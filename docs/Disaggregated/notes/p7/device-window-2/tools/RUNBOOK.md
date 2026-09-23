@@ -69,7 +69,7 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
 | 4 | `30-gate3.sh <stamp>` | 36 例（`--matrix` 的 DirectVulkan 集减 `create-indirect` / `1.21.11-main-menu` / `photon-v1.3b`，冻结在 `gate3/cases.txt`）× 四臂（monolith 与 inproc / spawn 同为 ×`--repeat`，ID-P7-62）；iterationrp 带 `apk.yml:460-462` 三个 Magma 旋钮；每遍 result.json / actual PNG / 双角色日志 / transport-proof / logcat 归档；每臂前后 pin check；每对前后核 boot_id（§1「会话」），`.done` 只在每遍都有 result.json + actual PNG 时写，否则退出 3 留待续跑。主机自检（stub adb + stub 跑器，不占设备）：`bash 30-gate3-selftest.sh` | 65–80 min |
 | 5 | `40-bsl-stats.sh <stamp>` | bsl-esc-menu × {inproc, spawn} 各 1 遍，`MOBILEGL_PIPE_STATS=1 PERIOD=1`；先 force-stop 再起设备端 root 采样器（0.25 s：maps 行数、VmRSS、VmHWM；排除 argv 带 `tcp://` 的 supervisor server）；`wbuf[]` 从归档日志取 | ~1 min |
 | 6 | `50-cts-after.sh <stamp>` | APK 的 arm64 `libMobileGL.so` 推到 `mgcts` 并在设备上核 sha256；AFTER 环境 = `$BASE` 的 flag + `MOBILEGL_TRANSPORT=inproc` + `ROLE_SPLIT_STATE=1 STRICT_ERRORS=1 RUN_AHEAD=1`；臂证明（mgprobe PASS 且 logcat 有 inproc 解析句与 `Config: IPC … strict=1 role-split-state=1 run-ahead=1`、0 Fatal；再用一个 glcts 用例证一次，其 StatusCode 记进 `arm-proof.txt`，不是 Pass / Fail 时打 WARN）；五块依次跑（顺序同 `$BASE`），每块 `qpa_report --json`（块的 `.done` 只在 `run_cts` 退出 0 且 `60-reduce.py --check-block` 判完整时写，否则退出 3 留待续跑），最后 `cts_multi_report` 出与 `$BASE` 同形的 JSON；UBO（GTF）块不跑：本 glcts 无 GTF 模块（ID-P7-16） | 6–7 min（pipe 头 lib inproc 实测 358 s；`$BASE` monolith 372 s） |
-| 7 | `60-reduce.py <stamp>` | 写 `verdict.txt` / `verdict.json`（见 §3）；每遍都跑。自检：`python3 60-reduce-selftest.py`（主机，不占设备，~7 s） | ~2–3 min（门 3 归档每遍一次纯 Python 的 SSIM-vs-first：`p7w7-6afa077f` 的 monolith+inproc+spawn 归档只读实测 108 s，本包的 reducer 在主机有负载时 130 s；monolith ×3 多 72 遍） |
+| 7 | `60-reduce.py <stamp>` | 写 `verdict.txt` / `verdict.json`（见 §3）；每遍都跑。自检：`python3 60-reduce-selftest.py`（主机，不占设备，~10 s） | ~2–3 min（门 3 归档每遍一次纯 Python 的 SSIM-vs-first：`p7w7-6afa077f` 的 monolith+inproc+spawn 归档只读实测 108 s，本包的 reducer 在主机有负载时 130 s；monolith ×3 多 72 遍） |
 | 8 | `90-restore.sh <stamp>` | Home；`am force-stop` 包（回放后缓存的 app 进程与 spawn 回放留下的 `libMobileGLServer.so @mgl-…` 子进程会一直占着几百 MB）；**把 `$BASE` 库推回 `/data/local/tmp/mgcts`**（设备 sha256 ≠ `$BASE` = `IDENTITY.txt` 的 `7f58aa0b…` 时才推，推后在设备上核 sha，结果行进 `restored.txt`）；supervisor 若开窗时在跑则以 `tcp_device_server.py start --allow-idle`（同 listen / token / Doze 状态文件）在**新 APK**上重启并核实在听；解钉频（MIUI 启动 boost 会让 `check` 短暂读成 DRIFT，重读至多 20 s）；stay-on 复原；每遍都跑（幂等） | ~15 s |
 
 合计：构建 ~6 min + 设备 ~77–95 min ≈ **1.5–1.7 h**。外推依据见 §5。
@@ -99,11 +99,14 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   行汇总 monolith 身份与 split 臂 transport-proof 的通过数。`RUN_AHEAD=0` 臂每例必须有（见上 ②），且 `Config: IPC` 全是 `run-ahead=0`；
   它的 ssim、SHA 只记录、不判；它的 runner rc=1 是 `--require-inproc` 要求 `run-ahead=1` 的已知副作用（E1）。
   末行 `GATE3 PASS: 36/36` 才是门 3。
-- **monolith 自身不可逐位复现的例（ruling: integrator 2026-09-23，ID-P7-62，`~/w7/logs/g3det/VERDICT.md` §2）**：「三遍逐位相同」预设参照可逐位复现。
+- **monolith 自身不可逐位复现的例（ruling: integrator 2026-09-23，ID-P7-62，`~/w7/logs/g3det/VERDICT.md` §2；(2) 为集成者修订后的「最近 monolith」口径）**：「三遍逐位相同」预设参照可逐位复现。
   同一会话 monolith ≥ 3 遍而图不全相同的例，split 臂的逐位相同条款换成**分布判据**：(1) split 每遍对本会话**每个** monolith 读数 `|ssim − m| ≤ 0.0005`；
-  (2) 全部 split（inproc + spawn 各遍）× monolith 图对的最大差异像素数（RGBA 任一通道不同）与最大逐通道差，各 ≤ monolith 两两之间最大值的 **1.25 倍**
+  (2) **最近 monolith**：px = RGBA 任一通道不同的像素数，Δ = 最大逐通道差；一遍的「最近」= 与它 px 最少的那遍（px 相同取 Δ 小者），Δ 也量到这一遍。
+  `D_mm` / `Δ_mm` = 各 monolith 遍到**另一** monolith 遍的最近 px / Δ 的最大值（留一法，按遍：逐位相同的两遍互为 0）；split（inproc + spawn）每遍 s 须
+  `px(s, 最近) ≤ 1.25 × D_mm + 32` **且** `Δ(s, 最近) ≤ Δ_mm + 1`（首版「全部图对最大值 ≤ monolith 两两最大值的 1.25 倍」作废：bliss 在 monolith ×3 下只 16% 能过，对纯噪声不公平）
   （从归档 actual PNG 算，numpy + PIL；没有则用 compare_actuals 的标准库解码，同数，`W2_REDUCE_PNG_DECODER=pure` 可强制）。
-  该例打 `nondeterministic monolith (N distinct / M passes) -> distributional check` 与两组最大值、界、`max |ssim - monolith|`，跨臂不同由 (2) 判、
+  该例打 `nondeterministic monolith (N distinct / M passes) -> distributional check` 与 `D_mm` / `Δ_mm`、split 到最近的最大值（及最远的那遍）、界、`max |ssim - monolith|`；
+  超界的 split 遍逐遍列出（它的最近 monolith 遍与 px / Δ），`verdict.json` 的 `monolith_determinism.{mono_nearest,split_nearest}` 列每遍；跨臂不同由 (2) 判、
   不需 `gate3/adjudication.tsv` 行；`-- monolith determinism` 行汇总三类例数。monolith 逐位相同、或同会话不足 3 遍（ID-P7-62 之前 ×1 的归档）的例仍按逐位相同判，
   后者 split 不逐位相同时原因注明「需 ≥ 3 遍」。monolith 每遍都要本身通过且确是 monolith；已完成的 monolith 对少于 `arms.txt` 的 `monolith_repeat=` → 该例 FAIL。
   **`--extra-monolith DIR[@BOOT_ID]`**（可重复）把别处归档的同会话 monolith 遍（`run_android_retrace_local.py --archive-dir` 形状，如 g3det 的 `E1-mono`）加进读数：
@@ -144,15 +147,16 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   跨臂不同全部裁定）且 CTS 为 `PASS`（五块完整、无未裁定的 L 例）才是 0；`PASS-SUBSET` / `PASS-NOT-REBOOT-CLEAN` / `PASS-NEEDS-ADJUDICATION` /
   `PASS-WITH-EXTRA-READINGS` 不是判据，`FAIL-REPEATS` / `FAIL-ARMS` / `FAIL-CASESET` 是合同常量不符，均退出 1；门 3 没跑（无 `gate3/cases.txt`）记 `NOT-RUN`，同样非 0。
   `reduce` 的退出码只作记录：红的门也要走完 restore。
-- 自检（主机，~7 s）：`python3 60-reduce-selftest.py`（门 3 按规范 36 例造：用例名由自检自己按 `30-gate3.sh` 的算法从 `trace_cases.json` 算）——造目录验：
+- 自检（主机，~10 s）：`python3 60-reduce-selftest.py`（门 3 按规范 36 例造：用例名由自检自己按 `30-gate3.sh` 的算法从 `trace_cases.json` 算）——造目录验：
   缺块 → `CTS INCOMPLETE`；boot_id 变 / 旧 `.done` / 缺 `boot-id.txt` → `GATE3 INVALID-SESSION`；monolith 日志带 `Config: IPC` → FAIL；
   **合同常量**：`--repeat 1`、同一归档配上谎报 `repeat=3` 的 `arms.txt`、已完成的对只有 2 遍 → `FAIL-REPEATS`（同一对没有 `.done` → INCOMPLETE）；
   开跑不带 ra0 / 不带 spawn → `FAIL-ARMS`，ra0 已列未跑 / 缺一例 → INCOMPLETE，ra0 日志 `run-ahead=1` → 该例 FAIL；
   35 例 + create-indirect / 35 例 + 集外名 / 36 例 + 排除例 / 重复行 → `FAIL-CASESET`；
   **跨臂**：spawn 每例不同 → WARN + 像素差、`PASS-NEEDS-ADJUDICATION`，全部写进 `gate3/adjudication.tsv` → PASS，缺一例（无理由行）→ 仍 NEEDS-ADJUDICATION，
-  只一例不同且已裁定（另有陈旧行）→ PASS；臂内不同 → FAIL；**ID-P7-62**（8×8 合成图：灰 128、前 n 个像素换值）：monolith ×3 逐位相同 + inproc 不同 → FAIL；
-  monolith 3 遍 3 张（两两 10 px / 差 4）+ split 在 1.25 倍内（10 px / 差 5）→ PASS、退出 0、不需裁定行、印出数字，标准库解码同数；
-  split 超界（差 6 > 5；13 px > 12.5）→ FAIL；某 split 遍对**一个** monolith 读数差 0.00051 → FAIL；monolith ×1（旧归档）+ split 不同 → FAIL 且注明需 ≥ 3 遍；
+  只一例不同且已裁定（另有陈旧行）→ PASS；臂内不同 → FAIL；**ID-P7-62 最近 monolith**（8×8 合成图：灰 128、几段像素换值）：monolith ×3 逐位相同 + inproc 不同 → FAIL；
+  monolith 3 遍成链（两两 4 / 4 / 8 px、Δ 2：`D_mm` 4、`Δ_mm` 2、界 37 px / 3）+ split 各遍到最近 ≤ 37 px / Δ 3（到最远 45 px，首版口径会红）→ PASS、退出 0、
+  不需裁定行、印出数字、每遍最近点名（px 相同取 Δ 小者），标准库解码同数；某 split 遍到最近 38 px → FAIL；到 px 最近的那遍 Δ 4（另一遍 Δ 仅 2）→ FAIL；
+  monolith ×4 含一对逐位相同 → 留一法按遍（`D_mm` 4，按图会是 20），split 一遍到最近 40 px → FAIL；某 split 遍对**一个** monolith 读数差 0.00051 → FAIL；monolith ×1（旧归档）+ split 不同 → FAIL 且注明需 ≥ 3 遍；
   已完成的 monolith 对只有 2 遍 → FAIL（无 `.done` → INCOMPLETE）；×1 归档 + `--extra-monolith DIR@BOOT` 两遍 → 规则生效、`PASS-WITH-EXTRA-READINGS`（退出 1），
   不带 `@BOOT` / 另一 boot → `INVALID-SESSION`；**只由 rate 定**的块（dsa 1 / 2 / 4 例 Pass→Fail：−0.270 pp PASS、−0.541 pp FAIL、
   364/6/0/1/0 −1.081 pp FAIL，无 crash）；**L 例**：dsa Pass→NS 未裁定 → 367/370、−0.270 pp（字面 −0.001 pp 只作信息）、列出、dsa FAIL，裁定后 PASS
@@ -163,7 +167,7 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   dry run 数据（`60-reduce-selftest-pre14e1c8b9.json` = pre-14e1c8b9 五块相对 `$BASE` 的差异）上 dsa 门 rate −0.541 pp（字面 −0.272 pp、
   旧口径 −0.539 pp 只作信息）；`~/w7/logs/devprep/w2/pre-14e1c8b9` 在时再对原始输出验一遍。
   `--reducer <py>` 可对别的 reducer 跑同一套检查（red-once：`6afa077f` 的 reducer 113 项里红 54 项；`8f3d179c` 的 reducer 116 项里红 5 项——裁定例仍进 rate；
-  `dd415408` 的 reducer 131 项里红 43 项（monolith ×3 与 ID-P7-62 的 15 项全红）；只关掉本 reducer 的 ID-P7-62 分支 → 131 项里红 9 项）。
+  `dd415408` 的 reducer（ID-P7-62 之前）134 项里红 46 项；`19cb0dbc` 的 reducer（(2) 的首版 1.25 × 全部图对最大值）134 项里红 11 项，全在 monolith-determinism）。
   `bash 30-gate3-selftest.sh [--script <sh>]`：stub adb + stub 跑器驱动 `30-gate3.sh`——新跑 `arms.txt` 记 `monolith_repeat=3`、monolith 按 ×3 调用并归档 3 遍、
   删一个 monolith `.done` 只重跑那一对、monolith 缺 PNG → 无 `.done` 退出 3 再跑补齐、`monolith_repeat=3` 的跑以 `--repeat 1` 续跑仍 ×3、
   无 `monolith_repeat=` 的旧 `arms.txt` 续跑仍 monolith ×1（red-once：`dd415408` 的 `30-gate3.sh` 11 项里红 8 项）。
@@ -222,11 +226,14 @@ bsl-esc-menu 15–30 s）与本次 dry run 的 7–8 s/例一致，36 例一遍 
   判据本身用的是入库的 `CTS-base/report-*.json` 逐例结果。
 - `$BASE` 库的 IDENTITY 写 stamp `p7w1-d260f110`，README / JSON 名写 `9be62cbc`：两者是同一补丁（`d260f110` 与 `9be62cbc` 同题提交），只是命名差。
 - 每次回放的 `am force-stop` 会杀 TCP supervisor；restore 负责按开窗状态复原。
-- **窗口 2（`p7w7-6afa077f`）按 ID-P7-62 只读重判**（输出 `~/w7/logs/g3-tools/`，归档未改）：原档 monolith ×1 → 三个 Iris 例仍 FAIL（规则需 ≥ 3 遍），
-  `GATE3 FAIL 33/36`（`verdict-rereduce.txt`）；加 g3det `E1-mono`（同 boot，`spec1*.log` 前后核）→ sundial、derivative 过，**bliss 超界**
-  （monolith 6 遍 4 张、两两最大 17 px / 差 2；split 最大 23 px / 差 3），`GATE3 FAIL 35/36`（`verdict-rereduce-e1mono.txt`）；再加 `E5-mono-{a,b,c}`
-  （同 boot，`spec2.log`）→ bliss monolith 18 遍 11 张、22 px / 差 3，split 23 px / 差 3，36/36，只余 create-instancing 的跨臂裁定：
-  `PASS-NEEDS-ADJUDICATION`（`verdict-rereduce-e1e5mono.txt`）。
-- **bliss 在 monolith ×3 下多半过不了 (2)**：它的不确定性是稀疏事件。同会话 18 遍 monolith 里任取 3 遍作参照、配门 3 自己的 split 6 遍，(2) 只在 16.2% 的组合下成立
-  （×6 33%，×9 50%）；sundial 85%、derivative 75%（`~/w7/logs/g3-tools/{x3sim.txt,xksim-bliss.txt}`）。按现行判据下一窗口 bliss 大概率仍红——这是判据的统计性质，
-  不是新缺陷；要不要给列名的例加 monolith 遍数或改 (2) 的比较口径，由集成者定。
+- **窗口 2（`p7w7-6afa077f`）按 ID-P7-62（(2) 最近 monolith 口径）只读重判**（输出 `~/w7/logs/g3-tools-rev/`，`verdict.{json,txt}` sha 前后相同、归档无改动）：
+  原档 monolith ×1 → 三个 Iris 例仍 FAIL（规则需 ≥ 3 遍），`GATE3 FAIL 33/36`（`verdict-rereduce.txt`）；加 g3det `E1-mono`（同 boot，`spec1*.log` 前后核）→
+  sundial（`D_mm` 4113 px / `Δ_mm` 44，split 到最近 ≤ 4242 px / Δ 36）、bliss（9 px / 2，split ≤ 13 px / Δ 3）过，**derivative 红在 Δ 项**
+  （`D_mm` 8690 / `Δ_mm` 49，界 10894.5 px / 50；spawn rep1 到最近 8743 px、Δ 56），`GATE3 FAIL 35/36`（`verdict-rereduce-e1mono.txt`）；再加 `E5-mono-{a,b,c}`
+  （同 boot，`spec2.log`，只有 bliss）→ bliss monolith 18 遍 11 张、8 px / 2，split ≤ 5 px / Δ 2；derivative 不变，仍 `GATE3 FAIL 35/36`（`verdict-rereduce-e1e5mono.txt`；
+  另有 create-instancing 的跨臂裁定未写）。
+- **monolith ×3 下 (1)+(2) 的通过率**（同会话 plain monolith 池任取 3 遍作参照，配门 3 自己的 split 6 遍，`~/w7/logs/g3-tools-rev/nearsim.txt`，(2) 由本 reducer 的
+  `nearest_spread` 算）：bliss 89.6%（816 组；首版 16.2%）、sundial 75.0%（20 组；首版 85%）、derivative 0%（20 组；首版 75%）；×6：bliss 95.9%，sundial / derivative 池只有 6 遍、
+  唯一一组 100% / 0%。纯噪声对照（参照 ×3，另取 monolith 遍当 split 判）：bliss 98.3%（伪 split ×3；×6 96.9%）、sundial / derivative 各 70%（伪 split ×3）。derivative 只差在 Δ：同会话 15 遍 split（门 3 6 遍 + g3det 9 遍）
+  到最近 monolith 的 Δ 只有门 3 spawn rep1 的 56 超过 50，monolith 两两 Δ 25–50（`neardetail.txt`）——Δ 是单像素最大值，`+1` 的余量对 derivative 这种大 Δ 的例很紧；
+  是否调整由集成者定。`Δ_mm` 若改读作「到任一其他遍的最小 Δ」（而不是到 px 最近那遍的 Δ），bliss ×3 同为 89.6%、sundial ×3 65%、×6 由 100% 变 0%。
