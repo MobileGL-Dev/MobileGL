@@ -210,9 +210,10 @@ def verify_split_arming(logs_dir, junit_path, expected_path):
 
     What this replaces: a COUNT. The landing shape of the lane's arm proof asserted that at
     least 850 of at least 1000 per-entry client logs carried `MGPipe: verify armed`, which
-    leaves ~117 entries unnamed and therefore unaccounted - a lane can lose fifty arms and
-    gain fifty skips and the floor never moves. The census is the point (dualblock-expected-
-    fatals.txt's rule, ID-119), so this is the same two-sided ratchet applied to arming:
+    leaves ~155 entries unnamed and therefore unaccounted (117 of them skips) - a lane can
+    lose fifty arms and gain fifty skips and the floor never moves. The census is the point
+    (dualblock-expected-fatals.txt's rule, ID-119), so this is the same two-sided ratchet
+    applied to arming:
 
       * an entry whose client log carries the arming line is ARMED and needs nothing else;
       * an entry that ctest reported SKIPPED is recognised without a name - a gtest skip is a
