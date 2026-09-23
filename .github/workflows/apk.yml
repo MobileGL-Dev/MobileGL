@@ -364,7 +364,7 @@ jobs:
             --avd-name "${AVD_NAME}"
 
   retrace:
-    name: retrace (${{ matrix.backend.name }} / ${{ matrix.lane || 'monolith-control' }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case.name }})
+    name: retrace (${{ matrix.backend.name }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case.name }})
     runs-on: ubuntu-latest
     needs:
       - build
@@ -385,7 +385,7 @@ jobs:
       max-parallel: 4
       matrix: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 8
@@ -454,7 +454,7 @@ jobs:
             --profile pixel_6 \
             --avd-name "${AVD_NAME}"
 
-      - name: Launch Emulator
+      - name: Launch emulator
         run: |
           sh android-plugin/run-avd-ci.sh start \
             --avd-name "${AVD_NAME}" \
@@ -611,7 +611,7 @@ jobs:
           free -h > android-retrace-result/diagnostics/host-memory.txt 2>&1 || true
           sudo dmesg -T 2>/dev/null | tail -300 > android-retrace-result/diagnostics/host-dmesg.txt || true
 
-      - name: Stop Emulator
+      - name: Stop emulator
         if: always()
         run: |
           sh android-plugin/run-avd-ci.sh stop \

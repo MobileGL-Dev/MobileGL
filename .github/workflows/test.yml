@@ -46,7 +46,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -123,7 +123,7 @@ jobs:
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 
-      - name: Prove primary runtime compilation and identity
+      - name: Primary runtime mode proof
         run: |
           python3 scripts/ci/runtime_mode_proof.py self-test
           mode=monolith
@@ -195,7 +195,7 @@ jobs:
       CCACHE_COMPRESS: "true"
       CCACHE_NOHASHDIR: "true"
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -401,7 +401,8 @@ jobs:
               -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           fi
 
-      - name: Prove both backend roles execute inproc in the primary artifact
+      # Both backend roles must execute inproc in the primary artifact.
+      - name: Inproc execution proof (both backends)
         if: matrix.transport == 'inproc'
         working-directory: build-linux
         run: |
@@ -452,7 +453,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -537,7 +538,7 @@ jobs:
       # entries, this artifact is never stripped, and `No MG_Remote in the pull build` below already
       # uses this spelling. The symbol count guards the remaining hole: a stripped library would
       # make both greps fail for a third, silent reason.
-      - name: The verify library really carries the comparator
+      - name: Comparator symbols in verify library
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
           defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
@@ -646,7 +647,7 @@ jobs:
               path.write_text(text)
           PY
 
-      - name: Integration scenarios under MOBILEGL_PIPE_VERIFY
+      - name: Integration scenarios (verify)
         working-directory: build-verify
         # --no-tests=error is half the gate: the verify entries only exist when the library was
         # configured with -DMOBILEGL_PIPE_VERIFY=ON, so a build that lost the option matches no
@@ -745,7 +746,8 @@ jobs:
       #     shape is not a recorded one - and because its own assertions can go red.
       # As with the four before them, each alternative is the SHORTEST string that selects only what
       # it means to.
-      - name: The handle-ABA, CSO, subsystem and texture-parameter controls (G8, G8b, G9, G10, G12)
+      # Handle-ABA, CSO, subsystem and texture-parameter controls (G8, G8b, G9, G10, G12).
+      - name: Push-build controls (G8, G9, G10, G12)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -772,7 +774,7 @@ jobs:
       # processes ran the same library with the same MOBILEGL_PIPE_VERIFY=1 as their ~400 ambient
       # siblings. It is not, and cannot be, a per-process census - the shared log cannot support one.
       # It catches the case ctest cannot: an arming entry that SKIPPED still reports green.
-      - name: The verify lanes armed the comparator
+      - name: Verify lane arming check
         working-directory: build-verify
         run: |
           shopt -s nullglob
@@ -798,7 +800,7 @@ jobs:
       # property on the ambient Verify. entries names it (MG_IntegrationTest/CMakeLists.txt says
       # so out loud), and a property entry would otherwise override this and the control would
       # prove nothing. Same precedent as MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH in `integration`.
-      - name: Negative control A - a corrupted snapshot field must turn the lane red
+      - name: Negative control A (corrupted snapshot)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -827,7 +829,7 @@ jobs:
       # the ambient lane above and is the ONLY integration entry in the tree that calls
       # glGenerateMipmap at all. It deliberately does not skip itself when the knob is set, exactly
       # so that this control has something to turn red.
-      - name: Negative control B - an omitted fill point must turn the lane red on that verb
+      - name: Negative control B (omitted fill point)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -890,7 +892,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -957,7 +959,7 @@ jobs:
 
       # Both options, both directions of "did it take" - the two jobs this one is the product of
       # each check one of them, and this library has to pass both checks.
-      - name: The library carries both the comparator and MG_Remote
+      - name: Comparator and MG_Remote symbols
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
           defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
@@ -997,7 +999,7 @@ jobs:
 
       # The lane. `^...$` because ctest -L is a regex (ID-131) and `integration-verify` would
       # otherwise also match this label and the monolith one would match both.
-      - name: Integration scenarios under MOBILEGL_PIPE_VERIFY on the split (inproc) arm
+      - name: Verify-split scenarios (inproc)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1023,7 +1025,7 @@ jobs:
       #     (56 names in five classes, each class saying why it reaches no verb). A listed entry
       #     that arms, and a listed name with no log at all, both fail - an exception set that
       #     keeps rows nothing needs is how a proof rots green.
-      - name: The verify-split entries ran inproc, and every one armed, skipped or is named
+      - name: Verify-split per-entry arm proof
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
           shopt -s nullglob
@@ -1056,7 +1058,7 @@ jobs:
       # with the green run they were meant to be evidence of already gone. `if: always()` on the
       # upload made that worse rather than better, because a failure investigation is exactly
       # when the overwritten half is the half somebody needs.
-      - name: Keep the green lane logs before the controls overwrite them
+      - name: Keep green lane logs
         if: always()
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
@@ -1070,7 +1072,7 @@ jobs:
       # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH
       # backends. Measured at landing: 10 of 10 red, each with
       # Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"|"@DrawArrays", ..., where=entry}.
-      - name: Negative control A (split) - a corrupted snapshot field must turn the lane red
+      - name: Negative control A (split)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1116,7 +1118,7 @@ jobs:
       #
       # THE GREEN HALF is the lane run above: the same hook, the same window, with no corruption
       # armed, across 1070 entries at zero divergences.
-      - name: Negative control A (split, read side) - the server's own read must report it
+      - name: Negative control A (split, read side)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1145,7 +1147,7 @@ jobs:
       # withholds ReadPixels:GetPixelStoreParameters, which the server reads under its own stamp.
       # Measured at landing: 2 of 2 red, each child dying with
       # Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"} on mgl-srv-apply.
-      - name: Negative control B (split) - an omitted stamp must turn the lane red on that verb
+      - name: Negative control B (split)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1215,7 +1217,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -1301,7 +1303,7 @@ jobs:
       # The mirror of this assertion already exists and is the G1 control: monolith-symbol-report
       # asserts that a -DMOBILEGL_BUILD_DISAGGREGATED=OFF library defines NO MG_Remote symbol. The
       # two together are ARCHITECTURE.md:524's surviving byte-level equality, in both directions.
-      - name: The split library really carries MG_Remote
+      - name: MG_Remote symbols in split library
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
           defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
@@ -1341,7 +1343,7 @@ jobs:
       # It reads the per-object output of the MobileGL target, so it must run before anything
       # that cleans the build tree; the packaging step below excludes *.o from the tarball but
       # does not delete them.
-      - name: The server image reaches no further into the frontend than the baseline
+      - name: Server link-closure ratchet
         run: |
           mkdir -p ci-artifacts
           python3 scripts/link_ratchet.py --self-test
@@ -1456,7 +1458,7 @@ jobs:
       # question a green lane cannot: did the spawn arm cover the same cases the split arm did?
       # A spawn lane registered with fewer cases goes green while proving less, and nothing about
       # a smaller green lane looks wrong.
-      - name: integration-spawn covers integration-split (9.2)
+      - name: Spawn/split lane parity (9.2)
         run: python3 scripts/ci/spawn_lane_parity.py build-split
 
       - name: Unit tests on the split runtime
@@ -1480,10 +1482,10 @@ jobs:
       # the supervisor's Busy / token / listen / version / build-policy / reap controls zero times.
       # --check is passed so this step cannot quietly regenerate a different committed header;
       # keeping that honest is flatc-check's job and this step must not overlap with it.
-      - name: Check out the FlatBuffers submodule for the TCP supervisor lane
+      - name: Check out FlatBuffers (TCP lane)
         run: git submodule update --init 3rdparty/flatbuffers
 
-      - name: Build the pinned flatc for the TCP supervisor lane
+      - name: Build pinned flatc (TCP lane)
         run: python3 scripts/gen_protocol.py --build-dir "${RUNNER_TEMP}/flatc-build" --check
 
       # --no-tests=error is half the gate, exactly as in integration-verify: the integration-split
@@ -1494,7 +1496,7 @@ jobs:
       # An entry whose owning package (c1 client, s1 session, v1 server) has not landed SKIPS with
       # the reason and never goes green - MG_IntegrationTest/CMakeLists.txt probes MG_Remote for
       # c0's signature stubs and disarms the lane while any remain.
-      - name: Split scenarios under MOBILEGL_TRANSPORT=inproc
+      - name: Split lanes (inproc, spawn, TCP)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1521,7 +1523,7 @@ jobs:
       # The entries that name MOBILEGL_TRANSPORT in their OWN property (the Split. lanes) keep
       # their value in both passes, which is correct: they are the split family in both arms and
       # the comparison is about the other 1100.
-      - name: The same integration entries under monolith and under inproc
+      - name: Transport A/B (monolith vs inproc)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1569,7 +1571,7 @@ jobs:
       # counting log (all Split entries now have private paths; nothing else writes this file).
       # The line is written during bring-up, before any scenario decides to skip, so this
       # check is live from the day the lanes land rather than from the day they stop skipping.
-      - name: The split lane really resolved the transport
+      - name: Transport resolution check
         working-directory: build-split
         run: |
           # P6: the sink writes one file per ROLE from the base MOBILEGL_LOG_FILE_PATH; the
@@ -1619,7 +1621,7 @@ jobs:
       # went green. The arming run's `|| true` had the matching defect - it counted a case that ran
       # and FAILED as evidence the lane was live, so the controls could be measured against a
       # baseline that was already red.
-      - name: Negative controls - the verb barrier and the persistent-map push must be load-bearing
+      - name: Negative controls (barrier, map push)
         if: ${{ !cancelled() }}
         working-directory: build-split
         env:
@@ -1711,7 +1713,7 @@ jobs:
       # The green half: no unit case may pull harder under strict. This includes the
       # RemoteGuards suite (the layer-1/layer-2 Fatal drives) and FieldOwnershipTest's strict
       # arms, so the guards are provably armed in the lane that gates on them.
-      - name: Unit tests on the split runtime under MOBILEGL_IPC_STRICT_ERRORS=1
+      - name: Unit tests on the split runtime (strict)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1735,7 +1737,7 @@ jobs:
       # pull and the expected-red control is the honest gate. Reading it here means the lane
       # changes meaning in the same commit the runtime does - a lane whose flip is a separate
       # human step is a lane that is wrong for as long as that step is outstanding.
-      - name: Integration-split under strict - expected-red before the P5e flip, hard green after
+      - name: Strict split lane
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1886,7 +1888,8 @@ jobs:
       # "green" would mean the knob stopped arming, which is exactly the decay ID-122 assigns
       # to a control rather than to a lane's good mood. At P5f's exit the file is empty and the
       # green arm is the correct one; delete the red expectation in the same commit.
-      - name: Integration-split under the dual-block rehearsal - empty census, hard green (P5f wave 2)
+      # P5f wave 2: with the census empty, this lane is a hard green gate.
+      - name: Dual-block census lane
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1934,7 +1937,8 @@ jobs:
           python3 "${helper}" expect-fatal "${RUNNER_TEMP}/dualblock-lane.json" \
             "${RUNNER_TEMP}/dualblock.xml" "${expected}"
 
-      - name: P5f per-frame zero residual reads must execute on both backends
+      # The per-frame zero-residual-read case must execute and pass on both backends.
+      - name: P5f per-frame zero-residual check
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1951,7 +1955,7 @@ jobs:
 
       # The mechanism's own negative control (P5F §6): the same named case must be green with
       # the knob on and red - on its own assertion text - with it off.
-      - name: Dual-block negative control (P5f f1, P5F section 6)
+      - name: Dual-block negative control (P5f f1)
         working-directory: build-split
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/dualblock_negative_control.sh"
 
@@ -1959,7 +1963,7 @@ jobs:
       #
       # P5f fm: Magma's framebuffer, copy and mipmap verbs consume server records.
       # The label remains separate so both backends' coverage stays explicit.
-      - name: Integration-magma-split under strict and dual-block state (P5f fm)
+      - name: Magma split lane (strict, dual-block)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1989,7 +1993,7 @@ jobs:
       # split arms run, on Magma - IS DELIBERATELY NOT HERE. Its job is to be able to go red
       # while CI stays green; a case moves into a gating step with the commit that retires its
       # blocker.
-      - name: Integration-magma-spawn and -tcp - the same cases in two processes (P7 L)
+      - name: Magma spawn and TCP lanes
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -2001,7 +2005,8 @@ jobs:
           ctest -L '^integration-magma-spawn$' --no-tests=error -j 2 --output-on-failure
           ctest -L '^integration-magma-tcp$' --no-tests=error -j 2 --output-on-failure
 
-      - name: Magma application-buffer wire cases must all execute
+      # Every named Magma application-buffer wire case must execute and pass.
+      - name: Magma buffer wire cases (inproc)
         working-directory: build-split
         run: |
           ctest -L integration-magma-buffers --show-only=json-v1 > "${RUNNER_TEMP}/magma-buffer-lane.json"
@@ -2054,7 +2059,7 @@ jobs:
       # tcp entry declares FIXTURES_REQUIRED mobilegl-tcp, so ctest lists the supervisor's two
       # fixture entries under the label as well - and they must be green too: a lane whose
       # supervisor failed to start has nothing to say about the twenty-one.
-      - name: Magma application-buffer wire cases must all execute on the spawn and tcp arms
+      - name: Magma buffer wire cases (spawn, TCP)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -2104,7 +2109,8 @@ jobs:
           PY
           done
 
-      - name: Magma run-ahead must queue real GPU work and enforce credits 1 and 3
+      # Run-ahead must queue real GPU work and enforce credits 1 and 3.
+      - name: Magma run-ahead cases (credits 1, 3)
         working-directory: build-split
         run: |
           ctest -L integration-magma-runahead --show-only=json-v1 > "${RUNNER_TEMP}/magma-runahead-lane.json"
@@ -2129,22 +2135,23 @@ jobs:
           slp.require_green(json.load(open(sys.argv[2])), sys.argv[3], required)
           PY
 
-      - name: Magma run-ahead off loses real queue lead and restores green
+      # Run-ahead off must go red on the lost queue lead; run-ahead back on must be green.
+      - name: Magma run-ahead negative control
         run: |
           python3 scripts/ci/magma_runahead_checks.py negative --build-dir build-split \
             --out "${RUNNER_TEMP}/magma-runahead-negative" --execute
 
-      - name: Magma run-ahead passes Vulkan synchronization validation
+      - name: Magma run-ahead sync validation
         run: |
           python3 scripts/ci/magma_runahead_checks.py validation --build-dir build-split \
             --out "${RUNNER_TEMP}/magma-runahead-syncval" --execute
 
-      - name: Magma cached views and framebuffers pass Vulkan synchronization validation
+      - name: Magma view/framebuffer cache sync validation
         run: |
           python3 scripts/ci/magma_cache_checks.py --build-dir build-split \
             --out "${RUNNER_TEMP}/magma-cache-syncval" --execute
 
-      - name: Upload Magma run-ahead control and validation evidence
+      - name: Upload Magma run-ahead evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -2160,7 +2167,7 @@ jobs:
       # their pixels assertion. Its named check survives the flip in the only direction that has
       # evidence behind it: the case must EXECUTE, PASS, and never skip - a lane-level exit code
       # alone would not separate "generated" from "quietly absent".
-      - name: Magma P7 packed-float mip generation executes green under strict split state
+      - name: Magma packed-float mipmap case (P7)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -2183,7 +2190,7 @@ jobs:
 
       # Client vertex/index inputs are copied into owned wire buffer resources.
       # The original dedicated entries now have to execute successfully with run-ahead.
-      - name: Integration-clientarrays-split - owned client inputs under run-ahead
+      - name: Client-array split lane (run-ahead)
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -2241,7 +2248,7 @@ jobs:
       - name: Regenerate protocol_generated.h
         run: python3 scripts/gen_protocol.py --build-dir "${{ runner.temp }}/flatc-build"
 
-      - name: Fail if the committed header is stale
+      - name: Generated header staleness check
         run: git diff --exit-code -- MobileGL/MG_Remote/Protocol/generated/protocol_generated.h
 
       # P7 wave 2-F, F fix round (PH-7 (4) review). MOBILEGL_PROTOCOL_CONTROL_REVISION is mixed
@@ -2251,7 +2258,7 @@ jobs:
       # edit that forgot the bump is red HERE, in the job that regenerates the header on every
       # such edit, and not a silently absent field between an old server and a new client. Its
       # self-test proves the check goes red on both perturbations before it says green.
-      - name: Fail if protocol.fbs changed without a MOBILEGL_PROTOCOL_CONTROL_REVISION bump
+      - name: Protocol revision pin check
         run: python3 scripts/ci/protocol_revision_pin.py --self-test
 
   # P0.5 interface-purity gate A (ARCHITECTURE.md:501): the two extracted headers' include closure,
@@ -2269,18 +2276,18 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      - name: Check out the three header submodules the closure needs
+      - name: Check out header submodules
         # ska/flat_hash_map.hpp, xxhash.h and vulkan/vulkan.h are the only submodule headers
         # Includes.h reaches; glslang and spirv_cross are vendored under include/.
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
-      - name: Install clang and the X11 headers vulkan.h pulls on Linux
+      - name: Install clang and X11 headers
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
         # preprocessor and the gate reports 5 problems that have nothing to do with purity.
         run: sudo apt-get update && sudo apt-get install -y clang-20 libx11-dev
 
-      - name: Include-closure assertions and negative control
+      - name: Include-closure check and self-test
         # --expect-probes 4 (contract-v2.md 7.6): an exit code cannot tell four probes from none,
         # so a --probe typo or a manifest edit that selected nothing would run zero probes and
         # exit 0 - the second half of the finding that added the flag. The count is the length of
@@ -2368,7 +2375,7 @@ jobs:
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -2622,7 +2629,7 @@ jobs:
           if-no-files-found: error
 
   retrace:
-    name: retrace (${{ matrix.backend }} / ${{ matrix.lane || 'monolith-control' }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
+    name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
@@ -2641,7 +2648,7 @@ jobs:
       matrix: ${{ fromJSON(needs.trace-cases.outputs.matrix) }}
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
@@ -2823,7 +2830,7 @@ jobs:
       matrix: ${{ fromJSON(needs.trace-cases.outputs.verify-matrix) }}
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
@@ -2864,7 +2871,7 @@ jobs:
           name: mobilegl-trace-replay
           path: .
 
-      - name: Unpack the VERIFY runtime as the library under test
+      - name: Unpack verify runtime (library under test)
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
         # rather than through a variable: the verify .so is put where that path points. The nm
@@ -2886,7 +2893,7 @@ jobs:
           fi
           echo "the library at build-linux/libMobileGL.so is the verify build"
 
-      - name: Retrace and validate under MOBILEGL_PIPE_VERIFY
+      - name: Retrace and validate (verify)
         working-directory: build-retrace/tools/trace_replay
         # run_trace_case.cmake turns MOBILEGL_PIPE_VERIFY into three assertions of its own (the
         # arming line, no Fatal{PipeVerifyDiffer, no Fatal{UnmigratedPipeInput), so a case that
@@ -2916,7 +2923,7 @@ jobs:
       # would otherwise ship the deliberately corrupted run's output under the name of the good one.
       # The restore happens whichever way the control goes, which is why the ctest exit status is
       # captured rather than tested inline.
-      - name: Negative control - a corrupted snapshot field must red this retrace
+      - name: Negative control (corrupted snapshot)
         if: ${{ matrix.case == 'OpenRA' && matrix.backend == 'DirectGLES' }}
         working-directory: build-retrace/tools/trace_replay
         run: |
@@ -3011,7 +3018,7 @@ jobs:
       matrix: ${{ fromJSON(needs.trace-cases.outputs.split-matrix) }}
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
@@ -3053,7 +3060,7 @@ jobs:
           path: .
 
       # The PULL runtime, for the negative control at the end of this job and for nothing else.
-      - name: Download Linux pull runtime (negative control)
+      - name: Download pull runtime (negative control)
         uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-monolith-control
@@ -3064,7 +3071,7 @@ jobs:
           tar -xzf pull-runtime/mobilegl-linux-monolith-control.tgz -C pull-runtime
           test -f pull-runtime/build-monolith-control/libMobileGL.so
 
-      - name: Unpack the SPLIT runtime as the library under test
+      - name: Unpack split runtime (library under test)
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
         # rather than through a variable, exactly as in retrace-verify. `nm`, not `nm -D`.
@@ -3104,7 +3111,7 @@ jobs:
       # iterationrp x DirectVulkan unrepaired (ssim 0.028 < 0.98), reddened at
       # run_trace_case.cmake:173 before the transport assertion, and failed as "the failure never
       # says the library did not resolve the transport" - a red that is not the control's own.
-      - name: Magma repair knobs for this case (every later step)
+      - name: Magma repair knobs (all later steps)
         run: |
           # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
           # This job exported none at all, so every DirectVulkan row of the split matrix was
@@ -3135,7 +3142,7 @@ jobs:
             echo "MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1" >> "${GITHUB_ENV}"
           fi
 
-      - name: Retrace and validate under MOBILEGL_TRANSPORT=${{ matrix.transport }}
+      - name: Retrace and validate (${{ matrix.transport }})
         working-directory: build-retrace/tools/trace_replay
         # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own - the library
         # must have RESOLVED the transport in this process, and its log must carry no Fatal{ - so a
@@ -3183,7 +3190,7 @@ jobs:
       # `--no-tests=error` and was read as "the pull library turned it red"; and only "non-zero
       # ctest" was checked after the nm identity check, so a loader failure, a missing fixture or a
       # timeout passed it. The red must now carry run_trace_case.cmake's own sentence.
-      - name: Negative control - the PULL library must red this split retrace
+      - name: Negative control (pull library)
         working-directory: build-retrace/tools/trace_replay
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
@@ -3214,7 +3221,7 @@ jobs:
       # executed off a runner, and scripts/ci/control_smoke_test.sh drives this file against a
       # stubbed ctest in seven modes - including the two that matter most, a red whose SSIM never
       # fell and a knob that armed and dropped nothing.
-      - name: Negative control - dropping the draws on the wire must red this split retrace
+      - name: Negative control (dropped draws)
         working-directory: build-retrace/tools/trace_replay
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
@@ -3288,7 +3295,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set Swap Space
+      - name: Set swap space
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -3503,10 +3510,11 @@ jobs:
       # (a field list that does not cover its struct's members, a verb set that is not the function
       # table's). Regenerating and diffing above cannot see a check that silently stopped
       # checking - a broken gate and a clean tree produce the same green.
-      - name: The MGPipe generators' checks can still fail
+      - name: MGPipe generator self-test
         run: python3 scripts/gen_pipe.py --self-test
 
-      - name: The link seam owns physical storage and keeps link dispatch out of callers
+      # The link seam owns physical storage and keeps link dispatch out of callers.
+      - name: Link-seam purity check
         run: python3 scripts/ci/link_seam_purity.py --self-test
 
       # The same shape for Espryt's re-keyed memos (P3b/P4b, PLAN-PH-P34B-P7.md 1.2). P4a/P5f
@@ -3524,11 +3532,11 @@ jobs:
       # --self-test runs the negative controls and then the real scan in one invocation, as its
       # sibling does; the scan also asserts that every memo family's anchor still matches and
       # that every allow-list entry still suppresses something.
-      - name: Espryt memo keys carry no frontend pointer outside the exempted legacy arm
+      - name: Espryt memo-key purity check
         run: python3 scripts/ci/espryt_memo_purity.py --self-test
 
       # The same question for the symbol tool the P1 gate is written in terms of.
-      - name: The symbol report's buckets and gates can still fail
+      - name: Symbol report self-test
         run: python3 scripts/symbol_report.py --self-test
 
       # Per-draw fprintf/printf instrumentation has repeatedly been committed by accident,
@@ -3538,7 +3546,7 @@ jobs:
       # to it needs a reason in the pull request rather than a quiet whitelist entry. The
       # alternation names every stdio spelling, not just the two that were committed:
       # fprintf to either stream, printf, puts, and the iostream pair.
-      - name: No stdio instrumentation in MG_Backend or MG_State
+      - name: No stdio in MG_Backend or MG_State
         run: |
           if grep -rnE 'fprintf[[:space:]]*\((stderr|stdout)|(^|[^[:alnum:]_>.])printf[[:space:]]*\(|(^|[^[:alnum:]_>.:])puts[[:space:]]*\(|std::(cout|cerr)' \
               MobileGL/MG_Backend MobileGL/MG_State; then
@@ -3563,7 +3571,7 @@ jobs:
       # reads a mutation published through a helper as deferred, and scans only MG_Impl/GLImpl -
       # so the four MGP_NOTE_MUTATION sites in MG_State are outside it entirely. This is a
       # completeness gate over what the scanner can see; the semantic proof is the verify lane.
-      - name: MGPipe dirty-surface mapping is complete (G9)
+      - name: "G9: dirty-surface mapping complete"
         run: |
           python3 scripts/gen_pipe_dirty_surface.py --check
           python3 scripts/gen_pipe_dirty_surface.py --self-test
@@ -3584,7 +3592,7 @@ jobs:
       # was a silent duplicate of another, because the harness asked "did something exit" rather
       # than "did THIS exit". Every control now asserts its own message, and a harness control
       # asserts that the harness still rejects someone else's exit.
-      - name: MGPipe PipeInputs field-ownership table is complete (R-7.1, table 2)
+      - name: "R-7.1: field-ownership table complete"
         run: |
           python3 scripts/gen_pipe_field_ownership.py --check
           python3 scripts/gen_pipe_field_ownership.py --self-test
@@ -3607,7 +3615,7 @@ jobs:
       # about - and it guards the tool that decides whether a device golden run PASSED.
       # compare_actuals is the new half of that evidence (actual-vs-actual SSIM between
       # repeats); both are stub/synthetic-only, need no build, no GPU and no device.
-      - name: The split and retrace negative controls still reject a red that is not theirs (R-16)
+      - name: "R-16: control and trace-tool smoke tests"
         run: |
           bash scripts/ci/control_smoke_test.sh
           python3 scripts/ci/test_trace_infrastructure.py
@@ -3643,11 +3651,11 @@ jobs:
       # flush ladders) reported BY NAME, plus the pin-precedence control and a one-token edit to the
       # pinned ladder compared against the pin - and fails if any of them does not answer.
       # Same shape as gen_pipe.py --self-test above.
-      - name: The buffer pool, the deferred-release drain and the rings did not move (G5)
+      - name: "G5: buffer pool/rings unchanged"
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh "${BASELINE}" HEAD
 
-      - name: The untouched-region gate can still fail (G5)
+      - name: "G5: untouched-region self-test"
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh --self-test
 
@@ -3677,11 +3685,11 @@ jobs:
       # perturbed at its HEAD and at its TAIL and each required to be named BY NAME, plus a
       # one-token edit to the pinned FlushPendingRangesFrom body compared against the pin - and
       # fails if any of them does not answer.
-      - name: The unpack ring, the attachment permutation, the D24S8 core and the format caveat did not move (G5)
+      - name: "G5: P4a regions unchanged"
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
 
-      - name: The P4a untouched-region gate can still fail (G5)
+      - name: "G5: P4a untouched-region self-test"
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh --self-test
 
