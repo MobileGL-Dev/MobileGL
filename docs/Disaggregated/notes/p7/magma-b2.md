@@ -330,7 +330,8 @@ red-once（均已执行并还原，split + spawn，外加 tcp 的 `MsFlip.`）�
 fixture 的「记录序数必须移动」断言，对只查询的用例是误报。于是这条用例在它们上面全部 `Skipped`，文案
 还说「monolith 臂（MGITEST_SPLIT_LANE unset）」——而 round 2 之前它在这些条目上是跑过并通过的。
 改为 `!SplitLane::IsSplitLane() && !PeekSplitRuntime().transportResolved`
-（`Harness/SplitRuntimePeek.h`，即 `MG_Config::Transport != Monolith`）——这正是
+（`Harness/SplitRuntimePeek.h`，即 `MG_Config::Transport != Monolith`；round 4 删掉了 `IsSplitLane()`
+那一项——它到不了，§2.11 第 2 条）——这正是
 `VulkanRenderer::BlitFramebuffer` 分到 `BlitWireFramebuffers` 的那个分叉；文案改说「monolith
 transport」。标记单独仍然有效：一条要了 split 的精选车道照常跑这条用例，它拿没拿到传输由 fixture 的
 武装断言说。
@@ -392,6 +393,37 @@ stencil-only resolve）仍是逐 aspect 决定的，一次 `COLOR|STENCIL` 调�
 **七**条 tail（B3 合入时 `.StaleSerial.` 进了表），本分支没有 B3、它的门量到的是六条；两处都已写明。
 §6 新增第 8、9、10 条（审查 round 3 点出、本 round 不改的三笔债：合法同尺寸 MSAA→默认 framebuffer
 深/模板 blit 的 Fatal、scissor 裁空的静默返回、MS→MS 的逐 aspect decline）。
+
+### 2.11 审查 round 4：窗口腿的底色、一个到不了的合取项、按符号引用
+
+**1. 窗口腿的底色不能与别的表面相同（should-fix）。** round 3 的窗口腿把默认 framebuffer 清成蓝色、深度
+0.5——与用户 framebuffer `resolved.fbo` 的底色**相同**，而那张 FBO 在自己那条被 decline 的 blit 之后也还是
+蓝 / 0.5。于是若 `glBindFramebuffer(GL_FRAMEBUFFER, 0)` 落在了用户 framebuffer 上，或 wire 的默认
+framebuffer 读回解析到了错的表面，三个探针读到的仍是蓝 / 0.5，这条腿**空过**。改为清成品红 `(1, 0, 1, 1)`、
+深度 0.625——测试里没有第二张表面持有这对值（用户 FBO 蓝 / 0.5，源下红上绿 / 0.25 与 0.75）——三个探针要求
+的就是这对值。
+一次性证明（已还原）：把探针前的绑定改成 `resolved.fbo`，`DirectVulkan.{Split,Spawn,Tcp}.MsFlip.` 三臂在
+(1, 1) 两个 aspect 都红：`the declined COLOR|DEPTH scale onto the window must not have written its colour
+at (1, 1)`，读到 `{0,0,255,255}`、要 `{255,0,255,255}`；`must have left its depth alone at (1, 1)`，
+`depth evaluates to 0.50000005960464478`、要 0.625（(64, 48) 与 (126, 94) 落在 64×48 的 FBO 之外，读到
+`{0,0,128,0}` / 0.996，同样红）。round 3 的底色下同一改动读到的正是它要的蓝 / 0.5——这就是审查指出的空过。
+还原后三臂 `Passed`。
+
+**2. 门里一个到不了的合取项（nit）。** round 3 的门写成 `!SplitLane::IsSplitLane() &&
+!PeekSplitRuntime().transportResolved`，并说「标记单独仍然有效」。标记那一项到不了：标记置位而传输未解析时，
+fixture 的 SetUp 已经经 `SplitLane::SkipReasonForSplitOnlyAssertions()` → `SplitRuntimeSkipReason()`
+（「MG_Config::Transport resolved to 'monolith', not to a split transport」）`GTEST_SKIP`，`Ready()` 为假，
+用例在门之前就返回了。在每一个到得了的状态里，门都等于 `!PeekSplitRuntime().transportResolved`。已删掉
+那一项（`SplitLane.h` 的 include 随之去掉），注释改述这一点，§2.10 第 1 条的原文保留为历史并加了指回。
+行为不变：monolith `DirectVulkan.…AFlipped…` 仍 `Skipped`（同一文案），`{Split,Spawn,Tcp}.Full.…AFlipped…`
+仍 `Passed`。
+
+**3. §6 第 1、2、3 条改为按符号引用（nit）。** round 2 记的 `WireFramebuffer.inc:932-946` / `:878` /
+`:1095-1125` 在 round 3 于它们上方加了七行之后已经全部错位。现在按 `BlitWireFramebuffers` 的 `blit` lambda
+里的臂与 `MGLOG_E_ONCE` / `RecordTextureCopyError` 的文案引用；第 1 条里 monolith 那一处也改为
+`VulkanRenderer::BlitFramebuffer` 里 `vkCmdResolveImage` 之后的 `vkCmdBlitImage`，不再带 `pipe` 行号。
+
+本 round 只动这份笔记与一个测试源文件，不碰 `MG_Backend`，G1 不受影响。门见 §7 末尾的 round 4 一段。
 
 ---
 
@@ -551,11 +583,14 @@ monolith 臂在 **Android 的 disaggregated 包**里现在跑的是烘焙 blit�
 
 ## 6. 记录债（写给 CONTRACT-P7 §12 的几行）
 
-1. **缩放后的第二段没有裁剪**（`WireFramebuffer.inc:932-946`，round 2 之后本树行号）。多重采样颜色 resolve 的第二段
+1. **缩放后的第二段没有裁剪**（`WireFramebuffer.inc`，`BlitWireFramebuffers` 的 `blit` lambda 里多重采样
+   颜色 resolve 臂的第二段：`vkCmdResolveImage` 进 resolve scratch 之后、`destination.isDefault` 的
+   `else` 分支那一次 `vkCmdBlitImage`。本节按符号引、不按行号——round 2 记的行号在 round 3 加行之后
+   已经错位一次，审查 round 4）。多重采样颜色 resolve 的第二段
    `vkCmdBlitImage` 把目的矩形原样交给驱动；一个越出目的图像的矩形是
    `VUID-vkCmdBlitImage-dstOffset-00248/00249`，不是一张被裁过的图。**这条与 monolith 臂共有**
-   （`VulkanRenderer.cpp:10066` 的 `vkCmdBlitImage` 同样不裁；`:10060` 是它前面的
-   `vkCmdResolveImage`，行号是 `pipe` 上的），所以它不是分离缺陷，也不该由本包单独改；
+   （`VulkanRenderer::BlitFramebuffer` 多重采样颜色臂里 `vkCmdResolveImage` 之后的那次
+   `vkCmdBlitImage` 同样不裁），所以它不是分离缺陷，也不该由本包单独改；
    两条臂一起裁是一件独立的活。
    **部分生效（审查 round 2，已关）**：同一个缩放，mask 若是 `COLOR|DEPTH`，round 1 先由这条臂把颜色
    缩放写进目的地，再由深度臂记 `INVALID_OPERATION`——出错的调用留下了一半效果，18.3.1 不允许。
@@ -563,11 +598,17 @@ monolith 臂在 **Android 的 disaggregated 包**里现在跑的是烘焙 blit�
    什么也不写（§2.9 第 3 条，red-once 已做）。round 2 的预检漏掉了默认 draw framebuffer——同一个
    缩放落到**窗口**上时颜色照样先写进 swapchain——round 3 补上（§2.10 第 2 条，red-once 已做）。
    剩下的债只是上面的「不裁」。
-2. **`MagmaWireFatal("multisample-resolve-region")`**（`WireFramebuffer.inc:878`）仍然对
+2. **`MagmaWireFatal("multisample-resolve-region")`**（`WireFramebuffer.inc`，同一条多重采样颜色 resolve
+   臂在建 resolve scratch 之前的源区域检查）仍然对
    **源矩形越出读缓冲**的 blit 带走会话。GL 对这种形状的承诺是「那些像素的值未定义」，不是一个
    错误——所以正确的收口是 decline 或钳制，不是 Fatal。本包没有改它，因为它不带 `@P7`、也不是
    §3.2 点名的行；记在这里。
-3. **1 → N 的等矩形 decline**（`WireFramebuffer.inc:1095-1125`）拒绝的是一个**合法**形状：
+3. **1 → N 的等矩形 decline**（`WireFramebuffer.inc`，`BlitWireFramebuffers` 的 `blit` lambda 里多重采样
+   **目的地**那一段，`source.samples == destination.samples` 的 `else`：`MGLOG_E_ONCE("… aspect 0x%x
+   cannot go from a %u-sample source to a %u-sample destination …")` 加
+   `RecordTextureCopyError(… "glBlitFramebuffer cannot change the sample count of an attachment in
+   that direction.")`；它前面同一段里的尺寸 / 格式 decline 是 `"… a blit onto a multisample attachment
+   carries no scale, no flip and no format conversion …"`，即第 10 条说的那一处）拒绝的是一个**合法**形状：
    18.3.1 说单采样源写进多重采样目的地是**样本复制**。本包 decline 它，是因为 Vulkan 没有命令能
    表达它，而 monolith 臂对同一形状的「可观测」是一次 VU 违规（`vkCmdBlitImage` 的两侧都必须是
    单采样）——即没有一个正确的对照读数可抄。要真的实现它需要一条以目的地采样数建管线的 draw，
@@ -643,3 +684,11 @@ cherry-pick 到落地树上的）。所以这里只记**本树**的读数，并�
 
 `scripts/data/link_ratchet_baseline.txt` 的 `base commit` 头注释指 `6af422b3`——173 是在那棵树上量出来的，
 不是在 `4bee1313` 上；本 round 没有动它。
+
+**round 4**（本树 `p7/magma-b2`，round 3 之顶再加两条提交：测试一条、笔记 + 测试一条；`MG_Backend` 一字未动，
+G1 不受影响，所以上表的 G1 / ratchet / parity / `unit` 各行本 round 没有重量）。在 round 4 两条提交之顶量得：
+`ninja -C build-split` rc 0；`integration-magma-split` **95** / `integration-magma-spawn` **74** /
+`integration-magma-tcp` **70**，全绿；`DirectVulkan.{Split,Spawn,Tcp}.MsFlip.` 三条 `Passed`（探针指向
+`resolved.fbo` 的一次性证明下三条全红，§2.11 第 1 条）；monolith `DirectVulkan.…AFlipped…` /
+`DirectGLES.…AFlipped…` 仍 `Skipped`（同一文案）；`DirectVulkan.{Split,Spawn,Tcp}.Full.…AFlipped…` 三条仍
+`Passed`；`fatal_census` 79 / 44 / 0，RC 0。

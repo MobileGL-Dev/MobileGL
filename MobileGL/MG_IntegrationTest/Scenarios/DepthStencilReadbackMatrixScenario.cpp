@@ -44,7 +44,6 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
-#include "../Harness/SplitLane.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -444,8 +443,12 @@ namespace MGITest {
     // `DirectVulkan.{Split,Spawn,Tcp}.Full.` census and the `DirectVulkan.VerifySplit.` lane run
     // inproc/spawn/tcp WITHOUT it on purpose (their CMake blocks say why), and a marker gate
     // skipped this case there with a message about a monolith that was not running. The marker
-    // is still honoured on its own: a curated lane that asked for split keeps running the case,
-    // and its fixture's arming assertion is what says whether it got what it asked for.
+    // plays no part in this gate at all (review round 4): when it is set and the transport did
+    // not resolve, the fixture's SetUp has already skipped the case through
+    // SplitLane::SkipReasonForSplitOnlyAssertions() -> SplitRuntimeSkipReason() ("MG_Config::
+    // Transport resolved to 'monolith', not to a split transport"), so Ready() is false and this
+    // line is never reached - a `!IsSplitLane() &&` conjunct here could only ever be true, and
+    // round 3's comment described a branch nothing reaches.
     TEST_F(DepthStencilReadbackMatrixScenario, AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines) {
         if (!Ready()) return;
         if (Gl().BackendName() != "DirectVulkan") {
@@ -453,7 +456,7 @@ namespace MGITest {
                             "flipped multisample depth resolve writes nothing with no error and a scaled "
                             "one raises no INVALID_OPERATION - a P3b/P4b debt (notes/p7/magma-b2.md §6)";
         }
-        if (!SplitLane::IsSplitLane() && !PeekSplitRuntime().transportResolved) {
+        if (!PeekSplitRuntime().transportResolved) {
             GTEST_SKIP() << "the monolith DirectVulkan transport (this process resolved no split "
                             "transport, so BlitFramebuffer takes the monolith arm) refuses a flipped "
                             "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
