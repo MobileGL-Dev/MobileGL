@@ -33,18 +33,24 @@ says otherwise. The scenarios:
                   NEEDS-ADJUDICATION naming it; one case differing, adjudicated (+ a stale line) ->
                   PASS; one inproc repeat differs from its siblings -> FAIL (within-arm identity)
   unfinished      a pair without .done; a repeat without an actual PNG -> GATE3 INCOMPLETE
-  monolith-determinism  ID-P7-62, on synthetic 8x8 pictures (base grey 128, the first n px at
-                  another level): a bit-identical monolith x3 + a nondeterministic inproc -> FAIL
-                  (strict clause); a nondeterministic monolith (3 distinct / 3 passes, 10 px / delta
-                  4 apart) + split pictures inside 1.25x (10 px / delta 5) -> PASS, exit 0, no
-                  adjudication line needed, the numbers printed; the same with the stdlib decoder
-                  (W2_REDUCE_PNG_DECODER=pure) -> the same numbers; split beyond 1.25x in delta
-                  (6 > 5) or in pixels (13 > 12.5) -> FAIL; one split ssim 0.0005+ from ONE
-                  monolith reading -> FAIL; the pre-ID-P7-62 monolith x1 + a nondeterministic
-                  split -> FAIL naming the >= 3 passes it lacks; a finished monolith pair short of
-                  arms.txt's monolith_repeat -> FAIL; --extra-monolith DIR@BOOT adding two passes
-                  to that x1 archive -> the rule applies, GATE3 PASS-WITH-EXTRA-READINGS (exit 1),
-                  without @BOOT or with another boot -> INVALID-SESSION
+  monolith-determinism  ID-P7-62, clause (2) in its nearest-monolith form, on synthetic 8x8
+                  pictures (grey 128 with runs of pixels at other levels): a bit-identical monolith
+                  x3 + a nondeterministic inproc -> FAIL (strict clause); a nondeterministic
+                  monolith in a chain (4 / 4 / 8 px apart, delta 2: D_mm 4, Delta_mm 2, bound
+                  1.25 x 4 + 32 = 37 px / 2 + 1 = 3) + split passes at most 37 px / delta 3 from
+                  their nearest monolith pass (45 px from the farthest: outside the first form's
+                  1.25 x max-pair) -> PASS, exit 0, no adjudication line, the numbers printed, each
+                  pass's nearest named (a px tie goes to the smaller delta); the stdlib decoder
+                  (W2_REDUCE_PNG_DECODER=pure) -> the same numbers; a split pass 38 px from its
+                  nearest -> FAIL; one at delta 4 from its nearest-by-px pass (M1, 4 px) -> FAIL
+                  though another pass is delta 2 away; monolith x4 with a bit-identical twin pair
+                  -> leave-one-out over passes (D_mm 4, not 20 over pictures), a split pass 40 px
+                  from its nearest -> FAIL; one split ssim 0.0005+ from ONE monolith reading ->
+                  FAIL; the pre-ID-P7-62 monolith x1 + a nondeterministic split -> FAIL naming the
+                  >= 3 passes it lacks; a finished monolith pair short of arms.txt's
+                  monolith_repeat -> FAIL; --extra-monolith DIR@BOOT adding two passes to that x1
+                  archive -> the rule applies, GATE3 PASS-WITH-EXTRA-READINGS (exit 1), without
+                  @BOOT or with another boot -> INVALID-SESSION
   rate-gate       the gate rate alone decides (no crash anywhere): k $BASE-Pass dsa cases
                   turn Fail. k=1: 367/370, -0.270 pp -> PASS, exit 0; k=2: -0.541 pp -> FAIL on
                   the rate; k=4: 364/6/0/1/0, -1.081 pp -> FAIL, CTS FAIL
@@ -143,6 +149,12 @@ def write(path, data):
         path.write_text(data, encoding="utf-8")
 
 
+def speck(*runs):
+    """A Canned.png picture: 8x8 grey 128 with each (start, count, level) run of pixels (row-major,
+    0..63) at grey `level`; px(a, b) / delta(a, b) between two specks follow by hand."""
+    return tuple(runs)
+
+
 def lookup(table, arm, case, repeat, default):
     """A canned per-repeat value: (arm, case, repeat), else (arm, case), else arm, else default."""
     for key in ((arm, case, repeat), (arm, case), arm):
@@ -186,13 +198,13 @@ class Canned:
         self.root, self.tree, self.ca = root, tree, ca
 
     def png(self, value):
-        """value: a grey level (a solid 8x8 picture), or (n, level): grey 128 with its first n pixels
-        (row-major) at `level` - the synthetic 'speckle' the ID-P7-62 scenarios move around."""
+        """value: a grey level (a solid 8x8 picture), or speck(...): grey 128 with runs of pixels at
+        other levels - the synthetic 'speckle' the ID-P7-62 scenarios move around."""
         if isinstance(value, tuple):
-            n, level = value
             rgba = bytearray(self.ca._solid(8, 8, 128))
-            for i in range(n):
-                rgba[i * 4:i * 4 + 3] = bytes([level] * 3)
+            for start, n, level in value:
+                for i in range(start, start + n):
+                    rgba[i * 4:i * 4 + 3] = bytes([level] * 3)
             return self.ca._png_bytes(8, 8, bytes(rgba))
         return self.ca._png_bytes(8, 8, self.ca._solid(8, 8, value))
 
@@ -671,24 +683,38 @@ def scenario_unfinished(k, cn, tree):
 
 def scenario_determinism(k, cn, tree):
     print("[monolith-determinism] ID-P7-62: a monolith not bit-identical over >= 3 passes swaps the split arms' "
-          "bit-identity clause for the distributional check")
-    # A nondeterministic monolith: 3 distinct pictures, pairwise 10 px apart, largest delta 4 -> the
-    # split bound is 12.5 px / delta 5.0.
-    mono = {("monolith", A, 1): (10, 128), ("monolith", A, 2): (10, 132), ("monolith", A, 3): (10, 130)}
-    inside = {("inproc", A, 1): (10, 129), ("inproc", A, 2): (10, 131), ("inproc", A, 3): (10, 133),
-              ("spawn", A, 1): (10, 130), ("spawn", A, 2): (10, 132), ("spawn", A, 3): (10, 128)}
+          "bit-identity clause for the distributional check, clause (2) in its nearest-monolith form")
+    # A nondeterministic monolith in a chain: M1 = px 0..7 at 130, M2 = px 0..3 at 130, M3 = solid
+    # 128. M1-M2 4 px / delta 2, M2-M3 4 px / 2, M1-M3 8 px / 2 -> each pass's nearest OTHER pass is
+    # 4 px / delta 2: D_mm 4, Delta_mm 2, bound 1.25 x 4 + 32 = 37 px / 2 + 1 = 3. (The first form,
+    # 1.25 x the max over all pairs, bounded the split at 10 px / delta 2.5.)
+    m1, m2, m3 = speck((0, 8, 130)), speck((0, 4, 130)), 128
+    mono = {("monolith", A, 1): m1, ("monolith", A, 2): m2, ("monolith", A, 3): m3}
+    # inproc rep3: px 8..44 at 131 -> nearest M3 at 37 px / delta 3 (41 px from M2, 45 from M1);
+    # spawn rep2: px 0..3 at 130 + 8..27 at 129 -> nearest M2, 20 px / delta 1; spawn rep3: px 0..7
+    # at 131 -> 8 px from both M1 (delta 1) and M2 (delta 3): the tie goes to the smaller delta.
+    inside = {("inproc", A, 1): m1, ("inproc", A, 2): m2, ("inproc", A, 3): speck((8, 37, 131)),
+              ("spawn", A, 1): m3, ("spawn", A, 2): speck((0, 4, 130), (8, 20, 129)),
+              ("spawn", A, 3): speck((0, 8, 131))}
     rule_line = "nondeterministic monolith (3 distinct / 3 passes) -> distributional check (ID-P7-62)"
-    numbers = {"passes": 3, "distinct": 3, "rule": "distributional", "mono_pairs": 3, "mono_px_max": 10,
-               "mono_delta_max": 4, "split_pairs": 18, "split_px_max": 10, "split_delta_max": 5, "within": True}
+    numbers = {"passes": 3, "distinct": 3, "rule": "distributional", "mono_nearest_px_max": 4,
+               "mono_nearest_delta_max": 2, "split_nearest_px_max": 37, "split_nearest_delta_max": 3,
+               "px_bound": 37.0, "delta_bound": 3, "within": True}
+    numbers_line = ("monolith leave-one-out nearest: D_mm 4 px / Delta_mm 2 (3 passes); split-to-nearest-monolith max "
+                    "37 px / delta 3 (6 passes; most px: inproc rep3 -> monolith rep3 37 px / delta 3); bound 1.25 x 4 "
+                    "+ 32 = 37.00 px / 2 + 1 = 3: within")
 
     def det(v):
         return case(v, A).get("monolith_determinism", {})
+
+    def near(v, label):
+        return next((n for n in det(v).get("split_nearest", []) if n.get("pass") == label), {})
 
     def has(v, needle):
         return any(needle in r for r in case(v, A).get("reasons", []))
 
     # (a) the strict clause stands when the monolith is bit-identical over its 3 passes.
-    cn.window("det-strict", gate3_args={"picture": {("inproc", A, 2): (10, 131)}})
+    cn.window("det-strict", gate3_args={"picture": {("inproc", A, 2): speck((0, 4, 130))}})
     rc, text, v = run_reducer(cn.root, "det-strict", tree)
     k.expect("bit-identical monolith x3 + a nondeterministic inproc -> %s FAIL (strict clause), GATE3 FAIL" % A,
              case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0 and det(v).get("rule") == "strict"
@@ -696,18 +722,32 @@ def scenario_determinism(k, cn, tree):
                         "bit-identical over 3 passes") and case(v, B).get("verdict") == "PASS",
              (case(v, A).get("reasons"), det(v)))
 
-    # (b) a nondeterministic monolith, the split pictures inside its spread -> PASS, no adjudication.
+    # (b) a nondeterministic monolith, every split pass within its nearest monolith pass's bound -> PASS.
     cn.window("det-inside", gate3_args={"picture": {**mono, **inside}})
     rc, text, v = run_reducer(cn.root, "det-inside", tree)
-    k.expect("nondeterministic monolith (3 distinct / 3 passes) + split inside 1.25x -> %s PASS, GATE3 PASS, exit 0" % A,
+    k.expect("nondeterministic monolith (3 distinct / 3 passes) + every split pass within 1.25 x D_mm + 32 px / "
+             "Delta_mm + 1 of its nearest monolith pass (37 px / delta 3; 45 px / delta 3 from the farthest) -> %s "
+             "PASS, GATE3 PASS, exit 0" % A,
              case(v, A).get("verdict") == "PASS" and overall(v) == "PASS" and rc == 0
              and "GATE3 PASS: 36/36 cases PASS\n" in text, (case(v, A).get("reasons"), overall(v), text[-400:]))
-    k.expect("...the rule line and the numbers: 10 px / delta 4 over 3 monolith pairs, 10 px / delta 5 over 18 "
-             "split pairs, bound 12.50 px / 5.00",
-             {key: det(v).get(key) for key in numbers} == numbers and rule_line in text
-             and "monolith-vs-monolith max 10 px / delta 4 (3 pairs); split-vs-monolith max 10 px / delta 5 (18 pairs); "
-                 "bound 1.25x = 12.50 px / 5.00: within" in text
-             and g3(v, "determinism", {}).get("distributional") == [A], (det(v), text[:1500]))
+    k.expect("...the rule line and the numbers: D_mm 4 px / Delta_mm 2 over 3 monolith passes, split-to-nearest max "
+             "37 px / delta 3 over 6 split passes, bound 37.00 px / 3",
+             {key: det(v).get(key) for key in numbers} == numbers and rule_line in text and numbers_line in text
+             and len(det(v).get("split_nearest", [])) == 6 and g3(v, "determinism", {}).get("distributional") == [A],
+             (det(v), text[:1500]))
+    k.expect("...leave-one-out over the monolith passes: each pass's nearest OTHER pass is 4 px / delta 2",
+             [(n.get("pass"), n.get("px"), n.get("delta")) for n in det(v).get("mono_nearest", [])]
+             == [("monolith rep1", 4, 2), ("monolith rep2", 4, 2), ("monolith rep3", 4, 2)], det(v).get("mono_nearest"))
+    k.expect("...each split pass is scored against its NEAREST monolith pass (fewest px; a px tie goes to the "
+             "smaller delta)",
+             near(v, "inproc rep3") == {"pass": "inproc rep3", "nearest": "monolith rep3", "px": 37, "delta": 3,
+                                        "within": True}
+             and near(v, "spawn rep2") == {"pass": "spawn rep2", "nearest": "monolith rep2", "px": 20, "delta": 1,
+                                           "within": True}
+             and near(v, "spawn rep3") == {"pass": "spawn rep3", "nearest": "monolith rep1", "px": 8, "delta": 1,
+                                           "within": True}
+             and near(v, "inproc rep1").get("px") == 0 and near(v, "spawn rep1").get("nearest") == "monolith rep3",
+             det(v).get("split_nearest"))
     k.expect("...its cross-arm difference needs no gate3/adjudication.tsv line (decided by the rule)",
              case(v, A).get("cross_arm", {}).get("identical") is False
              and case(v, A).get("cross_arm", {}).get("distributional") is True
@@ -719,23 +759,48 @@ def scenario_determinism(k, cn, tree):
              % decoder, {key: det(v).get(key) for key in numbers} == numbers
              and det(v).get("decoder", "").startswith("pure-python") and rc == 0, det(v))
 
-    # (c) beyond 1.25x: in the per-channel delta, then in the pixel count.
-    cn.window("det-delta", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): (10, 134)}})
-    rc, text, v = run_reducer(cn.root, "det-delta", tree)
-    k.expect("...one split picture at delta 6 > 1.25 x 4 -> %s FAIL, GATE3 FAIL" % A,
-             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0
-             and det(v).get("split_delta_max") == 6 and det(v).get("within") is False
-             and has(v, "split-vs-monolith max per-channel delta 6 > 1.25 x the monolith-vs-monolith max 4 (= 5.00)")
-             and not has(v, "differing px"), case(v, A).get("reasons"))
-    cn.window("det-px", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): (13, 131)}})
+    # (c) outside the bound: in pixels, then in the per-channel delta to the nearest-by-px pass.
+    cn.window("det-px", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): speck((8, 38, 131))}})
     rc, text, v = run_reducer(cn.root, "det-px", tree)
-    k.expect("...one split picture 13 px off > 1.25 x 10 (delta inside) -> %s FAIL" % A,
-             case(v, A).get("verdict") == "FAIL" and rc != 0 and det(v).get("split_px_max") == 13
-             and det(v).get("split_delta_max") == 4
-             and has(v, "split-vs-monolith max 13 differing px > 1.25 x the monolith-vs-monolith max 10 (= 12.50)")
-             and not has(v, "per-channel delta"), (det(v), case(v, A).get("reasons")))
+    k.expect("...one split pass 38 px from its nearest monolith pass > 1.25 x 4 + 32 = 37 (delta 3 inside) -> %s "
+             "FAIL, GATE3 FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0
+             and det(v).get("split_nearest_px_max") == 38 and det(v).get("within") is False
+             and near(v, "inproc rep3").get("within") is False
+             and case(v, A).get("reasons") == ["ID-P7-62: inproc rep3 is 38 differing px from its nearest monolith pass "
+                                               "(monolith rep3) > 1.25 x D_mm 4 + 32 (= 37.00)"],
+             (det(v).get("split_nearest"), case(v, A).get("reasons")))
+    # inproc rep3: px 0..3 at 126, 4..7 at 130 -> M1 4 px / delta 4 (the nearest), M2 8 px / 4, M3 8 px / 2.
+    cn.window("det-delta", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): speck((0, 4, 126), (4, 4, 130))}})
+    rc, text, v = run_reducer(cn.root, "det-delta", tree)
+    k.expect("...one split pass at delta 4 from its nearest-by-px monolith pass (M1, 4 px) > 2 + 1 -> %s FAIL, though "
+             "another pass (M3, 8 px) is only delta 2 away" % A,
+             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0
+             and det(v).get("split_nearest_delta_max") == 4 and det(v).get("within") is False
+             and case(v, A).get("reasons") == ["ID-P7-62: inproc rep3's per-channel delta to its nearest monolith pass "
+                                               "(monolith rep1, 4 px) is 4 > Delta_mm 2 + 1 (= 3)"],
+             (det(v).get("split_nearest"), case(v, A).get("reasons")))
 
-    # (d) clause (1) holds against EVERY monolith reading, not one of them.
+    # (d) leave-one-out is over PASSES: a bit-identical twin pair is 0 px from each other. Monolith x4:
+    # rep1 = rep2 = solid, rep3 = px 0..19 at 130, rep4 = px 0..23 at 130 -> D_mm = max(0, 0, 4, 4) = 4
+    # (over distinct pictures it would be 20); inproc rep3 = px 24..63 at 129 is 40 px from its nearest
+    # (rep1) > 37 -> FAIL.
+    twins = {("monolith", A, 1): 128, ("monolith", A, 2): 128, ("monolith", A, 3): speck((0, 20, 130)),
+             ("monolith", A, 4): speck((0, 24, 130)), ("inproc", A, 3): speck((24, 40, 129))}
+    cn.window("det-twins", gate3_args={"arms": (("monolith", 4),) + ARMS[1:], "picture": twins})
+    rc, text, v = run_reducer(cn.root, "det-twins", tree)
+    k.expect("monolith x4 with a bit-identical twin pair (3 distinct / 4 passes): D_mm 4 over the passes, not 20 "
+             "over the pictures; a split pass 40 px from its nearest -> %s FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and rc != 0 and det(v).get("rule") == "distributional"
+             and (det(v).get("passes"), det(v).get("distinct")) == (4, 3)
+             and [(n.get("pass"), n.get("nearest"), n.get("px")) for n in det(v).get("mono_nearest", [])]
+             == [("monolith rep1", "monolith rep2", 0), ("monolith rep2", "monolith rep1", 0),
+                 ("monolith rep3", "monolith rep4", 4), ("monolith rep4", "monolith rep3", 4)]
+             and det(v).get("px_bound") == 37.0
+             and has(v, "inproc rep3 is 40 differing px from its nearest monolith pass (monolith rep1)"),
+             (det(v), case(v, A).get("reasons")))
+
+    # (e) clause (1) holds against EVERY monolith reading, not one of them.
     ssim = {("monolith", A, 1): 0.9978, ("monolith", A, 2): 0.998, ("monolith", A, 3): 0.9982, ("spawn", A, 2): 0.99831}
     cn.window("det-ssim", gate3_args={"picture": {**mono, **inside}, "ssim": ssim})
     rc, text, v = run_reducer(cn.root, "det-ssim", tree)
@@ -744,7 +809,7 @@ def scenario_determinism(k, cn, tree):
              and case(v, A).get("reasons") == ["spawn rep2 |ssim-monolith|=0.000510 > 0.0005 (max over 3 monolith readings)"],
              case(v, A).get("reasons"))
 
-    # (e) the pre-ID-P7-62 archives (monolith x1, no monolith_repeat= in arms.txt): the rule cannot apply.
+    # (f) the pre-ID-P7-62 archives (monolith x1, no monolith_repeat= in arms.txt): the rule cannot apply.
     cn.window("det-mono1", gate3_args={"arms": ARMS_MONO1, "arms_txt": ARMS_TXT_MONO1, "picture": inside})
     rc, text, v = run_reducer(cn.root, "det-mono1", tree)
     k.expect("monolith x1 (the earlier 30-gate3.sh) + a nondeterministic split -> %s FAIL naming the >= 3 monolith "
@@ -755,7 +820,7 @@ def scenario_determinism(k, cn, tree):
                         "rule needs >= 3 same-session monolith passes, this session has 1")
              and case(v, B).get("verdict") == "PASS", (det(v), case(v, A).get("reasons")))
 
-    # (f) the monolith pair's own bookkeeping: arms.txt monolith_repeat=3 holds a finished pair to 3.
+    # (g) the monolith pair's own bookkeeping: arms.txt monolith_repeat=3 holds a finished pair to 3.
     out = cn.window("det-short")
     shutil.rmtree(out / "gate3/archive/monolith" / (A + "-DirectVulkan") / "repeat-03")
     rc, text, v = run_reducer(cn.root, "det-short", tree)
@@ -768,16 +833,17 @@ def scenario_determinism(k, cn, tree):
              case(v, A).get("verdict") == "INCOMPLETE" and overall(v) == "INCOMPLETE"
              and "monolith: 2/3 repeats" in case(v, A).get("reasons", []), case(v, A).get("reasons"))
 
-    # (g) --extra-monolith: the g3det E1-mono re-reduction shape (x1 archive + passes outside gate3/).
+    # (h) --extra-monolith: the g3det E1-mono re-reduction shape (x1 archive = M3 + passes outside gate3/).
     cn.window("det-extra", gate3_args={"arms": ARMS_MONO1, "arms_txt": ARMS_TXT_MONO1, "picture": inside})
-    extra = cn.extra_monolith(cn.root / "extra-unstamped", A, [(10, 132), (10, 130)])
+    extra = cn.extra_monolith(cn.root / "extra-unstamped", A, [m1, m2])
     rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=["%s@%s" % (extra, BOOT)])
     k.expect("x1 archive + 2 extra monolith passes attested @session boot -> the rule applies (3 distinct / 3), "
              "%s PASS, GATE3 PASS-WITH-EXTRA-READINGS, exit 1" % A,
              case(v, A).get("verdict") == "PASS" and det(v).get("rule") == "distributional"
              and overall(v) == "PASS-WITH-EXTRA-READINGS" and rc == 1
              and "GATE3 PASS-WITH-EXTRA-READINGS: 36/36 cases PASS" in text and "NOT a gate verdict" in text
-             and "monolith 38/38 repeat(s) (2 of them --extra-monolith)" in text,
+             and "monolith 38/38 repeat(s) (2 of them --extra-monolith)" in text
+             and near(v, "spawn rep3").get("nearest") == "monolith +extra-unstamped rep1",
              (overall(v), case(v, A).get("reasons"), det(v), text[-600:]))
     rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=[extra])
     s = g3(v, "session", {})
@@ -788,7 +854,7 @@ def scenario_determinism(k, cn, tree):
     k.expect("...attested @another boot -> GATE3 INVALID-SESSION naming it",
              overall(v) == "INVALID-SESSION" and rc != 0
              and any(OTHER_BOOT in p for p in g3(v, "session", {}).get("problems", [])), g3(v, "session"))
-    stamped = cn.extra_monolith(cn.root / "extra-stamped", A, [(10, 132), (10, 130)], boot=BOOT)
+    stamped = cn.extra_monolith(cn.root / "extra-stamped", A, [m1, m2], boot=BOOT)
     rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=[stamped])
     k.expect("...extra passes whose own boot_id.txt is the session's (no @BOOT_ID) -> PASS-WITH-EXTRA-READINGS",
              overall(v) == "PASS-WITH-EXTRA-READINGS" and rc == 1 and case(v, A).get("verdict") == "PASS", overall(v))

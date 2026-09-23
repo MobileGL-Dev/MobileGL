@@ -38,15 +38,19 @@ GATE 3 (CONTRACT-P7 7.1/7.2), per case of gate3/cases.txt:
     presupposes a bit-reproducible reference. A case whose same-session monolith pictures are NOT
     all bit-identical over >= 3 passes has none, so for it the split arms' bit-identity clause is
     replaced by the distributional check: (1) the |ssim - m| clause above, for every monolith
-    reading m; (2) over every split-vs-monolith picture pair (inproc and spawn repeats x monolith
-    passes) the maximum differing-pixel count (any RGBA channel differs) and the maximum
-    per-channel delta are each <= 1.25 x the monolith-vs-monolith maximum. The pixels are read
-    from the archived actual PNGs (numpy + PIL; without them, or with W2_REDUCE_PNG_DECODER=pure,
-    compare_actuals' stdlib decoder - the same numbers, slower). Such a case prints
-    'nondeterministic monolith (N distinct / M passes) -> distributional check' and its numbers,
-    and its cross-arm difference is decided by (2), not by gate3/adjudication.tsv. A case whose
-    monolith is bit-identical, or that has fewer than 3 monolith passes (the pre-ID-P7-62 x1
-    archives), keeps the strict clause;
+    reading m; (2) NEAREST MONOLITH (integrator ruling on ID-P7-62, replacing the first form's
+    1.25 x the max over all pairs): px(a, b) = the pixels where any RGBA channel differs, delta(a, b)
+    = the largest per-channel difference; the nearest of a pass among candidate monolith passes is
+    the one with the fewest differing px (a tie: the smaller delta), and its delta is measured to
+    that same pass. D_mm / Delta_mm = the max over the monolith passes of px / delta to the nearest
+    OTHER monolith pass (leave-one-out, over passes: a bit-identical twin is 0 / 0); every split
+    pass s (inproc and spawn repeats) must hold px(s, nearest) <= 1.25 x D_mm + 32 AND
+    delta(s, nearest) <= Delta_mm + 1. The pixels are read from the archived actual PNGs (numpy +
+    PIL; without them, or with W2_REDUCE_PNG_DECODER=pure, compare_actuals' stdlib decoder - the
+    same numbers, slower). Such a case prints 'nondeterministic monolith (N distinct / M passes)
+    -> distributional check' and its numbers, and its cross-arm difference is decided by (2), not
+    by gate3/adjudication.tsv. A case whose monolith is bit-identical, or that has fewer than 3
+    monolith passes (the pre-ID-P7-62 x1 archives), keeps the strict clause;
   * --extra-monolith DIR[@BOOT_ID] (repeatable; an adjudication re-reduction, never the gate):
     adds the passes under DIR/<case>-DirectVulkan/repeat-NN (a run_android_retrace_local.py
     --archive-dir tree) to the case's monolith readings. Each must be the session's: a repeat's
@@ -111,7 +115,6 @@ non-skipped case of the run's caselist and unrun.txt is empty, 3 when not (the r
 """
 import argparse
 import hashlib
-import itertools
 import json
 import os
 import re
@@ -121,10 +124,14 @@ from pathlib import Path
 
 TOL = 0.0005
 # ID-P7-62 (g3det VERDICT.md section 2): a case whose same-session monolith is not bit-identical
-# over >= MONOLITH_RULE_PASSES passes is judged by the distributional check, whose pixel bound is
-# SPREAD_FACTOR x the monolith's own spread.
+# over >= MONOLITH_RULE_PASSES passes is judged by the distributional check, whose clause (2) holds
+# every split pass to its nearest monolith pass within SPREAD_FACTOR x D_mm + PX_HEADROOM px and
+# Delta_mm + DELTA_HEADROOM per channel (D_mm / Delta_mm: the monolith's leave-one-out nearest
+# spread; integrator ruling on ID-P7-62).
 MONOLITH_RULE_PASSES = 3
 SPREAD_FACTOR = 1.25
+PX_HEADROOM = 32
+DELTA_HEADROOM = 1
 RULING_62 = "ID-P7-62"
 UUID = re.compile(r"^(.+)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 # CONTRACT-P7 7.1/7.2's constants: the gate is held to these, never to what gate3/arms.txt,
@@ -372,10 +379,14 @@ def picture_reader(ca):
     return PurePictures(ca)
 
 
-def spread(reader, mono, split):
-    """ID-P7-62 clause (2). mono, split: [(sha, path)] over every reading (a picture repeated in
-    several readings is decoded and compared once; an identical pair counts as 0 px / delta 0).
-    -> {mono_pairs, mono_px_max, mono_delta_max, split_pairs, split_px_max, split_delta_max}."""
+def nearest_spread(reader, mono, split):
+    """ID-P7-62 clause (2), nearest-monolith form. mono, split: [(label, sha, path)] over every
+    reading (a picture repeated in several readings is decoded and compared once; an identical pair
+    is 0 px / delta 0). The nearest of a pass among candidates is the one with the fewest differing
+    px, a tie broken by the smaller delta (then the first listed); its delta is measured to that
+    same pass. -> {mono_nearest: [{pass, nearest, px, delta}] (leave-one-out: the nearest OTHER
+    monolith pass), mono_nearest_px_max (D_mm), mono_nearest_delta_max (Delta_mm), split_nearest:
+    [...] (the nearest monolith pass), split_nearest_px_max, split_nearest_delta_max}."""
     cache, memo = {}, {}
 
     def load(sha, path):
@@ -383,22 +394,27 @@ def spread(reader, mono, split):
             cache[sha] = reader.load(path)
         return cache[sha]
 
-    def worst(pairs):
-        px = delta = 0
-        for (sa, pa), (sb, pb) in pairs:
-            if sa == sb:
-                continue
-            key = (sa, sb) if sa < sb else (sb, sa)
-            if key not in memo:
-                memo[key] = reader.diff(load(sa, pa), load(sb, pb))
-            px, delta = max(px, memo[key][0]), max(delta, memo[key][1])
-        return px, delta
-    mono_pairs = list(itertools.combinations(mono, 2))
-    split_pairs = list(itertools.product(split, mono))
-    mono_px, mono_delta = worst(mono_pairs)
-    split_px, split_delta = worst(split_pairs)
-    return {"mono_pairs": len(mono_pairs), "mono_px_max": mono_px, "mono_delta_max": mono_delta,
-            "split_pairs": len(split_pairs), "split_px_max": split_px, "split_delta_max": split_delta}
+    def diff(a, b):
+        (_, sa, pa), (_, sb, pb) = a, b
+        if sa == sb:
+            return 0, 0
+        key = (sa, sb) if sa < sb else (sb, sa)
+        if key not in memo:
+            memo[key] = reader.diff(load(sa, pa), load(sb, pb))
+        return memo[key]
+
+    def nearest(item, candidates):
+        px, delta, _, other = min((diff(item, c) + (i, c) for i, c in enumerate(candidates)),
+                                  key=lambda t: t[:3])
+        return {"pass": item[0], "nearest": other[0], "px": px, "delta": delta}
+    mono_nearest = [nearest(m, mono[:i] + mono[i + 1:]) for i, m in enumerate(mono)]
+    split_nearest = [nearest(s, mono) for s in split]
+    return {"mono_nearest": mono_nearest,
+            "mono_nearest_px_max": max(n["px"] for n in mono_nearest),
+            "mono_nearest_delta_max": max(n["delta"] for n in mono_nearest),
+            "split_nearest": split_nearest,
+            "split_nearest_px_max": max((n["px"] for n in split_nearest), default=0),
+            "split_nearest_delta_max": max((n["delta"] for n in split_nearest), default=0)}
 
 
 def extra_monolith(ca, specs):
@@ -497,6 +513,9 @@ def gate3(out, ca, extras=()):
 
     def picture(row):
         return str(Path(row["dir"]) / row["actual"]) if row and row.get("actual") else None
+
+    def mono_label(row):  # a monolith reading, short: "monolith rep2", "monolith +E1-mono rep3"
+        return "monolith %srep%d" % ("+%s " % Path(row["extra"]).name if row.get("extra") else "", row["repeat"])
 
     def ra0_proof(row):
         p = Path(row["dir"]) / "mobilegl.log"
@@ -619,30 +638,37 @@ def gate3(out, ca, extras=()):
                 if lc[i] and lc[i] == lc[i - 1]:
                     reasons.append("%s rep%d STALE (logcat identical to rep%d)" % (arm, rs[i]["repeat"], rs[i - 1]["repeat"]))
         if distributional:
-            # ID-P7-62 clause (2): the split pictures lie inside the monolith's own spread.
-            split_valid = [r for arm in SPLIT_ARMS for r in split_rows[arm] if not r.get("error") and r.get("actual")]
-            split_ssims = [r["ssim_vs_golden"] for r in split_valid if isinstance(r.get("ssim_vs_golden"), (int, float))]
+            # ID-P7-62 clause (2), nearest-monolith form: every split pass lies within the monolith's
+            # own leave-one-out nearest spread of its nearest monolith pass.
+            split_valid = [("%s rep%d" % (arm, r["repeat"]), r) for arm in SPLIT_ARMS for r in split_rows[arm]
+                           if not r.get("error") and r.get("actual")]
+            split_ssims = [r["ssim_vs_golden"] for _, r in split_valid if isinstance(r.get("ssim_vs_golden"), (int, float))]
             det["max_dssim"] = max((abs(s - m) for s in split_ssims for m in mono_ssims), default=None)
             reader = reader or picture_reader(ca)
             det["decoder"] = reader.name
             try:
-                det.update(spread(reader, [(m["actual_sha256"], picture(m)) for m in mono_rows if m.get("actual")],
-                                  [(r["actual_sha256"], picture(r)) for r in split_valid]))
+                det.update(nearest_spread(
+                    reader, [(mono_label(m), m["actual_sha256"], picture(m)) for m in mono_rows if m.get("actual")],
+                    [(label, r["actual_sha256"], picture(r)) for label, r in split_valid]))
             except Exception as error:  # an unreadable / mis-sized picture: no measurement, no pass
                 det["error"] = "%s: %s" % (type(error).__name__, error)
                 reasons.append("%s distributional check cannot be measured (%s)" % (RULING_62, det["error"]))
             else:
-                det["px_bound"] = SPREAD_FACTOR * det["mono_px_max"]
-                det["delta_bound"] = SPREAD_FACTOR * det["mono_delta_max"]
-                det["within"] = det["split_px_max"] <= det["px_bound"] and det["split_delta_max"] <= det["delta_bound"]
-                if det["split_px_max"] > det["px_bound"]:
-                    reasons.append("%s: split-vs-monolith max %d differing px > %.2f x the monolith-vs-monolith max %d "
-                                   "(= %.2f)" % (RULING_62, det["split_px_max"], SPREAD_FACTOR, det["mono_px_max"],
-                                                 det["px_bound"]))
-                if det["split_delta_max"] > det["delta_bound"]:
-                    reasons.append("%s: split-vs-monolith max per-channel delta %d > %.2f x the monolith-vs-monolith "
-                                   "max %d (= %.2f)" % (RULING_62, det["split_delta_max"], SPREAD_FACTOR,
-                                                        det["mono_delta_max"], det["delta_bound"]))
+                d_mm, delta_mm = det["mono_nearest_px_max"], det["mono_nearest_delta_max"]
+                det["px_bound"] = SPREAD_FACTOR * d_mm + PX_HEADROOM
+                det["delta_bound"] = delta_mm + DELTA_HEADROOM
+                for n in det["split_nearest"]:
+                    n["within"] = n["px"] <= det["px_bound"] and n["delta"] <= det["delta_bound"]
+                    if n["px"] > det["px_bound"]:
+                        reasons.append("%s: %s is %d differing px from its nearest monolith pass (%s) > %.2f x D_mm %d "
+                                       "+ %d (= %.2f)" % (RULING_62, n["pass"], n["px"], n["nearest"], SPREAD_FACTOR,
+                                                          d_mm, PX_HEADROOM, det["px_bound"]))
+                    if n["delta"] > det["delta_bound"]:
+                        reasons.append("%s: %s's per-channel delta to its nearest monolith pass (%s, %d px) is %d > "
+                                       "Delta_mm %d + %d (= %d)" % (RULING_62, n["pass"], n["nearest"], n["px"],
+                                                                    n["delta"], delta_mm, DELTA_HEADROOM,
+                                                                    det["delta_bound"]))
+                det["within"] = all(n["within"] for n in det["split_nearest"])
         # The RUN_AHEAD=0 control arm: required on every case (CONTRACT-P7 7.2 "RUN_AHEAD=0 对照臂一遍
         # 记录"), and it must be that arm; its picture is recorded, never gating.
         ra0 = rows("inproc-ra0", case)
@@ -790,11 +816,17 @@ def print_gate3(g3):
             print("%-*s    nondeterministic monolith (%d distinct / %d passes) -> distributional check (%s)" % (
                 w, "", det["distinct"], det["passes"], RULING_62))
             if "error" not in det:
-                print("%-*s      monolith-vs-monolith max %d px / delta %d (%d pairs); split-vs-monolith max %d px / "
-                      "delta %d (%d pairs); bound %.2fx = %.2f px / %.2f: %s; max |ssim - monolith| %s; decoder %s" % (
-                          w, "", det["mono_px_max"], det["mono_delta_max"], det["mono_pairs"], det["split_px_max"],
-                          det["split_delta_max"], det["split_pairs"], SPREAD_FACTOR, det["px_bound"],
-                          det["delta_bound"], "within" if det["within"] else "OUTSIDE",
+                worst = max(det["split_nearest"], key=lambda n: (n["px"], n["delta"]), default=None)
+                print("%-*s      monolith leave-one-out nearest: D_mm %d px / Delta_mm %d (%d passes); split-to-nearest-"
+                      "monolith max %d px / delta %d (%d passes%s); bound %.2f x %d + %d = %.2f px / %d + %d = %d: %s; "
+                      "max |ssim - monolith| %s; decoder %s" % (
+                          w, "", det["mono_nearest_px_max"], det["mono_nearest_delta_max"], len(det["mono_nearest"]),
+                          det["split_nearest_px_max"], det["split_nearest_delta_max"], len(det["split_nearest"]),
+                          "; most px: %s -> %s %d px / delta %d" % (worst["pass"], worst["nearest"], worst["px"],
+                                                                    worst["delta"]) if worst else "",
+                          SPREAD_FACTOR, det["mono_nearest_px_max"], PX_HEADROOM, det["px_bound"],
+                          det["mono_nearest_delta_max"], DELTA_HEADROOM, det["delta_bound"],
+                          "within" if det["within"] else "OUTSIDE",
                           "-" if det["max_dssim"] is None else "%.1e" % det["max_dssim"], det["decoder"]))
         for reason in e["reasons"]:
             print("%-*s    ! %s" % (w, "", reason))
