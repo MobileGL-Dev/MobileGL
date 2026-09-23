@@ -512,6 +512,15 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
     「OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it retires, so the
     completed-serial floor still advances correctly after one fence wait」——disagg 构建上 §3.1 之后
     **不再逐记录通知**，地板只推到无在飞持有的序号。该函数是 pull 与 disagg 共用代码，注释归 B4 一起改。
+- **`WaitForFrameSerial` 在 disagg 构建上可能答 true 而序号并未完成（修正轮，fable 复审；写给集成者抄进 §12，
+  本包不修）**：它等的是 `m_inFlightSubmits` 里**第一条** `frameSerial >= serial` 的记录，
+  `OnSubmitsCompletedUpTo(record.submitIndex)` 之后就 `return true`。有了 §3.1 的钳制，若**更晚**的一条记录
+  （S2，Present）持有**同一个**序号——正是 §2.2 的「一个序号两次提交」——地板到不了 `serial`，于是函数返回 true
+  而 `IsFrameSerialComplete(serial)` 为 false。唯一的调用者 `WaitForTimerQueryResult` 返回前重查
+  `IsTimerQueryResultReady(record)`，所以今天它退化为一次**假超时**（结果这次拿不到、下次再收），不是错读。
+  **修法归 B4**：`OnSubmitsCompletedUpTo` 之后只在 `IsFrameSerialComplete(serial)` 为真时返回，否则**从头重扫**
+  ——`OnSubmitsCompletedUpTo` 会从正在迭代的 vector 里 erase，所以是 restart，不能 continue；
+  与 §7.1 的聚合等待与上面的注释一起做。
 - **disaggregated 构建的 monolith 臂现在比 pull 构建更可靠（复审 (a)）**：monolith 的
   `VkBufferResource` 路径 `OnSubData` 经 `IsResourceBusy`（`VkBufferManager.cpp:709`）读的是**同一个**
   `GetCompletedSerial()` 地板，所以 §3.1 的钳制在 disagg 构建里也保护了 monolith 臂的 mid-frame flush；
