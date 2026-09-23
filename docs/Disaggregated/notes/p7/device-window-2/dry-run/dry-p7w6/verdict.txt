@@ -1,0 +1,39 @@
+== GATE 3 (DirectVulkan x pbuffer; split repeat=1; tol |ssim-monolith| <= 0.0005) ==
+case                                       verdict     monolith     inproc(min..max) #sha     spawn(min..max) #sha      ra0          i==s==m
+OpenRA                                     PASS        1.000000     1.000000..1.000000 #1     1.000000..1.000000 #1     1.000000     yes
+minecraft-1.21.4-fabric-iris-bsl-in-world  PASS        0.997010     0.997010..0.997010 #1     0.997010..0.997010 #1     0.997010     yes
+-- RUN_AHEAD=0 control (recorded, not gating): 2 case(s); proofs: run-ahead=0
+-- excluded (red on monolith, CONTRACT-P7 7.1): minecraft-1.21.1-neoforge-create-indirect-in-world, minecraft-1.21.11-main-menu, minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world
+GATE3 PASS: 2/2 cases PASS  (denominator is 2, not the gate's 36: a subset run is NOT a gate verdict)
+
+== BSL-ESC-MENU MOBILEGL_PIPE_STATS (maps lines / RSS peaks, wbuf[] gauges) ==
+[inproc] rc=0 seconds=13 finished=2026-09-23T09:41:05-04:00
+  replay: passed=True ssim=0.999791667 sha=155dcdd13a24e0ee
+  pid      comm               samples  maps_peak VmRSS_peak_kB     VmHWM_kB   span_s
+  32599    ugin.p7w1.trace         38       8115       821992       823612     13.9
+  32416    ugin.p7w1.trace          6       5191       768728       804116      1.9
+  3 wbuf[wbufs=28 wlivepk=1052 wdefpk=3312832 wdefsync=24]
+
+== CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==
+rate = Pass/(results-NotSupported); gate: delta >= -0.5 pp and 0 new crash per block
+block           cases  BASE P/NS/F/X  rate         AFTER P/NS/F/X rate          delta pp  crash   regr  fixed  verdict
+dsa                20  19/0/0/1 95.000%            19/0/0/1 95.000%               +0.000      0      0      0  PASS (SUBSET)
+CTS PASS (SUBSET run: not a gate verdict)
+
+== TIMING ==
+  preflight               5s  2026-09-23T09:39:38 -> 2026-09-23T09:39:43  reboot=0 pin=1
+  install                 0s  2026-09-23T09:39:43 -> 2026-09-23T09:39:43  verify_only=1
+  gate3-monolith         15s  2026-09-23T09:39:44 -> 2026-09-23T09:39:59  2 cases
+  gate3-inproc           16s  2026-09-23T09:39:59 -> 2026-09-23T09:40:15  2 cases
+  gate3-spawn            15s  2026-09-23T09:40:15 -> 2026-09-23T09:40:30  2 cases
+  gate3-inproc-ra0       15s  2026-09-23T09:40:31 -> 2026-09-23T09:40:46  2 cases
+  gate3                  63s  2026-09-23T09:39:43 -> 2026-09-23T09:40:46
+  bsl-inproc             13s  2026-09-23T09:40:48 -> 2026-09-23T09:41:01
+  bsl                    18s  2026-09-23T09:40:47 -> 2026-09-23T09:41:05
+  cts-dsa                 1s  2026-09-23T09:41:08 -> 2026-09-23T09:41:09  limit=20
+  cts                     5s  2026-09-23T09:41:05 -> 2026-09-23T09:41:10  blocks=[dsa] limit=20
+  gate3 monolith     2 case invocations, mean 7s, total 14s
+  gate3 inproc       2 case invocations, mean 8s, total 15s
+  gate3 spawn        2 case invocations, mean 8s, total 15s
+  gate3 inproc-ra0   2 case invocations, mean 7s, total 14s
+reduce rc=0

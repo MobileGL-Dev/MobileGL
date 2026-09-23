@@ -1,0 +1,17 @@
+=== glcts conformance summary [DirectVulkan-inproc-dsa] ===
+files parsed      : 2
+cases with result : 371
+
+   Pass                       366   98.65%
+ ! Fail                         3    0.81%
+   CompatibilityWarning         1    0.27%
+ ! Crash                        1    0.27%
+
+conformance pass rate (Pass+NotSupported+warnings) :  98.92%  (367/371)
+strict pass rate      (Pass only)                  :  98.65%  (366/371)
+failures                                           : 4
+
+--- worst groups (of 1) ---
+  KHR-GL46.direct_state_access                              4/371    fail  (  1.1%)
+
+wrote /home/swung/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-dsa.json

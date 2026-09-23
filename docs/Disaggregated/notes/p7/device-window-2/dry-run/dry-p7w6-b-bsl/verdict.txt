@@ -1,0 +1,28 @@
+== BSL-ESC-MENU MOBILEGL_PIPE_STATS (maps lines / RSS peaks, wbuf[] gauges) ==
+[inproc] rc=0 seconds=14 finished=2026-09-23T09:43:28-04:00
+  replay: passed=True ssim=0.999791667 sha=155dcdd13a24e0ee
+  pid      comm               role   samples  maps_peak VmRSS_peak_kB     VmHWM_kB   span_s
+  483      ugin.p7w1.trace    app         38       8536       822968       822968     14.0
+  3 wbuf[wbufs=28 wlivepk=1052 wdefpk=3312832 wdefsync=24]
+[spawn] rc=0 seconds=14 finished=2026-09-23T09:43:47-04:00
+  replay: passed=True ssim=0.999791667 sha=155dcdd13a24e0ee
+  pid      comm               role   samples  maps_peak VmRSS_peak_kB     VmHWM_kB   span_s
+  7405     libMobileGLServ    server      32       7401       342144       343392     13.1
+  677      ugin.p7w1.trace    app         33       4595       552672       554952     13.5
+  3 wbuf[wbufs=28 wlivepk=1052 wdefpk=3312832 wdefsync=24]
+
+== CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==
+rate = Pass/(results-NotSupported); gate: delta >= -0.5 pp and 0 new crash per block
+block           cases  BASE P/NS/F/X  rate         AFTER P/NS/F/X rate          delta pp  crash   regr  fixed  verdict
+dsa                20  19/0/0/1 95.000%            19/0/0/1 95.000%               +0.000      0      0      0  PASS (SUBSET)
+CTS PASS (SUBSET run: not a gate verdict)
+
+== TIMING ==
+  preflight               5s  2026-09-23T09:43:03 -> 2026-09-23T09:43:08  reboot=0 pin=1
+  install                 0s  2026-09-23T09:43:08 -> 2026-09-23T09:43:08  verify_only=1
+  bsl-inproc             14s  2026-09-23T09:43:11 -> 2026-09-23T09:43:25
+  bsl-spawn              14s  2026-09-23T09:43:30 -> 2026-09-23T09:43:44
+  bsl                    38s  2026-09-23T09:43:09 -> 2026-09-23T09:43:47
+  cts-dsa                 1s  2026-09-23T09:43:51 -> 2026-09-23T09:43:52  limit=20
+  cts                     6s  2026-09-23T09:43:47 -> 2026-09-23T09:43:53  blocks=[dsa] limit=20
+reduce rc=0

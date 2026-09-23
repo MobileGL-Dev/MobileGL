@@ -1,0 +1,2 @@
+mgprobe: transport-marker=1 ipc-lines=[Config: IPC ring=8MiB stage=32MiB wire-deferred=64MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=1 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'] fatal=0 -> PROVEN
+glcts KHR-GL46.direct_state_access.buffers_clear: transport-marker=1 ipc-lines=[Config: IPC ring=8MiB stage=32MiB wire-deferred=64MiB spin=50us persistent-block=64KiB adopt-tier=2 verb-barrier=1 run-ahead=1 present-credit=1 strict=1 audit=0 role-split-state=1 affinity='auto'] fatal=0 -> PROVEN

@@ -1,0 +1,17 @@
+=== glcts conformance summary [DirectVulkan-inproc-shader-image] ===
+files parsed      : 2
+cases with result : 125
+
+   Pass                        65   52.00%
+   NotSupported                56   44.80%
+ ! Fail                         3    2.40%
+ ! Crash                        1    0.80%
+
+conformance pass rate (Pass+NotSupported+warnings) :  96.80%  (121/125)
+strict pass rate      (Pass only)                  :  52.00%  (65/125)
+failures                                           : 4
+
+--- worst groups (of 2) ---
+  KHR-GL46.shader_image_load_store                          4/51     fail  (  7.8%)
+
+wrote /home/swung/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-shader-image.json

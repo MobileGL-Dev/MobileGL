@@ -1,0 +1,16 @@
+direct_state_access.renderbuffers_storage                    monolith      RC=0 StatusCode="Pass"
+direct_state_access.renderbuffers_storage                    inproc-gate   RC=134   Fatal{ReplyTooLarge, "ReadPixels 256x512 0x1908/0x1406 2097152 > 2097136"}
+direct_state_access.renderbuffers_storage                    inproc-plain  RC=134   Fatal{ReplyTooLarge, "ReadPixels 256x512 0x1908/0x1406 2097152 > 2097136"}
+direct_state_access.renderbuffers_storage_multisample        monolith      RC=0 StatusCode="Pass"
+direct_state_access.renderbuffers_storage_multisample        inproc-gate   RC=1 StatusCode="Fail"
+direct_state_access.renderbuffers_storage_multisample        inproc-plain  RC=1 StatusCode="Fail"
+shader_image_load_store.incomplete_textures                  monolith      RC=1 StatusCode="Fail"
+shader_image_load_store.incomplete_textures                  inproc-gate   RC=134   Fatal{UnmigratedVerb, "Magma:image-view-window"}
+shader_image_load_store.incomplete_textures                  inproc-plain  RC=134   Fatal{UnmigratedVerb, "Magma:image-view-window"}
+shader_image_load_store.advanced-sync-vertexArray            monolith      RC=1 StatusCode="Fail"
+shader_image_load_store.advanced-sync-vertexArray            inproc-gate   RC=1 StatusCode="Fail"
+shader_image_load_store.advanced-sync-vertexArray            inproc-plain  RC=1 StatusCode="Fail"
+texture_border_clamp.Texture2DArrayCompressed                monolith      RC=0 StatusCode="Pass"
+texture_border_clamp.Texture2DArrayCompressed                inproc-gate   RC=0 StatusCode="Pass"
+texture_border_clamp.Texture2DArrayCompressed                inproc-plain  RC=0 StatusCode="Pass"
+BASE lib restored (7f58aa0b140dd6501586f89bf2a352d81ac77bb3148f2bb3059e097b202b4994)

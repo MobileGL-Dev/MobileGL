@@ -1,0 +1,42 @@
+== CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==
+rate = Pass/(results-NotSupported); gate: delta >= -0.5 pp and 0 new crash per block
+block           cases  BASE P/NS/F/X  rate         AFTER P/NS/F/X rate          delta pp  crash   regr  fixed  verdict
+dsa               371  368/0/2/1 99.191%           366/0/3/2 98.652%              -0.539      1      2      0  FAIL
+    ! 1 NEW crash(es)
+    ! delta -0.539 pp < -0.5 pp
+    NEW CRASH  KHR-GL46.direct_state_access.renderbuffers_storage
+    Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage
+    Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage_multisample
+packed-pixels    4732  4732/0/0/0 100.000%         4732/0/0/0 100.000%            +0.000      0      0      0  PASS
+shader-image      125  63/56/6/0 91.304%           65/56/3/1 94.203%              +2.899      1      1      3  FAIL
+    ! 1 NEW crash(es)
+    ! note: AFTER is 2.899 pp ABOVE BASE (not a regression; review the fixed list)
+    NEW CRASH  KHR-GL46.shader_image_load_store.incomplete_textures
+    Pass->not  KHR-GL46.shader_image_load_store.advanced-sync-vertexArray
+    not->Pass  KHR-GL46.shader_image_load_store.advanced-sync-drawIndirect
+    not->Pass  KHR-GL46.shader_image_load_store.advanced-sync-textureUpdate
+    not->Pass  KHR-GL46.shader_image_load_store.non-layered_binding
+ssbo              124  124/0/0/0 100.000%          124/0/0/0 100.000%             +0.000      0      0      0  PASS
+texture          1054  815/221/18/0 97.839%        823/221/10/0 98.800%           +0.960      0      1      9  PASS
+    ! note: AFTER is 0.960 pp ABOVE BASE (not a regression; review the fixed list)
+    Pass->not  KHR-GL46.texture_border_clamp.Texture2DArrayCompressed
+    not->Pass  KHR-GL46.texture_barrier.disjoint-texels
+    not->Pass  KHR-GL46.texture_barrier.overlapping-texels
+    not->Pass  KHR-GL46.texture_barrier.same-texel-rw
+    not->Pass  KHR-GL46.texture_barrier.same-texel-rw-multipass
+    not->Pass  KHR-GL46.texture_size_promotion.functional
+    not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_7
+    not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_8
+    not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_7
+    not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_8
+CTS FAIL
+
+== TIMING ==
+  preflight               5s  2026-09-23T09:59:01 -> 2026-09-23T09:59:06  reboot=0 pin=1
+  cts-shader-image        9s  2026-09-23T09:59:10 -> 2026-09-23T09:59:19  limit=0
+  cts-ssbo                3s  2026-09-23T09:59:20 -> 2026-09-23T09:59:23  limit=0
+  cts-dsa                 9s  2026-09-23T09:59:24 -> 2026-09-23T09:59:33  limit=0
+  cts-texture           108s  2026-09-23T09:59:34 -> 2026-09-23T10:01:22  limit=0
+  cts-packed-pixels     220s  2026-09-23T10:01:23 -> 2026-09-23T10:05:03  limit=0
+  cts                   358s  2026-09-23T09:59:06 -> 2026-09-23T10:05:04  blocks=[shader-image ssbo dsa texture packed-pixels] limit=0
+reduce rc=1

@@ -1,0 +1,11 @@
+=== glcts conformance summary [DirectVulkan-inproc-ssbo] ===
+files parsed      : 1
+cases with result : 124
+
+   Pass                       124  100.00%
+
+conformance pass rate (Pass+NotSupported+warnings) : 100.00%  (124/124)
+strict pass rate      (Pass only)                  : 100.00%  (124/124)
+failures                                           : 0
+
+wrote /home/swung/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-ssbo.json

@@ -1,0 +1,5 @@
+focus      :  mCurrentFocus=Window{3128f99 u0 com.miui.home/com.miui.home.launcher.Launcher}
+supervisor : listening (found: 1)
+pin        : UNPINNED (found: UNPINNED)
+stayon     : 15 (found: 15)
+doze wl    : user,top.mobilegl.plugin.p7w1.trace,10318

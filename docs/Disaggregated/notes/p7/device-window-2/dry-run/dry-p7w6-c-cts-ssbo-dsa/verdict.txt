@@ -1,0 +1,18 @@
+== CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==
+rate = Pass/(results-NotSupported); gate: delta >= -0.5 pp and 0 new crash per block
+block           cases  BASE P/NS/F/X  rate         AFTER P/NS/F/X rate          delta pp  crash   regr  fixed  verdict
+dsa               371  368/0/2/1 99.191%           366/0/3/2 98.652%              -0.539      1      2      0  FAIL
+    ! 1 NEW crash(es)
+    ! delta -0.539 pp < -0.5 pp
+    NEW CRASH  KHR-GL46.direct_state_access.renderbuffers_storage
+    Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage
+    Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage_multisample
+ssbo              124  124/0/0/0 100.000%          124/0/0/0 100.000%             +0.000      0      0      0  PASS
+CTS FAIL
+
+== TIMING ==
+  preflight               6s  2026-09-23T09:56:51 -> 2026-09-23T09:56:57  reboot=0 pin=1
+  cts-ssbo                3s  2026-09-23T09:57:00 -> 2026-09-23T09:57:03  limit=0
+  cts-dsa                 9s  2026-09-23T09:57:04 -> 2026-09-23T09:57:13  limit=0
+  cts                    16s  2026-09-23T09:56:57 -> 2026-09-23T09:57:13  blocks=[ssbo dsa] limit=0
+reduce rc=1

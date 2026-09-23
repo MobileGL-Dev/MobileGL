@@ -1,0 +1,11 @@
+=== glcts conformance summary [DirectVulkan-inproc-packed-pixels] ===
+files parsed      : 1
+cases with result : 4732
+
+   Pass                      4732  100.00%
+
+conformance pass rate (Pass+NotSupported+warnings) : 100.00%  (4732/4732)
+strict pass rate      (Pass only)                  : 100.00%  (4732/4732)
+failures                                           : 0
+
+wrote /home/swung/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-packed-pixels.json

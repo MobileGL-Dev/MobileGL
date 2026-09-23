@@ -1,0 +1,23 @@
+=== glcts conformance summary [DirectVulkan-inproc-texture] ===
+files parsed      : 1
+cases with result : 1054
+
+   Pass                       823   78.08%
+   NotSupported               221   20.97%
+ ! Fail                        10    0.95%
+
+conformance pass rate (Pass+NotSupported+warnings) :  99.05%  (1044/1054)
+strict pass rate      (Pass only)                  :  78.08%  (823/1054)
+failures                                           : 10
+
+--- NOT MEASURED (excluded from the rates above) ---
+  quarantined up front : 1
+  The rates above cover only cases that produced a result.
+
+--- worst groups (of 19) ---
+  KHR-GL46.texture_cube_map_array                           5/27     fail  ( 18.5%)
+  KHR-GL46.texture_border_clamp                             3/32     fail  (  9.4%)
+  KHR-GL46.texture_buffer                                   1/16     fail  (  6.2%)
+  KHR-GL46.texture_view                                     1/7      fail  ( 14.3%)
+
+wrote /home/swung/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-texture.json
