@@ -2099,6 +2099,32 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set_tests_properties(TcpLane.SupervisorProtocolControls PROPERTIES
         LABELS integration-tcp TIMEOUT 180 SKIP_RETURN_CODE 77
         RESOURCE_LOCK mobilegl-tcp)
+    # Ph fuzz arm 3 (PH-6, ID-P7-2): A PEER THAT STOPS DRAINING SEG_EVENT, on both data planes.
+    # MG_Test/Wire/EventForfeitPeerTest.cpp starts its own `--serve` supervisor (an abstract unix
+    # endpoint for the shm plane, a free loopback port for the stream plane) with
+    # MOBILEGL_IPC_EVENT_WAIT_MS=2000, and asserts the whole arm: the server forfeits the reverse
+    # channel by name, counts the drop, ends the session with exit 0 inside the knob rather than
+    # the old 30 s Fatal, and the SAME supervisor welcomes the next connection. The names are not
+    # `DirectGLES.<Arm>.<Scenario>` on purpose: spawn_lane_parity.py compares the scenario arms and
+    # this is a supervisor control, one per lane, like the entry above. It needs no fixture and no
+    # resource lock (its supervisor is its own), and the CI lane names both entries to
+    # junit_tally.py --require-entry-passed so a missing build or a skip is red by name.
+    if (TARGET EventForfeitPeerTest)
+        # A plain list, not mgl_itest_join_environment's escaped one: that form is for values that
+        # travel through gtest_discover_tests' PROPERTIES, and these two entries are add_test's.
+        set(MGL_ITEST_EVENT_FORFEIT_ENVIRONMENT
+            "MOBILEGL_TEST_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" ${MGL_ITEST_COMMON_ENV})
+        add_test(NAME SpawnLane.EventForfeitPeer COMMAND $<TARGET_FILE:EventForfeitPeerTest>
+            --gtest_filter=EventForfeitPeer.ShmPeerThatStopsDrainingIsForfeitedAndTheNextConnectionIsWelcomed)
+        set_tests_properties(SpawnLane.EventForfeitPeer PROPERTIES
+            LABELS integration-spawn TIMEOUT 120
+            ENVIRONMENT "${MGL_ITEST_EVENT_FORFEIT_ENVIRONMENT}")
+        add_test(NAME TcpLane.EventForfeitPeer COMMAND $<TARGET_FILE:EventForfeitPeerTest>
+            --gtest_filter=EventForfeitPeer.StreamPeerThatStopsDrainingIsForfeitedAndTheNextConnectionIsWelcomed)
+        set_tests_properties(TcpLane.EventForfeitPeer PROPERTIES
+            LABELS integration-tcp TIMEOUT 120
+            ENVIRONMENT "${MGL_ITEST_EVENT_FORFEIT_ENVIRONMENT}")
+    endif()
     # D2: the texture-view opt-in on both TCP lists too, so the three shared GLES split arms
     # carry one configuration. See the note over MGL_ITEST_GLES_SPLIT_ENVIRONMENT.
     #

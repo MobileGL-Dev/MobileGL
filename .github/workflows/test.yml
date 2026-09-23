@@ -1511,11 +1511,12 @@ jobs:
           # SECOND PROCESS, so a failure here that the line above did not see is a transport fact
           # and not a phase one - which is the whole reason both lanes exist.
           ctest --output-on-failure -L integration-spawn --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/spawn-baseline.xml"
-          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/spawn-baseline.xml" --require-spawn-ran
+          # PH-6 / fuzz arm 3: the supervisor-level forfeit control rides this lane and must RUN.
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/spawn-baseline.xml" --require-spawn-ran --require-entry-passed SpawnLane.EventForfeitPeer
           ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
           ctest --output-on-failure -L '^integration-tcp$' --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/tcp-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-tcp-ran --require-run-ahead --discovery "${RUNNER_TEMP}/tcp-discovery.json"
-          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls --require-entry-passed TcpLane.EventForfeitPeer
 
       # Both full transport runs are hard gates. The per-case comparison below
       # remains diagnostic because explicit mechanism controls retain their own mode.

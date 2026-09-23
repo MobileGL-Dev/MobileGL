@@ -159,6 +159,28 @@ if (Python3_Interpreter_FOUND)
     set_tests_properties(ProtocolSchema.RevisionPinsDigest PROPERTIES LABELS unit)
 endif ()
 
+# Ph fuzz arm 3 (PH-6, ID-P7-2): a `--serve` supervisor, a peer that stops draining SEG_EVENT, and
+# the next connection. NOT discovered into `unit`: the peer brings a pbuffer context up on the
+# server, which needs the integration lanes' EGL environment, so MG_IntegrationTest/CMakeLists.txt
+# registers its two cases - SpawnLane.EventForfeitPeer (integration-spawn, the shm data plane) and
+# TcpLane.EventForfeitPeer (integration-tcp, the stream data plane) - beside the TCP supervisor's
+# own protocol controls. It execs the server image, so it is built after it, as ServerSpawnTest is.
+if (NOT WIN32)
+    add_executable(EventForfeitPeerTest EventForfeitPeerTest.cpp)
+    target_include_directories(EventForfeitPeerTest PRIVATE
+            ${MGL_ROOT}/include
+            ${MGL_ROOT}/MobileGL
+            ${MGL_ROOT}/3rdparty/flatbuffers/include
+    )
+    target_link_libraries(EventForfeitPeerTest PRIVATE
+            GTest::gtest_main
+            ${LINK_LIBRARIES}
+    )
+    if (TARGET MobileGLServer)
+        add_dependencies(EventForfeitPeerTest MobileGLServer)
+    endif ()
+endif ()
+
 # P6.5 manual fault-injection probe: requires an explicit live peer and is never
 # registered with ctest, so a device-less unit run cannot silently skip this gate.
 if (NOT WIN32)
