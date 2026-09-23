@@ -213,6 +213,13 @@ server 半边日志：
 [mgl-srv-apply/FATAL]: MGPipe: Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"}
 ```
 
+**正形条目断言的是「哪个角色」，不是「有没有人」（V1 修复轮补）。** `ReadChildLog()` 把子进程的 client 与 server
+两个半边连起来，原断言查的是并集——而这一对配对存在的理由恰恰是 **server 自己的 verb stamp 遵守 knob**
+（`ServerPoisonOmission`），一个 client 侧的触发会同样满足并集、却证明了相反的事。现在 `kOmittedPairs` 每对带
+`FiresOnTheServer`，split 那一对额外断言 Fatal 出现在**子进程的 server 半边**里。实测两后端：client 半边
+`Fatal{UnmigratedPipeInput` **0 行**，server 半边**各 1 行**——并集断言此前确实分辨不出来。monolith 那一对只有一个
+角色，仍查并集。
+
 正形条目 `VerifySplitCorrupted.` / `VerifySplitReadCorrupted.` / `VerifySplitPoisonOmitted.` 两后端 6/6 绿。
 
 ### 3.2 发现 C：monolith 的 POISON_OMIT 配对在 split 臂上是哑的

@@ -95,14 +95,23 @@ namespace MGITest {
         // split control: the server's read_pixels backend call DOES read the pack half through the
         // accessor, under the server's own stamp, which honours the knob in a verify build
         // (MG_Backend/MGPipe/PipeInputs.cpp's ServerPoisonOmission).
+        //
+        // AND EACH PAIR SAYS WHICH ROLE HAS TO FIRE (`FiresOnTheServer`), which is the whole point
+        // of the split pair and was not checked at all until P7 wave 3's V1 fix round. The reader
+        // below concatenates the child's two role halves and the assertion searched the union, so
+        // `VerifySplitPoisonOmitted.` would have been just as green if the stamp the knob withheld
+        // had been the CLIENT's - which is the case it exists to rule out, because the mechanism
+        // under test is MG_Backend/MGPipe/PipeInputs.cpp's server-side stamp honouring the knob.
+        // The monolith pair has one role and one log half, so it keeps the union.
         struct OmittedPair {
             const char* Verb;
             const char* Field;
             const char* EarlierVerbs[2]; // verbs the sequence runs BEFORE this one, which must not trip
+            bool FiresOnTheServer;       // the Fatal must be in the child's SERVER half, not merely present
         };
         constexpr OmittedPair kOmittedPairs[] = {
-            {"GenerateMipmap", "GetActiveTextureUnit", {"@DrawArrays", "@DrawArrays"}},
-            {"ReadPixels", "GetPixelStoreParameters", {"@DrawArrays", "@GenerateMipmap"}},
+            {"GenerateMipmap", "GetActiveTextureUnit", {"@DrawArrays", "@DrawArrays"}, false},
+            {"ReadPixels", "GetPixelStoreParameters", {"@DrawArrays", "@GenerateMipmap"}, true},
         };
         constexpr const char* kFatalPrefix = "Fatal{UnmigratedPipeInput";
 
@@ -183,15 +192,30 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         // the fill is the client's and the read is the backend's, and in a split build the
         // backend runs on the server role's thread. A reader that took the client half alone
         // would report "the child aborted with no Fatal" for every server-side firing.
-        std::string ReadChildLog() {
+        //
+        // THE HALVES ARE ALSO KEPT APART (P7 wave 3, V1), because "did anyone report this" and
+        // "did the SERVER report this" are different questions and only the first one survives
+        // concatenation. Server is empty in a monolith build, which a caller must read as "there
+        // is no such half" rather than as "the server said nothing".
+        struct ChildLog {
+            std::string Client;
+            std::string Server;
+            std::string All; // Client + Server, the union every role-agnostic assertion wants
+        };
+
+        ChildLog ReadChildLogHalves() {
+            ChildLog log;
             const std::string base = ChildLogBasePath();
-            if (base.empty()) return {};
-            std::string all = ReadWholeFile(ChildRoleLogPath(base, "client"));
+            if (base.empty()) return log;
+            log.Client = ReadWholeFile(ChildRoleLogPath(base, "client"));
 #if MOBILEGL_BUILD_DISAGGREGATED
-            all += ReadWholeFile(ChildRoleLogPath(base, "server"));
+            log.Server = ReadWholeFile(ChildRoleLogPath(base, "server"));
 #endif
-            return all;
+            log.All = log.Client + log.Server;
+            return log;
         }
+
+        std::string ReadChildLog() { return ReadChildLogHalves().All; }
 
         class PoisonOmissionScenario : public ScenarioTest {
         protected:
@@ -397,7 +421,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             std::string reason;
             ASSERT_TRUE(RunSequenceInAChildProcess(status, reason)) << reason;
 
-            const std::string childLog = ReadChildLog();
+            const ChildLog halves = ReadChildLogHalves();
+            const std::string& childLog = halves.All;
             ASSERT_TRUE(WIFSIGNALED(status))
                 << "with the stamp of " << expectedPair << " omitted, the " << pair->Verb << " in the child "
                 << "had to read a field its verb never filled and abort. It " << DescribeStatus(status)
@@ -415,11 +440,30 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 GTEST_SKIP() << "the abort happened, but the lane set no MOBILEGL_LOG_FILE_PATH, so the "
                                 "Fatal's text cannot be read back; the PoisonOmitted. ctest entries set it";
             }
-            EXPECT_NE(childLog.find(std::string(kFatalPrefix) + ", \"" + expectedPair + "\""),
-                      std::string::npos)
+            const std::string expectedFatal = std::string(kFatalPrefix) + ", \"" + expectedPair + "\"";
+            EXPECT_NE(childLog.find(expectedFatal), std::string::npos)
                 << "the child aborted, but not with Fatal{UnmigratedPipeInput, \"" << expectedPair
                 << "\"} - that message is the whole diagnostic value of the poison. Child log:\n"
                 << childLog;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // WHICH ROLE, for the split pair (P7 wave 3, V1). The union above answers "did the
+            // poison fire", which is all the monolith pair can be asked; this pair exists to prove
+            // that the SERVER'S OWN verb stamp honours MOBILEGL_PIPE_POISON_OMIT
+            // (MG_Backend/MGPipe/PipeInputs.cpp's ServerPoisonOmission) - the thing that was NOT
+            // true before wave 3 and made the control silently green. A client-side firing would
+            // satisfy the union and prove the opposite of what the entry claims, so the half is
+            // named here.
+            if (pair->FiresOnTheServer) {
+                EXPECT_NE(halves.Server.find(expectedFatal), std::string::npos)
+                    << "the child aborted with " << expectedFatal << ", but NOT in its server-role log. "
+                       "This pair is the split arm's control and its whole claim is that the stamp the "
+                       "SERVER writes at the verb boundary honours the omission - a firing anywhere "
+                       "else means the withheld stamp was the client's and the server-side half is "
+                       "untested. Client half:\n"
+                    << halves.Client << "\nServer half:\n"
+                    << halves.Server;
+            }
+#endif
             for (const char* earlier : pair->EarlierVerbs) {
                 EXPECT_EQ(childLog.find(earlier), std::string::npos)
                     << "a verb that ran BEFORE the omitted one (" << earlier << ") also tripped the "
