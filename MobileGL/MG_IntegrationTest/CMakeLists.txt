@@ -2757,12 +2757,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # ClientSession now gives those two kinds of op MOBILEGL_IPC_COLD_START_MS (default 20 s)
     # until the session's first MakeCurrent is answered ok.
     #
-    # These two entries are that rule's red-once, made FAST: the server's test lever
+    # These two entries are that rule's red-once: the server's test lever
     # MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS holds the first surface creation and the first
-    # MakeCurrent back by 3 s each, and the steady bound is lowered to 2 s. With the cold-start
-    # budget both ops land inside 20 s and the case is green; without it (every op on the steady
-    # bound, which is what the client did before) the first one times out and the case reds on
-    # "remote spawn bring-up failed" - the CI failure in miniature, without waiting 5 s.
+    # MakeCurrent back by 6 s each - past the steady bound, which stays at its 5 s default. With
+    # the cold-start budget both ops land inside 20 s and the case is green. Against the client as
+    # it was before (every op on a hard-coded 5 s), with the budget selection removed, or with the
+    # cold-start default lowered to the old 5 s, the first one times out and the case reds on
+    # "remote spawn bring-up failed" - the CI failure in miniature. A 3 s lever under a 2 s steady
+    # knob was faster but proved less: the pre-fix client never read MOBILEGL_IPC_CONTROL_TIMEOUT_MS,
+    # so its 5 s bound outlasted the lever and the entries were green at 14e1c8b9 (measured).
+    # Each entry takes ~25 s, because the harness's pre-flight child brings a server up as well.
     # NOT on integration-spawn: this is not a copy of the split lane (spawn_lane_parity.py). The
     # DirectVulkan entry does carry integration-gpu, unlike the Magma arms' informational tiers
     # below: it is one expected-GREEN case, and Magma's bring-up is the MakeCurrent half.
@@ -2776,7 +2780,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(MGL_COLDSTART_ENV_${mglColdBackend}
             "MOBILEGL_BACKEND_TYPE=${mglColdBackend}" ${MGL_ITEST_SPAWN_ARM_TRANSPORT_ENV}
             "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
-            "MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS=3000" "MOBILEGL_IPC_CONTROL_TIMEOUT_MS=2000"
+            "MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS=6000"
             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cold-start-spawn-${mglColdBackend}.log"
             ${MGL_ITEST_CAPABILITY_ENV} ${mglColdDriverEnv})
         gtest_discover_tests(MobileGLIntegrationTest
