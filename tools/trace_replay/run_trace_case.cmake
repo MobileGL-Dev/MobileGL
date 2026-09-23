@@ -119,6 +119,11 @@ set(mobilegl_log "${TRACE_OUTPUT_DIR}/output/mobilegl.client.log")
 # The client file keeps the unsuffixed name, so every other reader here - the transport markers,
 # the pipe-verify block, the artifact copy - is unchanged.
 set(mobilegl_server_log "${TRACE_OUTPUT_DIR}/output/mobilegl.server.log")
+# A PULL library (no MOBILEGL_BUILD_DISAGGREGATED: CI's build-linux and build-linux-verify) has
+# one log role and writes MOBILEGL_LOG_FILE_PATH unchanged (Log.h's pull RoleLogPath). It is kept
+# and dumped beside the two role logs, and the verify block below reads it when there is no client
+# log; the MOBILEGL_TRANSPORT block never does, because it must refuse a run with no client log.
+set(mobilegl_pull_log "${TRACE_OUTPUT_DIR}/output/mobilegl.log")
 if(EXISTS "${retrace_log}")
     file(STRINGS "${retrace_log}" gl_identity_lines REGEX "MOBILEGL_TRACE_GL_")
     foreach(line IN LISTS gl_identity_lines)
@@ -152,6 +157,9 @@ if(DEFINED TRACE_ARTIFACT_DIR AND NOT "${TRACE_ARTIFACT_DIR}" STREQUAL "")
     if(EXISTS "${mobilegl_log}")
         file(COPY_FILE "${mobilegl_log}" "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-mobilegl.client.log")
     endif()
+    if(EXISTS "${mobilegl_pull_log}")
+        file(COPY_FILE "${mobilegl_pull_log}" "${TRACE_ARTIFACT_DIR}/${TRACE_CASE_NAME}-${TRACE_BACKEND}-mobilegl.log")
+    endif()
 endif()
 
 if(EXISTS "${result_json}")
@@ -162,10 +170,15 @@ else()
         file(READ "${retrace_log}" retrace_log_contents)
         message(STATUS "${retrace_log_contents}")
     endif()
-    if(EXISTS "${mobilegl_log}")
-        file(READ "${mobilegl_log}" mobilegl_log_contents)
-        message(STATUS "${mobilegl_log_contents}")
-    endif()
+    # Every log the library could have written: under a pull library the only one is
+    # mobilegl.log, and that is where a verify negative control's Fatal{PipeVerifyDiffer} is -
+    # without it the transcript of a replay that aborted before result.json says nothing about why.
+    foreach(role_log IN ITEMS "${mobilegl_log}" "${mobilegl_pull_log}")
+        if(EXISTS "${role_log}")
+            file(READ "${role_log}" role_log_contents)
+            message(STATUS "--- ${role_log}\n${role_log_contents}")
+        endif()
+    endforeach()
     message(FATAL_ERROR "trace replay did not write ${result_json}")
 endif()
 
@@ -197,15 +210,24 @@ endif()
 # aborted, so the run would otherwise finish 0 with its own report in the log.
 if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQUAL "")
     set(pipe_verify_case "${TRACE_CASE_NAME} ${TRACE_BACKEND}")
+    # THE VERIFY LIBRARY IS A PULL BUILD in CI (test.yml build-linux-verify configures no
+    # MOBILEGL_BUILD_DISAGGREGATED), and a pull build has one log role and writes
+    # MOBILEGL_LOG_FILE_PATH unchanged (Log.h's pull RoleLogPath): output/mobilegl.log. A split
+    # verify build writes mobilegl.client.log. Read whichever this library wrote - this block only;
+    # the MOBILEGL_TRANSPORT block below must keep refusing a run with no client log.
+    set(pipe_verify_log_path "${mobilegl_log}")
+    if(NOT EXISTS "${pipe_verify_log_path}" AND EXISTS "${mobilegl_pull_log}")
+        set(pipe_verify_log_path "${mobilegl_pull_log}")
+    endif()
     if("$ENV{MOBILEGL_PIPE_VERIFY}" STREQUAL "0" OR "$ENV{MOBILEGL_PIPE_VERIFY}" STREQUAL "false")
         message(STATUS "MGPipe verify: MOBILEGL_PIPE_VERIFY=$ENV{MOBILEGL_PIPE_VERIFY}, no verify assertions for ${pipe_verify_case}")
-    elseif(NOT EXISTS "${mobilegl_log}")
+    elseif(NOT EXISTS "${pipe_verify_log_path}")
         message(FATAL_ERROR
-                "MOBILEGL_PIPE_VERIFY is set for ${pipe_verify_case} but the run wrote no ${mobilegl_log}, "
+                "MOBILEGL_PIPE_VERIFY is set for ${pipe_verify_case} but the run wrote no ${pipe_verify_log_path}, "
                 "so there is no evidence the comparator ever armed. A verify retrace with no library log "
                 "cannot be counted as a verify retrace.")
     else()
-        file(READ "${mobilegl_log}" pipe_verify_log)
+        file(READ "${pipe_verify_log_path}" pipe_verify_log)
         string(FIND "${pipe_verify_log}" "MGPipe: verify armed" pipe_verify_armed_at)
         if(pipe_verify_armed_at EQUAL -1)
             message(FATAL_ERROR
@@ -215,7 +237,7 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "nothing - or the runtime knob never reached the process. Check that the VERIFY "
                     "runtime artifact is the one unpacked at ${MOBILEGL_LIBRARY}.")
         endif()
-        file(STRINGS "${mobilegl_log}" pipe_verify_fatals
+        file(STRINGS "${pipe_verify_log_path}" pipe_verify_fatals
                 REGEX "Fatal\\{(PipeVerifyDiffer|UnmigratedPipeInput|PipeVerifyBadKnob)")
         if(pipe_verify_fatals)
             foreach(line IN LISTS pipe_verify_fatals)

@@ -3081,6 +3081,43 @@ jobs:
           chmod +x build-linux/libMobileGLServer.so
           echo "server image: $(readlink -f build-linux/libMobileGLServer.so)"
 
+      # THE MAGMA KNOBS GO TO $GITHUB_ENV, NOT TO ONE STEP'S SHELL: the replay below AND both
+      # negative controls after it must run the same repair set. Exported inside "Retrace and
+      # validate" only, they never reached the pull-library control, which replayed
+      # iterationrp x DirectVulkan unrepaired (ssim 0.028 < 0.98), reddened at
+      # run_trace_case.cmake:173 before the transport assertion, and failed as "the failure never
+      # says the library did not resolve the transport" - a red that is not the control's own.
+      - name: Magma repair knobs for this case (every later step)
+        run: |
+          # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
+          # This job exported none at all, so every DirectVulkan row of the split matrix was
+          # compared against a monolith row running a different repair set - and a split retrace
+          # whose control is not comparable cannot say whether a divergence is a transport fact.
+          # R11F_G11F_B10F fallback is whole-backend; the blended depth-write quirk auto-enables
+          # only on Qualcomm, which no runner has, so the OIT case forces it exactly as the
+          # monolith job does (ForceOn bypasses only the vendor gate).
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
+            echo "MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1" >> "${GITHUB_ENV}"
+          fi
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
+            echo "MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1" >> "${GITHUB_ENV}"
+          fi
+          # THE THREE ITERATIONRP KNOBS, FOR THE ONE CASE THE MONOLITH JOB NAMES.
+          # The iterationRP repairs are tri-state quirks that default to device auto-detection and
+          # lavapipe is on no auto list, so without them Program 203 runs unrepaired and misses its
+          # golden output. The monolith job has exported them since they landed; this job never
+          # did, so `iterationrp x DirectVulkan` was the one cell of the split matrix whose red
+          # could not be read as a transport fact - the monolith control it is compared against was
+          # running a different repair set. Exit gate 1 asks for the two halves to be COMPARABLE,
+          # and two runs that differ in a quirk knob are not.
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
+            echo "MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1" >> "${GITHUB_ENV}"
+            echo "MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1" >> "${GITHUB_ENV}"
+            echo "MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1" >> "${GITHUB_ENV}"
+          fi
+
       - name: Retrace and validate under MOBILEGL_TRANSPORT=${{ matrix.transport }}
         working-directory: build-retrace/tools/trace_replay
         # run_trace_case.cmake turns MOBILEGL_TRANSPORT into assertions of its own - the library
@@ -3096,34 +3133,6 @@ jobs:
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
           # only to decide it does not need it.
           export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
-          # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
-          # This job exported none at all, so every DirectVulkan row of the split matrix was
-          # compared against a monolith row running a different repair set - and a split retrace
-          # whose control is not comparable cannot say whether a divergence is a transport fact.
-          # R11F_G11F_B10F fallback is whole-backend; the blended depth-write quirk auto-enables
-          # only on Qualcomm, which no runner has, so the OIT case forces it exactly as the
-          # monolith job does (ForceOn bypasses only the vendor gate).
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
-            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
-          fi
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
-            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
-          fi
-          # THE THREE ITERATIONRP KNOBS, FOR THE ONE CASE THE MONOLITH JOB NAMES.
-          # The iterationRP repairs are tri-state quirks that default to device auto-detection and
-          # lavapipe is on no auto list, so without them Program 203 runs unrepaired and misses its
-          # golden output. The monolith job has exported them since they landed; this job never
-          # did, so `iterationrp x DirectVulkan` was the one cell of the split matrix whose red
-          # could not be read as a transport fact - the monolith control it is compared against was
-          # running a different repair set. Exit gate 1 asks for the two halves to be COMPARABLE,
-          # and two runs that differ in a quirk knob are not.
-          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
-             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
-            export MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1
-            export MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1
-            export MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1
-          fi
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
