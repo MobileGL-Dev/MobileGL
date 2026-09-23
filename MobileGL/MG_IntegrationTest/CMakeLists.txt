@@ -2110,9 +2110,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # server must say PeerGone at once and exit 0), and the shm entry the LaunchServer case (the
     # knob must cross ServerSpawn.cpp's scrub). The gtest filters are per plane. The names are not
     # `DirectGLES.<Arm>.<Scenario>` on purpose: spawn_lane_parity.py compares the scenario arms and
-    # this is a supervisor control, one per lane, like the entry above. It needs no fixture and no
-    # resource lock (its supervisor is its own), and the CI lane names both entries to
-    # junit_tally.py --require-entry-passed so a missing build or a skip is red by name.
+    # this is a supervisor control, one per lane, like the entry above. It needs no fixture (its
+    # supervisor is its own), and the CI lane names both entries to junit_tally.py
+    # --require-entry-passed so a missing build or a skip is red by name. The Tcp entry still takes
+    # the lane's resource lock, as the entry above does: every integration-tcp entry must, or
+    # spawn_lane_parity.py and junit_tally.py --discovery refuse the registration.
     if (TARGET EventForfeitPeerTest)
         # A plain list, not mgl_itest_join_environment's escaped one: that form is for values that
         # travel through gtest_discover_tests' PROPERTIES, and these two entries are add_test's.
@@ -2126,7 +2128,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         add_test(NAME TcpLane.EventForfeitPeer COMMAND $<TARGET_FILE:EventForfeitPeerTest>
             --gtest_filter=EventForfeitPeer.Stream*)
         set_tests_properties(TcpLane.EventForfeitPeer PROPERTIES
-            LABELS integration-tcp TIMEOUT 120
+            LABELS integration-tcp TIMEOUT 120 RESOURCE_LOCK mobilegl-tcp
             ENVIRONMENT "${MGL_ITEST_EVENT_FORFEIT_ENVIRONMENT}")
     endif()
     # P7 F2: Ph fuzz arm 1 (PLAN-PH-P34B-P7.md §1.1, "gate: fuzz arm 1 malformed control
