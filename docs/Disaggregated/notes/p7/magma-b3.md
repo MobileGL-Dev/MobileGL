@@ -347,6 +347,7 @@ inproc 的服务端在测试进程里、spawn 的服务端继承 client 的环�
 `scripts/ci/spawn_lane_parity.py` 的 server 端旋钮例外表 **`MAGMA_SERVER_ENV_KNOB_NO_TCP`** 加入 `.StaleSerial.`（集成时并入 B2 返工的同一机制 `compare_arms(no_tcp=)` / CMake `mglItestServerEnvKnobArm`，而不是包树里单独的 `MAGMA_NOT_OVER_TCP`）
 （与 ID-P7-14 的 `MAGMA_INPROC_ONLY` 同形）：只从 **tcp 臂**的比较基准里去掉，spawn 缺了它仍是错误。
 B2 在自己的树里把它的旋钮条目加进同一个元组，集成者合并两处 hunk。
+（落地：`pipe@6207c9c9` 上这一项并进了 B2 的 **`MAGMA_SERVER_ENV_KNOB_NO_TCP`**，打印措辞见 §5。）
 
 **基线（把 `busyBySubmission` 临时改回 `false` 重建；R-16，已执行并还原）：**
 
@@ -401,7 +402,7 @@ inproc 与 spawn **sha 逐字相同**，证明机制在**服务端**。
 
 ## 5. 门
 
-（`~/w7/b3-out/gate-h1.log`，脚本按 `~/w7/logs/p7-gate-c-inner.sh` 的量法。）
+（初版——包树 `0d425499`，合并前；`~/w7/b3-out/gate-h1.log`，脚本按 `~/w7/logs/p7-gate-c-inner.sh` 的量法。）
 
 - **G1**：`build-linux`（pull）`.text` = **`0xa52203`**，`nm --defined-only` 对
   `~/w7/p7-before/pull-syms.txt` **added=0 / removed=0**，编译 rc 0（含测试，ID-P7-11）。
@@ -421,22 +422,31 @@ inproc 与 spawn **sha 逐字相同**，证明机制在**服务端**。
 | `integration-magma-tcp` | 69 | 71 | +2 |
 | `integration-magma-full-split` | 526 | 527 | +1 |
 
-**复审轮的门**（`~/w7/b3bin/gate.log`，头 `774bc17f`，同一量法）：G1 编译 rc 0、`.text` **`0xa52203`**、
+**复审轮的门——包树 `774bc17f`，合并前**（`~/w7/b3bin/gate.log`，同一量法）：G1 编译 rc 0、`.text` **`0xa52203`**、
 nm **added=0 / removed=0**；`fatal_census.py` rc 0（**79** / 20 文件 / 44 / 3 / 0 无标记）；
 `wire_declines_audit.py` rc 0（53 / 53 / 0 / 0）；`link_ratchet.py --assert-monotone` **unchanged at 186**；
-`spawn_lane_parity.py build-split` rc 0（magma gated tier 报「1 entry not registered on the tcp arm by name」）；
-`@P7` 站点 12。车道全部 100%：
+`spawn_lane_parity.py build-split` rc 0；`@P7` 站点 12。车道全部 100%。
 
-| 车道 | 初版 | 复审轮 | 差 |
+**落地树 `pipe@6207c9c9`，集成者的门**：G1 rc 0、`.text` **`0xa52203`**、nm **0 / 0**；census **79**；
+`link_ratchet.py` **173**；`spawn_lane_parity.py` rc 0；audit **53 行 / 53 有站点 / 0 未记日志**；
+OpenRA DirectVulkan inproc + spawn retrace ssim **1.000000**、**0 px**、`MGWIRE-FLOOR unsound-serial-complete` **0** 行。
+合并时集成者把本包的 `MAGMA_NOT_OVER_TCP` 并进了 B2 的 **`MAGMA_SERVER_ENV_KNOB_NO_TCP`**
+（`compare_arms(no_tcp=)`、CMake `mglItestServerEnvKnobArm`），落地的 parity 脚本对该表打印
+「`N server-env-knob entrie(s) excluded from the TCP comparison only`」（§4.2 的元组以落地名为准）。
+
+| 车道 | 初版 | 复审轮（包树 `774bc17f`，合并前） | 落地树 `pipe@6207c9c9`（集成者的门） |
 |---|---|---|---|
-| `unit` | 2420 | 2420 | 0 |
-| `integration-split` | 226 | 226 | 0 |
-| `integration-magma-split` | 90 | 90 | 0 |
-| `integration-magma-spawn` | 69 | 69 | 0 |
-| `integration-magma-tcp` | 71 | **70** | −1（`Tcp.StaleSerial.` 撤，§4.2） |
-| `integration-magma-full-split` | 527 | 527 | 0 |
+| `unit` | 2420 | 2420 | 2429 |
+| `integration-split` | 226 | 226 | 304 |
+| `integration-magma-split` | 90 | 90 | 96 |
+| `integration-magma-spawn` | 69 | 69 | 75 |
+| `integration-magma-tcp` | 71 | **70**（−1，`Tcp.StaleSerial.` 撤，§4.2） | 71 |
+| `integration-magma-full-split` | 527 | 527 | 535 |
+| `link_ratchet.py` | 186 | 186 | 173 |
 
-外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
+落地树的车道数含同一波其它包合入的条目，与包树之差不是本包的增量。
+
+包树上外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
 PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。为跑这两条，本树 `build-split` 以
 `-DMOBILEGL_BUILD_TRACE_REPLAY=ON` 重配，并初始化了 `3rdparty/apitrace` 的嵌套子模块（只动子模块工作树）。
 
