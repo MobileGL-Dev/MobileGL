@@ -210,6 +210,9 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_session = &session;
         m_stopRequested.store(false, std::memory_order_release);
+        // PH-6 fix round: the session's copy of the request, for ReserveEventOrBlock's wait. Lowered
+        // with the loop's own, so a loop restarted on the same session does not forfeit at once.
+        session.ClearApplyStopRequest();
         // m-3: reset THIS session's own diagnostics. DrainedRecords()/ParkCount() are absolute and
         // a case asserts == N, so a process that opens a SECOND session (context loss, or
         // Initialize after Destroy) must start them at zero rather than carry the first session's
@@ -816,6 +819,11 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_stopRequested.store(true, std::memory_order_release);
         if (m_session != nullptr) {
+            // PH-6 fix round: the apply thread may be parked in ReserveEventOrBlock rather than in
+            // the loop's own park, and that wait's predicate is the session's, not this loop's.
+            // Raised BEFORE the ring below for the same publish-then-ring reason as the flag above;
+            // without it a knob longer than kJoinTimeoutMs outlives this join.
+            m_session->RequestApplyStop();
             // The bell may already be dead - ClientSession::Stop calls transport->Shutdown()
             // first, which is what table 3's step 2 requires - and Notify on a dead bell is
             // harmless. Ringing anyway covers the paths that Stop without a Kill.

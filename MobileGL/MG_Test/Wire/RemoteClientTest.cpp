@@ -2963,6 +2963,59 @@ TEST(RemoteRunAhead, ATricklingClientGetsTheWholeWaitThenForfeitsByNameInsteadOf
     EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
 }
 
+// STOP WHILE THE SERVER WAITS (PH-6 fix round). ServerLoop::Stop() arrives while the apply thread is
+// parked inside the reservation, on a bell that is still ALIVE - the spawn session's shape when its
+// control stream ends (EOF on a half-close, a malformed frame, a LogFlush ack) while the client is
+// not draining. The knob is 20 s, four times Stop()'s 5000 ms bounded join, so this child can only
+// exit cleanly if the wait ends on the stop request itself and forfeits as `Stopped`.
+//
+// THE RED: take ApplyStopRequested() out of ReserveEventOrBlock's predicate and the ring Stop()
+// sends is swallowed by a wait that re-tests only "has the client drained?"; the reservation sits
+// out its 20 s and Stop() aborts the child after 5 s with Fatal{ApplyThreadJoinTimeout}.
+TEST(RemoteRunAhead, AStopWhileTheServerWaitsForADrainEndsTheWaitByNameInsteadOfTheJoinTimeout) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.EventWaitMs = 20000;
+        StartRunAheadSession();
+        // The producer's probe blocks inside the reservation, so it is posted from a thread of its
+        // own: RunProbeOnApplyThreadForTesting waits for the probe to return.
+        std::thread producer([] {
+            (void)Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                +[](void*) -> MobileGLResult {
+                    MG_Pipe::MGPRange ranges[64];
+                    for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                    for (Uint32 i = 0; i < 3000; ++i) {
+                        MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
+                    }
+                    return MOBILEGL_OK;
+                },
+                nullptr);
+        });
+        // The reservation is waiting once SEG_EVENT's latch is up: nothing in this child drains.
+        const auto signals = Srv::ServerSessionInstance().DataLink()->Signals();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
+        while (signals.EventRingFull->load(std::memory_order_acquire) == 0) {
+            if (std::chrono::steady_clock::now() > until) ::_exit(106);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // well into the park
+        const auto start = std::chrono::steady_clock::now();
+        Srv::ServerLoopInstance().Stop();
+        const Uint64 stopMs = MillisecondsSince(start);
+        producer.join();
+        auto& server = Srv::ServerSessionInstance();
+        if (!server.ReverseChannelForfeited()) ::_exit(101);
+        if (server.ForfeitDrops() == 0) ::_exit(102);
+        // Stop() came back on the request, not on the join's 5000 ms or the knob's 20 s.
+        if (stopMs > 2000u) ::_exit(104);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{Stopped} - kEventGpuWritten"), std::string::npos)
+        << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{ApplyThreadJoinTimeout"), std::string::npos) << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
+}
+
 // §2.7 / ruling 13: the deferred-destroy queue stays, and an enqueue from an unbarriered
 // apply is the finding. Under strict it is the abort; this is the arm the lane owns.
 TEST(RemoteGuards, ADeferredDestroyFromAnUnbarrieredApplyIsFatalUnderStrict) {

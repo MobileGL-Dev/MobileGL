@@ -244,6 +244,29 @@ namespace MobileGL::MG_Remote::Server {
                                     Uint32 shortDrains);
         void* DropEventAfterForfeit(Uint64 payloadBytes);
 
+        // PH-6 fix round. SERVERLOOP::STOP'S REQUEST, SEEN BY THE ONE APPLY-THREAD WAIT THAT IS NOT
+        // THE LOOP'S OWN PARK. ReserveEventOrBlock parks on the same consumer bell the loop parks
+        // on, but with its own predicate, so a Stop() that rang that bell used to wake it only to
+        // have it re-test "has the client drained?", find no, and park again for the rest of
+        // MOBILEGL_IPC_EVENT_WAIT_MS - while Stop()'s bounded join (5000 ms) ran out and the
+        // session died of Fatal{ApplyThreadJoinTimeout}. A control stream that ends (EOF, a
+        // malformed frame, a LogFlush ack) while the apply thread waits for a drain is exactly
+        // that shape. Stop() raises this BEFORE it rings; the wait's predicate reads it and the
+        // reservation forfeits as `Stopped`. Start() lowers it for the next run of the loop.
+        void RequestApplyStop() { m_applyStopRequested.store(true, std::memory_order_release); }
+        void ClearApplyStopRequest() {
+            m_controlStreamEnded.store(false, std::memory_order_release);
+            m_applyStopRequested.store(false, std::memory_order_release);
+        }
+        Bool ApplyStopRequested() const { return m_applyStopRequested.load(std::memory_order_acquire); }
+        // WHY the stop came, when the answer is "the peer is gone": ServerMain's control loop
+        // notes an EOF or a transport error on the control stream BEFORE it stops the loop, so a
+        // reservation that the stop wakes names the hangup (PeerGone) and not the stop. Needed
+        // because the stop and the data bell's own death race - on the stream plane the control
+        // EOF routinely wins - and a peer killed mid-wait is not a session somebody stopped.
+        void NoteControlStreamEnded() { m_controlStreamEnded.store(true, std::memory_order_release); }
+        Bool ControlStreamEnded() const { return m_controlStreamEnded.load(std::memory_order_acquire); }
+
         // completedFrameSerial / presentAckSerial: the two watermarks only the server can
         // advance, kept together with the other three rather than poked into RingControl from
         // whatever code happens to notice a present finished.
@@ -283,6 +306,10 @@ namespace MobileGL::MG_Remote::Server {
         std::atomic<Bool> m_reverseChannelForfeit{false};
         std::atomic<Uint64> m_forfeitDrops{0};
         std::vector<Uint8> m_forfeitScratch;
+        // PH-6 fix round. Written by ServerLoop::Start/Stop and ServerMain's control loop, read by
+        // the apply thread's event wait.
+        std::atomic<Bool> m_applyStopRequested{false};
+        std::atomic<Bool> m_controlStreamEnded{false};
     };
 
     // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may

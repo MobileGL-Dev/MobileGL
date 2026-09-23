@@ -92,6 +92,13 @@ namespace MobileGL::MG_Remote::Client {
         // then watch this object, not a side effect three layers up.
         Transport::Doorbell* SelfDoorbellForTest() { return m_producer.SelfDoorbell(); }
 
+        // PH-6's fuzz arm 3 ONLY (EventForfeitPeerTest): the control stream, so a peer that has
+        // stopped draining can still put on it the frames no ClientSession path would send at that
+        // moment - a malformed one, or a surface op queued behind a wait it did not drain for.
+        // Every production path that writes control holds
+        // m_remoteControlMutex and drains first; a caller of this does neither, which is the point.
+        Transport::ITransport* ControlTransportForTest() { return m_transport; }
+
         // CONTRACT-P6 4.3: THE PID THE SERVER STATED IN ITS Welcome, which is not the same fact
         // as the pid this session's launcher recorded - that one is local knowledge, this one
         // CROSSED THE WIRE. Under spawn they must agree and neither may be ours; under inproc

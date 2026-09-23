@@ -295,6 +295,13 @@ namespace MobileGL::MG_Remote::Server {
             const auto drained = [signals] {
                 return signals.EventRingFull->load(std::memory_order_acquire) == 0;
             };
+            // THE WAIT ALSO ENDS ON A STOP (PH-6 fix round). ServerLoop::Stop() raises the session's
+            // request and rings this same bell; a predicate that asked only "drained?" swallowed
+            // that ring and parked again for the rest of the knob, so any knob over Stop()'s 5000 ms
+            // join turned an ordinary end of the control stream into Fatal{ApplyThreadJoinTimeout}.
+            const auto drainedOrStopping = [&drained, &session] {
+                return drained() || session.ApplyStopRequested();
+            };
             // ONE DEADLINE FOR THE WHOLE RESERVATION, NOT ONE PER PARK. The loop goes round as
             // often as the client clears the latch - that is how a client that drains in pieces
             // eventually makes room - but every round spends the same budget, so a peer that
@@ -320,6 +327,22 @@ namespace MobileGL::MG_Remote::Server {
                                                            eventName, payloadBytes, MillisecondsSince(start),
                                                            budgetMs, shortDrains);
             };
+            // Asked AFTER Dead() everywhere below: under spawn a stop usually FOLLOWS the peer's
+            // hangup (control EOF), and the hangup is the more specific answer. The same fact can
+            // reach the stop first from the other side - ServerMain notes an ended control stream
+            // before it calls Stop() - and then it is still a hangup, not a stop.
+            const auto stopped = [&]() {
+                if (session.ControlStreamEnded()) {
+                    return session.ForfeitReverseChannel(
+                        "PeerGone", "the client's control stream ended while the server waited - the peer is gone",
+                        eventName, payloadBytes, MillisecondsSince(start), budgetMs, shortDrains);
+                }
+                return session.ForfeitReverseChannel("Stopped",
+                                                     "the session was stopped while the server waited for the "
+                                                     "client to drain SEG_EVENT",
+                                                     eventName, payloadBytes, MillisecondsSince(start), budgetMs,
+                                                     shortDrains);
+            };
             for (;;) {
                 // PUBLISH AND RING FIRST. The client cannot drain a ring whose head it has not
                 // been shown, and the latch Reserve just set is only useful to a client that
@@ -327,23 +350,37 @@ namespace MobileGL::MG_Remote::Server {
                 session.PublishEvents();
                 // DEAD FIRST (the plan's own clause): a bell whose peer is gone answers every
                 // Wait with an immediate false, and reporting that as "waited N ms" would name
-                // a timeout for what is a hangup.
+                // a timeout for what is a hangup. Under spawn on the shm plane this needs the
+                // bell's death witness (ServerMain.cpp, the control socket): the server holds
+                // both ends of its own bell pair, so without one it can never go Dead().
                 if (bell.Dead()) {
                     return session.ForfeitReverseChannel("PeerGone", "the client's doorbell is dead - the peer is gone",
                                                          eventName, payloadBytes, MillisecondsSince(start), budgetMs,
                                                          shortDrains);
                 }
                 if (!drained()) {
+                    if (session.ApplyStopRequested()) return stopped();
                     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
                         deadline - std::chrono::steady_clock::now()).count();
                     if (left <= 0) return outOfPatience();
-                    if (!bell.Wait(*signals.ConsumerParked, drained, /*spinUs=*/0, static_cast<Uint32>(left))) {
+                    if (!bell.Wait(*signals.ConsumerParked, drainedOrStopping, /*spinUs=*/0,
+                                   static_cast<Uint32>(left))) {
                         if (bell.Dead()) {
                             return session.ForfeitReverseChannel(
                                 "PeerGone", "the client's doorbell died while the server waited - the peer is gone",
                                 eventName, payloadBytes, MillisecondsSince(start), budgetMs, shortDrains);
                         }
                         return outOfPatience();
+                    }
+                    // Woken by Stop() and not by a drain. A drain that raced the stop still gets
+                    // its Reserve below; the next round then sees the request and stops.
+                    if (!drained()) {
+                        if (bell.Dead()) {
+                            return session.ForfeitReverseChannel(
+                                "PeerGone", "the client's doorbell died while the server waited - the peer is gone",
+                                eventName, payloadBytes, MillisecondsSince(start), budgetMs, shortDrains);
+                        }
+                        return stopped();
                     }
                 }
                 slot = session.Events().Reserve(kind, payloadBytes);
@@ -353,6 +390,10 @@ namespace MobileGL::MG_Remote::Server {
                 // gets the rest of the same budget - Reserve has just raised the latch again, so
                 // the next round parks until the client clears it once more.
                 ++shortDrains;
+                // A peer that clears the latch itself (it is on a page the peer can write) keeps
+                // drained() true and this loop from parking; the budget still bounds it, and so
+                // does a stop.
+                if (session.ApplyStopRequested()) return stopped();
                 if (std::chrono::steady_clock::now() >= deadline) return outOfPatience();
             }
         }

@@ -340,6 +340,17 @@ void SendLogAck(void* pointer) {
         // clientBell[0] is the CLIENT's park end and no bell here owns it; the
         // other three belong to selfBell and peerBell and are closed with them.
         ::close(clientBell[0]);
+        // PH-6 fix round: THE SERVER'S BELL GETS A DEATH WITNESS TOO (CONTRACT-P6 D5c, mirrored).
+        // selfBell parks on serverBell[0] and this process rings itself through serverBell[1], so
+        // it holds both ends of that pair and the pair can never hang up, however dead the client
+        // is: Dead() stayed false for the life of a shm session, and ReserveEventOrBlock's "dead
+        // first" check could only ever report a peer killed mid-wait as NotDraining after the
+        // whole MOBILEGL_IPC_EVENT_WAIT_MS. The control socket's far end is the client's alone, so
+        // its hangup IS the death; the bell polls it for hangup only and never reads from it, so
+        // SocketTransport's reassembler below keeps every byte. Set before loop.Start(): the apply
+        // thread is the one that parks on this bell. (The stream plane's bell is the data socket
+        // itself and dies with the peer already.)
+        selfBell->SetDeathWitness(control->StreamFd());
     }
 
     const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
@@ -371,7 +382,13 @@ void SendLogAck(void* pointer) {
             break;
         }
         if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
-        if (result != MOBILEGL_OK) break;
+        if (result != MOBILEGL_OK) {
+            // EOF or a transport error: the peer is gone. Said to the session BEFORE loop.Stop()
+            // below, so an apply thread that the stop wakes inside ReserveEventOrBlock names the
+            // hangup (PeerGone) rather than the stop (PH-6 fix round).
+            session.NoteControlStreamEnded();
+            break;
+        }
         // THE FILE IDENTIFIER, ASKED FIRST AND SAID OUT LOUD (P7 wave 0).
         //
         // The plan asked for CtrlEnvelopeBufferHasIdentifier here because ServerSession::
@@ -435,7 +452,10 @@ void SendLogAck(void* pointer) {
         if (session.DataLink()) reply.eventHead = session.DataLink()->EventPublishedHead();
         flatbuffers::FlatBufferBuilder builder(256);
         EncodeSurfaceReplyFrame(reply, &builder);
-        if (control->SendFrame({builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) break;
+        if (control->SendFrame({builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
+            session.NoteControlStreamEnded();
+            break;
+        }
     }
     loop.Stop();
     // Publish the final server window while log forwarding is still attached.
