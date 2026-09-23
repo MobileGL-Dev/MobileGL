@@ -193,6 +193,36 @@ namespace {
         return link;
     }
 
+    // How many archive bytes follow a u64 `count` that is itself followed by `next` - the LAST such
+    // spot, so a fixture can find the count of a field near the archive's end. This is
+    // Remaining() at the moment TakeCount reads that count. SIZE_MAX when there is no such spot.
+    SizeT BytesAfterTheCount(const Vector<Uint8>& bytes, Uint64 count, const Vector<Uint8>& next) {
+        Vector<Uint8> needle(sizeof(count));
+        std::memcpy(needle.data(), &count, sizeof(count));
+        needle.insert(needle.end(), next.begin(), next.end());
+        if (bytes.size() < needle.size()) return static_cast<SizeT>(-1);
+        for (SizeT at = bytes.size() - needle.size() + 1; at-- > 0;) {
+            if (std::memcmp(bytes.data() + at, needle.data(), needle.size()) == 0) {
+                return bytes.size() - at - sizeof(count);
+            }
+        }
+        return static_cast<SizeT>(-1);
+    }
+
+    // The encoded width of one DEFAULT element of LinkArtifacts::uniformReflection, measured
+    // through the encoder itself: an archive with one such element minus an archive with none.
+    // A default ResourceReflection has an empty name, so this is the smallest encoding one can
+    // have - the charge PH-5's TakeCount makes per element.
+    SizeT EncodedBytesOfOneDefaultResourceReflection() {
+        Vector<Uint8> none;
+        EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, none);
+        LinkArtifacts one{};
+        one.uniformReflection.resize(1);
+        Vector<Uint8> withOne;
+        EncodeProgramArtifacts(one, SpirvArtifacts{}, withOne);
+        return withOne.size() - none.size();
+    }
+
     SpirvArtifacts MakeSpirvArtifacts() {
         SpirvArtifacts spirv{};
         spirv.generatedSpirv = {{0x07230203u, 0x00010300u, 0u}, {0x07230203u, 0x00010300u, 1u}};
@@ -299,6 +329,75 @@ TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
 #endif
 }
 
+// A COMPACT archive - one whose wire form is SMALLER than its in-memory form - is still an archive
+// this encoder wrote, and it has to come back (codex closeout finding 3). Ten one-character
+// xfbInterfaceNames are 90 bytes on the wire and ten 32-byte std::strings in memory; with every
+// vector behind them empty, the bytes that remain at their count are fewer than 10 x sizeof(String),
+// and PH-5's first bound - which charged sizeof(value_type) per element - refused the archive. The
+// same holds one level down for SpirvArtifacts::generatedSpirv: ten EMPTY modules are ten u64
+// counts on the wire and ten 24-byte vectors in memory (the next case). Red with TakeCount's vector
+// charge put back to sizeof(Element): the decode answers false. Each case's ASSERT_LT is the
+// fixture's own proof that it can go red that way.
+TEST(ProgramArtifactsCodec, ACompactArchiveOfTenShortXfbNamesRoundTrips) {
+#if MOBILEGL_PIPE_PUSH
+    {
+        LinkArtifacts link{};
+        link.xfbInterfaceNames = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(link, SpirvArtifacts{}, bytes);
+        const Uint64 one = 1;
+        Vector<Uint8> firstName(sizeof(one));
+        std::memcpy(firstName.data(), &one, sizeof(one));
+        firstName.push_back(static_cast<Uint8>('a'));
+        const SizeT remaining = BytesAfterTheCount(bytes, link.xfbInterfaceNames.size(), firstName);
+        ASSERT_LT(remaining, link.xfbInterfaceNames.size() * sizeof(String))
+            << "fixture: a sizeof(value_type) charge would admit this count, so the case could not go red";
+
+        LinkArtifacts decodedLink;
+        SpirvArtifacts decodedSpirv;
+        ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv))
+            << "a LinkArtifacts with ten short XFB interface names, which this encoder wrote, was refused";
+        EXPECT_EQ(decodedLink.xfbInterfaceNames, link.xfbInterfaceNames);
+        EXPECT_TRUE(decodedLink.xfbStrides.empty());
+        EXPECT_TRUE(decodedLink.gsStripTriangles.empty());
+        Vector<Uint8> reencoded;
+        EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+        EXPECT_EQ(reencoded, bytes);
+    }
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
+#endif
+}
+
+// The same compact shape one level down: a Vector<Vector<unsigned>> element (one SPIR-V module) is
+// its u64 count on the wire when empty and a 24-byte object in memory.
+TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
+#if MOBILEGL_PIPE_PUSH
+    {
+        SpirvArtifacts spirv{};
+        spirv.generatedSpirv.resize(10);
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(LinkArtifacts{}, spirv, bytes);
+        const SizeT remaining = BytesAfterTheCount(bytes, spirv.generatedSpirv.size(),
+                                                   Vector<Uint8>(10 * sizeof(Uint64), 0));
+        ASSERT_LT(remaining, spirv.generatedSpirv.size() * sizeof(Vector<unsigned>))
+            << "fixture: a sizeof(value_type) charge would admit this count, so the case could not go red";
+
+        LinkArtifacts decodedLink;
+        SpirvArtifacts decodedSpirv;
+        ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv))
+            << "a SpirvArtifacts with ten empty modules, which this encoder wrote, was refused";
+        ASSERT_EQ(decodedSpirv.generatedSpirv.size(), 10u);
+        for (const auto& module : decodedSpirv.generatedSpirv) EXPECT_TRUE(module.empty());
+        Vector<Uint8> reencoded;
+        EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+        EXPECT_EQ(reencoded, bytes);
+    }
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
+#endif
+}
+
 // Negative control 1. Every prefix length is checked against the bytes that REMAIN, so a
 // stream cut anywhere has to come back false with both outputs defaulted - never a partially
 // filled archive, and never a resize driven by a count the stream cannot back.
@@ -335,8 +434,12 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
 }
 
 // A count is not permission to reserve a container larger than the bytes left in the
-// untrusted archive. This mutates the first LinkArtifacts vector count to the boundary value
-// that the former raw <= Remaining check accepted but sizeof(value_type) <= Remaining rejects.
+// untrusted archive can back. This mutates the first LinkArtifacts vector count to the boundary
+// value one element past PH-5's bound - the smallest count the remaining bytes cannot hold at
+// the element's minimum encoded size - which the former raw <= Remaining check accepted. (Not
+// discriminating on its own: under the byte bound the resize is small and the element reads run
+// out of bytes, so the decode is false either way. ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize
+// is the case that goes red.)
 TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveBytes) {
 #if MOBILEGL_PIPE_PUSH
     Vector<Uint8> bytes;
@@ -344,7 +447,12 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
     constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
     ASSERT_GT(bytes.size(), countOffset + sizeof(Uint64));
     const SizeT available = bytes.size() - countOffset - sizeof(Uint64);
-    const Uint64 forgedCount = static_cast<Uint64>(available / sizeof(UniformReflection)) + 1;
+    const SizeT perElement = EncodedBytesOfOneDefaultResourceReflection();
+    // What finding 3 is about, stated: an element's wire floor is below its object size, and
+    // above the one byte the former bound charged.
+    ASSERT_GT(perElement, 1u);
+    ASSERT_LT(perElement, sizeof(UniformReflection));
+    const Uint64 forgedCount = static_cast<Uint64>(available / perElement) + 1;
     ASSERT_LT(forgedCount, static_cast<Uint64>(available))
         << "fixture must pass the old count <= remaining check";
     std::memcpy(bytes.data() + countOffset, &forgedCount, sizeof(forgedCount));
@@ -365,10 +473,12 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
 // bytes - DecodeProgramArtifacts answers false either way (red-once: it stays green). What PH-5
 // actually changed is the ALLOCATION a count may cause before the reads, so this case forges the
 // count BETWEEN the two bounds - `count == Remaining()`, in an archive padded to 7 MiB - and
-// decodes it in a forked child whose address space has 64 MiB of headroom. PH-5 refuses before
-// the resize and the child exits 0; the old bound resizes to Remaining() elements of
-// sizeof(UniformReflection) each, far past the headroom, and the child dies of std::bad_alloc.
-// The same shape crosses the wire in PeerLatchTest's D11ArchiveVectorCount row.
+// decodes it in a forked child whose address space has 64 MiB of headroom. PH-5 charges each
+// element its minimum encoded size (a ResourceReflection's is ~100 bytes; the codex closeout
+// finding 3 fix, not sizeof), refuses before the resize, and the child exits 0; the old bound
+// resizes to Remaining() elements of sizeof(UniformReflection) each, far past the headroom, and
+// the child dies of std::bad_alloc. The same shape crosses the wire in PeerLatchTest's
+// D11ArchiveVectorCount row.
 #if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
 namespace {
     [[noreturn]] void DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit() {
@@ -405,8 +515,8 @@ TEST(ProgramArtifactsCodec, ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize
 #if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
     EXPECT_EXIT(DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit(), ::testing::ExitedWithCode(0), ".*")
         << "std::bad_alloc escaping the child is the resize PH-5 exists to refuse: the vector count was "
-           "charged one byte per element instead of sizeof(value_type); exit 3 is a decode that did not "
-           "refuse; 64+ is the fixture";
+           "charged one byte per element instead of its minimum encoded size; exit 3 is a decode that "
+           "did not refuse; 64+ is the fixture";
 #else
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off (the archive codec is push-only), or no RLIMIT_AS / fork here";
 #endif

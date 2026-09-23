@@ -247,16 +247,68 @@ namespace MobileGL::MG_State::GLState {
             return true;
         }
 
-        // A COUNT IS CHECKED AGAINST THE BYTES THAT REMAIN BEFORE ANYTHING IS ALLOCATED.
-        // For resizable vectors, also charge sizeof(value_type) per element: even when a
-        // serialized record is compact, its immediate vector reservation must not exceed the
-        // remaining untrusted archive bytes. The division form avoids multiplying attacker
-        // input and is safe on both 32-bit and 64-bit SizeT.
-        Bool TakeCount(ReadCursor& in, SizeT& count, SizeT allocationBytesPerElement = 1) {
+        // ---- the fewest bytes the writer can emit for one value of a type ----
+        //
+        // What PH-5's vector bound charges per element (TakeCount below). It is the WRITER'S
+        // floor, derived arm for arm from WriteValue above: a scalar is its own width, a string
+        // or a container is its u64 count and nothing else when empty, a fixed array is its
+        // width times its element's floor, and a record - VisitFields, or the hand-written
+        // TUniformInitializer table - is the sum of its fields' floors. It depends on the TYPE
+        // only; the default-constructed instance is there because VisitFields needs something to
+        // walk, and no member value is read.
+        template <class Value>
+        SizeT MinEncodedBytesOf() {
+            using T = std::remove_cv_t<Value>;
+            if constexpr (ArchiveScalar<T>) {
+                return sizeof(T);
+            } else if constexpr (ArchiveString<T> || ArchiveMap<T> || ArchiveSet<T> || ArchiveVector<T>) {
+                return sizeof(Uint64);
+            } else if constexpr (ArchiveFixedArray<T>) {
+                return std::tuple_size<T>::value * MinEncodedBytesOf<typename T::value_type>();
+            } else {
+                T value{};
+                SizeT bytes = 0;
+                const auto field = [&bytes](const char*, const auto& member) {
+                    bytes += MinEncodedBytesOf<std::remove_cvref_t<decltype(member)>>();
+                };
+                if constexpr (ArchiveUniformInitializer<T>) VisitUniformInitializer(value, field);
+                else VisitFields(value, field);
+                return bytes;
+            }
+        }
+
+        // At least one byte, so a count is always bounded by the bytes that remain (a type whose
+        // floor were zero - an empty record, a zero-width array - would otherwise admit any count).
+        template <class Value>
+        SizeT MinEncodedBytes() {
+            static const SizeT bytes = [] {
+                const SizeT least = MinEncodedBytesOf<Value>();
+                return least == 0 ? SizeT{1} : least;
+            }();
+            return bytes;
+        }
+
+        // A COUNT IS CHECKED AGAINST THE BYTES THAT REMAIN BEFORE ANYTHING IS ALLOCATED: every
+        // one of `count` elements still has to be read out of Remaining(), so a count larger than
+        // Remaining() / (the element's smallest encoding) is one no stream this writer produced
+        // can back, and it is refused before the resize.
+        //
+        // PH-5 (codex closeout finding 3): the charge per element is the MINIMUM ENCODED size,
+        // NOT sizeof(value_type). The first PH-5 charged sizeof, and that refused archives this
+        // very encoder writes: a Vector<String> element is eight bytes of count plus its
+        // characters on the wire but a 32-byte object in memory, so ten one-character
+        // xfbInterfaceNames with empty vectors behind them decoded to false
+        // (ProgramArtifactsCodecTest's ACompactArchiveOf* round trips). The allocation stays
+        // bounded all the same - resize(count) costs at most
+        // (Remaining() / MinEncodedBytes<T>()) * sizeof(T), a
+        // constant factor of the archive fixed per type (on libstdc++: 4 for a String, 3 for a
+        // nested vector, ~1.3 for a ResourceReflection), never the peer's count. The division
+        // form avoids multiplying attacker input and is safe on both 32-bit and 64-bit SizeT.
+        Bool TakeCount(ReadCursor& in, SizeT& count, SizeT minEncodedBytesPerElement = 1) {
             Uint64 raw = 0;
             if (!TakeRaw(in, raw)) return false;
-            if (allocationBytesPerElement == 0 ||
-                raw > static_cast<Uint64>(in.Remaining() / allocationBytesPerElement)) {
+            if (minEncodedBytesPerElement == 0 ||
+                raw > static_cast<Uint64>(in.Remaining() / minEncodedBytesPerElement)) {
                 in.Ok = false;
                 return false;
             }
@@ -306,7 +358,7 @@ namespace MobileGL::MG_State::GLState {
             } else if constexpr (ArchiveVector<T>) {
                 SizeT count = 0;
                 using Element = typename T::value_type;
-                if (!TakeCount(in, count, sizeof(Element))) return;
+                if (!TakeCount(in, count, MinEncodedBytes<Element>())) return;
                 value.clear();
                 value.resize(count);
                 for (auto& element : value) {

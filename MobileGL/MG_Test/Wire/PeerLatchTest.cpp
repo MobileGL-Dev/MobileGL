@@ -750,8 +750,10 @@ namespace {
 #if MOBILEGL_PIPE_PUSH
     // PH-5's RAW-PEER CONTROL, MADE TO DISCRIMINATE. What PH-5 changed (ProgramArtifactsCodec.cpp
     // TakeCount, 1ae7474d) is the CHARGE for a vector count: it used to be one byte per element
-    // (`count <= Remaining()`), and PH-5 charges sizeof(value_type) per element before the
-    // resize. So the control is a count BETWEEN the two bounds - one the byte bound admits and
+    // (`count <= Remaining()`), and PH-5 charges each element its minimum encoded size before the
+    // resize (sizeof(value_type) until codex closeout finding 3 showed that refused valid compact
+    // archives; ~100 bytes for a ResourceReflection either way). So the control is a count
+    // BETWEEN the two bounds - one the byte bound admits and
     // PH-5 refuses: `count == Remaining()`, in an archive padded out to kArchiveBytes. Under PH-5
     // the decode refuses before anything is allocated and the session latches by name. Under the
     // byte bound the same count reaches `resize(count)` - Remaining() elements of
@@ -1299,7 +1301,7 @@ namespace {
         // decoder's CreateShaderState.Reflection latch, but what it CONTROLS is TakeCount's
         // element charge (see ArchiveWhoseCountOnlyTheByteBoundAdmits), so the site map does
         // not credit it to the decoder's site (CreateShaderStateReflectionGarbage covers that).
-        {"D11ArchiveVectorCount", "ProgramArtifactsCodec.cpp", "PH-5 TakeCount count x sizeof(element)",
+        {"D11ArchiveVectorCount", "ProgramArtifactsCodec.cpp", "PH-5 TakeCount count x min encoded element",
          Outcome::Latched, "Fatal{ProtocolCorruption, \"CreateShaderState.Reflection\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
              std::size_t element = 0;
