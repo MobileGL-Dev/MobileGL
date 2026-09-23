@@ -1377,6 +1377,27 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
 
+      # P7 wave 2-F, PH-7 (1). THE TCP SUPERVISOR LANE NEEDS flatc, AND CI HAD NONE.
+      #
+      # `TcpLane.SupervisorProtocolControls` carries LABELS integration-tcp, so it has been in the
+      # selection below since wave 0 - as a SKIP, every run. The script builds the protocol's
+      # Python bindings with flatc, flatc is deliberately absent from the build graph
+      # (gen_protocol.py's header says why), and with none found it exits 77 and ctest reports
+      # the entry skipped. Skipped is what the entry looked like for the whole time it did not
+      # exist, which is the failure mode the plan's own row named ("referenced by NOTHING").
+      #
+      # So the job builds the SAME pinned flatc that flatc-check builds, from the same submodule,
+      # and the lane step below names the entry to junit_tally.py --require-entry-passed. If the
+      # build ever stops producing one, the lane reds by name rather than going green having run
+      # the supervisor's Busy / token / listen / version / build-policy / reap controls zero times.
+      # --check is passed so this step cannot quietly regenerate a different committed header;
+      # keeping that honest is flatc-check's job and this step must not overlap with it.
+      - name: Check out the FlatBuffers submodule for the TCP supervisor lane
+        run: git submodule update --init 3rdparty/flatbuffers
+
+      - name: Build the pinned flatc for the TCP supervisor lane
+        run: python3 scripts/gen_protocol.py --build-dir "${RUNNER_TEMP}/flatc-build" --check
+
       # --no-tests=error is half the gate, exactly as in integration-verify: the integration-split
       # entries exist only when the library was configured with -DMOBILEGL_BUILD_DISAGGREGATED=ON,
       # so a build that lost the option matches nothing and reds here instead of reporting a green
@@ -1392,6 +1413,8 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
+          test -x "${MOBILEGL_FLATC_EXECUTABLE}"
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
           # Exit gate 9.3: the spawn arm green at the same count. It runs the same cases through a
@@ -1402,6 +1425,7 @@ jobs:
           ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
           ctest --output-on-failure -L '^integration-tcp$' --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/tcp-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-tcp-ran --require-run-ahead --discovery "${RUNNER_TEMP}/tcp-discovery.json"
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls
 
       # Both full transport runs are hard gates. The per-case comparison below
       # remains diagnostic because explicit mechanism controls retain their own mode.

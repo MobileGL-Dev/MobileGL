@@ -545,12 +545,11 @@ namespace MobileGL::MG_Remote::Server {
         if (stream && transport.Role() == Transport::TransportRole::InProcess)
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                    "stream requires a data connection");
-        const char* expectedToken = std::getenv("MOBILEGL_IPC_TOKEN");
-        if (transport.Role() != Transport::TransportRole::InProcess && expectedToken != nullptr &&
-            expectedToken[0] != '\0' && (hello->token() == nullptr ||
-            std::strcmp(hello->token()->c_str(), expectedToken) != 0))
-            return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Authentication,
-                                   "token mismatch");
+        // PH-7 (1). One policy, one constant-time comparison, shared with ServerMain's supervisor
+        // child (Handshake.h AuthenticatePeerToken). This site used std::strcmp, which returns at
+        // the first differing byte.
+        const MobileGLResult authenticated = AuthenticatePeerToken(transport, hello->token());
+        if (authenticated != MOBILEGL_OK) return authenticated;
         if (hello->backendType() >= static_cast<Uint32>(BackendType::BackendTypeCount) ||
             (m_backend != nullptr && hello->backendType() != static_cast<Uint32>(m_backend->GetBackendType())))
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Backend,

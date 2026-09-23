@@ -36,6 +36,7 @@
 // is one this side already reassembled out of bytes nobody else can re-deliver.
 
 #include <MG_Remote/Protocol/generated/protocol_generated.h> // RefuseCode, for the word below
+#include <MG_Remote/Transport/AuthToken.h> // PH-7 (3): the minimum and the comparison
 #include <MG_Remote/Transport/Doorbell.h> // kWaitForever
 #include <MG_Remote/Transport/FdPassing.h>
 #include <MG_Remote/Transport/SocketTransport.h>
@@ -129,6 +130,55 @@ TEST(SocketTransportTest, TcpRejectsMalformedNamesAndUnauthenticatedWildcard) {
     EXPECT_STREQ(MobileGL::Wire::EnumNameRefuseCode(MobileGL::Wire::RefuseCode::Authentication),
                  "Authentication");
     if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
+}
+
+// PH-7 (3), ID-P7-3. A CONFIGURED TOKEN IS EITHER A CREDENTIAL OR A REFUSAL.
+//
+// The listen policy used to ask only "non-empty", so a one-byte MOBILEGL_IPC_TOKEN opened a
+// wildcard listen. The end-to-end half of this - the supervisor PROCESS dying with a named
+// reason rather than degrading to a loopback server that looks like success - is
+// TcpLane.SupervisorProtocolControls; this is the cheap half, and it also pins that the refusal
+// applies on LOOPBACK, where a short token would otherwise be harmless. Silently accepting it
+// there is what would let a short token reach a deployment.
+TEST(SocketTransportTest, TcpRefusesToListenWithATokenShorterThanTheMinimum) {
+    const char* prior = std::getenv("MOBILEGL_IPC_TOKEN");
+    const std::string saved = prior ? prior : "";
+    const bool wasSet = prior != nullptr;
+    const std::string tooShort(kMinimumAuthTokenBytes - 1, 'x');
+    ::setenv("MOBILEGL_IPC_TOKEN", tooShort.c_str(), 1);
+    int listener = -1;
+    EXPECT_EQ(SocketTransport::Listen("tcp://127.0.0.1:40697", &listener),
+              MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    EXPECT_EQ(listener, -1);
+    // One more byte and the same endpoint comes up, so the refusal above is the LENGTH and not
+    // the port, the address family or the environment variable's mere presence.
+    const std::string longEnough(kMinimumAuthTokenBytes, 'x');
+    ::setenv("MOBILEGL_IPC_TOKEN", longEnough.c_str(), 1);
+    EXPECT_EQ(SocketTransport::Listen("tcp://127.0.0.1:40697", &listener), MOBILEGL_OK);
+    EXPECT_GE(listener, 0);
+    if (listener >= 0) ::close(listener);
+    if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
+    else ::unsetenv("MOBILEGL_IPC_TOKEN");
+}
+
+// The comparison itself. `std::strcmp` and `std::string::operator==` - the two this replaced -
+// both stop at the first differing byte; these cases pin the answers, and the loop in
+// AuthToken.h is what makes the time not depend on WHERE the difference is.
+TEST(SocketTransportTest, TheTokenComparisonAnswersLengthAndPrefixTheSameWay) {
+    const char* expected = "0123456789abcdef";
+    EXPECT_TRUE(ConstantTimeTokenMatch(expected, "0123456789abcdef", 16));
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, "0123456789abcdeF", 16));
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, "Z123456789abcdef", 16));
+    // A correct PREFIX is not a match, and neither is a correct token with anything after it.
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, "0123456789abcde", 15));
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, "0123456789abcdefg", 17));
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, "", 0));
+    // An embedded NUL is compared, not truncated at: `presented` carries its own length because
+    // a flatbuffers string can hold one and c_str()-plus-strcmp would have stopped there.
+    const char embedded[] = {'0', '\0', '2', '3', '4', '5', '6', '7',
+                             '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+    EXPECT_FALSE(ConstantTimeTokenMatch(expected, embedded, sizeof(embedded)));
+    EXPECT_FALSE(ConstantTimeTokenMatch(nullptr, "anything", 8));
 }
 
 namespace {

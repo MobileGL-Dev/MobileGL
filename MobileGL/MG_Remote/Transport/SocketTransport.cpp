@@ -8,6 +8,7 @@
 
 #include "SocketTransport.h"
 
+#include "AuthToken.h"
 #include "Doorbell.h" // kWaitForever
 #include "FdPassing.h"
 #include "WireLog.h"
@@ -153,8 +154,24 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult ListenTcp(const std::string& name, int* outFd) {
             addrinfo* addresses = nullptr;
             if (!TcpAddress(name, &addresses)) return MOBILEGL_ERR_INVALID_ARGUMENT;
-            const char* token = std::getenv("MOBILEGL_IPC_TOKEN");
-            const bool authenticated = token != nullptr && token[0] != '\0';
+            // PH-7 (3), ID-P7-3. A CONFIGURED TOKEN IS EITHER A CREDENTIAL OR A REFUSAL.
+            //
+            // This read `getenv(...) != nullptr && token[0] != '\0'`, so ANY non-empty value -
+            // one byte - opened a `tcp://0.0.0.0` listen. The listen is the only place that can
+            // still say no cheaply and to the operator rather than to a peer, so the length is
+            // asked here, and a short token fails the listen outright instead of quietly
+            // becoming a loopback-only server that looks exactly like a working one.
+            // AuthToken.h holds the constant and the reason.
+            const char* token = ConfiguredAuthToken();
+            if (token != nullptr && !AuthTokenIsLongEnough(token)) {
+                WireLogError("MG_Remote: Refuse{Authentication} MOBILEGL_IPC_TOKEN is %zu bytes "
+                             "and the minimum is %zu (PH-7 (3)); refusing to listen on %s rather "
+                             "than authenticating with a guessable secret",
+                             std::strlen(token), kMinimumAuthTokenBytes, name.c_str());
+                ::freeaddrinfo(addresses);
+                return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+            }
+            const bool authenticated = token != nullptr;
             MobileGLResult result = MOBILEGL_ERR_UNSUPPORTED;
             for (auto* address = addresses; address; address = address->ai_next) {
                 if (!authenticated && !Loopback(address->ai_addr)) {

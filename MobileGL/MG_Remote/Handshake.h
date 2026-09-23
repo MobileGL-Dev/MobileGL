@@ -2,8 +2,10 @@
 #pragma once
 #include "CapsCodec.h"
 #include "Protocol/generated/protocol_generated.h"
+#include "Transport/AuthToken.h"
 #include "Transport/ITransport.h"
 #include <MG_Util/Debug/Log.h>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 
@@ -35,6 +37,35 @@ namespace MobileGL::MG_Remote {
                 static_cast<unsigned long long>(refusal->expected()),
                 static_cast<unsigned long long>(refusal->actual()));
         return true;
+    }
+
+    // PH-7 (1)(2), ID-P7-3. THE TOKEN POLICY, ONCE, FOR BOTH SERVER-SIDE SITES.
+    //
+    // ServerSession::Accept and ServerMain::RunSession each had their own reading of it (see
+    // Transport/AuthToken.h for what the three readings were). They now call this, so the answer
+    // to "is this peer allowed to open a session" is one function with one comparison, and it is
+    // the constant-time one.
+    //
+    // THE FOUR STATES, stated here because they were implicit and therefore different at each
+    // site:
+    //   in-process  - there is no peer; the "connection" is this process. Never authenticated.
+    //   no token    - not an empty credential: the LISTEN policy has already confined this
+    //                 server to loopback (SocketTransport.cpp's ListenTcp), so there is nothing
+    //                 left for a token to add. A peer that sends one anyway is not refused for
+    //                 it; ServerMain used to do that and no document ever said so.
+    //   token, match    - welcomed.
+    //   token, mismatch - `Refuse{Authentication}`, detail "token mismatch", and the value is
+    //                 not in the line. A missing token field is a mismatch, not a separate case.
+    inline MobileGLResult AuthenticatePeerToken(Transport::ITransport& transport,
+                                                const ::flatbuffers::String* presented) {
+        if (transport.Role() == Transport::TransportRole::InProcess) return MOBILEGL_OK;
+        const char* expected = Transport::ConfiguredAuthToken();
+        if (expected == nullptr) return MOBILEGL_OK;
+        const char* bytes = presented == nullptr ? "" : presented->c_str();
+        const std::size_t size = presented == nullptr ? 0u : presented->size();
+        if (Transport::ConstantTimeTokenMatch(expected, bytes, size)) return MOBILEGL_OK;
+        return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Authentication,
+                               "token mismatch");
     }
 
     inline MobileGLResult ValidatePeerHandshake(Transport::ITransport& transport,

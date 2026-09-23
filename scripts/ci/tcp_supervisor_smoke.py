@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Exercise a real TCP supervisor's Busy, token, version, build-policy and REAP controls.
+"""Exercise a real TCP supervisor's LISTEN, Busy, token, version, build-policy and REAP controls.
 
 P7 wave 0 registered this script as `TcpLane.SupervisorProtocolControls` in
 MG_IntegrationTest/CMakeLists.txt. Until then it was referenced by NOTHING in the tree - no
 ctest entry, no workflow step - so the four controls it asserts had been green or red for an
 unknown number of commits and nobody would have known which.
+
+P7 wave 2-F, PH-7 (1)(2)(3) (ID-P7-3), added the two LISTEN controls at the top of main(). They
+are the negative controls for the policy AuthToken.h now owns, and both are end-to-end against a
+real supervisor process because that is the only place the policy is reachable: an in-process
+unit test of `SocketTransport::Listen` can assert the return code but not that an operator who
+misconfigured a token gets a dead server with a named reason rather than a live one that silently
+serves loopback only.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
 header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:
@@ -33,6 +40,18 @@ ROOT = Path(__file__).resolve().parents[2]
 # ctest's SKIP_RETURN_CODE for this entry. 77 is the automake convention the rest of the world
 # uses and ctest has no opinion of its own.
 kSkipExit = 77
+
+# PH-7 (3): >= AuthToken.h's kMinimumAuthTokenBytes (16). The old value, `p65-smoke-token`, was
+# fifteen bytes - one short - which is a pleasing accident and exactly the kind of token the
+# minimum exists to refuse. The value is arbitrary; its LENGTH is the fixture.
+kToken = 'p7-ph-f-supervisor-token'
+assert len(kToken) >= 16, kToken
+# A token that is a credential in every respect except length.
+kShortToken = 'p7-ph-f-short'
+assert len(kShortToken) < 16, kShortToken
+
+# ServerMain's `SocketTransport::Listen(...) != MOBILEGL_OK` arm.
+kListenRefusedExit = 72
 
 
 def resolve_flatc(explicit):
@@ -77,7 +96,7 @@ def receive(peer, schema):
     raise RuntimeError(f'unexpected first control reply {kind}')
 
 
-def hello(schema, flatbuffers, fingerprint=0, major=1, token='p65-smoke-token', identifier=b'MGLC'):
+def hello(schema, flatbuffers, fingerprint=0, major=1, token=kToken, identifier=b'MGLC'):
     builder = flatbuffers.Builder(512)
     build = builder.CreateString('intentionally-different-build-for-p65-control')
     auth = builder.CreateString(token)
@@ -108,18 +127,62 @@ def hello(schema, flatbuffers, fingerprint=0, major=1, token='p65-smoke-token', 
     return struct.pack('<4sI', b'MGLF', len(payload)) + payload
 
 
-@contextmanager
-def supervisor(server, log, same_build=False):
-    with socket.socket() as reserve:
-        reserve.bind(('127.0.0.1', 0))
-        port = reserve.getsockname()[1]
-    base = log.with_suffix('.library.log')
+def supervisor_environment(log, token, same_build=False):
+    """The env a supervisor is started with, minus everything ServerMain's scrub catches."""
     env = dict(os.environ, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
-               MOBILEGL_IPC_TOKEN='p65-smoke-token', MOBILEGL_IPC_REQUIRE_SAME_BUILD=str(int(same_build)),
-               MOBILEGL_IPC_LOG_FORWARD='0', MOBILEGL_LOG_FILE_PATH=str(base))
+               MOBILEGL_IPC_REQUIRE_SAME_BUILD=str(int(same_build)),
+               MOBILEGL_IPC_LOG_FORWARD='0', MOBILEGL_LOG_FILE_PATH=str(log))
+    if token is None:
+        env.pop('MOBILEGL_IPC_TOKEN', None)
+    else:
+        env['MOBILEGL_IPC_TOKEN'] = token
     for name in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
                  'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
         env.pop(name, None)
+    return env
+
+
+def free_loopback_port():
+    with socket.socket() as reserve:
+        reserve.bind(('127.0.0.1', 0))
+        return reserve.getsockname()[1]
+
+
+def refused_listen(server, log, endpoint, token):
+    """Start a supervisor that must NOT come up, and return (exit code, everything it said).
+
+    PH-7 (2)(3), ID-P7-3. Both listen refusals are asserted this way rather than through
+    SocketTransport::Listen's return code, because the property is not "the function returns
+    PROTOCOL_MISMATCH" - it is that the PROCESS dies, says which policy killed it, and does not
+    leave a half-configured server listening. A supervisor that degraded to loopback-only after a
+    misconfigured token would pass a return-code test and fail an operator.
+    """
+    base = log.with_suffix('.library.log')
+    env = supervisor_environment(base, token)
+    with log.open('wb') as output:
+        child = subprocess.Popen([server, endpoint, '--serve'], env=env,
+                                 stdout=output, stderr=output, start_new_session=True)
+    try:
+        code = child.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        # THE RED SHAPE OF THIS CONTROL IS A SUPERVISOR THAT CAME UP, so it is still listening
+        # and would answer the next control's peers. Killed here rather than left for the
+        # assertion below, which is what makes the red a red and not a cascade.
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=10)
+        code = None
+    text = log.read_text(errors='replace')
+    role = base.with_name(base.stem + '.server' + base.suffix)
+    if role.is_file():
+        text += role.read_text(errors='replace')
+    return code, text
+
+
+@contextmanager
+def supervisor(server, log, same_build=False):
+    port = free_loopback_port()
+    base = log.with_suffix('.library.log')
+    env = supervisor_environment(base, kToken, same_build=same_build)
     with log.open('wb') as output:
         child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}', '--serve'], env=env,
                                  stdout=output, stderr=output, start_new_session=True)
@@ -247,6 +310,32 @@ def main():
         schema = {name: importlib.import_module('MobileGL.Wire.' + name)
                   for name in ('CtrlEnvelope', 'CtrlMsg', 'Hello', 'LinkTerms', 'Refuse', 'Welcome')}
         evidence = {}
+
+        # ---- PH-7 (2)(3), ID-P7-3: THE TWO LISTEN REFUSALS -------------------------------
+        #
+        # Both are the SAME policy from two directions: a listener that can be reached from off
+        # this machine has to have a credential, and a credential has to be one.
+        #
+        # (a) No token, non-loopback bind. The mechanism has been in the tree since P6.5
+        #     (SocketTransport.cpp's ListenTcp) and the plan's own gate row called it "done
+        #     (mechanism)" with the caveat that nothing referenced it. This is the reference.
+        # (b) A token shorter than 16 bytes, on LOOPBACK, where a short token is otherwise
+        #     harmless. It still fails, and that is the ruling: a configured token is either a
+        #     credential or a refusal, never a warning. Before this package a one-byte token
+        #     unlocked `tcp://0.0.0.0`.
+        code, said = refused_listen(args.server, args.out / 'wildcard-no-token.log',
+                                    'tcp://0.0.0.0:40699', None)
+        assert code == kListenRefusedExit, (code, said)
+        assert 'Refuse{Authentication}' in said, said
+        evidence['wildcard_listen_without_a_token'] = {'exit': code, 'line': next(
+            l.strip() for l in said.splitlines() if 'Refuse{Authentication}' in l)}
+        short = f'tcp://127.0.0.1:{free_loopback_port()}'
+        code, said = refused_listen(args.server, args.out / 'short-token.log', short, kShortToken)
+        assert code == kListenRefusedExit, (code, said)
+        assert 'Refuse{Authentication}' in said and 'minimum is 16' in said, said
+        assert kShortToken not in said, 'the refusal printed the token'
+        evidence['short_token_listen'] = {'exit': code, 'line': next(
+            l.strip() for l in said.splitlines() if 'Refuse{Authentication}' in l)}
         with supervisor(args.server, args.out / 'supervisor.log') as (port, process, serverLog):
             with pair(port) as held:
                 with pair(port) as second:

@@ -61,6 +61,34 @@ def require_tcp_proof(path, prefix, discovery, require_run_ahead=False):
             raise ValueError(f"{case.get('name')}: TCP runtime did not keep requested run-ahead armed")
 
 
+def require_entries_passed(path, names):
+    """P7 wave 2-F, PH-7 (1). Named entries must have RUN and passed - a SKIP is a failure here.
+
+    `TcpLane.SupervisorProtocolControls` is registered with SKIP_RETURN_CODE 77 because the
+    script it runs needs flatc, which is deliberately not in the build graph. That is the right
+    behaviour for a developer who has not built one; it is the wrong behaviour for CI, where the
+    lane's whole job is to run the supervisor's protocol controls and "skipped" is
+    indistinguishable from the three commits the entry did not exist. The workflow builds flatc
+    and then names the entry here, so a CI run in which the tool went missing reds by name
+    instead of reporting a green lane that measured less than it says.
+    """
+    seen = {}
+    for case in ET.parse(path).getroot().iter('testcase'):
+        name = case.get('name')
+        if name not in names:
+            continue
+        if case.find('failure') is not None or case.find('error') is not None:
+            seen[name] = 'failed'
+        elif case.find('skipped') is not None or case.get('status') in ('notrun', 'disabled'):
+            seen[name] = 'skipped'
+        else:
+            seen[name] = 'passed'
+    for name in names:
+        state = seen.get(name, 'absent')
+        if state != 'passed':
+            raise ValueError(f'{name}: required to pass, was {state}')
+
+
 def tally(path, prefix=None):
     passed = failed = skipped = 0
     for case in ET.parse(path).getroot().iter('testcase'):
@@ -84,6 +112,8 @@ def main():
     parser.add_argument('--discovery', help='CTest --show-only=json-v1 output (required for TCP proof)')
     parser.add_argument('--require-run-ahead', action='store_true',
                         help='Additionally prove actual run-ahead, without fallback or demotion, on each TCP case')
+    parser.add_argument('--require-entry-passed', action='append', default=[], metavar='NAME',
+                        help='This ctest entry must be present and passed; a SKIP fails (repeatable)')
     args = parser.parse_args()
     if args.prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.') and not args.discovery:
         parser.error('TCP arm proof requires --discovery to locate each private role log')
@@ -94,6 +124,8 @@ def main():
         passed, failed, skipped = tally(args.junit, prefix=prefix)
         if prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):
             require_tcp_proof(args.junit, prefix, args.discovery, args.require_run_ahead)
+        if args.require_entry_passed:
+            require_entries_passed(args.junit, args.require_entry_passed)
     except Exception as exc:  # a malformed file is not "zero of everything"
         print(f"junit_tally: cannot prove {args.junit}: {exc}", file=sys.stderr)
         return 1

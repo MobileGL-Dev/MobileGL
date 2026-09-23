@@ -87,6 +87,35 @@ class Accounting(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tally.require_tcp_proof(junit, 'DirectGLES.Tcp.', discovery)
 
+    def test_a_skipped_required_entry_is_not_a_pass(self):
+        """P7 wave 2-F, PH-7 (1). The four states of a NAMED entry, and only one of them passes.
+
+        `TcpLane.SupervisorProtocolControls` skips itself (exit 77) when flatc is absent, which
+        is correct for a developer and wrong for CI - the workflow now builds flatc and names the
+        entry, so `skipped` has to red here exactly as `failed` and `absent` do. Written as four
+        cases rather than one because the one that matters is `skipped`, and a check that only
+        looked for <failure> would have let it through, which is the whole defect.
+        """
+        tally = module('junit_tally')
+        name = 'TcpLane.SupervisorProtocolControls'
+        bodies = {
+            'passed': f'<testcase name="{name}" />',
+            'skipped': f'<testcase name="{name}"><skipped /></testcase>',
+            'notrun': f'<testcase name="{name}" status="notrun" />',
+            'failed': f'<testcase name="{name}"><failure /></testcase>',
+            'absent': '<testcase name="TcpLane.AccountingControls" />',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            junit = Path(directory) / 'junit.xml'
+            for state, body in bodies.items():
+                junit.write_text(f'<testsuite>{body}</testsuite>')
+                if state == 'passed':
+                    tally.require_entries_passed(junit, [name])
+                    continue
+                with self.assertRaises(ValueError, msg=state) as raised:
+                    tally.require_entries_passed(junit, [name])
+                self.assertIn(name, str(raised.exception))
+
     def test_equal_counts_do_not_hide_a_missing_case(self):
         parity = module('spawn_lane_parity')
         a, b = 'TriangleScenario.Draw', 'TriangleScenario.Read'

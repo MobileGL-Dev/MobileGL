@@ -87,14 +87,14 @@ void SendLogAck(void* pointer) {
     if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
             hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
             hello->dialMode()) != MOBILEGL_OK) ::_exit(0);
-    if (tcp) {
-        const char* expected = std::getenv("MOBILEGL_IPC_TOKEN");
-        const std::string token = hello->token() ? hello->token()->str() : std::string();
-        if (token != (expected ? expected : "")) {
-            Refuse(*control, Protocol::RefuseCode::Authentication, "TCP token mismatch");
-            ::_exit(0);
-        }
-    }
+    // PH-7 (1). The SAME policy ServerSession::Accept applies, from Handshake.h, so the
+    // supervisor's pre-fork answer and the session's post-fork answer cannot drift. What went:
+    // a `std::string` comparison (byte-at-a-time, early-returning) that ALSO refused a peer for
+    // presenting a token to a server that had configured none, and a `tcp` guard that made the
+    // unix control socket exempt by construction rather than by the policy's own reasoning.
+    // RefuseHandshake logs `Refuse{Authentication}` and sends the peer the frame; the supervisor's
+    // local Refuse() helper stays for the refusals that are its own (Busy, backend).
+    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) ::_exit(0);
     MobileGL::MG_ConfigLoader::Init();
     MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
     MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
