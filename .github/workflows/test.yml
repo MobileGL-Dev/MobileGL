@@ -1099,8 +1099,11 @@ jobs:
       # installs the neutral one, the backend's ReadPixels reads it after - and the hook perturbs
       # its oracle once per read, because the ID-49 overwrite inside the window wipes the first
       # perturbation before the second read's compare. A step satisfied by ONE line was satisfied
-      # by either perturbation alone and falsified neither; two is one per read, each falsified on
-      # its own. Measured at landing: 3 (DirectGLES) / 2 (DirectVulkan).
+      # by either perturbation alone and falsified neither. Measured at landing: 3 (DirectGLES,
+      # whose backend reads the field twice after the install) / 2 (DirectVulkan); without the
+      # re-applied perturbation both drop to 1, without the first one DirectVulkan drops to 1
+      # while DirectGLES stays at 2 - so BOTH backends are required, and the first perturbation's
+      # falsifier is the DirectVulkan entry.
       #
       # THE GREEN HALF is the lane run above: the same hook, the same window, with no corruption
       # armed, across 1070 entries at zero divergences.

@@ -380,7 +380,11 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             // after the window's overwrite can turn the post-install read red, because there the
             // stored value IS the neutral pack. A control satisfied by ONE line is satisfied by
             // either block alone and so falsified neither. Measured at landing the server half
-            // carries 3 (DirectGLES) / 2 (DirectVulkan); removing either block drops it to 1.
+            // carries 3 (DirectGLES: the saved-pack read and TWO post-install reads) / 2
+            // (DirectVulkan: one of each). Removing the re-applied block drops both backends to
+            // 1; removing the first block drops DirectVulkan to 1 and leaves DirectGLES at 2, so
+            // the first block's falsifier is the DirectVulkan entry - which is why the CI step
+            // runs both backends and needs both.
             const std::size_t reads = CountReadReports(server, expected);
             EXPECT_GE(reads, std::size_t{2})
                 << "the server half carries " << reads << " `where=read` report(s) for " << expected

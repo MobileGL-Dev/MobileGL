@@ -779,8 +779,11 @@ namespace MobileGL::MG_Pipe {
             // GetPixelStoreParameters cannot turn red - and a control that accepted ONE report
             // would never notice, because the saved-pack read still reports through the block
             // above. The VerifySplitReadCorrupted. entries and the CI step therefore require at
-            // least TWO `where=read` reports in the server half: one per block, each falsified
-            // alone (V1 fix round 2).
+            // least TWO `where=read` reports in the server half (V1 fix round 2). Measured: 3 on
+            // DirectGLES (its backend reads the field twice after the install) / 2 on
+            // DirectVulkan; without this block both drop to 1, without the block above
+            // DirectVulkan drops to 1 while DirectGLES's two post-install reports keep it at 2 -
+            // so this block is falsified on both backends and the one above on DirectVulkan.
             if (g_verify.Corrupt && *g_verify.Corrupt == field) {
                 MGPipeApplyVerifyCorruption(g_readScratch, field);
             }
