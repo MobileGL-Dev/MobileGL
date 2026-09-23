@@ -394,5 +394,37 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                     "them is silenced here: this log is the only place they appear, because the console sink "
                     "is compiled out of the configurations this lane runs.")
         endif()
+        # P7 B3 (review ID-P7-34): THE COMPLETED-FRAME-SERIAL FLOOR'S LANE, read exactly like the
+        # Fatal census above - both roles' logs, every split run, counted even when zero.
+        #
+        # VulkanRenderer::OnSubmitsCompletedUpTo logs one "MGWIRE-FLOOR unsound-serial-complete"
+        # line (MGLOG_W, unconditional, disaggregated builds only) each time it would raise the
+        # floor to a frame serial that a submission still in flight carries - the defect behind
+        # the OpenRA device divergence, where a mid-frame pooled-fence submission retiring
+        # declared its whole serial complete while the Present submission of the same serial was
+        # still copying. The clamp there makes the line unreachable, and without this red the
+        # clamp had no lane: deleting it left every lane green and the picture on lavapipe gold,
+        # because the host's barriers happen to hide the tear. The count was 26 per OpenRA replay
+        # before the fix and 0 after; any nonzero count is the floor asserting a completion it
+        # never waited for, whether or not this driver's timing turned it into pixels.
+        file(STRINGS "${mobilegl_log}" split_floor REGEX "MGWIRE-FLOOR unsound-serial-complete")
+        if(EXISTS "${mobilegl_server_log}")
+            file(STRINGS "${mobilegl_server_log}" split_server_floor REGEX "MGWIRE-FLOOR unsound-serial-complete")
+            list(APPEND split_floor ${split_server_floor})
+        endif()
+        list(LENGTH split_floor split_floor_count)
+        message(STATUS "MGPipe split: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT}, "
+                       "MGWIRE-FLOOR unsound-serial-complete lines: ${split_floor_count}")
+        if(split_floor)
+            list(GET split_floor 0 split_floor_first)
+            message(STATUS "${split_floor_first}")
+            message(FATAL_ERROR
+                    "${split_case}: ${split_floor_count} MGWIRE-FLOOR unsound-serial-complete line(s) under "
+                    "MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT}. The completed-frame-serial floor was "
+                    "raised to a serial an in-flight submission still carries, so a streamed buffer write "
+                    "can take the unsynchronised host path over bytes that submission is still copying "
+                    "(magma-b3.md §2). The clamp in VulkanRenderer::OnSubmitsCompletedUpTo is what makes "
+                    "this unreachable; a line here means it was removed or bypassed.")
+        endif()
     endif()
 endif()
