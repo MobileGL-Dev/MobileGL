@@ -1139,6 +1139,31 @@ namespace MobileGL::MG_Pipe {
     static_assert(sizeof(MGPPixelPackState) == 28,
                   "MGPPixelPackState changed size; update the wire format and this assertion");
 
+    // ID-49's NEUTRAL PACK, in one place. The server's read_pixels reads the backend with this
+    // state and scatters the tight reply through the application's own pack on the client side
+    // (MG_Remote/Server/PipeApplier.cpp), so the pack state never shapes the wire answer.
+    //
+    // ONE SPELLING, because there are two readers of the same constant and they are in different
+    // libraries: the applier that installs it, and (in a verify build) the compare-at-read hook in
+    // MG_Impl/Pipe/PipeFill.cpp, whose oracle for the pack half inside that window IS this value.
+    // Two hand-typed copies would drift silently in the ONE direction that matters - the hook
+    // would stop recognising the window and start reporting a divergence that is not one - so
+    // MG_Pipe, which owns MGPPixelPackState, owns the constant as well.
+    //
+    // Value-initialised and then the five fields the applier sets: RowLength / SkipRows /
+    // SkipPixels / SkipImages are already 0 by PixelStoreParameters' own defaults and are spelled
+    // out anyway, because "neutral" is a statement about every member rather than about the ones
+    // whose default happens to be right.
+    inline MGPPixelPackState MGPipeNeutralReadPixelsPack() {
+        MGPPixelPackState neutral{};
+        neutral.Pack.RowLength = 0;
+        neutral.Pack.SkipRows = 0;
+        neutral.Pack.SkipPixels = 0;
+        neutral.Pack.SkipImages = 0;
+        neutral.Pack.Alignment = 1;
+        return neutral;
+    }
+
     // Also a shader-variant input: both backends bake these into the synthesized
     // pass-through control stage.
     struct MGPPatchState {

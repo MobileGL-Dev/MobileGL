@@ -128,8 +128,10 @@ upload，所以描述符宣告 `(target, level)` 而调用递空指针，会走�
 `#if MOBILEGL_BUILD_DISAGGREGATED`）。** 只在这个窗口里换预言：server stamp 之下、`ReadPixels` 动词上，pack 半边
 的期望值是 applier 读用的中性 pack；unpack 半边和其它每个字段仍以活上下文为预言。整字段比较失败后，把 scratch
 里的 pack 半边换成中性值**再比一次整字段**——pack 既不是应用的值、也不恰为中性值的 server 读，仍是分歧、仍 Fatal。
-中性常量是 `PipeApplier.cpp` 的 `neutralPack` 的第二种拼法（不从这里伸手进 `MG_Remote/Server`）；两者一旦分叉，
-server 侧读就不再等于它，车道按名变红——失败方向是响的。
+中性常量**只有一种拼法**：`MG_Pipe/MGPipeTypes.h` 的 `MGPipeNeutralReadPixelsPack()`，applier 的 `read_pixels`
+与这里的预言是同一个函数的两个调用点。它一开始是逐字段重打的第二份（为了不从 `MG_Impl` 伸手进 `MG_Remote/Server`），
+但 `MGPPixelPackState` 的属主本来就是 `MG_Pipe`、两边本来就 include 它，而两份拼法分叉的代价是**一次假分歧**而不是
+一次编译错误——失败方向是哑的，所以改成一处。
 
 **放弃了什么，写明。** 在 server 的 `ReadPixels` 上，比对器看不见一个推送了**错误** pack 状态的 client，因为
 applier 在 backend 读之前把它覆盖了；消费真实 pack 的 client 侧 scatter 由 readback 矩阵用例按字节覆盖，不按字段。

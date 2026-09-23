@@ -452,12 +452,10 @@ namespace MobileGL::MG_Remote::Server {
         // in which the pack state is neutral does not outlive the call.
         const MG_Pipe::PixelStoreParameters savedPack =
             MG_Pipe::gPipeInputs.GetPixelStoreParameters(/*isUnpack=*/false);
-        MG_Pipe::MGPPixelPackState neutralPack{};
-        neutralPack.Pack.RowLength = 0;
-        neutralPack.Pack.SkipRows = 0;
-        neutralPack.Pack.SkipPixels = 0;
-        neutralPack.Pack.SkipImages = 0;
-        neutralPack.Pack.Alignment = 1;
+        // MG_Pipe owns the constant (MGPipeTypes.h): in a verify build the compare-at-read hook's
+        // oracle for the pack half inside this window is the same value, and a second hand-typed
+        // copy would drift without a build break.
+        const MG_Pipe::MGPPixelPackState neutralPack = MG_Pipe::MGPipeNeutralReadPixelsPack();
         MG_Pipe::MGPipeApplySetPixelPackState(neutralPack);
 
         table->GL.ReadPixels(info.Box.X, info.Box.Y, static_cast<GLsizei>(info.Box.W),

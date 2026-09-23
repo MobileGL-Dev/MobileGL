@@ -681,19 +681,12 @@ namespace MobileGL::MG_Pipe {
                    self.CurrentVerb() == MGPipeVerb::ReadPixels;
         }
 
-        // PipeApplier.cpp's `neutralPack`, field for field. A second spelling of a constant is
-        // the price of not reaching into MG_Remote/Server from here; if the two ever part, the
-        // server-side read stops matching this and the lane goes red by name, which is the
-        // direction that fails loudly.
-        PixelStoreParameters ServerReadPixelsNeutralPack() {
-            PixelStoreParameters neutral{};
-            neutral.RowLength = 0;
-            neutral.SkipRows = 0;
-            neutral.SkipPixels = 0;
-            neutral.SkipImages = 0;
-            neutral.Alignment = 1;
-            return neutral;
-        }
+        // The constant itself is MG_Pipe's (MGPipeTypes.h's MGPipeNeutralReadPixelsPack), which is
+        // the same function MG_Remote/Server/PipeApplier.cpp's read_pixels installs. It used to be
+        // re-typed here, field for field, to avoid reaching into MG_Remote/Server from MG_Impl -
+        // but the owner of MGPPixelPackState is MG_Pipe, both sites already include it, and a
+        // drift between the two spellings would have cost a false divergence rather than a build
+        // break.
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 #endif // MOBILEGL_PIPE_VERIFY
     } // namespace
@@ -740,7 +733,7 @@ namespace MobileGL::MG_Pipe {
             g_verify.InHook = true;
             PipeInputs::VisitStorage(field, g_readScratch, g_readScratch, [](auto& live, auto&) {
                 if constexpr (std::is_same_v<std::remove_reference_t<decltype(live)>, PixelStoreParameters[2]>) {
-                    live[0] = ServerReadPixelsNeutralPack();
+                    live[0] = MGPipeNeutralReadPixelsPack().Pack;
                 }
                 return true;
             });
