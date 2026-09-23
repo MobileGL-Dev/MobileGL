@@ -17,7 +17,8 @@ P7 F2, PH-7 (5): the supervisor now reads and authenticates every first frame be
 the controls here assert that an unauthenticated peer learns nothing of ours
 (`unauthenticated_wrong_layout`), that a silent one costs no fork and is answered at the pre-auth
 deadline (`silent_peer`), that Busy is the answer to an AUTHENTICATED second client (`busy`), the
-pending cap and the backoff (`pending_cap`, `auth_backoff`).
+pending cap and the backoff (`pending_cap`, `auth_backoff`). The five malformed-frame shapes
+are fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
 header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:

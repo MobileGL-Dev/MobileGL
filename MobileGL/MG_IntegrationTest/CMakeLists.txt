@@ -2129,6 +2129,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS integration-tcp TIMEOUT 120
             ENVIRONMENT "${MGL_ITEST_EVENT_FORFEIT_ENVIRONMENT}")
     endif()
+    # P7 F2: Ph fuzz arm 1 (PLAN-PH-P34B-P7.md §1.1, "gate: fuzz arm 1 malformed control
+    # frames"). Five malformed control frames - bad identifier, truncated length prefix, oversize
+    # length, garbage flatbuffer, wrong union type - sent to a live supervisor as a FIRST frame
+    # (answered by name with no child forked, PH-7 (5)) and inside an established session (the
+    # session ends with a named line and is not counted as a fault), with a well-formed client
+    # welcomed after each phase. Same shape as TcpLane.SupervisorProtocolControls: its own supervisor on its own
+    # port, the lane's resource lock, flatc or SKIP (77) - and CI requires it PASSED by name.
+    add_test(NAME TcpLane.ControlFrameFuzz COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/ci/ph_fuzz_control_frames.py"
+        --server "${MGL_ITEST_SPLIT_SERVER_PATH}"
+        --out "${CMAKE_CURRENT_BINARY_DIR}/tcp-control-frame-fuzz")
+    set_tests_properties(TcpLane.ControlFrameFuzz PROPERTIES
+        LABELS integration-tcp TIMEOUT 180 SKIP_RETURN_CODE 77
+        RESOURCE_LOCK mobilegl-tcp)
     # D2: the texture-view opt-in on both TCP lists too, so the three shared GLES split arms
     # carry one configuration. See the note over MGL_ITEST_GLES_SPLIT_ENVIRONMENT.
     #

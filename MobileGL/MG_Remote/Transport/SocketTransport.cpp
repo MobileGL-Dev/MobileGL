@@ -777,6 +777,11 @@ namespace MobileGL::MG_Remote::Transport {
         return m_reader.PendingMessageSize();
     }
 
+    std::uint64_t SocketTransport::BufferedBytes() {
+        std::lock_guard<std::mutex> lock(m_recvMutex);
+        return m_reader.BufferedBytes();
+    }
+
     MobileGLResult SocketTransport::ShareFd(int fd, MobileGLByteSpan sideband) {
         if (m_tcp || m_auxFd < 0) {
             // A link that declared no descriptor passing. Rule G: it does not
@@ -843,6 +848,7 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
     std::uint64_t SocketTransport::PeekFrameSize() { return 0; }
+    std::uint64_t SocketTransport::BufferedBytes() { return 0; }
     MobileGLResult SocketTransport::ShareFd(int, MobileGLByteSpan) {
         return MOBILEGL_ERR_UNSUPPORTED;
     }

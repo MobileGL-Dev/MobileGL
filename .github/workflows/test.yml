@@ -1482,6 +1482,8 @@ jobs:
       # the supervisor's Busy / token / listen / version / build-policy / reap controls zero times.
       # --check is passed so this step cannot quietly regenerate a different committed header;
       # keeping that honest is flatc-check's job and this step must not overlap with it.
+      # P7 F2: `TcpLane.ControlFrameFuzz` (Ph fuzz arm 1, scripts/ci/ph_fuzz_control_frames.py)
+      # needs the same flatc and is required PASSED by name on the same junit_tally line.
       - name: Check out FlatBuffers (TCP lane)
         run: git submodule update --init 3rdparty/flatbuffers
 
@@ -1516,7 +1518,7 @@ jobs:
           ctest --show-only=json-v1 -L '^integration-tcp$' > "${RUNNER_TEMP}/tcp-discovery.json"
           ctest --output-on-failure -L '^integration-tcp$' --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/tcp-baseline.xml"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-tcp-ran --require-run-ahead --discovery "${RUNNER_TEMP}/tcp-discovery.json"
-          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls --require-entry-passed TcpLane.EventForfeitPeer
+          python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/tcp-baseline.xml" --require-entry-passed TcpLane.SupervisorProtocolControls --require-entry-passed TcpLane.EventForfeitPeer --require-entry-passed TcpLane.ControlFrameFuzz
 
       # Both full transport runs are hard gates. The per-case comparison below
       # remains diagnostic because explicit mechanism controls retain their own mode.

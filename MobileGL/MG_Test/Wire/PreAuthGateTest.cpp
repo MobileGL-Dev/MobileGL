@@ -11,8 +11,8 @@
 // These are the cheap halves. The end-to-end halves - a live supervisor that must answer every
 // malformed first frame by name, fork for nothing it has not authenticated, refuse a silent peer
 // at its deadline, cap its pending connections and back an address off - are
-// TcpLane.SupervisorProtocolControls (scripts/ci/tcp_supervisor_smoke.py). What is pinned here
-// is what
+// TcpLane.SupervisorProtocolControls (scripts/ci/tcp_supervisor_smoke.py) and
+// TcpLane.ControlFrameFuzz (scripts/ci/ph_fuzz_control_frames.py). What is pinned here is what
 // those scripts cannot see from outside: that each malformation lands on the shape it is named
 // for (and not merely on SOME refusal), that the assembler never reads a byte past the first
 // frame, and the backoff's arithmetic.

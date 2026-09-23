@@ -420,6 +420,14 @@ void SendLogAck(void* pointer) {
             // below, so an apply thread that the stop wakes inside ReserveEventOrBlock names the
             // hangup (PeerGone) rather than the stop (PH-6 fix round).
             session.NoteControlStreamEnded();
+            // Fuzz arm 1, steady state. A bad magic or an over-cap length has already been named
+            // by the framing latch (Framing.h) as it latched; a clean close is the client's normal
+            // end and says nothing. The one silent case was a close INSIDE a frame - a truncated
+            // length prefix or payload - which ended the session exactly like a clean close.
+            if (result == MOBILEGL_ERR_TRANSPORT_CLOSED && control->BufferedBytes() != 0)
+                WireLogError("MG_Remote server: control connection closed inside a frame (%llu bytes of it "
+                             "received); ending the session",
+                             static_cast<unsigned long long>(control->BufferedBytes()));
             break;
         }
         // THE FILE IDENTIFIER, ASKED FIRST AND SAID OUT LOUD (P7 wave 0).
@@ -478,7 +486,15 @@ void SendLogAck(void* pointer) {
             continue;
         }
         const auto* operation = envelope->msg_as_SurfaceOp();
-        if (!operation) break;
+        if (!operation) {
+            // Fuzz arm 1, steady state: a well-formed envelope of a type this loop does not take
+            // (or a SurfaceOp tag with no table behind it) ended the session without a word.
+            WireLogError("MG_Remote server: control frame of type %u (%s) is not a LogFlush or SurfaceOp "
+                         "(size=%llu); ending the session",
+                         static_cast<unsigned>(envelope->msg_type()), Protocol::EnumNameCtrlMsg(envelope->msg_type()),
+                         static_cast<unsigned long long>(size));
+            break;
+        }
         Server::SurfaceControlFrame reply{};
         (void)ServerApplyWireSurfaceOp(*operation, &reply);
         // PH-1 (3): an op that latched (its own bytes, or a record the apply thread was on) is

@@ -167,6 +167,10 @@ namespace MobileGL::MG_Remote::Transport {
         void CloseLocalCopy();
         // End requests while retaining the receive side for final diagnostics/EOF.
         MobileGLResult ShutdownSend();
+        // Bytes received but not yet returned as a whole frame. Non-zero after a TRANSPORT_CLOSED
+        // means the peer closed INSIDE a frame, which the steady-state control loop names (fuzz
+        // arm 1) rather than treating it as the client's normal end.
+        std::uint64_t BufferedBytes();
 
     private:
         // Pulls whatever the socket has into the reassembler. Returns
