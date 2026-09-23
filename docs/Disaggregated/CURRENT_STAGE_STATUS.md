@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `87584d0b`；集成树 `~/w7/pipe` 领先 40 提交（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2、F 修复轮），M2 与 F 修复门全绿、审查在跑；窗口 1b 逐例矩阵在跑（ID-P7-42）。
+**更新：2026-09-22 夜（集成者会话收尾）** · 交接清单 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)；在跑 agent 的报告落到 WSL `~/w7/notes/handoff/`。`origin/feat/disaggregated` 推到集成树头（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2、F 修复轮；门全绿）；**M2 审查的 must-fix（memo 句柄复用 ABA）由 M2 r2 关闭，落地前 wire 臂有一处已知可达点**（ID-P7-43）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -62,14 +62,14 @@
 | B2 r3 审查（fable） | transport 门控的真值域、默认 framebuffer pre-pass 的解析、新腿的读面 | 进行中；代码已在 pipe（ID-P7-40） |
 | B3 修复 r2 审查（fable） | 剥注释 / 字面量的边界、块回溯规则、自测覆盖、fail-closed 顺序、pull-library 控制 | 进行中；代码已在 pipe，门全绿（ID-P7-40） |
 | V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 进行中；代码已在 pipe（ID-P7-40） |
-| M2 审查（fable） | 提前释放的三个条件、水位线同步的可重入性、`ServerSpawn.cpp` 放行的形状、计量 / 场景的双向性 | 进行中；代码已在 pipe（ID-P7-41） |
+| M2 r2（fable） | **must-fix**：`m_wireStoreDestroyEpoch` 进 `UniformManager` 两个 memo（§9 例外已批）+ red-once；note SHA、`ASSERT_GE`、注释、`lastUseSubmitIndex` 清零、清洗名单 | 进行中 → `~/w7/notes/handoff/m2-r2.md`（ID-P7-43） |
 | V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | 进行中（ID-P7-42） |
 | X2（fable） | `InitialCapsStartup.ANullInitialSnapshot…` 在负载下的 flake：复现、测试 vs 产品判定、修复 + 500 次循环 | 进行中（ID-P7-42） |
 | B3 r3 + B2 r4 审查（fable） | 守卫感知的 `#endif` 规则、`EVIDENCE` 保护、窗口腿底色 | 进行中（ID-P7-42） |
 | 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中；已见 ReadPixels 被设备 server 拒、main-menu server 死亡（ID-P7-41） |
 | F 修复轮审查（fable） | hand-off 关闭的竞态窗口、listener 关闭的路径、摘要 pin 的 LF 归一化、`MalformedHello` 词表、G14 的 `CapsMirrorTest` 一名 | 进行中；代码已在 pipe（ID-P7-42） |
 
-## 5. 下一步（按序）
+## 5. 下一步（按序；机械步骤与命令见 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)）
 
 1. ~~推送~~ 已推 `origin@87584d0b`；四个修复轮（B2 r3、B3 修复 r2、V1 修复、F 修复）回来 → 各自门 + 复审 → 下一次推送。
 2. **F2**：D11 五处 + PH-2、PH-6 drop-with-latch、PH-1 (3)(4)、PH-7 (5) fork 前认证——先要一个能向 spawn / TCP server 发畸形记录的对端字节驱动（fuzz 臂 2 的第一块）。
