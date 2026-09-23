@@ -23,7 +23,7 @@ behind popcount(Mask) == Count, so only the mismatch is reachable).
 covering row in turn and requires its group to turn up unmapped.
 
 THE DECLINE-AND-CLOSE HALF IS NOT A SITE, so it is not a row: MECHANICS below names each check
-that makes a latched session decline the rest of its work and close (DrainRing's two latch checks,
+that makes a latched session decline the rest of its work and close (DrainRing's pre-pop latch check,
 the apply thread's own exit, the control pump's and SurfaceOpCodec's latched answers, RunSession's
 sliced wait, the pre-gate ahead of the applier's stamp, SessionLatch's own bookkeeping), the code
 that IS the check, and the cases that go red without it. The script requires both to exist.
@@ -75,14 +75,20 @@ WIRE_TESTS = ROOT / "MobileGL" / "MG_Test" / "Wire"
 # (source, what the check does, a regex that IS the check, [(test file, case name)]) - each case goes
 # red with the check deleted (the red-once is recorded in the package's NOTE).
 MECHANICS = [
-    (REMOTE / "Server" / "ServerLoop.cpp", "DrainRing: a drain ENTERED latched pops nothing (the exit-path drain)",
-     r"Uint64 ServerLoop::DrainRing\(\) \{.*?if \(SessionLatched\(\)\) return 0;",
+    # ONE check, the first statement of DrainRing's loop, immediately before every pop. It replaced
+    # the two the F2 latch package shipped (one at the function's top, one under `++applied;`):
+    # codex closeout finding 6 showed a latch that another thread stores after the per-record check
+    # still let one more record be popped and applied. The one check does all three jobs - a drain
+    # ENTERED latched pops nothing (the exit-path drain), a record that latched is the last one its
+    # batch applies, and a latch from RunSession's control thread between two records stops the
+    # next pop - and each case below goes red with it deleted. The pattern may not leave DrainRing's
+    # body (`\n    }\n` closes a member function in ServerLoop.cpp).
+    (REMOTE / "Server" / "ServerLoop.cpp",
+     "DrainRing: no record is popped once the session latched (checked immediately before every pop)",
+     r"Uint64 ServerLoop::DrainRing\(\) \{(?:(?!\n    \}\n).)*?for \(;;\) \{\s*if \(SessionLatched\(\)\) break;",
      [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop"),
-      ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies")]),
-    (REMOTE / "Server" / "ServerLoop.cpp", "DrainRing: a record that latched is the last one its batch applies",
-     r"\+\+applied;\s*if \(SessionLatched\(\)\) break;",
-     [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop"),
-      ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies")]),
+      ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies"),
+      ("ServerLoopTest.cpp", "ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPop")]),
     (REMOTE / "Server" / "ServerLoop.cpp", "ApplyThreadMain: the apply thread leaves its loop on the latch, no Stop()",
      r"if \(SessionLatched\(\)\) \{\s*MGLOG_E\(\"MG_Remote server: mgl-srv-apply leaves its loop",
      [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop")]),

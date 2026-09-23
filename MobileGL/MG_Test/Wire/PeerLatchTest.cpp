@@ -33,7 +33,7 @@
 //
 // THE DECLINE-AND-CLOSE HALF has its own cases below the table (they are not sites, so they are
 // not rows; scripts/ci/ph_latch_sites.py's MECHANICS list names them): a latched record is the
-// last one its batch applies (DrainRing's two latch checks), and a latch raised on the apply
+// last one its batch applies (DrainRing's pre-pop latch check), and a latch raised on the apply
 // thread closes the session while the peer is still connected and silent (RunSession's sliced
 // control wait). ServerLoopTest holds the in-process half of the same checks.
 //
@@ -394,7 +394,7 @@ namespace {
     // SEVERAL IMAGES, ONE PUBLISH: each gets its own filler (its ring position is taken right
     // after that filler is encoded, so a wrap pad between two of them cannot shift it), all are
     // overwritten, and one PublishAndNotify makes them visible to the server together - the shape
-    // of a peer that batches, which is what DrainRing's per-record latch check is for.
+    // of a peer that batches, which is what DrainRing's pre-pop latch check stops mid-batch.
     // `mutateHeader` applies to the FIRST image's header; `outSeq` is the LAST record's seq.
     bool PublishImages(Client::ClientSession& client, const std::vector<std::vector<Uint8>>& images,
                        Uint64* outSeq,
@@ -1681,10 +1681,9 @@ namespace {
     }
 } // namespace
 
-// DrainRing's two latch checks, over the wire: the record behind the latched one in the same batch
-// is never applied - its own named fault never reaches the log - and the session closes having
-// latched exactly one. Red with either check deleted: the top one (the apply thread's exit-path
-// drain then applies the second record) or the per-record one (the same drain does).
+// DrainRing's pre-pop latch check, over the wire: the record behind the latched one in the same
+// batch is never applied - its own named fault never reaches the log - and the session closes
+// having latched exactly one. Red with the check deleted (the same drain applies the second record).
 TEST(PeerLatchTest, ALatchedRecordIsTheLastRecordItsBatchApplies) {
     Supervisor sup;
     ASSERT_TRUE(Launch("batch", /*tcp=*/false, &sup));

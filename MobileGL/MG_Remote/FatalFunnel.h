@@ -77,7 +77,7 @@ namespace MobileGL::MG_Remote {
     // SessionFail calls: the string must carry its `Fatal{Word` and the word must have a .def row.
     void ArmSessionLatch();
     bool SessionLatchArmed();
-    // True once the first fault has latched. One acquire load: DrainRing asks it per record.
+    // True once the first fault has latched. One acquire load: DrainRing asks it before every pop.
     bool SessionLatched();
     // The first latched fault - its family and its line, verbatim. Meaningful only once
     // SessionLatched() is true; the line's storage lives for the process.

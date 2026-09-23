@@ -310,6 +310,13 @@ namespace MobileGL::MG_Remote::Server {
         void SetBeforeRetireHookForTesting(void (*hook)()) {
             m_beforeRetireHook.store(hook, std::memory_order_release);
         }
+        // Scheduling point only, same discipline: DrainRing runs the hook on the apply thread
+        // BETWEEN two records - after a popped record's own checks, before the next pop's latch
+        // check - and never on an empty-ring poll. ServerLoopLatchTest latches from a second
+        // thread there, which is the interleaving codex closeout finding 6 named.
+        void SetBetweenRecordsHookForTesting(void (*hook)()) {
+            m_betweenRecordsHook.store(hook, std::memory_order_release);
+        }
 
         // C7 / ID-54 diagnostics, read by ServerLoopTest's C7 and N-3 controls. NativeBindCount is
         // how many times ApplyMakeCurrent FORWARDED a bind to the backend (a tuple it did not
@@ -459,6 +466,7 @@ namespace MobileGL::MG_Remote::Server {
         // that reached the blocking Park. Relaxed everywhere: it is a gauge.
         std::atomic<Uint64> m_parkBlocks{0};
         std::atomic<void (*)()> m_beforeRetireHook{nullptr};
+        std::atomic<void (*)()> m_betweenRecordsHook{nullptr};
 
         // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and
         // read ONLY on the apply thread inside ApplyMakeCurrent, so it needs no lock; the two

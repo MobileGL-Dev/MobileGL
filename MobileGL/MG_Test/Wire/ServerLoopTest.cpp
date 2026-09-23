@@ -2912,12 +2912,79 @@ namespace {
         fixture.Stop();
         ::_exit(failed);
     }
+
+    // A LATCH FROM ANOTHER THREAD, BETWEEN TWO RECORDS OF ONE BATCH (codex closeout finding 6).
+    // RunSession's control thread latches a malformed SurfaceOp while the apply thread is mid-batch;
+    // the interleaving the finding names is "just after the apply thread's per-record check". The
+    // loop's between-records hook is that point, made deterministic: on its FIRST call - after the
+    // first record's own checks, before the second pop - it starts a thread that latches, and joins
+    // it, so the latch is stored by another thread and complete before the apply thread moves on.
+    enum : int {
+        kBetweenThreadStayed = 1, // the apply thread was still running 3 s after the latch, no Stop()
+        kBetweenDrainedMore = 2,  // a record behind the latch point reached the applier
+        kBetweenWrongFault = 4,   // not exactly one fault latched, or it is not the control thread's
+        kBetweenWatermark = 8,    // appliedSeq moved past the first record
+        kBetweenHookCalls = 16,   // the hook did not run exactly once (the case did not interleave)
+    };
+
+    std::atomic<int> g_betweenRecordsCalls{0};
+
+    void LatchFromAControlThreadOnTheFirstCall() {
+        if (g_betweenRecordsCalls.fetch_add(1, std::memory_order_acq_rel) != 0) return;
+        std::thread control([] {
+            (void)MobileGL::MG_Remote::SessionLatch(
+                MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption,
+                "MGPipe: Fatal{ProtocolCorruption, \"unit.between-records\"} - latched by a control "
+                "thread after the apply thread's checks on the first record");
+        });
+        control.join();
+    }
+
+    [[noreturn]] void LatchFromAnotherThreadBetweenTwoRecordsAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&LatchFromAControlThreadOnTheFirstCall);
+        // Three LEGAL draws under ONE publish (the draw ARecordShorterThanItsType... proves applies
+        // in an armed child without latching), so nothing but the control thread's latch can stop
+        // the batch.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < 3; ++i) {
+            last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                                sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(66);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        int failed = 0;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kBetweenThreadStayed;
+        if (loop.DrainedRecords() != 1) failed |= kBetweenDrainedMore;
+        if (Remote::SessionLatchCount() != 1 ||
+            std::strstr(Remote::SessionLatchedLine(), "\"unit.between-records\"") == nullptr) {
+            failed |= kBetweenWrongFault;
+        }
+        if (fixture.session->Consumer().AppliedSeq() != 1) failed |= kBetweenWatermark;
+        if (g_betweenRecordsCalls.load(std::memory_order_acquire) != 1) failed |= kBetweenHookCalls;
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
 } // namespace
 
-// DrainRing's two latch checks and the apply thread's own exit, in process. Red with the top
-// check deleted (the exit-path drain applies the null-handle record: bits 2|4|16), with the
-// per-record check deleted (the same drain applies both records behind it: bits 2|4|16), and with
-// ApplyThreadMain's latched break deleted (bit 1: the thread spins on a ring it will not drain).
+// DrainRing's pre-pop latch check and the apply thread's own exit, in process. Red with the check
+// deleted (the drain applies both records behind the latched one: bits 2|4|16 - the exit-path drain
+// would too), and with ApplyThreadMain's latched break deleted (bit 1: the thread spins on a ring it
+// will not drain).
 TEST(ServerLoopLatchTest, ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop) {
     EXPECT_EXIT(RunALatchedBatchAndExit(), ::testing::ExitedWithCode(0), ".*")
         << "bits: 1 = the apply thread was still running 3 s after the latch; 2 = a record behind the "
@@ -2958,6 +3025,18 @@ TEST(ServerLoopLatchTest, ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStam
     EXPECT_EXIT(AShortRecordIsLatchedBeforeItIsStampedAndExit(), ::testing::ExitedWithCode(0), ".*")
         << "bits: 1 = the Clear verb was stamped from a record shorter than MGPClear; 2 = the latched "
            "line is not record.Minimum; 4 = not exactly two records reached the applier (64+ = setup)";
+}
+
+// Codex closeout finding 6: a latch ANOTHER thread stores between two records of one batch stops the
+// next pop. Red with DrainRing's pre-pop check put back to the F2 shape (a check at the function's
+// top and one under `++applied;`, the hook where it is now): the latch lands after the first
+// record's checks, the drain pops and applies the second draw, and only then looks again (bits 2|8).
+TEST(ServerLoopLatchTest, ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPop) {
+    EXPECT_EXIT(LatchFromAnotherThreadBetweenTwoRecordsAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the apply thread was still running 3 s after the latch; 2 = a record behind the "
+           "latch point reached the applier; 4 = not exactly the control thread's fault latched; 8 = "
+           "appliedSeq moved past the first record; 16 = the between-records hook did not run exactly "
+           "once (64+ = setup)";
 }
 #endif
 
