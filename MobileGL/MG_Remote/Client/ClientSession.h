@@ -458,7 +458,8 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 m_remoteControlSeq = 0;
         // P7 CI: false until this session's first MakeCurrent is answered ok. Until then the
         // ops the server may bring its native backend up inside wait MOBILEGL_IPC_COLD_START_MS
-        // for their reply instead of MOBILEGL_IPC_CONTROL_TIMEOUT_MS (Config.h has both).
+        // for their reply instead of MOBILEGL_IPC_CONTROL_TIMEOUT_MS (Config.h has both). Either
+        // budget bounds SILENCE (p7/spawnhang): a Wire::SurfaceProgress for the op restarts it.
         // Guarded by m_remoteControlMutex, like the seq above; reset by Stop().
         Bool m_serverBackendWarm = false;
 

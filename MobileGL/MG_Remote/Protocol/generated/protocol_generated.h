@@ -77,6 +77,9 @@ struct FatalBuilder;
 struct LogLine;
 struct LogLineBuilder;
 
+struct SurfaceProgress;
+struct SurfaceProgressBuilder;
+
 struct CtrlEnvelope;
 struct CtrlEnvelopeBuilder;
 
@@ -506,11 +509,12 @@ enum class CtrlMsg : uint8_t {
   Refuse = 11,
   LogFlush = 12,
   DataBind = 13,
+  SurfaceProgress = 14,
   MIN = NONE,
-  MAX = DataBind
+  MAX = SurfaceProgress
 };
 
-inline const CtrlMsg (&EnumValuesCtrlMsg())[14] {
+inline const CtrlMsg (&EnumValuesCtrlMsg())[15] {
   static const CtrlMsg values[] = {
     CtrlMsg::NONE,
     CtrlMsg::Hello,
@@ -525,13 +529,14 @@ inline const CtrlMsg (&EnumValuesCtrlMsg())[14] {
     CtrlMsg::LogLine,
     CtrlMsg::Refuse,
     CtrlMsg::LogFlush,
-    CtrlMsg::DataBind
+    CtrlMsg::DataBind,
+    CtrlMsg::SurfaceProgress
   };
   return values;
 }
 
 inline const char * const *EnumNamesCtrlMsg() {
-  static const char * const names[15] = {
+  static const char * const names[16] = {
     "NONE",
     "Hello",
     "Welcome",
@@ -546,13 +551,14 @@ inline const char * const *EnumNamesCtrlMsg() {
     "Refuse",
     "LogFlush",
     "DataBind",
+    "SurfaceProgress",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameCtrlMsg(CtrlMsg e) {
-  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::DataBind)) return "";
+  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::SurfaceProgress)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesCtrlMsg()[index];
 }
@@ -611,6 +617,10 @@ template<> struct CtrlMsgTraits<MobileGL::Wire::LogFlush> {
 
 template<> struct CtrlMsgTraits<MobileGL::Wire::DataBind> {
   static const CtrlMsg enum_value = CtrlMsg::DataBind;
+};
+
+template<> struct CtrlMsgTraits<MobileGL::Wire::SurfaceProgress> {
+  static const CtrlMsg enum_value = CtrlMsg::SurfaceProgress;
 };
 
 template <bool B = false>
@@ -2220,6 +2230,64 @@ inline ::flatbuffers::Offset<LogLine> CreateLogLineDirect(
       text__);
 }
 
+struct SurfaceProgress FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef SurfaceProgressBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_SEQ = 4,
+    VT_ELAPSEDMS = 6
+  };
+  uint64_t seq() const {
+    return GetField<uint64_t>(VT_SEQ, 0);
+  }
+  uint32_t elapsedMs() const {
+    return GetField<uint32_t>(VT_ELAPSEDMS, 0);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_SEQ, 8) &&
+           VerifyField<uint32_t>(verifier, VT_ELAPSEDMS, 4) &&
+           verifier.EndTable();
+  }
+};
+
+struct SurfaceProgressBuilder {
+  typedef SurfaceProgress Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_seq(uint64_t seq) {
+    fbb_.AddElement<uint64_t>(SurfaceProgress::VT_SEQ, seq, 0);
+  }
+  void add_elapsedMs(uint32_t elapsedMs) {
+    fbb_.AddElement<uint32_t>(SurfaceProgress::VT_ELAPSEDMS, elapsedMs, 0);
+  }
+  explicit SurfaceProgressBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<SurfaceProgress> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<SurfaceProgress>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<SurfaceProgress> CreateSurfaceProgress(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t seq = 0,
+    uint32_t elapsedMs = 0) {
+  SurfaceProgressBuilder builder_(_fbb);
+  builder_.add_seq(seq);
+  builder_.add_elapsedMs(elapsedMs);
+  return builder_.Finish();
+}
+
+struct SurfaceProgress::Traits {
+  using type = SurfaceProgress;
+  static auto constexpr Create = CreateSurfaceProgress;
+};
+
 struct CtrlEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   typedef CtrlEnvelopeBuilder Builder;
   struct Traits;
@@ -2272,6 +2340,9 @@ struct CtrlEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   }
   const MobileGL::Wire::DataBind *msg_as_DataBind() const {
     return msg_type() == MobileGL::Wire::CtrlMsg::DataBind ? static_cast<const MobileGL::Wire::DataBind *>(msg()) : nullptr;
+  }
+  const MobileGL::Wire::SurfaceProgress *msg_as_SurfaceProgress() const {
+    return msg_type() == MobileGL::Wire::CtrlMsg::SurfaceProgress ? static_cast<const MobileGL::Wire::SurfaceProgress *>(msg()) : nullptr;
   }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
@@ -2333,6 +2404,10 @@ template<> inline const MobileGL::Wire::LogFlush *CtrlEnvelope::msg_as<MobileGL:
 
 template<> inline const MobileGL::Wire::DataBind *CtrlEnvelope::msg_as<MobileGL::Wire::DataBind>() const {
   return msg_as_DataBind();
+}
+
+template<> inline const MobileGL::Wire::SurfaceProgress *CtrlEnvelope::msg_as<MobileGL::Wire::SurfaceProgress>() const {
+  return msg_as_SurfaceProgress();
 }
 
 struct CtrlEnvelopeBuilder {
@@ -2427,6 +2502,10 @@ inline bool VerifyCtrlMsg(::flatbuffers::VerifierTemplate<B> &verifier, const vo
     }
     case CtrlMsg::DataBind: {
       auto ptr = reinterpret_cast<const MobileGL::Wire::DataBind *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case CtrlMsg::SurfaceProgress: {
+      auto ptr = reinterpret_cast<const MobileGL::Wire::SurfaceProgress *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

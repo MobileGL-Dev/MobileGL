@@ -2839,6 +2839,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # "remote spawn bring-up failed" - the CI failure in miniature. A 3 s lever under a 2 s steady
     # knob was faster but proved less: the pre-fix client never read MOBILEGL_IPC_CONTROL_TIMEOUT_MS,
     # so its 5 s bound outlasted the lever and the entries were green at 14e1c8b9 (measured).
+    # SINCE p7/spawnhang THEY ARE NO LONGER THE BUDGET SELECTION'S RED-ONCE: a 20 s bring-up outran
+    # the cold-start budget too (run 35912252677), so both budgets now bound SILENCE - the server
+    # reports Wire::SurfaceProgress every 250 ms while it runs the op, and each report restarts the
+    # client's budget. These entries stay as the end-to-end check that a held bring-up is waited
+    # for on both backends; the mechanism's red-once is ServerSpawnTest's cold-bring-up case (unit).
     # Each entry takes ~25 s, because the harness's pre-flight child brings a server up as well.
     # NOT on integration-spawn: this is not a copy of the split lane (spawn_lane_parity.py). The
     # DirectVulkan entry does carry integration-gpu, unlike the Magma arms' informational tiers

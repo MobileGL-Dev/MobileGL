@@ -335,7 +335,9 @@ into the pull build too, and is now guarded for the same reason.
 its expiry is `Fatal{ControlReplyTimeout, "<op>@<seq>"}`. (b) The client's *cross-process* reply wait
 is bounded by `MOBILEGL_IPC_CONTROL_TIMEOUT_MS` (default 5000) and its expiry is **not** fatal: the
 client consults the doorbell's death latch — dead latches device-lost, alive-but-silent is a named
-diagnostic. Packages: `cp` (a), `dl` (b).
+diagnostic. Packages: `cp` (a), `dl` (b). (P7, p7/spawnhang: "silent" is now literal — a server whose
+apply thread is running the op says so every 250 ms with `SurfaceProgress`, and each report restarts
+the client's bound, up to 120 s; a server that never took the op, or is frozen, sends none.)
 
 > **D5c — the client's self-bell CANNOT witness the server's death, and `sm` is why.** Measured, not
 > predicted: `minecraft-1.21.4-fabric-iris-iterationrp-in-world` kills the *server* process outright

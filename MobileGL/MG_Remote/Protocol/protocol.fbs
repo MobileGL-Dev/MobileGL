@@ -340,6 +340,19 @@ table LogLine {
   text: string;
 }
 
+// P7 (p7/spawnhang). THE SERVER IS STILL RUNNING THE CLIENT'S SURFACE OP. Sent only by the
+// server's control pump, only while its apply thread is running a SurfaceOp it has TAKEN, and
+// only before that op's SurfaceReply - once per progress interval after the op has run that long
+// (ServerLoop.cpp, kControlProgressIntervalMs). It is how a client tells a server that is BUSY
+// with its op (a cold native bring-up inside the first surface creation or MakeCurrent: eglInitialize
+// loading a software rasteriser off a cold disk) from one that is SILENT: the client's reply budget
+// restarts on each report, up to a ceiling. A server that never took the op, or is frozen, sends
+// none and still times out by name (CONTRACT-P6 5.4 D5b).
+table SurfaceProgress {
+  seq: ulong;       // the SurfaceOp.seq being run
+  elapsedMs: uint;  // since the op was posted to the apply thread
+}
+
 // ---------------------------------------------------------------------------
 // Envelope
 // ---------------------------------------------------------------------------
@@ -363,6 +376,7 @@ union CtrlMsg {
   Refuse,
   LogFlush,
   DataBind,
+  SurfaceProgress,
 }
 
 table CtrlEnvelope {

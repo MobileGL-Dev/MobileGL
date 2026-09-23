@@ -57,6 +57,22 @@ void ForwardLog(void* user, const char* text) {
     (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
 }
 
+// p7/spawnhang. THE PROGRESS REPORT: Wire::SurfaceProgress, sent by the thread that posted the op
+// - RunSession's control pump, waiting in ServerApplyWireSurfaceOp - after each
+// ServerLoop::kControlProgressIntervalMs that mgl-srv-apply has spent running it
+// (ServerLoop::SetControlProgressSink). The client's reply budget restarts on each one, so a cold
+// native bring-up that outruns MOBILEGL_IPC_COLD_START_MS is waited for instead of being reported
+// ALIVE BUT SILENT (retrace-split run 35912252677). A send failure is left to the reply's send,
+// which already ends the session on it.
+void SendSurfaceProgress(void* user, Server::SurfaceControlOp, std::uint64_t seq, std::uint32_t elapsedMs) {
+    auto& transport = *static_cast<SocketTransport*>(user);
+    flatbuffers::FlatBufferBuilder builder(64);
+    auto progress = Protocol::CreateSurfaceProgress(builder, seq, elapsedMs);
+    auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::SurfaceProgress, progress.Union());
+    Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
+    (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
+}
+
 void RefuseBusy(SocketTransport& transport, const char* detail) {
     // Unread Hello bytes can make close send RST and discard our Refuse.
     std::uint64_t bytes = 0;
@@ -459,6 +475,10 @@ void DelaySessionHandshakeForTest() {
     if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0))
         MobileGL::MG_Util::Debug::SetLogForwarder(&ForwardLog, control.get());
     auto& loop = Server::ServerLoopInstance();
+    // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
+    // below) and is the one that says "still running" while the apply thread runs it. Cleared
+    // after the loop, on this same thread, so no post can be in flight when it goes.
+    loop.SetControlProgressSink(&SendSurfaceProgress, control.get());
     if (loop.Start(session) != MOBILEGL_OK) ::_exit(70);
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
                  selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
@@ -595,6 +615,7 @@ void DelaySessionHandshakeForTest() {
             break;
         }
     }
+    loop.SetControlProgressSink(nullptr, nullptr);
     loop.Stop();
     // Publish the final server window while log forwarding is still attached.
     MobileGL::MG_Util::PipeStats::Shutdown();

@@ -1251,9 +1251,32 @@ namespace MobileGL::MG_Remote::Client {
         // The reply. A BOUNDED wait whose expiry is NOT fatal (CONTRACT-P6 §5.4
         // D5b): a peer that is gone is a different fact from a peer that is slow,
         // and only the doorbell's death latch may say which.
+        //
+        // P7 (p7/spawnhang): THE BUDGET BOUNDS SILENCE, NOT THE OP. It used to be one deadline
+        // for the whole reply, so a server that was still running the op - a cold native
+        // bring-up, eglInitialize loading a software rasteriser off a runner's cold disk for
+        // ~20 s (retrace-split run 35912252677) - was reported ALIVE BUT SILENT and its surface
+        // creation failed, although it was about to answer. The server now says so while it runs
+        // an op it has taken (Wire::SurfaceProgress, every ServerLoop::kControlProgressIntervalMs),
+        // and each report restarts this budget. What still times out, named as before: a server
+        // that never took the op or is frozen (no report arrives), and one that reports progress
+        // past kBarrierTimeoutMs - the bound the verb barrier gives one record's apply, which is
+        // what a surface op that is being run IS.
+        const auto sentAt = std::chrono::steady_clock::now();
+        const Uint32 ceilingMs = std::max<Uint32>(budgetMs, kBarrierTimeoutMs);
+        Uint32 progressReports = 0;
+        Uint32 lastProgressMs = 0;
         for (;;) {
             std::vector<Uint8> reply;
-            const MobileGLResult received = ReceiveControlFrame(reply, budgetMs);
+            Uint32 waitMs = budgetMs;
+            if (progressReports != 0) {
+                const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - sentAt).count();
+                waitMs = spentMs >= ceilingMs ? 0u : std::min<Uint32>(budgetMs, ceilingMs - static_cast<Uint32>(spentMs));
+            }
+            // A zero wait is the ceiling, reached: answered exactly as an expired budget is.
+            const MobileGLResult received =
+                waitMs == 0 ? MOBILEGL_ERR_TIMEOUT : ReceiveControlFrame(reply, waitMs);
             if (received != MOBILEGL_OK) {
                 // `dl` (D5b): THE EXPIRY IS NOT FATAL AND IT IS NOT ONE ANSWER. The transport
                 // already distinguishes the two states this wait can end in, and the contract
@@ -1272,6 +1295,14 @@ namespace MobileGL::MG_Remote::Client {
                 } else if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
                            bell != nullptr && bell->PeerHungUp()) {
                     LatchDeviceLost("a control reply timed out and the peer had hung up");
+                } else if (progressReports != 0 && waitMs == 0) {
+                    MGLOG_E("MG_Remote client: the server is ALIVE AND BUSY past the ceiling - it "
+                            "reported %u time(s) that it was still running %s seq %llu (the last "
+                            "at %u ms) and has not answered within %u ms, the bound the verb "
+                            "barrier gives one apply. This is NOT device loss (CONTRACT-P6 5.4); "
+                            "the op itself is not returning on the server's apply thread.",
+                            progressReports, Server::SurfaceControlOpName(frame.kind),
+                            static_cast<unsigned long long>(frame.seq), lastProgressMs, ceilingMs);
                 } else {
                     MGLOG_E("MG_Remote client: the server is ALIVE BUT SILENT - no SurfaceReply "
                             "for %s seq %llu within %u ms (%s) and the control stream is still "
@@ -1283,9 +1314,23 @@ namespace MobileGL::MG_Remote::Client {
                             coldStart ? "the cold-start budget, MOBILEGL_IPC_COLD_START_MS: the "
                                         "server may still have been bringing its backend up"
                                       : "the steady bound, MOBILEGL_IPC_CONTROL_TIMEOUT_MS");
+                    // WHICH SILENCE (p7/spawnhang). A server running the op reports progress, so
+                    // none at all means it never started it (or froze before it could say so);
+                    // reports that stopped mean it froze mid-op.
+                    if (progressReports == 0)
+                        MGLOG_E("MG_Remote client: no SurfaceProgress arrived for seq %llu either (a "
+                                "server reports every %u ms while it runs an op): it did not start "
+                                "the op, or it is frozen",
+                                static_cast<unsigned long long>(frame.seq),
+                                Server::ServerLoop::kControlProgressIntervalMs);
+                    else
+                        MGLOG_E("MG_Remote client: the server had reported progress on seq %llu "
+                                "%u time(s), the last at %u ms, and then stopped",
+                                static_cast<unsigned long long>(frame.seq), progressReports,
+                                lastProgressMs);
                 }
                 MGLOG_E("MG_Remote client: no SurfaceReply for seq %llu within %u ms (rc=%d)",
-                        static_cast<unsigned long long>(frame.seq), budgetMs,
+                        static_cast<unsigned long long>(frame.seq), waitMs == 0 ? ceilingMs : budgetMs,
                         static_cast<int>(received));
                 return received;
             }
@@ -1302,6 +1347,30 @@ namespace MobileGL::MG_Remote::Client {
                 if (const auto* snapshot = envelope->msg_as_CapsSnapshot()) {
                     AdoptCapsSnapshot(snapshot);
                 }
+                continue;
+            }
+            if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::SurfaceProgress) {
+                // THE SERVER IS STILL RUNNING THIS OP (p7/spawnhang, above): the budget restarts.
+                // One op is outstanding at a time (m_remoteControlMutex), so a report naming any
+                // other seq is a server that has lost track of which op it is running.
+                const auto* progress = envelope->msg_as_SurfaceProgress();
+                if (progress == nullptr || progress->seq() != frame.seq) {
+                    MGLOG_E("MG_Remote client: a SurfaceProgress names seq %llu while seq %llu is "
+                            "the op outstanding",
+                            static_cast<unsigned long long>(progress == nullptr ? 0 : progress->seq()),
+                            static_cast<unsigned long long>(frame.seq));
+                    return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                }
+                if (progressReports == 0) {
+                    MGLOG_I("MG_Remote client: the server is still running %s seq %llu (%u ms after "
+                            "it was posted to its apply thread); the reply budget of %u ms restarts "
+                            "on each progress report, up to %u ms",
+                            Server::SurfaceControlOpName(frame.kind),
+                            static_cast<unsigned long long>(frame.seq), progress->elapsedMs(), budgetMs,
+                            ceilingMs);
+                }
+                ++progressReports;
+                lastProgressMs = progress->elapsedMs();
                 continue;
             }
             if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::Fatal) {

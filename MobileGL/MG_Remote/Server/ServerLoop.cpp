@@ -633,9 +633,21 @@ namespace MobileGL::MG_Remote::Server {
         // The dispatch runs OUTSIDE the lock, exactly as the old work(user) did, and fills the
         // frame's reply half; the reply is then published back into the slot under the lock so
         // the poster's copy-out after m_controlDone sees it.
+        const auto dispatchStart = std::chrono::steady_clock::now();
         const MobileGLResult result = ApplySurfaceControlFrame(
             frame, m_controlProbeHook.load(std::memory_order_acquire),
             m_controlProbeUser.load(std::memory_order_acquire));
+        // p7/spawnhang: A SLOW DISPATCH NAMES ITSELF. The first surface creation / MakeCurrent is
+        // where a lazy native bring-up runs, and on a cold CI runner it outran the client's whole
+        // reply budget with nothing in this log to say so - the investigation had to infer it.
+        const auto dispatchMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - dispatchStart).count();
+        if (dispatchMs >= static_cast<long long>(kSlowControlDispatchMs)) {
+            MGLOG_W("MG_Remote server: %s seq %llu ran %lld ms on mgl-srv-apply (a lazy native "
+                    "bring-up runs inside the first surface creation or MakeCurrent)",
+                    SurfaceControlOpName(frame.kind), static_cast<unsigned long long>(frame.seq),
+                    static_cast<long long>(dispatchMs));
+        }
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
             m_controlFrame = frame;
@@ -844,9 +856,40 @@ namespace MobileGL::MG_Remote::Server {
         if (m_session != nullptr) {
             m_session->DataLink()->ConsumerBell().Notify();
         }
-        m_controlDone.wait(lock, [this] { return m_controlFinished; });
+        // p7/spawnhang: THE WAIT IS SLICED, AND A SLICE THE APPLY THREAD SPENT RUNNING THIS FRAME IS
+        // REPORTED (SetControlProgressSink). It used to be one untimed wait, so the poster - under
+        // spawn, the control pump in ServerMain, the only thread that talks to the client - was mute
+        // for as long as the dispatch ran, and a client could not tell a cold bring-up from a wedge.
+        // "Running" is read under this lock from the mailbox's own fields: the pump clears the
+        // shadow when it TAKES the frame (PumpControlRequest), and m_controlPending stays true until
+        // the reply is published under this same lock. Posted-but-not-taken says nothing. The sink
+        // runs without the lock, so a dispatch finishing meanwhile is not held up by the send; the
+        // predicate is re-asked on the way back in. Only the timing of the wakeups changed: the
+        // handshake, the C2 exit block's answer and the copy-out below are exactly as before.
+        const auto postedAt = std::chrono::steady_clock::now();
+        while (!m_controlDone.wait_for(lock, std::chrono::milliseconds(kControlProgressIntervalMs),
+                                       [this] { return m_controlFinished; })) {
+            const Bool running = m_controlPending && !m_controlPosted.load(std::memory_order_acquire);
+            const ControlProgressSink sink = m_progressSink;
+            void* const user = m_progressUser;
+            if (!running || sink == nullptr) continue;
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - postedAt).count();
+            lock.unlock();
+            sink(user, frame.kind, frame.seq,
+                 static_cast<Uint32>(std::min<long long>(elapsedMs, 0xFFFFFFFFll)));
+            lock.lock();
+        }
         frame = m_controlFrame; // the reply half, written by the dispatch
         return m_controlResult;
+    }
+
+    void ServerLoop::SetControlProgressSink(ControlProgressSink sink, void* user) {
+        // Under the mailbox's lock, which the poster holds when it reads the pair, so a sink is
+        // never called with another sink's user.
+        const std::lock_guard<std::mutex> lock(m_controlMutex);
+        m_progressSink = sink;
+        m_progressUser = user;
     }
 
     MobileGLResult ServerLoop::RunProbeOnApplyThreadForTesting(ControlProbeHook hook, void* user) {

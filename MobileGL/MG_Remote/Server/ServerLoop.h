@@ -249,6 +249,28 @@ namespace MobileGL::MG_Remote::Server {
         using ControlProbeHook = MobileGLResult (*)(void* user);
         MobileGLResult RunProbeOnApplyThreadForTesting(ControlProbeHook hook, void* user);
 
+        // P7 (p7/spawnhang). WHAT A POSTER SAYS WHILE THE APPLY THREAD RUNS ITS FRAME.
+        //
+        // A posted frame is waited for in slices of kControlProgressIntervalMs, and after every
+        // slice in which the apply thread is RUNNING it - taken, not yet answered - the poster calls
+        // this sink with the frame's kind, its seq and how long ago it was posted, WITHOUT
+        // m_controlMutex held. ServerMain installs one that sends Wire::SurfaceProgress on the
+        // control connection: that is how a spawn / TCP client tells a server BUSY with its op (a
+        // cold native bring-up - eglInitialize loading a software rasteriser off a cold disk ran
+        // ~20 s on a CI runner) from a SILENT one, and restarts its reply budget. A frame posted but
+        // NOT TAKEN reports nothing, because that silence is exactly what the client's budget
+        // exists to name. Null (inproc, and every case that does not set one): the slices are
+        // waited out and nothing is said. Read on the posting thread, set from any (both under
+        // m_controlMutex).
+        using ControlProgressSink = void (*)(void* user, SurfaceControlOp kind, Uint64 seq, Uint32 elapsedMs);
+        void SetControlProgressSink(ControlProgressSink sink, void* user);
+        // Well inside the smallest default reply budget (MOBILEGL_IPC_CONTROL_TIMEOUT_MS, 5000),
+        // and a frame's worth of bytes per interval only while an op runs that long.
+        static constexpr Uint32 kControlProgressIntervalMs = 250;
+        // A dispatch that runs at least this long is logged, with its op, seq and duration, on the
+        // apply thread when it returns - the line the retrace-split investigation did not have.
+        static constexpr Uint32 kSlowControlDispatchMs = 1000;
+
         // How many frames this loop has dispatched (every kind, probe included). Reset by
         // Start(). The frame channel's own red-once handle: a forwarder that stopped posting
         // frames leaves this unmoved.
@@ -451,6 +473,10 @@ namespace MobileGL::MG_Remote::Server {
         // published; held until its reply returns. Re-entrant probes use call-local arguments.
         std::atomic<ControlProbeHook> m_controlProbeHook{nullptr};
         std::atomic<void*> m_controlProbeUser{nullptr};
+        // SetControlProgressSink's pair (p7/spawnhang). Guarded by m_controlMutex: the poster reads
+        // both while it holds that lock between slices, so the pair is always read whole.
+        ControlProgressSink m_progressSink = nullptr;
+        void* m_progressUser = nullptr;
 
         // The BOUNDED join's other half. std::thread::join has no deadline, so a lost wakeup
         // would wedge CI rather than fail it; the thread signals here last and Stop() waits

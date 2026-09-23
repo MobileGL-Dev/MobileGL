@@ -33,6 +33,7 @@
 //   SCM_RIGHTS works across   - the mechanism the four segments ride on, proven
 //   the boundary               before the data plane needs it.
 
+#include <Config.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Server/ServerLoop.h>
@@ -966,6 +967,115 @@ TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
     Client::ClientSessionInstance().Stop();
     int exitCode = -1;
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+}
+
+namespace {
+    // p7/spawnhang. The client's two reply budgets, shortened for one case and put back after it,
+    // and the harness's headless EGL for the server it starts (EventForfeitPeerTest's PinHeadlessEgl:
+    // the first surface creation runs a real eglInitialize, and a runner has no DISPLAY).
+    struct ShortReplyBudgets {
+        MobileGL::Uint32 steady = MobileGL::MG_Config::Ipc.ControlTimeoutMs;
+        MobileGL::Uint32 cold = MobileGL::MG_Config::Ipc.ColdStartMs;
+        explicit ShortReplyBudgets(MobileGL::Uint32 ms) {
+            MobileGL::MG_Config::Ipc.ControlTimeoutMs = ms;
+            MobileGL::MG_Config::Ipc.ColdStartMs = ms;
+        }
+        ~ShortReplyBudgets() {
+            MobileGL::MG_Config::Ipc.ControlTimeoutMs = steady;
+            MobileGL::MG_Config::Ipc.ColdStartMs = cold;
+        }
+    };
+
+    std::string HeadlessEglPlatform() {
+        const char* pinned = std::getenv("EGL_PLATFORM");
+        return pinned != nullptr ? pinned : "surfaceless";
+    }
+
+    Server::SurfaceControlFrame PbufferCreation() {
+        Server::SurfaceControlFrame frame{};
+        frame.kind = Server::SurfaceControlOp::CreatePbufferSurface;
+        frame.surface = 1;
+        frame.width = 16;
+        frame.height = 16;
+        return frame;
+    }
+
+    long long MillisecondsSince(std::chrono::steady_clock::time_point start) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+            .count();
+    }
+} // namespace
+
+// p7/spawnhang: retrace-split run 35912252677, in miniature and in seconds instead of twenty.
+//
+// A spawned server brings its native backend up lazily, INSIDE the first surface creation
+// (eglInitialize). On a cold CI runner that read a software rasteriser off disk for ~20 s - the
+// whole MOBILEGL_IPC_COLD_START_MS - and the client, which measured the op's DURATION against a
+// budget meant for SILENCE, reported the server ALIVE BUT SILENT and failed the pbuffer with
+// EGL_BAD_ALLOC while the server was about to answer. The server now reports progress while its
+// apply thread runs an op it has taken (Wire::SurfaceProgress), and each report restarts the
+// client's budget.
+//
+// Here the server's own test lever holds its first CreatePbufferSurface for 3000 ms and the client's
+// budgets are 1000 ms - the same shape as 20 s of bring-up against a 20 s budget, three times over.
+// Against the client and server as they were (one untimed wait on the server, one deadline on the
+// client) the op comes back TIMEOUT at ~1000 ms: the CI failure, named the way CI named it. With
+// the progress reports it comes back answered, after the lever let it go.
+TEST(ServerSpawnTest, AColdBringUpThatOutlastsTheReplyBudgetIsWaitedForBecauseTheServerReportsProgress) {
+    const ScopedEnvironment lever("MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS", "3000");
+    const ScopedEnvironment headless("EGL_PLATFORM", HeadlessEglPlatform());
+    const ShortReplyBudgets budgets(1000);
+
+    Session session;
+    ASSERT_TRUE(Bring("coldprogress", &session));
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    Server::SurfaceControlFrame frame = PbufferCreation();
+    const auto start = std::chrono::steady_clock::now();
+    const MobileGLResult rc = Client::ClientSessionInstance().RunRemoteSurfaceControlFrame(frame);
+    const long long elapsedMs = MillisecondsSince(start);
+
+    // THE ROUND TRIP, not the EGL answer: whether a headless runner can make a pbuffer is not
+    // this case's question (`ok` is whatever the driver said); whether the reply was WAITED FOR is.
+    EXPECT_EQ(rc, MOBILEGL_OK)
+        << "the op came back rc=" << static_cast<int>(rc) << " after " << elapsedMs
+        << " ms: the client gave up on a server that was still running it - the retrace-split "
+           "failure (\"ALIVE BUT SILENT - no SurfaceReply for CreatePbufferSurface seq 2\")";
+    if (rc == MOBILEGL_OK) {
+        EXPECT_GE(elapsedMs, 3000)
+            << "the reply came back before the server's lever released the op, so the lever did not "
+               "hold the bring-up and this case proved nothing about waiting for one";
+    }
+    EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a slow server is not a lost device (5.4)";
+}
+
+// The other half, and the reason the budget still exists: a server that is ALIVE BUT FROZEN reports
+// nothing, so the same op against it still ends at the budget, by name, rather than waiting on
+// progress that never comes. SIGSTOP freezes the whole process - the pump that would report as well
+// as the apply thread - and keeps every descriptor open, so it is not a hangup either.
+TEST(ServerSpawnTest, AFrozenServerReportsNoProgressAndTheOpStillTimesOutAtTheBudget) {
+    const ScopedEnvironment headless("EGL_PLATFORM", HeadlessEglPlatform());
+    const ShortReplyBudgets budgets(1000);
+
+    Session session;
+    ASSERT_TRUE(Bring("frozenprogress", &session));
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    ASSERT_EQ(::kill(session.server.pid, SIGSTOP), 0);
+
+    Server::SurfaceControlFrame frame = PbufferCreation();
+    const auto start = std::chrono::steady_clock::now();
+    const MobileGLResult rc = Client::ClientSessionInstance().RunRemoteSurfaceControlFrame(frame);
+    const long long elapsedMs = MillisecondsSince(start);
+    (void)::kill(session.server.pid, SIGCONT);
+
+    EXPECT_EQ(rc, MOBILEGL_ERR_TIMEOUT)
+        << "a frozen server was not timed out (rc=" << static_cast<int>(rc) << ")";
+    EXPECT_LT(elapsedMs, 10000)
+        << "took " << elapsedMs << " ms against a 1000 ms budget: something other than a progress "
+           "report restarted the wait";
+    EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a frozen server is not a lost device (5.4)";
 }
 
 TEST(ServerSpawnTest, TheHandshakeCarriesTwoDifferentProcessIdsAndNotTwoZeroes) {

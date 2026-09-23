@@ -75,6 +75,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -440,6 +441,175 @@ TEST(ServerLoopTest, TheControlShadowIsClearedWhenThePumpTakesTheRequest) {
         << "the apply thread never re-entered the blocking park after a control request: the "
            "shadow is stuck set, so the idle poll now spins a core at full clock for the rest "
            "of the session";
+
+    fixture.Stop();
+}
+
+// =====================================================================================
+// p7/spawnhang: the poster reports a frame the apply thread is RUNNING, and only that
+// =====================================================================================
+//
+// retrace-split run 35912252677: a spawned server's first CreatePbufferSurface ran its lazy native
+// bring-up (eglInitialize, a software rasteriser read off a cold runner disk) for ~20 s - the whole
+// cold-start reply budget - and the client, which could not tell a busy server from a wedged one,
+// gave up while the server was about to answer. The poster now waits in slices and, after every
+// slice the apply thread spent RUNNING its frame, tells the installed sink (ServerMain's sends
+// Wire::SurfaceProgress; ServerSpawnTest's cold-bring-up case is the end-to-end half). Two
+// halves, each red for its own reason:
+//   - a frame the apply thread runs for several slices IS reported, with its kind, one seq and a
+//     growing elapsed time - with the old untimed wait there is no report at all;
+//   - a frame POSTED BUT NOT TAKEN (the apply thread is held in a drain) is NOT, however long it
+//     waits: that silence is what the client's budget still names, and a poster that reported
+//     every slice regardless would turn a stuck apply thread into an endless wait.
+namespace {
+    struct ProgressLog {
+        struct Report {
+            Server::SurfaceControlOp kind;
+            Uint64 seq;
+            Uint32 elapsedMs;
+        };
+        std::mutex mutex;
+        std::vector<Report> reports;
+
+        static void Sink(void* user, Server::SurfaceControlOp kind, Uint64 seq, Uint32 elapsedMs) {
+            auto* log = static_cast<ProgressLog*>(user);
+            const std::lock_guard<std::mutex> lock(log->mutex);
+            log->reports.push_back(Report{kind, seq, elapsedMs});
+        }
+        std::vector<Report> Snapshot() {
+            const std::lock_guard<std::mutex> lock(mutex);
+            return reports;
+        }
+    };
+
+    // Six slices: long enough that a poster oversleeping by most of a second under a loaded `-j`
+    // still wakes at least once while the frame runs.
+    constexpr Uint32 kProgressProbeRunMs = 6 * Server::ServerLoop::kControlProgressIntervalMs;
+
+    // Posts `hook` from a helper thread (N-9's reason: a lost post must be said in the case's own
+    // words, not as ctest's timeout) and waits for its answer within `deadlineMs`.
+    bool PostProbeAndWait(Server::ServerLoop::ControlProbeHook hook, void* user, Uint32 deadlineMs,
+                          MobileGLResult* rc, long long* waitedMs) {
+        std::atomic<Bool> answered{false};
+        std::thread poster([&] {
+            const auto start = std::chrono::steady_clock::now();
+            *rc = Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(hook, user);
+            *waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start).count();
+            answered.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(deadlineMs);
+        while (!answered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const Bool ok = answered.load(std::memory_order_acquire);
+        if (!ok) Server::ServerLoopInstance().Stop(); // frees the poster (C2's exit block answers it)
+        poster.join();
+        return ok;
+    }
+} // namespace
+
+TEST(ServerLoopTest, AFrameTheApplyThreadIsRunningIsReportedToTheProgressSinkWhileItRuns) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ProgressLog log;
+    loop.SetControlProgressSink(&ProgressLog::Sink, &log);
+
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    long long waitedMs = 0;
+    const Bool answered = PostProbeAndWait(
+        +[](void*) -> MobileGLResult {
+            std::this_thread::sleep_for(std::chrono::milliseconds(kProgressProbeRunMs));
+            return MOBILEGL_OK;
+        },
+        nullptr, 20000, &rc, &waitedMs);
+    loop.SetControlProgressSink(nullptr, nullptr);
+    // EXPECT, never ASSERT, from here to Stop(): a case that returns early leaves the apply thread
+    // parked and the process does not exit.
+    EXPECT_TRUE(answered) << "a posted probe was never answered";
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    const std::vector<ProgressLog::Report> reports = log.Snapshot();
+    EXPECT_FALSE(reports.empty())
+        << "the apply thread ran the frame for " << waitedMs << " ms and the poster said nothing: "
+        << "a spawn client would have seen silence for the whole of a cold bring-up and given up "
+           "on a server that was about to answer";
+    for (std::size_t i = 0; i < reports.size(); ++i) {
+        EXPECT_EQ(reports[i].kind, Server::SurfaceControlOp::ProbeForTesting) << "report " << i;
+        EXPECT_NE(reports[i].seq, 0u) << "report " << i << " names no seq";
+        EXPECT_EQ(reports[i].seq, reports.front().seq) << "one frame, one seq (report " << i << ")";
+        EXPECT_GE(reports[i].elapsedMs, Server::ServerLoop::kControlProgressIntervalMs)
+            << "report " << i << " came before one whole interval had passed";
+        if (i != 0) EXPECT_GT(reports[i].elapsedMs, reports[i - 1].elapsedMs) << "report " << i;
+    }
+
+    // THE SERVER LOG NAMES THE SLOW DISPATCH TOO: the line the investigation did not have.
+    const std::string text = ReadLog();
+    EXPECT_NE(text.find("ProbeForTesting seq"), std::string::npos)
+        << "a dispatch that ran " << waitedMs << " ms was not named in the server log";
+    EXPECT_NE(text.find("ms on mgl-srv-apply"), std::string::npos);
+
+    fixture.Stop();
+}
+
+TEST(ServerLoopTest, AFramePostedButNotYetTakenIsNotReportedHoweverLongItWaits) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+
+    // HOLD THE APPLY THREAD IN A DRAIN, where it cannot take a posted frame: the retire hook runs
+    // on the apply thread after a record is applied and before it is retired (DrainRing).
+    static std::atomic<Bool> s_inDrain{false};
+    static std::atomic<Bool> s_releaseDrain{false};
+    s_inDrain.store(false);
+    s_releaseDrain.store(false);
+    loop.SetBeforeRetireHookForTesting(+[] {
+        s_inDrain.store(true, std::memory_order_release);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!s_releaseDrain.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+    const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear));
+    ASSERT_NE(seq, Codec::kInvalidSeq);
+    fixture.encoder.Publish();
+    fixture.producer.PublishAndNotify(seq);
+    const auto holdDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!s_inDrain.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < holdDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(s_inDrain.load(std::memory_order_acquire)) << "the apply thread never reached the drain";
+
+    ProgressLog log;
+    loop.SetControlProgressSink(&ProgressLog::Sink, &log);
+    // The probe is posted from a helper while the drain holds the apply thread for six slices,
+    // then the drain is let go from here and the probe - instant once taken - is answered.
+    std::thread releaser([] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kProgressProbeRunMs));
+        s_releaseDrain.store(true, std::memory_order_release);
+    });
+    MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+    long long waitedMs = 0;
+    const Bool answered =
+        PostProbeAndWait(+[](void*) -> MobileGLResult { return MOBILEGL_OK; }, nullptr, 20000, &rc, &waitedMs);
+    releaser.join();
+    loop.SetControlProgressSink(nullptr, nullptr);
+    loop.SetBeforeRetireHookForTesting(nullptr);
+    EXPECT_TRUE(answered) << "a posted probe was never answered once the drain let go";
+    EXPECT_EQ(rc, MOBILEGL_OK);
+
+    // THE WINDOW WAS REAL: the probe waited behind the drain for several slices.
+    EXPECT_GE(waitedMs, static_cast<long long>(2 * Server::ServerLoop::kControlProgressIntervalMs))
+        << "the probe was answered after " << waitedMs << " ms, so it was never posted-and-waiting "
+           "long enough for this case to say anything";
+    EXPECT_TRUE(log.Snapshot().empty())
+        << log.Snapshot().size() << " progress report(s) for a frame the apply thread had NOT "
+        << "taken: the poster reports every slice, so a client would wait on a server whose apply "
+           "thread never started its op";
 
     fixture.Stop();
 }
