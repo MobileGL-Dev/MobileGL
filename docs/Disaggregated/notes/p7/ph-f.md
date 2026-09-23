@@ -297,7 +297,9 @@ GREEN 还原: protocol revision pin: revision 1 holds (sha256 7fc859f7fa756818..
 - **两处 wave 2-F 之前就存在的预认证暴露**（审查核实、归 PH-7 (5)）：(a) supervisor 对每条 TCP 连接**先 fork
   再读 Hello**，未认证对端每连接可让 server 付出一次 fork + 最长 10 s 的 Hello 等待；(b) `ValidatePeerHandshake`
   在 `AuthenticatePeerToken` **之前**跑，`Refuse{ProtocolVersion|WireFingerprint|BuildFingerprint}` 把本端
-  wire 指纹与 build stamp 送给了未认证的对端。
+  wire 指纹与 build stamp 送给了未认证的对端。**（P7 F2 包 f2-auth 已关 (a)(b)**：supervisor 在 fork 前自己读首帧、
+  先验令牌，待认证工作有期限、有上限、按地址公平让位，失败按地址退避；unix 端点的「先 fork 再读 Hello」仍在，
+  归本地对端债。旋钮与留下的债见 CONTRACT-P7 §12 末条、`MG_Remote/Server/PreAuthGate.h`。**）**
 - 令牌最小长度只在 TCP 监听处检查（§1.1）。
 
 ---

@@ -8,7 +8,7 @@
 
 `MOBILEGL_TRANSPORT=spawn` 表示两进程拓扑。`MOBILEGL_IPC_CONTROL` 选择 `fork`（默认）、`unix:<path>` 或 `tcp://host:port`，`MOBILEGL_IPC_DATA=auto|shm|stream` 选择数据面。本波 TCP 只接受 stream，fork/UNIX 只接受 shm；不支持的显式组合具名拒绝。Connect 不启动本地子进程，实际 server pid 来自 Welcome。
 
-TCP 两条连接依次为控制和数据。每条均设置 NODELAY、KEEPALIVE，Linux/Android 另设置 KEEPIDLE=2、KEEPINTVL=1、KEEPCNT=3、USER_TIMEOUT=5000。网络错误和 EOF 才触发 peer-hung-up；apply 超时不是 device loss。无 `MOBILEGL_IPC_TOKEN` 的 listener 仅能绑定 loopback；错令牌返回 Refuse，不打印令牌值。
+TCP 两条连接依次为控制和数据。每条均设置 NODELAY、KEEPALIVE，Linux/Android 另设置 KEEPIDLE=2、KEEPINTVL=1、KEEPCNT=3、USER_TIMEOUT=5000。网络错误和 EOF 才触发 peer-hung-up；apply 超时不是 device loss。无 `MOBILEGL_IPC_TOKEN` 的 listener 仅能绑定 loopback；错令牌返回 Refuse，不打印令牌值。（P7 包 f2-auth，PH-7 (5)）`--serve` 的 TCP supervisor 在 fork 之前自己读每条连接的首帧、先验令牌：未认证对端只得到 `Refuse{Authentication}`，不带 wire 指纹与 build stamp，也不花一次 fork；首帧须在 `MOBILEGL_IPC_PREAUTH_MS`（默认 2000）内到齐；同时待认证的连接至多 `MOBILEGL_IPC_PREAUTH_MAX`（默认 8，上限 256），满时新连接顶掉占位最多的地址最老的一条（`Refuse{Busy}`），自己地址已占最多时才被拒；同一地址失败（错令牌、畸形首帧、超时、静默占位超过 250 ms）达 `MOBILEGL_IPC_AUTH_BACKOFF_AFTER`（默认 5，0 关）次后在 accept 处拒绝，窗口自 `MOBILEGL_IPC_AUTH_BACKOFF_MS`（默认 1000）起逐次翻倍、上限 60 s，一次认证成功清零。这四个旋钮只读环境变量（supervisor 不跑 ConfigLoader）。细节 `MG_Remote/Server/PreAuthGate.h`，记录债见 CONTRACT-P7 §12。
 
 ## 握手与布局
 
