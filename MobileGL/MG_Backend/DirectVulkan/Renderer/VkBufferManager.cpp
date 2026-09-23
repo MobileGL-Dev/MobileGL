@@ -248,6 +248,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DeferWireRelease(std::move(resource->buffer), orphanedUseSerial);
         resource->size = desc.Width;
         resource->lastUseSerial = 0;
+        resource->lastUseSubmitIndex = 0;  // M2 r2: the new store carries no submission yet (B3's stamp is per store)
         resource->gpuWritesPending = false;
         resource->stagedCoverage.clear();
         ++m_sliceEpochCounter;
