@@ -194,7 +194,10 @@
         GetImageTransitionSourceState(image.layout, stage, access);
         // One tracked layout per image: move the complete mip chain, never just the surface.
         VkImageAspectFlags barrierAspect = image.aspect;
-        if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+        // Every packed format, D16_UNORM_S8_UINT included (g5-msrbo review round): the layout is
+        // tracked per image, so a one-aspect barrier would leave the other aspect behind the
+        // tracked layout - and CopyWireDepthStencilBlit moves the two aspects in two legs.
+        if (WireFormatIsPackedDepthStencil(image.format))
             barrierAspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
         if (image.layout == layout) {
             // GENERAL->GENERAL is not a layout transition, but the next load,
