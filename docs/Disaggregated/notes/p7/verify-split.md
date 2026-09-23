@@ -246,7 +246,7 @@ client 的 summary 行自己就写着 DirectGLES `4 divergence(s)` / DirectVulka
 日志同样被抹）。修法在 verify 专属代码里（`Log.cpp` 在 pull 构建里，G1 不许动）：`MGPipeVerifyFlushSummary()` 由
 `DestroyImpl` 在 `Close()` 之前调用（`#if MOBILEGL_PIPE_VERIFY`），静态析构随后无事可做。修前后同一条目
 `pipe-verify-split-read-corrupt-DirectGLES.client.log`：**121 B / 1 行 → 7461 B / 85 行**
-（DirectVulkan：121 B / 1 行 → 7386 B / 85 行），其中 `where=entry` 各 @GLES_ENTRY@ / @VK_ENTRY@ 行，
+（DirectVulkan：121 B / 1 行 → 7386 B / 85 行），其中 `where=entry` 各 1 / 1 行（summary 的 4 / 3 = client 入口比对 1 行 + server 读臂 3 / 2 行，计数器是进程级的），
 summary 行仍在、且现在在文件**末尾**而不是独占一文件。
 
 **B（G5）** `MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters` 打
