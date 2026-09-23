@@ -45,6 +45,10 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 | 25 | 修正轮 2 | `retrace_pull_library_control.sh`：接受 P6 日志改名后 pull 库实际得到的那句 FATAL（§4.5） |
 | 26 | 修正轮 2 | 注释：`WireDeclineTally.h` 引用了不存在的 `MGL_WIRE_DECLINE_FALSE`；`.def` 横幅说 wire 臂而非 draw |
 | 27 | 本文（修正轮 2） | — |
+| 28 | 修正轮 3（fable 对修正轮 2 的复审，land with fixes） | 审计：块走查只对整行的 `#if MOBILEGL_BUILD_DISAGGREGATED` 这一种守卫 fail-open（`#if 0` / `#ifdef X` 之下的日志不算站点的日志）；任何缩进的 `#else`/`#elif` 都是停点（§1.5） |
+| 29 | 修正轮 3 | `run_trace_case.cmake`：并入的服务端日志 FATAL 也报 `MOBILEGL_IPC_CONTROL`，tcp 臂的红仍说 tcp（§4.1） |
+| 30 | 修正轮 3 | `retrace_pull_library_control.sh`：`EVIDENCE` 里的空 `grep -F` 模式即 `::error::`；`stub_ctest.sh` 恢复可执行位（§4.5） |
+| 31 | 本文（修正轮 3） | §7.2 B4 那句给出包树/落地树两套行号；§7.2 两条债（tcp pid 证明检查的次序、`LOG_WINDOW` 数被跳过的行）；§5 本轮的门 |
 
 ---
 
@@ -140,6 +144,24 @@ OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS s
   | count under its log across a column-0 #if/#endif | rc 0 | rc 1 **误红** | rc 0 |
 
   14/14，树上仍是 **53 / 53 / 0**（树上今天没有带前缀的字符字面量，也没有跨 `#if` 的裸 `Count`，所以两处误红没有真的红过）。
+  **修正轮 3（fable 对修正轮 2 的复审）**：又两个洞，都在块走查对预处理行的处理上。跨过 `#endif` 是**不看守卫**的：
+  `#if 0` / `MGLOG_W(...)` / `#endif` / `Count(...)` 读成有日志（rc 0），`#ifdef MOBILEGL_VERBOSE_DECLINES` 包着的日志也一样
+  ——计数每次动、日志在任何发布构建里都不打；`#else`/`#elif` 只在第 0 列是停点（作为「缩进更浅的行」），
+  缩进到 `Count` 缩进上的 `#else` 直接穿过去。现在：走查**数**它跨过的 `#endif`，同缩进的日志若站在一个未闭合的
+  `#endif` 之下，只有当**继续向上**找到的每一个包着它的开启行都是整行的 `#if MOBILEGL_BUILD_DISAGGREGATED`
+  （`&& X` 也不算）才算数——那是本 tally 所在的构建，也是走查**唯一** fail-open 的守卫（注释写明）；
+  没有未闭合 `#endif` 的 `#if`/`#ifdef`/`#ifndef` 是 `Count` 自己的守卫（上方的日志无条件），照旧跨过，
+  所以「跨第 0 列 `#if/#endif`」那个夹具仍绿；`#else`/`#elif` 在**任何**缩进都在缩进判断之前就停。夹具 14 → **16**：
+
+  | 夹具 | 期望 | 旧审计（`32edcc46`） | 新审计 |
+  |---|---|---|---|
+  | log only under a #if 0 above the Count | rc 1 | rc 0 **误绿** | rc 1 |
+  | log only on the other side of an INDENTED #else at the Count's indentation | rc 1 | rc 0 **误绿** | rc 1 |
+
+  16/16，树上仍是 **53 / 53 / 0**（树上没有裸 `Count` 站在别的守卫之下的日志后面）。没有做成夹具但跑过的形状
+  （`~/w7/b3bin/r3/f3/probe_shapes.py`，8/8）：日志在 `#if MOBILEGL_BUILD_DISAGGREGATED` 下、`Count` 在外 → 绿（fail-open 的那一种）；
+  日志与 `Count` 之间夹一个闭合的 `#if FOO … #endif` 组 → 绿；日志在守卫开启行的 `#else` 一侧、守卫嵌在 `#if VERBOSE` 里、
+  `#if MOBILEGL_BUILD_DISAGGREGATED && !defined(X)` → 红。`LOG_WINDOW` 数被跳过的行的债见 §7.2。
 
 | 审计 | 行 | 有站点 | 未记日志 | rc |
 |---|---|---|---|---|
@@ -413,6 +435,14 @@ inproc 是 `mgl-srv-apply` 线程的行按线程角色路由到同一个 `.serve
 不毁日志时 OpenRA DirectVulkan **与 DirectGLES** 的 SPLIT / SPAWN 四条全绿（ssim 1.000000 / 0 px / `MGWIRE-FLOOR` 0 行；
 inproc 的服务端日志 DirectVulkan 536 行、DirectGLES 987 行）。
 
+**修正轮 3（nit）：并入的那条 FATAL 也报 `MOBILEGL_IPC_CONTROL`。** 修正轮 2 把 tcp 臂的「TCP session has no forwarded
+server log」并进了上面这条对所有 transport 的检查，消息里只剩 `MOBILEGL_TRANSPORT=…`——而 tcp 臂就是
+`MOBILEGL_TRANSPORT=spawn` 加 `MOBILEGL_IPC_CONTROL=tcp://…`，所以 tcp 臂丢了夹具转发的服务端日志时，读起来和普通 spawn 一样。
+消息现在在 transport 之后带 `MOBILEGL_IPC_CONTROL='…'`（inproc 与普通 spawn 为空）；只改消息，检查没有动。
+演示 1（inproc，删服务端日志）在新 runner 上重跑：rc 1，
+`OpenRA DirectVulkan: MOBILEGL_TRANSPORT=inproc MOBILEGL_IPC_CONTROL='' but the run wrote no …/mobilegl.server.log, …`（`:388`）。
+tcp 臂本轮没有跑（要起 `tcp_server_fixture.py`；消息只是 `$ENV{}` 的展开）。
+
 **图是金的、用例是红的**——这正是这条门要的：它红在「地板断言了一次没等过的完成」，
 不管这台驱动的时序有没有把它变成像素。
 
@@ -518,6 +548,13 @@ CMake Error at run_trace_case.cmake:270 (message):
 (ctest exit 8): 1 selected case(s) named the transport, not the picture」。CI 上这一步自改名以来的读数本包看不到，
 只能说：按同一份代码它每次都会 rc 1。
 
+**修正轮 3（nit）**：`EVIDENCE` 的每一行都是一个 `grep -F` 模式，而**空行是匹配一切的模式**——赋值时多一个尾随换行、
+或两句之间空一行，第二道门就退化成「任何红都行」；smoke 的「red without the transport-resolution message」会抓到（22/23），
+但那是有人跑它的时候。现在赋值之后紧跟一个 `case`：`EVIDENCE` 含空行、或以换行开头/结尾，即 `::error::` 并 rc 1，
+在计数选择、换库之前。红检扰动的那一行（`grep -qF "${EVIDENCE}"`）不动；smoke 仍 **23/23**、红检 rc 0。
+顺带：`stub_ctest.sh` 在修正轮 2 加 `retrace-evidence-nolog` 的那个提交里从 100755 变成了 100644（Windows 挂载的痕迹），
+`git update-index --chmod=+x` 恢复；smoke 拷贝后自己 `chmod +x`，所以没有任何东西跑得不一样。
+
 ---
 
 ## 5. 门
@@ -579,6 +616,13 @@ census rc 0 **79**；audit `--self-test` **14/14** rc 0、树上 **53 / 53 / 0**
 `unit` **2420/2420**、`integration-magma-split` **90/90**、`integration-magma-spawn` **69/69**；
 OpenRA DirectVulkan SPLIT / SPAWN PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行（DirectGLES 两臂同，§4.1）；
 §4.1 的四个 fail-closed 演示与 §4.5 的 pull 库对照（inproc 与 spawn 各一次，rc 0）。
+
+**修正轮 3 的门——包树 `09cbdb41`（修正轮 3 最后一个代码提交），合并前**（`~/w7/b3bin/r3/f3/gate.log`）：
+本轮**没有产品文件改动**（`git diff 32edcc46..09cbdb41 -- MobileGL/` 为空），G1 不受影响——`build-linux` 重跑为 no-op，
+`.text` **`0xa52203`**、nm **0 / 0** 照旧；census rc 0 **79**；audit `--self-test` **16/16** rc 0、树上 **53 / 53 / 0** rc 0；
+`control_smoke_test.sh` **23/23** rc 0、`redcheck_control_smoke_test.sh` rc 0；OpenRA DirectVulkan SPLIT / SPAWN PASS、
+ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行（runner 只改了一条消息）；§4.1 的演示 1 在新 runner 上重跑（消息带 `MOBILEGL_IPC_CONTROL=''`）。
+车道没有重跑：无产品改动，也没有改到任何测试或 harness 文件。
 
 包树上外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
 PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。为跑这两条，本树 `build-split` 以
@@ -656,13 +700,22 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
   **修法归 B4**：`OnSubmitsCompletedUpTo` 之后只在 `IsFrameSerialComplete(serial)` 为真时返回，否则**从头重扫**
   ——`OnSubmitsCompletedUpTo` 会从正在迭代的 vector 里 erase，所以是 restart，不能 continue；
   与 §7.1 的聚合等待与上面的注释一起做。**修正轮 2 补给 B4 的一句**：`OnSubmitsCompletedUpTo(record.submitIndex)`
-  之后**不得再读 `record`**——`:13404` 的 range-for 拿的是 `m_inFlightSubmits` 元素的引用，而 `OnSubmitsCompletedUpTo`
-  正是从这个 vector 里 erase；要用的字段先拷出来（`RefreshCompletedSubmits` `:13471` 的
-  「Copy before OnSubmitsCompletedUpTo erases the front record」就是这条规则）。
+  之后**不得再读 `record`**——`WaitForFrameSerial` 的 range-for `for (const auto& record : m_inFlightSubmits)`
+  （包树 `:13404`，落地树 `:13533`）拿的是 `m_inFlightSubmits` 元素的引用，而 `OnSubmitsCompletedUpTo`
+  正是从这个 vector 里 erase；要用的字段先拷出来（`RefreshCompletedSubmits` 的
+  「Copy before OnSubmitsCompletedUpTo erases the front record」——包树 `:13471`，落地树 `:13600`——就是这条规则）。
 - **`run_trace_case.cmake` 的 census 排在 replay 退出码之后（修正轮 2 记债，本轮不动）**：`:172-174` 对非零
   `replay_result` 直接 `FATAL_ERROR`，两条 census（`Fatal{` 与 `MGWIRE-FLOOR`，修正轮 2 之后在 `:390` 与 `:416` 起）都在它之后——一次带 abort 的
   回放只留下退出码，日志里的 `Fatal{` 名字与地板计数不会被打印出来，读者得自己去翻两份日志。census 应当先于退出码判定
   读两份日志（存在则读）；与 §4.1 的 fail-closed 顺序一起改时要分清：「无服务端日志即 FATAL」是对**退出码为 0** 的回放说的。
+- **`run_trace_case.cmake` tcp 臂的「pid arm proof」检查仍排在 marker 检查之前（修正轮 3 记债，本轮不动）**：`:306-307` 对
+  `control=tcp data=stream server=… pid=…` 的检查在给 `split_expected_second` 赋值的分支里就 `FATAL_ERROR`，在 `:321` 的
+  marker 检查**之前**——和修正轮 2 刚给服务端日志 FATAL 改掉的是同一种误诊次序：一次从未 resolve 的 tcp 回放报的是
+  「TCP session has no endpoint and server pid arm proof」而不是「never reported resolving it」。低：CI 的 retrace-split
+  矩阵只跑 inproc 与 spawn，tcp 臂只在主机上跑；改法是把它挪到 `split_expected_second` 检查的位置。
+- **`wire_declines_audit.py` 的 `LOG_WINDOW` 把跳过的行也计入（修正轮 3 记债，不改）**：`has_own_log` 的 8 行窗口按源文件行数走，
+  空行与它跨过的 `#if`/`#endif` 都占名额——一条日志在 `Count` 上方第 8 行、中间隔两个空行，就被判成「8 行内没有日志」
+  （误红，fail-closed 方向）。树上今天没有这样的站点（53 / 53 / 0）；改法是只数非空、非预处理的行。
 - **disaggregated 构建的 monolith 臂现在比 pull 构建更可靠（复审 (a)）**：monolith 的
   `VkBufferResource` 路径 `OnSubData` 经 `IsResourceBusy`（`VkBufferManager.cpp:709`）读的是**同一个**
   `GetCompletedSerial()` 地板，所以 §3.1 的钳制在 disagg 构建里也保护了 monolith 臂的 mid-frame flush；
