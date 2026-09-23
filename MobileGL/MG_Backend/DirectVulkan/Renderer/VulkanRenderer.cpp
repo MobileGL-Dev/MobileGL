@@ -13584,7 +13584,7 @@ void main() {
 
         // A set cannot be rewritten while a recorded or submitted command
         // buffer might still read it. This wire-only boundary first submits
-        // the current recording, then waits for that exact submit index.
+        // the current recording, then idles the graphics queue before reuse.
         if (HasPendingRecordedWork() && !FlushPendingCommands())
             MagmaWireFatal("descriptor-rewind-flush");
         const Uint64 through = m_submitCounter;

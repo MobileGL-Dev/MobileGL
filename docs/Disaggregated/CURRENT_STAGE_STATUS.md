@@ -4,20 +4,20 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜（M2 r2 + V1 修复 r2 落地，ID-P7-46/47）** · 交接清单 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)；在跑 agent 的报告落到 WSL `~/w7/notes/handoff/`。`origin/feat/disaggregated` = 集成树头（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2 + **M2 r2**、F 修复轮、X2、**V1 修复 r2**；门全绿）；M2 审查的 must-fix（memo 句柄复用 ABA）**已由 M2 r2 关闭**（ID-P7-46）；V1 修复 r2 已落地（ID-P7-47）；窗口 1b 矩阵的中期读数与息屏假设见 ID-P7-48。
+**更新：2026-09-23（ID-P7-49/50）** · 当前交接 [`notes/p7/HANDOFF-2026-09-23.md`](notes/p7/HANDOFF-2026-09-23.md)。集成树已含 M3（pipe `9fd768d4`，门全绿，审查 land）；手机 p7w6 关闭 bsl-esc-menu 设备正确性项，DirectGLES TCP 38 例对照续跑中；门 3 终局与 CTS AFTER 未完成。B4 独立包树是草稿，未落地。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
 | # | 子系统 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 100 / 79 / 71，full-split 538（pipe，M2 之后；tcp 少 9 = 十条 server 端旋钮 / 计量 tail 的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（每个包的门都跑） |
+| 1 | Magma 两进程车道三臂同数绿 | ✅ | M3 集成树门：magma-split/spawn/tcp **102 / 81 / 71**，full-split **540**；OpenRA DirectVulkan inproc + spawn 回放 1.000000、0 unsound |
 | 2 | §3.2 六个 `@P7` 退役 | ✅ | A（byte-tail、native-range、对齐 decline）、B（copy-image、default-color-blit、mip 半退役）、B2（multisample shape/aspect）、C（vertex-layout 拆分）；树上 `@P7` 拒绝站点 **0** |
 | 3 | `StateObjectDeathOps` | ✅ | C，`dce9953d..cf7ca59f` |
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | ✅（修复 r2 在跑） | pipe 的 verify 构建：monolith verify **1148**、`integration-verify-split` **1082**（双后端 inproc，逐条武装普查 + 56 名具名例外表）全绿；`VERIFY_CORRUPT` 10/10 红、read 侧控制 server 半边红、`POISON_OMIT` server 半边红（split 臂）；8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；修复 r2 = read 侧断言 ≥ 2 行 + client 日志退出截断的既有缺陷 |
-| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄（M2 已到集成树，等 p7w6 真机） | p7w4：34/36 与 monolith 差 ≤ 0.0005；**OpenRA 已关**（ID-P7-33/34：真因 = wire 臂 frame-serial floor 不健全，B3 修；p7w5 **27/27 golden**，[`W5-verify/`](notes/p7/device-window-1/W5-verify/README.md)）；**bsl-esc-menu** = server 死 VkBuffer 无界累积（ID-P7-32，**M2** 在修）；终局形式（三遍逐位 + spawn 臂同会话）留 p7w6 |
+| 7 | verify × split（门 2） | ✅ | M3 后 verify 构建 unit 2436、integration-verify **1152**、integration-verify-split **1086**，全绿；负控与 8 verify trace 的既有证据见 V1/V1 r2 |
+| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu inproc/spawn 6/6，实际图像与 monolith SHA 完全相同（[`W6-verify/`](notes/p7/device-window-1/W6-verify/README.md)）；36 例三遍逐位及同会话对照待跑，M3 后设备回归需新 APK |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
 **40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → **173**（B2 重基线，余 88 = monolith draw 路径，wave 3）。
@@ -48,36 +48,28 @@
 | M2 | 孤儿 wire store 在 defer 路径回收 + `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + 1,024 计数上限 + `wbuf[]` 计量 + `MagmaWireReclaimScenario`；主机 bsl spawn server 825 → 546 MiB、映射 41k → 5.8k | pipe `b81a8827..7d131527`（门全绿 magma 100 / 79 / 71，审查 land with fixes，ID-P7-43）；**r2** = memo destroy-epoch，must-fix 关闭：pipe `4d207468..f62703e9` + parity `1ab62ece`（门全绿 magma 101 / 80 / 71，集成者审查 land，ID-P7-46） |
 | F 修复轮 | hand-off 端绑定后关 + `MSG_DONTWAIT`（多余 DataBind 具名拒绝）、listener 绑定后关、`sha256(protocol.fbs)` 钉到控制修订、定宽令牌比较、超额 Hello 记警、`MalformedHello`、文档更正 | pipe `0293aebb..9cea5140`（门全绿，集成者审查 land，ID-P7-44） |
 | B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门全绿，集成者审查 land，ID-P7-44） |
+| M3 | 长帧 descriptor set 游标按 queue-idle 证明回卷，2049 SSBO 窗口用例 split/spawn 绿且 red-once 红；包树与 pipe 完整门绿 | pipe `9fd768d4`（ID-P7-50，集成者审查 land） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
-- 当前 APK：**p7w5**（`p7w5-713bea9a`，B3+B2+D3 之上）。验收 = OpenRA inproc / spawn × run-ahead / lockstep × 冷 / 热各 3、FIF=8 ×3、dump-armed ×3 → **27/27 `ace2af04` / 1.000000 / 0 px**；iterationt ×2 + 26.3 逐位同 p7w4（ID-P7-34）。
-- p7w4 结论（[`W4-verify/README.md`](notes/p7/device-window-1/W4-verify/README.md)）：OpenRA 是与温度无关的约 50% 竞态、只出三张图；调色板纹理逐字节正确；错像素 100% 落在 call 30376 一次 draw 的 quad 前缀里；机制由裁判裁定并由 B3 计数证实。
-- bsl-esc-menu-854：monolith 807 MiB 过，spawn 的 server 1.2 GiB 死（scudo `internal map failure`）；M1 归因 = 死 VkBuffer 无界累积（一帧 1.3 M 调用、整跑 2 次 swap）；M2 修复中。
+- 当前 APK：**p7w6**，stamp `p7w6-0e16ca27`，已重装并重起 TCP supervisor；屏幕常亮设置 `stayon=15`。bsl-esc-menu DirectVulkan × pbuffer inproc/spawn 各三遍 **6/6**，PNG SHA 均与 E0a monolith 相同；OpenRA 的 p7w5 27/27 结论保留。p7w6 在 M3 落地前构建，后续设备回归需新 APK。
+- DirectGLES × TCP 窗口 1b 实际分母 38：p7w5 旧批次中断报告 [`window-1b-p7w5.md`](notes/p65/window-1b-p7w5.md)；p7w6 用 1900 s 外层上限续跑，日志 `~/w7/logs/p7w6-matrix-resume.log`。旧 p7w6 驱动的两次 900 s 截断是采集器上限，不能算产品红。
+- 门 3 终局 36 例三遍与同会话 spawn 尚待手机从 TCP 矩阵释放；CTS `$BASE` 已取，AFTER 尚待。
 
-## 4. 在跑（agent；实现方 `claude-opus-5-5`，审查方 fable）
+## 4. 在跑
 
-| 包 | 内容 | 状态 |
-|---|---|---|
-| B2 r3 审查（fable） | transport 门控的真值域、默认 framebuffer pre-pass 的解析、新腿的读面 | 完成：land with fixes → B2 r4 已落地（ID-P7-44） |
-| B3 修复 r2 审查（fable） | 剥注释 / 字面量的边界、块回溯规则、自测覆盖、fail-closed 顺序、pull-library 控制 | 完成：land with fixes → B3 r3 已落地（ID-P7-44） |
-| V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 完成：land with fixes → V1 修复 r2 已落地（ID-P7-47） |
-| M2 r2（fable） | **must-fix**：`m_wireStoreDestroyEpoch` 进 `UniformManager` 两个 memo（§9 例外已批）+ red-once；note SHA、`ASSERT_GE`、注释、`lastUseSubmitIndex` 清零、清洗名单 | **已落地**，集成者审查 land（ID-P7-46） |
-| V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | **已落地**，集成者审查 land（ID-P7-47） |
-| X2（fable） | `InitialCapsStartup.ANullInitialSnapshot…` 在负载下的 flake：复现、测试 vs 产品判定、修复 + 500 次循环 | **已落地**（test-only；真因 = 夹具按 accept 顺序配对，ID-P7-45） |
-| 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中（44 / 78）；pass 1 27/39 红，11 例聚在 57–61 s 处对端挂断——手机息屏 60 s 的假设，见 ID-P7-48 |
+| 工作 | 状态 |
+|---|---|
+| p7w6 DirectGLES TCP 38 例对照 | `~/w7/logs/p7w6-matrix-resume.sh` 以 setsid/nohup 续跑，进度 `~/w7/logs/p7w6-matrix-resume.log`；手机服务不可在此期间 force-stop |
+| B4 | `~/w7/p7-b4` 独立草稿：聚合等待、长帧 texture prune、AdoptRun extent 修复；目标 Magma 车道与 G1 绿，仍缺聚合等待负控 / 全门 / 复审 |
 
-## 5. 下一步（按序；机械步骤与命令见 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)）
+## 5. 下一步
 
-1. ~~推送~~ 已推；~~四个修复轮（B2 r3、B3 修复 r2、V1 修复、F 修复）回来 → 各自门 + 复审 → 下一次推送~~ 已落地并推送（ID-P7-44/45/46）；V1 修复 r2 已落地并推送（ID-P7-47）。
-2. **F2**：D11 五处 + PH-2、PH-6 drop-with-latch、PH-1 (3)(4)、PH-7 (5) fork 前认证——先要一个能向 spawn / TCP server 发畸形记录的对端字节驱动（fuzz 臂 2 的第一块）。
-3. ~~M2 门 + 审查绿 → 推送~~ 已推（M2 + r2，ID-P7-46）→ p7w6 APK（**含 F 的 wireFingerprint 变更：手机 server 必须重部署**）→ bsl-esc-menu spawn 臂通过（并重跑窗口 1b 作 `DataBind` 对照）→ **M3**（descriptor set 在长帧内无界，M2 的新发现） → 门 3 分母 36 全部与 monolith 同（三遍逐位相同 + spawn 臂，§7.2）。
-4. **B4**：裁判的 `WaitForSubmitsUpTo` 聚合等待（`Present:14094` / `WaitForSubmitIndex` / `WaitForFrameSerial`）+ 裁判点名的 Magma 债（§12）。
-5. wave 3 余项：棘轮 88 的 monolith draw 路径 `#if`。~~§7.2 同名重跑、Iris trace 普查~~ **已做（包 E1，主机 lavapipe，基 3c80cd62 = 现 `3c80cd62`）**：Iris 普查 77 行 × {monolith, inproc, spawn} 231 次全活，split 与 monolith 逐字节相同 70 / 77 行（7 行分歧 = Magma monolith draw 路径 vs wire 路径的差异或运行噪声，均在阈值内），P9 例外表为空——`texture-remint-pull` 在头上从未到达（[`notes/p7/iris-census-3c80cd62.md`](notes/p7/iris-census-3c80cd62.md)）；27 个 P5 wrong-answer 同名 24 绿 / 3 具名停止（`PIPE_PUSH=0` 控制臂）/ 0 错答（`MEASUREMENTS.md` §7.2 末）。
-6. wave 4：CTS AFTER（inproc × DV 五块 vs `$BASE`，≤ 0.5 pp，新增 crash = 0）、门 3 终局三遍。
-7. wave 5：F 余片、fuzz 三臂、P7 收官异模型整体审查（ID-66）。
+1. 完成 p7w6 TCP 38 例对照并逐例结案；重跑前两例被错误外层截断的长 trace，ID / §7 记录 DataBind 与息屏结论。
+2. 完成门 3：36 例 DirectVulkan × pbuffer × inproc/spawn 三遍逐位、与同会话 monolith 差 ≤0.0005；设备 M3 回归用新 APK。补一次启用 PipeStats 的 bsl 映射峰值与 `wbuf[]`。
+3. B4 补聚合等待负控、完整门与集成者复审；F2 字节驱动、D11/PH-2/PH-6/PH-1/PH-7；wave 3 棘轮 88；wave 4 CTS AFTER；wave 5 fuzz 三臂与整体审查。
 
 ## 6. 阻塞 / 需要人
 
-- ~~P6.5 残余 39 例 TCP 矩阵（窗口 1b）等 WSL 主机路由~~ **用户已加路由（2026-09-22 夜）**，矩阵在跑（p7w5 stamp 的主机制品 `~/w7/logs/p7w5host/host/` ↔ 手机 p7w5 server，ID-P7-40）。
-- 待修 flake：`InitialCapsStartup.ANullInitialSnapshotFailsInsteadOfStartingWithAPlaceholder` 在并发构建负载下的 pipe 门里连续两次红、单跑 3/3 绿（同族 `DelayedTcpSnapshot…` 曾有同样记录）。
+- 手机需保持 adb、WSL 路由、前台 Service 与 `stayon=15` 直到 p7w6 TCP 矩阵完成；续跑脚本已脱离当前命令会话。当前无需要用户决策的阻塞。
+- X2 已关闭 `InitialCapsStartup` 的测试夹具乱序 flake；不再列为待修。
