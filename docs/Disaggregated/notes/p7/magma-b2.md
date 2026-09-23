@@ -12,7 +12,10 @@
 >
 > 基线门读数（本树实测，非引自包 B）：`integration-magma-split` **88**、`-spawn` **67**、
 > `-tcp` **69**、`integration-magma-full-split` **521**、`ctest -L unit` **2420**，全绿。
-> （包 B 的报告写的是 84 / 63 / 65；差的四条是包 A 在它之后落地的。）
+> 包 B 的报告写的是 84 / 63 / 65，差的四条**不是**「包 A 在它之后落地」——那句是错的，
+> 审查round 已更正：包 A 在 B **之前**落地（`5a14e5a1..2f48ccf4` 在 `c5fa52f9` 之前）且只有 +2
+> （`magma-a.md:151-153`），另外 +2 是包 C（`magma-c.md:59-61`）。本树的基线因此是
+> 73 + 11（B）+ 2（A）+ 2（C）= **88 / 67 / 69**。
 
 ## 0. 每片一条提交，每片至少一次 red-once
 
@@ -127,14 +130,15 @@ Vulkan 里不用 shader 把深度或模板 aspect resolve 下来的**唯一**办
 aspect 都读回、并检查只做深度的 resolve 没动目的地的模板、反之亦然），而且**本来就在三条 Magma 臂
 的信息档（`…Full.`）里跑**。缺的只是一条 gating 条目。
 
-每臂两条（`MsResolve0.` / `MsResolve1.`），第二条是它那条臂在此唯一可达的方式：lavapipe 两个 resolve
-扩展都有，扩展臂会接下本机的每一次 resolve。`MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE` 丢掉扩展臂。
+`MsResolve0.` 在三臂都注册；`MsResolve1.` **只在 split 和 spawn**（审查 round 的修正，见 §2.7）。
+第二条是那条臂在此唯一可达的方式：lavapipe 两个 resolve 扩展都有，扩展臂会接下本机的每一次
+resolve。`MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE` 丢掉扩展臂。
 **它在本机不 skip**：lavapipe 也带 `VK_EXT_shader_stencil_export`，所以 shader 臂深度和模板都走通了。
 新增的 F1 用例是那条 decline。
 
 > 集成者交代里写的「可能在 lavapipe 上 SKIP（分离的 D24/S8 不支持）」本树**没有发生**：
 > 提拔的这条用例用的是**合并**的 `DEPTH24_STENCIL8`，分离 D24/S8 是同一文件里另一条用例
-> （`SeparateDepthAndStencilAttachmentsAreBothReadable`）的事，没有提拔。三臂 6/6 绿。
+> （`SeparateDepthAndStencilAttachmentsAreBothReadable`）的事，没有提拔。
 
 `MOBILEGL_BAKED_INTERNAL_SHADERS` 的表从 8 行涨到 **11 行**。
 
@@ -158,10 +162,85 @@ aspect 都读回、并检查只做深度的 resolve 没动目的地的模板、�
 `bake_internal_shaders.py --check` 五个头全新鲜；`fatal_census` 79 / 44 / 0；
 `link_ratchet --assert-monotone` 186 不变；G1 `.text` `0xa52203`、符号表逐行相同。
 
+> 上面这三个 `+3` 是**片 2 落地当天**的读数，那时 `MsResolve1.` 还注册在 tcp 上。审查 round
+> 把它从 tcp 摘掉了（§2.7），tcp 的最终读数在 §7。
+
 ### 2.6 欠设备核对
 
 shader resolve 臂正是**手机**在没有 `VK_KHR_depth_stencil_resolve` 时会走的那条，而本机只能经旋钮
 到达它。它的几何要在 Redmi 上看一眼。
+
+### 2.7 审查 round：一个 server 端旋钮**没有** tcp 臂
+
+`MGITEST_MAGMA_FORCE_*` 三个旋钮都由 **server** 读（`WireFramebuffer.inc` 的三个 `std::getenv`
+跑在 apply 线程上），而 ctest 的 `ENVIRONMENT` 属性只到达 ctest 启动的那个进程，也就是 **client**。
+三条臂的 server 来处不同：
+
+| 臂 | server 从哪来 | 旋钮到得了吗 |
+|---|---|---|
+| inproc | 同进程的一个线程 | 到 |
+| spawn | `ServerSpawn.cpp:106` 把 `::environ` 复制进子进程 | 到 |
+| tcp | **车道级** `TcpServer.Start` fixture，由 `scripts/ci/tcp_server_fixture.py` 用**它自己的** `os.environ` 在任何用例之前启动一次，每个 Hello fork 一个会话子进程 | **到不了** |
+
+所以一条 tcp 的旋钮条目跑的是**默认**臂，名字却宣称不是——对 ShaderMip 而言，这正是那条用例自己的
+skip 文案说不许发生的事（「would assert the native blit twice over」）。
+
+**实测，不是推导**：在三个 reader 里各放一个临时 fatal，五条 knob=1 条目在 split **全死**、在
+spawn **全死**、在 tcp **五条全绿**；五条 knob=0 的孪生条目三臂全绿。
+
+修法用的是 ID-P7-14 `MAGMA_INPROC_ONLY` 的先例：`scripts/ci/spawn_lane_parity.py` 新增
+`MAGMA_SERVER_ENV_KNOB_NO_TCP`，并给 `compare_arms` 加一个 `no_tcp=` 参数。它和 `inproc_only=`
+**不是**同一个形状，这一点是承重的：`inproc_only` 把键从**每一条**非 split 臂的比较里拿掉，而这五条
+必须在 spawn 上**仍然被要求**——spawn 才是它们干活最多的地方。受影响的五条是
+`.ShaderMip1.` `.ShaderMip2.` `.DepthMip.` `.DefaultBlitShape1.` `.MsResolve1.`；knob=0 的
+`.DefaultBlitShape0.` / `.MsResolve0.` 留在三臂，因为零就是默认值，那两条在三臂含义相同。
+
+其中三条（`ShaderMip1/2`、`DepthMip`、`DefaultBlitShape1`）是**包 B 既有的**同种空转，一并修。
+
+**这是一笔债而不是一个结论**：要让 tcp 车道也能带这些条目，fixture 得接受**每用例的 server 环境**
+——那是一个 supervisor 控制项，不是一个 ctest 属性。记在 §6。
+
+### 2.8 审查 round：翻转和缩放的深/模板 resolve 不再带走会话
+
+`ResolveWireDepthStencil` 的区域判据要求 `sx1 > sx0` 且 `sy1 > sy0`，否则
+`Magma:multisample-depth-resolve-region` 带走会话。于是
+
+```
+glBlitFramebuffer(0, h, w, 0,  0, 0, w, h,  GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+```
+
+从一个多重采样 framebuffer 出发时，**颜色 blit 正确完成**（颜色臂自 P5f 起就会翻转，本包又给了它
+缩放），**然后死在深度上**。GL 4.6 core 18.3.1 要求的是**尺寸**相同而不是角点相同（Mesa 比的是
+`abs()`），所以翻转是一次合法的 blit，欠一张镜像的图。
+
+拆成三块：
+
+1. **缩放** → 规则 I (a) 具名 decline。18.3.1 说尺寸不同就是 `INVALID_OPERATION`，没有「正确结果」。
+2. **Y 翻转、同格式** → **退役**：copy-out 那一步本来就是「image → buffer → image」，而 buffer copy
+   是按**行**寻址的，所以每行一个 `VkBufferImageCopy`、倒着走，就是一次垂直镜像。`bufferRowLength`
+   / `bufferImageHeight` 保持 0：每个 region 正好描述一行，默认的「紧贴 imageExtent」就是要的。
+3. **X 翻转**，以及**跨格式的 Y 翻转** → 具名 decline。横向镜像要一个 region 一个 **texel**，那已经
+   不是 copy 了；跨格式重编码走 `BlitDepthAcrossFormats`（与 monolith 臂共用），它也没有翻转。
+   两条都进 §6。
+
+span 从此是**有符号**的，下游一律用 min 角（`sxMin/syMin/dxMin/dyMin`），render pass 的 renderArea、
+shader 臂的 scissor、buffer copy 的 imageOffset、`BlitDepthAcrossFormats` 的四个角全部跟着改。
+
+**场景**：`DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines`，
+三臂各一条，前缀 `MsFlip.`，**不需要旋钮**（两种形状都在能力问题之前由矩形决定）。
+**颜色和深度在同一次调用里**，因为那正是让这件事显形的形状；两条带子深度不等（下 0.25 / 上 0.75），
+并且颜色也断言了同一个方向——一次「假翻转」（比如只是把读回顺序倒过来）会让颜色和深度不一致。
+
+**red-once（R-16，三条，均已执行并还原，split + spawn 各一遍；审查 round 的第二个会话又亲手各跑了一遍）**：
+
+1. 把旧判据放回去（`spanX <= 0 || spanY <= 0 || spanX != dstSpanX || spanY != dstSpanY` → Fatal）
+   → 两臂都死于 `Fatal{UnmigratedVerb, "Magma:multisample-depth-resolve-region"}`；
+2. 只把**缩放**那条 decline 换回旧 Fatal（翻转路径不动）→ 翻转那一半通过，两臂都在缩放那一步死于
+   同一个名字——证明缩放 decline 是承重的，而不是被翻转那条红顺带盖住；
+3. 把 copy-out 的 `if (!mirrorY)` 改成恒真（即拿掉逐行倒序，其余一律不动）→ 两臂都**活着**但深度
+   带子上下颠倒：`flipped resolve: the destination's bottom band: 768 of 768 depth values differ
+   from 0.75; first bad value 0.25`（顶带反之）。这一条才是对**新代码**的断言——它证明那张镜像的图
+   是逐行倒序产生的，不是别处的副作用。
 
 ---
 
@@ -315,3 +394,49 @@ monolith 臂在 **Android 的 disaggregated 包**里现在跑的是烘焙 blit�
 3. **片 4**：`ROTATE_90/180/270` 下 monolith 臂的烘焙 blit 几何（§4.5）。
 4. 包 B 遗留、本包未碰：非恒等旋转下的 `default-color-blit-shape` scratch 臂，以及
    OpenRA 三次 `pm clear` 冷跑的 1.0 验收。
+
+---
+
+## 6. 记录债（写给 CONTRACT-P7 §12 的几行）
+
+1. **缩放后的第二段没有裁剪**（`WireFramebuffer.inc:856-870`）。多重采样颜色 resolve 的第二段
+   `vkCmdBlitImage` 把目的矩形原样交给驱动；一个越出目的图像的矩形是
+   `VUID-vkCmdBlitImage-dstOffset-00248/00249`，不是一张被裁过的图。**这条与 monolith 臂共有**
+   （`VulkanRenderer.cpp:10061` 的 blit 臂同样不裁），所以它不是分离缺陷，也不该由本包单独改；
+   两条臂一起裁是一件独立的活。
+2. **`MagmaWireFatal("multisample-resolve-region")`**（`WireFramebuffer.inc:802`）仍然对
+   **源矩形越出读缓冲**的 blit 带走会话。GL 对这种形状的承诺是「那些像素的值未定义」，不是一个
+   错误——所以正确的收口是 decline 或钳制，不是 Fatal。本包没有改它，因为它不带 `@P7`、也不是
+   §3.2 点名的行；记在这里。
+3. **1 → N 的等矩形 decline**（`WireFramebuffer.inc:1019-1049`）拒绝的是一个**合法**形状：
+   18.3.1 说单采样源写进多重采样目的地是**样本复制**。本包 decline 它，是因为 Vulkan 没有命令能
+   表达它，而 monolith 臂对同一形状的「可观测」是一次 VU 违规（`vkCmdBlitImage` 的两侧都必须是
+   单采样）——即没有一个正确的对照读数可抄。要真的实现它需要一条以目的地采样数建管线的 draw，
+   也就是 resolve 机器反过来再写一遍。
+4. **tcp 车道带不了 server 端测试旋钮**（§2.7）。五条 knob 条目因此只注册在 split + spawn，并在
+   `spawn_lane_parity.py` 里具名。要收回这条，`tcp_server_fixture.py` 得接受每用例的 server
+   环境——一个 supervisor 控制项。
+5. **X 镜像与跨格式 Y 镜像的深/模板 resolve**（§2.8）decline。前者要逐 texel 的 region，后者要
+   `BlitDepthAcrossFormats`（与 monolith 共用）长出翻转。两者都不是一个片的体量。
+
+---
+
+## 7. 审查 round 的门（ID-P7-31 三条修正落地之后）
+
+在 `5d896170`（§2.7 与 §2.8 两条代码提交之上；本节所在的提交只动文档与棘轮基线的头注释）实测：
+
+| 门 | 读数 |
+|---|---|
+| `integration-magma-split` | **94**（93 + `MsFlip.`），全绿 |
+| `integration-magma-spawn` | **73**（72 + `MsFlip.`），全绿 |
+| `integration-magma-tcp` | **70**（74 − 5 条 server 端旋钮条目 + `MsFlip.`），全绿 |
+| `integration-magma-full-split` | **525**（524 + 新场景），全绿 |
+| `ctest -L unit` | **2423**，全绿 |
+| `spawn_lane_parity.py build-split` | RC 0；gated 档点名 5 条 `MAGMA_SERVER_ENV_KNOB_NO_TCP` 条目 |
+| `fatal_census` | 79 / 44 / 0，RC 0 |
+| `link_ratchet --assert-monotone` | 173 不变，RC 0 |
+| G1 pull 构建 | RC 0，`.text` `0xa52203`，`nm --defined-only` 与 `~/w7/p7-before/pull-syms.txt` 0 增 0 减 |
+| `@P7` | 19 行，全是注释 |
+
+`scripts/data/link_ratchet_baseline.txt` 的 `base commit` 头注释改指 `6af422b3`——173 是在那棵树上量出来的，
+不是在 `4bee1313` 上。

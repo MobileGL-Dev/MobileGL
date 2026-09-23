@@ -2,7 +2,7 @@
 # Regenerate: python3 scripts/link_ratchet.py --build-dir <dir> \
 #               --baseline scripts/data/link_ratchet_baseline.txt \
 #               --write-baseline scripts/data/link_ratchet_baseline.txt
-# base commit : 4bee13136585c1333823796500ed12a86b991e61
+# base commit : 6af422b3e85a7d24bcfc32473bd8a0f99afaa3cd
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_PIPE_PUSH=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : build-split
 # count       : 173
