@@ -3005,7 +3005,43 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # the shared Fm environment would silently retarget GenerateMipmapPixels,
         # GenerateMipmapPackedFloatPixels, GenerateMipmapDepthPixels and the two base/view cases
         # as well - four green entries that would stop measuring the arm they were written for.
+        # ---- P7 wave 2-B2: A SERVER-SIDE KNOB HAS NO TCP ARM, AND THAT IS STRUCTURAL ---------
+        #
+        # Every MGITEST_MAGMA_FORCE_* knob in this block is read BY THE SERVER
+        # (WireFramebuffer.inc's three `std::getenv` readers run on the apply thread). A ctest
+        # ENVIRONMENT property reaches the process ctest starts - the CLIENT - and the two arms
+        # differ in where the server comes from:
+        #   inproc  the server is a thread of that same process, so it sees the knob;
+        #   spawn   ServerSpawn.cpp copies ::environ into the child, so it sees the knob;
+        #   tcp     the server is the LANE-WIDE TcpServer.Start fixture, started once from the
+        #           fixture's own os.environ (scripts/ci/tcp_server_fixture.py) long before any
+        #           case runs, and it forks a session child per Hello. Nothing a per-test
+        #           ENVIRONMENT says can reach it.
+        #
+        # So a tcp copy of a knob entry does not exercise the arm it names - it runs the
+        # DEFAULT arm under a name that claims otherwise, which for ShaderMip is precisely what
+        # that case's own skip message says must not happen ("this case would assert the native
+        # blit twice over"). MEASURED, not deduced: a temporary fatal in each of the three
+        # readers killed all five knob=1 entries on split and on spawn and left ALL FIVE GREEN
+        # on tcp.
+        #
+        # Registering them on split+spawn only is therefore a coverage statement, not a gap, and
+        # it is NAMED in scripts/ci/spawn_lane_parity.py (MAGMA_SERVER_ENV_KNOB_NO_TCP) the way
+        # MAGMA_INPROC_ONLY and MONOLITH_ONLY are, so the parity gate keeps its teeth for
+        # everything else. The knob=0 twins (DefaultBlitShape0, MsResolve0) DO stay on tcp: zero
+        # is the default, so those entries mean the same thing on all three arms.
+        #
+        # Making the tcp lane able to carry these would need the fixture to take a per-case
+        # server environment - a supervisor control, not a ctest property - and that is a debt,
+        # recorded in notes/p7/magma-b2.md §6.
+        set(mglItestServerEnvKnobArm TRUE)
+        if(mglItestArm STREQUAL "Tcp")
+            set(mglItestServerEnvKnobArm FALSE)
+        endif()
         foreach(shaderMipTier 1 2)
+            if(NOT mglItestServerEnvKnobArm)
+                continue()
+            endif()
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMip${shaderMipTier}."
                 TEST_FILTER "F1WireScenario.GenerateMipmapWithoutNativeBlitPixels"
@@ -3017,7 +3053,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # The DEPTH half of the same knob (CONTRACT-P7 §5.1 (A)). ONE TIER, not two: the depth
         # pass renders into a depth ATTACHMENT view of the destination level, which a depth
         # image always has usage for - there is no "cannot be attached" shape to force, so
-        # tier 2 would register a second copy of tier 1's run.
+        # tier 2 would register a second copy of tier 1's run. Split+spawn only, for the
+        # server-side-knob reason above.
+        if(mglItestServerEnvKnobArm)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.${mglItestArm}.DepthMip."
             TEST_FILTER "F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels"
@@ -3025,6 +3063,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ${mglItestArmProperties}
                 ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-depthmip${mglItestArmLogTag}.log")
+        endif()
         # NO KNOB on the decline: it is decided on the aspect before the blit-support question
         # is asked, so the plain Fm environment reaches it on every driver.
         gtest_discover_tests(MobileGLIntegrationTest
@@ -3098,7 +3137,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # VK_SURFACE_TRANSFORM_IDENTITY, so the scratch path that exists FOR rotation would
         # never run. Forced onto an identity surface it must produce the SAME pixels as the
         # fall-through, which is what the shared assertions check.
+        # The knob=1 copy is split+spawn only (the server-side-knob note above); knob=0 is the
+        # default and means the same thing on all three arms, so it keeps its tcp entry.
         foreach(defaultBlitScratch 0 1)
+            if(defaultBlitScratch AND NOT mglItestServerEnvKnobArm)
+                continue()
+            endif()
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.DefaultBlitShape${defaultBlitScratch}."
                 TEST_FILTER "F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades"
@@ -3149,6 +3193,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # ITS OWN ENTRIES RATHER THAN A LANE-WIDE FLIP, the shader-mip block's reason: the knob
         # changes how EVERY depth/stencil resolve in the process is performed.
         foreach(shaderDepthResolve 0 1)
+            # Same split+spawn restriction, same reason, same parity exception: the knob is read
+            # on the server and the tcp server is the lane fixture. MsResolve0 stays everywhere.
+            if(shaderDepthResolve AND NOT mglItestServerEnvKnobArm)
+                continue()
+            endif()
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolve${shaderDepthResolve}."
                 TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"

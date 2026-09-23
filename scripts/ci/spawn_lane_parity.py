@@ -57,6 +57,24 @@ FIXTURE_ENTRIES = {"TcpServer.Start", "TcpServer.Stop"}
 # until they do, naming the two scenarios here keeps the tolerance from widening for anything else.
 MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 
+# P7 wave 2-B2: THE SANCTIONED ASYMMETRY THAT IS NOT INPROC-ONLY - these exist on split AND
+# spawn and cannot exist on tcp. Every MGITEST_MAGMA_FORCE_* knob is read BY THE SERVER
+# (WireFramebuffer.inc's getenv readers run on the apply thread), and a ctest ENVIRONMENT
+# property only reaches the process ctest starts, the CLIENT. Under inproc the server is a
+# thread of that process and under spawn ServerSpawn.cpp copies ::environ into the child, so
+# both see it; under tcp the server is the LANE-WIDE TcpServer.Start fixture, started once from
+# the fixture's own os.environ before any case runs, so nothing a per-test property says can
+# reach it. A tcp copy would run the DEFAULT arm under a name claiming otherwise.
+#
+# MEASURED (a temporary fatal in each of the three readers): all five knob=1 entries died on
+# split and on spawn and ALL FIVE PASSED on tcp.
+#
+# These are TAILS, not scenarios - the normaliser above keeps the sub-lane tail for the Magma
+# tier on purpose, so `.MsResolve1.` names the knob entry and `.MsResolve0.` (the default, which
+# does keep its tcp entry) is untouched.
+MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
+                                ".DefaultBlitShape1.", ".MsResolve1.")
+
 
 def lane_names(build_dir, label):
     """Every ctest entry name under an ANCHORED label (`ctest -L` is a regex, not a name)."""
@@ -75,8 +93,14 @@ def lane_cases(build_dir, label):
     return {m.group(1) for m in CASE.finditer(out)}
 
 
-def compare_arms(build_dir, tier, labels, inproc_only=()):
+def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
     """The three arms of one tier must name the same set after the arm segment comes off.
+
+    `inproc_only` drops a key from the comparison for EVERY non-split arm; `no_tcp` drops it for
+    the tcp arm alone, which is a different shape and needs to be: a server-side test knob does
+    reach a spawned server and does not reach the tcp lane's shared fixture, so the entry is
+    required on spawn and forbidden on tcp. Folding it into `inproc_only` would stop requiring
+    it on spawn, which is where it does most of its work.
 
     Returns True on failure, the way main() below counts them."""
     sets = {}
@@ -100,10 +124,19 @@ def compare_arms(build_dir, tier, labels, inproc_only=()):
     if len(comparable) != len(sets[reference]):
         print(f"{tier}: {len(sets[reference]) - len(comparable)} inproc-only entrie(s) excluded "
               f"from the comparison by name ({', '.join(inproc_only)})")
+    if no_tcp:
+        dropped = {k for k in comparable if any(only in k for only in no_tcp)}
+        if dropped:
+            print(f"{tier}: {len(dropped)} server-env-knob entrie(s) excluded from the TCP "
+                  f"comparison only ({', '.join(no_tcp)}) - the knob is read on the server and "
+                  f"the tcp server is the lane fixture, not a per-case process")
     for arm, keys in sets.items():
         if arm == reference:
             continue
-        missing, extra = sorted(comparable - keys), sorted(keys - comparable)
+        expected = comparable
+        if arm == "tcp" and no_tcp:
+            expected = {k for k in comparable if not any(only in k for only in no_tcp)}
+        missing, extra = sorted(expected - keys), sorted(keys - expected)
         if missing or extra:
             print(f"::error::{tier}: the {arm} arm does not match the {reference} arm: "
                   f"missing={missing}, extra={extra}. Every arm of a tier is emitted from one "
@@ -163,11 +196,15 @@ def main():
     # every arm - it is a whole-binary filter, and there they simply SKIP for want of their
     # lane marker - so excluding them there would turn a present-on-all-arms case into a
     # spurious "extra".
+    # The server-env knob entries are gated-tier only for the same per-tier reason: the
+    # full-suite census is a whole-binary filter with no knob in its environment at all, so
+    # there is nothing there to exclude.
     failed |= compare_arms(args.build_dir, "magma gated tier",
                            {"split": "integration-magma-split",
                             "spawn": "integration-magma-spawn",
                             "tcp": "integration-magma-tcp"},
-                           inproc_only=MAGMA_INPROC_ONLY)
+                           inproc_only=MAGMA_INPROC_ONLY,
+                           no_tcp=MAGMA_SERVER_ENV_KNOB_NO_TCP)
     failed |= compare_arms(args.build_dir, "magma informational tier",
                            {"split": "integration-magma-all-split",
                             "spawn": "integration-magma-all-spawn",
