@@ -125,7 +125,7 @@ respecify 之间没有 swap），读 server 自己发布的四个 PipeStats gaug
 `integration-magma-spawn` + `integration-magma-spawn-reclaim`，环境 = strict + 双块 + `MOBILEGL_PIPE_STATS=1`
 `_PERIOD=1` + `MOBILEGL_IPC_WIRE_DEFERRED_MB=8` + 私有日志路径。**不注册 tcp 臂**（ID-P7-14 的形状）：tcp 的 server
 是整条车道共用的 fixture supervisor 子进程，条目设不了它的环境（给它设 stats + 8 MiB 会改掉其它每条 tcp 条目的
-server），也读不到它的日志。`spawn_lane_parity.py` 新增按名例外 `MAGMA_NOT_ON_TCP`（只对 tcp 臂的比较扣除），
+server），也读不到它的日志。`spawn_lane_parity.py` 的 server 端环境例外表 `MAGMA_SERVER_ENV_KNOB_NO_TCP` 加入三条 `.Reclaim.…` tail（集成时并入 B2 的同一机制 `compare_arms(no_tcp=)`，一条 tail 恰对应一个 split 条目；只对 tcp 臂的比较扣除），
 `PipeStatsTest` 钉住四个短名。
 
 red-once（R-16，已执行并还原；数字是 server 的 gauge）：
