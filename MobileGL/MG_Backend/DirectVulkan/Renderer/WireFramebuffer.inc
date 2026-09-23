@@ -654,13 +654,25 @@
             // this GPU buffer cannot replace the destination's other aspect.
             const VkDeviceSize texelSize = source.aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 :
                 (source.format == VK_FORMAT_D16_UNORM || source.format == VK_FORMAT_D16_UNORM_S8_UINT ? 2 : 4);
-            const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * texelSize;
+            // THE ROW STRIDE IS PADDED TO 4 BYTES. A depth/stencil buffer<->image copy wants
+            // every bufferOffset on a multiple of 4 (VUID-vkCmdCopyBufferToImage-dstImage-07978,
+            // pRegions-07978 in older layers), and the mirror below starts a region on every
+            // row - so a tight row of 1-byte stencil texels whose width is not a multiple of 4,
+            // or of 2-byte D16 texels with an odd width, put every row after the first on an
+            // illegal offset. The scissor clip in BlitWireFramebuffers produces exactly such
+            // widths. Both copies name the padded length as bufferRowLength, so the buffer
+            // layout is one layout whichever way it is walked.
+            const VkDeviceSize texelsPer4Bytes = 4 / texelSize;
+            const VkDeviceSize paddedWidth =
+                (static_cast<VkDeviceSize>(width) + texelsPer4Bytes - 1) / texelsPer4Bytes * texelsPer4Bytes;
+            const VkDeviceSize bytes = paddedWidth * height * texelSize;
             aspectBuffer = MakeUnique<VkBufferObject>();
             if (!aspectBuffer->Create({.allocator = m_allocator, .size = bytes,
                     .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE}))
                 MagmaWireFatal("multisample-depth-resolve-buffer");
             VkBufferImageCopy copy{};
+            copy.bufferRowLength = static_cast<Uint32>(paddedWidth);
             copy.imageSubresource = {source.aspect, 0, 0, 1};
             copy.imageOffset = {sxMin, syMin, 0};
             copy.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
@@ -682,12 +694,11 @@
             } else {
                 // THE VERTICAL MIRROR, and it costs one region per row rather than a pass. The
                 // buffer holds the resolved band bottom row first (the image copy above wrote it
-                // tightly packed from syMin upwards); writing row r of that buffer to
-                // destination row dyMin + height - 1 - r reverses the band. bufferRowLength /
-                // bufferImageHeight stay 0: each region describes exactly one tight row, so the
-                // default "packed to imageExtent" is what is wanted.
+                // from syMin upwards, one padded stride per row); writing row r of that buffer
+                // to destination row dyMin + height - 1 - r reverses the band. Each region
+                // starts on a padded row, which is what keeps its bufferOffset a multiple of 4.
                 Vector<VkBufferImageCopy> rows(static_cast<SizeT>(height), copy);
-                const VkDeviceSize rowBytes = static_cast<VkDeviceSize>(width) * texelSize;
+                const VkDeviceSize rowBytes = paddedWidth * texelSize;
                 for (Int64 row = 0; row < height; ++row) {
                     auto& region = rows[static_cast<SizeT>(row)];
                     region.bufferOffset = static_cast<VkDeviceSize>(row) * rowBytes;

@@ -457,26 +457,32 @@ namespace MGITest {
             DestroySource(multisampled);
             GTEST_SKIP() << "this driver cannot host a 4x multisample DEPTH24_STENCIL8 renderbuffer";
         }
+        constexpr int kBottomStencil = 11;
+        constexpr int kTopStencil = 99;
+        constexpr int kPrimeStencil = 3;
         FirstGLError();
         glDisable(GL_SCISSOR_TEST);
         glViewport(0, 0, kWidth, kHeight);
         glDepthMask(GL_TRUE);
+        glStencilMask(0xFFu);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glEnable(GL_SCISSOR_TEST);
         glScissor(0, 0, kWidth, kHeight / 2);
         glClearDepth(0.25);
+        glClearStencil(kBottomStencil);
         glClearColor(1, 0, 0, 1);
-        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
         glScissor(0, kHeight / 2, kWidth, kHeight - kHeight / 2);
         glClearDepth(0.75);
+        glClearStencil(kTopStencil);
         glClearColor(0, 1, 0, 1);
-        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
         glDisable(GL_SCISSOR_TEST);
         ASSERT_EQ(FirstGLError(), 0u) << "banding the multisample source";
 
         DepthSource resolved = MakeTextureSource(GL_DEPTH24_STENCIL8);
         ASSERT_TRUE(SourceIsUsable());
-        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, kPrimeStencil);
         glClearColor(0, 0, 1, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         ASSERT_EQ(FirstGLError(), 0u) << "priming the resolve destination";
@@ -503,6 +509,47 @@ namespace MGITest {
         glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, colour.data());
         EXPECT_EQ(colour, (std::array<GLubyte, 4>{0, 255, 0, 255}))
             << "flipped resolve: colour and depth must agree about which way up the blit landed";
+
+        // THE STENCIL ASPECT, NARROW AND OFFSET ON BOTH SIDES. The copy-out moves one aspect
+        // through a buffer one row per region, and a depth/stencil buffer<->image copy wants
+        // every bufferOffset on a multiple of 4 (VUID-vkCmdCopyBufferToImage-pRegions-07978).
+        // A stencil texel is ONE byte, so a tightly packed row whose width is not a multiple
+        // of 4 puts every row but the first on an illegal offset - which the 64-wide depth
+        // leg above (4-byte texels) can never show. 29 is odd, so a 2-byte (D16) texel would
+        // miss the alignment too. The rectangle also sits away from the origin on both sides
+        // (source x 5, y 8; destination x 20, y 4), so a copy-out that forgot the min corner
+        // on either side lands the band somewhere else.
+        {
+            constexpr int kSx = 5, kSy = 8, kDx = 20, kDy = 4, kW = 29, kH = 32;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+            glBlitFramebuffer(kSx, kSy + kH, kSx + kW, kSy, kDx, kDy, kDx + kW, kDy + kH,
+                              GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), 0u) << "a flipped, narrow multisample stencil resolve is a legal blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+            const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+            EXPECT_EQ(FirstGLError(), 0u);
+            size_t bad = 0;
+            int firstX = -1, firstY = -1, firstGot = 0, firstWant = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    int want = kPrimeStencil;
+                    if (x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH) {
+                        const int sourceRow = kSy + kH - 1 - (y - kDy); // the mirror
+                        want = sourceRow < kHeight / 2 ? kBottomStencil : kTopStencil;
+                    }
+                    const int got = stencil[static_cast<size_t>(y) * kWidth + x];
+                    if (got != want) {
+                        if (bad == 0) { firstX = x; firstY = y; firstGot = got; firstWant = want; }
+                        ++bad;
+                    }
+                }
+            }
+            EXPECT_EQ(bad, 0u) << "flipped narrow stencil resolve: " << bad << " of " << stencil.size()
+                               << " stencil values are wrong; first at (" << firstX << ", " << firstY
+                               << "): got " << firstGot << ", want " << firstWant;
+        }
 
         // A SCALE, which is INVALID_OPERATION and must leave the destination as it is.
         ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
