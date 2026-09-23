@@ -30,6 +30,11 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 | 3 | 车道 | `F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered` × 三臂 × 两档 |
 | 4 | **可证的地板（主修）** | `OnSubmitsCompletedUpTo` 只把地板推到**没有任何在飞提交仍持有**的序号；`unsound-serial-complete` 计数器 |
 | 5 | 本文 | — |
+| 6 | 复审（ID-P7-34）第 4 条 | `.def` 53 行**每行有站点、每站点有 W/E 行**；`scripts/ci/wire_declines_audit.py` 守住两半（§1.5） |
+| 7 | 复审第 1 条 | `StaleSerial.` 只注册 split + spawn；`spawn_lane_parity.py` 的具名例外 `MAGMA_NOT_OVER_TCP`（§4.2） |
+| 8 | 复审第 3 条 | 注释改正：**地板是保证、提交项是探针/纵深**；`WaitForWireBufferHostAccess` 早返回加提交项、`ReadWireBuffer` 补盖戳（§3.2） |
+| 9 | 复审第 2 条 | `run_trace_case.cmake`：split retrace 见 `MGWIRE-FLOOR unsound-serial-complete` 即红——主修有了车道（§4.1） |
+| 10 | 本文（复审轮） | — |
 
 ---
 
@@ -53,7 +58,9 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 ### 1.2 未强制的 tally：**全零**，lens A 的首选假说被**证伪**
 
 OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS ssim=1.0`，
-`transport=inproc`，`Fatal{` 0 行，`grep MGWIRE-DECLINES` **空**——32 个出口一次都没走过，pending gauge 恒 0。
+`transport=inproc`，`Fatal{` 0 行，`grep MGWIRE-DECLINES` **空**——当时**已接线**的 40 个站点一次都没走过，pending gauge 恒 0。
+（本段初版写「32 个出口」，与树不符；复审轮的审计给出的实数是：52 行里 40 行有站点、12 行**无站点**。
+那 12 行在此次回放中是否被走过，初版的读数**回答不了**——它们当时不会计数。复审轮补齐后的读数见 §1.5。）
 
 这与裁判的独立判定一致：**lens A 的「静默丢 draw」出局**。裁判给的两条更硬的理由：
 `SetupDraw` 的每一个 bail-out 都 `MGLOG_E_ONCE`（而通过/失败日志逐行相同）；且
@@ -79,6 +86,46 @@ OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS s
 
 规则 I 说 wire 臂的拒绝只有 decline 与具名 Fatal 两种形状；裸 `return false` 是第三种。
 本包把这条路径上的每一个都变成了 **decline**：具名、计数、每站点一行日志。
+（初版这句话**言过其实**，复审轮改正，见 §1.5。）
+
+### 1.5 复审轮：每一行都有站点，每个站点都有一行（ID-P7-34 第 4 条）
+
+复审数出初版的 `.def` 52 行里 **12 行没有任何站点**——`TexViewFormat` / `TexNoApplierRecord` /
+`TexRecordDeadOrStale` 与九个 `Shape*`——还有只 `Count` 不打日志的站点；`SyncWireTextureShape`
+的 ViewOf 出口仍是裸 `return false`。复审轮：
+
+- `SyncWireTextureShape` 的九个 `Shape*` 出口全部计数；ViewOf 与 preserve-flush 两个裸出口改为
+  `MGL_WIRE_DECLINE_AT`；image-flags 出口原来只有 `MGLOG_D`（Release 编译掉），同样提升。
+- preserve-copy 出口是这个函数里**唯一一个没有行**的出口：按 append-only 追加 `ShapePreserveCopyFailed`，共 **53** 行。
+- `SyncTextureResourceByHandle` / `UploadPendingWireLevels` 里没有自己日志的 count-only 站点提升为
+  `MGL_WIRE_DECLINE_AT`；已经站在一条 W/E `_ONCE` 日志下面的保留那条日志并补上计数。
+- **分布**：`SetupWireDraw` 21 + `DispatchWireCompute` 4、`PrepareWireTextureResources` 3、
+  `SyncTextureResourceByHandle` 7、`UploadPendingWireLevels` 8、`SyncWireTextureShape` 10 = **53**。
+- `scripts/ci/wire_declines_audit.py`（进 CI，与 fatal census 同一个只读树的 job）：
+  行无站点、站点不在 `.def`、裸 `Count()` 上方 8 行内没有 `MGLOG_W`/`MGLOG_E`——任一即 rc 1。
+  定义宏的 `WireDeclineTally.h` 不算站点（初版审计的误报就在这里）。
+
+| 审计 | 行 | 有站点 | 未记日志 | rc |
+|---|---|---|---|---|
+| 复审前（`0d425499`） | 52 | 40 | 10（W/E 口径） | 1 |
+| 复审后 | 53 | **53** | **0** | **0** |
+
+**tally 仍然不是桩**（R-16，已执行并还原）：把 `ShapeNoVkFormat` 的条件临时改成「1×1 纹理恒真」
+重建，跑 `DirectVulkan.Split.Fm.F1WireScenario.VertexIdSamplerAndScalarUniformPixels`：像素断言失败，
+服务端日志
+
+```
+[mgl-srv-apply/WARN]: Magma wire texture {slot=16, gen=0}: no backing VkFormat for internal format 0x14
+[mgl-srv-apply/ERROR]: Magma wire draw declined [TexShapeSync]: texture {slot=16, gen=0}: no backing image; see the Shape* tally
+[mgl-srv-apply/INFO]: MGWIRE-DECLINES[shutdown] total=6 ...
+[mgl-srv-apply/INFO]: MGWIRE-DECLINES[shutdown]   TextureResourcesUnprepared=2
+[mgl-srv-apply/INFO]: MGWIRE-DECLINES[shutdown]   TexShapeSync=2
+[mgl-srv-apply/INFO]: MGWIRE-DECLINES[shutdown]   ShapeNoVkFormat=2
+```
+
+两次 draw、三层名字逐层对上。还原后绿。（先试过「对所有纹理恒真」：FBO 附件也跟着失去 image，
+先撞上 `Fatal{UnmigratedVerb, "Magma:framebuffer-resource"}`——那是 framebuffer 路径自己的具名 Fatal，
+不是本表的出口，所以把强制收窄到只命中被采样的 1×1 源纹理。）
 
 ---
 
@@ -183,7 +230,9 @@ if (retiredAny) {
 
 `NotifyFrameSerialComplete` 本就单调且拒绝「仍在录制的序号」，所以这只会让地板**推得更晚**，
 永不更远。**disaggregated 构建的 monolith 臂行为逐位不变**（一个序号一次提交——本包实测
-monolith 30 次提交 / 32 个序号，且 `unsound` 计数为 0）。
+monolith 30 次提交 / 32 个序号，且 `unsound` 计数为 0）。**复审轮限定**：这是 OpenRA 上的读数；
+monolith 臂一旦有 mid-frame flush（一个序号两次提交），钳制同样生效，disagg 构建的 monolith 臂在那种
+trace 上**比 pull 构建更可靠**——见 §7.2 (a)。
 
 ### 3.2 纵深（rule I 形状）：判据自己也带一条 fence
 
@@ -206,6 +255,21 @@ if (busyBySerial || busyBySubmission) { /* 有序拷贝，或等 */ }
 
 这一项在地板可证之后**本不该再触发**，它是纵深与设备探针。`GetCompletedSerial()` 本身**一行未动**
 ——它也服务 monolith 的 `VkBufferResource` 路径，改它会动 pull `.text`。
+
+**复审轮更正（ID-P7-34 第 3 条）：提交项单独不可证，它不是修复。** `02bb5789` 的代码注释把它写成
+「the fix」，且仍带着 §2.4 已否定的每第 8 次 drain 机制；这两点在 `VkBufferManager.cpp`
+（`WriteWireBuffer` 的块注释、`AcquireWireSlice` 的盖戳注释）、`VkBufferManager.h` 的字段注释、
+`MG_IntegrationTest/CMakeLists.txt` 与 `F1WireScenario.cpp` 的用例注释里全部改写为：
+**地板是保证，提交项是探针与纵深**，drain 的故事删掉（drain 探针的注释改为「它否定了这个机制」）。
+不可证的原因：`lastUseSubmitIndex` 在 `AcquireWireSlice` 盖戳，而 `BindProgramUniformBuffers` 之后仍可能经
+`SyncWireTextureShape` 的 preserve 路径 → `FlushWirePendingCommandsForTextureUpdate` →
+`FlushPendingCommands` 把**盖戳的那个序号**提交出去而**不带这个 draw**——戳名 S1，draw 坐 S2。
+复审同时指出的两处漏项已补：
+
+- `WaitForWireBufferHostAccess` 的早返回原来只看 serial 与 `gpuWritesPending`，现在还要求
+  `IsSubmitIndexComplete(lastUseSubmitIndex)`（`pVulkanRenderer` 为空时退化为旧判据）；
+- `ReadWireBuffer` 等待后恢复 `lastUseSerial` 时，同时把 `lastUseSubmitIndex` 重新盖成
+  `GetWireNextSubmitIndex()`——保留的是同一个待录 draw 的两半预约。
 
 ### 3.3 未做的（按裁判的 MUST NOT / 债务清单）
 
@@ -236,6 +300,27 @@ if (busyBySerial || busyBySubmission) { /* 有序拷贝，或等 */ }
 主机上这个缺陷是**计数器可见、图不可见**——和包 B §5.2 的 `fences=2 vs 1` 同一形状）。
 「退休时仍有在飞记录」monolith 也有 27 次，但那些记录持有的是**更高**的序号，所以 monolith 恒 0。
 
+**复审轮：这个计数器现在是门（ID-P7-34 第 2 条）。** 初版的主修没有车道——删掉钳制循环，所有车道
+仍绿、主机图仍金，唯一可观测的就是这行 `MGLOG_W`。`tools/trace_replay/run_trace_case.cmake`
+现在在每次 split retrace（inproc / spawn / tcp）读**两个角色的日志**里的
+`MGWIRE-FLOOR unsound-serial-complete`，和它读 `Fatal{` 完全同形：通过与否都打印条数，非零即
+`FATAL_ERROR`。红/绿（R-16，已执行并还原）：
+
+```
+# 删掉 OnSubmitsCompletedUpTo 的钳制循环重建
+MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT   ***Failed   (ssim=1.000000, mismatchPixels=0)
+-- MGPipe split: OpenRA DirectVulkan transport=inproc, MGWIRE-FLOOR unsound-serial-complete lines: 26
+-- [mgl-srv-apply/WARN]: MGWIRE-FLOOR unsound-serial-complete #1: advancing the completed frame-serial
+   floor to 3, which submission 3 (serial 3) still carries
+CMake Error at run_trace_case.cmake:421: OpenRA DirectVulkan: 26 MGWIRE-FLOOR unsound-serial-complete line(s) ...
+MobileGLTraceReplay.OpenRA.DirectVulkan.SPAWN   ***Failed   (transport=spawn, 26 行，逐字同上)
+# 还原
+.SPLIT / .SPAWN   Passed   ssim=1.000000 / 0 px / 0 行
+```
+
+**图是金的、用例是红的**——这正是这条门要的：它红在「地板断言了一次没等过的完成」，
+不管这台驱动的时序有没有把它变成像素。
+
 ### 4.2 (b) 车道用例：像素级的红，在两进程臂上
 
 `F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered`：8×8 FBO，一个
@@ -243,9 +328,18 @@ if (busyBySerial || busyBySubmission) { /* 有序拷贝，或等 */ }
 每批画自己那两列、用自己的颜色；回读断言每一列是自己的颜色。
 用例**不能**只断言「无 GL 错误」——这条路径上没有错误可断言，只有像素。
 
-三臂各注册两条：`Fm.`（无旋钮，回归门）与 `StaleSerial.`（带
-`MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1`，即 red-once）。该旋钮让 §3.2 的**计数项**说谎，
-**不**绕过有序拷贝，所以跨修复仍有效。
+三臂各注册 `Fm.`（无旋钮，回归门）；`StaleSerial.`（带
+`MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1`，即 red-once）**只注册 split 与 spawn**。该旋钮让 §3.2 的
+**serial 项**说谎（连同地板一起绕过），**不**绕过有序拷贝，所以它钉的是**纵深的提交项**，不是地板；
+地板的车道是 §4.1 的 retrace 门。
+
+**复审轮（ID-P7-34 第 1 条）：tcp 臂的 `StaleSerial.` 是一个永远不会红的名字，已撤。** 旋钮由**服务端**读；
+tcp 臂的服务端是车道夹具（`scripts/ci/tcp_server_fixture.py`），从它**自己**的环境起一次，
+条目级 `ENVIRONMENT` 到不了它——`DirectVulkan.Tcp.StaleSerial.*` 跑的是未强制的用例，却顶着旋钮的名字。
+inproc 的服务端在测试进程里、spawn 的服务端继承 client 的环境，那两臂上旋钮是真的（§4.2 基线正是两臂红）。
+`scripts/ci/spawn_lane_parity.py` 增加第二种具名不对称 **`MAGMA_NOT_OVER_TCP = ("DirectVulkan.StaleSerial.",)`**
+（与 ID-P7-14 的 `MAGMA_INPROC_ONLY` 同形）：只从 **tcp 臂**的比较基准里去掉，spawn 缺了它仍是错误。
+B2 在自己的树里把它的旋钮条目加进同一个元组，集成者合并两处 hunk。
 
 **基线（把 `busyBySubmission` 临时改回 `false` 重建；R-16，已执行并还原）：**
 
@@ -320,6 +414,25 @@ inproc 与 spawn **sha 逐字相同**，证明机制在**服务端**。
 | `integration-magma-tcp` | 69 | 71 | +2 |
 | `integration-magma-full-split` | 526 | 527 | +1 |
 
+**复审轮的门**（`~/w7/b3bin/gate.log`，头 `774bc17f`，同一量法）：G1 编译 rc 0、`.text` **`0xa52203`**、
+nm **added=0 / removed=0**；`fatal_census.py` rc 0（**79** / 20 文件 / 44 / 3 / 0 无标记）；
+`wire_declines_audit.py` rc 0（53 / 53 / 0 / 0）；`link_ratchet.py --assert-monotone` **unchanged at 186**；
+`spawn_lane_parity.py build-split` rc 0（magma gated tier 报「1 entry not registered on the tcp arm by name」）；
+`@P7` 站点 12。车道全部 100%：
+
+| 车道 | 初版 | 复审轮 | 差 |
+|---|---|---|---|
+| `unit` | 2420 | 2420 | 0 |
+| `integration-split` | 226 | 226 | 0 |
+| `integration-magma-split` | 90 | 90 | 0 |
+| `integration-magma-spawn` | 69 | 69 | 0 |
+| `integration-magma-tcp` | 71 | **70** | −1（`Tcp.StaleSerial.` 撤，§4.2） |
+| `integration-magma-full-split` | 527 | 527 | 0 |
+
+外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
+PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。为跑这两条，本树 `build-split` 以
+`-DMOBILEGL_BUILD_TRACE_REPLAY=ON` 重配，并初始化了 `3rdparty/apitrace` 的嵌套子模块（只动子模块工作树）。
+
 ---
 
 ## 6. 集成者要跑的设备验收
@@ -372,9 +485,21 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
 - `FlushWirePendingCommandsForTextureUpdate`（`VulkanRenderer.h:149-151`）把
   「此刻没有录制」当成「没有在飞」。
 - `StagedTextureStore` `AdoptRun` 缺 extent-move 复位（`StagedTextureStore.h:234-243` vs `:270-284`）。
-- `VkBufferManager.cpp:530-544` 的注释「**Mid-frame drains do not advance m_frameSerial**」
-  在今天的树上**是错的**（`TryDrainFrameTransients` 每第 8 次 drain 会调 `BeginFrame`）。
-  结论（不在该处回收 arena 存储）仍然正确，只是理由写错了；改注释会和 B2 在同文件区域的改动打架。
+- **陈旧注释（复审点名，本包记债不改）**：
+  - `VkBufferManager::CollectAllDeferredReleases`（本树 `VkBufferManager.cpp:661-675`）的
+    「**Mid-frame drains do not advance m_frameSerial**」在今天的树上**是错的**（`TryDrainFrameTransients`
+    每第 8 次 drain 会调 `BeginFrame`）。结论（不在该处回收 arena 存储）仍然正确，只是理由写错了；
+    改注释会和 B2 在同文件区域的改动打架。
+  - `VulkanRenderer::WaitForFrameSerial`（本树 `VulkanRenderer.cpp:13400-13403`）的
+    「OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it retires, so the
+    completed-serial floor still advances correctly after one fence wait」——disagg 构建上 §3.1 之后
+    **不再逐记录通知**，地板只推到无在飞持有的序号。该函数是 pull 与 disagg 共用代码，注释归 B4 一起改。
+- **disaggregated 构建的 monolith 臂现在比 pull 构建更可靠（复审 (a)）**：monolith 的
+  `VkBufferResource` 路径 `OnSubData` 经 `IsResourceBusy`（`VkBufferManager.cpp:709`）读的是**同一个**
+  `GetCompletedSerial()` 地板，所以 §3.1 的钳制在 disagg 构建里也保护了 monolith 臂的 mid-frame flush；
+  **pull 构建**的 `#else` 分支逐字保留（G1），**潜在缺陷原样留在 pull 构建里**——由 G1 与 P13 持有，本包不碰。
+- **复审的其余结论，照录**：钳制算术对所有退休次序逐一验算**精确**、无卡死模式、`#else` 逐字；
+  裁判的次修（聚合等待）判为**非缺陷**——B4 是后续，不是本包的前置条件（§7.1）。
 
 ### 7.3 给 M1：OpenRA 的真实提交结构（回答「present 只发生一次吗」）
 
