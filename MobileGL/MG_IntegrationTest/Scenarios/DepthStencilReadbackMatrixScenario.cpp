@@ -35,6 +35,7 @@
 // only checked "no GL error" would pass against a readback that never touched the buffer,
 // which is precisely how this whole cluster hid for so long.
 
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -397,6 +398,98 @@ namespace MGITest {
         ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.375f,
                        "stencil-only resolve preserves destination depth");
         EXPECT_EQ(FirstGLError(), 0u);
+
+        DestroySource(resolved);
+        DestroySource(multisampled);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        Gl().EndFrame();
+    }
+
+    // P7 wave 2-B2 (review round): A MULTISAMPLE DEPTH RESOLVE THAT FLIPS, AND ONE THAT SCALES.
+    //
+    // GL 4.6 core 18.3.1 asks a multisample blit for identical rectangle DIMENSIONS, not for
+    // identical corners - Mesa compares absolute spans - so `glBlitFramebuffer(0, h, w, 0, ...)`
+    // out of a multisample framebuffer is legal and owes a mirrored picture, while a blit whose
+    // sizes differ is INVALID_OPERATION and owes nothing. The wire arm used to end the SESSION
+    // on both: `Magma:multisample-depth-resolve-region` covered the reversed rectangle and the
+    // scaled one under one Fatal.
+    //
+    // COLOUR AND DEPTH IN ONE CALL, because that is the shape that made this visible: the colour
+    // arm has handled a flip since P5f and handles a scale as of this package, so
+    // GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT resolved its colour correctly and then died on its
+    // depth. Asserting both aspects of the same blit is what pins them together.
+    //
+    // THE BANDS ARE UNEQUAL ON PURPOSE (0.25 bottom / 0.75 top): a flip that did not happen
+    // returns the bands the right way up, and a "flip" that merely reordered the readback would
+    // move the colour too - so colour and depth are checked to agree about which way up they are.
+    TEST_F(DepthStencilReadbackMatrixScenario, AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines) {
+        if (!Ready()) return;
+        DepthSource multisampled = MakeRenderbufferSource(GL_DEPTH24_STENCIL8, 4);
+        if (!SourceIsUsable()) {
+            DestroySource(multisampled);
+            GTEST_SKIP() << "this driver cannot host a 4x multisample DEPTH24_STENCIL8 renderbuffer";
+        }
+        FirstGLError();
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0, 0, kWidth, kHeight);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, kWidth, kHeight / 2);
+        glClearDepth(0.25);
+        glClearColor(1, 0, 0, 1);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glScissor(0, kHeight / 2, kWidth, kHeight - kHeight / 2);
+        glClearDepth(0.75);
+        glClearColor(0, 1, 0, 1);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+        ASSERT_EQ(FirstGLError(), 0u) << "banding the multisample source";
+
+        DepthSource resolved = MakeTextureSource(GL_DEPTH24_STENCIL8);
+        ASSERT_TRUE(SourceIsUsable());
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
+        glClearColor(0, 0, 1, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ASSERT_EQ(FirstGLError(), 0u) << "priming the resolve destination";
+
+        // Y REVERSED ON THE SOURCE SIDE, identical dimensions.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer(0, kHeight, kWidth, 0, 0, 0, kWidth, kHeight,
+                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish();
+        EXPECT_EQ(FirstGLError(), 0u) << "a flipped multisample resolve is a legal blit";
+
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        // The bands come back swapped: the destination's bottom rows hold what was the top.
+        const std::vector<float> bottom = ReadDepthFloat(0, 0, kWidth, kHeight / 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllDepth(bottom, 0.75f, "flipped resolve: the destination's bottom band");
+        const std::vector<float> top = ReadDepthFloat(0, kHeight - kHeight / 4, kWidth, kHeight / 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectAllDepth(top, 0.25f, "flipped resolve: the destination's top band");
+        // Colour went the same way up, through the arm that could already do this.
+        std::array<GLubyte, 4> colour{};
+        glReadPixels(kWidth / 2, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, colour.data());
+        EXPECT_EQ(colour, (std::array<GLubyte, 4>{0, 255, 0, 255}))
+            << "flipped resolve: colour and depth must agree about which way up the blit landed";
+
+        // A SCALE, which is INVALID_OPERATION and must leave the destination as it is.
+        ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);
+        ASSERT_EQ(FirstGLError(), 0u);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2,
+                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glFinish(); // the decline's error rides a later reply under a transport
+        EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+            << "a scaled multisample resolve is INVALID_OPERATION, not a picture";
+        glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
+        ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.5f,
+                       "the declined scale must have left the destination alone");
+        EXPECT_EQ(FirstGLError(), 0u) << "the session survived the decline";
 
         DestroySource(resolved);
         DestroySource(multisampled);

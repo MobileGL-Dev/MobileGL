@@ -3206,6 +3206,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
         endforeach()
+        # P7 wave 2-B2 (review round): a FLIPPED multisample depth/stencil resolve is a legal blit
+        # that used to end the session, and a SCALED one is INVALID_OPERATION that used to end it
+        # too. Both shapes are decided on the rectangles, before any capability question, so this
+        # entry needs NO knob and runs on all three arms.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.MsFlip."
+            TEST_FILTER "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}.log")
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
             gtest_discover_tests(MobileGLIntegrationTest

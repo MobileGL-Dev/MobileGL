@@ -434,15 +434,65 @@
 
     void VulkanRenderer::ResolveWireDepthStencil(WireImage source, WireImage destination,
         GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1) {
-        const Int64 width = static_cast<Int64>(sx1) - sx0;
-        const Int64 height = static_cast<Int64>(sy1) - sy0;
-        if (!width || !height) return;
+        // P7 wave 2-B2 (review round): A REVERSED RECTANGLE IS NOT A MALFORMED ONE. This guard
+        // used to require `sx1 > sx0` and `sy1 > sy0` and take the session with a named Fatal
+        // otherwise - so `glBlitFramebuffer(0, h, w, 0, 0, 0, w, h, COLOR|DEPTH)` out of a
+        // multisample framebuffer blitted its COLOUR correctly (the colour arm has handled a
+        // flip since P5f and now handles a scale too) and then died on its DEPTH. GL 4.6 core
+        // 18.3.1 asks for identical DIMENSIONS, not identical corners - Mesa compares absolute
+        // spans - so a flip is a legal blit that has to produce a mirrored picture.
+        //
+        // Spans are therefore signed and everything downstream works off the min corner.
+        const Int64 spanX = static_cast<Int64>(sx1) - sx0;
+        const Int64 spanY = static_cast<Int64>(sy1) - sy0;
+        const Int64 dstSpanX = static_cast<Int64>(dx1) - dx0;
+        const Int64 dstSpanY = static_cast<Int64>(dy1) - dy0;
+        if (!spanX || !spanY || !dstSpanX || !dstSpanY) return;
+        const Int64 width = spanX < 0 ? -spanX : spanX;
+        const Int64 height = spanY < 0 ? -spanY : spanY;
+        // A SCALE has no arm here and is not supposed to: 18.3.1 makes a multisample blit whose
+        // rectangles differ in size INVALID_OPERATION. Rule I (a), the same three lines the
+        // colour arm's multisample-destination decline uses.
+        if (width != (dstSpanX < 0 ? -dstSpanX : dstSpanX) ||
+            height != (dstSpanY < 0 ? -dstSpanY : dstSpanY)) {
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a %lldx%lld source rectangle "
+                         "cannot reach a %lldx%lld destination rectangle - a multisample resolve "
+                         "carries no scale; declining the blit",
+                         static_cast<long long>(width), static_cast<long long>(height),
+                         static_cast<long long>(dstSpanX < 0 ? -dstSpanX : dstSpanX),
+                         static_cast<long long>(dstSpanY < 0 ? -dstSpanY : dstSpanY));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "glBlitFramebuffer from a multisampled read framebuffer requires "
+                                   "identical source and destination rectangle dimensions.");
+            return;
+        }
+        const Bool mirrorX = (spanX < 0) != (dstSpanX < 0);
+        const Bool mirrorY = (spanY < 0) != (dstSpanY < 0);
+        const GLint sxMin = std::min(sx0, sx1), syMin = std::min(sy0, sy1);
+        const GLint dxMin = std::min(dx0, dx1), dyMin = std::min(dy0, dy1);
         if (source.isDefault || destination.isDefault || source.is3D || destination.is3D ||
-            width <= 0 || height <= 0 || width != static_cast<Int64>(dx1) - dx0 ||
-            height != static_cast<Int64>(dy1) - dy0 || sx0 < 0 || sy0 < 0 || dx0 < 0 || dy0 < 0 ||
-            static_cast<Uint64>(sx1) > source.extent.width || static_cast<Uint64>(sy1) > source.extent.height ||
-            static_cast<Uint64>(dx1) > destination.extent.width || static_cast<Uint64>(dy1) > destination.extent.height)
+            sxMin < 0 || syMin < 0 || dxMin < 0 || dyMin < 0 ||
+            static_cast<Uint64>(sxMin + width) > source.extent.width ||
+            static_cast<Uint64>(syMin + height) > source.extent.height ||
+            static_cast<Uint64>(dxMin + width) > destination.extent.width ||
+            static_cast<Uint64>(dyMin + height) > destination.extent.height)
             MagmaWireFatal("multisample-depth-resolve-region");
+        // WHICH MIRRORS HAVE AN ARM. The copy-out below moves the resolved aspect through a
+        // buffer, and a buffer copy addresses ROWS: one VkBufferImageCopy per row, walked
+        // backwards, is a vertical mirror for free. A HORIZONTAL one would need a region per
+        // TEXEL, which is not a copy any more - and re-encoding across formats
+        // (BlitDepthAcrossFormats, shared with the monolith arm) has no flip either. Both
+        // decline by name; §12 in notes/p7/magma-b2.md carries them.
+        if (mirrorX || (mirrorY && source.format != destination.format)) {
+            MGLOG_E_ONCE("DirectVulkan::ResolveWireDepthStencil: a multisample resolve mirrored on "
+                         "%s (source format %d, destination format %d) has no arm - the copy-out "
+                         "reverses whole rows and nothing smaller; declining the blit",
+                         mirrorX ? "X" : "Y across two formats",
+                         static_cast<Int>(source.format), static_cast<Int>(destination.format));
+            RecordTextureCopyError("ResolveWireDepthStencil", ErrorCode::InvalidOperation,
+                                   "This device cannot mirror that multisample depth/stencil blit.");
+            return;
+        }
         VkImageAspectFlags formatAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
         if (source.format == VK_FORMAT_S8_UINT) formatAspects = VK_IMAGE_ASPECT_STENCIL_BIT;
         else if (source.format == VK_FORMAT_D16_UNORM_S8_UINT || source.format == VK_FORMAT_D24_UNORM_S8_UINT ||
@@ -554,10 +604,10 @@
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = pass;
         begin.framebuffer = framebuffer;
-        begin.renderArea = {{sx0, sy0}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
+        begin.renderArea = {{sxMin, syMin}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
         vkCmdBeginRenderPass(m_frameContext.GetCurrent().commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(m_frameContext.GetCurrent().commandBuffer);
-        } else if (!ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sx0, sy0,
+        } else if (!ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sxMin, syMin,
                                                       static_cast<Uint32>(width), static_cast<Uint32>(height))) {
             // NEITHER ARM, and rule I (a) says what that is: this device has no
             // VK_KHR_depth_stencil_resolve and the pass cannot stand in for it either - the
@@ -612,7 +662,7 @@
                 MagmaWireFatal("multisample-depth-resolve-buffer");
             VkBufferImageCopy copy{};
             copy.imageSubresource = {source.aspect, 0, 0, 1};
-            copy.imageOffset = {sx0, sy0, 0};
+            copy.imageOffset = {sxMin, syMin, 0};
             copy.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
             vkCmdCopyImageToBuffer(frame.commandBuffer, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                    aspectBuffer->GetHandle(), 1, &copy);
@@ -625,16 +675,36 @@
             vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0, 0, nullptr, 1, &barrier, 0, nullptr);
             copy.imageSubresource = {source.aspect, destination.level, destination.layer, 1};
-            copy.imageOffset = {dx0, dy0, 0};
-            vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            copy.imageOffset = {dxMin, dyMin, 0};
+            if (!mirrorY) {
+                vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            } else {
+                // THE VERTICAL MIRROR, and it costs one region per row rather than a pass. The
+                // buffer holds the resolved band bottom row first (the image copy above wrote it
+                // tightly packed from syMin upwards); writing row r of that buffer to
+                // destination row dyMin + height - 1 - r reverses the band. bufferRowLength /
+                // bufferImageHeight stay 0: each region describes exactly one tight row, so the
+                // default "packed to imageExtent" is what is wanted.
+                Vector<VkBufferImageCopy> rows(static_cast<SizeT>(height), copy);
+                const VkDeviceSize rowBytes = static_cast<VkDeviceSize>(width) * texelSize;
+                for (Int64 row = 0; row < height; ++row) {
+                    auto& region = rows[static_cast<SizeT>(row)];
+                    region.bufferOffset = static_cast<VkDeviceSize>(row) * rowBytes;
+                    region.imageOffset = {dxMin, static_cast<Int32>(dyMin + height - 1 - row), 0};
+                    region.imageExtent = {static_cast<Uint32>(width), 1, 1};
+                }
+                vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       static_cast<Uint32>(rows.size()), rows.data());
+            }
         } else {
             // A logical GL depth format may use different native renderbuffer
             // and texture formats. Re-encode only after producing real resolved
             // samples. Keep all scratch objects local across this helper's flush.
             if (!BlitDepthAcrossFormats(frame, resolved.image, resolved.format, &scratch->layout, 0, 0,
                 destination.image, destination.format, destination.trackedLayout, destination.level, destination.layer,
-                sx0, sy0, dx0, dy0, static_cast<GLint>(width), static_cast<GLint>(height),
+                sxMin, syMin, dxMin, dyMin, static_cast<GLint>(width), static_cast<GLint>(height),
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 source.aspect == VK_IMAGE_ASPECT_STENCIL_BIT))
                 MagmaWireFatal("multisample-depth-resolve-conversion");
