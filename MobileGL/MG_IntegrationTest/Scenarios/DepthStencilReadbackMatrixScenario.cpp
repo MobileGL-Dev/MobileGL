@@ -436,8 +436,16 @@ namespace MGITest {
     //     calls INVALID_OPERATION. The wire arm is the more correct one here; the monolith fix
     //     is P13/G1-bound.
     // The backend gate runs first so a DirectGLES entry names the backend that owes the fix,
-    // whichever lane it sits in; MGITEST_SPLIT_LANE then separates the wire DirectVulkan arms
-    // (`DirectVulkan.{Split,Spawn,Tcp}.MsFlip*.`, all of which carry it) from the monolith one.
+    // whichever lane it sits in. The second gate is THE TRANSPORT THE PROCESS RESOLVED, read out
+    // of the process (SplitRuntimePeek.h), because that is the very fork that selects the wire
+    // arm: VulkanRenderer::BlitFramebuffer hands the call to BlitWireFramebuffers whenever
+    // MG_Config::Transport is not Monolith. MGITEST_SPLIT_LANE would be the wrong question
+    // (review round 3): it marks the CURATED lanes, not the transport - the whole-binary
+    // `DirectVulkan.{Split,Spawn,Tcp}.Full.` census and the `DirectVulkan.VerifySplit.` lane run
+    // inproc/spawn/tcp WITHOUT it on purpose (their CMake blocks say why), and a marker gate
+    // skipped this case there with a message about a monolith that was not running. The marker
+    // is still honoured on its own: a curated lane that asked for split keeps running the case,
+    // and its fixture's arming assertion is what says whether it got what it asked for.
     TEST_F(DepthStencilReadbackMatrixScenario, AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines) {
         if (!Ready()) return;
         if (Gl().BackendName() != "DirectVulkan") {
@@ -445,8 +453,9 @@ namespace MGITest {
                             "flipped multisample depth resolve writes nothing with no error and a scaled "
                             "one raises no INVALID_OPERATION - a P3b/P4b debt (notes/p7/magma-b2.md §6)";
         }
-        if (!SplitLane::IsSplitLane()) {
-            GTEST_SKIP() << "the monolith DirectVulkan arm (MGITEST_SPLIT_LANE unset) refuses a flipped "
+        if (!SplitLane::IsSplitLane() && !PeekSplitRuntime().transportResolved) {
+            GTEST_SKIP() << "the monolith DirectVulkan transport (this process resolved no split "
+                            "transport, so BlitFramebuffer takes the monolith arm) refuses a flipped "
                             "depth blit (\"depth blits with flipped rectangles are not supported yet\", "
                             "destination untouched, no error) and scales a multisample depth blit GL "
                             "calls INVALID_OPERATION - a wire-vs-monolith divergence where the wire arm "
