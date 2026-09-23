@@ -39,11 +39,14 @@ otherwise. The scenarios:
   cts-lost        a $BASE-Pass case AFTER turns NotSupported / another non-Pass, non-Fail status
                   (L): dsa Pass->NS -> NON-PASS in the rate (367/370, -0.270 pp; the literal
                   Pass/(Pass+Fail) -0.001 pp printed as info), listed, dsa FAIL, CTS FAIL; with a
-                  cts/adjudication.tsv line -> dsa PASS, exit 0 (still counted in the rate); a line
-                  without a reason adjudicates nothing; ssbo Pass->NS adjudicated -> still FAIL on
-                  the rate (-0.806 pp); codex's example, 123 of 124 ssbo Passes -> NS: literal
-                  100% but gate rate 0.806% -> FAIL; Pass->CompatibilityWarning -> L; Pass->Crash
-                  adjudicated -> still FAIL (a NEW crash is never adjudicated)
+                  cts/adjudication.tsv line -> dsa PASS, exit 0, printed ADJUDICATED and OUT of the
+                  block's rate on both sides (367/369 vs 367/369, +0.000 pp); one adjudicated + one
+                  not -> L 1, -0.271 pp, FAIL on the unadjudicated one; 2 adjudicated NS + 2
+                  Pass->Fail -> -0.543 pp, FAIL on the rate; a line without a reason adjudicates
+                  nothing; ssbo Pass->NS adjudicated -> ssbo PASS (+0.000 pp, not -0.806); codex's
+                  example, 123 of 124 ssbo Passes -> NS: literal 100% but gate rate 0.806% -> FAIL;
+                  Pass->CompatibilityWarning -> L; Pass->Crash adjudicated -> still FAIL (a NEW crash
+                  is never adjudicated)
   vacuous         no verdict from nothing: the caselist a run names is gone (the dry run's AFTER
                   data, two new crashes) -> every block MISSING, CTS INCOMPLETE - and with the
                   caselist copy the window keeps, the real reading (CTS FAIL); no caselist at all /
@@ -672,10 +675,42 @@ def scenario_cts_lost(k, cn, tree):
     cn.window("lost-ns-adj", differences={"dsa": {ns: "NotSupported"}}, adjudication="%s\t%s\n" % (ns, reason))
     rc, text, v = run_reducer(cn.root, "lost-ns-adj", tree)
     d = block(v, "dsa")
-    k.expect("...with a cts/adjudication.tsv line: dsa PASS, CTS PASS, window exit 0, still NON-PASS in the rate",
-             d.get("verdict") == "PASS" and v["cts"]["overall"] == "PASS" and rc == 0 and r3(d.get("delta_pp")) == -0.27
-             and d.get("lost") == [{"case": ns, "after": "NotSupported", "adjudication": reason}]
-             and ("adjudicated: " + reason) in text, (d.get("verdict"), d.get("reasons"), rc))
+    k.expect("...with a cts/adjudication.tsv line: dsa PASS, CTS PASS, window exit 0",
+             d.get("verdict") == "PASS" and v["cts"]["overall"] == "PASS" and rc == 0
+             and d.get("lost") == [{"case": ns, "after": "NotSupported", "adjudication": reason}],
+             (d.get("verdict"), d.get("reasons"), rc))
+    k.expect("...and OUT of the block's rate on both sides: BASE 367/369, AFTER 367/(367+2+0), +0.000 pp, L 0, "
+             "printed ADJUDICATED (the literal info still counts it: -0.001 pp; the NS WARN stays)",
+             r3(d.get("delta_pp")) == 0.0 and d.get("after", {}).get("lost") == 0
+             and r3(100 * d.get("base", {}).get("rate", 0)) == 99.458 and r3(100 * d.get("after", {}).get("rate", 0)) == 99.458
+             and d.get("lost_adjudicated") == [ns] and d.get("lost_unadjudicated") == []
+             and ("ADJUDICATED %s  (Pass -> NotSupported)  out of the rate; adjudicated: %s" % (ns, reason)) in text
+             and r3(d.get("delta_pp_literal_info")) == -0.001 and "WARN dsa: NotSupported $BASE 0 -> AFTER 1" in text,
+             (d.get("delta_pp"), d.get("base"), d.get("after"), d.get("lost_adjudicated")))
+
+    # One adjudicated, one not, in one block: only the adjudicated one leaves the rate.
+    cn.window("lost-mixed", gate3=False, differences={"dsa": {dsa[0]: "NotSupported", dsa[1]: "NotSupported"}},
+              adjudication="%s\t%s\n" % (dsa[0], reason))
+    rc, text, v = run_reducer(cn.root, "lost-mixed", tree)
+    d = block(v, "dsa")
+    k.expect("dsa 2 Pass->NS, 1 adjudicated: L 1, BASE 367/369 vs AFTER 366/(366+2+1) = -0.271 pp; FAIL on the "
+             "unadjudicated one, one ADJUDICATED and one LOST line",
+             r3(d.get("delta_pp")) == -0.271 and d.get("after", {}).get("lost") == 1 and d.get("verdict") == "FAIL"
+             and d.get("lost_unadjudicated") == [dsa[1]] and d.get("lost_adjudicated") == [dsa[0]]
+             and not any(r.startswith("delta ") for r in d.get("reasons", []))
+             and ("LOST       %s  (Pass -> NotSupported)  UNADJUDICATED" % dsa[1]) in text
+             and ("ADJUDICATED %s  (Pass -> NotSupported)" % dsa[0]) in text,
+             (d.get("delta_pp"), d.get("after"), d.get("reasons")))
+
+    # An adjudication takes its own case out and nothing else: real Pass->Fail losses still gate.
+    cn.window("lost-adj-fails", gate3=False, adjudication="".join("%s\t%s\n" % (x, reason) for x in dsa[:2]),
+              differences={"dsa": {dsa[0]: "NotSupported", dsa[1]: "NotSupported", dsa[2]: "Fail", dsa[3]: "Fail"}})
+    rc, text, v = run_reducer(cn.root, "lost-adj-fails", tree)
+    d = block(v, "dsa")
+    k.expect("dsa 2 adjudicated Pass->NS + 2 Pass->Fail: BASE 366/368 vs AFTER 364/368 = -0.543 pp -> FAIL on the rate",
+             r3(d.get("delta_pp")) == -0.543 and d.get("verdict") == "FAIL" and d.get("lost_unadjudicated") == []
+             and "delta -0.543 pp < -0.5 pp (Pass/(Pass+Fail+L))" in d.get("reasons", []),
+             (d.get("delta_pp"), d.get("reasons")))
 
     cn.window("lost-ns-noreason", gate3=False, differences={"dsa": {ns: "NotSupported"}}, adjudication=ns + "\n")
     rc, text, v = run_reducer(cn.root, "lost-ns-noreason", tree)
@@ -688,9 +723,11 @@ def scenario_cts_lost(k, cn, tree):
               adjudication="%s\t%s\n" % (ssbo[0], reason))
     rc, text, v = run_reducer(cn.root, "lost-ssbo-adj", tree)
     s = block(v, "ssbo")
-    k.expect("ssbo Pass->NS adjudicated: 123/(123+0+1) = -0.806 pp -> still FAIL on the rate (adjudication != rate)",
-             s.get("verdict") == "FAIL" and r3(s.get("delta_pp")) == -0.806 and s.get("lost_unadjudicated") == []
-             and "delta -0.806 pp < -0.5 pp (Pass/(Pass+Fail+L))" in s.get("reasons", []), (s.get("delta_pp"), s.get("reasons")))
+    k.expect("ssbo Pass->NS adjudicated: out of the rate, 123/123 vs 123/123 = +0.000 pp -> ssbo PASS (it was "
+             "-0.806 pp FAIL for ever while an adjudicated case stayed NON-PASS)",
+             s.get("verdict") == "PASS" and r3(s.get("delta_pp")) == 0.0 and s.get("lost_unadjudicated") == []
+             and s.get("lost_adjudicated") == [ssbo[0]] and not any(r.startswith("delta ") for r in s.get("reasons", [])),
+             (s.get("delta_pp"), s.get("reasons")))
 
     cn.window("lost-codex", gate3=False, differences={"ssbo": {x: "NotSupported" for x in ssbo[1:]}})
     rc, text, v = run_reducer(cn.root, "lost-codex", tree)
@@ -712,9 +749,11 @@ def scenario_cts_lost(k, cn, tree):
     cn.window("lost-crash-adj", gate3=False, differences={"dsa": {ns: "Crash"}}, adjudication="%s\t%s\n" % (ns, reason))
     rc, text, v = run_reducer(cn.root, "lost-crash-adj", tree)
     d = block(v, "dsa")
-    k.expect("dsa Pass->Crash adjudicated -> the L case is adjudicated, but the NEW crash still makes dsa FAIL",
+    k.expect("dsa Pass->Crash adjudicated -> the L case is adjudicated (out of the rate, +0.000 pp), but the NEW "
+             "crash still makes dsa FAIL",
              d.get("verdict") == "FAIL" and d.get("new_crash") == [ns] and d.get("lost_unadjudicated") == []
-             and d.get("reasons", [None])[0] == "1 NEW crash(es)", (d.get("verdict"), d.get("reasons")))
+             and r3(d.get("delta_pp")) == 0.0 and d.get("reasons", [None])[0] == "1 NEW crash(es)",
+             (d.get("verdict"), d.get("delta_pp"), d.get("reasons")))
 
 
 def scenario_vacuous(k, cn, tree):

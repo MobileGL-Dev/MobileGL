@@ -63,8 +63,11 @@ CTS AFTER (CONTRACT-P7 7.3), per block vs device-window-1/CTS-base/report-<block
     rates and still counts for new crashes). AFTER without a single Pass/Fail/L where BASE has some
     is FAIL (the rate cannot be formed); BASE without one is INCOMPLETE;
   * every L case is listed (Pass -> its AFTER status), and a block with one that
-    cts/adjudication.tsv ('<case><TAB><reason>') does not list is FAIL. An adjudication waives
-    only that rule: the case still counts as NON-PASS in the rate;
+    cts/adjudication.tsv ('<case><TAB><reason>') does not list is FAIL. An ADJUDICATED one is
+    printed 'ADJUDICATED' and leaves that block's rate on both sides - no longer an L case in AFTER's
+    denominator, one Pass fewer in BASE's (ruling: integrator 2026-09-23 after the int3 critic: else
+    a single ruled-legitimate loss in the 124-case ssbo block was -0.806 pp that nothing could clear);
+    the literal and pre-ruling info rates still count it;
   * crashes (Crash/Timeout/InternalError/ResourceError/DeviceHang/Incomplete, plus hung.txt) are
     counted in their own column and are non-Pass; one that BASE does not already have is a NEW
     crash, a hard red of its own that no adjudication waives (a Fail that became a Crash is a new
@@ -628,19 +631,24 @@ def read_list(path):
     return [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")]
 
 
-def rate(statuses, lost=0):
-    """The gate's block rate = Pass / (Pass + Fail + lost), `lost` = the $BASE-Pass cases this side
-    turned NotSupported or another non-Pass, non-Fail status (a warning, a crash): a lost supported
-    case is NON-PASS, it does not leave the denominator (ruling: integrator 2026-09-23 after codex
-    closeout review). Other NotSupported / warnings / crashes stay out of the denominator; crashes
-    get their own count. Information only: CONTRACT-P7 7.3's literal Pass / (Pass + Fail) as
-    `literal_rate` and the pre-ruling Pass / (results - NotSupported) as `results_rate`."""
+def rate(statuses, lost=0, adjudicated=0):
+    """The gate's block rate = Pass / (Pass + Fail + lost), `lost` = the UNADJUDICATED $BASE-Pass
+    cases this side turned NotSupported or another non-Pass, non-Fail status (a warning, a crash): a
+    lost supported case is NON-PASS, it does not leave the denominator (ruling: integrator 2026-09-23
+    after codex closeout review). An ADJUDICATED one leaves the block's rate on both sides (ruling:
+    integrator 2026-09-23 after the int3 critic): not an L case here, and on the $BASE side
+    `adjudicated` of its Passes are taken out. Other NotSupported / warnings / crashes stay out of the
+    denominator; crashes get their own count. Information only: CONTRACT-P7 7.3's literal Pass /
+    (Pass + Fail) as `literal_rate` and the pre-ruling Pass / (results - NotSupported) as
+    `results_rate`, both over every compared case."""
     c = Counter(statuses)
     p, f, ns = c["Pass"], c["Fail"], c["NotSupported"]
     x = sum(c[s] for s in HARD)
     n = len(statuses)
+    g = p - adjudicated
     return {"pass": p, "fail": f, "ns": ns, "crash": x, "warn": n - p - f - ns - x, "results": n, "lost": lost,
-            "rate": (p / (p + f + lost)) if (p + f + lost) else None,
+            "adjudicated": adjudicated,
+            "rate": (g / (g + f + lost)) if (g + f + lost) else None,
             "literal_rate": (p / (p + f)) if (p + f) else None,
             "results_rate": (p / (n - ns)) if (n - ns) else None}
 
@@ -724,8 +732,12 @@ def cts_block(c, b, base_dir, canon_dir, adjudicated=None):
     both = [x for x in universe if x in after and x in base]
     # A $BASE Pass that AFTER turned NotSupported / a warning / a crash: NON-PASS in the gate rate,
     # listed, and FAIL unless adjudicated (ruling: integrator 2026-09-23 after codex closeout review).
+    # An adjudicated one is out of the block's rate on BOTH sides (ruling: integrator 2026-09-23 after
+    # the int3 critic - else one ruled-legitimate loss in a 124-case block was -0.806 pp for ever).
     lost = sorted(x for x in both if base[x] == "Pass" and after[x] not in ("Pass", "Fail"))
-    ra, rb = rate([after[x] for x in both], lost=len(lost)), rate([base[x] for x in both])
+    unadjudicated = [x for x in lost if x not in adjudicated]
+    waived = len(lost) - len(unadjudicated)
+    ra, rb = rate([after[x] for x in both], lost=len(unadjudicated)), rate([base[x] for x in both], adjudicated=waived)
 
     def pp(key):
         return None if ra[key] is None or rb[key] is None else (ra[key] - rb[key]) * 100.0
@@ -735,7 +747,6 @@ def cts_block(c, b, base_dir, canon_dir, adjudicated=None):
     regress = sorted(x for x in universe if base.get(x) == "Pass" and after.get(x) not in (None, "Pass"))
     fixed = sorted(x for x in universe if base.get(x) not in (None, "Pass") and after.get(x) == "Pass")
     missing_base = sorted(x for x in universe if x not in base)
-    unadjudicated = [x for x in lost if x not in adjudicated]
     fail, notes, warnings = [], [], []
     if new_crash:
         fail.append("%d NEW crash(es)" % len(new_crash))
@@ -753,9 +764,9 @@ def cts_block(c, b, base_dir, canon_dir, adjudicated=None):
     if unadjudicated:
         fail.append("%d $BASE-Pass case(s) lost to NotSupported / another non-Pass, non-Fail status with no "
                     "cts/adjudication.tsv line (%s)" % (len(unadjudicated), CODEX_RULING))
-    elif lost:
-        notes.append("note: %d $BASE-Pass case(s) lost to NotSupported / another non-Pass, non-Fail status, each "
-                     "adjudicated in cts/adjudication.tsv (still NON-PASS in the rate)" % len(lost))
+    if waived:
+        notes.append("note: %d $BASE-Pass case(s) lost to NotSupported / another non-Pass, non-Fail status and "
+                     "adjudicated in cts/adjudication.tsv: out of the block's rate, BASE and AFTER" % waived)
     if missing_base:
         warnings.append("%d case(s) have no $BASE result (e.g. %s): left out of both rates; a crash among them "
                         "still counts as NEW" % (len(missing_base), missing_base[0]))
@@ -771,6 +782,7 @@ def cts_block(c, b, base_dir, canon_dir, adjudicated=None):
             "new_crash": new_crash, "regressed": regress, "fixed": fixed, "missing_in_base": missing_base,
             "lost": [{"case": x, "after": after[x], "adjudication": adjudicated.get(x)} for x in lost],
             "lost_unadjudicated": unadjudicated,
+            "lost_adjudicated": [x for x in lost if x in adjudicated],
             "unrun": len(unrun), "hung": hung, "verdict": verdict, "reasons": incomplete + fail + notes,
             "warnings": warnings, "subset": subset}
 
@@ -802,10 +814,11 @@ def print_cts(c):
     print("  rate = Pass/(Pass+Fail+L), L = the $BASE-Pass cases AFTER turned NotSupported or another non-Pass,")
     print("  non-Fail status (a lost supported case is NON-PASS); other NS, warnings W and crashes X are not in the")
     print("  denominator. Per block: delta >= -%.1f pp, 0 NEW crash, and every L case adjudicated in" % CTS_TOL_PP)
-    print("  cts/adjudication.tsv (else FAIL); all five blocks required. '(literal)' = the contract's literal")
-    print("  Pass/(Pass+Fail) delta and 'info' the pre-ruling Pass/(results-NS): printed for comparison, never gating.")
-    print("%-14s %6s  %-20s %8s  %-20s %4s  %8s  %9s  %9s  %5s  %4s  %5s  %s" % (
-        "block", "cases", "BASE P/F/NS/W/X", "rate", "AFTER P/F/NS/W/X", "L", "rate", "delta pp", "(literal)",
+    print("  cts/adjudication.tsv (else FAIL); an adjudicated one (A) is out of the block's rate, BASE and AFTER.")
+    print("  All five blocks required. '(literal)' = the contract's literal Pass/(Pass+Fail) delta and 'info' the")
+    print("  pre-ruling Pass/(results-NS), both over every compared case: printed for comparison, never gating.")
+    print("%-14s %6s  %-20s %8s  %-20s %4s %3s  %8s  %9s  %9s  %5s  %4s  %5s  %s" % (
+        "block", "cases", "BASE P/F/NS/W/X", "rate", "AFTER P/F/NS/W/X", "L", "A", "rate", "delta pp", "(literal)",
         "crash", "regr", "fixed", "verdict"))
 
     def counts(r):
@@ -820,9 +833,10 @@ def print_cts(c):
         if "after" not in b:
             print("%-14s  %s: %s" % (b["block"], b["verdict"], "; ".join(b["reasons"])))
             continue
-        print("%-14s %6d  %-20s %8s  %-20s %4d  %8s  %9s  %9s  %5d  %4d  %5d  %s%s" % (
+        print("%-14s %6d  %-20s %8s  %-20s %4d %3d  %8s  %9s  %9s  %5d  %4d  %5d  %s%s" % (
             b["block"], b["cases"], counts(b["base"]), pct(b["base"]["rate"]), counts(b["after"]),
-            b["after"]["lost"], pct(b["after"]["rate"]), pp(b["delta_pp"]), "(%s)" % pp(b["delta_pp_literal_info"]),
+            b["after"]["lost"], len(b.get("lost_adjudicated", [])), pct(b["after"]["rate"]), pp(b["delta_pp"]),
+            "(%s)" % pp(b["delta_pp_literal_info"]),
             len(b["new_crash"]), len(b["regressed"]), len(b["fixed"]), b["verdict"],
             " (SUBSET)" if b["subset"] else ""))
         print("    info  literal Pass/(Pass+Fail): BASE %s  AFTER %s  delta %s pp (not gating)" % (
@@ -836,8 +850,11 @@ def print_cts(c):
         for x in b["new_crash"]:
             print("    NEW CRASH  " + x)
         for x in b["lost"]:
-            print("    LOST       %s  (Pass -> %s)  %s" % (x["case"], x["after"], "adjudicated: " + x["adjudication"]
-                                                          if x["adjudication"] else "UNADJUDICATED"))
+            if x["adjudication"]:
+                print("    ADJUDICATED %s  (Pass -> %s)  out of the rate; adjudicated: %s" % (
+                    x["case"], x["after"], x["adjudication"]))
+            else:
+                print("    LOST       %s  (Pass -> %s)  UNADJUDICATED" % (x["case"], x["after"]))
         lost = {x["case"] for x in b["lost"]}
         others = [x for x in b["regressed"] if x not in lost]
         for x in others[:40]:

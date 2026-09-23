@@ -120,7 +120,9 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   Pass / (Pass + Fail)，ssbo 124 个 `$BASE` Pass 里 123 个变 NS、1 个仍 Pass，读数仍是 100%）；其余 NS、warning、crash 不在分母里。
   表里 `L` 列是其个数；§7.3 字面的 Pass / (Pass + Fail) 照印在 `(literal)` 列与每块的 `info  literal` 行，只供对照、**不判**。
   L 例逐条列 `LOST <case>  (Pass -> <AFTER 状态>)`，块里有任何一条没在 `cts/adjudication.tsv`（每行 `<case><TAB><理由>`；没有理由的行不算，打 WARN）
-  裁定 → 该块 **FAIL**；裁定只免这一条，该例仍按非 Pass 进 rate（所以 ssbo 1 例 Pass→NS 即使裁定，−0.806 pp 仍红）。块判据：delta ≥ −0.5 pp、
+  裁定 → 该块 **FAIL**；**已裁定的 L 例印作 `ADJUDICATED <case>  (Pass -> <状态>)  out of the rate; adjudicated: <理由>`，并从该块两边的 rate 里拿掉**
+  （不再算 AFTER 分母里的 L，`$BASE` 少一个 Pass；表里 `A` 列是其个数；`(literal)` 与旧口径两行 info 仍把它算在内。**ruling: integrator 2026-09-23 after the int3 critic**——
+  否则 ssbo 1 例合理的 Pass→NS 裁定后仍是 −0.806 pp，永远红）。块判据：delta ≥ −0.5 pp、
   未裁定的 L 例 = 0、**新增 crash = 0 单独硬红且不可裁定**（AFTER 为 X 而 BASE 不是——Fail→Crash 也算——另加 hung.txt；Pass→Crash 既是新 crash 也是 L 例）、`unrun.txt` 为空。
   两边的 rate 只在**两边都有结果的用例**上算（同口径）；`$BASE` 没有的用例打 `WARN <block>: N case(s) have no $BASE result`，不进两边的 rate，
   其中的 crash 仍算新增。AFTER 一个 Pass / Fail 都没有而 `$BASE` 有（例如全变 NotSupported：`$BASE` 的 Pass 全成 L，rate 为 0）→ 该块 **FAIL**；
@@ -140,12 +142,13 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   **跨臂**：spawn 每例不同 → WARN + 像素差、`PASS-NEEDS-ADJUDICATION`，全部写进 `gate3/adjudication.tsv` → PASS，缺一例（无理由行）→ 仍 NEEDS-ADJUDICATION，
   只一例不同且已裁定（另有陈旧行）→ PASS；臂内不同 → FAIL；**只由 rate 定**的块（dsa 1 / 2 / 4 例 Pass→Fail：−0.270 pp PASS、−0.541 pp FAIL、
   364/6/0/1/0 −1.081 pp FAIL，无 crash）；**L 例**：dsa Pass→NS 未裁定 → 367/370、−0.270 pp（字面 −0.001 pp 只作信息）、列出、dsa FAIL，裁定后 PASS
-  （仍进 rate），无理由的裁定行不算；ssbo Pass→NS 裁定后仍 −0.806 pp FAIL；codex 的例子 ssbo 123/124 变 NS：字面 100% 而门 rate 0.806% → FAIL；
+  且出 rate（367/369 对 367/369、+0.000 pp、印 `ADJUDICATED`）；一例裁定一例未裁定 → L 1、−0.271 pp、因未裁定例 FAIL；2 例裁定 NS + 2 例 Pass→Fail →
+  −0.543 pp 因 rate FAIL；无理由的裁定行不算；ssbo Pass→NS 裁定后 PASS（+0.000 pp，不再 −0.806）；codex 的例子 ssbo 123/124 变 NS：字面 100% 而门 rate 0.806% → FAIL；
   Pass→CompatibilityWarning 也是 L；Pass→Crash 裁定后仍因新 crash FAIL；caselist 没了 / 为空 / 全 NotSupported → MISSING / FAIL 而非 PASS；
   2 例门 3、非 reboot-clean、`--limit` CTS → `PASS-SUBSET` / `PASS-NOT-REBOOT-CLEAN` 且退出非 0；`$BASE` 缺的用例 → WARN；`--check-block` 的 0 / 3；
   dry run 数据（`60-reduce-selftest-pre14e1c8b9.json` = pre-14e1c8b9 五块相对 `$BASE` 的差异）上 dsa 门 rate −0.541 pp（字面 −0.272 pp、
   旧口径 −0.539 pp 只作信息）；`~/w7/logs/devprep/w2/pre-14e1c8b9` 在时再对原始输出验一遍。
-  `--reducer <py>` 可对别的 reducer 跑同一套检查（red-once：`6afa077f` 的 reducer 113 项里红 54 项）。
+  `--reducer <py>` 可对别的 reducer 跑同一套检查（red-once：`6afa077f` 的 reducer 113 项里红 54 项；`8f3d179c` 的 reducer 116 项里红 5 项——裁定例仍进 rate）。
 
 ## 4. 入库清单 → `docs/Disaggregated/notes/p7/device-window-2/`
 
