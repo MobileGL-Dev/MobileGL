@@ -573,6 +573,8 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t ProgramArtifactsCodecVersion = 0;
         std::uint64_t ProgramArtifactsSchema = 0;
         std::uint64_t OpCount = 0;
+        // MOBILEGL_PROTOCOL_CONTROL_REVISION (mg_protocol_base.h): the control schema's shape.
+        std::uint64_t ControlSchemaRevision = 0;
         std::uint32_t AbiVersion = 0;
         std::uint32_t PointerBits = 0;
         std::uint32_t LittleEndian = 0;

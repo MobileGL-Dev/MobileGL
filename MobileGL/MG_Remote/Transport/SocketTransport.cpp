@@ -34,6 +34,9 @@
 #    include <netdb.h>
 #    include <netinet/in.h>
 #    include <netinet/tcp.h>
+#    if defined(__linux__)
+#        include <sys/syscall.h>
+#    endif
 #else
 #    define MOBILEGL_SOCKET_TRANSPORT_POSIX 0
 #endif
@@ -435,6 +438,126 @@ namespace MobileGL::MG_Remote::Transport {
         }
         outClient = std::make_unique<SocketTransport>(control, aux, TransportRole::Client);
         return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::ConnectControl(const std::string& path, std::uint32_t timeoutMs,
+                                                   std::unique_ptr<SocketTransport>& outClient) {
+        if (!TcpName(path)) return ConnectTo(path, timeoutMs, outClient);
+        outClient.reset();
+        int control = -1;
+        const MobileGLResult connected = ConnectOne(path, timeoutMs, &control);
+        if (connected != MOBILEGL_OK) return connected;
+        outClient = std::make_unique<SocketTransport>(control, -1, TransportRole::Client);
+        return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::ConnectDataConnection(const std::string& path, std::uint32_t timeoutMs,
+                                                          MobileGLByteSpan firstFrame, int* outFd) {
+        if (outFd == nullptr || !TcpName(path)) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        *outFd = -1;
+        std::vector<std::uint8_t> framed;
+        const MobileGLResult appended = AppendFrame(framed, firstFrame.data, firstFrame.size);
+        if (appended != MOBILEGL_OK) return appended;
+        int fd = -1;
+        const MobileGLResult connected = ConnectOne(path, timeoutMs, &fd);
+        if (connected != MOBILEGL_OK) return connected;
+        std::size_t written = 0;
+        while (written < framed.size()) {
+            const ssize_t n = ::send(fd, framed.data() + written, framed.size() - written, MSG_NOSIGNAL);
+            if (n > 0) { written += static_cast<std::size_t>(n); continue; }
+            if (n < 0 && errno == EINTR) continue;
+            WireLogError("MG_Remote SocketTransport: the data connection's DataBind could not be "
+                         "sent (%zu of %zu bytes): %s", written, framed.size(), std::strerror(errno));
+            ::close(fd);
+            return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        }
+        *outFd = fd;
+        return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::AcceptOne(int listenFd, std::uint32_t timeoutMs, int* outFd) {
+        if (listenFd < 0 || outFd == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        *outFd = -1;
+        for (;;) {
+            const int ready = WaitReadable(listenFd, timeoutMs);
+            if (ready == 0) return MOBILEGL_ERR_TIMEOUT;
+            if (ready < 0) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            const int fd = ::accept(listenFd, nullptr, nullptr);
+            if (fd < 0) {
+                // The same two non-failures AcceptPair re-polls on.
+                if (errno == EINTR || errno == ECONNABORTED) continue;
+                WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(errno));
+                return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            if (TcpSocket(fd) && !ConfigureTcp(fd)) {
+                ::close(fd);
+                continue;
+            }
+            *outFd = fd;
+            return MOBILEGL_OK;
+        }
+    }
+
+    MobileGLResult SocketTransport::ReceiveOneFrame(int fd, std::uint32_t timeoutMs, std::uint64_t maxBytes,
+                                                    std::vector<std::uint8_t>* outPayload) {
+        if (fd < 0 || outPayload == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        outPayload->clear();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        const auto readExactly = [&](std::uint8_t* into, std::size_t size) -> MobileGLResult {
+            while (size != 0) {
+                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+                if (left <= 0) return MOBILEGL_ERR_TIMEOUT;
+                const int ready = WaitReadable(fd, static_cast<std::uint32_t>(left));
+                if (ready == 0) return MOBILEGL_ERR_TIMEOUT;
+                if (ready < 0) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+                const ssize_t n = ::recv(fd, into, size, 0);
+                if (n < 0 && errno == EINTR) continue;
+                if (n <= 0) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+                into += n;
+                size -= static_cast<std::size_t>(n);
+            }
+            return MOBILEGL_OK;
+        };
+        std::uint8_t header[kFrameHeaderSize];
+        const MobileGLResult headerRead = readExactly(header, sizeof(header));
+        if (headerRead != MOBILEGL_OK) return headerRead;
+        std::uint32_t magic = 0, length = 0;
+        std::memcpy(&magic, header, sizeof(magic));
+        std::memcpy(&length, header + 4, sizeof(length));
+        if (magic != kFrameMagic || length > maxBytes) return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+        outPayload->resize(length);
+        const MobileGLResult payloadRead = readExactly(outPayload->data(), length);
+        if (payloadRead != MOBILEGL_OK) outPayload->clear();
+        return payloadRead;
+    }
+
+    MobileGLResult SocketTransport::MintNonce(std::uint8_t* out, std::size_t size) {
+        if (out == nullptr) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        std::size_t filled = 0;
+#if defined(__linux__) && defined(SYS_getrandom)
+        while (filled < size) {
+            const long n = ::syscall(SYS_getrandom, out + filled, size - filled, 0);
+            if (n > 0) { filled += static_cast<std::size_t>(n); continue; }
+            if (n < 0 && errno == EINTR) continue;
+            break; // ENOSYS on an old kernel: the device file below is the same pool.
+        }
+#endif
+        if (filled < size) {
+            const int source = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+            while (source >= 0 && filled < size) {
+                const ssize_t n = ::read(source, out + filled, size - filled);
+                if (n > 0) { filled += static_cast<std::size_t>(n); continue; }
+                if (n < 0 && errno == EINTR) continue;
+                break;
+            }
+            if (source >= 0) ::close(source);
+        }
+        if (filled == size) return MOBILEGL_OK;
+        WireLogError("MG_Remote SocketTransport: the kernel CSPRNG gave %zu of %zu bytes; a data "
+                     "nonce is not minted from anything weaker", filled, size);
+        return MOBILEGL_ERR_UNSUPPORTED;
     }
 
     MobileGLResult SocketTransport::CreatePair(std::unique_ptr<SocketTransport>& outClient,

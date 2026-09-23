@@ -777,8 +777,11 @@ namespace MobileGL::MG_Remote::Client {
             m_connectDial = true;
             const auto endpoint = tcp ? configured : configured.substr(5);
             std::unique_ptr<Transport::SocketTransport> socket;
-            const auto connected = Transport::SocketTransport::ConnectTo(endpoint, kSpawnConnectTimeoutMs, socket);
+            // PH-7 (4): on TCP, the control connection only. The data connection is opened after
+            // Welcome, with the nonce Welcome carries - never paired by arrival order.
+            const auto connected = Transport::SocketTransport::ConnectControl(endpoint, kSpawnConnectTimeoutMs, socket);
             if (connected != MOBILEGL_OK) return connected;
+            m_dataEndpoint = tcp ? endpoint : std::string();
             const auto started = StartOverSocket(std::move(socket));
             if (started == MOBILEGL_OK) {
                 MGLOG_I("MG_Remote client: control=%s data=%s server=%s pid=%u dial=connect",
@@ -890,6 +893,7 @@ namespace MobileGL::MG_Remote::Client {
         // every lane (CONTRACT-P6 4.4).
         Transport::SessionSegmentSizes negotiatedSizes;
         bool stream = false;
+        std::vector<Uint8> dataBind;
         Uint64 announced[4] = {0, 0, 0, 0};
         const Uint32 replySlotCount = Transport::kDefaultReplySlotCount;
         {
@@ -949,6 +953,19 @@ namespace MobileGL::MG_Remote::Client {
                 return result;
             }
             stream = terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream;
+            if (stream) {
+                // PH-7 (4). A Stream Welcome without a nonce of exactly the minted width names no
+                // data connection this client could open; refused rather than guessed at.
+                const auto* nonce = welcome->dataNonce();
+                if (nonce == nullptr || nonce->size() != Transport::kDataNonceBytes || m_dataEndpoint.empty()) {
+                    const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                                        "stream Welcome carries no data nonce", Transport::kDataNonceBytes,
+                                                        nonce == nullptr ? 0 : nonce->size());
+                    Stop();
+                    return result;
+                }
+                dataBind = EncodeDataBind(nonce->data(), nonce->size());
+            }
             negotiatedSizes.CmdRingBytes = terms->cmdWindowBytes();
             negotiatedSizes.StageBytes = terms->stageWindowBytes();
             negotiatedSizes.EventRingBytes = terms->eventWindowBytes();
@@ -969,7 +986,16 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         if (stream) {
-            const auto attached = AttachStreamLink(m_socketTransport->TakeDataFd(), negotiatedSizes);
+            int dataFd = -1;
+            const auto opened = Transport::SocketTransport::ConnectDataConnection(
+                m_dataEndpoint, kSpawnConnectTimeoutMs, MobileGLByteSpan{dataBind.data(), dataBind.size()}, &dataFd);
+            if (opened != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote client: could not open the data connection to %s (rc=%d)",
+                        m_dataEndpoint.c_str(), static_cast<int>(opened));
+                Stop();
+                return opened;
+            }
+            const auto attached = AttachStreamLink(dataFd, negotiatedSizes);
             if (attached != MOBILEGL_OK) { Stop(); return attached; }
             m_controlInbox = std::make_unique<Transport::ControlInbox>(*m_transport);
             Server::ServerLoopInstance().SetRemoteControlSink(&RemoteControlSinkThunk, this);

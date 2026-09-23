@@ -42,6 +42,8 @@
 #pragma once
 #include "../Transport/ILink.h"
 #include <Includes.h>
+#include <cstdint>
+#include <functional>
 #include <vector>
 
 #include <MG_Pipe/MGPipe.h>
@@ -55,6 +57,10 @@
 #include "../Transport/SessionRings.h"
 #include "../Wire/PipeWireCodec.h"
 #include "PipeApplier.h"
+
+namespace MobileGL::MG_Remote::Transport {
+    class StreamLink;
+}
 
 namespace MobileGL::MG_Remote::Server {
 
@@ -75,6 +81,20 @@ namespace MobileGL::MG_Remote::Server {
         // and the build fingerprint must match, and a mismatch is Fatal{AbiMismatch}.
         MobileGLResult Accept(Transport::ITransport& transport,
                               const std::vector<Uint8>* firstFrame = nullptr);
+
+        // PH-7 (4), ID-P7-3. WHERE A TCP SESSION'S DATA CONNECTION COMES FROM.
+        //
+        // A Stream data plane is not handed to Accept with the control connection any more: the
+        // client opens it after Welcome and names this session by presenting Welcome.dataNonce
+        // as its first frame (DataBind). Whoever owns the listener - ServerMain's supervisor,
+        // which forwards the descriptor over a socketpair, or the single-session loop, which
+        // accepts it directly - reads that frame and offers the connection here with the nonce
+        // it presented. Accept compares, binds the one that matches, and refuses every other by
+        // name. MOBILEGL_ERR_TIMEOUT from the source means "nothing yet"; anything else ends
+        // the wait (TRANSPORT_CLOSED when the control peer went away while it waited).
+        using DataConnectionSource =
+            std::function<MobileGLResult(std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce)>;
+        void SetDataConnectionSource(DataConnectionSource source) { m_dataSource = std::move(source); }
 
         // Re-publishes the whole snapshot. R-12: a SECOND arrival IS the invalidation signal,
         // which is how DirectGLES - which has no OnCapsInvalidated producer - tells the client
@@ -207,6 +227,10 @@ namespace MobileGL::MG_Remote::Server {
         void LogMemory(const char* phase) const;
 
     private:
+        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::StreamLink& link,
+                                          const Uint8* nonce);
+
+        DataConnectionSource m_dataSource;
         std::unique_ptr<Transport::ILink> m_link;
         // sm: non-owning; the spawn entry point owns the SocketDoorbells.
         Transport::Doorbell* m_externalConsumerBell = nullptr;

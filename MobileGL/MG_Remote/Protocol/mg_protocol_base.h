@@ -51,6 +51,14 @@ extern "C" {
 #define MOBILEGL_PROTOCOL_ABI_MAJOR 1
 #define MOBILEGL_PROTOCOL_ABI_MINOR 0
 
+// The CONTROL schema's revision (protocol.fbs), mixed into wireFingerprint. The fingerprint's
+// other inputs are struct sizes and codec digests of the DATA plane; nothing moved it when a
+// control message changed shape, so a peer built before a control-schema change agreed with one
+// built after it and the difference surfaced as whatever the first misread field did. Bump this
+// with every protocol.fbs change a peer must agree on.
+//   1  P7 wave 2-F, PH-7 (4): Welcome.dataNonce and the DataBind message.
+#define MOBILEGL_PROTOCOL_CONTROL_REVISION 1
+
 #define MOBILEGL_ABI_VERSION(major, minor) (((uint32_t)(major) << 16) | (uint32_t)(minor))
 #define MOBILEGL_ABI_MAJOR_OF(version) ((uint32_t)(version) >> 16)
 #define MOBILEGL_ABI_MINOR_OF(version) ((uint32_t)(version) & 0xFFFFu)

@@ -13,6 +13,14 @@ namespace MobileGL::MG_Remote::Transport {
         ~StreamLink() override;
         MobileGLResult Attach(int dataFd, SessionSegments& mirrors, TransportRoleTag role);
         MobileGLResult AttachOwned(int dataFd, const struct SessionSegmentSizes& sizes, TransportRoleTag role);
+        // PH-7 (4), ID-P7-3. The SERVER's half of a nonce-bound data connection, in two steps.
+        // The owned memory has to exist before the connection does - Welcome announces its
+        // sizes, and Welcome is what carries the nonce the client's data connection presents -
+        // so the link is attached WITHOUT a descriptor and without its reader thread, and
+        // BindDataFd starts both once the connection has proved which session it belongs to.
+        // Until then every write answers TRANSPORT_CLOSED (there is no fd) rather than blocking.
+        MobileGLResult AttachOwnedDeferred(const struct SessionSegmentSizes& sizes, TransportRoleTag role);
+        MobileGLResult BindDataFd(int dataFd);
         SessionSegments& Memory() override;
         void InitializeEndpoints() override;
         RingProducer& CommandsOut() override;
@@ -44,6 +52,7 @@ namespace MobileGL::MG_Remote::Transport {
         TransportRoleTag Role() const override;
 
     private:
+        MobileGLResult Prepare(SessionSegments& mirrors, TransportRoleTag role);
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };

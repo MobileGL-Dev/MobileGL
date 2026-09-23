@@ -130,6 +130,7 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.ProgramArtifactsCodecVersion, MG_State::GLState::kProgramArtifactsCodecVersion);
     EXPECT_EQ(inputs.ProgramArtifactsSchema, MG_State::GLState::ProgramArtifactsSchemaFingerprint());
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
+    EXPECT_EQ(inputs.ControlSchemaRevision, static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION));
     EXPECT_EQ(inputs.PointerBits, sizeof(void*) * 8);
     const auto perturbed = [&](auto mutate) {
         auto copy = inputs;
@@ -148,6 +149,7 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsCodecVersion; })) << "ProgramArtifactsCodecVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsSchema; })) << "ProgramArtifactsSchema";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.OpCount; })) << "OpCount";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.ControlSchemaRevision; })) << "ControlSchemaRevision";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.AbiVersion; })) << "AbiVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.PointerBits; })) << "PointerBits";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.LittleEndian; })) << "LittleEndian";

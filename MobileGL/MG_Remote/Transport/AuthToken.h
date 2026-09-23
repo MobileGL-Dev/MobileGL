@@ -87,4 +87,19 @@ namespace MobileGL::MG_Remote::Transport {
         return difference == 0;
     }
 
+    // PH-7 (4), ID-P7-3. The width of `Welcome.dataNonce`: 128 bits from the CSPRNG, the same
+    // floor as the token for the same reason.
+    inline constexpr std::size_t kDataNonceBytes = 16;
+
+    // The nonce comparison. Both operands are exactly kDataNonceBytes by the time this is asked
+    // (a presented nonce of any other length is refused before it gets here), so the loop has
+    // one length and no early exit.
+    inline bool ConstantTimeNonceMatch(const unsigned char* expected, const unsigned char* presented) {
+        if (expected == nullptr || presented == nullptr) return false;
+        unsigned difference = 0;
+        for (std::size_t index = 0; index < kDataNonceBytes; ++index)
+            difference |= static_cast<unsigned>(expected[index] ^ presented[index]);
+        return difference == 0;
+    }
+
 } // namespace MobileGL::MG_Remote::Transport

@@ -450,6 +450,9 @@ namespace MobileGL::MG_Remote::Client {
         Server::LaunchedServer m_spawned;
 
         std::unique_ptr<Transport::SocketTransport> m_socketTransport;
+        // PH-7 (4): the `tcp://` endpoint the control connection went to, for the data
+        // connection opened after Welcome. Empty on every other transport.
+        std::string m_dataEndpoint;
         std::unique_ptr<Transport::Doorbell> m_socketSelfBell;
         std::unique_ptr<Transport::Doorbell> m_socketPeerBell;
 

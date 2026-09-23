@@ -126,6 +126,20 @@ table Welcome {
   wireFingerprint: ulong;
   linkTerms: LinkTerms;
   backendType: uint;
+  // PH-7 (4), ID-P7-3. 128 bits from the server's CSPRNG, minted after the Hello authenticated
+  // and only on a Stream data plane. The client opens its data connection AFTER this Welcome
+  // and presents the value as that connection's first frame (DataBind); the server binds the
+  // connection to this session by the value, not by which connection arrived second. Absent on
+  // SharedSegments, whose descriptors travel over the control connection's own aux socket.
+  dataNonce: [ubyte];
+}
+
+// PH-7 (4). The FIRST and only control-framed message on a TCP data connection: the Welcome's
+// dataNonce, handed back. Everything after it on that connection is StreamLink's own framing.
+// A connection whose first frame is not this, or whose nonce is not the live session's, is
+// refused by name (`Refuse{Authentication}`) and never becomes a data plane.
+table DataBind {
+  nonce: [ubyte];
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +362,7 @@ union CtrlMsg {
   LogLine,
   Refuse,
   LogFlush,
+  DataBind,
 }
 
 table CtrlEnvelope {

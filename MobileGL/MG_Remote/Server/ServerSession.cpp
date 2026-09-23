@@ -9,6 +9,7 @@
 // P5 package s1: the server half of a session.
 
 #include "../Transport/SocketTransport.h"
+#include "../Transport/StreamLink.h"
 #include "ServerSession.h"
 #include <MG_Remote/FatalFunnel.h>
 
@@ -558,9 +559,26 @@ namespace MobileGL::MG_Remote::Server {
 
         // ---- 3. the four segments, both control pages, the rings.
         MobileGLResult created = MOBILEGL_ERR_UNSUPPORTED;
+        // PH-7 (4), ID-P7-3. Minted HERE - after the token was checked, before a byte of Welcome
+        // exists - and bound after Welcome by BindDataConnection. The link is attached without
+        // its descriptor: Welcome has to announce the sizes of memory the connection it names
+        // will fill.
+        Uint8 dataNonce[Transport::kDataNonceBytes] = {};
+        Transport::StreamLink* pendingStream = nullptr;
         if (stream) {
             auto* socket = dynamic_cast<Transport::SocketTransport*>(&transport);
-            if (socket && socket->IsTcp()) created = AttachStreamLink(socket->TakeDataFd(), m_sizes);
+            if (socket == nullptr || !socket->IsTcp() || !m_dataSource)
+                return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                       "stream needs a TCP control connection and a data-connection source");
+            created = Transport::SocketTransport::MintNonce(dataNonce, sizeof(dataNonce));
+            if (created == MOBILEGL_OK) {
+                auto link = std::make_unique<Transport::StreamLink>();
+                created = link->AttachOwnedDeferred(m_sizes, Transport::TransportRoleTag::ServerConsumer);
+                if (created == MOBILEGL_OK) {
+                    pendingStream = link.get();
+                    AttachDataLink(std::move(link));
+                }
+            }
         } else {
             created = m_link->Memory().Create(m_sizes, Transport::MemoryRole::Server);
         }
@@ -597,6 +615,9 @@ namespace MobileGL::MG_Remote::Server {
             auto reply = segmentRef(3, ::MobileGL::Wire::SegmentKind::Reply, Slot::Reply);
             auto event = segmentRef(4, ::MobileGL::Wire::SegmentKind::Event, Slot::Event);
             auto stamp = builder.CreateString(BuildFingerprint());
+            const auto nonce = pendingStream != nullptr
+                ? builder.CreateVector(dataNonce, sizeof(dataNonce))
+                : ::flatbuffers::Offset<::flatbuffers::Vector<Uint8>>();
             const Uint64 maxReply = m_sizes.ReplyBytes / m_sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader);
             auto negotiated = ::MobileGL::Wire::CreateLinkTerms(builder, terms->dataPlane(),
                 ::MobileGL::Wire::WireForm::StructImage, maxReply, m_link->Memory().CmdRingCapacity(),
@@ -612,7 +633,8 @@ namespace MobileGL::MG_Remote::Server {
                 // equal by construction.
                 static_cast<Uint32>(SelfProcessId()),
                 cmd, stage, reply, event, stamp, ourFingerprint, ourFingerprint, negotiated,
-                m_backend == nullptr ? hello->backendType() : static_cast<Uint32>(m_backend->GetBackendType()));
+                m_backend == nullptr ? hello->backendType() : static_cast<Uint32>(m_backend->GetBackendType()),
+                nonce);
             auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
                 builder, ::MobileGL::Wire::CtrlMsg::Welcome, welcome.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
@@ -620,6 +642,13 @@ namespace MobileGL::MG_Remote::Server {
             if (sent != MOBILEGL_OK) {
                 Close();
                 return sent;
+            }
+        }
+        if (pendingStream != nullptr) {
+            const MobileGLResult bound = BindDataConnection(transport, *pendingStream, dataNonce);
+            if (bound != MOBILEGL_OK) {
+                Close();
+                return bound;
             }
         }
 
@@ -730,6 +759,52 @@ namespace MobileGL::MG_Remote::Server {
             builder, ::MobileGL::Wire::CtrlMsg::CapsSnapshot, snapshot.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
         return SendEnvelope(*m_transport, builder);
+    }
+
+    // PH-7 (4), ID-P7-3. THE ONE PLACE A DATA CONNECTION IS BOUND TO A SESSION.
+    //
+    // Every connection the source offers is compared against this session's nonce, in constant
+    // time. A match becomes the Stream data plane. A mismatch is refused BY NAME - to the log,
+    // and to the peer on that same connection - and the wait goes on, so a stale connection
+    // left over from an earlier session, or one raced in by somebody who can reach the port,
+    // cannot end the session it failed to join. What ends the wait is the deadline or the
+    // control peer going away; the deadline is refused on the control connection, where the
+    // client is listening.
+    MobileGLResult ServerSession::BindDataConnection(Transport::ITransport& control,
+                                                     Transport::StreamLink& link, const Uint8* nonce) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kHandshakeTimeoutMs);
+        Uint32 refused = 0;
+        for (;;) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (left <= 0) {
+                MGLOG_E("MG_Remote server: no data connection presented this session's nonce within "
+                        "%u ms (%u refused)", kHandshakeTimeoutMs, refused);
+                return RefuseHandshake(control, ::MobileGL::Wire::RefuseCode::Authentication,
+                                       "no data connection presented the session nonce");
+            }
+            int fd = -1;
+            Uint8 presented[Transport::kDataNonceBytes] = {};
+            const MobileGLResult offered = m_dataSource(static_cast<std::uint32_t>(left), &fd, presented);
+            if (offered == MOBILEGL_ERR_TIMEOUT) continue;
+            if (offered != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote server: waiting for the data connection ended (rc=%d, %u refused)",
+                        static_cast<int>(offered), refused);
+                return offered;
+            }
+            if (Transport::ConstantTimeNonceMatch(nonce, presented)) {
+                const MobileGLResult bound = link.BindDataFd(fd);
+#if !defined(_WIN32)
+                if (bound != MOBILEGL_OK) ::close(fd);
+#endif
+                return bound;
+            }
+            ++refused;
+            // The stray's transport owns `fd` and closes it on the way out of this scope.
+            Transport::SocketTransport stray(fd, -1, Transport::TransportRole::Server);
+            (void)RefuseHandshake(stray, ::MobileGL::Wire::RefuseCode::Authentication,
+                                  "data connection nonce mismatch");
+        }
     }
 
     MobileGLResult ServerSession::AttachStreamLink(int fd, const Transport::SessionSegmentSizes& sizes) {

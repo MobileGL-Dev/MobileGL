@@ -47,6 +47,9 @@ struct HelloBuilder;
 struct Welcome;
 struct WelcomeBuilder;
 
+struct DataBind;
+struct DataBindBuilder;
+
 struct CapsSnapshot;
 struct CapsSnapshotBuilder;
 
@@ -502,11 +505,12 @@ enum class CtrlMsg : uint8_t {
   LogLine = 10,
   Refuse = 11,
   LogFlush = 12,
+  DataBind = 13,
   MIN = NONE,
-  MAX = LogFlush
+  MAX = DataBind
 };
 
-inline const CtrlMsg (&EnumValuesCtrlMsg())[13] {
+inline const CtrlMsg (&EnumValuesCtrlMsg())[14] {
   static const CtrlMsg values[] = {
     CtrlMsg::NONE,
     CtrlMsg::Hello,
@@ -520,13 +524,14 @@ inline const CtrlMsg (&EnumValuesCtrlMsg())[13] {
     CtrlMsg::Fatal,
     CtrlMsg::LogLine,
     CtrlMsg::Refuse,
-    CtrlMsg::LogFlush
+    CtrlMsg::LogFlush,
+    CtrlMsg::DataBind
   };
   return values;
 }
 
 inline const char * const *EnumNamesCtrlMsg() {
-  static const char * const names[14] = {
+  static const char * const names[15] = {
     "NONE",
     "Hello",
     "Welcome",
@@ -540,13 +545,14 @@ inline const char * const *EnumNamesCtrlMsg() {
     "LogLine",
     "Refuse",
     "LogFlush",
+    "DataBind",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameCtrlMsg(CtrlMsg e) {
-  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::LogFlush)) return "";
+  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::DataBind)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesCtrlMsg()[index];
 }
@@ -601,6 +607,10 @@ template<> struct CtrlMsgTraits<MobileGL::Wire::Refuse> {
 
 template<> struct CtrlMsgTraits<MobileGL::Wire::LogFlush> {
   static const CtrlMsg enum_value = CtrlMsg::LogFlush;
+};
+
+template<> struct CtrlMsgTraits<MobileGL::Wire::DataBind> {
+  static const CtrlMsg enum_value = CtrlMsg::DataBind;
 };
 
 template <bool B = false>
@@ -1164,7 +1174,8 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_ABIFINGERPRINT = 20,
     VT_WIREFINGERPRINT = 22,
     VT_LINKTERMS = 24,
-    VT_BACKENDTYPE = 26
+    VT_BACKENDTYPE = 26,
+    VT_DATANONCE = 28
   };
   uint32_t abiMajor() const {
     return GetField<uint32_t>(VT_ABIMAJOR, 0);
@@ -1202,6 +1213,9 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint32_t backendType() const {
     return GetField<uint32_t>(VT_BACKENDTYPE, 0);
   }
+  const ::flatbuffers::Vector<uint8_t> *dataNonce() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_DATANONCE);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1223,6 +1237,8 @@ struct Welcome FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_LINKTERMS) &&
            verifier.VerifyTable(linkTerms()) &&
            VerifyField<uint32_t>(verifier, VT_BACKENDTYPE, 4) &&
+           VerifyOffset(verifier, VT_DATANONCE) &&
+           verifier.VerifyVector(dataNonce()) &&
            verifier.EndTable();
   }
 };
@@ -1267,6 +1283,9 @@ struct WelcomeBuilder {
   void add_backendType(uint32_t backendType) {
     fbb_.AddElement<uint32_t>(Welcome::VT_BACKENDTYPE, backendType, 0);
   }
+  void add_dataNonce(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> dataNonce) {
+    fbb_.AddOffset(Welcome::VT_DATANONCE, dataNonce);
+  }
   explicit WelcomeBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1291,10 +1310,12 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcome(
     uint64_t abiFingerprint = 0,
     uint64_t wireFingerprint = 0,
     ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
-    uint32_t backendType = 0) {
+    uint32_t backendType = 0,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> dataNonce = 0) {
   WelcomeBuilder builder_(_fbb);
   builder_.add_wireFingerprint(wireFingerprint);
   builder_.add_abiFingerprint(abiFingerprint);
+  builder_.add_dataNonce(dataNonce);
   builder_.add_backendType(backendType);
   builder_.add_linkTerms(linkTerms);
   builder_.add_buildFingerprint(buildFingerprint);
@@ -1326,8 +1347,10 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcomeDirect(
     uint64_t abiFingerprint = 0,
     uint64_t wireFingerprint = 0,
     ::flatbuffers::Offset<MobileGL::Wire::LinkTerms> linkTerms = 0,
-    uint32_t backendType = 0) {
+    uint32_t backendType = 0,
+    const std::vector<uint8_t> *dataNonce = nullptr) {
   auto buildFingerprint__ = buildFingerprint ? _fbb.CreateString(buildFingerprint) : 0;
+  auto dataNonce__ = dataNonce ? _fbb.CreateVector<uint8_t>(*dataNonce) : 0;
   return MobileGL::Wire::CreateWelcome(
       _fbb,
       abiMajor,
@@ -1341,7 +1364,66 @@ inline ::flatbuffers::Offset<Welcome> CreateWelcomeDirect(
       abiFingerprint,
       wireFingerprint,
       linkTerms,
-      backendType);
+      backendType,
+      dataNonce__);
+}
+
+struct DataBind FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef DataBindBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NONCE = 4
+  };
+  const ::flatbuffers::Vector<uint8_t> *nonce() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_NONCE);
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NONCE) &&
+           verifier.VerifyVector(nonce()) &&
+           verifier.EndTable();
+  }
+};
+
+struct DataBindBuilder {
+  typedef DataBind Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nonce(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> nonce) {
+    fbb_.AddOffset(DataBind::VT_NONCE, nonce);
+  }
+  explicit DataBindBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<DataBind> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<DataBind>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<DataBind> CreateDataBind(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> nonce = 0) {
+  DataBindBuilder builder_(_fbb);
+  builder_.add_nonce(nonce);
+  return builder_.Finish();
+}
+
+struct DataBind::Traits {
+  using type = DataBind;
+  static auto constexpr Create = CreateDataBind;
+};
+
+inline ::flatbuffers::Offset<DataBind> CreateDataBindDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<uint8_t> *nonce = nullptr) {
+  auto nonce__ = nonce ? _fbb.CreateVector<uint8_t>(*nonce) : 0;
+  return MobileGL::Wire::CreateDataBind(
+      _fbb,
+      nonce__);
 }
 
 struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2188,6 +2270,9 @@ struct CtrlEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const MobileGL::Wire::LogFlush *msg_as_LogFlush() const {
     return msg_type() == MobileGL::Wire::CtrlMsg::LogFlush ? static_cast<const MobileGL::Wire::LogFlush *>(msg()) : nullptr;
   }
+  const MobileGL::Wire::DataBind *msg_as_DataBind() const {
+    return msg_type() == MobileGL::Wire::CtrlMsg::DataBind ? static_cast<const MobileGL::Wire::DataBind *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2244,6 +2329,10 @@ template<> inline const MobileGL::Wire::Refuse *CtrlEnvelope::msg_as<MobileGL::W
 
 template<> inline const MobileGL::Wire::LogFlush *CtrlEnvelope::msg_as<MobileGL::Wire::LogFlush>() const {
   return msg_as_LogFlush();
+}
+
+template<> inline const MobileGL::Wire::DataBind *CtrlEnvelope::msg_as<MobileGL::Wire::DataBind>() const {
+  return msg_as_DataBind();
 }
 
 struct CtrlEnvelopeBuilder {
@@ -2334,6 +2423,10 @@ inline bool VerifyCtrlMsg(::flatbuffers::VerifierTemplate<B> &verifier, const vo
     }
     case CtrlMsg::LogFlush: {
       auto ptr = reinterpret_cast<const MobileGL::Wire::LogFlush *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case CtrlMsg::DataBind: {
+      auto ptr = reinterpret_cast<const MobileGL::Wire::DataBind *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;

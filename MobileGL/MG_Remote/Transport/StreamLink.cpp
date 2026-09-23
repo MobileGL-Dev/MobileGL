@@ -330,21 +330,53 @@ namespace MobileGL::MG_Remote::Transport {
         (void)role;
         return MOBILEGL_ERR_UNSUPPORTED;
 #else
-        if (fd < 0 || !mirrors.Valid() || !mirrors.ReplySlotCount() ||
+        if (fd < 0) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        const auto prepared = Prepare(mirrors, role);
+        if (prepared != MOBILEGL_OK) return prepared;
+        return BindDataFd(fd);
+#endif
+    }
+    MobileGLResult StreamLink::Prepare(SessionSegments& mirrors, TransportRoleTag role) {
+        if (!mirrors.Valid() || !mirrors.ReplySlotCount() ||
             mirrors.ReplyBytes() / mirrors.ReplySlotCount() <= sizeof(ReplySlotHeader))
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         Detach();
         m_impl.reset(new Impl);
         auto& x = *m_impl;
-        x.fd = fd;
         x.memory = &mirrors;
         x.role = role;
         x.records = {mirrors.CmdRingBase(), mirrors.CmdRingCapacity(), mirrors.CmdRingCapacity() - 1, 0};
         x.recordCursor = {mirrors.CmdRingBase(), mirrors.CmdRingCapacity(), mirrors.CmdRingCapacity() - 1, 0};
         x.events = {mirrors.EventRingBase(), mirrors.EventRingCapacity(), mirrors.EventRingCapacity() - 1, 0};
         x.eventCursor = {mirrors.EventRingBase(), mirrors.EventRingCapacity(), mirrors.EventRingCapacity() - 1, 0};
+        return MOBILEGL_OK;
+    }
+    MobileGLResult StreamLink::BindDataFd(int fd) {
+#if defined(_WIN32)
+        (void)fd;
+        return MOBILEGL_ERR_UNSUPPORTED;
+#else
+        auto& x = *m_impl;
+        // Once, onto a prepared link: a second descriptor would be a second reader on one ring.
+        if (fd < 0 || !x.memory || x.fd >= 0 || x.reader.joinable()) return MOBILEGL_ERR_INVALID_ARGUMENT;
+        x.fd = fd;
         x.reader = std::thread([&x] { x.Loop(); });
         return MOBILEGL_OK;
+#endif
+    }
+    MobileGLResult StreamLink::AttachOwnedDeferred(const SessionSegmentSizes& sizes, TransportRoleTag role) {
+#if defined(_WIN32)
+        (void)sizes;
+        (void)role;
+        return MOBILEGL_ERR_UNSUPPORTED;
+#else
+        auto owned = std::make_unique<ShmLink>();
+        const auto result = owned->Memory().CreatePrivate(
+            sizes, role == TransportRoleTag::ClientProducer ? MemoryRole::Client : MemoryRole::Server);
+        if (result != MOBILEGL_OK) return result;
+        const auto prepared = Prepare(owned->Memory(), role);
+        if (prepared == MOBILEGL_OK) m_impl->owned = std::move(owned);
+        return prepared;
 #endif
     }
     MobileGLResult StreamLink::AttachOwned(int fd, const SessionSegmentSizes& sizes, TransportRoleTag role) {

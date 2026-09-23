@@ -92,7 +92,8 @@ def receive(peer, schema):
     if kind == schema['CtrlMsg'].CtrlMsg.Welcome:
         welcome = schema['Welcome'].Welcome()
         welcome.Init(table.Bytes, table.Pos)
-        return {'welcome': welcome.ServerPid(), 'fingerprint': welcome.WireFingerprint()}
+        return {'welcome': welcome.ServerPid(), 'fingerprint': welcome.WireFingerprint(),
+                'nonce': bytes(welcome.DataNonce(j) for j in range(welcome.DataNonceLength())).hex()}
     raise RuntimeError(f'unexpected first control reply {kind}')
 
 
@@ -125,6 +126,30 @@ def hello(schema, flatbuffers, fingerprint=0, major=1, token=kToken, identifier=
     builder.Finish(envelope.End(builder), identifier)
     payload = bytes(builder.Output())
     return struct.pack('<4sI', b'MGLF', len(payload)) + payload
+
+
+def data_bind(schema, flatbuffers, nonce):
+    """PH-7 (4): the framed DataBind a client writes as its data connection's first bytes."""
+    builder = flatbuffers.Builder(64)
+    vector = builder.CreateByteVector(nonce)
+    message = schema['DataBind']
+    message.Start(builder)
+    message.AddNonce(builder, vector)
+    body = message.End(builder)
+    envelope = schema['CtrlEnvelope']
+    envelope.Start(builder)
+    envelope.AddMsgType(builder, schema['CtrlMsg'].CtrlMsg.DataBind)
+    envelope.AddMsg(builder, body)
+    builder.Finish(envelope.End(builder), b'MGLC')
+    payload = bytes(builder.Output())
+    return struct.pack('<4sI', b'MGLF', len(payload)) + payload
+
+
+def open_data(port, schema, flatbuffers, nonce):
+    """A data connection that has presented `nonce`. Left open: the server owns what happens next."""
+    data = socket.create_connection(('127.0.0.1', port), timeout=3)
+    data.sendall(data_bind(schema, flatbuffers, nonce))
+    return data
 
 
 def supervisor_environment(log, token, same_build=False):
@@ -200,35 +225,39 @@ def supervisor(server, log, same_build=False):
 
 
 @contextmanager
-def held_session(port, schema, message):
+def held_session(port, schema, flatbuffers, message):
     """A welcomed session whose sockets STAY OPEN, so its child is still alive to be killed.
 
-    `exchange` closes the pair before returning, which is what every other control in this file
-    wants and is exactly wrong for the reap case: a child that has already exited cannot be made
-    to fault. Busy is retried here for the same reason it is there - a previous child may still
-    be reaching _exit.
+    `exchange` closes the connection before returning, which is what every other control in this
+    file wants and is exactly wrong for the reap case: a child that has already exited cannot be
+    made to fault. Busy is retried here for the same reason it is there - a previous child may
+    still be reaching _exit.
+
+    PH-7 (4): the data connection is opened AFTER the Welcome and presents its nonce, which is
+    what gets the child out of the handshake and into its control loop.
     """
     control = None
     data = None
     reply = None
     for _ in range(30):
         control = socket.create_connection(('127.0.0.1', port), timeout=3)
-        data = socket.create_connection(('127.0.0.1', port), timeout=3)
         control.sendall(message)
         reply = receive(control, schema)
         if reply.get('code') != 7:
             break
         control.close()
-        data.close()
         control = None
         time.sleep(.05)
     if control is None:
         raise RuntimeError('supervisor remained Busy while a held session was wanted')
+    if reply.get('welcome', 0):
+        data = open_data(port, schema, flatbuffers, bytes.fromhex(reply['nonce']))
     try:
         yield control, reply
     finally:
         control.close()
-        data.close()
+        if data is not None:
+            data.close()
 
 
 def last_faulted(path):
@@ -254,6 +283,10 @@ def wait_for_log(path, needle, seconds=15):
 
 @contextmanager
 def pair(port):
+    """A session's CONTROL connection. The name is historical: until PH-7 (4) a TCP session was
+    two connections paired by arrival order, and this opened both. The data connection is now
+    opened after Welcome with the nonce it carries (open_data), so a control that stops at the
+    handshake - every one but held_session's - never opens one."""
     deadline = time.monotonic() + 5
     while True:
         try:
@@ -264,11 +297,7 @@ def pair(port):
                 raise
             time.sleep(.02)
     try:
-        data = socket.create_connection(('127.0.0.1', port), timeout=3)
-        try:
-            yield control
-        finally:
-            data.close()
+        yield control
     finally:
         control.close()
 
@@ -308,7 +337,7 @@ def main():
         sys.path[:0] = [directory, str(ROOT / '3rdparty/flatbuffers/python')]
         import flatbuffers
         schema = {name: importlib.import_module('MobileGL.Wire.' + name)
-                  for name in ('CtrlEnvelope', 'CtrlMsg', 'Hello', 'LinkTerms', 'Refuse', 'Welcome')}
+                  for name in ('CtrlEnvelope', 'CtrlMsg', 'DataBind', 'Hello', 'LinkTerms', 'Refuse', 'Welcome')}
         evidence = {}
 
         # ---- PH-7 (2)(3), ID-P7-3: THE TWO LISTEN REFUSALS -------------------------------
@@ -364,7 +393,7 @@ def main():
             # a frame of a DIFFERENT schema that happened to verify was read here as a
             # CtrlEnvelope and its union tag believed. This is the cheap half of Ph's fuzz arm 1;
             # the arm itself (five malformed shapes, its own ctest lane) is scheduled after P7.
-            with held_session(port, schema,
+            with held_session(port, schema, flatbuffers,
                               hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
                 assert welcome.get('welcome', 0), welcome
                 control.sendall(hello(schema, flatbuffers, fingerprint=fingerprint,
@@ -390,7 +419,7 @@ def main():
             # the status, so the log carried no line at all for this event and the assertion
             # below could not have been written.
             held = hello(schema, flatbuffers, fingerprint=fingerprint)
-            with held_session(port, schema, held) as (control, welcome):
+            with held_session(port, schema, flatbuffers, held) as (control, welcome):
                 faulted = welcome.get('welcome', 0)
                 assert faulted and faulted != os.getpid(), welcome
                 # The count is a supervisor LIFETIME figure and the controls above have already
@@ -418,6 +447,64 @@ def main():
             after = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert after.get('welcome', 0) and after['welcome'] != faulted, after
             evidence['connect_after_fault'] = after
+
+            # ---- PH-7 (4), ID-P7-3: THE DATA CONNECTION IS BOUND BY NONCE ---------------------
+            #
+            # (a) THE FIELD FAILURE. Over a Windows `adb forward` the two connections of one
+            #     session arrived reordered, the server's AcceptPair read the data connection as
+            #     control, and every child exited 67. Reproduced here without adb: the data
+            #     connection (a DataBind with a nonce no live session minted) is presented FIRST,
+            #     the control connection second. It is refused by name, as a clean exit, and the
+            #     control connection behind it is welcomed.
+            stray = open_data(port, schema, flatbuffers, os.urandom(16))
+            try:
+                refused = receive(stray, schema)
+            finally:
+                stray.close()
+            assert refused.get('code') == 4 and refused.get('detail') == 'data connection names no live session', refused
+            reordered = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
+            assert reordered.get('welcome', 0), reordered
+            assert len(bytes.fromhex(reordered['nonce'])) == 16, reordered
+            evidence['data_connection_first'] = refused
+
+            # (b) A STALE NONCE while a session is live: a data connection from an earlier session
+            #     (or raced in by anybody who can reach the port) is refused by name ON THAT
+            #     CONNECTION, and the session it failed to join still binds its own and comes up.
+            held = hello(schema, flatbuffers, fingerprint=fingerprint)
+            for _ in range(30):
+                control = socket.create_connection(('127.0.0.1', port), timeout=3)
+                control.sendall(held)
+                welcome = receive(control, schema)
+                if welcome.get('code') != 7:
+                    break
+                control.close()
+                time.sleep(.05)
+            try:
+                assert welcome.get('welcome', 0) and len(bytes.fromhex(welcome['nonce'])) == 16, welcome
+                nonce = bytes.fromhex(welcome['nonce'])
+                stale = bytes(b ^ 0xFF for b in nonce)
+                wrong = open_data(port, schema, flatbuffers, stale)
+                try:
+                    mismatch = receive(wrong, schema)
+                finally:
+                    wrong.close()
+                assert mismatch.get('code') == 4 and mismatch.get('detail') == 'data connection nonce mismatch', mismatch
+                right = open_data(port, schema, flatbuffers, nonce)
+                try:
+                    ready = wait_for_log(serverLog, f'pid={welcome["welcome"]} transport=spawn role=server ready')
+                    assert ready is not None, (
+                        f'session pid={welcome["welcome"]} did not come up on its own data connection '
+                        f'after a stale one was refused; see {serverLog}')
+                finally:
+                    right.close()
+            finally:
+                control.close()
+            named = wait_for_log(serverLog, 'Refuse{Authentication} data connection nonce mismatch')
+            assert named is not None, f'the stale data connection was not refused by name in {serverLog}'
+            evidence['stale_nonce'] = {'refusal': mismatch, 'line': next(
+                l.strip() for l in named.splitlines() if 'data connection nonce mismatch' in l)}
+            assert process.poll() is None, 'a refused data connection killed the supervisor'
+
         with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _, _log):
             strict = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert strict.get('code') == 3, strict

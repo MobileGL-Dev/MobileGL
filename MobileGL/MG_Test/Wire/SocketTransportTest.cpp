@@ -35,6 +35,7 @@
 // `BufferTooSmallKeepsTheMessage` matters more here: the message it must keep
 // is one this side already reassembled out of bytes nobody else can re-deliver.
 
+#include <MG_Remote/Handshake.h> // PH-7 (4): EncodeDataBind / DecodeDataBind
 #include <MG_Remote/Protocol/generated/protocol_generated.h> // RefuseCode, for the word below
 #include <MG_Remote/Transport/AuthToken.h> // PH-7 (3): the minimum and the comparison
 #include <MG_Remote/Transport/Doorbell.h> // kWaitForever
@@ -179,6 +180,75 @@ TEST(SocketTransportTest, TheTokenComparisonAnswersLengthAndPrefixTheSameWay) {
                              '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     EXPECT_FALSE(ConstantTimeTokenMatch(expected, embedded, sizeof(embedded)));
     EXPECT_FALSE(ConstantTimeTokenMatch(nullptr, "anything", 8));
+}
+
+// PH-7 (4), ID-P7-3. THE DATA CONNECTION'S FIRST FRAME IS READ EXACTLY, AND ONLY A DataBind
+// OF THE MINTED WIDTH IS ONE.
+//
+// A client writes its DataBind and then, on the same socket, StreamLink's own frames - possibly
+// in the same segment. The server hands that descriptor to a StreamLink reader after reading
+// the DataBind, so a reader that buffered ahead would eat the first command bytes and the
+// session would die of "invalid data frame header" one frame later. ReceiveOneFrame reads the
+// header and then exactly the payload; the bytes behind it are still on the socket afterwards.
+// End to end, over a real loopback TCP listener, through the two helpers ServerMain and the
+// client use. The two-process half (reordered arrival, stale nonce, refused by name) is
+// TcpLane.SupervisorProtocolControls.
+TEST(SocketTransportTest, TheDataBindIsReadExactlyAndTheStreamBehindItIsLeftOnTheSocket) {
+    int reservation = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(reservation, 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::bind(reservation, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    socklen_t addressSize = sizeof(address);
+    ASSERT_EQ(::getsockname(reservation, reinterpret_cast<sockaddr*>(&address), &addressSize), 0);
+    const auto endpoint = std::string("tcp://127.0.0.1:") + std::to_string(ntohs(address.sin_port));
+    ::close(reservation);
+    int listener = -1;
+    ASSERT_EQ(SocketTransport::Listen(endpoint, &listener), MOBILEGL_OK);
+
+    std::uint8_t nonce[kDataNonceBytes];
+    ASSERT_EQ(SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
+    const auto bind = MobileGL::MG_Remote::EncodeDataBind(nonce, sizeof(nonce));
+    int client = -1;
+    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
+                                                     &client), MOBILEGL_OK);
+    const char tail[] = "MGLD-the-first-stream-bytes";
+    ASSERT_EQ(::send(client, tail, sizeof(tail), MSG_NOSIGNAL), static_cast<ssize_t>(sizeof(tail)));
+
+    int accepted = -1;
+    ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &accepted), MOBILEGL_OK);
+    std::vector<std::uint8_t> frame;
+    ASSERT_EQ(SocketTransport::ReceiveOneFrame(accepted, 1000, 1024, &frame), MOBILEGL_OK);
+    EXPECT_EQ(frame, bind);
+    std::uint8_t presented[kDataNonceBytes] = {};
+    ASSERT_TRUE(MobileGL::MG_Remote::DecodeDataBind(frame, presented));
+    EXPECT_TRUE(ConstantTimeNonceMatch(nonce, presented));
+    char after[sizeof(tail)] = {};
+    EXPECT_EQ(::recv(accepted, after, sizeof(after), MSG_WAITALL), static_cast<ssize_t>(sizeof(tail)));
+    EXPECT_EQ(std::memcmp(after, tail, sizeof(tail)), 0);
+
+    // Only a DataBind of the minted width is one: a shorter nonce, and a frame that is not a
+    // DataBind at all, both decode as "no", which the callers refuse by name.
+    const auto shortBind = MobileGL::MG_Remote::EncodeDataBind(nonce, sizeof(nonce) - 1);
+    EXPECT_FALSE(MobileGL::MG_Remote::DecodeDataBind(shortBind, presented));
+    std::vector<std::uint8_t> notABind(bind.size(), 0xA5);
+    EXPECT_FALSE(MobileGL::MG_Remote::DecodeDataBind(notABind, presented));
+    // One byte of difference anywhere is a mismatch.
+    presented[kDataNonceBytes - 1] ^= 1;
+    EXPECT_FALSE(ConstantTimeNonceMatch(nonce, presented));
+
+    // A frame over the caller's bound is refused before its payload is read.
+    int second = -1;
+    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
+                                                     &second), MOBILEGL_OK);
+    int big = -1;
+    ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &big), MOBILEGL_OK);
+    EXPECT_EQ(SocketTransport::ReceiveOneFrame(big, 1000, bind.size() - 1, &frame), MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    // And a connection that says nothing times out rather than blocking.
+    EXPECT_EQ(SocketTransport::AcceptOne(listener, 50, &big), MOBILEGL_ERR_TIMEOUT);
+    for (const int fd : {client, accepted, second, big, listener})
+        if (fd >= 0) ::close(fd);
 }
 
 namespace {

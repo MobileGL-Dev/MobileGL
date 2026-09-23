@@ -476,6 +476,7 @@ namespace MobileGL::MG_Remote {
         inputs.ProgramArtifactsCodecVersion = MG_State::GLState::kProgramArtifactsCodecVersion;
         inputs.ProgramArtifactsSchema = MG_State::GLState::ProgramArtifactsSchemaFingerprint();
         inputs.OpCount = static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount);
+        inputs.ControlSchemaRevision = MOBILEGL_PROTOCOL_CONTROL_REVISION;
         inputs.AbiVersion = MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR);
         inputs.PointerBits = sizeof(void*) * 8;
         const Uint32 endian = 1;

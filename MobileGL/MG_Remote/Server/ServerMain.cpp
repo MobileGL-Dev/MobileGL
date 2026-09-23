@@ -1,6 +1,7 @@
 // MobileGL - separate-process server and TCP session supervisor.
 // SPDX-License-Identifier: LGPL-3.0-only
 #include "../Transport/Doorbell.h"
+#include "../Transport/FdPassing.h"
 #include "../Transport/SocketTransport.h"
 #include "../Transport/WireLog.h"
 #include "../Protocol/SurfaceOpCodec.h"
@@ -14,6 +15,7 @@
 #include <MG_Backend/ServerRole.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +23,8 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <cerrno>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -59,6 +63,103 @@ void RefuseBusy(SocketTransport& transport, const char* detail) {
     Refuse(transport, Protocol::RefuseCode::Busy, detail);
 }
 
+// PH-7 (4), ID-P7-3. THE DATA CONNECTION IS ROUTED BY WHAT IT SAYS, NOT BY WHEN IT CAME.
+//
+// On TCP the supervisor accepts ONE connection at a time. While no session is live, a
+// connection is a session's control connection and goes to a fresh child. While one is, the
+// connection's first frame decides: a DataBind is the live session's data connection and its
+// descriptor goes to that child over the hand-off socketpair, with the nonce it presented as
+// the sideband; anything else is a second client and is refused Busy exactly as before. The
+// supervisor never judges the nonce - ServerSession::BindDataConnection compares it, once, in
+// the child that minted it. This replaces AcceptPair's rule that the second connection to
+// arrive inside the window IS the data plane: over a Windows `adb forward` the two arrived
+// reordered, the data connection was read as control, and every child exited 67.
+constexpr std::uint32_t kFirstFrameWaitMs = 2000;
+constexpr std::uint64_t kFirstFrameMaxBytes = 1024 * 1024;
+
+void RouteWhileBusy(SocketTransport& connection, int handoff) {
+    std::vector<std::uint8_t> frame;
+    const int fd = connection.StreamFd();
+    const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
+    std::uint8_t nonce[kDataNonceBytes] = {};
+    if (read == MOBILEGL_OK && DecodeDataBind(frame, nonce)) {
+        if (handoff >= 0 && FdPassing::SendFd(handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)}) == MOBILEGL_OK) {
+            // The child holds its own descriptor for this connection now; ours goes without a
+            // shutdown(2), which would disconnect the child's too.
+            connection.CloseLocalCopy();
+            return;
+        }
+        Refuse(connection, Protocol::RefuseCode::Authentication,
+               "data connection could not be handed to the live session");
+        return;
+    }
+    // The frame (if any) is consumed, so closing cannot RST the refusal away - the reason
+    // RefuseBusy reads the Hello first.
+    Refuse(connection, Protocol::RefuseCode::Busy, "one session is already active");
+}
+
+// True when the control peer has closed (EOF or error); false while it is open, readable or not.
+bool ControlPeerGone(int controlFd) {
+    char byte = 0;
+    const auto peeked = ::recv(controlFd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+    return peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR);
+}
+
+// The session child's source: descriptors the supervisor forwarded, each with the nonce its
+// DataBind presented. Watching the control connection too, so a client that went away after
+// Welcome ends the wait at once instead of holding the supervisor Busy for the whole deadline.
+Server::ServerSession::DataConnectionSource HandoffSource(int handoff, int controlFd) {
+    return [handoff, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
+        pollfd fds[2] = {{handoff, POLLIN, 0}, {controlFd, POLLIN, 0}};
+        // A control connection with bytes waiting is not a hang-up and must not spin this loop:
+        // after the first look it is only asked again once per slice.
+        const int rc = ::poll(fds, 2, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50)));
+        if (rc < 0) return errno == EINTR ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
+        if ((fds[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0 && ControlPeerGone(controlFd))
+            return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        if ((fds[0].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+            if ((fds[1].revents & POLLIN) != 0) {
+                pollfd only{handoff, POLLIN, 0};
+                if (::poll(&only, 1, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50))) <= 0)
+                    return MOBILEGL_ERR_TIMEOUT;
+            } else {
+                return MOBILEGL_ERR_TIMEOUT;
+            }
+        }
+        std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
+        std::uint64_t size = 0;
+        const auto received = FdPassing::ReceiveFd(handoff, outFd, MobileGLMutableByteSpan{sideband, sizeof(sideband)},
+                                                   &size, 0);
+        if (received != MOBILEGL_OK) return received;
+        // The supervisor always sends exactly the presented nonce; a short sideband compares as
+        // zeros, which no minted nonce is going to equal by accident.
+        std::memcpy(outNonce, sideband, kDataNonceBytes);
+        return MOBILEGL_OK;
+    };
+}
+
+// The single-session (no --serve) source: this process still owns the listener, so it accepts
+// the data connection itself and reads its DataBind the same way the supervisor would.
+Server::ServerSession::DataConnectionSource ListenerSource(int listener, int controlFd) {
+    return [listener, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
+        if (ControlPeerGone(controlFd)) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        int fd = -1;
+        const auto accepted = SocketTransport::AcceptOne(listener, std::min<std::uint32_t>(timeoutMs, 250), &fd);
+        if (accepted != MOBILEGL_OK) return accepted;
+        std::vector<std::uint8_t> frame;
+        std::uint8_t presented[kDataNonceBytes] = {};
+        const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
+        if (read != MOBILEGL_OK || !DecodeDataBind(frame, presented)) {
+            SocketTransport stray(fd, -1, TransportRole::Server);
+            Refuse(stray, Protocol::RefuseCode::Authentication, "data connection's first frame is not a DataBind");
+            return MOBILEGL_ERR_TIMEOUT;
+        }
+        std::memcpy(outNonce, presented, kDataNonceBytes);
+        *outFd = fd;
+        return MOBILEGL_OK;
+    };
+}
+
 struct FlushAck { ITransport* transport; std::uint64_t seq; };
 void SendLogAck(void* pointer) {
     auto& ack = *static_cast<FlushAck*>(pointer);
@@ -70,7 +171,10 @@ void SendLogAck(void* pointer) {
 }
 
 // Called only after fork: the supervisor never creates a backend or EGL context.
-[[noreturn]] void RunSession(std::unique_ptr<SocketTransport> control) {
+// `dataSource` is set on TCP (PH-7 (4)) and empty on a unix endpoint, whose second connection
+// is the SCM_RIGHTS socket AcceptPair already paired.
+[[noreturn]] void RunSession(std::unique_ptr<SocketTransport> control,
+                             Server::ServerSession::DataConnectionSource dataSource) {
     const int selfPid = static_cast<int>(::getpid());
     const bool tcp = control->IsTcp();
     std::vector<std::uint8_t> helloFrame;
@@ -81,6 +185,15 @@ void SendLogAck(void* pointer) {
     if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) ::_exit(67);
     flatbuffers::Verifier verifier(helloFrame.data(), helloFrame.size());
     if (!Protocol::VerifyCtrlEnvelopeBuffer(verifier)) ::_exit(67);
+    // PH-7 (4). A DataBind with no live session to join: the supervisor routes a data connection
+    // to a child only while one is live, so this is a stale connection (its session already
+    // ended) or one that never had a session. Refused by name, and the child is a clean exit -
+    // it is a refusal, not a fault.
+    if (Protocol::GetCtrlEnvelope(helloFrame.data())->msg_type() == Protocol::CtrlMsg::DataBind) {
+        Refuse(*control, Protocol::RefuseCode::Authentication, "data connection names no live session");
+        std::fflush(nullptr);
+        ::_exit(0);
+    }
     const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
     if (!hello) ::_exit(67);
     // Reject incompatible wire before backend bring-up can obscure the cause.
@@ -122,11 +235,14 @@ void SendLogAck(void* pointer) {
         peerBell = std::make_unique<SocketDoorbell>(-1, clientBell[1], 1, true);
         session.SetExternalDoorbells(selfBell.get(), peerBell.get());
     }
+    if (tcp) session.SetDataConnectionSource(std::move(dataSource));
     const auto accepted = session.Accept(*control, &helloFrame);
     if (accepted != MOBILEGL_OK) {
         WireLogError("MG_Remote server: pid=%d Accept failed (rc=%d)", selfPid, static_cast<int>(accepted));
         std::fflush(nullptr);
-        ::_exit(accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH ? 0 : 67);
+        // A refusal and a peer that went away before its data connection bound (PH-7 (4): the
+        // client closed after Welcome) are outcomes, not faults; the supervisor counts only 67.
+        ::_exit(accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH || accepted == MOBILEGL_ERR_TRANSPORT_CLOSED ? 0 : 67);
     }
     if (!tcp)
     {
@@ -358,34 +474,74 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     WireLogError("MG_Remote server: pid=%d listening on %s", static_cast<int>(::getpid()), endpoint.c_str());
     pid_t active = -1;
     unsigned long sessionsFaulted = 0;
+    const bool tcpEndpoint = endpoint.compare(0, 6, "tcp://") == 0;
+    // The supervisor's end of the live child's data-connection hand-off (PH-7 (4)); -1 while no
+    // session is live. It goes with the child: a reaped session can be handed nothing.
+    int handoff = -1;
+    const auto reap = [&]() {
+        const bool reaped = ReapActiveSession(active, sessionsFaulted);
+        if (active <= 0 && handoff >= 0) { ::close(handoff); handoff = -1; }
+        return reaped;
+    };
     for (;;) {
-        ReapActiveSession(active, sessionsFaulted);
+        reap();
         std::unique_ptr<SocketTransport> control;
-        const auto accepted = SocketTransport::AcceptPair(listener, serve ? 250 : 30000, control);
+        MobileGLResult accepted = MOBILEGL_ERR_UNSUPPORTED;
+        if (tcpEndpoint) {
+            int fd = -1;
+            accepted = SocketTransport::AcceptOne(listener, serve ? 250 : 30000, &fd);
+            if (accepted == MOBILEGL_OK) control = std::make_unique<SocketTransport>(fd, -1, TransportRole::Server);
+        } else {
+            accepted = SocketTransport::AcceptPair(listener, serve ? 250 : 30000, control);
+        }
         if (accepted == MOBILEGL_ERR_TIMEOUT && serve) continue;
         if (accepted != MOBILEGL_OK) { LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
         if (!serve) {
+            if (tcpEndpoint) {
+                // The listener stays open: this session's data connection has yet to arrive on it.
+                const int controlFd = control->StreamFd();
+                RunSession(std::move(control), ListenerSource(listener, controlFd));
+            }
             ::close(listener);
-            if (endpoint[0] != '@' && endpoint.compare(0, 6, "tcp://") != 0) ::unlink(endpoint.c_str());
-            RunSession(std::move(control));
+            if (endpoint[0] != '@') ::unlink(endpoint.c_str());
+            RunSession(std::move(control), {});
         }
-        ReapActiveSession(active, sessionsFaulted);
+        reap();
         // exit_group closes files just before waitpid can observe the exit.
         // Allow that small scheduling window; a live peer remains Busy.
         const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
         while (active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
-            if (ReapActiveSession(active, sessionsFaulted)) break;
+            if (reap()) break;
             ::usleep(1000);
         }
         if (active > 0) {
-            RefuseBusy(*control, "one session is already active");
+            if (tcpEndpoint) RouteWhileBusy(*control, handoff);
+            else RefuseBusy(*control, "one session is already active");
+            continue;
+        }
+        int pair[2] = {-1, -1};
+        if (tcpEndpoint && FdPassing::CreateSocketPair(pair) != MOBILEGL_OK) {
+            RefuseBusy(*control, "could not create the data-connection hand-off");
             continue;
         }
         std::fflush(nullptr);
         const pid_t child = ::fork();
-        if (child == 0) { ::close(listener); RunSession(std::move(control)); }
-        if (child < 0) { RefuseBusy(*control, "could not create session child"); continue; }
+        if (child == 0) {
+            ::close(listener);
+            if (pair[0] >= 0) ::close(pair[0]);
+            const int controlFd = control->StreamFd();
+            RunSession(std::move(control), tcpEndpoint ? HandoffSource(pair[1], controlFd)
+                                                       : Server::ServerSession::DataConnectionSource{});
+        }
+        if (child < 0) {
+            if (pair[0] >= 0) ::close(pair[0]);
+            if (pair[1] >= 0) ::close(pair[1]);
+            RefuseBusy(*control, "could not create session child");
+            continue;
+        }
         active = child;
+        if (pair[1] >= 0) ::close(pair[1]);
+        handoff = pair[0];
         control->CloseLocalCopy();
     }
     LogSupervisorSummary(sessionsFaulted);

@@ -6,8 +6,10 @@
 #include "Transport/ITransport.h"
 #include <MG_Util/Debug/Log.h>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace MobileGL::MG_Remote {
     inline MobileGLResult RefuseHandshake(Transport::ITransport& transport,
@@ -91,5 +93,36 @@ namespace MobileGL::MG_Remote {
             MGLOG_W("MGPipe: compatible wire with different build: local=%s peer=%s",
                     BuildFingerprint(), stamp == nullptr ? "<missing>" : stamp);
         return MOBILEGL_OK;
+    }
+
+    // PH-7 (4), ID-P7-3. THE DATA CONNECTION'S FIRST FRAME, both directions of it.
+    //
+    // A TCP data connection is opened after Welcome and names its session by handing back
+    // `Welcome.dataNonce` in a DataBind, framed exactly like a control message so the server can
+    // tell it from a Hello with one read. The nonce is COMPARED in exactly one place,
+    // ServerSession::BindDataConnection, in constant time; these two only build and parse.
+    inline std::vector<std::uint8_t> EncodeDataBind(const std::uint8_t* nonce, std::size_t size) {
+        ::flatbuffers::FlatBufferBuilder builder(64);
+        auto bind = ::MobileGL::Wire::CreateDataBind(builder, builder.CreateVector(nonce, size));
+        auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::DataBind,
+                                                            bind.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        return std::vector<std::uint8_t>(builder.GetBufferPointer(),
+                                         builder.GetBufferPointer() + builder.GetSize());
+    }
+
+    // True when `frame` is a verifiable CtrlEnvelope carrying a DataBind whose nonce is exactly
+    // kDataNonceBytes; the nonce is copied out. Anything else - a Hello, a different schema, a
+    // nonce of another width - is false, and the caller refuses the connection by name.
+    inline bool DecodeDataBind(const std::vector<std::uint8_t>& frame,
+                               std::uint8_t (&nonce)[Transport::kDataNonceBytes]) {
+        if (frame.size() < 8 || !::MobileGL::Wire::CtrlEnvelopeBufferHasIdentifier(frame.data())) return false;
+        ::flatbuffers::Verifier verifier(frame.data(), frame.size());
+        if (!::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier)) return false;
+        const auto* bind = ::MobileGL::Wire::GetCtrlEnvelope(frame.data())->msg_as_DataBind();
+        if (bind == nullptr || bind->nonce() == nullptr || bind->nonce()->size() != Transport::kDataNonceBytes)
+            return false;
+        std::memcpy(nonce, bind->nonce()->data(), Transport::kDataNonceBytes);
+        return true;
     }
 } // namespace MobileGL::MG_Remote

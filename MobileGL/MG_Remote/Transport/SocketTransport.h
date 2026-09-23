@@ -100,6 +100,39 @@ namespace MobileGL::MG_Remote::Transport {
         static MobileGLResult ConnectTo(const std::string& path, std::uint32_t timeoutMs,
                                         std::unique_ptr<SocketTransport>& outClient);
 
+        // ---- PH-7 (4), ID-P7-3: a TCP data connection is BOUND, not paired --------
+        //
+        // AcceptPair/ConnectTo pair a session's two connections by ARRIVAL ORDER inside a
+        // window: first is control, second is data. That is a protocol only while nothing sits
+        // between the two processes. Over a Windows `adb forward` the two arrive reordered, the
+        // data connection is read as control, and every session child exits 67 waiting for a
+        // Hello that went down the other socket - and anybody who can reach the port can race a
+        // connection into the gap and become somebody else's data plane. So on TCP the session
+        // is ONE connection until it is authenticated; the server mints `Welcome.dataNonce`,
+        // and the client then opens its data connection and presents the nonce as that
+        // connection's first frame (DataBind). The server matches the value, not the order.
+        // Unix endpoints keep AcceptPair: their second connection is the SCM_RIGHTS socket of a
+        // same-user rendezvous, not a data plane anybody else can reach.
+
+        // Connects the control connection only on `tcp://`; identical to ConnectTo otherwise.
+        static MobileGLResult ConnectControl(const std::string& path, std::uint32_t timeoutMs,
+                                             std::unique_ptr<SocketTransport>& outClient);
+        // Opens one more connection to `path` and writes `firstFrame` (a CtrlEnvelope carrying
+        // DataBind, framed here) as its first bytes. *outFd is the caller's to attach a
+        // StreamLink to.
+        static MobileGLResult ConnectDataConnection(const std::string& path, std::uint32_t timeoutMs,
+                                                    MobileGLByteSpan firstFrame, int* outFd);
+        // Accepts ONE connection (TCP options applied, CLOEXEC). MOBILEGL_ERR_TIMEOUT when none.
+        static MobileGLResult AcceptOne(int listenFd, std::uint32_t timeoutMs, int* outFd);
+        // Reads EXACTLY one framed message from a raw socket - the header, then the payload,
+        // and not one byte more. A DataBind is followed on the same connection by StreamLink's
+        // own frames, which a buffered reader would swallow. PROTOCOL_MISMATCH for a bad magic
+        // or a payload over `maxBytes`, TIMEOUT when the frame did not complete in time.
+        static MobileGLResult ReceiveOneFrame(int fd, std::uint32_t timeoutMs, std::uint64_t maxBytes,
+                                              std::vector<std::uint8_t>* outPayload);
+        // `size` bytes from the kernel CSPRNG. Never a PRNG fallback: an error is an error.
+        static MobileGLResult MintNonce(std::uint8_t* out, std::size_t size);
+
         // Adopts an already-connected stream fd - what `sm` uses on each side of
         // the fork, where fd 3 is the stream and fd 4 is the aux socket.
         // `auxFd` may be -1: the transport then answers MOBILEGL_ERR_UNSUPPORTED
