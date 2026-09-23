@@ -123,6 +123,10 @@ namespace MobileGL::MG_Remote::Transport {
         static MobileGLResult ConnectDataConnection(const std::string& path, std::uint32_t timeoutMs,
                                                     MobileGLByteSpan firstFrame, int* outFd);
         // Accepts ONE connection (TCP options applied, CLOEXEC). MOBILEGL_ERR_TIMEOUT when none.
+        // MOBILEGL_ERR_OUT_OF_MEMORY when accept(2) ran out of descriptors or memory (EMFILE,
+        // ENFILE, ENOBUFS, ENOMEM): the connection stays in the backlog and the listener is fine,
+        // so a caller that serves many peers can wait and try again (the TCP supervisor does);
+        // TRANSPORT_CLOSED for every other failure.
         static MobileGLResult AcceptOne(int listenFd, std::uint32_t timeoutMs, int* outFd);
         // Reads EXACTLY one framed message from a raw socket - the header, then the payload,
         // and not one byte more. A DataBind is followed on the same connection by StreamLink's

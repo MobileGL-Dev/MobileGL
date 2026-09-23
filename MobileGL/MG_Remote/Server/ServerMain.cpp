@@ -714,16 +714,23 @@ public:
         std::vector<pollfd> fds;
         for (;;) {
             Reap();
-            fds.clear();
-            fds.push_back({m_listener, POLLIN, 0});
-            for (const auto& peer : m_pending) fds.push_back({peer.fd, POLLIN, 0});
             auto now = Clock::now();
+            // While accepting is paused (out of descriptors, AcceptNew) the listener sits out the
+            // poll - it stays readable, and would spin the loop - and the pause's end is a wakeup.
+            const bool acceptPaused = now < m_acceptResumeAt;
+            fds.clear();
+            fds.push_back({acceptPaused ? -1 : m_listener, POLLIN, 0});
+            for (const auto& peer : m_pending) fds.push_back({peer.fd, POLLIN, 0});
             // 250 ms is the old accept timeout, i.e. how often a finished child is reaped while
             // nothing arrives; a pending deadline that falls sooner shortens it.
             std::int64_t timeout = 250;
             for (const auto& peer : m_pending)
                 timeout = std::clamp<std::int64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(peer.deadline - now).count(), 0, timeout);
+            if (acceptPaused)
+                timeout = std::clamp<std::int64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(m_acceptResumeAt - now).count() + 1, 0,
+                    timeout);
             const int polled = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), static_cast<int>(timeout));
             if (polled < 0 && errno != EINTR) {
                 WireLogError("MG_Remote server: supervisor poll failed: %s", std::strerror(errno));
@@ -823,6 +830,18 @@ private:
             int fd = -1;
             const auto accepted = SocketTransport::AcceptOne(m_listener, 0, &fd);
             if (accepted == MOBILEGL_ERR_TIMEOUT) return 0;
+            if (accepted == MOBILEGL_ERR_OUT_OF_MEMORY) {
+                // f2-auth fix round. Out of descriptors (or memory) is not a dead listener: the
+                // connection waits in the backlog, and pending connections give descriptors back
+                // as they are judged or reach their deadline. The first cut returned 73 here, so
+                // a connection flood against a low RLIMIT_NOFILE (or a large pending cap) took the
+                // supervisor down. Now accepting pauses for kAcceptPauseMs and the loop goes on.
+                m_acceptResumeAt = now + std::chrono::milliseconds(kAcceptPauseMs);
+                WireLogError("MG_Remote server: accept paused for %u ms: out of descriptors or memory with %zu "
+                             "connections awaiting authentication",
+                             kAcceptPauseMs, m_pending.size());
+                return 0;
+            }
             if (accepted != MOBILEGL_OK) return 73;
             std::string address = PeerAddress(fd);
             if (const std::uint32_t retry = m_backoff.RetryAfterMs(address, now); retry != 0) {
@@ -979,6 +998,9 @@ private:
     int m_handoff = -1;
     std::vector<PendingPeer> m_pending;
     std::vector<PendingPeer> m_ready;
+    // Accepting resumes at this time after accept(2) ran out of descriptors or memory.
+    static constexpr std::uint32_t kAcceptPauseMs = 100;
+    Clock::time_point m_acceptResumeAt{};
 };
 }
 

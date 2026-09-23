@@ -486,7 +486,13 @@ namespace MobileGL::MG_Remote::Transport {
             if (fd < 0) {
                 // The same two non-failures AcceptPair re-polls on.
                 if (errno == EINTR || errno == ECONNABORTED) continue;
-                WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(errno));
+                const int error = errno;
+                WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(error));
+                // Out of descriptors or memory is the PROCESS's state, not the listener's: the
+                // connection waits in the backlog (f2-auth fix round; the TCP supervisor pauses
+                // and retries instead of exiting 73).
+                if (error == EMFILE || error == ENFILE || error == ENOBUFS || error == ENOMEM)
+                    return MOBILEGL_ERR_OUT_OF_MEMORY;
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
             ::fcntl(fd, F_SETFD, FD_CLOEXEC);

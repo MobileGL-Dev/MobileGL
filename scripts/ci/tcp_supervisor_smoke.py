@@ -22,7 +22,9 @@ refusal (`data_bind_queued_before_bound`). The f2-auth fix round added that the 
 shared between addresses (`pending_queue_is_shared`) and that an address holding slots with silent
 connections is backed off (`silent_slot_holder_backed_off`), that routing DataBinds does not stall
 the supervisor (`data_bind_routing_does_not_stall`), and that a child which refuses its Hello
-refuses the DataBinds queued to it (`data_bind_queued_before_refused_hello`, ID-P7-44). The five
+refuses the DataBinds queued to it (`data_bind_queued_before_refused_hello`, ID-P7-44), and that
+running out of descriptors pauses accepting instead of ending the supervisor
+(`accept_out_of_descriptors`). The five
 malformed-frame shapes are fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
@@ -38,6 +40,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import shutil
 import signal
 import socket
@@ -234,18 +237,25 @@ def refused_listen(server, log, endpoint, token):
 
 
 @contextmanager
-def supervisor(server, log, same_build=False, serve=True, extra_env=None):
+def supervisor(server, log, same_build=False, serve=True, extra_env=None, nofile=None):
     """A supervisor on its own free loopback port. `serve=False` is the single-session shape
     (no fork; the process IS the session and exits with it), which `single_session_listener`
     below needs and nothing else does. `extra_env` sets supervisor knobs (PH-7 (5)'s pre-auth
-    deadline, pending cap and backoff) for the controls that need non-default ones."""
+    deadline, pending cap and backoff) for the controls that need non-default ones. `nofile`
+    lowers the supervisor's soft RLIMIT_NOFILE, for the descriptor-exhaustion control."""
     port = free_loopback_port()
     base = log.with_suffix('.library.log')
     env = supervisor_environment(base, kToken, same_build=same_build)
     env.update(extra_env or {})
+
+    def limit():
+        if nofile is not None:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (nofile, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+
     with log.open('wb') as output:
         child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}'] + (['--serve'] if serve else []),
-                                 env=env, stdout=output, stderr=output, start_new_session=True)
+                                 env=env, stdout=output, stderr=output, start_new_session=True,
+                                 preexec_fn=limit if nofile is not None else None)
     try:
         # Log.cpp's RoleLogPath: the base name is a BASE, and the server role writes
         # `<stem>.server<ext>`. Yielded rather than recomputed at the call site, so the one
@@ -971,6 +981,51 @@ def main():
             evidence['silent_slot_holder_backed_off'] = {'refusal': silent, 'line': next(
                 l.strip() for l in named.splitlines() if reason in l)}
             assert process.poll() is None, 'the pre-auth limits killed the supervisor'
+
+        # ---- f2-auth fix round: OUT OF DESCRIPTORS, THE SUPERVISOR PAUSES ACCEPTING, NOT EXITS ----
+        #
+        # accept(2) failing with EMFILE used to be "the listener failed": the supervisor logged
+        # its summary and exited 73, so a connection flood against a low RLIMIT_NOFILE (or a large
+        # MOBILEGL_IPC_PREAUTH_MAX - now clamped to 256) took the server down for everybody. Here
+        # the supervisor runs with a soft limit of 16 descriptors (five in use when idle) and a
+        # pending cap it cannot reach (64), and 48 silent connections are opened (the listen
+        # backlog is 8, so they arrive in waves - the first waves alone pass the limit): it must
+        # name the pause, stay up, and - once the flood is gone - still answer a Hello
+        # (fingerprint 0, so the answer is the child's Refuse{WireFingerprint}). The backoff is
+        # off: the flood's failures are not this control's subject. RED before the fix: the
+        # supervisor has exited.
+        exhaust = {'MOBILEGL_IPC_PREAUTH_MAX': '64', 'MOBILEGL_IPC_PREAUTH_MS': '3000',
+                   'MOBILEGL_IPC_AUTH_BACKOFF_AFTER': '0'}
+        with supervisor(args.server, args.out / 'descriptors.log', extra_env=exhaust, nofile=16) as (
+                port, process, serverLog):
+            flood = []
+            try:
+                # The first connect waits for the supervisor to be listening (connect_control's
+                # retry); the rest are non-blocking: a blocking one stalls this loop for its whole
+                # timeout once the backlog is full, and the flood would never outrun the deadlines.
+                flood.append(connect_control(port))
+                for _ in range(47):
+                    peer = socket.socket()
+                    flood.append(peer)
+                    peer.setblocking(False)
+                    try:
+                        peer.connect(('127.0.0.1', port))
+                    except (BlockingIOError, ConnectionRefusedError):
+                        pass  # refused is the red shape: the supervisor is gone
+                paused = wait_for_log(serverLog, 'accept paused for', seconds=5)
+                alive = process.poll() is None
+            finally:
+                for peer in flood:
+                    peer.close()
+            assert alive, f'the supervisor exited ({process.poll()}) when accept ran out of descriptors; see {serverLog}'
+            assert paused is not None, f'the supervisor never named its accept pause in {serverLog}'
+            time.sleep(1.0)  # every flood connection has been read as closed (or is still in the backlog)
+            after_flood = exchange(port, schema, hello(schema, flatbuffers))
+            assert after_flood.get('code') == 2 and after_flood.get('expected', 0), (
+                f'after the descriptor flood a Hello was answered {after_flood}')
+            assert process.poll() is None, 'the supervisor died after the descriptor flood'
+            evidence['accept_out_of_descriptors'] = {'line': next(
+                l.strip() for l in paused.splitlines() if 'accept paused for' in l), 'afterFlood': after_flood}
 
         # ---- ID-P7-44, f2-auth fix round: A CHILD THAT REFUSES ITS HELLO REFUSES WHAT WAS QUEUED --
         #

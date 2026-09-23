@@ -303,4 +303,14 @@ TEST(PreAuthGateTest, TheKnobsReadTheirEnvironmentAndKeepTheirDefaultsOtherwise)
         EXPECT_EQ(knobs.backoffAfter, 5u);
         EXPECT_EQ(knobs.backoffBaseMs, 1000u);
     }
+    // f2-auth fix round: the pending cap is bounded, whatever it is set to - every pending
+    // connection is a descriptor. Red once by dropping the clamp: 100000 comes back.
+    {
+        ScopedEnvironment b("MOBILEGL_IPC_PREAUTH_MAX", "100000");
+        EXPECT_EQ(Server::PreAuthKnobs::FromEnvironment().maxPending, Server::kPreAuthMaxPendingCeiling);
+    }
+    {
+        ScopedEnvironment b("MOBILEGL_IPC_PREAUTH_MAX", "256");
+        EXPECT_EQ(Server::PreAuthKnobs::FromEnvironment().maxPending, 256u);
+    }
 }

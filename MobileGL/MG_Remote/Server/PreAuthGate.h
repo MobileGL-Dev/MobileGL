@@ -89,6 +89,11 @@ namespace MobileGL::MG_Remote::Server {
     // port probe; one that held its slot longer is a failure. A real client writes its first frame
     // the moment it connects, so it is never on the wrong side of this.
     inline constexpr std::uint32_t kPreAuthProbeGraceMs = 250;
+    // MOBILEGL_IPC_PREAUTH_MAX never exceeds this. Every pending connection is a descriptor the
+    // supervisor holds, and an unbounded knob would let a connection flood walk it into
+    // RLIMIT_NOFILE (the supervisor also survives that now - it pauses accepting - but a knob
+    // should not be the way in).
+    inline constexpr std::uint32_t kPreAuthMaxPendingCeiling = 256;
 
     // The refusal details a peer (and the log) sees. Named once so the supervisor and the unit test
     // cannot drift on the words; the TCP lane's scripts mirror them rather than parse them, so a
@@ -108,8 +113,9 @@ namespace MobileGL::MG_Remote::Server {
         // MOBILEGL_IPC_PREAUTH_MS: how long a new connection has to present a complete first
         // frame. A real client writes its Hello (or DataBind) the moment it connects.
         std::uint32_t deadlineMs = 2000;
-        // MOBILEGL_IPC_PREAUTH_MAX: connections the supervisor holds unauthenticated at once; one
-        // more is refused Busy at accept.
+        // MOBILEGL_IPC_PREAUTH_MAX: connections the supervisor holds unauthenticated at once, at
+        // most kPreAuthMaxPendingCeiling. When they are all taken a newcomer displaces the busiest
+        // address's oldest one, or is refused Busy at accept (ChoosePendingToDisplace).
         std::uint32_t maxPending = 8;
         // MOBILEGL_IPC_AUTH_BACKOFF_AFTER: failures from one address before it is refused at
         // accept. 0 turns the backoff off (the fuzz arm does, to send many malformed frames from
@@ -124,7 +130,8 @@ namespace MobileGL::MG_Remote::Server {
         static PreAuthKnobs FromEnvironment() {
             PreAuthKnobs knobs;
             knobs.deadlineMs = Read("MOBILEGL_IPC_PREAUTH_MS", knobs.deadlineMs, false);
-            knobs.maxPending = Read("MOBILEGL_IPC_PREAUTH_MAX", knobs.maxPending, false);
+            knobs.maxPending =
+                std::min(Read("MOBILEGL_IPC_PREAUTH_MAX", knobs.maxPending, false), kPreAuthMaxPendingCeiling);
             knobs.backoffAfter = Read("MOBILEGL_IPC_AUTH_BACKOFF_AFTER", knobs.backoffAfter, true);
             knobs.backoffBaseMs = Read("MOBILEGL_IPC_AUTH_BACKOFF_MS", knobs.backoffBaseMs, false);
             return knobs;
