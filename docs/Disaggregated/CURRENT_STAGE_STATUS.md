@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-23（ID-P7-49/50）** · 当前交接 [`notes/p7/HANDOFF-2026-09-23.md`](notes/p7/HANDOFF-2026-09-23.md)。集成树已含 M3（pipe `9fd768d4`，门全绿，审查 land）；手机 p7w6 关闭 bsl-esc-menu 设备正确性项，DirectGLES TCP 38 例对照续跑中；门 3 终局与 CTS AFTER 未完成。B4 独立包树是草稿，未落地。
+**更新：2026-09-23（ID-P7-49–52）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。集成树已含 M3 与 B4（pipe b19297d5，B4 源码审查 land、完整主机门通过）；B4 的 docs/citation/push 收尾中。p7w6 DirectGLES TCP 38 例矩阵已结案，逐例结果见 [window-1b-p7w6.md](notes/p65/window-1b-p7w6.md)。门 3 终局和 CTS AFTER 尚未完成；F2 在独立包分支继续。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -16,8 +16,8 @@
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | ✅ | M3 后 verify 构建 unit 2436、integration-verify **1152**、integration-verify-split **1086**，全绿；负控与 8 verify trace 的既有证据见 V1/V1 r2 |
-| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu inproc/spawn 6/6，实际图像与 monolith SHA 完全相同（[`W6-verify/`](notes/p7/device-window-1/W6-verify/README.md)）；36 例三遍逐位及同会话对照待跑，M3 后设备回归需新 APK |
+| 7 | verify × split（门 2） | ✅ | B4 集成树 verify build：unit 2439、integration-verify 1152、integration-verify-split 1086，全绿；V1/V1 r2 负控与 8 verify trace 证据仍有效 |
+| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu DirectVulkan inproc/spawn 6/6 且图像 SHA 与 monolith 相同；另有 p7w6 DirectGLES × TCP 38 例窗口矩阵报告（非门 3）：16/29 pass、8 idle timeout、2 visual failure、3 missing result；36 例 DirectVulkan 三遍、同会话 monolith 对照和 M3 后 APK 回归待跑 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
 **40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → **173**（B2 重基线，余 88 = monolith draw 路径，wave 3）。
@@ -49,27 +49,28 @@
 | F 修复轮 | hand-off 端绑定后关 + `MSG_DONTWAIT`（多余 DataBind 具名拒绝）、listener 绑定后关、`sha256(protocol.fbs)` 钉到控制修订、定宽令牌比较、超额 Hello 记警、`MalformedHello`、文档更正 | pipe `0293aebb..9cea5140`（门全绿，集成者审查 land，ID-P7-44） |
 | B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门全绿，集成者审查 land，ID-P7-44） |
 | M3 | 长帧 descriptor set 游标按 queue-idle 证明回卷，2049 SSBO 窗口用例 split/spawn 绿且 red-once 红；包树与 pipe 完整门绿 | pipe `9fd768d4`（ID-P7-50，集成者审查 land） |
+| B4 | 聚合 submit 前缀等待、frame serial 重新扫描、Present 槽退休保护、pre-pass pending、texture prune 与 staged extent 清理 | pipe b19297d5（ID-P7-51；集成者 review land，完整 pipe 门通过；当前文档/citation/push 收尾中） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
 - 当前 APK：**p7w6**，stamp `p7w6-0e16ca27`，已重装并重起 TCP supervisor；屏幕常亮设置 `stayon=15`。bsl-esc-menu DirectVulkan × pbuffer inproc/spawn 各三遍 **6/6**，PNG SHA 均与 E0a monolith 相同；OpenRA 的 p7w5 27/27 结论保留。p7w6 在 M3 落地前构建，后续设备回归需新 APK。
-- DirectGLES × TCP 窗口 1b 实际分母 38：p7w5 旧批次中断报告 [`window-1b-p7w5.md`](notes/p65/window-1b-p7w5.md)；p7w6 用 1900 s 外层上限续跑，日志 `~/w7/logs/p7w6-matrix-resume.log`。旧 p7w6 驱动的两次 900 s 截断是采集器上限，不能算产品红。
-- 门 3 终局 36 例三遍与同会话 spawn 尚待手机从 TCP 矩阵释放；CTS `$BASE` 已取，AFTER 尚待。
+- DirectGLES × TCP 窗口 1b（p7w6）已结案，逐例状态与 phone reap 证据见 notes/p65/window-1b-p7w6.md：9 缓存跳过、29 次尝试（16 pass、8 idle timeout、2 visual failure、3 missing-result）。Photon v1.3b 与 D24.4.14 需做设备 DirectGLES monolith 对照。
+- 门 3 的 36 例 DirectVulkan 三遍逐位与同会话 monolith 对照仍待手机新 APK；CTS AFTER 五块也未运行。
 
 ## 4. 在跑
 
 | 工作 | 状态 |
 |---|---|
 | p7w6 DirectGLES TCP 38 例对照 | `~/w7/logs/p7w6-matrix-resume.sh` 以 setsid/nohup 续跑，进度 `~/w7/logs/p7w6-matrix-resume.log`；手机服务不可在此期间 force-stop |
-| B4 | `~/w7/p7-b4` 独立草稿：聚合等待、长帧 texture prune、AdoptRun extent 修复；目标 Magma 车道与 G1 绿，仍缺聚合等待负控 / 全门 / 复审 |
+| F2 | p7-f2-driver 包分支有 raw-record 驱动、D11 CSO slot 与 PH-3 readback 上限（db80dd16 / adf2cbe0）；定向测试和 G1 已过。PH-4 staged texture byte bound 正在修复并待独立验证；还剩 D11 ArchiveVector、PH-2、PH-6、PH-1 (3)(4)、PH-7 (5) |
 
 ## 5. 下一步
 
-1. 完成 p7w6 TCP 38 例对照并逐例结案；重跑前两例被错误外层截断的长 trace，ID / §7 记录 DataBind 与息屏结论。
-2. 完成门 3：36 例 DirectVulkan × pbuffer × inproc/spawn 三遍逐位、与同会话 monolith 差 ≤0.0005；设备 M3 回归用新 APK。补一次启用 PipeStats 的 bsl 映射峰值与 `wbuf[]`。
-3. B4 补聚合等待负控、完整门与集成者复审；F2 字节驱动、D11/PH-2/PH-6/PH-1/PH-7；wave 3 棘轮 88；wave 4 CTS AFTER；wave 5 fuzz 三臂与整体审查。
+1. p7w6 TCP 矩阵已结案；保留的 idle/missing-result 项在主机空闲时按需重跑，Photon v1.3b 与 D24.4.14 先做设备 DirectGLES monolith 对照，结案报告见 notes/p65/window-1b-p7w6.md。
+2. 最终功能 APK 部署后完成门 3（36 例 DirectVulkan × pbuffer × inproc/spawn，三遍逐位一致并与同会话 monolith 差 ≤0.0005）和 CTS AFTER 五块（相对 BASE ≤0.5 pp、新 crash=0）；另采 PipeStats bsl 映射峰值与 wbuf[]。
+3. F2 继续 PH-4（StagedTextureStore level bound）、PH-5 ArchiveVector、PH-2 SlotTables，并完成 PH-6、PH-1 (3)(4)、PH-7 (5) 与 fuzz 三臂；每个字节可达负控由两进程 raw-record 驱动触发并经过完整包门。
 
 ## 6. 阻塞 / 需要人
 
-- 手机需保持 adb、WSL 路由、前台 Service 与 `stayon=15` 直到 p7w6 TCP 矩阵完成；续跑脚本已脱离当前命令会话。当前无需要用户决策的阻塞。
+- p7w6 TCP 矩阵已终止；任何补跑或设备 monolith 对照不得与门 3/CTS 同时 force-stop 同包 Service。当前没有需要用户决策的阻塞。
 - X2 已关闭 `InitialCapsStartup` 的测试夹具乱序 flake；不再列为待修。

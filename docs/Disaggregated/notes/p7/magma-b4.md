@@ -1,21 +1,21 @@
-# P7 B4：Magma 提交等待与长帧清理（草稿，未落地）
+# P7 B4：Magma 提交等待与长帧清理（已落地）
 
-基线：`0e16ca27`，独立 worktree `~/w7/p7-b4`。本包仍在实现／审查，以下是当前源码状态，不是集成树结论。
+包分支基于 M3；集成提交为 a4c1bc8b（B4 实现）和 b19297d5（聚合等待负控与 build compatibility）。集成者源码审查为 land，见 review-b4.md。
 
-## 提交与 frame serial
+## 修复
 
-`WaitForSubmitsUpTo(index, timeout)` 收集 tracker 中所有 `submitIndex <= index` 的在飞 fence，以 `vkWaitForFences(..., VK_TRUE)` 等全部信号之后才推进完成计数。`WaitForSubmitIndex` 不再拿一条较晚 fence 代替整个前缀。`WaitForFrameSerial` 等待第一条匹配记录后重查地板；若同一 serial 仍被第二条提交持有，就从头重扫（不能在 `OnSubmitsCompletedUpTo` erase 后继续旧迭代器，也不再读 `record` 引用）。没有可用记录时才 queue idle，最终只按 `IsFrameSerialComplete` 答 true。
+- DirectVulkan disaggregated 路径新增 WaitForSubmitsUpTo：从在飞提交中收集到目标 submit 为止的完整 fence 前缀，waitAll 等待成功后才推进完成计数。缺失目标索引或空 fence 会失败，不会用更早的前缀冒充完成。
+- WaitForFrameSerial 在等待后检查 IsFrameSerialComplete 并从头重扫；不能完整证明时才 queue idle，最后仍重查完成地板。Present 在 FrameContext 释放退休命令缓冲、重置槽 fence 前等待该槽的完整提交前缀。pending-work 判断纳入 pre-pass command buffer。
+- FlushWirePendingCommandsForTextureUpdate 先提交当前录制，再等待 graphics submit 前缀，保证旧纹理采样/保存任务先于独立上传。
+- Wire draw/dispatch 每 256 次调用触发纹理缓存 prune；StagedTextureStore 在 AdoptRun 遇到 extent 改变时清旧 bytes 和 coverage，不混合不同 level 坐标系。
+- GLXImpl.cpp 中 XDisplay 的类型拼写限定为 ::Display，规避 GCC -Wchanges-meaning 编译错误；这是编译兼容改动，不改变对象布局或执行逻辑。
 
-`Present` 在 `FrameContext::WaitAndAcquireNextImage` 重置槽 fence / 释放退休命令缓冲之前，先等该槽 `lastSubmitIndex` 的完整前缀；suspended 后首次 acquire 同样做。readback 原本已有全 fence 等待，保持；mid-frame flush 的退化重用分支改走聚合等待。`HasPendingRecordedWork` 在 disagg 构建下也计 pre-pass 录制，`FlushPendingCommands` 的空批判断对应扩展。这样 `TryDrainFrameTransients` 的 wire `CollectWireObjects(all=true)` 不会在 pre-pass 尚未提交时把未来标签视作空闲。pull 分支的可执行语句保持原样。
+## 负控与审查
 
-`FlushWirePendingCommandsForTextureUpdate` 在提交当前录制后等所有在飞 graphics 提交，才允许新的独立上传批修改旧 draw 可能采样的图像。这里可能有明显的 stall 代价，按规则只记录性能，不设门；需在长 trace 上实测。该修正还没有针对单 fence 错退的确定性负控，当前包不得以现有绿数直接落地。
+MagmaAggregateWaitTest 与生产 fence-prefix selector 共用实现。单 fence 反事实只退休同 serial 的第一笔提交，目标 frame 仍在飞；聚合选择器覆盖目标前缀并排除下一 frame。缺失目标索引控制拒绝早期前缀。两个 focused tests 通过；AdoptRun extent 单测 red-once 记录在包原始日志中。
 
-## 长帧回收与 staged bytes
+## 完整 pipe 门（HEAD b19297d5）
 
-wire draw / dispatch 入口现在调用 `VkTextureManager::CollectGarbage`，使每 256 次的 `pruneWire` 能在一帧内执行。`StagedTextureStore::AdoptRun` 遇到 extent 变化时清旧 `Bytes` 与 `Covered`：单测先送旧 [0,16)，再送新 extent 的 [16,32)，不能把两种坐标系拼成已覆盖。禁用清理时该单测在旧范围误判覆盖处红，恢复后绿。
+G1 pull .text=0xa52203，符号新增/删除 0/0；fatal census 79 个站点、0 未标记；ratchet 173；parity 通过；wire decline audit 53/53、0 unlogged/unknown、自测 16/16。八条 split lanes 均 0 失败：unit 2439（11 skip）、integration-split 304（9 skip）、spawn 220、tcp 223、Magma split/spawn/tcp 102/81/71、full-split 540。Verify：unit 2439、integration-verify 1152、integration-verify-split 1086，0 失败。OpenRA DirectVulkan inproc/spawn 均 SSIM 1.000000、0 mismatch、0 Fatal、0 unsound.
 
-## 已验证／待做
-
-完整 `MobileGL`、`MobileGLServer`、`MobileGLIntegrationTest` 与 `StagedTextureStoreTest` 构建通过；新 extent 单测绿，红一次按上述覆盖断言红；Magma split/spawn/tcp 为 101/80/71、full-split 539，全绿；OpenRA DirectVulkan inproc / spawn 都 ssim 1.000000、0 Fatal、0 `unsound-serial-complete`。原始日志 `~/w7/logs/p7b4/`、`~/w7/logs/p7-gate-b4a-retrace/`。
-
-待做：聚合等待的可证伪负控；G1 / 普查 / 棘轮 / parity / 完整八车道 / verify 门；集成者对 pipe 源码复审；与 M3 的 `VulkanRenderer.cpp` 冲突合并；真机回归。未完成前不推送本包。
+主机完整门日志：~/w7/logs/p7b4-integration-b19297d5-rerun-20260923/。graphics fence 全前缀等待可能增加同步等待时间；性能只记录，不设门。
