@@ -1,0 +1,7 @@
+arm                                                         rep  pass   ssim_vs_golden    ssim_vs_first    bit-identical  px!=first
+----------------------------------------------------------  ---  -----  ----------------  ---------------  -------------  ---------
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan  1    yes    0.999791667       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan  2    yes    0.999791667       1.000000000      yes            0
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan  3    yes    0.999791667       1.000000000      yes            0
+
+minecraft-1.21.4-fabric-iris-bsl-esc-menu-854-DirectVulkan: 3 repeat(s), 0 error(s), all-bitwise-identical=yes, passed-all=yes, min ssim vs golden=0.999791667, min ssim vs first=1.000000000
