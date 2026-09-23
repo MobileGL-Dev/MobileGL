@@ -80,7 +80,21 @@ namespace MobileGL::MG_Remote::Server {
         // Every MOBILEGL_TRANSPORT and MOBILEGL_IPC_* goes. Built BEFORE fork:
         // between fork and execve only async-signal-safe calls are allowed, and
         // allocating a vector of strings is not one of them.
+        //
+        // EXCEPT A KNOB ONLY THE SERVER READS, named here one by one. P7 wave 4 M2's
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB bounds the server's own orphaned wire buffer stores;
+        // nothing in the client reads it, so scrubbing it did not make the child safer - it made
+        // the knob mean something under inproc and silently nothing under spawn, the worst of
+        // the three states (the tcp server reads its supervisor's environment, as for every
+        // knob). It names no endpoint, no role and no segment size, so neither anti-recursion
+        // catch has anything to say about it.
         bool ShouldScrub(const char* entry) {
+            static constexpr const char* kServerOwned[] = {"MOBILEGL_IPC_WIRE_DEFERRED_MB="};
+            for (const char* kept : kServerOwned) {
+                if (std::strncmp(entry, kept, std::strlen(kept)) == 0) {
+                    return false;
+                }
+            }
             static constexpr const char* kPrefixes[] = {"MOBILEGL_TRANSPORT=", "MOBILEGL_IPC_"};
             for (const char* prefix : kPrefixes) {
                 if (std::strncmp(entry, prefix, std::strlen(prefix)) == 0) {
