@@ -139,7 +139,7 @@ verify 今天只在 monolith 注册（`MG_IntegrationTest/CMakeLists.txt:1684-17
 
 1. `CONTRACT-P6.md:666`（§10.3）把 `DynamicBackendParameters` 定宽记在 P7 名下——已由 P6.5 wf 落地，P7 不再持有。
 2. `CONTRACT-P6.md` §12.1「棘轮在 CI 里重算 184 并断言只降」——由 wave 0 包 R 落地为 `scripts/link_ratchet.py`；「移交 P6.5」从未被 P6.5 接收，归 P7。
-3. `CONTRACT-P6.md` §12.2 D11 把五行中的三行分给 P6 `dl`——树上五处全部仍在原状态（`PipeApply.cpp:1575`、`PipeApplier.cpp:444`、`ProgramArtifactsCodec.cpp:309`、`StagedTextureStore.h:440`、`SlotTables.h:347/:371`）；归 Ph（计划 §1.1 D11），wave 2-F 做。
+3. `CONTRACT-P6.md` §12.2 D11 把五行中的三行分给 P6 `dl`——树上五处全部仍在原状态（`PipeApply.cpp:1575`、`PipeApplier.cpp:444`、`ProgramArtifactsCodec.cpp:309`、`StagedTextureStore.h:440`、`SlotTables.h:347/:371`）；归 Ph（计划 §1.1 D11），wave 2-F 做。**wave 2-F 实况（`notes/p7/ph-f.md`）**：落地的是 PH-7 (1)–(4)（常量时间令牌合一、≥16 字节、无令牌只 loopback、`Welcome.dataNonce` 绑定数据连接——`protocol.fbs` 变、`wireFingerprint` 随 `MOBILEGL_PROTOCOL_CONTROL_REVISION` 变）与 PH-8 单测；**D11 五处与 PH-2 仍未落地**：每处都要一条字节来自对端的两进程负控，而树上没有能越过 client 自身守卫伪造记录的对端驱动（= fuzz 臂 2 的骨架），按计划停止规则未开工。
 4. `CONTRACT-P6.md` §5.2「`Session::Fail` 在 P6 保持 `[[noreturn]]`」——Ph 的翻转按 ID-P7-1 重定界，不做 98 站点的字面翻转；`Server/StagedShadow.h:115`、`Server/StagedTextureStore.h:344` 两处旁路由 wave 0 包 C 收进漏斗。
 5. `ARCHITECTURE.md` §8.5「XFB scatter 在 client」——树上取的是 server staged shadow + `OnBufferWriteback`（P5c/P5f）；`OnXfbScatterReady` 是死声明，删除。
 
