@@ -23,6 +23,10 @@ if (NOT WIN32)
     # socketpair with real threads, plus the three a stream has and a message queue does not.
     # POSIX for the same reason as FdPassingTest - and because CONTRACT-P6 §2.6 lands POSIX only.
     list(APPEND MOBILEGL_WIRE_TESTS SocketTransportTest StreamLinkTest StreamClientPublicationTest InitialCapsStartupTest)
+    # P7 F2, PH-7 (5) and fuzz arm 1: the TCP supervisor's pre-auth gate (first-frame shapes, the
+    # exact first-frame reader, the backoff's arithmetic, the knobs). Its reader is a socket read,
+    # so POSIX for the same reason.
+    list(APPEND MOBILEGL_WIRE_TESTS PreAuthGateTest)
     # P6 sm: two MobileGL processes. Needs the real server image beside it, so
     # the dependency is declared after the loop rather than assumed.
     list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)

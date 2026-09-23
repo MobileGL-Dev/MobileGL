@@ -47,6 +47,9 @@
 #include <MG_Remote/Server/ServerSession.h>
 #include <MG_Remote/Transport/InProcessTransport.h>
 #include <MG_Remote/Transport/SessionRings.h>
+#if !defined(_WIN32)
+#include <MG_Remote/Transport/SocketTransport.h>
+#endif
 
 #if __has_include(<MGGitHash.h>)
 #include <MGGitHash.h>
@@ -336,6 +339,53 @@ TEST(SessionHandshakeTest, ConnectCanRequireTheSameBuild) {
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
                    ::MobileGL::Wire::DialMode::Connect, ::MobileGL::Wire::RefuseCode::BuildFingerprint);
 }
+
+#if !defined(_WIN32)
+// PH-7 (5) (ph-f.md §6.4 (b)). AN UNAUTHENTICATED PEER LEARNS ONLY THAT IT IS UNAUTHENTICATED.
+//
+// ServerSession::Accept checked the dial mode, the version, the wire fingerprint and the build
+// stamp BEFORE the token, so a peer without the token that sent a wrong fingerprint was answered
+// Refuse{WireFingerprint} with this build's fingerprint in `expected` - and with a wrong major,
+// Refuse{ProtocolVersion} with this build's version; with REQUIRE_SAME_BUILD, the build stamp.
+// Here a Hello wrong in EVERY one of those, and in its token, reaches a real Accept over a real
+// socket pair (the only transport role the token policy applies to - InProcess has no peer) with a
+// token configured: the one answer is Refuse{Authentication} with expected = actual = 0 and no
+// peer value. RED ONCE by moving AuthenticatePeerToken back below ValidatePeerHandshake in
+// ServerSession::Accept: the code comes back ProtocolVersion with our version in `expected`.
+TEST(SessionHandshakeTest, AnUnauthenticatedHelloLearnsNeitherTheFingerprintNorTheBuild) {
+    using namespace ::MobileGL::Wire;
+    ScopedHandshakeEnvironment token("MOBILEGL_IPC_TOKEN", "ph7-5-the-servers-own-token");
+    ScopedHandshakeEnvironment required("MOBILEGL_IPC_REQUIRE_SAME_BUILD", "1");
+    std::unique_ptr<Transport::SocketTransport> client, server;
+    ASSERT_EQ(Transport::SocketTransport::CreatePair(client, server), MOBILEGL_OK);
+    ::flatbuffers::FlatBufferBuilder builder(512);
+    auto terms = CreateLinkTerms(builder);
+    auto hello = CreateHelloDirect(builder, 99, MOBILEGL_PROTOCOL_ABI_MINOR, "some-other-build", 0, 1, nullptr,
+                                   WireFingerprint() ^ 1, WireFingerprint() ^ 1, terms, "not-the-servers-token",
+                                   DialMode::Fork);
+    auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
+    FinishCtrlEnvelopeBuffer(builder, root);
+    std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
+    Server::ServerSession session;
+    Transport::SessionSegmentSizes sizes;
+    sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
+    sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+    session.SetSegmentSizes(sizes);
+    EXPECT_EQ(session.Accept(*server, &first), MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    EXPECT_FALSE(session.Accepted());
+    const auto reply = ReadHandshakeFrame(*client);
+    ASSERT_FALSE(reply.empty());
+    ::flatbuffers::Verifier verifier(reply.data(), reply.size());
+    ASSERT_TRUE(VerifyCtrlEnvelopeBuffer(verifier));
+    const auto* refusal = GetCtrlEnvelope(reply.data())->msg_as_Refuse();
+    ASSERT_NE(refusal, nullptr);
+    EXPECT_EQ(refusal->code(), RefuseCode::Authentication) << EnumNameRefuseCode(refusal->code());
+    EXPECT_EQ(refusal->expected(), 0u) << "an unauthenticated peer was told a value of ours";
+    EXPECT_EQ(refusal->actual(), 0u);
+    EXPECT_TRUE(refusal->peerValue() == nullptr || refusal->peerValue()->size() == 0);
+    session.Close();
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The two null-union guards, driven THROUGH the handshakes (ID-46 finding 7)

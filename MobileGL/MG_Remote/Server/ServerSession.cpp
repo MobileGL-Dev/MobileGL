@@ -635,6 +635,19 @@ namespace MobileGL::MG_Remote::Server {
         const char* theirStamp =
             hello->buildFingerprint() == nullptr ? nullptr : hello->buildFingerprint()->c_str();
 
+        // PH-7 (1). One policy, one constant-time comparison, shared with ServerMain's supervisor
+        // and its session child (Handshake.h AuthenticatePeerToken). This site used std::strcmp,
+        // which returns at the first differing byte.
+        //
+        // PH-7 (5) (ph-f.md §6.4 (b)): and it is asked FIRST. It used to follow the dial-mode,
+        // version and fingerprint checks, so an unauthenticated peer was answered
+        // Refuse{WireFingerprint} with this build's wire fingerprint in `expected`, or
+        // Refuse{BuildFingerprint} - everything a peer needs to know which build it is talking to,
+        // given to one that has not shown it may talk at all. Nothing the checks below say is
+        // said to a peer that has not authenticated.
+        const MobileGLResult authenticated = AuthenticatePeerToken(transport, hello->token());
+        if (authenticated != MOBILEGL_OK) return authenticated;
+
         if (hello->dialMode() != ::MobileGL::Wire::DialMode::No &&
             hello->dialMode() != ::MobileGL::Wire::DialMode::Fork &&
             hello->dialMode() != ::MobileGL::Wire::DialMode::Connect)
@@ -654,11 +667,6 @@ namespace MobileGL::MG_Remote::Server {
         if (stream && transport.Role() == Transport::TransportRole::InProcess)
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                    "stream requires a data connection");
-        // PH-7 (1). One policy, one constant-time comparison, shared with ServerMain's supervisor
-        // child (Handshake.h AuthenticatePeerToken). This site used std::strcmp, which returns at
-        // the first differing byte.
-        const MobileGLResult authenticated = AuthenticatePeerToken(transport, hello->token());
-        if (authenticated != MOBILEGL_OK) return authenticated;
         if (hello->backendType() >= static_cast<Uint32>(BackendType::BackendTypeCount) ||
             (m_backend != nullptr && hello->backendType() != static_cast<Uint32>(m_backend->GetBackendType())))
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Backend,
