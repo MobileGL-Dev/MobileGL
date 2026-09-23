@@ -15,7 +15,7 @@
 // TcpLane.ControlFrameFuzz (scripts/ci/ph_fuzz_control_frames.py). What is pinned here is what
 // those scripts cannot see from outside: that each malformation lands on the shape it is named
 // for (and not merely on SOME refusal), that the assembler never reads a byte past the first
-// frame, and the backoff's arithmetic.
+// frame, the backoff's arithmetic, and which pending connection a full queue gives up.
 
 #include <MG_Remote/Handshake.h>
 #include <MG_Remote/Server/PreAuthGate.h>
@@ -244,6 +244,34 @@ TEST(PreAuthGateTest, TheBackoffWindowStartsAtTheThresholdDoublesAndIsCapped) {
     // Bounded, however many addresses fail.
     for (int i = 0; i < 1000; ++i) backoff.NoteFailure("198.51.100." + std::to_string(i), t0);
     EXPECT_LE(backoff.Tracked(), Server::kAuthBackoffTrackedPeers);
+}
+
+// Fix round: the full pending queue is shared between addresses. One address that holds every slot
+// keeps out nobody but itself; the busiest address's OLDEST connection is the one displaced. Red
+// once by making ChoosePendingToDisplace always refuse the newcomer (the first cut's single pool):
+// the first EXPECT_EQ names it.
+TEST(PreAuthGateTest, AFullQueueIsSharedBetweenAddresses) {
+    const std::string a = "192.0.2.1", b = "192.0.2.2", c = "192.0.2.3", d = "192.0.2.4";
+    // One address holds all four slots: anybody else displaces its oldest; it cannot add a fifth.
+    const std::vector<std::string> oneHolder = {a, a, a, a};
+    EXPECT_EQ(Server::ChoosePendingToDisplace(oneHolder, b), 0u);
+    EXPECT_EQ(Server::ChoosePendingToDisplace(oneHolder, a), oneHolder.size());
+    // The busiest address loses its oldest connection, wherever that sits in the queue.
+    const std::vector<std::string> mixed = {b, a, c, a};
+    EXPECT_EQ(Server::ChoosePendingToDisplace(mixed, d), 1u);
+    // An address with fewer slots than the busiest still gets one; one with as many does not.
+    EXPECT_EQ(Server::ChoosePendingToDisplace(mixed, b), 1u);
+    EXPECT_EQ(Server::ChoosePendingToDisplace(mixed, a), mixed.size());
+    // Equal shares: the connection that has waited longest goes first.
+    const std::vector<std::string> even = {b, a, a, b};
+    EXPECT_EQ(Server::ChoosePendingToDisplace(even, c), 0u);
+    EXPECT_EQ(Server::ChoosePendingToDisplace(even, a), even.size());
+    // One slot each: a new address still gets in, by displacing the oldest.
+    const std::vector<std::string> spread = {d, c, b, a};
+    EXPECT_EQ(Server::ChoosePendingToDisplace(spread, "192.0.2.5"), 0u);
+    EXPECT_EQ(Server::ChoosePendingToDisplace(spread, a), spread.size());
+    // Nothing pending: nothing to displace.
+    EXPECT_EQ(Server::ChoosePendingToDisplace({}, a), 0u);
 }
 
 // The knobs: defaults, values, and the one knob where 0 means something.

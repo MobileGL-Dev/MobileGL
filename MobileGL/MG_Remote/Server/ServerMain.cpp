@@ -627,12 +627,15 @@ void LogSupervisorSummary(unsigned long sessionsFaulted) {
 //     itself, a few bytes per wakeup, from all pending connections at once (one poll loop - no
 //     peer can make it wait for another), and never a byte past the frame;
 //   - a pending connection has MOBILEGL_IPC_PREAUTH_MS (default 2000) to complete it, and at most
-//     MOBILEGL_IPC_PREAUTH_MAX (default 8) are pending at once - one more is refused Busy at accept;
+//     MOBILEGL_IPC_PREAUTH_MAX (default 8) are pending at once. The queue is SHARED between
+//     addresses: when it is full a newcomer displaces the oldest connection of the address holding
+//     the most slots, and is itself refused Busy only when its own address already holds as many;
 //   - a Hello is AUTHENTICATED HERE, token first; an unauthenticated one is answered
 //     Refuse{Authentication} and nothing else. Only an authenticated Hello is forked for, and the
 //     child is handed the frame it would otherwise have read;
-//   - a failure (wrong token, malformed first frame, deadline) is counted against the peer's
-//     address; after MOBILEGL_IPC_AUTH_BACKOFF_AFTER (default 5) of them that address is refused
+//   - a failure (wrong token, malformed first frame, deadline, a silent connection that held its
+//     slot past kPreAuthProbeGraceMs before it closed or was displaced) is counted against the
+//     peer's address; after MOBILEGL_IPC_AUTH_BACKOFF_AFTER (default 5) of them that address is refused
 //     at accept, before a byte is read, for MOBILEGL_IPC_AUTH_BACKOFF_MS doubling per further
 //     failure up to a minute. An authenticated Hello from the address clears it;
 //   - a DataBind is routed exactly as PH-7 (4) routed it: to the live session's child over the
@@ -690,8 +693,14 @@ public:
                             NoteFailure(peer.address, "not a control frame");
                             continue;
                         case Step::EndedEmpty:
-                            // A port probe: it cost an accept and nothing else. Not a failure.
+                            // A port probe - gone within the grace, having sent nothing - cost an
+                            // accept and nothing else, and is not a failure. A connection that HELD
+                            // its slot past the grace and then left without a byte is how one
+                            // address kept every slot taken without ever reaching the deadline,
+                            // so that one counts (fix round; PreAuthGate.h).
                             ::close(peer.fd);
+                            if (now - peer.accepted >= std::chrono::milliseconds(Server::kPreAuthProbeGraceMs))
+                                NoteFailure(peer.address, "held a pre-auth slot and closed without a byte");
                             continue;
                         case Step::EndedPartial:
                             RefuseAndClose(peer.fd, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
@@ -722,6 +731,7 @@ private:
     struct PendingPeer {
         int fd = -1;
         std::string address;
+        Clock::time_point accepted{};
         Clock::time_point deadline{};
         Server::FirstFrameAssembler frame;
     };
@@ -766,14 +776,34 @@ private:
                 continue;
             }
             if (m_pending.size() >= m_knobs.maxPending) {
-                WireLogError("MG_Remote server: connection from %s refused at accept: %zu connections are "
-                             "already awaiting authentication", address.c_str(), m_pending.size());
-                RefuseAndClose(fd, Protocol::RefuseCode::Busy, Server::kPreAuthFull);
-                continue;
+                // Full. The queue is shared between addresses (PreAuthGate.h
+                // ChoosePendingToDisplace): the newcomer takes the busiest address's oldest slot,
+                // unless its own address is the busiest - then it is the one refused.
+                std::vector<std::string> holders;
+                holders.reserve(m_pending.size());
+                for (const auto& peer : m_pending) holders.push_back(peer.address);
+                const std::size_t victim = Server::ChoosePendingToDisplace(holders, address);
+                if (victim >= m_pending.size()) {
+                    WireLogError("MG_Remote server: connection from %s refused at accept: %zu connections are "
+                                 "already awaiting authentication", address.c_str(), m_pending.size());
+                    RefuseAndClose(fd, Protocol::RefuseCode::Busy, Server::kPreAuthFull);
+                    continue;
+                }
+                PendingPeer displaced = std::move(m_pending[victim]);
+                m_pending.erase(m_pending.begin() + static_cast<std::ptrdiff_t>(victim));
+                WireLogError("MG_Remote server: pending connection from %s displaced by one from %s: the pre-auth "
+                             "queue is full and %s holds the most of it", displaced.address.c_str(), address.c_str(),
+                             displaced.address.c_str());
+                RefuseAndClose(displaced.fd, Protocol::RefuseCode::Busy, Server::kPreAuthDisplaced);
+                // A displaced connection that had already held its slot past the grace is a silent
+                // holder like one that closed; otherwise displacement would be a free way out.
+                if (now - displaced.accepted >= std::chrono::milliseconds(Server::kPreAuthProbeGraceMs))
+                    NoteFailure(displaced.address, "held a pre-auth slot until displaced");
             }
             PendingPeer peer;
             peer.fd = fd;
             peer.address = std::move(address);
+            peer.accepted = now;
             peer.deadline = now + std::chrono::milliseconds(m_knobs.deadlineMs);
             m_pending.push_back(std::move(peer));
         }

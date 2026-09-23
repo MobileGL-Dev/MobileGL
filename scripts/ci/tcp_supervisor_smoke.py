@@ -18,8 +18,10 @@ the controls here assert that an unauthenticated peer learns nothing of ours
 (`unauthenticated_wrong_layout`), that a silent one costs no fork and is answered at the pre-auth
 deadline (`silent_peer`), that Busy is the answer to an AUTHENTICATED second client (`busy`), the
 pending cap and the backoff (`pending_cap`, `auth_backoff`), and ID-P7-44's queued-DataBind
-refusal (`data_bind_queued_before_bound`). The five malformed-frame shapes are fuzz arm 1's own
-entry, scripts/ci/ph_fuzz_control_frames.py.
+refusal (`data_bind_queued_before_bound`). The f2-auth fix round added that the pending queue is
+shared between addresses (`pending_queue_is_shared`) and that an address holding slots with silent
+connections is backed off (`silent_slot_holder_backed_off`). The five malformed-frame shapes are
+fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
 header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:
@@ -255,14 +257,17 @@ def supervisor(server, log, same_build=False, serve=True, extra_env=None):
         child.wait(timeout=10)
 
 
-def connect_control(port, seconds=5):
+def connect_control(port, seconds=5, source=None):
     """A connection to the supervisor's port, retried on ECONNREFUSED for `seconds`: a supervisor
     just started may not have reached listen() yet, and a refused connect before it has is
-    startup, not a finding."""
+    startup, not a finding. `source` binds the local end to another loopback address (127.0.0.2,
+    ...), which is how the pre-auth controls stand in for a second host: the supervisor keys its
+    backoff and its share of the pending queue by peer address."""
     deadline = time.monotonic() + seconds
     while True:
         try:
-            return socket.create_connection(('127.0.0.1', port), timeout=3)
+            return socket.create_connection(('127.0.0.1', port), timeout=3,
+                                            source_address=(source, 0) if source else None)
         except ConnectionRefusedError:
             if time.monotonic() >= deadline:
                 raise
@@ -361,6 +366,7 @@ kDetailUnverifiable = 'first frame did not verify as a CtrlEnvelope'
 kDetailNotAHello = 'first control frame is not a verifiable Hello'
 kDetailDeadline = 'no authenticated first frame within the pre-auth deadline'
 kDetailPendingFull = 'too many connections are awaiting authentication'
+kDetailDisplaced = 'displaced from the pre-auth queue by a connection from another address'
 kDetailBackoff = 'too many failed authentications from this address; retry later'
 kDetailHandoff = 'data connection could not be handed to the live session'
 
@@ -815,19 +821,20 @@ def main():
         #
         # A supervisor with small knobs, so both limits are reached in a few connections: at most
         # two connections pending authentication, and an address backed off after two failures,
-        # for 1500 ms.
+        # for 1500 ms. Each control below speaks from its OWN loopback address (connect_control's
+        # `source`), because the failures one control provokes are counted against the address it
+        # used, and a silent connection held past the probe grace is one of them.
         knobs = {'MOBILEGL_IPC_PREAUTH_MAX': '2', 'MOBILEGL_IPC_PREAUTH_MS': '3000',
                  'MOBILEGL_IPC_AUTH_BACKOFF_AFTER': '2', 'MOBILEGL_IPC_AUTH_BACKOFF_MS': '1500'}
         with supervisor(args.server, args.out / 'preauth-knobs.log', extra_env=knobs) as (port, process, serverLog):
-            # (a) THE CAP. Two silent connections fill it; the third is refused Busy AT ACCEPT, at
-            #     once, instead of joining them. The two are then closed before their deadline -
-            #     a close before any byte is a probe, not an authentication failure, so (b) below
-            #     starts from zero. RED with the cap disabled: the third is not answered until its
-            #     own deadline, and then as Authentication.
-            first, second = connect_control(port), connect_control(port)
+            # (a) THE CAP. Two silent connections from 127.0.0.3 fill it; a third from the SAME
+            #     address is refused Busy AT ACCEPT, at once, instead of joining them - its address
+            #     already holds the whole queue. RED with the cap disabled: the third is not
+            #     answered until its own deadline, and then as Authentication.
+            first, second = connect_control(port, source='127.0.0.3'), connect_control(port, source='127.0.0.3')
             try:
                 time.sleep(.3)  # both accepted and pending
-                third = connect_control(port)
+                third = connect_control(port, source='127.0.0.3')
                 try:
                     third.settimeout(10)
                     began = time.monotonic()
@@ -841,6 +848,40 @@ def main():
             assert full.get('code') == 7 and full.get('detail') == kDetailPendingFull, full
             assert waited < 1, f'the connection over the pending cap waited {waited:.2f} s for its answer'
             evidence['pending_cap'] = {'refusal': full, 'answeredAfterSeconds': round(waited, 3)}
+            time.sleep(.3)
+
+            # (a2) THE QUEUE IS SHARED (fix round). The first cut had one pool: one address that
+            #     held every slot kept every other address out, for as long as it cared to. Now two
+            #     silent connections from 127.0.0.2 fill the queue and a Hello from 127.0.0.1 is
+            #     still JUDGED - it displaces 127.0.0.2's oldest connection, which is told so by
+            #     name - and reaches a session child (an authenticated Hello with fingerprint 0 is
+            #     answered Refuse{WireFingerprint} by the child, i.e. it was forked for). RED with a
+            #     single pool: the Hello is refused Busy "too many connections are awaiting
+            #     authentication".
+            holders = [connect_control(port, source='127.0.0.2') for _ in range(2)]
+            try:
+                time.sleep(.3)  # both accepted and pending
+                # Not `exchange`: its Busy retry would turn the red shape into a timeout. No
+                # session is live on this supervisor, so a Busy here can only be the queue's.
+                with pair(port) as newcomer:
+                    newcomer.settimeout(10)
+                    newcomer.sendall(hello(schema, flatbuffers))
+                    shared = receive(newcomer, schema)
+                holders[0].settimeout(5)
+                try:
+                    displaced = receive(holders[0], schema)
+                except (RuntimeError, OSError) as error:
+                    displaced = {'error': repr(error)}
+            finally:
+                for holder in holders:
+                    holder.close()
+            assert shared.get('code') == 2 and shared.get('expected', 0), (
+                f'a Hello from 127.0.0.1 while 127.0.0.2 held the whole pre-auth queue was answered {shared}')
+            assert displaced.get('code') == 7 and displaced.get('detail') == kDetailDisplaced, displaced
+            named = wait_for_log(serverLog, 'pending connection from 127.0.0.2 displaced by one from 127.0.0.1')
+            assert named is not None, f'the displacement was not named in {serverLog}'
+            evidence['pending_queue_is_shared'] = {'newcomer': shared, 'displaced': displaced, 'line': next(
+                l.strip() for l in named.splitlines() if 'displaced by one from 127.0.0.1' in l)}
             time.sleep(.3)
 
             # (b) THE BACKOFF. Two wrong tokens from this address, and the THIRD connection - with
@@ -862,6 +903,34 @@ def main():
             evidence['auth_backoff'] = {'refusal': backed, 'line': next(
                 l.strip() for l in named.splitlines() if 'refused at accept: authentication backoff' in l),
                 'afterWindow': after}
+
+            # (c) A SILENT SLOT HOLDER IS BACKED OFF (fix round). The critic's reproduction, with
+            #     this supervisor's small knobs: 127.0.0.4 holds the whole queue with connections
+            #     that never send a byte and closes them just before the deadline would have
+            #     counted them. The first cut counted no close without a byte, so that address
+            #     could repeat this for ever. A close after the probe grace (250 ms) is a failure
+            #     now: after two, 127.0.0.4 is refused at accept - even with the right token.
+            #     RED without the rule: that Hello is judged and forked for (Refuse{WireFingerprint}
+            #     from the child, code 2).
+            holders = [connect_control(port, source='127.0.0.4') for _ in range(2)]
+            time.sleep(.6)  # past the grace, well inside the 3000 ms deadline
+            for holder in holders:
+                holder.close()
+            time.sleep(.2)  # the supervisor sees both closes before the next connection
+            with socket.create_connection(('127.0.0.1', port), timeout=3, source_address=('127.0.0.4', 0)) as held:
+                held.settimeout(10)
+                held.sendall(hello(schema, flatbuffers))
+                try:
+                    silent = receive(held, schema)
+                except (RuntimeError, OSError) as error:
+                    silent = {'error': repr(error)}
+            assert silent.get('code') == 4 and silent.get('detail') == kDetailBackoff, (
+                f'127.0.0.4 held the pre-auth queue twice without a byte and its next Hello was answered {silent}')
+            reason = '127.0.0.4 failed pre-auth 2 times (last: held a pre-auth slot and closed without a byte)'
+            named = wait_for_log(serverLog, reason)
+            assert named is not None, f'the silent holder\'s failures were not named ("{reason}") in {serverLog}'
+            evidence['silent_slot_holder_backed_off'] = {'refusal': silent, 'line': next(
+                l.strip() for l in named.splitlines() if reason in l)}
             assert process.poll() is None, 'the pre-auth limits killed the supervisor'
 
         # ---- F fix round: THE SINGLE-SESSION SERVER CLOSES ITS LISTENER ONCE THE SESSION IS BOUND

@@ -32,11 +32,23 @@
 //                       which that address is refused at accept, before a byte of it is read.
 //
 // What a failure IS, for the backoff: a Hello whose token did not match, a first frame that is not
-// a well-formed control frame, and a connection that let the deadline pass. What it is NOT: a
-// connection that closed before sending a byte (a port probe costs the server an accept and
-// nothing else), a DataBind that names no live session (a stale data connection of a session that
-// just ended is a legitimate client's), and a refusal the backoff itself issued (counting those
-// would let anybody behind a shared address keep that address locked out for ever).
+// a well-formed control frame, a connection that let the deadline pass, and a connection that HELD
+// its pending slot for kPreAuthProbeGraceMs or longer and then closed (or was displaced, below)
+// without completing a frame. What it is NOT: a connection that closed within kPreAuthProbeGraceMs
+// of its accept without sending a byte (a port probe costs the server an accept and nothing else),
+// a DataBind that names no live session (a stale data connection of a session that just ended is a
+// legitimate client's), and a refusal the backoff itself issued (counting those would let anybody
+// behind a shared address keep that address locked out for ever).
+//
+// Fix round (the f2-auth critic's reproduction). The first cut counted no silent close at all, and
+// the pending slots were one pool for everybody: one address could open MOBILEGL_IPC_PREAUTH_MAX
+// silent connections, close them just before the deadline, open them again, and every Hello from
+// anywhere was refused Busy for as long as it liked - no failure counted, no backoff ever. Two
+// rules close that: a silent connection that held its slot past the grace is a failure (so the
+// holder is backed off after MOBILEGL_IPC_AUTH_BACKOFF_AFTER of them), and a full queue is SHARED
+// (ChoosePendingToDisplace): a newcomer from an address that holds fewer slots than the busiest
+// address displaces the busiest address's oldest pending connection, so no one address can keep
+// another out.
 
 #pragma once
 
@@ -73,6 +85,10 @@ namespace MobileGL::MG_Remote::Server {
     // A failure this old no longer counts: the operator who mistyped a token yesterday starts
     // from zero today.
     inline constexpr std::uint32_t kAuthBackoffForgetMs = 10 * 60 * 1000;
+    // A connection that closes (or is displaced) without a byte this soon after its accept is a
+    // port probe; one that held its slot longer is a failure. A real client writes its first frame
+    // the moment it connects, so it is never on the wrong side of this.
+    inline constexpr std::uint32_t kPreAuthProbeGraceMs = 250;
 
     // The refusal details a peer (and the log) sees. Named once so the supervisor and the unit test
     // cannot drift on the words; the TCP lane's scripts mirror them rather than parse them, so a
@@ -85,6 +101,7 @@ namespace MobileGL::MG_Remote::Server {
     inline constexpr const char* kFirstFrameBadDataBind = "first frame is a DataBind without a 16-byte nonce";
     inline constexpr const char* kPreAuthDeadline = "no authenticated first frame within the pre-auth deadline";
     inline constexpr const char* kPreAuthFull = "too many connections are awaiting authentication";
+    inline constexpr const char* kPreAuthDisplaced = "displaced from the pre-auth queue by a connection from another address";
     inline constexpr const char* kAuthBackoffRefusal = "too many failed authentications from this address; retry later";
 
     struct PreAuthKnobs {
@@ -162,6 +179,28 @@ namespace MobileGL::MG_Remote::Server {
             case FirstFrameShape::DataBind: return nullptr;
         }
         return kFirstFrameNotAHello;
+    }
+
+    // THE PENDING QUEUE IS SHARED BETWEEN ADDRESSES. Called when every pending slot is taken and a
+    // connection from `newcomer` has just been accepted. `pending` is the addresses of the pending
+    // connections, oldest first. The newcomer displaces the OLDEST pending connection of the
+    // address that holds the most slots, unless its own address already holds as many as that -
+    // then the newcomer is the one refused. Returns the index to displace, or pending.size() to
+    // refuse the newcomer.
+    //
+    // So an address holding nothing is always let in, whoever fills the queue; an address can only
+    // keep every slot while nobody else wants one; and among addresses with equal shares, the
+    // connection that has waited longest - the one furthest from being a client that writes its
+    // Hello on connect - goes first.
+    inline std::size_t ChoosePendingToDisplace(const std::vector<std::string>& pending, const std::string& newcomer) {
+        std::unordered_map<std::string, std::size_t> held;
+        std::size_t most = 0;
+        for (const auto& address : pending) most = std::max(most, ++held[address]);
+        const auto own = held.find(newcomer);
+        if (own != held.end() && own->second >= most) return pending.size();
+        for (std::size_t index = 0; index < pending.size(); ++index)
+            if (held[pending[index]] == most) return index;
+        return pending.size();
     }
 
     // Failures per peer address and the window each address is refused for.
