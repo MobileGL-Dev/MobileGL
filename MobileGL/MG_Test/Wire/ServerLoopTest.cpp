@@ -2917,8 +2917,11 @@ namespace {
     // RunSession's control thread latches a malformed SurfaceOp while the apply thread is mid-batch;
     // the interleaving the finding names is "just after the apply thread's per-record check". The
     // loop's between-records hook is that point, made deterministic: on its FIRST call - after the
-    // first record's own checks, before the second pop - it starts a thread that latches, and joins
-    // it, so the latch is stored by another thread and complete before the apply thread moves on.
+    // first record's own checks, before the second pop's latch check - it starts a thread that
+    // latches, and joins it, so the latch is stored by another thread and complete before the apply
+    // thread moves on. This pins the NARROWED window only: DrainRing's check-before-pop sees a latch
+    // stored here, but one stored between that check and the pop still lets that record through
+    // (the window is check-to-pop, not closed), and the session then ends at the next check.
     enum : int {
         kBetweenThreadStayed = 1, // the apply thread was still running 3 s after the latch, no Stop()
         kBetweenDrainedMore = 2,  // a record behind the latch point reached the applier
@@ -3027,8 +3030,8 @@ TEST(ServerLoopLatchTest, ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStam
            "line is not record.Minimum; 4 = not exactly two records reached the applier (64+ = setup)";
 }
 
-// Codex closeout finding 6: a latch ANOTHER thread stores between two records of one batch stops the
-// next pop. Red with DrainRing's pre-pop check put back to the F2 shape (a check at the function's
+// Codex closeout finding 6: a latch ANOTHER thread stores between two records of one batch, before the
+// next pop's check, stops that pop (the check-to-pop span itself stays open - narrowed, not closed). Red with DrainRing's pre-pop check put back to the F2 shape (a check at the function's
 // top and one under `++applied;`, the hook where it is now): the latch lands after the first
 // record's checks, the drain pops and applies the second draw, and only then looks again (bits 2|8).
 TEST(ServerLoopLatchTest, ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPop) {

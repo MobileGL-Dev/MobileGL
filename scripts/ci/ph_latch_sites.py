@@ -81,8 +81,9 @@ MECHANICS = [
     # still let one more record be popped and applied. The one check does all three jobs - a drain
     # ENTERED latched pops nothing (the exit-path drain), a record that latched is the last one its
     # batch applies, and a latch from RunSession's control thread between two records stops the
-    # next pop - and each case below goes red with it deleted. The pattern may not leave DrainRing's
-    # body (`\n    }\n` closes a member function in ServerLoop.cpp).
+    # next pop when stored before this check (it NARROWS the window to check-to-pop, not closes it;
+    # the session ends at the next check) - and each case below goes red with it deleted. The
+    # pattern may not leave DrainRing's body (`\n    }\n` closes a member function in ServerLoop.cpp).
     (REMOTE / "Server" / "ServerLoop.cpp",
      "DrainRing: no record is popped once the session latched (checked immediately before every pop)",
      r"Uint64 ServerLoop::DrainRing\(\) \{(?:(?!\n    \}\n).)*?for \(;;\) \{\s*if \(SessionLatched\(\)\) break;",

@@ -671,14 +671,14 @@ namespace MobileGL::MG_Remote::Server {
         //     latched-batch case);
         //   * a latch ANOTHER thread stores between two records - RunSession's control thread
         //     latching a malformed SurfaceOp while this drain is mid-batch - stops the next pop
-        //     (codex closeout finding 6; ServerLoopLatchTest's between-records case). The first
-        //     version checked at the top of the function and after each record instead, and a
-        //     latch that landed after the per-record check was still followed by one more pop and
-        //     apply before anything looked again.
-        // What remains is the window between this load and the pop itself, and it is not a gap
-        // in the guarantee but its linearization point: a latch stored after this load is ordered
-        // after the record the load admitted, exactly as a latch stored while that record runs is.
-        // Closing it would take a lock the control thread shares with every pop.
+        //     when it is stored before this load (codex closeout finding 6; ServerLoopLatchTest's
+        //     between-records case). The first version checked at the top of the function and after
+        //     each record, and made one more load (the PH-6 forfeit check) before the next pop;
+        //     checking HERE only NARROWS that control/apply window to this load-to-pop span, it
+        //     does not close it.
+        // A latch stored inside that span still lets the one record already admitted be popped and
+        // applied; the session then ends at the next check, one record later. Closing the span would
+        // take a lock the control thread shares with every pop.
         //
         // The idle poll's cost is unchanged: this load replaces the function-top check the first
         // version made, and the empty-ring answer is still it plus Pop's cmdHead load.
@@ -727,9 +727,11 @@ namespace MobileGL::MG_Remote::Server {
             // check as the first statement of this loop.)
             if (session.ReverseChannelForfeited()) break;
             // TEST-ONLY scheduling point BETWEEN two records: after this record's own checks and
-            // before the next pop's latch check, which is where a latch from RunSession's control
-            // thread used to slip one more record through. Only after a popped record, so the idle
-            // poll never pays for it; null outside ServerLoopLatchTest.
+            // before the next pop's latch check. A control-thread latch stored here is seen by that
+            // check (the first version let it through); one stored after the check and before the
+            // pop still is not - the window is narrowed to check-to-pop, not closed, and the session
+            // ends at the check after that record. Only after a popped record, so the idle poll never
+            // pays for it; null outside ServerLoopLatchTest.
             if (const auto hook = m_betweenRecordsHook.load(std::memory_order_acquire)) hook();
         }
         if (applied != 0) {
