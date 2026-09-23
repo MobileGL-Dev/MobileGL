@@ -1,14 +1,14 @@
 #!/bin/bash
 # EXIT GATE E1's NEGATIVE CONTROL and EXIT GATE E3(a)'s.
 #
-# This file is the body of .github/workflows/test.yml's "Negative controls - the verb barrier and
-# the persistent-map push must be load-bearing" step. It lives in the repository rather than inline
-# in the workflow for one reason: a workflow `run:` block cannot be executed anywhere except on a
-# runner, so the logic below was unreviewable and untestable until it ran in CI - and when the
-# wave-1 cross-family review claimed it was broken, confirming the claim needed a hand-made copy of
-# these lines with their inputs stubbed (wave1-codex-verify.md 8). A copy is not the thing. The
-# smoke test at scripts/ci/control_smoke_test.sh now runs THIS file, so the lines CI executes and
-# the lines the smoke test proves are the same lines.
+# This file is the body of .github/workflows/test.yml's "Negative controls (barrier, map push)"
+# step, which requires the verb barrier and the persistent-map push to be load-bearing. It lives in
+# the repository rather than inline in the workflow for one reason: a workflow `run:` block cannot
+# be executed anywhere except on a runner, so the logic below was unreviewable and untestable until
+# it ran in CI - and when the wave-1 cross-family review claimed it was broken, confirming the
+# claim needed a hand-made copy of these lines with their inputs stubbed (wave1-codex-verify.md 8).
+# A copy is not the thing. The smoke test at scripts/ci/control_smoke_test.sh now runs THIS file,
+# so the lines CI executes and the lines the smoke test proves are the same lines.
 #
 # WHAT THE REVIEW FOUND (ID-46 finding 8, CONFIRMED by execution; ID-48 assigns it here).
 # The previous version accepted ANY non-zero ctest exit as "the knob is load-bearing". A timeout, a

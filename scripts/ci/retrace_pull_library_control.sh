@@ -1,8 +1,8 @@
 #!/bin/bash
 # THE RETRACE-SPLIT LANE'S NEGATIVE CONTROL: a PULL library must red this split retrace.
 #
-# This file is the body of .github/workflows/test.yml's "Negative control - the PULL library must
-# red this split retrace" step, extracted for the reason given at the top of
+# This file is the body of .github/workflows/test.yml's "Negative control (pull library)" step in
+# the retrace-split job, extracted for the reason given at the top of
 # scripts/ci/split_negative_controls.sh: a `run:` block is unreviewable and untestable off a
 # runner, and scripts/ci/control_smoke_test.sh now runs THIS file rather than a hand-made copy.
 #

@@ -747,7 +747,7 @@ jobs:
       # As with the four before them, each alternative is the SHORTEST string that selects only what
       # it means to.
       # Handle-ABA, CSO, subsystem and texture-parameter controls (G8, G8b, G9, G10, G12).
-      - name: Push-build controls (G8, G9, G10, G12)
+      - name: Push-build controls (G8, G8b, G9, G10, G12)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1058,7 +1058,7 @@ jobs:
       # with the green run they were meant to be evidence of already gone. `if: always()` on the
       # upload made that worse rather than better, because a failure investigation is exactly
       # when the overwritten half is the half somebody needs.
-      - name: Keep green lane logs
+      - name: Keep lane logs before controls
         if: always()
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
@@ -1072,7 +1072,7 @@ jobs:
       # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH
       # backends. Measured at landing: 10 of 10 red, each with
       # Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"|"@DrawArrays", ..., where=entry}.
-      - name: Negative control A (split)
+      - name: Negative control A (corrupted snapshot)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1118,7 +1118,7 @@ jobs:
       #
       # THE GREEN HALF is the lane run above: the same hook, the same window, with no corruption
       # armed, across 1070 entries at zero divergences.
-      - name: Negative control A (split, read side)
+      - name: Negative control A (server-side read)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -1147,7 +1147,7 @@ jobs:
       # withholds ReadPixels:GetPixelStoreParameters, which the server reads under its own stamp.
       # Measured at landing: 2 of 2 red, each child dying with
       # Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"} on mgl-srv-apply.
-      - name: Negative control B (split)
+      - name: Negative control B (omitted stamp)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -2151,7 +2151,7 @@ jobs:
           python3 scripts/ci/magma_cache_checks.py --build-dir build-split \
             --out "${RUNNER_TEMP}/magma-cache-syncval" --execute
 
-      - name: Upload Magma run-ahead evidence
+      - name: Upload Magma run-ahead and cache evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -3162,9 +3162,9 @@ jobs:
 
       # THE RETRACE LANE'S OWN ALWAYS-ON NEGATIVE CONTROL, and its absence was review finding M-6:
       # this job was a clone of retrace-verify with the one step removed that makes the lane mean
-      # anything. retrace-verify carries "a corrupted snapshot field must red this retrace" so that
-      # "79 traces, zero divergences" is not a statement about a comparator nobody watched; the
-      # same sentence applies here word for word.
+      # anything. retrace-verify's "Negative control (corrupted snapshot)" step requires a corrupted
+      # snapshot field to red the retrace, so that "79 traces, zero divergences" is not a statement
+      # about a comparator nobody watched; the same reasoning applies here word for word.
       #
       # The control swaps the PULL library into the frozen path and requires the SAME replay to
       # fail. It is the sharpest one available, because OpenRA scores ssim 1.000000 either way -
@@ -3571,7 +3571,7 @@ jobs:
       # reads a mutation published through a helper as deferred, and scans only MG_Impl/GLImpl -
       # so the four MGP_NOTE_MUTATION sites in MG_State are outside it entirely. This is a
       # completeness gate over what the scanner can see; the semantic proof is the verify lane.
-      - name: "G9: dirty-surface mapping complete"
+      - name: Dirty-surface mapping complete (G9)
         run: |
           python3 scripts/gen_pipe_dirty_surface.py --check
           python3 scripts/gen_pipe_dirty_surface.py --self-test
@@ -3592,7 +3592,7 @@ jobs:
       # was a silent duplicate of another, because the harness asked "did something exit" rather
       # than "did THIS exit". Every control now asserts its own message, and a harness control
       # asserts that the harness still rejects someone else's exit.
-      - name: "R-7.1: field-ownership table complete"
+      - name: Field-ownership table complete (R-7.1)
         run: |
           python3 scripts/gen_pipe_field_ownership.py --check
           python3 scripts/gen_pipe_field_ownership.py --self-test
@@ -3615,7 +3615,7 @@ jobs:
       # about - and it guards the tool that decides whether a device golden run PASSED.
       # compare_actuals is the new half of that evidence (actual-vs-actual SSIM between
       # repeats); both are stub/synthetic-only, need no build, no GPU and no device.
-      - name: "R-16: control and trace-tool smoke tests"
+      - name: Control and trace-tool smoke tests (R-16)
         run: |
           bash scripts/ci/control_smoke_test.sh
           python3 scripts/ci/test_trace_infrastructure.py
@@ -3651,11 +3651,11 @@ jobs:
       # flush ladders) reported BY NAME, plus the pin-precedence control and a one-token edit to the
       # pinned ladder compared against the pin - and fails if any of them does not answer.
       # Same shape as gen_pipe.py --self-test above.
-      - name: "G5: buffer pool/rings unchanged"
+      - name: P3a regions unchanged (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh "${BASELINE}" HEAD
 
-      - name: "G5: untouched-region self-test"
+      - name: P3a untouched-region self-test (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh --self-test
 
@@ -3685,11 +3685,11 @@ jobs:
       # perturbed at its HEAD and at its TAIL and each required to be named BY NAME, plus a
       # one-token edit to the pinned FlushPendingRangesFrom body compared against the pin - and
       # fails if any of them does not answer.
-      - name: "G5: P4a regions unchanged"
+      - name: P4a regions unchanged (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
 
-      - name: "G5: P4a untouched-region self-test"
+      - name: P4a untouched-region self-test (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p4a_untouched_regions.sh --self-test
 
