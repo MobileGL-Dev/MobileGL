@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `3c80cd62`（= 旧 1135c664 的树，提交尾注已按用户令改写并强推）；集成树 `~/w7/pipe` 领先 20+ 提交（B2 返工 r1/r2、B3 返工 + 修复轮、V1、F 片 1–3），门全绿，等 fable 审查后推送（ID-P7-37）。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `3c80cd62`（= 旧 3c80cd62 的树，提交尾注已按用户令改写并强推）；集成树 `~/w7/pipe` 领先 20+ 提交（B2 返工 r1/r2、B3 返工 + 修复轮、V1、F 片 1–3），门全绿，等 fable 审查后推送（ID-P7-37）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -68,7 +68,7 @@
 2. **F2**：D11 五处 + PH-2、PH-6 drop-with-latch、PH-1 (3)(4)、PH-7 (5) fork 前认证——先要一个能向 spawn / TCP server 发畸形记录的对端字节驱动（fuzz 臂 2 的第一块）。
 3. M2 落地 → p7w6 APK（**含 F 的 wireFingerprint 变更：手机 server 必须重部署**）→ bsl-esc-menu spawn 臂通过 → 门 3 分母 36 全部与 monolith 同（三遍逐位相同 + spawn 臂，§7.2）。
 4. **B4**：裁判的 `WaitForSubmitsUpTo` 聚合等待（`Present:14094` / `WaitForSubmitIndex` / `WaitForFrameSerial`）+ 裁判点名的 Magma 债（§12）。
-5. wave 3 余项：棘轮 88 的 monolith draw 路径 `#if`。~~§7.2 同名重跑、Iris trace 普查~~ **已做（包 E1，主机 lavapipe，基 1135c664 = 现 `3c80cd62`）**：Iris 普查 77 行 × {monolith, inproc, spawn} 231 次全活，split 与 monolith 逐字节相同 70 / 77 行（7 行分歧 = Magma monolith draw 路径 vs wire 路径的差异或运行噪声，均在阈值内），P9 例外表为空——`texture-remint-pull` 在头上从未到达（[`notes/p7/iris-census-1135c664.md`](notes/p7/iris-census-1135c664.md)）；27 个 P5 wrong-answer 同名 24 绿 / 3 具名停止（`PIPE_PUSH=0` 控制臂）/ 0 错答（`MEASUREMENTS.md` §7.2 末）。
+5. wave 3 余项：棘轮 88 的 monolith draw 路径 `#if`。~~§7.2 同名重跑、Iris trace 普查~~ **已做（包 E1，主机 lavapipe，基 3c80cd62 = 现 `3c80cd62`）**：Iris 普查 77 行 × {monolith, inproc, spawn} 231 次全活，split 与 monolith 逐字节相同 70 / 77 行（7 行分歧 = Magma monolith draw 路径 vs wire 路径的差异或运行噪声，均在阈值内），P9 例外表为空——`texture-remint-pull` 在头上从未到达（[`notes/p7/iris-census-3c80cd62.md`](notes/p7/iris-census-3c80cd62.md)）；27 个 P5 wrong-answer 同名 24 绿 / 3 具名停止（`PIPE_PUSH=0` 控制臂）/ 0 错答（`MEASUREMENTS.md` §7.2 末）。
 6. wave 4：CTS AFTER（inproc × DV 五块 vs `$BASE`，≤ 0.5 pp，新增 crash = 0）、门 3 终局三遍。
 7. wave 5：F 余片、fuzz 三臂、P7 收官异模型整体审查（ID-66）。
 

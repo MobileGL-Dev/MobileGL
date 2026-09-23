@@ -1,15 +1,15 @@
-# Iris trace 普查 @ `1135c664`（P7 wave 3 包 E1，主机 lavapipe）
+# Iris trace 普查 @ `3c80cd62`（P7 wave 3 包 E1，主机 lavapipe）
 
 > 计划：[`PLAN-PH-P34B-P7.md`](PLAN-PH-P34B-P7.md) §1.2 的「门：每一个 Iris trace」行与 §3 wave 3 的「Iris trace 普查 + P9 例外表」；
 > [`ROADMAP.md`](../../ROADMAP.md) P3b/P4b 行门列「每一个 Iris trace（欠当前头的结果与 `texture-remint-pull` 的 P9 例外表）」；
 > [`CONTRACT-P7.md`](../../../../MobileGL/MG_Remote/CONTRACT-P7.md) §11「Iris 普查的 P9 例外」。
 > 同包的另一半（`MEASUREMENTS.md` §7.2 同名重跑）写在 [`MEASUREMENTS.md`](../../MEASUREMENTS.md) §7.2 的 P7 小节。
 >
-> 树 `~/w7/p7-census-e1`，分支 `p7/census-e1`，基线 `1135c664`（`origin/feat/disaggregated` 头，含 B3）。
+> 树 `~/w7/p7-census-e1`，分支 `p7/census-e1`，基线 `3c80cd62`（`origin/feat/disaggregated` 头，含 B3）。
 > `build-split` = Release / clang / ccache / `MOBILEGL_BUILD_DISAGGREGATED=ON` `_INPROC=ON` `MOBILEGL_PIPE_PUSH=ON`
 > `MOBILEGL_BUILD_INTEGRATION_TEST=ON` `MOBILEGL_BUILD_TRACE_REPLAY=ON`，ICD 钉 `lvp_icd.json`（lavapipe / llvmpipe）。
-> 证据根（树外）：`~/w7/e1-census/head-1135c664/`（`results.jsonl`、`reduced.json`、`art/<case>/<backend>[-SPLIT|-SPAWN]/{actual.png,result.json,ctest.out}`），
-> 重复轮 `~/w7/e1-census/rep{2,3}-1135c664/`，跑器 `~/w7/e1bin/census.py`（树外，未入库）。
+> 证据根（树外）：`~/w7/e1-census/head-3c80cd62/`（`results.jsonl`、`reduced.json`、`art/<case>/<backend>[-SPLIT|-SPAWN]/{actual.png,result.json,ctest.out}`），
+> 重复轮 `~/w7/e1-census/rep{2,3}-3c80cd62/`，跑器 `~/w7/e1bin/census.py`（树外，未入库）。
 
 ## 0. 结论
 
@@ -213,11 +213,11 @@ P5b 的 72 个通过格在头上两臂全活。
 ## 8. 复现
 
 ```bash
-bash ~/w7/notes/tools/p7_worktree.sh census-e1 1135c664
+bash ~/w7/notes/tools/p7_worktree.sh census-e1 3c80cd62
 cmake -S ~/w7/p7-census-e1 -B ~/w7/p7-census-e1/build-split -DMOBILEGL_BUILD_TRACE_REPLAY=ON
 ninja -C ~/w7/p7-census-e1/build-split -j 4
-python3 ~/w7/e1bin/census.py ~/w7/e1-census/head-1135c664 -j 2      # 231 条，可续跑
-python3 ~/w7/e1bin/reduce.py  ~/w7/e1-census/head-1135c664           # reduced.json + 表
+python3 ~/w7/e1bin/census.py ~/w7/e1-census/head-3c80cd62 -j 2      # 231 条，可续跑
+python3 ~/w7/e1bin/reduce.py  ~/w7/e1-census/head-3c80cd62           # reduced.json + 表
 python3 ~/w7/e1bin/repcmp.py                                         # §3 的三遍比对
 ```
 

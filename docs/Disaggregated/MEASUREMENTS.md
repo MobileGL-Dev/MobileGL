@@ -333,7 +333,7 @@ Espryt T1（`0x1fff` − pull）= +1076.1，T2（`0x1ff` − pull）= +1064.7，
 | `TextureParamsWithoutASamplerView` | 1 | P6 inspection forwarder |
 | `P4aFinalFixScenario` FBO/RBO delete | 1 | 读回用 ReadPixels，完整像素因果未隔离；client-thread framebuffer death 归 r1 #2 |
 
-> 上表是 P5 的历史去向。**头上读数（`1135c664`，P7 wave 3 同名重跑）见 §7.2 末**：22 条 readback → 19 绿 + 3 条由错答变为具名停止（都是 `MOBILEGL_PIPE_PUSH=0` 的对照臂）；3 条 query 全绿；inspection 与 FBO/RBO 各 1 条绿。
+> 上表是 P5 的历史去向。**头上读数（`3c80cd62`，P7 wave 3 同名重跑）见 §7.2 末**：22 条 readback → 19 绿 + 3 条由错答变为具名停止（都是 `MOBILEGL_PIPE_PUSH=0` 的对照臂）；3 条 query 全绿；inspection 与 FBO/RBO 各 1 条绿。
 
 ### 6.3 R-10、逐帧 ledger 与内存
 
@@ -384,7 +384,7 @@ splitctl 相对 push 的帧 p50 −0.1% – +1.6%（split build 的 monolith 臂
 
 包报告：`~/w7/notes/p5b/p5b-results/{d1-codex-v1,i1-v1,t2-codex-v1,f1-v1,r1-codex-v1,r2-v1,blit-codex-v1,mip-codex-v1,sync-codex-v1}.md`。
 
-### 7.2 主机收尾门与合并普查（`348d22a4`，`~/w7/p5b-final-host-348d22a4/`；同名重跑 @ `1135c664` 见本节末）
+### 7.2 主机收尾门与合并普查（`348d22a4`，`~/w7/p5b-final-host-348d22a4/`；同名重跑 @ `3c80cd62` 见本节末）
 
 | 车道 | Selected | Passed | Skipped | Failed |
 |---|---:|---:|---:|---:|
@@ -398,14 +398,14 @@ G1 27,814 符号 0/0/0/0、`.text` 10,806,611 → 10,806,611；G5 两族 + pin �
 
 **P5b 基线。** 合并 inproc 普查（`~/w7/p5b-final-census-348d22a4/`）：integration lane 显式 32 MiB，**1267 selected = 811 passed / 203 skipped / 62 aborted / 191 failed**；旧 1149 名全部保留、新增 118；旧 432 passes 全保留、零回退；旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。完整 trace 显式 256 MiB（容纳单次 128 MiB 上传，不是默认容量修复）：**79 = 72 passed / 6 aborted / 1 failed**（主跑止于 73/79，三轮续跑补齐；`create-indirect` DirectVulkan 在 llvmpipe 上内存膨胀 >60 GiB RSS 被守护杀死，两次复现，记 failed）。7 条未过项首阻塞：`rd12` DirectGLES `Fatal{InitialBytesNotCarried,"resource_respecify"}`、DirectVulkan `Fatal{BarrierTimeout,"Present"}`；`iris-photon`、`iris-derivative`、`create-indirect` 三个 DirectGLES `Fatal{UnmigratedEmulation,"texture-remint-pull"}`；`iris-bsl-esc-menu-854` DirectGLES `InitialBytesNotCarried`；`create-indirect` DirectVulkan 内存守护。通过项含 `improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914、`iris-iterationrp` DirectVulkan 0.995833、`iris-bsl-esc-menu-854` DirectVulkan 0.998402。逐 trace 见 `joint-codex-v1.md` 的 census 块与 `identity.json` / `counts.json` / `trace-transitions.json`。
 
-**同名重跑 @ `1135c664`（P7 wave 3 包 E1，2026-09-22，WSL `~/w7/p7-census-e1`，lavapipe）。** 方法逐字沿用上段普查的 helper（`~/w7/p5b-final-census-348d22a4/artifacts/census-helper.py`）：取 monolith 条目的命令与 ENVIRONMENT，`MOBILEGL_IPC_STAGE_MB=32` 与 `MOBILEGL_ITEST_REQUIRE_GPU=1` 作环境底、条目自己的 ENVIRONMENT 覆盖之，再强制 `MOBILEGL_TRANSPORT`、私有 `MOBILEGL_LOG_FILE_PATH`、tcache 关，状态映射相同；名单 = 上段 1267 个名字（头上 0 个缺失）。跑器 `~/w7/e1bin/{wa27,walane}.py`，证据 `~/w7/e1-census/{wa27,lane-inproc2}-1135c664/`；lane 普查单并发墙钟 426 s。
+**同名重跑 @ `3c80cd62`（P7 wave 3 包 E1，2026-09-22，WSL `~/w7/p7-census-e1`，lavapipe）。** 方法逐字沿用上段普查的 helper（`~/w7/p5b-final-census-348d22a4/artifacts/census-helper.py`）：取 monolith 条目的命令与 ENVIRONMENT，`MOBILEGL_IPC_STAGE_MB=32` 与 `MOBILEGL_ITEST_REQUIRE_GPU=1` 作环境底、条目自己的 ENVIRONMENT 覆盖之，再强制 `MOBILEGL_TRANSPORT`、私有 `MOBILEGL_LOG_FILE_PATH`、tcache 关，状态映射相同；名单 = 上段 1267 个名字（头上 0 个缺失）。跑器 `~/w7/e1bin/{wa27,walane}.py`，证据 `~/w7/e1-census/{wa27,lane-inproc2}-3c80cd62/`；lane 普查单并发墙钟 426 s。
 
-| 读数 | P5b `348d22a4` | 头 `1135c664` | delta |
+| 读数 | P5b `348d22a4` | 头 `3c80cd62` | delta |
 |---|---|---|---|
 | 27 个 wrong-answer 同名，inproc | 1 passed / 26 failed | **24 passed / 3 aborted / 0 failed** | 23 转绿；3 条由错答变为具名停止 |
 | 同上，spawn（P5b 未测） | — | 24 passed / 3 aborted / 0 failed | 与 inproc 逐名相同 |
 | 合并 lane 普查 1267 同名，inproc | 811 / 203 skipped / 62 aborted / 191 failed | **1051 / 172 / 37 / 7** | failed→passed 187、aborted→passed 62、skipped→passed 31；passed→非绿 40、failed→aborted 4 |
-| trace（CI split 子集），inproc | 79 = 72 / 6 aborted / 1 failed（含 `rd12` × 2，256 MiB） | **77 = 77 / 0 / 0**（默认 32 MiB；spawn 同为 77 / 0 / 0） | `rd12` 已 `ci: false` 出分母；其余 7 格全活（[`notes/p7/iris-census-1135c664.md`](notes/p7/iris-census-1135c664.md) §6） |
+| trace（CI split 子集），inproc | 79 = 72 / 6 aborted / 1 failed（含 `rd12` × 2，256 MiB） | **77 = 77 / 0 / 0**（默认 32 MiB；spawn 同为 77 / 0 / 0） | `rd12` 已 `ci: false` 出分母；其余 7 格全活（[`notes/p7/iris-census-3c80cd62.md`](notes/p7/iris-census-3c80cd62.md) §6） |
 
 27 条按 §6.2 的家族：
 
