@@ -2146,6 +2146,11 @@ jobs:
       - name: Fatal census (S7)
         run: python3 scripts/ci/fatal_census.py
 
+      # The decline half of rule I (P7 B3): every WireDeclines.def row has a site, every site a
+      # warning-or-error line. Same shape as the census - tree-only, no build.
+      - name: Wire declines audit (B3)
+        run: python3 scripts/ci/wire_declines_audit.py
+
       - name: Load trace cases
         id: trace-cases
         run: |

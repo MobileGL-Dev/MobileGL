@@ -2071,13 +2071,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (desc.StorageKind != static_cast<Uint8>(TextureStorageType::Mipmap)) {
             MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: buffer-backed textures are not migrated; declined",
                          desc.Resource.Slot, desc.Resource.Gen);
+            WireDeclineTally::Count(WireDeclineSite::ShapeBufferBacked);
             return false;
         }
         // ResolveWireTextureStorage has already followed ViewOf. Views share the storage
         // owner's image and layout; allocating a second image would break aliasing.
-        if (!MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) return false;
+        if (!MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) {
+            MGL_WIRE_DECLINE_AT(ShapeViewOfStorage,
+                                "texture {slot=%u, gen=%u} is a view whose storage owner did not resolve",
+                                desc.Resource.Slot, desc.Resource.Gen);
+            return false;
+        }
         if (desc.Levels == 0) {
             // A create before the first respecify: no storage, nothing to back.
+            MGL_WIRE_DECLINE_AT(ShapeNoLevels, "texture {slot=%u, gen=%u} has no defined level yet",
+                                desc.Resource.Slot, desc.Resource.Gen);
             return false;
         }
         TextureShapeInfo shapeInfo{};
@@ -2086,6 +2094,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                          "(%ux%ux%u, %u layers); declined",
                          desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(desc.Target), desc.Width,
                          desc.Height, desc.Depth, static_cast<Uint32>(desc.ArrayLayers));
+            WireDeclineTally::Count(WireDeclineSite::ShapeNoVulkanShape);
             return false;
         }
         const TextureInternalFormat internalFormat = static_cast<TextureInternalFormat>(desc.InternalFormat);
@@ -2094,6 +2103,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (format == VK_FORMAT_UNDEFINED) {
             MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: no backing VkFormat for internal format 0x%x",
                          desc.Resource.Slot, desc.Resource.Gen, desc.InternalFormat);
+            WireDeclineTally::Count(WireDeclineSite::ShapeNoVkFormat);
             return false;
         }
         // X8_D24 lacks optimal-tiling support on several drivers (lavapipe included); the same
@@ -2116,6 +2126,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!TryResolveSampleCountFlagBits(static_cast<Int>(desc.Samples), resolvedSampleCount)) {
                 MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: unsupported sample count %u",
                              desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(desc.Samples));
+                WireDeclineTally::Count(WireDeclineSite::ShapeSampleCount);
                 return false;
             }
             // glTexStorage*Multisample(samples = 1) is legal GL, but a one-sample image cannot
@@ -2251,7 +2262,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // old image must reach the queue first; waiting only for the preservation
         // fence cannot order work that is still in the renderer's open recording.
         // The descriptor caller preflights this before capturing its command buffer.
-        if (preserve && pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) return false;
+        if (preserve && pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) {
+            MGL_WIRE_DECLINE_AT(ShapePreserveFlushFailed,
+                                "texture {slot=%u, gen=%u}: earlier work could not be submitted before "
+                                "preserving its texels across a reallocation",
+                                desc.Resource.Slot, desc.Resource.Gen);
+            return false;
+        }
         TextureResource replacement;
 
         VkImageCreateInfo imageInfo{};
@@ -2298,9 +2315,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (imageFormatResult != VK_SUCCESS ||
                 (isMultisample && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
-                MGLOG_D("%s: image flags=0x%x sampleCount=%d are unsupported for texture {slot=%u, gen=%u}",
-                        __func__, static_cast<Uint32>(imageInfo.flags),
-                        static_cast<Int>(imageInfo.samples), desc.Resource.Slot, desc.Resource.Gen);
+                // Was an MGLOG_D, which a Release build compiles away: the one Shape* exit that
+                // left no line on the builds that ship.
+                MGL_WIRE_DECLINE_AT(ShapeImageFlagsUnsupported,
+                                    "texture {slot=%u, gen=%u}: image flags=0x%x sampleCount=%d are unsupported "
+                                    "by the device",
+                                    desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(imageInfo.flags),
+                                    static_cast<Int>(imageInfo.samples));
                 return false;
             }
         }
@@ -2319,6 +2340,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                          imageInfo.extent.height, imageInfo.extent.depth, imageInfo.arrayLayers,
                          imageInfo.mipLevels, static_cast<Int>(imageInfo.samples),
                          static_cast<Int>(imageInfo.format));
+            WireDeclineTally::Count(WireDeclineSite::ShapeCreateImageFailed);
             return false;
         }
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
@@ -2340,7 +2362,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (preserve) {
             FlushPendingUploads();
             if (!PreserveTextureContentsOnRecreate(m_device, m_commandPool, m_graphicsQueue,
-                                                   resource, replacement, true)) return false;
+                                                   resource, replacement, true)) {
+                MGL_WIRE_DECLINE_AT(ShapePreserveCopyFailed,
+                                    "texture {slot=%u, gen=%u}: its texels could not be copied into the "
+                                    "reallocated image",
+                                    desc.Resource.Slot, desc.Resource.Gen);
+                return false;
+            }
         }
         DeferResourceRelease(Move(resource));
         std::destroy_at(&resource);
@@ -2412,11 +2440,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // NOT `incomplete`: this arm reports SUCCESS while leaving the entry pending,
                 // so the draw proceeds against texels that were never uploaded. Counted
                 // separately for exactly that reason (B3).
-                WireDeclineTally::Count(WireDeclineSite::UploadLevelExtentMismatch);
+                MGL_WIRE_DECLINE_AT(UploadLevelExtentMismatch,
+                                    "texture {slot=%u, gen=%u} level %u: the staged extent does not match the "
+                                    "image's extent for that level; left pending and NOT uploaded",
+                                    handle.Slot, handle.Gen, static_cast<Uint32>(level));
                 continue;
             }
             if (texelSize.x() <= 0 || texelSize.y() <= 0 || byteSize == 0) {
-                WireDeclineTally::Count(WireDeclineSite::UploadEmptyLevel);
+                MGL_WIRE_DECLINE_AT(UploadEmptyLevel, "texture {slot=%u, gen=%u} level %u is empty",
+                                    handle.Slot, handle.Gen, static_cast<Uint32>(level));
                 incomplete = true;
                 continue;
             }
@@ -2445,7 +2477,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   (resource.aspect & VK_IMAGE_ASPECT_STENCIL_BIT);
             if (vkuFormatIsCompressed(resource.format) || !levelTexels ||
                 item.byteSize % levelTexels != 0 || item.byteSize / levelTexels == 0) {
-                WireDeclineTally::Count(WireDeclineSite::UploadTexelArithmetic);
+                MGL_WIRE_DECLINE_AT(UploadTexelArithmetic,
+                                    "texture {slot=%u, gen=%u} level %u: compressed, or its byte size is not a "
+                                    "whole number of texels",
+                                    handle.Slot, handle.Gen, static_cast<Uint32>(level));
                 incomplete = true;
                 continue;
             }
@@ -2465,7 +2500,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     if (offset[axis] < 0 || extent[axis] <= 0 ||
                         static_cast<Uint64>(offset[axis]) + static_cast<Uint64>(extent[axis]) >
                             static_cast<Uint64>(texelSize[axis])) {
-                        WireDeclineTally::Count(WireDeclineSite::UploadRegionOutOfBounds);
+                        MGL_WIRE_DECLINE_AT(UploadRegionOutOfBounds,
+                                            "texture {slot=%u, gen=%u} level %u: a staged region lies outside "
+                                            "the level",
+                                            handle.Slot, handle.Gen, static_cast<Uint32>(level));
                         incomplete = true;
                         return;
                     }
@@ -2521,7 +2559,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             WireDeclineTally::SetPendingGauge(static_cast<Uint64>(record.PendingUploads.size()), pendingBytes);
         }
         if (incomplete) {
-            WireDeclineTally::Count(WireDeclineSite::UploadIncomplete);
+            MGL_WIRE_DECLINE_AT(UploadIncomplete,
+                                "texture {slot=%u, gen=%u}: at least one pending level could not be staged; "
+                                "every draw that samples it is declined until it can",
+                                handle.Slot, handle.Gen);
             return false;
         }
         if (items.empty()) {
@@ -2533,7 +2574,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // otherwise Draw(old T), TexSubImage(T), Draw(new T) can upload before
         // the first draw. A clean texture never reaches this submission boundary.
         if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) {
-            WireDeclineTally::Count(WireDeclineSite::UploadFlushFailed);
+            MGL_WIRE_DECLINE_AT(UploadFlushFailed,
+                                "texture {slot=%u, gen=%u}: earlier renderer work could not be submitted before "
+                                "its upload batch",
+                                handle.Slot, handle.Gen);
             return false;
         }
 
@@ -2690,7 +2734,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkFormat viewFormat = VK_FORMAT_UNDEFINED;
             const auto storage = ResolveWireTextureStorage(handle, level, layer, &viewFormat);
             if (MG_Pipe::MGPipeHandleIsNull(storage)) {
-                WireDeclineTally::Count(WireDeclineSite::TexResolveStorage);
+                MGL_WIRE_DECLINE_AT(TexResolveStorage,
+                                    "texture {slot=%u, gen=%u}: no storage owner resolved", handle.Slot,
+                                    handle.Gen);
                 return nullptr;
             }
             if (storage != handle) {
@@ -2701,6 +2747,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                      vkuFormatCompatibilityClass(viewFormat) != vkuFormatCompatibilityClass(resource->format))) {
                     MGLOG_E_ONCE("Magma wire view: format %d cannot reinterpret storage format %d",
                                  static_cast<Int>(viewFormat), static_cast<Int>(resource->format));
+                    WireDeclineTally::Count(WireDeclineSite::TexViewFormat);
                     return nullptr;
                 }
                 return resource;
@@ -2711,6 +2758,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (handle.Slot >= records.size()) {
             MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: no applier record at that slot; declined",
                          handle.Slot, handle.Gen);
+            WireDeclineTally::Count(WireDeclineSite::TexNoApplierRecord);
             return nullptr;
         }
         auto& record = records[handle.Slot];
@@ -2720,6 +2768,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: the applier's record is %s; declined",
                          handle.Slot, handle.Gen,
                          !record.Live ? "dead" : "of another generation");
+            WireDeclineTally::Count(WireDeclineSite::TexRecordDeadOrStale);
             return nullptr;
         }
         const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
@@ -2731,15 +2780,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return &resource;
         }
         if (!SyncWireTextureShape(record, resource, requireStorage)) {
-            WireDeclineTally::Count(WireDeclineSite::TexShapeSync);
+            MGL_WIRE_DECLINE_AT(TexShapeSync, "texture {slot=%u, gen=%u}: no backing image; see the Shape* tally",
+                                handle.Slot, handle.Gen);
             return nullptr;
         }
         if (!renderbuffer && !UploadPendingWireLevels(handle, record, resource)) {
-            WireDeclineTally::Count(WireDeclineSite::TexUploadPendingLevels);
+            MGL_WIRE_DECLINE_AT(TexUploadPendingLevels,
+                                "texture {slot=%u, gen=%u}: pending levels could not be uploaded; see the "
+                                "Upload* tally",
+                                handle.Slot, handle.Gen);
             return nullptr;
         }
         if (requireStorage && (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) == 0) {
-            WireDeclineTally::Count(WireDeclineSite::TexStorageUsage);
+            MGL_WIRE_DECLINE_AT(TexStorageUsage,
+                                "texture {slot=%u, gen=%u} is bound as a shader image but its allocation has no "
+                                "STORAGE usage",
+                                handle.Slot, handle.Gen);
             return nullptr;
         }
         resource.syncedWireSerial = record.Serial;

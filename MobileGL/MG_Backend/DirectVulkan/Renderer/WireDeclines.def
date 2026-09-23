@@ -20,6 +20,13 @@
 // counts, so "which exit did this frame take" is answerable from a counter dump instead of
 // from a bisect. Rows are append-only: the integration lane asserts specific counters moved.
 //
+// EVERY ROW HAS A SITE AND EVERY SITE HAS A LINE. A row with no site is a name that can never
+// be counted - it reads as "this cannot happen here" when it only means "nobody wired it up" -
+// and a site with no line puts the reader back on a bisect. Sites reached through a macro
+// (MGL_WIRE_DECLINE_AT) get both at once; the few that use WireDeclineTally::Count directly do
+// so ONLY because the statement above them already carries the same reason as an _ONCE log.
+// scripts/ci/wire_declines_audit.py holds both halves.
+//
 // MGL_WIRE_DECLINE(Name)
 
 // ---- SetupWireDraw, in statement order -------------------------------------------------
@@ -88,3 +95,6 @@ MGL_WIRE_DECLINE(ShapeSampleCount)
 MGL_WIRE_DECLINE(ShapePreserveFlushFailed)
 MGL_WIRE_DECLINE(ShapeImageFlagsUnsupported)
 MGL_WIRE_DECLINE(ShapeCreateImageFailed)
+// Appended by the B3 review round: the preserve-copy arm of a reallocation was the one exit in
+// SyncWireTextureShape still leaving no trace at all.
+MGL_WIRE_DECLINE(ShapePreserveCopyFailed)
