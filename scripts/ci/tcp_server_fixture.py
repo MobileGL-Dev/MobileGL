@@ -63,6 +63,15 @@ def start(args):
     for key in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
                 'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):
         env.pop(key, None)
+    # The harness's headless pin (HeadlessGL.cpp, EnsureHeadlessPlatform), for the one server it
+    # does not start. Under inproc and spawn the server inherits the client's environment AFTER the
+    # pin; this supervisor inherits ctest's. Without it Mesa takes its build-time x11 platform: on a
+    # WSLg workstation that binds the window system and goes green, on a runner with no DISPLAY
+    # eglInitialize fails ("xcb_connect failed") and every Tcp. case reds with "remote TCP bring-up
+    # failed". An operator's explicit EGL_PLATFORM still wins, as it does in the harness.
+    env.setdefault('EGL_PLATFORM', 'surfaceless')
+    env.pop('DISPLAY', None)
+    env.pop('WAYLAND_DISPLAY', None)
     log_path = args.state.with_suffix('.log')
     with log_path.open('wb') as log:
         child = subprocess.Popen([args.server, args.endpoint, '--serve'], env=env,

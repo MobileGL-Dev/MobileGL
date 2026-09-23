@@ -202,6 +202,56 @@ class Supervisor(unittest.TestCase):
             with self.assertRaises(OSError):
                 socket.create_connection(('127.0.0.1', port), timeout=.2)
 
+    def started_server_environment(self, **outer):
+        """Start the fixture under `outer` (None unsets a key) and return the environment its
+        server process actually saw."""
+        fixture = module('tcp_server_fixture')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            seen = root / 'seen.json'
+            server = root / 'server'
+            server.write_text('#!' + sys.executable + '\n'
+                              'import json,os,socket,sys\n'
+                              f'open({str(seen)!r},"w").write(json.dumps(dict(os.environ)))\n'
+                              'port=int(sys.argv[1].rsplit(":",1)[1])\n'
+                              's=socket.socket();s.bind(("127.0.0.1",port));s.listen()\n'
+                              'while True: s.accept()[0].close()\n')
+            server.chmod(0o755)
+            with socket.socket() as reservation:
+                reservation.bind(('127.0.0.1', 0))
+                port = reservation.getsockname()[1]
+            state = root / 'state.json'
+            env = dict(os.environ)
+            for key, value in outer.items():
+                if value is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = value
+            subprocess.run([sys.executable, str(Path(fixture.__file__)), 'start',
+                            '--server', str(server), '--endpoint', f'tcp://127.0.0.1:{port}',
+                            '--state', str(state)], check=True, env=env)
+            try:
+                return json.loads(seen.read_text())
+            finally:
+                fixture.stop(state)
+
+    def test_the_supervisor_is_headless_like_every_other_server_the_harness_reaches(self):
+        """CI red since P6.5: every DirectGLES.Tcp. case failed "remote TCP bring-up failed".
+
+        Under inproc and spawn the server inherits the CLIENT's environment after
+        HeadlessGL.cpp's EnsureHeadlessPlatform pinned EGL_PLATFORM=surfaceless and cleared
+        DISPLAY/WAYLAND_DISPLAY. This supervisor is started by ctest from the job environment
+        instead, so on a WSLg workstation it bound Mesa's build-time default x11 platform and went
+        green, and on a runner with no window system eglInitialize failed with "xcb_connect
+        failed" for every session."""
+        seen = self.started_server_environment(DISPLAY=':0', WAYLAND_DISPLAY='wayland-0', EGL_PLATFORM=None)
+        self.assertEqual(seen.get('EGL_PLATFORM'), 'surfaceless')
+        self.assertNotIn('DISPLAY', seen)
+        self.assertNotIn('WAYLAND_DISPLAY', seen)
+        # An operator's explicit platform still wins, as it does in the harness.
+        seen = self.started_server_environment(EGL_PLATFORM='x11')
+        self.assertEqual(seen.get('EGL_PLATFORM'), 'x11')
+
 
 if __name__ == '__main__':
     unittest.main()
