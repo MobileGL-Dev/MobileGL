@@ -54,13 +54,18 @@ COUNT_SITE = re.compile(r"WireDeclineTally::Count\(\s*WireDeclineSite::([A-Za-z]
 # every time but logged only sometimes is the unlogged site this check exists to refuse.
 LOGGED = re.compile(r"^\s*MGLOG_[WE](_ONCE)?\s*\(")
 RAW_PREFIX = re.compile(r"(?:^|[^A-Za-z0-9_])(?:u8|u|U|L)?R$")
+# The same shape for a character literal: `L'"'` is a wide char, not the identifier `L` followed
+# by a digit separator - and read the other way the `"` inside it opens a phantom string that
+# blanks the rest of the line, sites included.
+CHAR_PREFIX = re.compile(r"(?:^|[^A-Za-z0-9_])(?:u8|u|U|L)$")
 
 
 def strip_code(text: str) -> str:
     """Blank out //, /* */ comments and string / character literals, keeping every newline.
 
     What remains lines up with the source line for line, so a match's index is a real line
-    number. Raw strings R"d(...)d" and C++14 digit separators (1'000) are handled."""
+    number. Raw strings R"d(...)d", prefixed character literals (L'x', u8'x') and C++14 digit
+    separators (1'000) are handled."""
     out = list(text)
     n = len(text)
     i = 0
@@ -98,7 +103,8 @@ def strip_code(text: str) -> str:
             j = n if close < 0 else close + len(delim) + 2
             blank(i, j)
             i = j
-        elif c == '"' or (c == "'" and not (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_"))):
+        elif c == '"' or (c == "'" and (CHAR_PREFIX.search(text[max(0, i - 3):i])
+                                        or not (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")))):
             j = i + 1
             while j < n and text[j] != c and text[j] != "\n":
                 j += 2 if text[j] == "\\" else 1
@@ -251,6 +257,13 @@ SELF_TEST_FIXTURES = (
      "    g ? MGLOG_E(\"or only then\") : (void)0;\n"
      "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
      "}\n", 1, NO_LOG),
+    ("prefixed char literals (L'\"', u8'\"') before a site on the same line",
+     "MGL_WIRE_DECLINE(WideQuote)\nMGL_WIRE_DECLINE(Utf8Quote)\n",
+     "bool F(wchar_t w, char8_t c) {\n"
+     "    if (w == L'\"') MGL_WIRE_DECLINE_AT(WideQuote, \"a wide double quote\");\n"
+     "    if (c == u8'\"') MGL_WIRE_DECLINE_AT(Utf8Quote, \"a utf-8 double quote\");\n"
+     "    return true;\n"
+     "}\n", 0, "0 unlogged, 0 unknown"),
     ("good sites (AT form, bare Count under its own W/E, def row with trailing comment)",
      "MGL_WIRE_DECLINE(GoodAt) // the macro form\nMGL_WIRE_DECLINE(GoodBare)\n",
      "bool F(int x) {\n"
