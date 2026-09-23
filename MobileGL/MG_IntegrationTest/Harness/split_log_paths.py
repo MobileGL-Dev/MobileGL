@@ -153,7 +153,7 @@ def print_marker_table(title, table):
         print(f"    {len(table[pair]):4d}  {pair}")
 
 
-# These six skips predate P5f closure. Match both the exact entry and its reason;
+# The first six skips predate P5f closure. Match both the exact entry and its reason;
 # losing a GPU/preflight, a required lane marker, or either RSP probe is never allowed.
 DUALBLOCK_ALLOWED_SKIPS = {
     "DirectGLES.Split.TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame": "not the strict-arming lane:",
@@ -162,6 +162,22 @@ DUALBLOCK_ALLOWED_SKIPS = {
     "DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares": "not the counting lane: MGITEST_PMAP_LANE",
     "DirectVulkan.Split.Fm.ClipDistanceScenario.ADisabledClipDistanceRemovesNothing": "clips by a DISABLED gl_ClipDistance",
     "DirectVulkan.Split.Fm.ClipDistanceScenario.TheEnablesAreIndependentPerDistance": "clips by every declared gl_ClipDistance regardless of the enables",
+    # P7 D1/B2 and the twelve-scenario census put these on the split arms; each skips by its own
+    # named reason (the spawn and tcp arms skip the same set). Backend-structural on DirectGLES:
+    "DirectGLES.Split.Xfb.XfbRepeatedCaptureScenario.AVertexOnlyAdjacencyCaptureRecords":
+        "DirectGLES cannot forward a geometry-shader-less adjacency draw",
+    "DirectGLES.Split.ForcedDs.DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines":
+        "does not produce this picture yet: a flipped multisample depth resolve writes nothing",
+    "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly":
+        "the frontend's binding-qualifier seeding does not walk an array of arrays",
+    # ...and driver capabilities llvmpipe does not have (the runner and the host both skip them).
+    "DirectGLES.Split.ForcedDs.DepthStencilReadbackMatrixScenario.SeparateDepthAndStencilAttachmentsAreBothReadable":
+        "this driver cannot host separate DEPTH_COMPONENT24 and STENCIL_INDEX8 attachments",
+    "DirectGLES.Split.ImageTargetKindScenario.LoadsTexture2DMultisample": "GL_MAX_IMAGE_SAMPLES is 0",
+    "DirectGLES.Split.ImageTargetKindScenario.LoadsTexture2DMultisampleArray": "GL_MAX_IMAGE_SAMPLES is 0",
+    "DirectGLES.Split.ImageTargetKindScenario.StoresTexture2DMultisample": "GL_MAX_IMAGE_SAMPLES is 0",
+    "DirectGLES.Split.ImageTargetKindScenario.StoresTexture2DMultisampleArray": "GL_MAX_IMAGE_SAMPLES is 0",
+    "DirectGLES.Split.ImageTargetKindScenario.IgnoresLayerForTexture2DMultisample": "GL_MAX_IMAGE_SAMPLES is 0",
 }
 
 

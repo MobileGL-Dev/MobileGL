@@ -2198,7 +2198,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # historical name (`integration-magma-buffers`); on the others the ARM comes first
     # (`integration-magma-spawn-buffers`). `ctest -L` is a regex, so the obvious
     # `integration-magma-buffers-spawn` would be SELECTED by the CI step that runs
-    # `-L integration-magma-buffers` and require_greens its nineteen inproc entries by name -
+    # `-L integration-magma-buffers` and require_greens its twenty-one inproc entries by name -
     # the lane would red on "required green entries differ" the day this package landed.
     macro(mgl_itest_magma_arm_shape mglItestArm)
         string(TOLOWER "${mglItestArm}" mglItestArmLower)

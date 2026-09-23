@@ -2007,6 +2007,8 @@ jobs:
               "F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal",
               "F1WireScenario.UniformBufferRangeAndRebindPixels",
               "F1WireScenario.ShortUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.SubWordUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.UnalignedAtomicCounterRangeDeclinesAndTheSessionLives",
               "F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack",
               "F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation",
               "F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect",
@@ -2028,10 +2030,11 @@ jobs:
                             ["DirectVulkan.Split.Buffers." + name for name in cases])
           PY
 
-      # P7 package L: THE SAME NINETEEN, BY NAME, IN TWO PROCESSES.
+      # P7 package L: THE SAME TWENTY-ONE, BY NAME, IN TWO PROCESSES (nineteen at package L; the
+      # sub-word uniform range and the unaligned atomic-counter decline joined later).
       #
       # `--no-tests=error` in the lane step above answers "did something run and pass"; it does
-      # not answer "did these nineteen run". require_green does, and it is the check that would
+      # not answer "did these twenty-one run". require_green does, and it is the check that would
       # catch the failure mode this package could plausibly introduce - an arm that registers
       # SOME of the lane and goes green on a smaller set. The label spelling is what keeps the
       # three arms apart under `ctest -L`'s regex: the inproc arm keeps the historical
@@ -2041,7 +2044,7 @@ jobs:
       # TcpServer.Start / TcpServer.Stop ARE IN THE tcp ARM'S REQUIRED LIST ON PURPOSE. Every
       # tcp entry declares FIXTURES_REQUIRED mobilegl-tcp, so ctest lists the supervisor's two
       # fixture entries under the label as well - and they must be green too: a lane whose
-      # supervisor failed to start has nothing to say about the nineteen.
+      # supervisor failed to start has nothing to say about the twenty-one.
       - name: Magma application-buffer wire cases must all execute on the spawn and tcp arms
         working-directory: build-split
         env:
@@ -2066,6 +2069,8 @@ jobs:
               "F1WireScenario.EnabledVertexBufferDrawKeepsNamedP7Fatal",
               "F1WireScenario.UniformBufferRangeAndRebindPixels",
               "F1WireScenario.ShortUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.SubWordUniformBufferRangePadsMissingBytes",
+              "F1WireScenario.UnalignedAtomicCounterRangeDeclinesAndTheSessionLives",
               "F1WireScenario.ComputeWrittenVertexAndIndexBuffersDrawAndReadBack",
               "F1WireScenario.ColorBlitToDefaultIgnoresViewportAndPreservesOrientation",
               "F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect",

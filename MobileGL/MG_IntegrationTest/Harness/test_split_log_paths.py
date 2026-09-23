@@ -87,15 +87,41 @@ class ResultAccountingTest(unittest.TestCase):
             self.census()
 
     def test_known_skip_requires_its_exact_reason(self):
-        name, reason = next(iter(helper.DUALBLOCK_ALLOWED_SKIPS.items()))
-        self.document = self.discovery([name])
-        self.results([(name, "notrun", "skipped")])
-        with self.assertRaisesRegex(ValueError, "unexpected skip"):
-            self.census()
-        tree = ET.parse(self.xml)
-        ET.SubElement(tree.getroot().find("testcase"), "system-out").text = reason
-        tree.write(self.xml)
-        self.census()
+        for name, reason in helper.DUALBLOCK_ALLOWED_SKIPS.items():
+            with self.subTest(name=name):
+                self.assertTrue(reason.strip(), "an allowed skip needs a non-empty reason")
+                self.document = self.discovery([name])
+                self.results([(name, "notrun", "skipped")])
+                with self.assertRaisesRegex(ValueError, "unexpected skip"):
+                    self.census()
+                tree = ET.parse(self.xml)
+                ET.SubElement(tree.getroot().find("testcase"), "system-out").text = reason
+                tree.write(self.xml)
+                self.census()
+
+    def test_an_allowed_entry_skipping_for_another_reason_is_refused(self):
+        # The Glsl420 row names the DECLINE; a program that stopped building skips too, with a
+        # different sentence, and must not ride the same row. The accepted half is asserted
+        # FIRST: without it this case would pass on a helper that does not list the entry at all
+        # (CI's dual-block census went red on exactly that, run 35785685692 onward).
+        name = "DirectGLES.Split.Glsl420DeclarationScenario.AnArrayOfSamplerArraysIsHonouredOrDeclinedCleanly"
+        self.assertIn(name, helper.DUALBLOCK_ALLOWED_SKIPS)
+        for reason, accepted in [
+                ("the frontend's binding-qualifier seeding does not walk an array of arrays, so "
+                 "DirectGLES samples unit 0 for every element; the locations asserted above are "
+                 "the half of this case it can answer", True),
+                ("the frontend does not build an array of sampler arrays: link error", False)]:
+            with self.subTest(accepted=accepted):
+                self.document = self.discovery([name])
+                self.results([(name, "notrun", "skipped")])
+                tree = ET.parse(self.xml)
+                ET.SubElement(tree.getroot().find("testcase"), "system-out").text = "Skipped\n" + reason
+                tree.write(self.xml)
+                if accepted:
+                    self.census()
+                else:
+                    with self.assertRaisesRegex(ValueError, "unexpected skip"):
+                        self.census()
 
     def test_admitted_or_fatal_on_passed_case_is_not_hidden(self):
         for marker in ['Admitted{UnmigratedPipeInput, "GetProgramObject@Clear"}',
