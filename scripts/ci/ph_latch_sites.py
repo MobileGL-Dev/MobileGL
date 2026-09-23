@@ -106,14 +106,20 @@ MECHANICS = [
 ]
 
 
+def case_suite(test_file, case):
+    """The gtest suite that owns `case` in `test_file`, or None when the file has no such case."""
+    text = (WIRE_TESTS / test_file).read_text(encoding="utf-8")
+    found = re.search(r"\bTEST(?:_F|_P)?\(\s*(\w+)\s*,\s*" + case + r"\s*\)", text)
+    return found.group(1) if found else None
+
+
 def mechanics_failures():
     failures = []
     for source, what, check, cases in MECHANICS:
         if not re.search(check, source.read_text(encoding="utf-8"), re.DOTALL):
             failures.append(f"MECHANICS: {source.name} no longer has the check for `{what}`")
         for test_file, case in cases:
-            text = (WIRE_TESTS / test_file).read_text(encoding="utf-8")
-            if not re.search(r"\bTEST(?:_F|_P)?\(\s*\w+\s*,\s*" + case + r"\s*\)", text):
+            if case_suite(test_file, case) is None:
                 failures.append(f"MECHANICS: {test_file} has no case {case} (the control for `{what}`)")
     return failures
 
@@ -123,7 +129,8 @@ def print_mechanics():
     print("| decline / close check | source | negative control(s) |")
     print("|---|---|---|")
     for source, what, _check, cases in MECHANICS:
-        print(f"| {what} | {source.name} | " + ", ".join(f"`{f.split('.')[0]}.{c}`" for f, c in cases) + " |")
+        print(f"| {what} | {source.name} | " +
+              ", ".join(f"`{case_suite(f, c)}.{c}` ({f})" for f, c in cases) + " |")
 
 
 LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])(SessionLatch|WireProtocolLatchAt|WireProtocolLatch)\s*\(")
