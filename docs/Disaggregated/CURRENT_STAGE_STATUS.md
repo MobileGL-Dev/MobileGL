@@ -4,19 +4,19 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `1135c664`（B3 + ID-P7-33/34）；集成树 `~/w7/pipe` = `1b5d97bd`（B2 返工 r1，审查 = rework，等 r2 后再门再推，ID-P7-35）。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `1135c664`（B3 + ID-P7-33/34）；集成树 `~/w7/pipe` = `699ce9a9`（B2 返工 r1 + B3 返工 + V1，未推：等 B2 r2 与 V1 门 / 审查，ID-P7-35/36）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
 | # | 子系统 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 96 / 75 / 72，full-split 535（pipe `1b5d97bd`，B2 返工 r1；tcp 少 5 条 = server 端旋钮条目的具名 parity 例外 + 1 条 `MsFlip.`） |
+| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 96 / 75 / 71，full-split 535（pipe `6207c9c9`；tcp 少 6 条 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（B3 的新红条件已进 pipe 门） |
 | 2 | §3.2 六个 `@P7` 退役 | ✅ | A（byte-tail、native-range、对齐 decline）、B（copy-image、default-color-blit、mip 半退役）、B2（multisample shape/aspect）、C（vertex-layout 拆分）；树上 `@P7` 拒绝站点 **0** |
 | 3 | `StateObjectDeathOps` | ✅ | C，`04292f06..7ed5da52` |
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | 🔄 | 包 **V1** 在跑（`PipeRespecifyScope` 放宽 + `integration-verify-split` + 两负控 + 8 verify trace × DV × inproc） |
+| 7 | verify × split（门 2） | 🔄→✅ | **V1 已报告并 cherry-pick 到 pipe**（`b015502e..699ce9a9`）：monolith verify 1136 不变、`integration-verify-split` 1070（DirectGLES 533 / DirectVulkan 537，逐条 inproc 武装证明）、`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）、8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；pipe 门 + fable 审查在跑 |
 | 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w4：34/36 与 monolith 差 ≤ 0.0005；**OpenRA 已关**（ID-P7-33/34：真因 = wire 臂 frame-serial floor 不健全，B3 修；p7w5 **27/27 golden**，[`W5-verify/`](notes/p7/device-window-1/W5-verify/README.md)）；**bsl-esc-menu** = server 死 VkBuffer 无界累积（ID-P7-32，**M2** 在修）；终局形式（三遍逐位 + spawn 臂同会话）留 p7w6 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
@@ -39,6 +39,8 @@
 | B2 | multisample 两处退役、AllocatorDebtScope ×2 删、(B′)、棘轮 173 | `089fd495..ec46a550` |
 | B3 | **OpenRA 真因**：wire 臂 completed-frame-serial floor 不健全 → 有序路径 + 可证 floor + 32 处静默出口具名 | `f62ceec6..38112dc6`，`origin@1135c664` |
 | B2 返工 r1 | tcp 五条 server 端旋钮条目改 split+spawn（parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）、翻转 MS 深/模板 resolve 逐行镜像、缩放 / X 镜像 / 跨格式 decline、`MsFlip.` 用例 | pipe `b155f607..1b5d97bd`（审查 rework → r2 在跑，ID-P7-35） |
+| B3 返工 | `WireDeclines.def` 53 行全站点 + 审计脚本、`StaleSerial.` parity 例外、注记 + `:273`/`:432`、`run_trace_case.cmake` 对 `unsound-serial-complete` 打红 | pipe `c167fd3d..6207c9c9`（审查 land with fixes → 修复轮在跑，ID-P7-36） |
+| V1 | `PipeRespecifyScope` 放宽、`integration-verify-split`（1070 条，双后端 inproc）、两负控 split 臂红、8 verify trace × DV × inproc 0 分歧、比对器 ReadPixels 窗口 oracle 改中性 pack | pipe `b015502e..699ce9a9`（门 + 审查在跑） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
@@ -51,9 +53,9 @@
 | 包 | 内容 | 状态 |
 |---|---|---|
 | B2 返工 r2 | 用例按 `IsSplitLane()` skip（monolith DirectVulkan / Espryt 两条新 §12 行）、逐行拷贝行距对齐 + stencil 腿 red-once、部分效应陈述、两个 `MGLOG_E_ONCE`、`MsFlip1.`、§7 双行 | 进行中（ID-P7-35） |
-| B3 返工 | tcp `StaleSerial` parity 例外、`run_trace_case.cmake` 对 `unsound-serial-complete` 打红、注记改写 + `:273` / `:432`、`WireDeclines.def` 12 行站点 + 审计脚本 | 进行中（fix 4 半成时重派） |
+| B3 修复轮 | 审计剥注释 / 字面量 + 按块回溯 + `--self-test`、`run_trace_case.cmake` spawn server 日志缺失 fail-closed、注记标「包树」+ §12 `WaitForFrameSerial` 债 | 进行中（ID-P7-36） |
 | M2 | `VkBufferManager` serial 门控回收（不假设帧有界）+ `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + spawn red-once | 进行中 |
-| V1 | verify × split（门 2）：`70f86064` 放宽已提交；车道 + 私有日志路径 + 负控 + 8 trace 在做 | 进行中 |
+| V1 审查 | fable：放宽的形状、比对器 oracle 收窄（server ReadPixels 窗口的盲点）、`PipeInputs.cpp` 越分区改动、车道武装证明、inproc-only 的理由 | 进行中；pipe 门含首次 `build-verify` |
 | F | Ph 小件：slice 1 令牌（常量时间 / ≥16 字节 / `Refuse{Authentication}` / smoke 接 CI）收尾 → `Welcome.dataNonce` → PH-8 → D11 + PH-2 → PH-6 → PH-1 (3)(4) | 进行中 |
 | E1 | Iris trace 普查（39 × 2 后端 × 3 臂）+ `MEASUREMENTS.md` §7.2 同名重跑 + P9 例外表 | 进行中 |
 
