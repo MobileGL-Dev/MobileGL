@@ -236,6 +236,16 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A run can be the first piece of a redefined level. Old coverage
+            // belongs to the previous coordinate system even when the new run
+            // happens to touch its old range; retaining it invents bytes that
+            // the current definition never supplied.
+            if (!shadow.Defined || shadow.Extent != extent) {
+                shadow.Bytes.clear();
+                shadow.Covered.clear();
+            }
+#endif
             shadow.Extent = extent;
             shadow.Defined = true;
             shadow.GpuDirty = false;

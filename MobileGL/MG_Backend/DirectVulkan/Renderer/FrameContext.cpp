@@ -307,8 +307,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (result != VK_SUCCESS) {
             return result;
         }
-        // The slot's fence has been waited: every command buffer this slot
-        // submitted (including mid-frame flushes) has finished executing.
+        // Under disaggregation VulkanRenderer waits every registered fence
+        // through this slot's last submit before calling here. That aggregate
+        // proof covers mid-frame pooled-fence flushes too; the slot fence alone
+        // would not. Initialize's first acquire has no prior submissions.
         FreeRetiredCommandBuffers(frame);
 
         result = vkAcquireNextImageKHR(device, swapchain, timeout, frame.imageAvailableSemaphore, acquireFence,

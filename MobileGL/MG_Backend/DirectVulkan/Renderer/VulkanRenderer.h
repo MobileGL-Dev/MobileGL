@@ -147,7 +147,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
         Bool FlushWirePendingCommandsForTextureUpdate() {
-            return !HasPendingRecordedWork() || FlushPendingCommands();
+            // A new texture upload must not race graphics work that samples
+            // the old texels. No current recording does not imply no in-flight
+            // submission: finish the recorded work, then wait its whole prefix.
+            if (HasPendingRecordedWork() && !FlushPendingCommands()) return false;
+            return WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX);
         }
         // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
         // RetireWireObjects (WireDraw.inc) already tags future objects with exactly this, and
@@ -685,6 +689,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // was waited or the device was idled); drops their records and
         // recycles pooled fences.
         void OnSubmitsCompletedUpTo(Uint64 submitIndex);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A later fence alone cannot retire earlier submissions. Wait for the
+        // whole still-live prefix before advancing the completed submit floor.
+        Bool WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs);
+#endif
         VkFence AcquirePooledSubmitFence();
         void DestroySubmitFencePool();
         Bool HasPendingRecordedWork() const;

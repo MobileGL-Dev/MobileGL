@@ -7063,6 +7063,10 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             RewindWireDescriptorSetsIfDue();
+            // The wire route returns before the monolith branch's draw-gated
+            // sweep. Dead wire texture/renderbuffer records otherwise live
+            // until the next frame boundary, which a long trace may not reach.
+            m_textureManager->CollectGarbage();
             return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
         }
 #endif
@@ -7685,6 +7689,7 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             RewindWireDescriptorSetsIfDue();
+            m_textureManager->CollectGarbage();
             DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
             return;
         }
@@ -13527,12 +13532,32 @@ void main() {
             return false;
         }
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            return IsFrameSerialComplete(serial);
+#else
             return true;
+#endif
         }
-        // Every submission is recorded with the frame serial it was made under, so the wait can be
-        // narrowed to the first submission at or past the requested serial instead of draining the
-        // whole queue. OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it
-        // retires, so the completed-serial floor still advances correctly after one fence wait.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // More than one submit can carry the same frame serial (mid-frame flush,
+        // then Present). The completed floor is clamped below any serial still
+        // held by an in-flight record; the first matching fence is not proof.
+        // OnSubmitsCompletedUpTo erases records, so copy fields and restart the
+        // search after every wait instead of continuing an invalidated iterator.
+        for (;;) {
+            const auto record = std::find_if(m_inFlightSubmits.begin(), m_inFlightSubmits.end(),
+                [serial](const auto& candidate) {
+                    return candidate.frameSerial >= serial && candidate.fence != VK_NULL_HANDLE;
+                });
+            if (record == m_inFlightSubmits.end()) break;
+            const Uint64 submitIndex = record->submitIndex;
+            if (!WaitForSubmitsUpTo(submitIndex, UINT64_MAX))
+                break; // fall through to the queue drain below
+            TryDrainFrameTransients();
+            if (IsFrameSerialComplete(serial)) return true;
+        }
+#else
+        // Pull build's historical one-fence wait stays byte-identical.
         for (const auto& record : m_inFlightSubmits) {
             if (record.frameSerial < serial || record.fence == VK_NULL_HANDLE) {
                 continue;
@@ -13546,6 +13571,7 @@ void main() {
             TryDrainFrameTransients();
             return true;
         }
+#endif
 
         // No usable record - fall back to draining the graphics queue. This over-waits (bounded by
         // the in-flight frame count) but never deadlocks.
@@ -13559,7 +13585,11 @@ void main() {
         // The queue was just drained; take the free frame-boundary drain when
         // nothing is recorded (present-less timer-query loops). No-op otherwise.
         TryDrainFrameTransients();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return IsFrameSerialComplete(serial);
+#else
         return true;
+#endif
     }
 
     Uint64 VulkanRenderer::GetSyncPointSubmitIndex() const {
@@ -13573,7 +13603,12 @@ void main() {
             return false;
         }
         const auto& frame = m_frameContext.GetCurrent();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return frame.isCommandRecording || frame.hasCommandBufferRecorded ||
+               frame.isPreCommandRecording || frame.hasPreCommandBufferRecorded;
+#else
         return frame.isCommandRecording || frame.hasCommandBufferRecorded;
+#endif
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -13638,6 +13673,29 @@ void main() {
             OnSubmitsCompletedUpTo(frontIndex);
         }
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VulkanRenderer::WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs) {
+        if (submitIndex <= m_completedSubmitCounter) return true;
+        if (submitIndex > m_submitCounter || m_device == VK_NULL_HANDLE) return false;
+        Vector<VkFence> fences;
+        for (const auto& record : m_inFlightSubmits) {
+            if (record.submitIndex > submitIndex) break;
+            if (record.fence == VK_NULL_HANDLE) return false;
+            fences.push_back(record.fence);
+        }
+        if (fences.empty()) return false;
+        const VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(fences.size()),
+                                                fences.data(), VK_TRUE, timeoutNs);
+        if (result == VK_SUCCESS) {
+            OnSubmitsCompletedUpTo(submitIndex);
+            return true;
+        }
+        if (result != VK_TIMEOUT)
+            MGLOG_E_ONCE("WaitForSubmitsUpTo: vkWaitForFences returned %d", result);
+        return false;
+    }
+#endif
 
     void VulkanRenderer::OnSubmitsCompletedUpTo(Uint64 submitIndex) {
         m_completedSubmitCounter = std::max(m_completedSubmitCounter, submitIndex);
@@ -13945,7 +14003,12 @@ void main() {
         // pooled fences and mid-frame command buffers.
         RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded &&
+            !frame.isPreCommandRecording && !frame.hasPreCommandBufferRecorded) {
+#else
         if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded) {
+#endif
             // GL flush semantics still demand batched texture uploads start
             // executing in finite time even when no draw was recorded.
             if (m_textureManager) {
@@ -13988,9 +14051,15 @@ void main() {
         const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer(submittingPreCommandBuffer);
         if (retireResult != VK_SUCCESS) {
             MGLOG_E_ONCE("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX)) {
+                // Every registered fence through this submission was waited.
+            } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
+#else
             if (vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS) {
                 OnSubmitsCompletedUpTo(m_submitCounter);
             } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
+#endif
                 m_bufferManager.NotifyDeviceIdle();
                 OnSubmitsCompletedUpTo(m_submitCounter);
             } else {
@@ -14028,6 +14097,12 @@ void main() {
                 return false;
             }
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!WaitForSubmitsUpTo(submitIndex, timeoutNs)) return false;
+        // A blocking wait can drain a present-less loop's frame transients.
+        TryDrainFrameTransients();
+        return true;
+#else
         for (const auto& record : m_inFlightSubmits) {
             if (record.submitIndex >= submitIndex) {
                 const VkResult result = vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, timeoutNs);
@@ -14048,6 +14123,7 @@ void main() {
         // No in-flight record at or beyond the index: it was already observed
         // complete via a fence wait on a later submission.
         return true;
+#endif
     }
 
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
@@ -14196,6 +14272,15 @@ void main() {
                 return;
             }
             m_presentSuspended = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A slot's Present fence alone does not prove its older pooled
+            // flushes retired. Wait the full prefix before FrameContext may
+            // free its retired command buffers and reset the slot fence.
+            const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
+            if (slotSubmit > m_completedSubmitCounter &&
+                !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX))
+                MagmaWireFatal("deferred-acquire-submit-wait");
+#endif
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
             if (acquireResult == VK_SUBOPTIMAL_KHR) {
@@ -14326,6 +14411,16 @@ void main() {
         // 3) Advance frame slot.
         m_frameContext.AdvanceToNext();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // FrameContext waits then resets the slot fence and frees retired
+        // command buffers. A later Present fence is not aggregate proof for
+        // earlier pooled flushes, so wait every registered submission in this
+        // slot's prefix BEFORE the reset/free happens.
+        const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
+        if (slotSubmit > m_completedSubmitCounter &&
+            !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX))
+            MagmaWireFatal("present-slot-submit-wait");
+#endif
         // 4) Wait/reset/acquire for next frame.
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         if (result == VK_SUBOPTIMAL_KHR) {
@@ -14350,10 +14445,9 @@ void main() {
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
-        // The acquired slot's fence has been waited: its last submission
-        // (and, in queue order, everything before it) is complete. The frame
-        // serials those submissions carried advance the buffer-manager floor
-        // inside OnSubmitsCompletedUpTo.
+        // Pull keeps its historical slot-fence inference. In a disaggregated
+        // build the aggregate wait above already retired the registered prefix
+        // before FrameContext reset the slot fence; this repeat is idempotent.
         OnSubmitsCompletedUpTo(m_frameContext.GetCurrent().lastSubmitIndex);
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
 #if MOBILEGL_BUILD_DISAGGREGATED

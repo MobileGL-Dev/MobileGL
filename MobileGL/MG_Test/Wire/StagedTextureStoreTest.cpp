@@ -307,6 +307,27 @@ TEST(StagedTextureStoreTest, StageChunkRunsAssembleTheLevelImageAndAGapIsNotCove
     EXPECT_EQ(store.LevelByteSize(key, kTex2DTarget, 0), 0u);
 }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+TEST(StagedTextureStoreTest, AdoptRunExtentMoveDoesNotInheritOldCoverage) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(15, 1));
+    Vector<Uint8> oldRun(16, 0x44);
+    Vector<Uint8> newRun(16, 0x99);
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, oldRun.data(), oldRun.size());
+    ASSERT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{8, 4, 1}, 16, newRun.data(), newRun.size());
+    EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 0))
+        << "the old level's [0,16) run was mistaken for bytes of the new extent";
+    EXPECT_EQ(store.LevelCoveredRunCount(key, kTex2DTarget, 0), 1u);
+    Vector<Uint8> newLower(16, 0xAA);
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{8, 4, 1}, 0, newLower.data(), newLower.size());
+    const Uint8* base = store.RequireLevelBytes(key, kTex2DTarget, 0, "unit_extent_move");
+    ASSERT_NE(base, nullptr);
+    EXPECT_EQ(base[0], 0xAAu);
+    EXPECT_EQ(base[16], 0x99u);
+}
+#endif
+
 // WHICH OF THE TWO STAGED-RUN SHAPES A RECORD CARRIES, read off the run's own LENGTH because the
 // wire layout is frozen and carries no field for it. The whole-level run (the shape this half has
 // always staged) is the level's complete shadow and begins at the level's first byte; a slab's run

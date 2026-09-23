@@ -808,8 +808,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Nothing bumps the slice epoch for those other resources, so freeing the buffer
         // here left the streamed memo handing a destroyed VkBuffer to vkCmdBindIndexBuffer
         // (llvmpipe then faulted inside the draw; the Create/Flywheel indirect retrace died
-        // exactly this way). Mid-frame drains do not advance m_frameSerial, so they must not
-        // free arena storage either: the arena's own ResetFrame/BeginFrame is the point where
+        // exactly this way). Most mid-frame drains do not advance m_frameSerial; every
+        // eighth does, but only through BeginFrame after the arena/memo boundary work.
+        // The drain's per-resource sweep must not free arena storage: ResetFrame/BeginFrame is where
         // the slot's slices stop being reachable, and that is where these releases land.
         for (Uint32 frameIndex = 0; frameIndex < m_deferredBufferReleases.size(); ++frameIndex) {
             CollectDeferredReleases(frameIndex);
