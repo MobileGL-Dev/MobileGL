@@ -18,6 +18,7 @@
 | 2 | `25e64de2` | `integration-verify-split` 车道（双后端 × inproc）、逐条目私有日志、CI 作业与逐条目臂证明；比对器在 server `read_pixels` 窗口内对 pack 半字段的预言改为 ID-49 中性 pack（§2.2 发现 A） |
 | 3 | `da3718c4` | 两条负控在 split 臂上的登记与 CI 红一次步骤；POISON_OMIT 的 split 臂配对与 server 侧 stamp 半边（§3.2 发现 C）；spawn 不注册的实测理由（§3.3） |
 | 4 | 本文 | note + `CONTRACT-P7.md` §6 状态句与 §8 第 (7) 项 |
+| 5 | V1 修复轮（8 个提交，各一项） | 评审 land-with-fixes 的八项：①read hook 的负控（§3.1 A′）②poison 正形条目断言角色半边（§3.1）③中性 pack 单一拼法（§2.2）④逐条目臂证明 + 具名例外表（§2.1）⑤spawn 措辞更正（§3.3）⑥`CONTRACT-P7.md` §6 / §8 ⑦CI 车道日志被负控覆盖（§2.1）⑧盲区收窄（§2.2 / §6） |
 
 ---
 
@@ -192,11 +193,11 @@ DirectVulkan 半边保留且绿。
 
 | 车道 | 臂 | 基线 `3c2867d3` | 本包之后 | 结果 |
 |---|---|---|---|---|
-| `integration-verify` | monolith，DirectGLES / DirectVulkan | 568 / 568 = 1136（本配置下 2 红，§2.4） | 568 / 568 = **1136**（名不变） | 1136/1136，271 skip |
+| `integration-verify` | monolith，DirectGLES / DirectVulkan | 568 / 568 = 1136（本配置下 2 红，§2.4） | 569 / 569 = **1138** | 1138/1138，273 skip |
 | `integration-verify-split` | inproc，DirectGLES / DirectVulkan | 0 / 0（不存在） | 534 / 538 = **1072** | 1072/1072，117 skip（GLES 60、Magma 57） |
 
 DirectGLES 534 = 530 环境 + Arming + Corrupted + ReadCorrupted + PoisonOmitted；DirectVulkan 538 = 534 + 4；
-两者差 4 = §2.3。（V1 修复轮把 `VerifySplitReadCorrupted.` 加进来，每后端 +1，1070 → 1072。）
+两者差 4 = §2.3。（V1 修复轮把 `VerifySplitReadCorrupted.` 加进来，每后端 +1；split 车道 1070 → **1072**，monolith verify 车道 1136 → **1138**——新 case 同样被 ambient `Verify.` 注册发现，在那里因为没有 CORRUPT 旋钮而 skip，与 `CorruptedFieldIsReported` 同形。）
 
 ---
 
@@ -329,7 +330,7 @@ divergences, zero unmigrated reads` 与 `MGPipe split: <case> DirectVulkan trans
 | `^integration-split$` | 303/303 |
 | `^integration-spawn$` | 219/219 |
 | `^integration-tcp$` | 222/222 |
-| `^integration-verify$`（monolith） | 1136/1136 |
+| `^integration-verify$`（monolith） | **1138/1138**（V1 修复轮 +2 skip） |
 | `^integration-verify-split$` | **1072/1072** |
 | `^integration-magma-split$` / `-spawn$` / `-tcp$` | 93/93 · 72/72 · 74/74 |
 
