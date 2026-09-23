@@ -128,7 +128,7 @@ server 在手机上**监听**，client 从 WSL **拨出**。理由不是偏好�
 adb shell ip -f inet addr show wlan0
 # 3. 起 server（前台 Service → supervisor 监听）
 adb shell am start-foreground-service -n top.mobilegl.plugin.trace/top.mobilegl.plugin.MobileGLServerService \
-  --es listen tcp://0.0.0.0:40613 --es token devtoken \
+  --es listen tcp://0.0.0.0:40613 --es token devtoken-0123456789abcdef \
   --es env "MOBILEGL_BACKEND_TYPE=DirectGLES;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1;MOBILEGL_LOG_FILE_PATH=/data/data/top.mobilegl.plugin.trace/files/mgl.log"
 adb logcat -s MobileGL | grep -m1 'listening on tcp://'
 # 停：adb shell am force-stop top.mobilegl.plugin.trace
@@ -139,7 +139,7 @@ adb logcat -s MobileGL | grep -m1 'listening on tcp://'
 export MOBILEGL_TRANSPORT=spawn                 # 拓扑：两进程；不 fork，因为下面给了远端
 export MOBILEGL_IPC_CONTROL=tcp://<phone-ip>:40613
 export MOBILEGL_IPC_DATA=stream
-export MOBILEGL_IPC_TOKEN=devtoken
+export MOBILEGL_IPC_TOKEN=devtoken-0123456789abcdef   # ≥16 字节（PH-7 (3)）：更短的令牌让 server 以 72 退出而不是监听
 export MOBILEGL_IPC_REQUIRE_SAME_BUILD=1        # APK 与本地构建必须同 commit
 ctest -L integration-tcp-device -j 1 --output-on-failure   # -j 1：设备同时只服务一个会话
 # retrace（同一环境）：

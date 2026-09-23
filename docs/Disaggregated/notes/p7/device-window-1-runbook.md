@@ -91,7 +91,12 @@ docs/Disaggregated/notes/p7/device-window-1/
 
 3. **主机侧 TCP 矩阵的制品先备好**（第 7 步用）：一份 WSL 的 `libMobileGL.so` +
    `mobilegl_trace_replay`，以及 `ctest --show-only=json-v1` 的 catalog。两端必须共享同一个
-   **显式** `MOBILEGL_BUILD_STAMP`，否则 `MOBILEGL_IPC_REQUIRE_SAME_BUILD=1` 会在握手上拒绝：
+   **显式** `MOBILEGL_BUILD_STAMP`，否则 `MOBILEGL_IPC_REQUIRE_SAME_BUILD=1` 会在握手上拒绝。
+   **设备上的 server 也必须是本次构建**（wave 2-F 起 TCP 握手换成了「一条连接 + `Welcome.dataNonce`」）：
+   新 APK 的 server 对旧 client 会回 `Refuse{WireFingerprint}`，但**旧 APK 的 server 对新 client 没有任何
+   Refuse 帧**——旧 supervisor 等第二条连接 2000 ms 后把两条都关掉（设备日志 `only 1 of 2 connections
+   arrived`），主机侧只看到 `MG_Remote client: no Welcome ... (rc=6)`；看到这条先回 §3 核对
+   `apk-install.txt` 的 `lastUpdateTime`，再怀疑别的：
 
    ```bash
    # [WSL]

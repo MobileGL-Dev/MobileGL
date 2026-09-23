@@ -11,7 +11,7 @@
 ```bash
 cmake --build /home/swung/p65-split --target MobileGLPeerLossProbe -j 12
 export MOBILEGL_IPC_CONTROL=tcp://PHONE_IP:40613
-export MOBILEGL_IPC_TOKEN=devtoken
+export MOBILEGL_IPC_TOKEN=devtoken-0123456789abcdef   # ≥16 字节（PH-7 (3)），与 server 端一致
 export MOBILEGL_IPC_REQUIRE_SAME_BUILD=1
 export MGITEST_PEER_KILL_CMD='adb -s 2f7cbe2e shell run-as top.mobilegl.plugin.trace kill -9 {pid}'
 /home/swung/p65-split/MobileGL/MG_Test/Wire/MobileGLPeerLossProbe --kill --deadline-ms 10000
@@ -25,7 +25,7 @@ loopback supervisor 的模板可以是 `MGITEST_PEER_KILL_CMD='kill -9 {pid}'`�
 
 ```bash
 export MOBILEGL_IPC_CONTROL=tcp://PHONE_IP:40613
-export MOBILEGL_IPC_TOKEN=devtoken
+export MOBILEGL_IPC_TOKEN=devtoken-0123456789abcdef   # ≥16 字节（PH-7 (3)），与 server 端一致
 export MOBILEGL_IPC_REQUIRE_SAME_BUILD=1
 run=$(mktemp -d /tmp/p65-wifi.XXXXXX)
 probe=/home/swung/p65-split/MobileGL/MG_Test/Wire/MobileGLPeerLossProbe
