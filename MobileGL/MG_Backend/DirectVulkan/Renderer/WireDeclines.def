@@ -6,7 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P7 wave 2 package B3. THE NAMES OF EVERY WAY A MAGMA WIRE DRAW CAN DECLINE.
+// P7 wave 2 package B3. THE NAMES OF EVERY WAY THE MAGMA WIRE ARM CAN DECLINE.
+//
+// A DECLINE IS NOT ALWAYS A SKIPPED DRAW. The SetupWireDraw / DispatchWireCompute rows are one
+// per refused draw or dispatch; the Tex* / Shape* / Upload* rows are counted per texture SYNC,
+// which the draw path reaches once per sampled texture and the descriptor resolver, framebuffer
+// attachments, CopyTexSubImage, mipmap generation, CopyImageSubData and texture readback reach
+// on their own (WireDeclineTally.h, above MGL_WIRE_DECLINE_AT).
 //
 // CONTRACT-P7 §0 rule I says a refusal on the wire arm is either a named decline or a named
 // Fatal. Before B3 the draw path had a third shape the rule does not admit: a bare

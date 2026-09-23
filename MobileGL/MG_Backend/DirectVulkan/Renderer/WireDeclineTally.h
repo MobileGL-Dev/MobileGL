@@ -149,7 +149,9 @@ private:
 };
 
 // Every decline goes through this: the tally moves ALWAYS, the log line is once per site.
-// `return MGL_WIRE_DECLINE_FALSE(Site, "why", ...)` reads as the statement it replaces.
+// `MGL_WIRE_DECLINE_AT(Site, "why", ...); return false;` is the statement pair that replaces
+// a bare `return false;` (the few sites that call WireDeclineTally::Count directly stand
+// under an MGLOG_W/E of their own; scripts/ci/wire_declines_audit.py holds them to that).
 //
 // A DECLINE IS NOT ALWAYS A SKIPPED DRAW, so the line does not say "draw". The Tex*, Shape* and
 // Upload* rows are counted per texture SYNC: SyncTextureResourceByHandle is reached from the
