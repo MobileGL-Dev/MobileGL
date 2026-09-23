@@ -5,7 +5,7 @@
 #   10-build.sh      APK + host artefacts, stamp <stamp> (default p7w7-<sha8>)        host only
 #   21-preflight.sh  record found state, reboot-clean (unless --no-reboot), stay-on, pin
 #   20-install.sh    adb install -r, on-device base.apk sha256 == built APK, dex2oat idle
-#   30-gate3.sh      36 cases x {monolith x3, inproc x3, spawn x3, inproc RUN_AHEAD=0 x1}
+#   30-gate3.sh      36 cases x {monolith x5, inproc x3, spawn x3, inproc RUN_AHEAD=0 x1}
 #   40-bsl-stats.sh  bsl-esc-menu x {inproc, spawn} with MOBILEGL_PIPE_STATS + maps sampler
 #   50-cts-after.sh  five KHR-GL46 blocks, inproc x DirectVulkan, AFTER lib deployed to mgcts
 #   60-reduce.py     gate-3 verdict per case, bsl peaks, CTS delta table + new-crash list

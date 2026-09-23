@@ -24,8 +24,9 @@ GATE 3 (CONTRACT-P7 7.1/7.2), per case of gate3/cases.txt:
     every arm, carries one boot_id, equal to session/boot-id.txt. A second boot_id, a record that
     carries none, or no session/boot-id.txt makes the whole gate GATE3 INVALID-SESSION, whatever
     the pictures say (the gate is a same-session reading);
-  * the monolith arm (x gate3/arms.txt's monolith_repeat: 3 from ID-P7-62 on; an arms.txt without
-    the key is the earlier script's x1) is the same-session control: every pass must itself pass,
+  * the monolith arm (x gate3/arms.txt's monolith_repeat: 5 from the ID-P7-62 final ruling on,
+    whatever --repeat; 3 in a run the interim script started; an arms.txt without the key is the
+    earlier script's x1) is the same-session control: every pass must itself pass,
     and its role logs must show no 'Config: IPC' / MOBILEGL_TRANSPORT line (the arm really was the
     monolith); a finished monolith pair with fewer passes than monolith_repeat is that case FAIL;
   * inproc and spawn: the pair finished (state .done), every expected repeat present and
@@ -38,19 +39,25 @@ GATE 3 (CONTRACT-P7 7.1/7.2), per case of gate3/cases.txt:
     presupposes a bit-reproducible reference. A case whose same-session monolith pictures are NOT
     all bit-identical over >= 3 passes has none, so for it the split arms' bit-identity clause is
     replaced by the distributional check: (1) the |ssim - m| clause above, for every monolith
-    reading m; (2) NEAREST MONOLITH (integrator ruling on ID-P7-62, replacing the first form's
-    1.25 x the max over all pairs): px(a, b) = the pixels where any RGBA channel differs, delta(a, b)
-    = the largest per-channel difference; the nearest of a pass among candidate monolith passes is
-    the one with the fewest differing px (a tie: the smaller delta), and its delta is measured to
-    that same pass. D_mm / Delta_mm = the max over the monolith passes of px / delta to the nearest
-    OTHER monolith pass (leave-one-out, over passes: a bit-identical twin is 0 / 0); every split
-    pass s (inproc and spawn repeats) must hold px(s, nearest) <= 1.25 x D_mm + 32 AND
-    delta(s, nearest) <= Delta_mm + 1. The pixels are read from the archived actual PNGs (numpy +
-    PIL; without them, or with W2_REDUCE_PNG_DECODER=pure, compare_actuals' stdlib decoder - the
-    same numbers, slower). Such a case prints 'nondeterministic monolith (N distinct / M passes)
-    -> distributional check' and its numbers, and its cross-arm difference is decided by (2), not
-    by gate3/adjudication.tsv. A case whose monolith is bit-identical, or that has fewer than 3
-    monolith passes (the pre-ID-P7-62 x1 archives), keeps the strict clause;
+    reading m; (2) NEAREST MONOLITH (the integrator's final ruling on ID-P7-62, replacing the
+    first form's 1.25 x the max over all pairs and the interim Delta_mm + 1): px(a, b) = the pixels
+    where any RGBA channel differs, delta(a, b) = the largest per-channel difference; the nearest
+    of a pass among candidate monolith passes is the one with the fewest differing px (a tie: the
+    smaller delta), and its delta is measured to that same pass. D_mm / Delta_mm = the max over the
+    monolith passes of px / delta to the nearest OTHER monolith pass (leave-one-out, over passes: a
+    bit-identical twin is 0 / 0); every split pass s (inproc and spawn repeats) must hold
+    px(s, nearest) <= 1.25 x D_mm + 32 AND delta(s, nearest) <= 1.5 x Delta_mm + 8 (delta is one
+    pixel's largest channel difference, so it gets a factor and a headroom of its own: scoring the
+    window-2 gate-3 split pictures against every monolith x3 subset of that session's monolith
+    passes, derivative passed 0% and pure monolith noise 70% under Delta_mm + 1; under
+    1.5 x Delta_mm + 8 sundial / bliss / derivative pass 100 / 97.5 / 95% at x3 and 100 / 99.9 /
+    100% at x5, noise 95-100%). The rule needs >= 3 monolith passes; 30-gate3.sh runs 5 (a case
+    judged on fewer notes it). The pixels are read from the archived actual PNGs (numpy + PIL;
+    without them, or with W2_REDUCE_PNG_DECODER=pure, compare_actuals' stdlib decoder - the same
+    numbers, slower). Such a case prints 'nondeterministic monolith (N distinct / M passes) ->
+    distributional check' and its numbers, and its cross-arm difference is decided by (2), not by
+    gate3/adjudication.tsv. A case whose monolith is bit-identical over all its passes, or that has
+    fewer than 3 monolith passes (the pre-ID-P7-62 x1 archives), keeps the strict clause;
   * --extra-monolith DIR[@BOOT_ID] (repeatable; an adjudication re-reduction, never the gate):
     adds the passes under DIR/<case>-DirectVulkan/repeat-NN (a run_android_retrace_local.py
     --archive-dir tree) to the case's monolith readings. Each must be the session's: a repeat's
@@ -126,12 +133,16 @@ TOL = 0.0005
 # ID-P7-62 (g3det VERDICT.md section 2): a case whose same-session monolith is not bit-identical
 # over >= MONOLITH_RULE_PASSES passes is judged by the distributional check, whose clause (2) holds
 # every split pass to its nearest monolith pass within SPREAD_FACTOR x D_mm + PX_HEADROOM px and
-# Delta_mm + DELTA_HEADROOM per channel (D_mm / Delta_mm: the monolith's leave-one-out nearest
-# spread; integrator ruling on ID-P7-62).
+# DELTA_FACTOR x Delta_mm + DELTA_HEADROOM per channel (D_mm / Delta_mm: the monolith's
+# leave-one-out nearest spread; the integrator's final ruling on ID-P7-62). 30-gate3.sh runs the
+# monolith x MONOLITH_EXPECTED_PASSES (recorded as arms.txt monolith_repeat=); the rule itself
+# needs MONOLITH_RULE_PASSES.
 MONOLITH_RULE_PASSES = 3
+MONOLITH_EXPECTED_PASSES = 5
 SPREAD_FACTOR = 1.25
 PX_HEADROOM = 32
-DELTA_HEADROOM = 1
+DELTA_FACTOR = 1.5
+DELTA_HEADROOM = 8
 RULING_62 = "ID-P7-62"
 UUID = re.compile(r"^(.+)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 # CONTRACT-P7 7.1/7.2's constants: the gate is held to these, never to what gate3/arms.txt,
@@ -445,8 +456,9 @@ def gate3(out, ca, extras=()):
         repeat = int(meta.get("repeat", str(CONTRACT_REPEATS)))
     except ValueError:
         repeat = 0
-    # 30-gate3.sh records monolith_repeat= from ID-P7-62 on (the monolith runs x --repeat); an
-    # arms.txt without the key was written by the earlier script, which ran the monolith x1.
+    # 30-gate3.sh records monolith_repeat= from ID-P7-62 on (5 under the final ruling, 3 under the
+    # interim script); an arms.txt without the key was written by the earlier script, which ran the
+    # monolith x1. A finished monolith pair is held to that recorded count.
     try:
         mono_repeat = int(meta.get("monolith_repeat", "1"))
     except ValueError:
@@ -656,7 +668,7 @@ def gate3(out, ca, extras=()):
             else:
                 d_mm, delta_mm = det["mono_nearest_px_max"], det["mono_nearest_delta_max"]
                 det["px_bound"] = SPREAD_FACTOR * d_mm + PX_HEADROOM
-                det["delta_bound"] = delta_mm + DELTA_HEADROOM
+                det["delta_bound"] = DELTA_FACTOR * delta_mm + DELTA_HEADROOM
                 for n in det["split_nearest"]:
                     n["within"] = n["px"] <= det["px_bound"] and n["delta"] <= det["delta_bound"]
                     if n["px"] > det["px_bound"]:
@@ -665,9 +677,9 @@ def gate3(out, ca, extras=()):
                                                           d_mm, PX_HEADROOM, det["px_bound"]))
                     if n["delta"] > det["delta_bound"]:
                         reasons.append("%s: %s's per-channel delta to its nearest monolith pass (%s, %d px) is %d > "
-                                       "Delta_mm %d + %d (= %d)" % (RULING_62, n["pass"], n["nearest"], n["px"],
-                                                                    n["delta"], delta_mm, DELTA_HEADROOM,
-                                                                    det["delta_bound"]))
+                                       "%.2f x Delta_mm %d + %d (= %.2f)" % (
+                                           RULING_62, n["pass"], n["nearest"], n["px"], n["delta"], DELTA_FACTOR,
+                                           delta_mm, DELTA_HEADROOM, det["delta_bound"]))
                 det["within"] = all(n["within"] for n in det["split_nearest"])
         # The RUN_AHEAD=0 control arm: required on every case (CONTRACT-P7 7.2 "RUN_AHEAD=0 对照臂一遍
         # 记录"), and it must be that arm; its picture is recorded, never gating.
@@ -756,6 +768,9 @@ def gate3(out, ca, extras=()):
         overall = "INCOMPLETE"
     rule_of = [(e["case"], e["monolith_determinism"]["rule"]) for e in results]
     return {"cases": results, "excluded": excluded, "repeat": repeat, "monolith_repeat": mono_repeat,
+            "rule_62": {"min_passes": MONOLITH_RULE_PASSES, "expected_passes": MONOLITH_EXPECTED_PASSES,
+                        "spread_factor": SPREAD_FACTOR, "px_headroom": PX_HEADROOM, "delta_factor": DELTA_FACTOR,
+                        "delta_headroom": DELTA_HEADROOM},
             "determinism": {"distributional": [c for c, r in rule_of if r == "distributional"],
                             "strict": [c for c, r in rule_of if r == "strict"],
                             "strict_under_3_passes": [c for c, r in rule_of if r.startswith("strict (")]},
@@ -771,8 +786,10 @@ def gate3(out, ca, extras=()):
 
 
 def print_gate3(g3):
-    print("== GATE 3 (DirectVulkan x pbuffer; split repeat=%d, contract >= %d; monolith repeat=%d; "
-          "tol |ssim-monolith| <= %.4f) ==" % (g3["repeat"], CONTRACT_REPEATS, g3["monolith_repeat"], TOL))
+    print("== GATE 3 (DirectVulkan x pbuffer; split repeat=%d, contract >= %d; monolith repeat=%d (30-gate3.sh runs "
+          "x%d, the %s rule needs >= %d); tol |ssim-monolith| <= %.4f) ==" % (
+              g3["repeat"], CONTRACT_REPEATS, g3["monolith_repeat"], MONOLITH_EXPECTED_PASSES, RULING_62,
+              MONOLITH_RULE_PASSES, TOL))
     s = g3["session"]
     print("-- session: boot_id %s; %d record(s) stamped; %s" % (s["session_boot_id"] or "?", s["records"],
                                                                s["reboot_clean"] or "no session/reboot-clean.txt"))
@@ -813,19 +830,22 @@ def print_gate3(g3):
             "yes" if e["split_eq_monolith"] else ("i==s" if e["inproc_eq_spawn"] else "no")))
         det = e["monolith_determinism"]
         if det["rule"] == "distributional":
-            print("%-*s    nondeterministic monolith (%d distinct / %d passes) -> distributional check (%s)" % (
-                w, "", det["distinct"], det["passes"], RULING_62))
+            print("%-*s    nondeterministic monolith (%d distinct / %d passes) -> distributional check (%s)%s" % (
+                w, "", det["distinct"], det["passes"], RULING_62,
+                " [%d < the %d monolith passes 30-gate3.sh runs; the rule needs >= %d]" % (
+                    det["passes"], MONOLITH_EXPECTED_PASSES, MONOLITH_RULE_PASSES)
+                if det["passes"] < MONOLITH_EXPECTED_PASSES else ""))
             if "error" not in det:
                 worst = max(det["split_nearest"], key=lambda n: (n["px"], n["delta"]), default=None)
                 print("%-*s      monolith leave-one-out nearest: D_mm %d px / Delta_mm %d (%d passes); split-to-nearest-"
-                      "monolith max %d px / delta %d (%d passes%s); bound %.2f x %d + %d = %.2f px / %d + %d = %d: %s; "
-                      "max |ssim - monolith| %s; decoder %s" % (
+                      "monolith max %d px / delta %d (%d passes%s); bound %.2f x %d + %d = %.2f px / %.2f x %d + %d = "
+                      "%.2f: %s; max |ssim - monolith| %s; decoder %s" % (
                           w, "", det["mono_nearest_px_max"], det["mono_nearest_delta_max"], len(det["mono_nearest"]),
                           det["split_nearest_px_max"], det["split_nearest_delta_max"], len(det["split_nearest"]),
                           "; most px: %s -> %s %d px / delta %d" % (worst["pass"], worst["nearest"], worst["px"],
                                                                     worst["delta"]) if worst else "",
                           SPREAD_FACTOR, det["mono_nearest_px_max"], PX_HEADROOM, det["px_bound"],
-                          det["mono_nearest_delta_max"], DELTA_HEADROOM, det["delta_bound"],
+                          DELTA_FACTOR, det["mono_nearest_delta_max"], DELTA_HEADROOM, det["delta_bound"],
                           "within" if det["within"] else "OUTSIDE",
                           "-" if det["max_dssim"] is None else "%.1e" % det["max_dssim"], det["decoder"]))
         for reason in e["reasons"]:

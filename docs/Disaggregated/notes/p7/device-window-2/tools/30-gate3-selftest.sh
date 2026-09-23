@@ -2,14 +2,19 @@
 # 30-gate3-selftest.sh [--script PATH]   (host only: no phone, no adb server, no device lock)
 #
 # Runs 30-gate3.sh (or PATH: red-once of an older driver) against a stub adb and a stub runner in a
-# temp dir and checks its repeat bookkeeping (ID-P7-62: the monolith arm runs x --repeat, recorded
-# as arms.txt monolith_repeat=) and its resume semantics:
-#   fresh       --cases a,b: arms.txt says repeat=3 monolith_repeat=3; the runner is asked for the
-#               monolith x3; every monolith pair archives 3 repeats and writes its .done; exit 0
-#   resume      one monolith .done deleted: only that pair re-runs, again x3
-#   incomplete  a monolith repeat without its PNG: no .done, progress.tsv INCOMPLETE, exit 3; the
-#               same command again completes it
-#   frozen      an arms.txt with monolith_repeat=3, resumed with --repeat 1: every arm keeps 3
+# temp dir and checks its repeat bookkeeping (ID-P7-62 final ruling: the monolith arm runs x5 on
+# every case whatever --repeat, the split arms x --repeat; recorded as arms.txt monolith_repeat=)
+# and its resume semantics:
+#   fresh       --cases a,b: arms.txt says repeat=3 monolith_repeat=5; the runner is asked for the
+#               monolith x5, inproc / spawn x3, ra0 x1; every monolith pair archives 5 repeats and
+#               writes its .done; exit 0
+#   decoupled   a fresh --repeat 1 run: the split arms x1, the monolith still x5 (monolith_repeat=5)
+#   resume      one monolith .done deleted: only that pair re-runs, again x5
+#   incomplete  a monolith repeat-05 (beyond the split arms' 3) without its PNG: no .done,
+#               progress.tsv INCOMPLETE, exit 3; the same command again completes it
+#   frozen      an arms.txt with monolith_repeat=5, resumed with --repeat 1: monolith x5, split x3
+#   interim     an arms.txt with monolith_repeat=3 (a run the interim x3 script started): a resume
+#               keeps monolith x3, and the log says why
 #   old-format  an arms.txt without monolith_repeat= (a run the pre-ID-P7-62 script started): a
 #               resume keeps that run's monolith x1
 # Exit 0 when every check holds.
@@ -83,51 +88,77 @@ reps() { find "$W2_LOGROOT/$1/gate3/archive/$2/$3-DirectVulkan" -maxdepth 1 -nam
 RUNS=0
 echo "30-gate3 self-test: driver $SCRIPT, stubs in $TMP"
 
-echo "[fresh] a new run records monolith_repeat and runs the monolith x --repeat"
+echo "[fresh] a new run records monolith_repeat=5 and runs the monolith x5, the split arms x3"
 gate fresh --cases case-a,case-b; rc=$?
 G="$W2_LOGROOT/fresh/gate3"
 expect "exit 0" $rc "rc=$rc; $(tail -3 "$TMP/fresh.$RUNS.log")"
-grep -qx 'monolith_repeat=3' "$G/arms.txt" && grep -qx 'repeat=3' "$G/arms.txt"
-expect "arms.txt: repeat=3 and monolith_repeat=3" $? "$(cat "$G/arms.txt")"
-[ "$(calls 'transport=monolith repeat=3 ')" = 2 ] && [ "$(calls 'transport=monolith repeat=1 ')" = 0 ]
-expect "the runner is asked for the monolith x3 on both cases" $? "$(grep monolith "$FAKE_RUNLOG")"
-[ "$(reps fresh monolith case-a)" = 3 ] && [ "$(reps fresh monolith case-b)" = 3 ]
-expect "each monolith pair archives 3 repeats" $? "$(reps fresh monolith case-a)/$(reps fresh monolith case-b)"
+grep -qx 'monolith_repeat=5' "$G/arms.txt" && grep -qx 'repeat=3' "$G/arms.txt"
+expect "arms.txt: repeat=3 and monolith_repeat=5" $? "$(cat "$G/arms.txt")"
+[ "$(calls 'transport=monolith repeat=5 ')" = 2 ] && [ "$(calls 'transport=monolith ')" = 2 ]
+expect "the runner is asked for the monolith x5 on both cases (and for nothing else on the monolith)" $? \
+    "$(grep monolith "$FAKE_RUNLOG")"
+[ "$(reps fresh monolith case-a)" = 5 ] && [ "$(reps fresh monolith case-b)" = 5 ]
+expect "each monolith pair archives 5 repeats" $? "$(reps fresh monolith case-a)/$(reps fresh monolith case-b)"
 [ "$(ls "$G"/state/*/*.done | wc -l)" = 8 ] && [ -f "$G/state/monolith/case-a.done" ]
 expect "every (arm, case) pair has its .done (8)" $? "$(ls "$G"/state/*/)"
 [ "$(calls 'transport=inproc repeat=3 ')" = 2 ] && [ "$(calls 'transport=spawn repeat=3 ')" = 2 ] \
-    && [ "$(calls 'transport=inproc repeat=1 case=case-.* env=MOBILEGL_IPC_RUN_AHEAD=0')" = 2 ]
+    && [ "$(calls 'transport=inproc repeat=1 case=case-.* env=MOBILEGL_IPC_RUN_AHEAD=0')" = 2 ] \
+    && [ "$(reps fresh inproc case-a)" = 3 ] && [ "$(reps fresh spawn case-b)" = 3 ]
 expect "the split arms keep x3 and ra0 x1" $? "$(cat "$FAKE_RUNLOG")"
 
-echo "[resume] a deleted monolith .done re-runs that one pair, x3"
+echo "[decoupled] the monolith count does not follow --repeat"
+: > "$FAKE_RUNLOG"
+gate decoupled --cases case-a --repeat 1; rc=$?
+G="$W2_LOGROOT/decoupled/gate3"
+[ $rc -eq 0 ] && grep -qx 'repeat=1' "$G/arms.txt" && grep -qx 'monolith_repeat=5' "$G/arms.txt" \
+    && [ "$(calls 'transport=monolith repeat=5 ')" = 1 ] && [ "$(calls 'transport=inproc repeat=1 case=case-a env=$')" = 1 ] \
+    && [ "$(calls 'transport=spawn repeat=1 ')" = 1 ] && [ "$(reps decoupled monolith case-a)" = 5 ]
+expect "a fresh --repeat 1 run: inproc / spawn x1, the monolith still x5 (arms.txt monolith_repeat=5)" $? \
+    "rc=$rc; $(cat "$G/arms.txt" 2>/dev/null); $(cat "$FAKE_RUNLOG")"
+
+echo "[resume] a deleted monolith .done re-runs that one pair, x5"
+G="$W2_LOGROOT/fresh/gate3"
 : > "$FAKE_RUNLOG"; rm "$G/state/monolith/case-a.done"
 gate fresh; rc=$?
-[ $rc -eq 0 ] && [ "$(wc -l < "$FAKE_RUNLOG")" = 1 ] && [ "$(calls 'transport=monolith repeat=3 case=case-a ')" = 1 ] \
-    && [ -f "$G/state/monolith/case-a.done" ] && [ "$(reps fresh monolith case-a)" = 3 ]
-expect "only monolith case-a re-ran, x3, and wrote its .done" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
+[ $rc -eq 0 ] && [ "$(wc -l < "$FAKE_RUNLOG")" = 1 ] && [ "$(calls 'transport=monolith repeat=5 case=case-a ')" = 1 ] \
+    && [ -f "$G/state/monolith/case-a.done" ] && [ "$(reps fresh monolith case-a)" = 5 ]
+expect "only monolith case-a re-ran, x5, and wrote its .done" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
 
-echo "[incomplete] a monolith repeat without its PNG leaves the pair open"
+echo "[incomplete] a monolith repeat without its PNG leaves the pair open - also beyond the split arms' 3"
 : > "$FAKE_RUNLOG"
-FAKE_DROP=monolith:case-b:2 gate incomplete --cases case-a,case-b; rc=$?
+FAKE_DROP=monolith:case-b:5 gate incomplete --cases case-a,case-b; rc=$?
 G="$W2_LOGROOT/incomplete/gate3"
 [ $rc -eq 3 ] && [ ! -f "$G/state/monolith/case-b.done" ] && [ -f "$G/state/monolith/case-a.done" ] \
-    && grep -q "^monolith	case-b	.*	INCOMPLETE$" "$G/progress.tsv"
-expect "monolith case-b repeat-02 without a PNG -> no .done, progress INCOMPLETE, exit 3" $? "rc=$rc; $(cat "$G/progress.tsv" 2>/dev/null)"
+    && grep -q "^monolith	case-b	.*	INCOMPLETE$" "$G/progress.tsv" && grep -q 'monolith case-b .*repeat-05 lack' "$TMP/incomplete.$RUNS.log"
+expect "monolith case-b repeat-05 without a PNG -> no .done, progress INCOMPLETE naming repeat-05, exit 3" $? \
+    "rc=$rc; $(cat "$G/progress.tsv" 2>/dev/null)"
 : > "$FAKE_RUNLOG"
 gate incomplete; rc=$?
 [ $rc -eq 0 ] && [ -f "$G/state/monolith/case-b.done" ] && [ "$(wc -l < "$FAKE_RUNLOG")" = 1 ] \
-    && [ "$(calls 'transport=monolith repeat=3 case=case-b ')" = 1 ]
-expect "...the same command again re-runs that pair only (x3) and completes, exit 0" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
+    && [ "$(calls 'transport=monolith repeat=5 case=case-b ')" = 1 ] && [ "$(reps incomplete monolith case-b)" = 5 ]
+expect "...the same command again re-runs that pair only (x5) and completes, exit 0" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
 
 echo "[frozen] a resume keeps the first run's counts, whatever --repeat it is given"
 G="$W2_LOGROOT/frozen/gate3"; mkdir -p "$G"
 printf 'case-a\n' > "$G/cases.txt"
-printf 'arms=monolith inproc spawn inproc-ra0\nrepeat=3\nmonolith_repeat=3\n' > "$G/arms.txt"
+printf 'arms=monolith inproc spawn inproc-ra0\nrepeat=3\nmonolith_repeat=5\n' > "$G/arms.txt"
 : > "$FAKE_RUNLOG"
 gate frozen --repeat 1; rc=$?
-[ $rc -eq 0 ] && [ "$(calls 'transport=monolith repeat=3 ')" = 1 ] && [ "$(calls 'transport=inproc repeat=3 ')" = 1 ] \
+[ $rc -eq 0 ] && [ "$(calls 'transport=monolith repeat=5 ')" = 1 ] && [ "$(calls 'transport=inproc repeat=3 ')" = 1 ] \
     && [ "$(calls 'transport=spawn repeat=3 ')" = 1 ]
-expect "arms.txt repeat=3 monolith_repeat=3 resumed with --repeat 1 -> monolith, inproc, spawn x3" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
+expect "arms.txt repeat=3 monolith_repeat=5 resumed with --repeat 1 -> monolith x5, inproc / spawn x3" $? \
+    "rc=$rc; $(cat "$FAKE_RUNLOG")"
+
+echo "[interim] an arms.txt the interim x3 script froze (monolith_repeat=3) keeps its monolith x3"
+G="$W2_LOGROOT/interim/gate3"; mkdir -p "$G"
+printf 'case-a\n' > "$G/cases.txt"
+printf 'arms=monolith inproc spawn inproc-ra0\nrepeat=3\nmonolith_repeat=3\napk=x\ntools=y\n' > "$G/arms.txt"
+: > "$FAKE_RUNLOG"
+gate interim; rc=$?
+[ $rc -eq 0 ] && [ "$(calls 'transport=monolith repeat=3 ')" = 1 ] && [ "$(calls 'transport=monolith ')" = 1 ] \
+    && [ "$(reps interim monolith case-a)" = 3 ] && [ -f "$G/state/monolith/case-a.done" ] \
+    && grep -qx 'monolith_repeat=3' "$G/arms.txt" && grep -q 'monolith repeat frozen at 3' "$TMP/interim.$RUNS.log"
+expect "monolith x3 with its .done, arms.txt untouched, and the log says why" $? "rc=$rc; $(cat "$FAKE_RUNLOG")"
 
 echo "[old-format] an arms.txt the pre-ID-P7-62 script froze (no monolith_repeat=) keeps its monolith x1"
 G="$W2_LOGROOT/old/gate3"; mkdir -p "$G"

@@ -2,10 +2,12 @@
 # 30-gate3.sh <stamp> [--cases a,b,...] [--repeat N] [--arms monolith,inproc,spawn,inproc-ra0]
 #
 # CONTRACT-P7 7.1/7.2 exit gate 3, one reboot-clean session, DirectVulkan x --use-pbuffer:
-#   monolith   xN   the same-session control every split reading is scored against; xN (ID-P7-62)
-#                   so the session itself shows whether the monolith is bit-reproducible - a case
-#                   whose monolith is not (the Iris sundial-lite / bliss / derivative packs on Adreno
-#                   830) is judged by 60-reduce.py's distributional check instead of bit-identity
+#   monolith   x5   the same-session control every split reading is scored against; x5
+#                   (MONOLITH_REPEAT, the ID-P7-62 final ruling; whatever --repeat) so the session
+#                   itself shows whether the monolith is bit-reproducible - a case whose monolith is
+#                   not (the Iris sundial-lite / bliss / derivative packs on Adreno 830) is judged by
+#                   60-reduce.py's distributional check instead of bit-identity, whose nearest-
+#                   monolith clause needs >= 3 passes and is steadier with more
 #   inproc     xN   (N = --repeat, default 3) must be bit-identical across passes
 #   spawn      xN   same, server role in a second process
 #   inproc-ra0 x1   MOBILEGL_IPC_RUN_AHEAD=0 lockstep control, recorded only
@@ -32,6 +34,8 @@ set -uo pipefail
 
 [ $# -ge 1 ] || die "usage: $0 <stamp> [--cases a,b] [--repeat N] [--arms list]"
 STAMP=$1; shift
+# ID-P7-62 final ruling: the monolith arm runs x5 on every case (the split arms stay x --repeat).
+MONOLITH_REPEAT=5
 CASES_ARG=""; REPEAT=3; ARMS="monolith inproc spawn inproc-ra0"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -73,7 +77,7 @@ fi
 mapfile -t CASES < "$OUT/cases.txt"
 [ ${#CASES[@]} -gt 0 ] || die "empty case list"
 [ -f "$OUT/arms.txt" ] || printf 'arms=%s\nrepeat=%s\nmonolith_repeat=%s\napk=%s\ntools=%s\n' \
-    "$ARMS" "$REPEAT" "$REPEAT" "$W2_APK" "$W2_TOOLS" > "$OUT/arms.txt"
+    "$ARMS" "$REPEAT" "$MONOLITH_REPEAT" "$W2_APK" "$W2_TOOLS" > "$OUT/arms.txt"
 # The repeat counts are frozen with the case list: a resume started without the first run's --repeat
 # (RUNBOOK: "30-gate3.sh <stamp>") must not re-run a pair with another count than its siblings'.
 FROZEN_REPEAT=$(sed -n 's/^repeat=//p' "$OUT/arms.txt")
@@ -81,11 +85,14 @@ if [ -n "$FROZEN_REPEAT" ] && [ "$FROZEN_REPEAT" != "$REPEAT" ]; then
     log "repeat frozen at $FROZEN_REPEAT by $OUT/arms.txt (asked: $REPEAT)"
     REPEAT=$FROZEN_REPEAT
 fi
-# The monolith runs x the same repeat from ID-P7-62 on (arms.txt monolith_repeat=). An arms.txt
-# without the key was frozen by the earlier script, whose monolith pairs ran x1: a resume of that
-# run keeps x1, so its monolith pairs all have one count (60-reduce.py reads the same key).
+# The monolith count is frozen the same way (arms.txt monolith_repeat=, MONOLITH_REPEAT on a fresh
+# start). A run the interim ID-P7-62 script started says 3 and a resume keeps 3; an arms.txt without
+# the key was frozen by the earlier script, whose monolith pairs ran x1: a resume of that run keeps
+# x1. Either way every monolith pair of one run has one count (60-reduce.py reads the same key).
 MONO_REPEAT=$(sed -n 's/^monolith_repeat=//p' "$OUT/arms.txt")
-if [ -z "$MONO_REPEAT" ]; then
+if [ -n "$MONO_REPEAT" ] && [ "$MONO_REPEAT" != "$MONOLITH_REPEAT" ]; then
+    log "monolith repeat frozen at $MONO_REPEAT by $OUT/arms.txt (this script starts a run at $MONOLITH_REPEAT)"
+elif [ -z "$MONO_REPEAT" ]; then
     MONO_REPEAT=1
     log "monolith repeat frozen at 1 by $OUT/arms.txt (no monolith_repeat=: started by the pre-ID-P7-62 script)"
 fi
