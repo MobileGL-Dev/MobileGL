@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-23（ID-P7-49–54）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。M3、B4 与 W6 文档已在 pipe e036b4e0 验证并推送；Photon / D24 同 APK monolith 对照已证明两项错图不是 TCP 分离回归。F2 的 PH-4/5/PH-2 已在 `p7-f2-driver` 经 Luna 审查落地；还剩 PH-6、PH-1 (3)(4)、PH-7 (5) 和 F2 完整门。门 3 / CTS AFTER 尚未完成。
+**更新：2026-09-23（ID-P7-49–56）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。CI 自 P6.5 起的七个红因已修（ID-P7-56），job/step 标题缩短、两个工作流加并发组；棘轮 173 → 171，余 86 标 `# P13`，门 4 关闭（ID-P7-55）。F2（PH-6、PH-1 (3)(4)、PH-7 (5)、fuzz 三臂）与门 5 的三个 inproc CTS 缺陷修复在集成；门 3 / CTS AFTER 待最终 APK。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -20,7 +20,7 @@
 | 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu DirectVulkan inproc/spawn 6/6 且图像 SHA 与 monolith 相同；DirectGLES × TCP 38 例窗口矩阵 16/29 pass、8 idle timeout、2 visual failure、3 missing result。Photon / D24 两项错图已由同 APK DirectGLES monolith 复现；36 例 DirectVulkan 三遍、同会话 monolith 对照和 M3 后 APK 回归待跑 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
-**40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → **173**（B2 重基线，余 88 = monolith draw 路径，wave 3）。
+**40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → 173 → **171**（ratchet88：`p7-magma` 余 86 全标 `# P13`，门 4 关闭，ID-P7-55）（B2 重基线，余 88 = monolith draw 路径，wave 3）。
 
 ## 2. 已落地（`feat/disaggregated`，按合并序）
 
@@ -50,6 +50,8 @@
 | B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门全绿，集成者审查 land，ID-P7-44） |
 | M3 | 长帧 descriptor set 游标按 queue-idle 证明回卷，2049 SSBO 窗口用例 split/spawn 绿且 red-once 红；包树与 pipe 完整门绿 | pipe `9fd768d4`（ID-P7-50，集成者审查 land） |
 | B4 | 聚合 submit 前缀等待、frame serial 重新扫描、Present 槽退休保护、pre-pass pending、texture prune 与 staged extent 清理 | pipe b19297d5（ID-P7-51；集成者 review land，完整 pipe 门通过；当前文档/citation/push 收尾中） |
+| CI 修复 | 链接缝走工厂、TCP fixture headless + 资源锁守卫、D3 拒绝句、Magma-only decline、dual-block 登记、retrace 链（旋钮 / pull verify 日志 / spawn 冷启动预算）、并发组、80 个标题缩短 | pipe `eaef83b3..e751b07b`（ID-P7-56） |
+| ratchet88 | `MGPipeTextureLegacyArmScope` 退役、余 86 标 `# P13`、棘轮 171 | `d49df354` / `d74e9923`（ID-P7-55） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
