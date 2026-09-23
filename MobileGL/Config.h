@@ -564,6 +564,21 @@ namespace MobileGL::MG_Config {
         // client that is already CPU-bound and costs a frame of latency, which is why the
         // default is 1 and not "as deep as the ring".
         Uint32 PresentCredit = 1;
+        // MOBILEGL_IPC_CONTROL_TIMEOUT_MS (CONTRACT-P6 §5.4 D5b): how long a spawn/tcp client
+        // waits for the SurfaceReply to one surface-control op (eglCreate*Surface, MakeCurrent,
+        // ...) once the server's backend is up. Its expiry is NOT fatal: the doorbell's death
+        // latch decides dead (device lost) from alive-but-silent (a named diagnostic). The
+        // contract named this knob from P6 on; the client hard-coded its default until P7.
+        Uint32 ControlTimeoutMs = 5000;
+        // MOBILEGL_IPC_COLD_START_MS (P7): the same wait for the three ops a server may bring its
+        // NATIVE backend up inside - CreatePbufferSurface, CreateWindowSurface, MakeCurrent -
+        // until the session's first MakeCurrent is answered ok. The bring-up is lazy (Espryt's
+        // eglInitialize, Magma's Vulkan instance and device), ~100 ms on a workstation and more
+        // than the steady 5 s on a loaded CI runner (retrace-split spawn legs, runs 35671704873
+        // and 35706183230). Never shorter than CONTROL_TIMEOUT_MS; its expiry is the same
+        // non-fatal named answer. The default is the spawn connect budget, for the same reason:
+        // "the server has to create a backend, and a cold software rasteriser is not fast".
+        Uint32 ColdStartMs = 20000;
         // MOBILEGL_IPC_STRICT_ERRORS: promote a BARRIER-PULLED field read - and, in a split
         // build, the seven sticky forwards that are otherwise exempt - from "count it in
         // rsp" to Fatal (R-7.3).

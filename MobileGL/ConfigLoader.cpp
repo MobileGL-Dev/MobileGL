@@ -423,6 +423,10 @@ namespace MobileGL::MG_ConfigLoader {
         // deeper queue buys nothing on a CPU-bound client and pays for it in latency. 0 is NOT
         // admitted: a credit of zero would mean "publish no present at all".
         ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", 1, 1, 8);
+        // CONTRACT-P6 D5b's reply bound and P7's cold-start budget (Config.h has the semantics).
+        // Both are floored at 100 ms: a zero bound would declare every live server silent.
+        ipc.ControlTimeoutMs = QueryEnvUint32("MOBILEGL_IPC_CONTROL_TIMEOUT_MS", 5000, 100, 600000);
+        ipc.ColdStartMs = QueryEnvUint32("MOBILEGL_IPC_COLD_START_MS", 20000, 100, 600000);
         ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
         ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
         QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
@@ -466,10 +470,10 @@ namespace MobileGL::MG_ConfigLoader {
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus persistent-block=%uKiB "
-                "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u strict=%d "
-                "audit=%d role-split-state=%d affinity='%s'",
+                "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
+                "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s'",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
-                ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit,
+                ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str());
         if (ipc.VerbBarrier == 0) {

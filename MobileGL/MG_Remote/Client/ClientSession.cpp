@@ -33,6 +33,7 @@
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -79,7 +80,9 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kHandshakeTimeoutMs = 5000;
         // cp (CONTRACT-P6 D5b): bounded, and its expiry is NOT fatal. A peer that
         // is gone is a different fact from a peer that is slow, and only the
-        // doorbell death latch may say which.
+        // doorbell death latch may say which. The surface-control reply wait itself reads
+        // MOBILEGL_IPC_CONTROL_TIMEOUT_MS / MOBILEGL_IPC_COLD_START_MS (ControlReplyBudgetMs
+        // below); this constant bounds the log-flush round trip, which is not a control op.
         constexpr Uint32 kRemoteControlTimeoutMs = 5000;
         // The server has to create a backend before it binds, and a cold
         // software rasteriser is not fast. Bounded, and a NAMED refusal at the end.
@@ -101,6 +104,34 @@ namespace MobileGL::MG_Remote::Client {
         // thread-local is private to its thread by construction.
         ::std::atomic<int> g_bringUpsInFlight{0};
         thread_local Bool tl_bringingUpHere = false;
+
+        // ---- P7 CI: THE COLD-START BUDGET OF A SURFACE-CONTROL REPLY -----------------------
+        //
+        // A spawned (or tcp) server brings its NATIVE backend up lazily, INSIDE the first
+        // surface creation (Espryt: eglInitialize under CreatePbufferSurface/CreateWindowSurface)
+        // or the first MakeCurrent (Magma: the Vulkan instance and device) - ServerLoop.cpp's
+        // ApplySurfaceControlFrame. On a workstation that is ~100 ms; on a loaded CI runner it
+        // took longer than the 5 s steady-state bound, and the retrace-split spawn legs died on
+        // "no SurfaceReply for CreatePbufferSurface seq 2" / "for MakeCurrent seq 3" with the
+        // server still alive and about to answer (11 of 77 legs in run 35671704873, 17 of 77 in
+        // 35706183230, a different set each run). The server was never wedged; the client simply
+        // asked a cold software rasteriser for a warm one's latency.
+        //
+        // So until the session's first MakeCurrent is answered ok, those three ops wait the
+        // cold-start budget; every other op, and all three once the backend is warm, keep the
+        // steady bound. The budget is never shorter than the steady bound, and its expiry is
+        // the same non-fatal, NAMED answer (D5b) - a longer wait, not a different contract.
+        Bool MayBringTheBackendUp(Server::SurfaceControlOp kind) {
+            return kind == Server::SurfaceControlOp::CreatePbufferSurface ||
+                   kind == Server::SurfaceControlOp::CreateWindowSurface ||
+                   kind == Server::SurfaceControlOp::MakeCurrent;
+        }
+
+        Uint32 ControlReplyBudgetMs(Server::SurfaceControlOp kind, Bool backendWarm, Bool* coldStart) {
+            const Uint32 steady = MG_Config::Ipc.ControlTimeoutMs;
+            *coldStart = !backendWarm && MayBringTheBackendUp(kind);
+            return *coldStart ? std::max(steady, MG_Config::Ipc.ColdStartMs) : steady;
+        }
 
         struct BringUpScope {
             BringUpScope() {
@@ -1198,12 +1229,16 @@ namespace MobileGL::MG_Remote::Client {
         // caller-serialised on the server's m_callerMutex under inproc; the same
         // discipline has to hold here or two replies race for one correlation.
         const std::lock_guard<std::mutex> lock(m_remoteControlMutex);
+        // The whole op - prefix drain, reply, event delivery - runs on one budget: the cold-start
+        // one while the server may still be bringing its backend up (see ControlReplyBudgetMs).
+        Bool coldStart = false;
+        const Uint32 budgetMs = ControlReplyBudgetMs(frame.kind, m_serverBackendWarm, &coldStart);
         // Control and data are independent ordered streams. Finish the old
         // command prefix before a surface operation can change its EGL tuple.
         if (m_started && m_link && !m_link->Capabilities().PublishIsDelivery) {
             const auto submitted = m_producer.LastPublishedSeq();
             m_producer.PublishAndNotify(submitted);
-            if (WaitForAppliedBudget(m_producer, *m_events, submitted, kRemoteControlTimeoutMs) !=
+            if (WaitForAppliedBudget(m_producer, *m_events, submitted, budgetMs) !=
                 Transport::SessionWait::Reached) return MOBILEGL_ERR_TRANSPORT_CLOSED;
             DrainEventRing(*m_events);
         }
@@ -1218,8 +1253,7 @@ namespace MobileGL::MG_Remote::Client {
         // and only the doorbell's death latch may say which.
         for (;;) {
             std::vector<Uint8> reply;
-            const MobileGLResult received =
-                ReceiveControlFrame(reply, kRemoteControlTimeoutMs);
+            const MobileGLResult received = ReceiveControlFrame(reply, budgetMs);
             if (received != MOBILEGL_OK) {
                 // `dl` (D5b): THE EXPIRY IS NOT FATAL AND IT IS NOT ONE ANSWER. The transport
                 // already distinguishes the two states this wait can end in, and the contract
@@ -1240,15 +1274,18 @@ namespace MobileGL::MG_Remote::Client {
                     LatchDeviceLost("a control reply timed out and the peer had hung up");
                 } else {
                     MGLOG_E("MG_Remote client: the server is ALIVE BUT SILENT - no SurfaceReply "
-                            "for %s seq %llu within %u ms and the control stream is still open. "
-                            "This is NOT device loss (CONTRACT-P6 5.4): a frozen or merely slow "
-                            "peer produces no hangup, and only a hangup may arm the latch. If "
-                            "this repeats, the server is wedged rather than gone.",
+                            "for %s seq %llu within %u ms (%s) and the control stream is still "
+                            "open. This is NOT device loss (CONTRACT-P6 5.4): a frozen or merely "
+                            "slow peer produces no hangup, and only a hangup may arm the latch. "
+                            "If this repeats, the server is wedged rather than gone.",
                             Server::SurfaceControlOpName(frame.kind),
-                            static_cast<unsigned long long>(frame.seq), kRemoteControlTimeoutMs);
+                            static_cast<unsigned long long>(frame.seq), budgetMs,
+                            coldStart ? "the cold-start budget, MOBILEGL_IPC_COLD_START_MS: the "
+                                        "server may still have been bringing its backend up"
+                                      : "the steady bound, MOBILEGL_IPC_CONTROL_TIMEOUT_MS");
                 }
                 MGLOG_E("MG_Remote client: no SurfaceReply for seq %llu within %u ms (rc=%d)",
-                        static_cast<unsigned long long>(frame.seq), kRemoteControlTimeoutMs,
+                        static_cast<unsigned long long>(frame.seq), budgetMs,
                         static_cast<int>(received));
                 return received;
             }
@@ -1297,9 +1334,12 @@ namespace MobileGL::MG_Remote::Client {
             }
             MG_Remote::DecodeWireSurfaceReply(*wire, &frame);
             if (m_link) {
-                const auto delivered = m_link->WaitForEventDelivery(frame.eventHead, kRemoteControlTimeoutMs);
+                const auto delivered = m_link->WaitForEventDelivery(frame.eventHead, budgetMs);
                 if (delivered != MOBILEGL_OK) return delivered;
             }
+            // A MakeCurrent the server answered ok has brought its backend up: from here on
+            // every op keeps the steady bound.
+            if (frame.kind == Server::SurfaceControlOp::MakeCurrent && frame.ok) m_serverBackendWarm = true;
             return MOBILEGL_OK;
         }
     }
@@ -1597,6 +1637,8 @@ namespace MobileGL::MG_Remote::Client {
         // for the same reason: the credit's id space belongs to the session that paces on it.
         m_runAheadArmed = false;
         m_runAheadLatched = false;
+        // The cold-start window is the next server's, not this one's (RunRemoteSurfaceControlFrame).
+        m_serverBackendWarm = false;
         m_presentsSent = 0;
         if (g_active == this) {
             g_active = nullptr;

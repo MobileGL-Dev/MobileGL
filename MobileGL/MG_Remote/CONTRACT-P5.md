@@ -394,6 +394,8 @@ is a pull-build symbol and G1 admits **no resize**, which is the same reason the
 | `MOBILEGL_IPC_STRICT_ERRORS` | 0 | promotes BARRIER-PULLED reads — and, in a split build, the seven sticky forwards — to `Fatal`. |
 | `MOBILEGL_IPC_AUDIT` | 0 | `0xDD` over retired staging bytes (rule C's mechanical control). |
 | `MOBILEGL_IPC_SERVER_AFFINITY` | `auto` | kept as the raw string; whoever starts the apply thread logs the **resolved mask**, because an affinity that silently did nothing looks exactly like one that worked. |
+| `MOBILEGL_IPC_CONTROL_TIMEOUT_MS` | 5000 | (P6 D5b, parsed from P7) a spawn/tcp client's wait for one surface-control `SurfaceReply` once the server's backend is up. Expiry is **not** fatal: dead latches device-lost, alive-but-silent is a named diagnostic. Range 100..600000. |
+| `MOBILEGL_IPC_COLD_START_MS` | 20000 | (P7) the same wait for `CreatePbufferSurface` / `CreateWindowSurface` / `MakeCurrent` until the session's first `MakeCurrent` is answered ok - the ops a server brings its native backend up inside, lazily. Never shorter than `CONTROL_TIMEOUT_MS`. Measured need: retrace-split spawn legs outlasted 5 s on loaded CI runners. The test lever is the server's `MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS`. |
 
 **One consequence, stated so it is not rediscovered.** In a build *without*
 `MOBILEGL_BUILD_DISAGGREGATED`, `MOBILEGL_TRANSPORT=inproc` is accepted by the environment and

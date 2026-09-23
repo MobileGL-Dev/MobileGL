@@ -17,9 +17,11 @@
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <thread>
 
 #if defined(__linux__) || defined(__ANDROID__)
 #include <pthread.h>
@@ -897,6 +899,41 @@ namespace MobileGL::MG_Remote::Server {
             return handle;
         }
 
+        // P7 CI. THE TEST LEVER FOR THE CLIENT'S COLD-START BUDGET (ClientSession.cpp,
+        // ControlReplyBudgetMs), in the style of MOBILEGL_TEST_DELAY_FIRST_CAPS_MS.
+        //
+        // MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS holds back this process's FIRST surface creation
+        // and its FIRST MakeCurrent by that many milliseconds each - the two dispatches a lazy
+        // native backend bring-up runs inside (Espryt's eglInitialize, Magma's instance and
+        // device). It stands in for a cold software rasteriser on a loaded runner, where that
+        // bring-up outlasted the client's steady reply bound and the retrace-split spawn legs died
+        // with the server still alive. Only the reply is late; the op itself is unchanged.
+        //
+        // Meant for a server in its OWN process (spawn / tcp), which is where the client's reply
+        // bound is. It is a TEST knob: it does nothing unless set, and is read once.
+        void DelayFirstBringUpForTest(SurfaceControlOp kind) {
+            static std::atomic<bool> surfaceSpent{false};
+            static std::atomic<bool> makeCurrentSpent{false};
+            std::atomic<bool>* spent = nullptr;
+            if (kind == SurfaceControlOp::CreatePbufferSurface || kind == SurfaceControlOp::CreateWindowSurface) {
+                spent = &surfaceSpent;
+            } else if (kind == SurfaceControlOp::MakeCurrent) {
+                spent = &makeCurrentSpent;
+            } else {
+                return;
+            }
+            static const long ms = [] {
+                const char* text = std::getenv("MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS");
+                return (text == nullptr || *text == '\0') ? 0L : std::strtol(text, nullptr, 10);
+            }();
+            if (ms <= 0 || spent->exchange(true, std::memory_order_acq_rel)) return;
+            MGLOG_W("MG_Remote server: MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS=%ld - the reply to the "
+                    "first %s is held back by that many milliseconds. This is the cold-start "
+                    "budget's test-only lever and must never be set in a measured run",
+                    ms, SurfaceControlOpName(kind));
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        }
+
     } // namespace
 
     MobileGLResult ServerLoop::ApplySurfaceControlFrame(SurfaceControlFrame& frame,
@@ -914,6 +951,7 @@ namespace MobileGL::MG_Remote::Server {
         // process whose split bring-up failed must see a refusal, not a crash.
         MG_Backend::BackendObject* backend = m_backend.get();
         if (backend == nullptr) return MOBILEGL_ERR_NOT_INITIALIZED;
+        DelayFirstBringUpForTest(frame.kind);
         switch (frame.kind) {
         case SurfaceControlOp::InitializeDisplay: {
             // The old Args carried the poster's `major`/`minor` OUT-POINTERS; here they are

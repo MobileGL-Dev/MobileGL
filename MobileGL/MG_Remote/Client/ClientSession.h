@@ -445,6 +445,11 @@ namespace MobileGL::MG_Remote::Client {
         // cp: one control op at a time, and the client's own seq space.
         std::mutex m_remoteControlMutex;
         Uint64 m_remoteControlSeq = 0;
+        // P7 CI: false until this session's first MakeCurrent is answered ok. Until then the
+        // ops the server may bring its native backend up inside wait MOBILEGL_IPC_COLD_START_MS
+        // for their reply instead of MOBILEGL_IPC_CONTROL_TIMEOUT_MS (Config.h has both).
+        // Guarded by m_remoteControlMutex, like the seq above; reset by Stop().
+        Bool m_serverBackendWarm = false;
 
         // The server we launched, if we launched one. Reaped in Stop().
         Server::LaunchedServer m_spawned;

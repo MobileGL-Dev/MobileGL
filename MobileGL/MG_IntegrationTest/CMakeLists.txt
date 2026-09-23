@@ -2748,6 +2748,48 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
+    # ---- P7 CI: THE SPAWN CLIENT'S COLD-START BUDGET ----------------------------------------
+    #
+    # A spawned server brings its native backend up lazily, inside the first surface creation
+    # (Espryt) or the first MakeCurrent (Magma). On loaded CI runners that took longer than the
+    # client's 5 s steady reply bound, and retrace-split's spawn legs died on "no SurfaceReply for
+    # CreatePbufferSurface seq 2" / "for MakeCurrent seq 3" while the server was about to answer.
+    # ClientSession now gives those two kinds of op MOBILEGL_IPC_COLD_START_MS (default 20 s)
+    # until the session's first MakeCurrent is answered ok.
+    #
+    # These two entries are that rule's red-once, made FAST: the server's test lever
+    # MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS holds the first surface creation and the first
+    # MakeCurrent back by 3 s each, and the steady bound is lowered to 2 s. With the cold-start
+    # budget both ops land inside 20 s and the case is green; without it (every op on the steady
+    # bound, which is what the client did before) the first one times out and the case reds on
+    # "remote spawn bring-up failed" - the CI failure in miniature, without waiting 5 s.
+    # NOT on integration-spawn: this is not a copy of the split lane (spawn_lane_parity.py). The
+    # DirectVulkan entry does carry integration-gpu, unlike the Magma arms' informational tiers
+    # below: it is one expected-GREEN case, and Magma's bring-up is the MakeCurrent half.
+    set(MGL_COLDSTART_FILTER "ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels")
+    foreach(mglColdBackend DirectGLES DirectVulkan)
+        if(mglColdBackend STREQUAL "DirectVulkan")
+            set(mglColdDriverEnv ${MGL_ITEST_VULKAN_ENV})
+        else()
+            set(mglColdDriverEnv ${MGL_ITEST_COMMON_ENV})
+        endif()
+        mgl_itest_join_environment(MGL_COLDSTART_ENV_${mglColdBackend}
+            "MOBILEGL_BACKEND_TYPE=${mglColdBackend}" ${MGL_ITEST_SPAWN_ARM_TRANSPORT_ENV}
+            "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+            "MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS=3000" "MOBILEGL_IPC_CONTROL_TIMEOUT_MS=2000"
+            "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cold-start-spawn-${mglColdBackend}.log"
+            ${MGL_ITEST_CAPABILITY_ENV} ${mglColdDriverEnv})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglColdBackend}.Spawn.ColdStart."
+            TEST_FILTER "${MGL_COLDSTART_FILTER}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-cold-start"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_COLDSTART_ENV_${mglColdBackend}}"
+        )
+    endforeach()
+
     # ---- D2: THE TEXTURE / PROGRAM SPLIT-SCENARIO CENSUS ------------------------------------
     #
     # PLAN-PH-P34B-P7.md 1.2, "门：纹理 / program 场景 split 覆盖". Each candidate was run once
