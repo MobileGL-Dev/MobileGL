@@ -1039,6 +1039,23 @@ jobs:
             verify-split-arming verify-split-logs "${RUNNER_TEMP}/verify-split.xml" \
             "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/verify-split-unarmed-expected.txt"
 
+      # THE GREEN LANE'S LOGS, KEPT BEFORE THE CONTROLS OVERWRITE THEM. Each control step below
+      # re-runs ambient VerifySplit. entries with a knob exported, and an ambient entry writes to
+      # ITS OWN per-entry path under verify-split-logs/ - which the library opens "w". So by the
+      # time the upload step at the end of this job runs, twelve of those files are the CONTROL
+      # runs' logs sitting under the LANE's names: an artifact showing deliberate divergences,
+      # with the green run they were meant to be evidence of already gone. `if: always()` on the
+      # upload made that worse rather than better, because a failure investigation is exactly
+      # when the overwritten half is the half somebody needs.
+      - name: Keep the green lane logs before the controls overwrite them
+        if: always()
+        working-directory: build-verify-split/MobileGL/MG_IntegrationTest
+        run: |
+          rm -rf verify-split-logs-lane
+          cp -a verify-split-logs verify-split-logs-lane
+          cp -p "${RUNNER_TEMP}/verify-split.xml" verify-split-logs-lane/ || true
+          echo "kept $(ls verify-split-logs-lane | wc -l) file(s) from the green lane run"
+
 
       # NEGATIVE CONTROL A ON THE SPLIT ARM - integration-verify's step A, same knob, same shape
       # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH
@@ -1124,12 +1141,17 @@ jobs:
           fi
           echo "the omitted stamp turned the split lane red, as it must"
 
+      # BOTH SETS, AND THEY ARE DIFFERENT EVIDENCE. verify-split-logs-lane/ is the green run the
+      # arm proof read; verify-split-logs/ is whatever the control steps left behind, which for
+      # twelve entries is a deliberately red re-run under the same name. Uploading only the
+      # second - which is what this step did before the copy above existed - loses the first.
       - name: Upload verify-split lane logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: integration-verify-split-logs
           path: |
+            build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs-lane/**
             build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs/**
             build-verify-split/MobileGL/MG_IntegrationTest/pipe-*split*.log*
           if-no-files-found: warn

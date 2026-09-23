@@ -111,6 +111,11 @@ upload，所以描述符宣告 `(target, level)` 而调用递空指针，会走�
   完整性查询（2，只有 DirectGLES 半边——DirectVulkan 上这两条 skip，由 skip 规则吸收）；只 fork 的 poison 父进程（2，
   帧画在子进程里、写子进程自己的日志）。
 
+- **CI 上传的是两套日志（V1 修复轮改）。** 两个负控步骤各自用旋钮重跑 12 条 ambient `VerifySplit.` 条目，而
+  ambient 条目写的就是 `verify-split-logs/` 下它自己那份私有路径（库以 `"w"` 打开），于是上传步骤收走的那 12 个
+  文件是**负控那次红跑**的日志、却顶着车道条目的名字——绿跑的证据已经没了，而且 `if: always()` 让这件事在**失败
+  排查时**最严重。现在臂证明之后先 `cp -a` 出 `verify-split-logs-lane/`（连同 JUnit），两套一起上传。
+
 ### 2.2 发现 A（真实分歧，已定位；改的是预言，不是规则）
 
 **用例与首个分歧记录。** 第一次整车道运行（`MOBILEGL_PIPE_VERIFY_FATAL=0` 普查）：1068 条里 **220** 条、
