@@ -655,6 +655,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).
         MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
         MobileGL/MG_Remote/Protocol/SurfaceOpCodec.cpp
+        # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
+        # arms and the probe that measures the first against the second, shared by the
+        # renderer's bring-up and the Vulkan POST. Wire-only - the monolith records neither arm -
+        # so it stays out of the pull build (gate G1).
+        MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
     )
 endif()
 

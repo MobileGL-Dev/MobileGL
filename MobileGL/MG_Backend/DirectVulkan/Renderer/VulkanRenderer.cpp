@@ -53,6 +53,7 @@
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
 #include "WireDeclineTally.h"
 #include "WireDepthResolveArm.h"
+#include "WireDepthResolveProbe.h"
 #endif
 #include <algorithm>
 #include <bit>
@@ -15148,28 +15149,9 @@ void main() {
         if (m_wireShaderStencilExport)
             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
                                           VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
-        // P7 gate 5 (g5-msrbo): the Adreno's no-draw depth/stencil resolve pass writes nothing,
-        // so the shader resolve goes first there (WireDepthResolveArm.h says why and where).
-        //
-        // THE VENDOR THE POLICY READS CAN BE SUBSTITUTED, AND ONLY HERE (review round). No host
-        // lane runs on a Qualcomm device, so the order this line picks for the Redmi ran nowhere
-        // a lane could see it: dropping this assignment, or the `m_wirePreferShaderDepthResolve ||`
-        // in ResolveWireDepthStencil, left every lane green and put
-        // KHR-GL46.direct_state_access.renderbuffers_storage_multisample back at 54 Fail lines on
-        // the device. MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID (strtoul base 0, so `0x5143`) replaces
-        // the id handed to WirePrefersShaderDepthResolve and nothing else - no other vendor
-        // check reads it - and the DirectVulkan.{Split,Spawn}.MsResolveQ./MsFlipQ. entries set it
-        // to Qualcomm's id and read ResolveWireDepthStencil's arm line back from the server log.
-        Uint32 depthResolvePolicyVendor = m_physicalDevice.properties.vendorID;
-        if (const char* substitute = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID");
-            substitute != nullptr && *substitute != '\0')
-            depthResolvePolicyVendor = static_cast<Uint32>(std::strtoul(substitute, nullptr, 0));
-        m_wirePreferShaderDepthResolve = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            WirePrefersShaderDepthResolve(depthResolvePolicyVendor);
-        if (m_wirePreferShaderDepthResolve)
-            MGLOG_I("DirectVulkan: vendor 0x%x (policy vendor 0x%x) - the wire arm resolves multisample "
-                    "depth/stencil with the shader pass first (the no-draw resolve render pass is the fallback)",
-                    m_physicalDevice.properties.vendorID, depthResolvePolicyVendor);
+        // P7 gate 5 (g5-msprobe): which multisample depth/stencil resolve arm goes first is measured
+        // once the device exists (ArmWireDepthResolveOrder, below), not keyed on the vendor.
+        m_wirePreferShaderDepthResolve = false;
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {
@@ -15826,7 +15808,80 @@ void main() {
         // Last, because it records on m_graphicsQueue: decide the PRIMITIVES_GENERATED
         // reroute for XFB-inactive draws. Nothing else has touched the queue yet.
         ArmPrimGenReroute();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Same terms: it records on m_graphicsQueue, which nothing but the probe above has used.
+        ArmWireDepthResolveOrder();
+#endif
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
+    // PROPERTY OF THIS DEVICE. WireDepthResolveArm.h says why (the Adreno 830's no-draw
+    // VK_KHR_depth_stencil_resolve pass writes nothing), WireDepthResolveProbe.h what is run. The
+    // answer is a device property, so it is memoized per process like the PRIMITIVES_GENERATED
+    // probe's, and logged once with every reading - the line the device evidence quotes.
+    //
+    // THE MEASUREMENT CAN BE REPLACED, AND ONLY HERE: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug|clean
+    // hands ChooseWireDepthResolveArm a canned measurement instead of running the probe - no host
+    // lane runs on a device with the defect - and the DirectVulkan.{Split,Spawn}.MsResolveBug./
+    // MsFlipBug. entries force `bug` and read ResolveWireDepthStencil's arm line back from the
+    // server log. The canned measurement is evaluated like a real one, so those entries go red
+    // when the evaluation stops detecting the defect.
+    void VulkanRenderer::ArmWireDepthResolveOrder() {
+        m_wirePreferShaderDepthResolve = false;
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        // ResolveWireDepthStencil's own test for the render-pass arm, less its per-format half
+        // (the probe asks that per format): without it the shader pass is the only arm.
+        const Bool renderPassArmAvailable = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&
+            (m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0;
+        static const WireDepthResolveArmChoice s_choice = [&]() {
+            const char* knobValue = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
+            const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
+            if (knob == WireDepthResolveProbeKnob::Unrecognised)
+                MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is neither `bug` nor `clean`; "
+                        "the resolve probe runs as if it were unset", knobValue);
+            WireDepthResolveArmChoice choice = ChooseWireDepthResolveArm(knob, renderPassArmAvailable, [&]() {
+                WireDepthResolveProbeContext context;
+                context.physicalDevice = m_physicalDevice.handle;
+                context.device = m_device;
+                context.queue = m_graphicsQueue;
+                context.queueFamilyIndex = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                context.createRenderPass2 = m_wireCreateRenderPass2;
+                context.depthResolveModes = m_wireDepthResolveModes;
+                context.stencilResolveModes = m_wireStencilResolveModes;
+                context.shaderStencilExport = m_wireShaderStencilExport;
+                return RunWireDepthResolveProbe(context);
+            });
+            if (choice.measurement.fenceWaitTimedOut) {
+                // Its objects are leaked on purpose (see the PRIMITIVES_GENERATED probe above for
+                // why this device must not be idle-waited on their account).
+                MGLOG_W("DirectVulkan: the depth/stencil resolve probe timed out waiting on its own "
+                        "submission; its Vulkan objects are deliberately leaked and the render-pass arm "
+                        "keeps its place");
+            } else if (choice.verdict == WireDepthResolveProbeVerdict::Inconclusive) {
+                MGLOG_W("DirectVulkan: depth/stencil resolve probe verdict=inconclusive - the shader "
+                        "control did not resolve the probe's inputs either, so nothing is concluded about "
+                        "the render pass and the default arm order stands");
+            }
+            MGLOG_I("DirectVulkan: depth/stencil resolve probe (%s) verdict=%s: %s%s%s",
+                    choice.measurement.fromKnob ? "forced by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE"
+                    : renderPassArmAvailable    ? "measured on this device"
+                                                : "not run: no render-pass arm",
+                    WireDepthResolveProbeVerdictName(choice.verdict),
+                    choice.preferShader ? "the shader pass resolves first, the no-draw render pass is the fallback"
+                    : (renderPassArmAvailable || choice.measurement.fromKnob)
+                        ? "the VK_KHR_depth_stencil_resolve render pass resolves first"
+                        : "the shader pass is the only arm",
+                    choice.measurement.failureReason.empty() ? "" : "; ",
+                    choice.measurement.failureReason.c_str());
+            for (const WireDepthResolveFormatReading& reading : choice.measurement.formats)
+                MGLOG_I("DirectVulkan: depth/stencil resolve probe %s",
+                        DescribeWireDepthResolveFormat(reading).c_str());
+            return choice;
+        }();
+        m_wirePreferShaderDepthResolve = s_choice.preferShader;
+    }
+#endif
 
     void VulkanRenderer::ArmPrimGenReroute() {
         using namespace MG_Util::SelfTest;

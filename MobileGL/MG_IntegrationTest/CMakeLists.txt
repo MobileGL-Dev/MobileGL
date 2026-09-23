@@ -3356,13 +3356,23 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             if(shaderDepthResolve AND NOT mglItestServerEnvKnobArm)
                 continue()
             endif()
+            # P7 gate 5 (g5-msprobe): MsResolve0 on split and spawn also pins the REAL resolve probe
+            # on this host - it must run at the server's bring-up, find lavapipe's no-draw resolve
+            # render pass clean, and leave that pass first. MGITEST_EXPECT_DEPTH_RESOLVE_PROBE is a
+            # marker only the scenario reads (DepthStencilReadbackMatrixScenario::
+            # ExpectTheResolveArmWhereTheLaneAsks), and only where the server's private log belongs
+            # to the entry - the tcp server is the lane fixture, so its MsResolve0 asserts pixels only.
+            set(msResolveProbeMarker "")
+            if(NOT shaderDepthResolve AND mglItestServerEnvKnobArm)
+                set(msResolveProbeMarker "\;MGITEST_EXPECT_DEPTH_RESOLVE_PROBE=clean")
+            endif()
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolve${shaderDepthResolve}."
                 TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}${msResolveProbeMarker}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
         endforeach()
         # ---- P7 gate 5 (g5-msrbo): the SINGLE-SAMPLED depth/stencil blit ----------------------
         #
@@ -3405,40 +3415,41 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
         endif()
-        # ---- P7 gate 5 (g5-msrbo review round): THE QUALCOMM ARM ORDER, ON A HOST -------------
+        # ---- P7 gate 5 (g5-msrbo review round, g5-msprobe): THE DEFECT'S ARM ORDER, ON A HOST --
         #
         # What made KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the
-        # Redmi is an arm ORDER: on a Qualcomm device ResolveWireDepthStencil takes the shader
-        # pass first, because the Adreno's no-draw VK_KHR_depth_stencil_resolve render pass left
-        # its target unwritten. Lavapipe resolves correctly through both arms, so no pixel on this
-        # host can see the order, and without these entries dropping it went unnoticed by every
-        # lane. MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID substitutes the vendor id the server's arm
-        # policy reads (VulkanRenderer.cpp, next to m_wirePreferShaderDepthResolve) - nothing
-        # else reads it - and the two resolve cases then assert their pixels AND that the
-        # server's private log says the shader pass resolved and the render pass never did
-        # (DepthStencilReadbackMatrixScenario::ExpectTheShaderResolveArmWhereTheLaneAsks, which
-        # asserts the same of the MsResolve1./MsFlip1. entries above).
+        # Redmi is an arm ORDER: where the server's resolve probe measures the no-draw
+        # VK_KHR_depth_stencil_resolve render pass leaving its target unwritten (the Adreno 830's
+        # does) ResolveWireDepthStencil takes the shader pass first. Lavapipe resolves correctly
+        # through both arms - its probe verdict is clean, which MsResolve0 above pins - so no
+        # pixel on this host can see the order. MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug replaces the
+        # probe's MEASUREMENT with a canned "the render pass wrote nothing, the shader control
+        # resolved" one (VulkanRenderer::ArmWireDepthResolveOrder) - nothing else reads it - and the
+        # two resolve cases then assert their pixels AND that the server's private log says the
+        # verdict was the defect, the shader pass resolved and the render pass never did
+        # (DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks, which asserts
+        # the same of the MsResolve1./MsFlip1. entries above).
         #
         # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
         # MAGMA_SERVER_ENV_KNOB_NO_TCP.
         #
-        # Red once (executed, reverted): drop `m_wirePreferShaderDepthResolve ||` from
-        # ResolveWireDepthStencil's `shaderFirst` (WireFramebuffer.inc) and all four entries fail
-        # on the arm assertion with their pixels green.
+        # Red once (executed, reverted): EvaluateWireDepthResolveProbe (WireDepthResolveArm.h)
+        # answering Clean for every measurement - the probe's detection switched off - fails all
+        # four entries on the arm assertions with their pixels green.
         if(mglItestServerEnvKnobArm)
-            foreach(qualcommOrderCase MsResolveQ:AResolvedMultisampleDepthReadsBackFromTheDestination
-                                      MsFlipQ:AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines)
-                string(REPLACE ":" ";" qualcommOrderPair "${qualcommOrderCase}")
-                list(GET qualcommOrderPair 0 qualcommOrderTail)
-                list(GET qualcommOrderPair 1 qualcommOrderTest)
-                string(TOLOWER "${qualcommOrderTail}" qualcommOrderLog)
+            foreach(probeBugCase MsResolveBug:AResolvedMultisampleDepthReadsBackFromTheDestination
+                                 MsFlipBug:AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines)
+                string(REPLACE ":" ";" probeBugPair "${probeBugCase}")
+                list(GET probeBugPair 0 probeBugTail)
+                list(GET probeBugPair 1 probeBugTest)
+                string(TOLOWER "${probeBugTail}" probeBugLog)
                 gtest_discover_tests(MobileGLIntegrationTest
-                    TEST_PREFIX "DirectVulkan.${mglItestArm}.${qualcommOrderTail}."
-                    TEST_FILTER "DepthStencilReadbackMatrixScenario.${qualcommOrderTest}"
+                    TEST_PREFIX "DirectVulkan.${mglItestArm}.${probeBugTail}."
+                    TEST_FILTER "DepthStencilReadbackMatrixScenario.${probeBugTest}"
                     DISCOVERY_TIMEOUT 30
                     PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                         ${mglItestArmProperties}
-                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID=0x5143\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${qualcommOrderLog}${mglItestArmLogTag}.log")
+                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${probeBugLog}${mglItestArmLogTag}.log")
             endforeach()
         endif()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers

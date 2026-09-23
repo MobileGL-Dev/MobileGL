@@ -669,11 +669,7 @@
             static_cast<Uint64>(dxMin + width) > destination.extent.width ||
             static_cast<Uint64>(dyMin + height) > destination.extent.height)
             MagmaWireFatal("multisample-depth-resolve-region");
-        VkImageAspectFlags formatAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
-        if (source.format == VK_FORMAT_S8_UINT) formatAspects = VK_IMAGE_ASPECT_STENCIL_BIT;
-        else if (source.format == VK_FORMAT_D16_UNORM_S8_UINT || source.format == VK_FORMAT_D24_UNORM_S8_UINT ||
-                 source.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
-            formatAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        const VkImageAspectFlags formatAspects = WireDepthStencilFormatAspects(source.format);
         // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): TWO ARMS, and which one
         // runs is a fact about the DEVICE, not about the shape. VK_KHR_depth_stencil_resolve is
         // the direct route and is taken wherever it exists; where it does not - which is where
@@ -726,30 +722,32 @@
         VkImageView views[2]{};
         VkRenderPass pass = VK_NULL_HANDLE;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
-        // P7 gate 5 (g5-msrbo): WHERE THE EXTENSION ARM IS KNOWN NOT TO RESOLVE, THE SHADER ARM
-        // GOES FIRST. The extension arm is a render pass with no draw in it, and on the Redmi
-        // (Adreno 830, driver 512.800.71) that pass left the resolve target unwritten:
+        // P7 gate 5 (g5-msrbo, g5-msprobe): WHERE THE EXTENSION ARM IS MEASURED NOT TO RESOLVE,
+        // THE SHADER ARM GOES FIRST. The extension arm is a render pass with no draw in it, and on
+        // the Redmi (Adreno 830, driver 512.800.71) that pass left the resolve target unwritten:
         // KHR-GL46.direct_state_access.renderbuffers_storage_multisample read every resolved depth
         // and stencil value back as 0 on the inproc arm - exactly its samples 2/4/4 iterations,
         // every format - and the same case PASSED on that device with
         // MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1. The shader arm draws, so nothing about it
         // can be elided. It still declines what it cannot express (a stencil aspect without
         // VK_EXT_shader_stencil_export), and then the extension arm is the fallback rather than
-        // a decline. m_wirePreferShaderDepthResolve is WirePrefersShaderDepthResolve's answer for
-        // this device (WireDepthResolveArm.h); everywhere else the order is the one B2 chose.
+        // a decline. m_wirePreferShaderDepthResolve is the verdict of the resolve probe that ran
+        // THIS pass and the shader pass on this device at bring-up (ArmWireDepthResolveOrder,
+        // WireDepthResolveProbe.cpp); where the probe finds the pass clean - or cannot tell - the
+        // order is the one B2 chose.
         const Bool shaderFirst = m_wirePreferShaderDepthResolve || !extensionResolve;
         const Bool resolvedByShader =
             shaderFirst && ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sxMin, syMin,
                                                              static_cast<Uint32>(width), static_cast<Uint32>(height));
         // WHICH ARM RESOLVED IS SAID, ONCE PER ARM (review round). Lavapipe resolves correctly
         // through both, so the pixels cannot tell a lane which one ran; these two lines can, and
-        // the MsResolveQ./MsFlipQ. entries (Qualcomm's arm order substituted on the host) and the
+        // the MsResolveBug./MsFlipBug. entries (the probe's defect verdict forced on the host) and the
         // MsResolve1./MsFlip1. ones (the extension arm dropped) read them back from the server
-        // log - DepthStencilReadbackMatrixScenario::ExpectTheShaderResolveArmWhereTheLaneAsks.
+        // log - DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks.
         // Keep the two phrases in step with that reader.
         //
         // AND A PREFERENCE THAT FELL BACK IS NOT SILENT: where the shader arm goes first it goes
-        // first because the render pass is known to leave its target unwritten on that device,
+        // first because the probe measured the render pass leaving its target unwritten here,
         // so a shader decline (a stencil aspect without VK_EXT_shader_stencil_export, a format
         // that is not SAMPLED_IMAGE + DEPTH_STENCIL_ATTACHMENT, a failed pipeline create -
         // WireMultisampleResolve.inc) that lands on the render pass is the resolve most likely
@@ -763,7 +761,7 @@
                 MGLOG_W_ONCE("DirectVulkan::ResolveWireDepthStencil: this device prefers the shader pass, "
                              "which did not resolve aspect 0x%x of a %u-sample format %d (stencil export=%d, "
                              "source usage 0x%x); falling back to the no-draw VK_KHR_depth_stencil_resolve "
-                             "render pass, which on the device that set the preference left its target "
+                             "render pass, which this device's resolve probe measured leaving its target "
                              "unwritten",
                              static_cast<Uint32>(source.aspect), static_cast<Uint32>(source.samples),
                              static_cast<Int>(source.format), m_wireShaderStencilExport ? 1 : 0,
@@ -776,45 +774,16 @@
         TransitionWireImage(source, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         TransitionWireImage(resolved, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        viewInfo.image = source.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = source.format;
-        viewInfo.subresourceRange = {formatAspects, source.level, 1, source.layer, 1};
-        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &views[0]));
-        viewInfo.image = resolved.image;
-        viewInfo.subresourceRange = {formatAspects, 0, 1, 0, 1};
-        VK_VERIFY(vkCreateImageView(m_device, &viewInfo, nullptr, &views[1]));
-        VkAttachmentDescription2 attachments[2]{};
-        for (Uint32 i = 0; i < 2; ++i) {
-            auto& attachment = attachments[i];
-            attachment.sType = VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2;
-            attachment.format = source.format;
-            attachment.samples = i == 0 ? source.samples : VK_SAMPLE_COUNT_1_BIT;
-            attachment.loadOp = attachment.stencilLoadOp = i == 0 ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            attachment.storeOp = attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.initialLayout = attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        }
-        VkAttachmentReference2 sourceReference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2};
-        sourceReference.attachment = 0;
-        sourceReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        sourceReference.aspectMask = formatAspects;
-        VkAttachmentReference2 resolveReference = sourceReference;
-        resolveReference.attachment = 1;
-        VkSubpassDescriptionDepthStencilResolve resolve{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_DEPTH_STENCIL_RESOLVE};
-        resolve.depthResolveMode = (formatAspects & VK_IMAGE_ASPECT_DEPTH_BIT) ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE;
-        resolve.stencilResolveMode = (formatAspects & VK_IMAGE_ASPECT_STENCIL_BIT) ? VK_RESOLVE_MODE_SAMPLE_ZERO_BIT : VK_RESOLVE_MODE_NONE;
-        resolve.pDepthStencilResolveAttachment = &resolveReference;
-        VkSubpassDescription2 subpass{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
-        subpass.pNext = &resolve;
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.pDepthStencilAttachment = &sourceReference;
-        VkRenderPassCreateInfo2 passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
-        passInfo.attachmentCount = 2;
-        passInfo.pAttachments = attachments;
-        passInfo.subpassCount = 1;
-        passInfo.pSubpasses = &subpass;
-        VK_VERIFY(m_wireCreateRenderPass2(m_device, &passInfo, nullptr, &pass));
+        // The view shapes and the pass are WireDepthResolveProbe.cpp's: the resolve probe runs this
+        // exact pass on the device at bring-up, so there is one definition of it (g5-msprobe).
+        const VkImageViewCreateInfo sourceViewInfo =
+            WireDepthStencilViewInfo(source.image, source.format, formatAspects, source.level, source.layer);
+        VK_VERIFY(vkCreateImageView(m_device, &sourceViewInfo, nullptr, &views[0]));
+        const VkImageViewCreateInfo resolvedViewInfo =
+            WireDepthStencilViewInfo(resolved.image, source.format, formatAspects, 0, 0);
+        VK_VERIFY(vkCreateImageView(m_device, &resolvedViewInfo, nullptr, &views[1]));
+        VK_VERIFY(CreateWireDepthStencilResolvePass(m_wireCreateRenderPass2, m_device, source.format, source.samples,
+                                                    &pass));
         VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         framebufferInfo.renderPass = pass;
         framebufferInfo.attachmentCount = 2;

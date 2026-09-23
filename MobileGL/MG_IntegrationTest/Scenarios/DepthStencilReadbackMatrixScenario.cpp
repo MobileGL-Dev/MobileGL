@@ -231,49 +231,72 @@ namespace MGITest {
                                            : "");
             }
 
-            // P7 gate 5 (g5-msrbo review round): WHICH WIRE ARM RESOLVED, WHERE THE ENTRY SAYS
-            // WHICH ONE IT HAS TO BE. Lavapipe resolves a multisample depth/stencil aspect
+            // P7 gate 5 (g5-msrbo review round, g5-msprobe): WHICH WIRE ARM RESOLVED, WHERE THE ENTRY
+            // SAYS WHICH ONE IT HAS TO BE. Lavapipe resolves a multisample depth/stencil aspect
             // correctly through both of ResolveWireDepthStencil's arms, so the pixel assertions
             // above cannot tell them apart - and the fix that made
             // KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the Redmi is
-            // exactly an arm ORDER (the shader pass first on Qualcomm, because the Adreno's no-draw
-            // resolve render pass leaves its target unwritten). Two kinds of entry name the arm:
-            //   - MsResolveQ. / MsFlipQ. set MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID to Qualcomm's id,
-            //     the one input the server's arm policy reads in place of the device's vendor;
-            //   - MsResolve1. / MsFlip1. set MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1, which
-            //     drops the render-pass arm altogether.
-            // Either way the server must have resolved with the shader pass and never with the
-            // render pass. The claim is read off the SERVER's private log (the backend runs on the
-            // apply thread, the server role, on every arm), where ResolveWireDepthStencil says
-            // once per arm which one ran; keep the two phrases in step with WireFramebuffer.inc.
-            // Every other entry - the device's own vendor, whatever order that picks - asserts
-            // nothing here.
+            // exactly an arm ORDER, chosen by a resolve probe at the server's device bring-up (the
+            // shader pass first where the no-draw resolve render pass is measured leaving its target
+            // unwritten, as the Adreno 830's does). Three kinds of entry name the arm:
+            //   - MsResolveBug. / MsFlipBug. set MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug, which hands
+            //     the server's arm choice a canned "the render pass wrote nothing" measurement in
+            //     place of running the probe: the shader pass must resolve, the render pass never;
+            //   - MsResolve1. / MsFlip1. set MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1, which drops
+            //     the render-pass arm altogether: same assertion;
+            //   - MsResolve0. on split and spawn sets MGITEST_EXPECT_DEPTH_RESOLVE_PROBE=clean - a
+            //     marker only this function reads - and asserts the REAL probe ran on the lane's
+            //     device (lavapipe), found the render pass clean, and that the render pass resolved.
+            //     Without it a probe that stopped working (or started reporting lavapipe as broken)
+            //     would leave every pixel green.
+            // The claim is read off the SERVER's private log (the backend runs on the apply thread,
+            // the server role, on every arm), where ResolveWireDepthStencil says once per arm which
+            // one ran and ArmWireDepthResolveOrder states the verdict; keep the phrases in step with
+            // WireFramebuffer.inc and VulkanRenderer.cpp. Every other entry asserts nothing here.
             //
-            // Red once (executed, reverted): drop `m_wirePreferShaderDepthResolve ||` from
-            // ResolveWireDepthStencil's `shaderFirst` and both Q entries fail here on split and
-            // spawn with the render-pass line in the log, while their pixels stay green.
-            static void ExpectTheShaderResolveArmWhereTheLaneAsks(const char* what) {
-                const std::string vendor = SplitLane::MarkerValue("MGITEST_MAGMA_DEPTH_RESOLVE_VENDOR_ID");
-                const bool qualcommOrder = !vendor.empty() && std::strtoul(vendor.c_str(), nullptr, 0) == 0x5143ul;
+            // Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
+            // measurement fails the four Bug entries here (the render-pass line is in the log and
+            // the verdict line says clean) while their pixels stay green.
+            static void ExpectTheResolveArmWhereTheLaneAsks(const char* what) {
+                const std::string probe = SplitLane::MarkerValue("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
+                const bool forcedBug = probe == "bug";
                 const bool renderPassDropped = SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
-                if (!qualcommOrder && !renderPassDropped) return;
+                const bool measuredClean = SplitLane::MarkerValue("MGITEST_EXPECT_DEPTH_RESOLVE_PROBE") == "clean";
+                if (!forcedBug && !renderPassDropped && !measuredClean) return;
                 if (PipeStatsWindow::ServerLibraryLogPath().empty()) {
-                    ADD_FAILURE() << what << ": the entry names the resolve arm (vendor=" << vendor
-                                  << ", force-shader=" << renderPassDropped
+                    ADD_FAILURE() << what << ": the entry names the resolve arm (probe=" << probe
+                                  << ", force-shader=" << renderPassDropped << ", expect-clean=" << measuredClean
                                   << ") but configured no MOBILEGL_LOG_FILE_PATH, and the server's log "
                                      "is the only place the arm is visible";
                     return;
                 }
                 glFinish();
                 const std::string server = PipeStatsWindow::ReadServerLogSince(PipeStatsWindow::LogMark{});
-                EXPECT_NE(server.find("ResolveWireDepthStencil: resolved by the shader pass"), std::string::npos)
-                    << what << ": the server never resolved with the shader pass (vendor=" << vendor
-                    << ", force-shader=" << renderPassDropped << ")";
-                EXPECT_EQ(server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass"),
+                const bool shaderResolved =
+                    server.find("ResolveWireDepthStencil: resolved by the shader pass") != std::string::npos;
+                const bool renderPassResolved =
+                    server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass") !=
+                    std::string::npos;
+                if (forcedBug || renderPassDropped) {
+                    EXPECT_TRUE(shaderResolved) << what << ": the server never resolved with the shader pass (probe="
+                                                << probe << ", force-shader=" << renderPassDropped << ")";
+                    EXPECT_FALSE(renderPassResolved)
+                        << what << ": the server resolved with the no-draw render pass, the arm the probe verdict "
+                                   "(or the knob) rules out (probe=" << probe
+                        << ", force-shader=" << renderPassDropped << ")";
+                    if (forcedBug) {
+                        EXPECT_NE(server.find("verdict=render-pass-resolve-broken"), std::string::npos)
+                            << what << ": the forced `bug` measurement did not evaluate to the defect verdict";
+                    }
+                    return;
+                }
+                EXPECT_NE(server.find("depth/stencil resolve probe (measured on this device) verdict=clean"),
                           std::string::npos)
-                    << what << ": the server resolved with the no-draw render pass, the arm that leaves its "
-                               "target unwritten on the Adreno (vendor=" << vendor
-                    << ", force-shader=" << renderPassDropped << ")";
+                    << what << ": the server's resolve probe did not measure this device's render pass clean";
+                EXPECT_TRUE(renderPassResolved)
+                    << what << ": a clean probe verdict must leave the render pass first, and it never resolved";
+                EXPECT_FALSE(shaderResolved) << what << ": the shader pass resolved although the probe found the "
+                                                        "render pass clean";
             }
         };
 
@@ -446,7 +469,7 @@ namespace MGITest {
         ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.375f,
                        "stencil-only resolve preserves destination depth");
         EXPECT_EQ(FirstGLError(), 0u);
-        ExpectTheShaderResolveArmWhereTheLaneAsks("depth-only and stencil-only resolves");
+        ExpectTheResolveArmWhereTheLaneAsks("depth-only and stencil-only resolves");
 
         DestroySource(resolved);
         DestroySource(multisampled);
@@ -613,7 +636,7 @@ namespace MGITest {
         }
         // The two flipped resolves above are the only ones in this case that reach an arm: every
         // leg below declines on its shape first.
-        ExpectTheShaderResolveArmWhereTheLaneAsks("flipped depth and narrow stencil resolves");
+        ExpectTheResolveArmWhereTheLaneAsks("flipped depth and narrow stencil resolves");
 
         // A SCALE, which is INVALID_OPERATION and must leave the destination as it is.
         ClearDepthStencil(GL_DEPTH24_STENCIL8, 0.5f, 3);

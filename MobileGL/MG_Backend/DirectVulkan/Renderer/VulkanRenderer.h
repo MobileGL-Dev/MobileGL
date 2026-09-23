@@ -556,9 +556,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireMultisampleResolveResources* m_wireMultisampleResolveResources = nullptr;
         void DestroyWireMultisampleResolveResources();
         Bool m_wireShaderStencilExport = false;
-        // WirePrefersShaderDepthResolve(vendorID) for this device (WireDepthResolveArm.h): the
-        // shader arm resolves first, the render-pass arm is the fallback (P7 gate 5).
+        // The resolve probe's verdict for this device (WireDepthResolveArm.h,
+        // WireDepthResolveProbe.h): true when the no-draw render pass was measured leaving its
+        // target unwritten while the shader control resolved - the shader arm then resolves
+        // first and the render-pass arm is the fallback (P7 gate 5, g5-msprobe).
         Bool m_wirePreferShaderDepthResolve = false;
+        // Runs the probe (memoized per process) and sets the member above. Called at the end of
+        // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
+        void ArmWireDepthResolveOrder();
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,
                                    GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);

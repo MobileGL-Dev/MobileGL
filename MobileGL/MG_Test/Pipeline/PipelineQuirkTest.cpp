@@ -517,18 +517,195 @@ TEST(WirePipelineCompatibility, HashUsesCompatibilityIdentityAndSeparatesNativeD
 #endif
 }
 
-// P7 gate 5 (g5-msrbo): the multisample depth/stencil resolve's arm order. On the Redmi (Adreno
-// 830) the no-draw VK_KHR_depth_stencil_resolve render pass left its target unwritten and the
-// shader arm resolved correctly, so a Qualcomm device takes the shader arm first; every other
-// vendor keeps P7 wave 2-B2's order (render pass first) until a device says otherwise.
-TEST(PipelineQuirkTest, WireDepthResolvePrefersTheShaderArmOnQualcommOnly) {
+// P7 gate 5 (g5-msrbo, g5-msprobe): the multisample depth/stencil resolve's arm order is the
+// resolve probe's VERDICT (WireDepthResolveArm.h), not the device's vendor. On the Redmi (Adreno
+// 830) the no-draw VK_KHR_depth_stencil_resolve render pass left its target unwritten while the
+// shader arm resolved correctly; the probe reproduces that on the actual device with the shader
+// arm as its control. These tests pin every mapping from a measurement to the order through a
+// FAKE RESULT SOURCE - a canned measurement handed to ChooseWireDepthResolveArm in place of the
+// Vulkan probe.
 #if MOBILEGL_BUILD_DISAGGREGATED
-    using MobileGL::MG_Backend::DirectVulkan::WirePrefersShaderDepthResolve;
-    EXPECT_TRUE(WirePrefersShaderDepthResolve(kVendorIdQualcomm))
-        << "the Adreno's no-draw resolve pass wrote nothing; the shader arm must go first there";
-    EXPECT_FALSE(WirePrefersShaderDepthResolve(kVendorIdArm));
-    EXPECT_FALSE(WirePrefersShaderDepthResolve(0x10005u)) << "Mesa (lavapipe) keeps the render-pass arm first";
-    EXPECT_FALSE(WirePrefersShaderDepthResolve(0x10DEu));
+namespace {
+    using MobileGL::MG_Backend::DirectVulkan::ChooseWireDepthResolveArm;
+    using MobileGL::MG_Backend::DirectVulkan::DescribeWireDepthResolveProbe;
+    using MobileGL::MG_Backend::DirectVulkan::EvaluateWireDepthResolveProbe;
+    using MobileGL::MG_Backend::DirectVulkan::ParseWireDepthResolveProbeKnob;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveAspectReading;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveFormatReading;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveProbeKnob;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement;
+    using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveProbeVerdict;
+
+    // How one aspect's two arms read back, out of 16 texels.
+    struct FakeArms {
+        Uint32 renderPassMatches = 16;
+        Bool shaderRan = true;
+        Uint32 shaderMatches = 16;
+    };
+
+    WireDepthResolveAspectReading FakeAspect(Uint32 expected, Uint32 sentinel, FakeArms arms) {
+        WireDepthResolveAspectReading aspect;
+        aspect.measured = true;
+        aspect.texels = 16;
+        aspect.expected = expected;
+        aspect.sentinel = sentinel;
+        aspect.renderPassMatches = arms.renderPassMatches;
+        aspect.renderPassSentinels = 16 - arms.renderPassMatches;
+        aspect.renderPassFirst = arms.renderPassMatches == 16 ? expected : sentinel;
+        aspect.shaderRan = arms.shaderRan;
+        aspect.shaderMatches = arms.shaderRan ? arms.shaderMatches : 0;
+        aspect.shaderFirst = arms.shaderMatches == 16 ? expected : 0;
+        return aspect;
+    }
+
+    // A packed format (both aspects) or a depth-only one (stencil = nullptr-like: not measured).
+    WireDepthResolveFormatReading FakeFormat(const char* name, FakeArms depth, Optional<FakeArms> stencil) {
+        WireDepthResolveFormatReading reading;
+        reading.name = name;
+        reading.samples = 4;
+        reading.ran = true;
+        reading.depth = FakeAspect(0x400000u, 0xBFFFFFu, depth);
+        if (stencil) reading.stencil = FakeAspect(0x5Au, 0xA5u, *stencil);
+        return reading;
+    }
+
+    WireDepthResolveProbeMeasurement FakeMeasurement(Vector<WireDepthResolveFormatReading> formats) {
+        WireDepthResolveProbeMeasurement measurement;
+        measurement.ran = true;
+        measurement.formats = Move(formats);
+        return measurement;
+    }
+
+    // The Adreno 830's reading: the render pass left the sentinel in every texel of both aspects,
+    // the shader control resolved all of them.
+    constexpr FakeArms kRenderPassWroteNothing{0, true, 16};
+    constexpr FakeArms kBothArmsResolve{16, true, 16};
+    // Neither arm resolved: the probe measured its own setup, or a device that cannot resolve.
+    constexpr FakeArms kControlFailsToo{0, true, 0};
+    constexpr FakeArms kNoStencilExport{0, false, 0};
+} // namespace
+#endif
+
+TEST(PipelineQuirkTest, WireDepthResolveProbeDetectsARenderPassThatWritesNothing) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Int measured = 0;
+    const auto choice = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Measure, true, [&] {
+        ++measured;
+        return FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kRenderPassWroteNothing, kRenderPassWroteNothing),
+                                FakeFormat("D32_SFLOAT", kRenderPassWroteNothing, std::nullopt)});
+    });
+    EXPECT_EQ(measured, 1);
+    EXPECT_EQ(choice.verdict, WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    EXPECT_TRUE(choice.preferShader) << "the render pass writes nothing and the shader control resolves: the "
+                                        "shader arm must go first";
+    // Writing WRONG values is the same defect as writing none.
+    auto wrong = FakeMeasurement({FakeFormat("D16_UNORM", kBothArmsResolve, std::nullopt)});
+    wrong.formats[0].depth.renderPassMatches = 15;
+    wrong.formats[0].depth.renderPassSentinels = 0;
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(wrong), WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    // One aspect of one format is enough: the render pass resolves every aspect in one pass.
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(FakeMeasurement(
+                  {FakeFormat("D24_UNORM_S8_UINT", kBothArmsResolve, kRenderPassWroteNothing),
+                   FakeFormat("D32_SFLOAT", kBothArmsResolve, std::nullopt)})),
+              WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    EXPECT_NE(DescribeWireDepthResolveProbe(choice.measurement).find("render pass 0/16"), String::npos);
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}
+
+TEST(PipelineQuirkTest, WireDepthResolveProbeKeepsTheRenderPassFirstWhereItResolves) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    const auto choice = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Measure, true, [] {
+        return FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kBothArmsResolve, kBothArmsResolve),
+                                FakeFormat("D32_SFLOAT", kBothArmsResolve, std::nullopt)});
+    });
+    EXPECT_EQ(choice.verdict, WireDepthResolveProbeVerdict::Clean);
+    EXPECT_FALSE(choice.preferShader) << "lavapipe's reading: the fast arm keeps its place";
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}
+
+// THE CONTROL (DriverBugProbes.h's iron rule): a render pass that failed where the shader pass
+// failed too is not evidence about the render pass.
+TEST(PipelineQuirkTest, WireDepthResolveProbeIsInconclusiveWhenTheShaderControlFailsToo) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    const auto choice = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Measure, true, [] {
+        return FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kControlFailsToo, kControlFailsToo),
+                                FakeFormat("D32_SFLOAT", kControlFailsToo, std::nullopt)});
+    });
+    EXPECT_EQ(choice.verdict, WireDepthResolveProbeVerdict::Inconclusive);
+    EXPECT_FALSE(choice.preferShader) << "an inconclusive probe must never move the arm order";
+    // No control at all (no shader kit) is the same answer.
+    auto uncontrolled = FakeMeasurement({FakeFormat("D32_SFLOAT", kNoStencilExport, std::nullopt)});
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(uncontrolled), WireDepthResolveProbeVerdict::Inconclusive);
+    // A stencil aspect with no control (no VK_EXT_shader_stencil_export) is not counted, either
+    // way: its render-pass failure proves nothing, and the controlled depth aspect decides.
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(
+                  FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kBothArmsResolve, kNoStencilExport)})),
+              WireDepthResolveProbeVerdict::Clean);
+    // A format whose control failed does not veto another format's conclusive defect.
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(
+                  FakeMeasurement({FakeFormat("D16_UNORM", kControlFailsToo, std::nullopt),
+                                   FakeFormat("D32_SFLOAT", kRenderPassWroteNothing, std::nullopt)})),
+              WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    // Skipped formats and a probe that did not run (or timed out) conclude nothing.
+    auto skipped = FakeMeasurement({FakeFormat("X8_D24_UNORM_PACK32", kRenderPassWroteNothing, std::nullopt)});
+    skipped.formats[0].ran = false;
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(skipped), WireDepthResolveProbeVerdict::Inconclusive);
+    auto timedOut = FakeMeasurement({FakeFormat("D32_SFLOAT", kRenderPassWroteNothing, std::nullopt)});
+    timedOut.fenceWaitTimedOut = true;
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(timedOut), WireDepthResolveProbeVerdict::NotRun);
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(WireDepthResolveProbeMeasurement{}), WireDepthResolveProbeVerdict::NotRun);
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}
+
+TEST(PipelineQuirkTest, WireDepthResolveProbeRunsOnlyWhereThereIsARenderPassArmToJudge) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Int measured = 0;
+    const auto choice = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Measure, false, [&] {
+        ++measured;
+        return FakeMeasurement({FakeFormat("D32_SFLOAT", kRenderPassWroteNothing, std::nullopt)});
+    });
+    EXPECT_EQ(measured, 0) << "without VK_KHR_depth_stencil_resolve the shader pass is the only arm";
+    EXPECT_EQ(choice.verdict, WireDepthResolveProbeVerdict::NotRun);
+    EXPECT_FALSE(choice.preferShader);
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}
+
+// MGITEST_MAGMA_DEPTH_RESOLVE_PROBE replaces the MEASUREMENT, not the verdict: the canned one goes
+// through the same evaluation, which is what lets the MsResolveBug./MsFlipBug. entries red when
+// the evaluation stops detecting the defect.
+TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVerdict) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob(nullptr), WireDepthResolveProbeKnob::Measure);
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob(""), WireDepthResolveProbeKnob::Measure);
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob("bug"), WireDepthResolveProbeKnob::ForceBug);
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob("clean"), WireDepthResolveProbeKnob::ForceClean);
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob("0x5143"), WireDepthResolveProbeKnob::Unrecognised);
+    Int measured = 0;
+    const auto measure = [&] {
+        ++measured;
+        return FakeMeasurement({FakeFormat("D32_SFLOAT", kBothArmsResolve, std::nullopt)});
+    };
+    const auto bug = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::ForceBug, true, measure);
+    EXPECT_TRUE(bug.measurement.fromKnob);
+    EXPECT_EQ(bug.verdict, WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    EXPECT_TRUE(bug.preferShader);
+    const auto clean = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::ForceClean, true, measure);
+    EXPECT_TRUE(clean.measurement.fromKnob);
+    EXPECT_EQ(clean.verdict, WireDepthResolveProbeVerdict::Clean);
+    EXPECT_FALSE(clean.preferShader);
+    EXPECT_EQ(measured, 0) << "a forced verdict must not also run the device probe";
+    const auto other = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::Unrecognised, true, measure);
+    EXPECT_EQ(measured, 1) << "an unrecognised value runs the probe as if the knob were unset";
+    EXPECT_FALSE(other.measurement.fromKnob);
+    EXPECT_EQ(other.verdict, WireDepthResolveProbeVerdict::Clean);
 #else
     GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
 #endif
