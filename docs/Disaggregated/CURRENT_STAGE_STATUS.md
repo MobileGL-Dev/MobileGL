@@ -4,19 +4,19 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `1135c664`（B3 + ID-P7-33/34）；集成树 `~/w7/pipe` = `699ce9a9`（B2 返工 r1 + B3 返工 + V1，未推：等 B2 r2 与 V1 门 / 审查，ID-P7-35/36）。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `1135c664`（B3 + ID-P7-33/34）；集成树 `~/w7/pipe` = `51c71d87`（B2 返工 r1 + B3 返工 + V1，未推：等 B2 r2 与 V1 门 / 审查，ID-P7-35/36）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
 | # | 子系统 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 96 / 75 / 71，full-split 535（pipe `6207c9c9`；tcp 少 6 条 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（B3 的新红条件已进 pipe 门） |
+| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 96 / 75 / 71，full-split 535（pipe `a785d055`；tcp 少 6 条 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（B3 的新红条件已进 pipe 门） |
 | 2 | §3.2 六个 `@P7` 退役 | ✅ | A（byte-tail、native-range、对齐 decline）、B（copy-image、default-color-blit、mip 半退役）、B2（multisample shape/aspect）、C（vertex-layout 拆分）；树上 `@P7` 拒绝站点 **0** |
 | 3 | `StateObjectDeathOps` | ✅ | C，`04292f06..7ed5da52` |
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | 🔄→✅ | **V1 已报告并 cherry-pick 到 pipe**（`b015502e..699ce9a9`）：monolith verify 1136 不变、`integration-verify-split` 1070（DirectGLES 533 / DirectVulkan 537，逐条 inproc 武装证明）、`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）、8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；pipe 门 + fable 审查在跑 |
+| 7 | verify × split（门 2） | 🔄→✅ | **V1 已报告并 cherry-pick 到 pipe**（`e5477898..51c71d87`）：monolith verify 1136 不变、`integration-verify-split` 1070（DirectGLES 533 / DirectVulkan 537，逐条 inproc 武装证明）、`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）、8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；pipe 门 + fable 审查在跑 |
 | 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w4：34/36 与 monolith 差 ≤ 0.0005；**OpenRA 已关**（ID-P7-33/34：真因 = wire 臂 frame-serial floor 不健全，B3 修；p7w5 **27/27 golden**，[`W5-verify/`](notes/p7/device-window-1/W5-verify/README.md)）；**bsl-esc-menu** = server 死 VkBuffer 无界累积（ID-P7-32，**M2** 在修）；终局形式（三遍逐位 + spawn 臂同会话）留 p7w6 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
@@ -38,9 +38,9 @@
 | D3 + 审查修复 | view 陈旧缺陷（clean gate 读 storage record）、D-K2 单一陈述 | `6eaaf492..25b586d0`、`f1f2a19e` |
 | B2 | multisample 两处退役、AllocatorDebtScope ×2 删、(B′)、棘轮 173 | `089fd495..ec46a550` |
 | B3 | **OpenRA 真因**：wire 臂 completed-frame-serial floor 不健全 → 有序路径 + 可证 floor + 32 处静默出口具名 | `f62ceec6..38112dc6`，`origin@1135c664` |
-| B2 返工 r1 | tcp 五条 server 端旋钮条目改 split+spawn（parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）、翻转 MS 深/模板 resolve 逐行镜像、缩放 / X 镜像 / 跨格式 decline、`MsFlip.` 用例 | pipe `b155f607..1b5d97bd`（审查 rework → r2 在跑，ID-P7-35） |
-| B3 返工 | `WireDeclines.def` 53 行全站点 + 审计脚本、`StaleSerial.` parity 例外、注记 + `:273`/`:432`、`run_trace_case.cmake` 对 `unsound-serial-complete` 打红 | pipe `c167fd3d..6207c9c9`（审查 land with fixes → 修复轮在跑，ID-P7-36） |
-| V1 | `PipeRespecifyScope` 放宽、`integration-verify-split`（1070 条，双后端 inproc）、两负控 split 臂红、8 verify trace × DV × inproc 0 分歧、比对器 ReadPixels 窗口 oracle 改中性 pack | pipe `b015502e..699ce9a9`（门 + 审查在跑） |
+| B2 返工 r1 | tcp 五条 server 端旋钮条目改 split+spawn（parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）、翻转 MS 深/模板 resolve 逐行镜像、缩放 / X 镜像 / 跨格式 decline、`MsFlip.` 用例 | pipe `475ab254..00f342c9`（审查 rework → r2 在跑，ID-P7-35） |
+| B3 返工 | `WireDeclines.def` 53 行全站点 + 审计脚本、`StaleSerial.` parity 例外、注记 + `:273`/`:432`、`run_trace_case.cmake` 对 `unsound-serial-complete` 打红 | pipe `23eeed68..a785d055`（审查 land with fixes → 修复轮在跑，ID-P7-36） |
+| V1 | `PipeRespecifyScope` 放宽、`integration-verify-split`（1070 条，双后端 inproc）、两负控 split 臂红、8 verify trace × DV × inproc 0 分歧、比对器 ReadPixels 窗口 oracle 改中性 pack | pipe `e5477898..51c71d87`（门 + 审查在跑） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
