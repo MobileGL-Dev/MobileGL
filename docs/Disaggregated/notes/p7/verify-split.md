@@ -149,8 +149,18 @@ upload，所以描述符宣告 `(target, level)` 而调用递空指针，会走�
 但 `MGPPixelPackState` 的属主本来就是 `MG_Pipe`、两边本来就 include 它，而两份拼法分叉的代价是**一次假分歧**而不是
 一次编译错误——失败方向是哑的，所以改成一处。
 
-**放弃了什么，写明。** 在 server 的 `ReadPixels` 上，比对器看不见一个推送了**错误** pack 状态的 client，因为
-applier 在 backend 读之前把它覆盖了；消费真实 pack 的 client 侧 scatter 由 readback 矩阵用例按字节覆盖，不按字段。
+**放弃了什么，写明——盲区比第一稿说的窄（V1 修复轮更正）。** 第一稿写的是「在 server 的 `ReadPixels` 上，比对器
+看不见一个推送了**错误** pack 状态的 client」。不对：`PipeApplier.cpp` 的 `read_pixels` 在写中性值**之前**先经
+**accessor** 把 `savedPack` 读出来（`gPipeInputs.GetPixelStoreParameters(false)` → `MGP_INPUT_VERIFY_READ`），
+所以 hook 在那一次就已经把**推送的 pack 对着活上下文的 pack**比过一遍了：
+
+- 推送值 == 活值（正确推送）→ 第一次比较相等，直接返回；
+- 推送值 ≠ 活值且 ≠ 中性值（错误推送）→ 第一次比较不等，中性窗口那次比较也不等 → **仍然是分歧、仍然 Fatal**；
+- 只有**恰好等于中性 pack 的错误推送**是看不见的（推送值 ≠ 活值但 == 中性值：中性窗口把它认成「applier 自己写的」）。
+
+盲区因此是**一个点**，不是整个字段：`{SwapBytes=0, LSBFirst=0, RowLength=0, ImageHeight=0, Skip*=0, Alignment=1}`
+这一个值，且只在应用自己的 pack 不等于它的时候。消费真实 pack 的 client 侧 scatter 另由 readback 矩阵用例按字节
+覆盖，不按字段。
 
 ### 2.3 发现 B（与 verify 无关，按名减掉）
 
@@ -331,8 +341,10 @@ divergences, zero unmigrated reads` 与 `MGPipe split: <case> DirectVulkan trans
 
 - **§2.3 的四条**：DirectGLES × split 上 Magma decline 契约用例红。要么这些用例在非 Magma 后端上按名 skip，要么
   Espryt 学会 decline 这些形状；归 P3b/P4b 的 Espryt 流（或用例作者），本包只按名减掉并记于此。
-- **server `ReadPixels` 上 pack 半边的字段级盲区**（§2.2 末段）：若要补，需要 server 侧把中性窗口显式告诉比对器
-  （动 `MG_Remote/Server`，本包分区外）。
+- **server `ReadPixels` 上 pack 半边的字段级盲区**（§2.2 末段，V1 修复轮已收窄）：唯一看不见的是**推送值恰好等于
+  ID-49 中性 pack 的错误推送**——`read_pixels` 在覆写之前就经 accessor 读过一次 `savedPack`，hook 在那一次已把推送值
+  对着活上下文比过，任何其它错误推送都仍然是分歧、仍然 Fatal。若要连这一个点也补上，需要 server 侧把中性窗口显式
+  告诉比对器（动 `MG_Remote/Server`，本包分区外）。
 - **spawn 上的 verify 需要一个跨进程的比对形状**（§3.3，已记入 `CONTRACT-P7.md` §12 记录债）：hook 在 server 进程里
   是有的、也被调用，缺的是预言（`MG_State::pGLContext` 为空，因为 server 的 main 不调 `MG_State::Init()`）。补它要让
   server 把它读到的字段值随回复带回、由 client 比，或在 server 侧立一个等价的状态镜像；不是注册问题，也不是链接问题。

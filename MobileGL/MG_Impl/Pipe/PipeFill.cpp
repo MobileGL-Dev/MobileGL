@@ -671,11 +671,19 @@ namespace MobileGL::MG_Pipe {
         // stamp, on the ReadPixels verb, the pack half's expected value is the neutral pack the
         // applier reads with, and the UNPACK half and every other field keep the live context as
         // their oracle. A server read of the pack half that is neither the application's value
-        // nor exactly the neutral one is still a divergence and still Fatal. What this gives up,
-        // stated: on the server's ReadPixels the comparator can no longer see a client that
-        // pushed a WRONG pack state, because the applier overwrites it before the backend reads;
-        // the client-side scatter that consumes the real pack is covered by the readback matrix
-        // cases, which compare bytes, not fields.
+        // nor exactly the neutral one is still a divergence and still Fatal.
+        //
+        // WHAT THIS GIVES UP IS ONE VALUE, NOT THE FIELD (corrected in P7 wave 3's V1 fix round;
+        // the first statement of it here said the comparator could no longer see a client that
+        // pushed a WRONG pack state at all, which is too broad). PipeApplier.cpp's read_pixels
+        // reads `savedPack` THROUGH THE ACCESSOR - and therefore through this hook - BEFORE it
+        // installs the neutral value, so the pushed pack has already been compared against the
+        // live one by then: a correct push is equal and returns, and a wrong push that is not
+        // exactly the neutral pack fails both compares and is still Fatal. The blind spot is the
+        // single value {SwapBytes 0, LSBFirst 0, RowLength 0, ImageHeight 0, Skip* 0, Alignment 1},
+        // and only while the application's own pack differs from it. The client-side scatter that
+        // consumes the real pack is covered by the readback matrix cases, which compare bytes,
+        // not fields.
         Bool ServerReadsInsideTheNeutralPackWindow(const PipeInputs& self, MGPipeInputField field) {
             return field == MGPipeInputField::GetPixelStoreParameters && self.ServerStampedVerb() &&
                    self.CurrentVerb() == MGPipeVerb::ReadPixels;
