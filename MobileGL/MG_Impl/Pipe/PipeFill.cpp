@@ -722,6 +722,17 @@ namespace MobileGL::MG_Pipe {
         // never recurses (and never reports the inner read against a half-copied scratch).
         g_verify.InHook = true;
         MGPipeFillAccess::CopyField(g_readScratch, *ctx, field);
+        // P7 wave 3 (V1): NEGATIVE CONTROL A REACHES THIS ARM TOO. Until this line the knob only
+        // ever perturbed EntryCompare's snapshot, so every red it could produce said `where=entry`
+        // and was produced on the CLIENT thread - which left the compare-at-read hook, the arm
+        // that runs on the server's apply thread and does the whole of the split lane's per-read
+        // work, with no falsifier at all: a hook that had stopped comparing would have looked
+        // exactly like a hook with nothing to report. The perturbation goes on the ORACLE, for
+        // EntryCompare's reason: the arm under test is the stored value, so corrupting THAT would
+        // be testing the corruption.
+        if (g_verify.Corrupt && *g_verify.Corrupt == field) {
+            MGPipeApplyVerifyCorruption(g_readScratch, field);
+        }
         const Bool equal = MGPipeInputsFieldEqual(field, self, g_readScratch);
         g_verify.InHook = false;
         if (equal) return;
@@ -737,6 +748,15 @@ namespace MobileGL::MG_Pipe {
                 }
                 return true;
             });
+            // AND THE CONTROL IS RE-APPLIED, because the overwrite above replaces the pack half
+            // WHOLESALE - the corruption included, since CorruptStorage perturbs an array's FIRST
+            // ELEMENT and the pack half is element 0. Without this line the one window in which
+            // this arm is most load-bearing (the server's read_pixels, 8530 reads over 220 of the
+            // lane's entries) would be the one window MOBILEGL_PIPE_VERIFY_CORRUPT=
+            // GetPixelStoreParameters cannot turn red.
+            if (g_verify.Corrupt && *g_verify.Corrupt == field) {
+                MGPipeApplyVerifyCorruption(g_readScratch, field);
+            }
             const Bool equalToTheNeutralPack = MGPipeInputsFieldEqual(field, self, g_readScratch);
             g_verify.InHook = false;
             if (equalToTheNeutralPack) return;

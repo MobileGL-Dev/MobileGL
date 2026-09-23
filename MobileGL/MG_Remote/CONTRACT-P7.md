@@ -102,7 +102,7 @@ P7 收官 = 五道出口门同时成立（§2–§7），而不是路线图 P7 �
 
 ## §6 出口门 2：verify 零分歧
 
-verify 今天只在 monolith 注册（`MG_IntegrationTest/CMakeLists.txt:1684-1760`）。门 2 = **verify × {monolith, split(inproc)} × Magma 零分歧**，且两条既有负控（`VERIFY_CORRUPT`、`POISON_OMIT`）在 split 臂上各红一次。前置债：verify+split 撞旧 `PipeRespecifyScope` 断言（`notes/p65/validation-status.md:118`）——放宽为「按 level 的 producer 各自覆盖其宣告范围」，正反单测各一。trace 侧：8 个 verify case × DirectVulkan × inproc 一轮，分歧计数 0。**状态（wave 3 V1，`p7/verify-split`，`notes/p7/verify-split.md`）**：前置债已清（`70f86064`），`integration-verify-split` 双后端 1070/1070 绿、两条负控在 split 臂上各红一次（POISON_OMIT 用 split 臂自己的 `ReadPixels:GetPixelStoreParameters` 配对）、trace 侧 8 case 分歧 0，门 2 在主机上成立；唯一的真实分歧是 server `read_pixels` 的 ID-49 中性 pack 窗口，按预言而非规则处理，spawn 不在门内也无法测（比对器是同进程仪器）。
+verify 今天只在 monolith 注册（`MG_IntegrationTest/CMakeLists.txt:1684-1760`）。门 2 = **verify × {monolith, split(inproc)} × Magma 零分歧**，且两条既有负控（`VERIFY_CORRUPT`、`POISON_OMIT`）在 split 臂上各红一次。前置债：verify+split 撞旧 `PipeRespecifyScope` 断言（`notes/p65/validation-status.md:118`）——放宽为「按 level 的 producer 各自覆盖其宣告范围」，正反单测各一。trace 侧：8 个 verify case × DirectVulkan × inproc 一轮，分歧计数 0。**状态（wave 3 V1，`p7/verify-split`，`notes/p7/verify-split.md`）**：前置债已清（`70f86064`），`integration-verify-split` 双后端 1072/1072 绿、两条负控在 split 臂上各红一次（POISON_OMIT 用 split 臂自己的 `ReadPixels:GetPixelStoreParameters` 配对）、trace 侧 8 case 分歧 0，门 2 在主机上成立；唯一的真实分歧是 server `read_pixels` 的 ID-49 中性 pack 窗口，按预言而非规则处理，spawn 不在门内也无法测（比对器是同进程仪器）。
 
 ---
 

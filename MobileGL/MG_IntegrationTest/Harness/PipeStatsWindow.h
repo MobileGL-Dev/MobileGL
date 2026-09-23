@@ -147,6 +147,20 @@ namespace MGITest::PipeStatsWindow {
 
     inline std::string ReadLaneLog() { return ReadLaneLogSince(LogMark{}); }
 
+    // THE SERVER HALF ALONE, for a claim whose whole content is WHICH ROLE said it. The
+    // concatenation above answers "did anyone report this", which is the right question for a
+    // diagnostic that could honestly come from either side; it is the wrong question for a
+    // control that exists to prove the SERVER's apply thread still runs the comparator, because
+    // the client's own entry compare reports the same field on the same verb and would satisfy a
+    // union search all by itself. Empty in a pull build (there is no server half), which a caller
+    // must read as "could not look" rather than as "the server said nothing".
+    inline std::string ReadServerLogSince(const LogMark& mark) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MGPipeSyncPeerLog();
+#endif
+        return ReadFileSince(ServerLibraryLogPath(), mark.server);
+    }
+
     // The last summary line in the log, verbatim. `found` is false when the library never emitted
     // one, which is a different failure from "the counter read zero" and has to be reported as
     // one: it means the stats channel never reached the process, not that the workload did

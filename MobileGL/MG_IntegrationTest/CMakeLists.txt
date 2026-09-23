@@ -3967,6 +3967,28 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
                 ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
                 RESOURCE_LOCK "pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
         )
+        # A ON THE OTHER ARM (P7 wave 3, V1). Control A above perturbs EntryCompare's snapshot,
+        # which runs on the CLIENT thread at a verb boundary and reports `where=entry`; the
+        # compare-at-read hook, which runs on the SERVER's apply thread at every backend read and
+        # is the only comparator that arm ever runs, had no control at all until this entry. The
+        # knob names GetPixelStoreParameters because ReadPixels is where the hook does its one
+        # piece of arm-specific reasoning - the ID-49 neutral pack window, whose oracle it rewrites
+        # - so a control aimed anywhere else would leave exactly that branch unproven.
+        #
+        # FATAL=0 for the corrupt entry's reason and one more: this field IS in kReadback's fill
+        # mask (FillPoints.def), so the client's entry compare fires first and with FATAL at its
+        # default the process would die before the server reached the read. The case reads the
+        # SERVER role's half of its private log and nothing else.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitReadCorrupted."
+            TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-verify-split"
+                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetPixelStoreParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log"
+                RESOURCE_LOCK "pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log"
+        )
         # B (G5): the child brings up its own inproc session from the inherited environment, and
         # PoisonOmissionScenario's ReadChildLog reads BOTH role halves of the child's log, because
         # under a transport the poisoned read can fire on either side of the seam.

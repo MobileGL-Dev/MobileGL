@@ -25,6 +25,15 @@
 //                              perturbed before the entry compare, so a comparator that works must
 //                              report Fatal{PipeVerifyDiffer, "<Field>@<Verb>"}. A comparator that
 //                              compares nothing stays quiet and this case goes red.
+//   CorruptedFieldIsReportedOnTheServerRead
+//                            - the same control aimed at the OTHER comparator (P7 wave 3, V1).
+//                              The entry compare runs on the client thread at a verb boundary; the
+//                              compare-at-read hook runs on the server's apply thread at every
+//                              backend read, and until this case existed nothing could tell a hook
+//                              that had stopped comparing from a hook with nothing to say. It
+//                              reads the SERVER role's half of the log, because with the knob
+//                              armed the client reports the same field and a union search would be
+//                              satisfied by the arm that is not under test.
 //
 // The observable is the library's own log, because MG_Config is not reachable from this module
 // (on Android it links the SHIPPING libMobileGL.so, built -fvisibility=hidden) and the arming
@@ -263,6 +272,84 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "means the comparator is not comparing - and every green entry in this lane is "
                    "green for no reason. Log appended by this case:\n"
                 << appended;
+        }
+
+        // NEGATIVE CONTROL A ON THE OTHER ARM (P7 wave 3, V1): the COMPARE-AT-READ hook, on the
+        // SERVER's apply thread, inside the ID-49 neutral pack window.
+        //
+        // WHY THE CASE ABOVE DOES NOT COVER IT. MOBILEGL_PIPE_VERIFY_CORRUPT used to perturb only
+        // EntryCompare's snapshot, so every red it could produce came from the CLIENT thread at a
+        // verb boundary and said `where=entry`. The hook that runs on every backend read - the
+        // whole of the split lane's per-read work, and the only comparator the server's apply
+        // thread ever runs - had no falsifier: a hook that had stopped comparing looked exactly
+        // like a hook with nothing to report, and the lane would have been just as green.
+        //
+        // WHY THIS FIELD AND THIS VERB. GetPixelStoreParameters@ReadPixels is where the hook does
+        // its one piece of ARM-SPECIFIC reasoning (PipeFill.cpp's
+        // ServerReadsInsideTheNeutralPackWindow): the applier reads the backend with the neutral
+        // pack, so inside that window the oracle for the pack half is the neutral pack rather than
+        // the live context. A control aimed anywhere else would leave exactly that branch unproven.
+        //
+        // THE SERVER HALF, NOT THE UNION. With this knob armed the client's own entry compare
+        // reports `GetPixelStoreParameters@...` too, in the client's log, so a whole-lane search
+        // would be satisfied without the server having run anything at all. The assertion below
+        // reads the server role's half and nothing else.
+        //
+        // MOBILEGL_PIPE_VERIFY_FATAL=0, for CorruptedFieldIsReported's reason and one more: the
+        // client's entry compare on the ReadPixels verb fires FIRST (kReadback's fill mask carries
+        // this field, FillPoints.def), so with FATAL at its default the process would abort before
+        // the server ever reached the read.
+        TEST_F(PipeVerifyArmingScenario, CorruptedFieldIsReportedOnTheServerRead) {
+            if (!Ready()) return;
+
+            constexpr const char* kPackField = "GetPixelStoreParameters";
+            const char* knob = std::getenv("MOBILEGL_PIPE_VERIFY_CORRUPT");
+            if (knob == nullptr || std::string(knob) != kPackField) {
+                GTEST_SKIP() << "this case is the compare-at-read hook's negative control and needs "
+                                "MOBILEGL_PIPE_VERIFY_CORRUPT=" << kPackField << " for the whole "
+                                "process, which is what the VerifySplitReadCorrupted. ctest entries "
+                                "set; no other field is read by the server inside a window whose "
+                                "oracle the hook rewrites";
+            }
+            if (AmbientQuirkFromEnvironment("MOBILEGL_PIPE_VERIFY") != AmbientQuirk::On) {
+                GTEST_SKIP() << "MOBILEGL_PIPE_VERIFY_CORRUPT is set but MOBILEGL_PIPE_VERIFY is not, so "
+                                "the comparator is dormant and there is nothing to corrupt";
+            }
+            if (LibraryLogPath().empty()) {
+                GTEST_SKIP() << "MOBILEGL_LOG_FILE_PATH is not set, so the library has nowhere to report "
+                                "the divergence; the VerifySplitReadCorrupted. ctest entries set both";
+            }
+            if (MGITest::PipeStatsWindow::ServerLibraryLogPath().empty()) {
+                GTEST_SKIP() << "this build writes no server-role log, so there is no half in which the "
+                                "server's own report could be told apart from the client's; the hook's "
+                                "read arm is registered on the split (inproc) lane only";
+            }
+
+            const MGITest::PipeStatsWindow::LogMark before = LibraryLogMark();
+            ASSERT_NO_FATAL_FAILURE(DrawOneFrame());
+
+            const std::string server = MGITest::PipeStatsWindow::ReadServerLogSince(before);
+            const std::string expected =
+                std::string(kDifferPrefix) + ", \"" + kPackField + "@ReadPixels\"";
+            const std::size_t at = server.find(expected);
+            ASSERT_NE(at, std::string::npos)
+                << "MOBILEGL_PIPE_VERIFY_CORRUPT=" << kPackField << " perturbs the hook's ORACLE at "
+                   "every backend read of that field, and the server's read_pixels reads it under "
+                   "the server's own stamp - so the server role's log had to carry " << expected
+                << ", ...}. It carried nothing: either the compare-at-read hook is not running on "
+                   "the apply thread, or the neutral-pack window swallowed the perturbation, and "
+                   "in both cases every per-read green in this lane is green for no reason. Server "
+                   "half of the log appended by this case:\n"
+                << server;
+
+            const std::size_t eol = server.find('\n', at);
+            const std::string line =
+                server.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+            EXPECT_NE(line.find("where=read"), std::string::npos)
+                << "the server half reported the corrupted field, but not from the compare-at-read "
+                   "arm - `where=` says which comparator spoke, and only `read` is this case's "
+                   "subject. Line:\n"
+                << line;
         }
 
     } // namespace

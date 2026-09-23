@@ -90,8 +90,8 @@ upload，所以描述符宣告 `(target, level)` 而调用递空指针，会走�
   (3) 仅 DirectGLES 半边的四条 Magma decline 用例（§2.3 发现 B）。GLES 的 texture-view 用例照 monolith
   verify 车道的拼法带 `MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1` 另注册一次。
 - 手工注册（机制过滤器把它们一起拿掉了）：每后端 `VerifySplitArming.`（arming 断言，私有日志）、
-  `VerifySplitCorrupted.` / `VerifySplitPoisonOmitted.`（§3）、`VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes`
-  （负控 B 的 CI 靶子）。
+  `VerifySplitCorrupted.` / `VerifySplitReadCorrupted.` / `VerifySplitPoisonOmitted.`（§3）、
+  `VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes`（负控 B 的 CI 靶子）。
 - **不设 `MGITEST_SPLIT_LANE=1`**：它武装 ScenarioFixture 析构的「本用例必须推动过 client 编码器序号」，对整二进制
   集合是错的（tier 3 实测 13 红全是 CapsMirror 回答的查询）。取而代之的是**逐条目私有日志**
   （`SplitLogPaths.cmake.in` 的 `MGL_VERIFY_SPLIT_TEST_LISTS`）和 CI 的逐条目臂证明：每个 client 日志都必须有
@@ -167,9 +167,10 @@ DirectVulkan 半边保留且绿。
 | 车道 | 臂 | 基线 `3c2867d3` | 本包之后 | 结果 |
 |---|---|---|---|---|
 | `integration-verify` | monolith，DirectGLES / DirectVulkan | 568 / 568 = 1136（本配置下 2 红，§2.4） | 568 / 568 = **1136**（名不变） | 1136/1136，271 skip |
-| `integration-verify-split` | inproc，DirectGLES / DirectVulkan | 0 / 0（不存在） | 533 / 537 = **1070** | 1070/1070，117 skip（GLES 60、Magma 57） |
+| `integration-verify-split` | inproc，DirectGLES / DirectVulkan | 0 / 0（不存在） | 534 / 538 = **1072** | 1072/1072，117 skip（GLES 60、Magma 57） |
 
-DirectGLES 533 = 530 环境 + Arming + Corrupted + PoisonOmitted；DirectVulkan 537 = 534 + 3；两者差 4 = §2.3。
+DirectGLES 534 = 530 环境 + Arming + Corrupted + ReadCorrupted + PoisonOmitted；DirectVulkan 538 = 534 + 4；
+两者差 4 = §2.3。（V1 修复轮把 `VerifySplitReadCorrupted.` 加进来，每后端 +1，1070 → 1072。）
 
 ---
 
@@ -188,6 +189,22 @@ DirectGLES 533 = 530 环境 + Arming + Corrupted + PoisonOmitted；DirectVulkan 
 2 × MGPipe: Fatal{PipeVerifyDiffer, "GetRenderStateParameters@DrawArrays", verb=1, where=entry}
 ```
 
+**A′（G4，读臂；V1 修复轮补）** 入口比对跑在 **client 线程的动词边界**上，报 `where=entry`；**compare-at-read
+hook 跑在 server 的 apply 线程上**，是这条臂每次 backend 读唯一运行的比对器，而在本轮之前 `VERIFY_CORRUPT`
+**根本到不了它**——一个停止比对的 hook 和一个没东西可报的 hook 长得一模一样。修复：hook 在
+`CopyField(g_readScratch, …)` 之后按旋钮扰动**预言**，并在 ID-49 中性 pack 覆写之后**再扰动一次**（覆写是整
+个 pack 半边的，连扰动一起抹掉——`CorruptStorage` 扰的正是数组的第 0 个元素，也就是 pack 半边）。新条目
+`{DirectGLES,DirectVulkan}.VerifySplitReadCorrupted.`（`MOBILEGL_PIPE_VERIFY_CORRUPT=GetPixelStoreParameters`、
+`FATAL=0`，因为该字段在 `kReadback` 填充掩码里、client 的入口比对会先死），用例只读**server 半边**：
+
+```
+[mgl-srv-apply/FATAL]: MGPipe: Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels", verb=6, where=read}
+```
+
+本机实测：**2/2 绿**，server 半边 DirectGLES 3 行 / DirectVulkan 2 行，client 半边 **0 行**（入口比对在这个
+字段上不报，所以这条红线**只能**来自读臂）。反证（把 hook 里的两处扰动去掉、重编、再跑、再还原）：两条条目
+**2/2 红**，两个 server 半边 `PipeVerifyDiffer` **各 0 行**。
+
 **B（G5）** `MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters` 打
 `(DirectGLES|DirectVulkan)\.VerifySplit\.PoisonOmissionScenario\.WithoutOmissionCompletes`：**2/2 红**，子进程
 server 半边日志：
@@ -196,7 +213,7 @@ server 半边日志：
 [mgl-srv-apply/FATAL]: MGPipe: Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"}
 ```
 
-正形条目 `VerifySplitCorrupted.` / `VerifySplitPoisonOmitted.` 两后端 4/4 绿。
+正形条目 `VerifySplitCorrupted.` / `VerifySplitReadCorrupted.` / `VerifySplitPoisonOmitted.` 两后端 6/6 绿。
 
 ### 3.2 发现 C：monolith 的 POISON_OMIT 配对在 split 臂上是哑的
 
@@ -273,7 +290,7 @@ divergences, zero unmigrated reads` 与 `MGPipe split: <case> DirectVulkan trans
 | `^integration-spawn$` | 219/219 |
 | `^integration-tcp$` | 222/222 |
 | `^integration-verify$`（monolith） | 1136/1136 |
-| `^integration-verify-split$` | **1070/1070** |
+| `^integration-verify-split$` | **1072/1072** |
 | `^integration-magma-split$` / `-spawn$` / `-tcp$` | 93/93 · 72/72 · 74/74 |
 
 以上 lane 均在 `build-split`（verify 构建）上跑，比基线口径更严（每个 backend 读都过比对器的 hook）。

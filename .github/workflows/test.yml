@@ -1056,6 +1056,44 @@ jobs:
           fi
           echo "the corrupted field turned ${matched} selected split entries red, as it must"
 
+      # NEGATIVE CONTROL A ON THE OTHER COMPARATOR (P7 wave 3, V1). The step above proves the
+      # ENTRY compare - client thread, verb boundary, `where=entry`. The compare-at-read hook runs
+      # on the SERVER's apply thread at every backend read and is the only comparator that arm ever
+      # runs, and until MG_Impl/Pipe/PipeFill.cpp's hook honoured MOBILEGL_PIPE_VERIFY_CORRUPT it
+      # had no control at all: a hook that had stopped comparing was indistinguishable from a hook
+      # with nothing to report.
+      #
+      # NOT THE "ctest MUST FAIL" SHAPE, and the reason is mechanical rather than a preference:
+      # GetPixelStoreParameters is in kReadback's fill mask, so with MOBILEGL_PIPE_VERIFY_FATAL at
+      # its default the client's entry compare aborts the process at the ReadPixels boundary and
+      # the server never reaches the read. The entries therefore pin FATAL=0, survive their own
+      # divergence, and each asserts from inside the process that the SERVER role's half of its
+      # private log carries the report. This step re-reads those logs from outside, so the claim
+      # does not rest only on the assertion that produced them.
+      #
+      # THE GREEN HALF is the lane run above: the same hook, the same window, with no corruption
+      # armed, across 1070 entries at zero divergences.
+      - name: Negative control A (split, read side) - the server's own read must report it
+        working-directory: build-verify-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          FILTER='(DirectGLES|DirectVulkan)\.VerifySplitReadCorrupted\.'
+          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 2 ]; then
+            echo "::error::split read-side control A selected ${matched} tests; its filter no longer matches both backends"
+            exit 1
+          fi
+          ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error
+          for backend in DirectGLES DirectVulkan; do
+            log="MobileGL/MG_IntegrationTest/pipe-verify-split-read-corrupt-${backend}.server.log"
+            if ! grep -q 'Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels".*where=read}' "${log}"; then
+              echo "::error::${log} carries no compare-at-read report for the corrupted pack field: the hook is not comparing on the server's apply thread, or the ID-49 neutral-pack window swallowed the perturbation"
+              exit 1
+            fi
+          done
+          echo "both backends reported GetPixelStoreParameters@ReadPixels where=read in the SERVER half, as they must"
+
       # NEGATIVE CONTROL B ON THE SPLIT ARM, WITH THE SPLIT ARM'S PAIR. The monolith pair
       # (GenerateMipmap:GetActiveTextureUnit) is inert here - the split backend's generate_mipmap
       # resolves its texture by the verb's handle and never reads the active unit - so this step
