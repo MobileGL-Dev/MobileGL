@@ -340,7 +340,14 @@
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &cache.descriptorLayout;
         VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
-        const VkDescriptorImageInfo sampled{filter == GL_LINEAR ? cache.linear : cache.nearest,
+        // GL_LINEAR filters only a STRETCHED blit; an unscaled one (mirrored or not, on any of the
+        // four transforms) is a copy and samples NEAREST, which is exact where linear filtering
+        // at a quantised coordinate is not (WireColorBlitFilter.h). The format check above still
+        // asks for SAMPLED_IMAGE_FILTER_LINEAR whenever GL said GL_LINEAR, so which blits reach
+        // this pass is unchanged.
+        const VkFilter samplerFilter = WireColorBlitFilterFor({sx0, sy0, sx1, sy1}, {dx0, dy0, dx1, dy1},
+                                                              filter, transform);
+        const VkDescriptorImageInfo sampled{samplerFilter == VK_FILTER_LINEAR ? cache.linear : cache.nearest,
                                            sourceView, sourceLayout};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         write.dstSet = descriptorSet;

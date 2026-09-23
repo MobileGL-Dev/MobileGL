@@ -52,6 +52,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
 #include "WireDeclineTally.h"
+#include "WireColorBlitFilter.h"
 #include "WireDepthResolveArm.h"
 #include "WireDepthResolveProbe.h"
 #endif

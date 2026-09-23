@@ -13,6 +13,7 @@
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Backend/DirectVulkan/Renderer/WireRenderPassCompatibility.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireColorBlitFilter.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
 #include <MG_Backend/DirectVulkan/Renderer/WirePlaceholderKey.h>
 #endif
@@ -893,5 +894,106 @@ TEST(PipelineQuirkTest, WirePlaceholderKeysArePrivatePerShapeAndUnitAndBounded) 
     EXPECT_EQ(take(r32uiStorage3D, true, kUnits - 1).unit, kUnits - 1);
 #else
     GTEST_SKIP() << "the wire placeholders exist only in the disaggregated build";
+#endif
+}
+
+// P7 g3-blit (g3det, ~/w7/logs/g3det/VERDICT.md section 3): WHICH SAMPLER THE WIRE ARM'S SHADER
+// COLOUR BLIT USES (WireColorBlitFilter.h). GL filters only a STRETCHED blit, so a 1:1 blit is a copy
+// whatever `filter` says. The wire pass sampled every GL_LINEAR blit through its linear sampler; on
+// Adreno 830 the sub-texel coordinate quantisation moved create-instancing's 1:1 GL_LINEAR blit into
+// FB 0 by 1 LSB on 712 edge pixels, while the monolith's vkCmdBlitImage copied them exactly.
+// Lavapipe samples texel centres exactly and shows the same picture on both samplers, so no host
+// lane can see this; the choice is pinned here instead.
+//
+// Red once (executed, reverted): WireColorBlitFilterFor reduced to the old mapping
+// (`filter == GL_LINEAR ? VK_FILTER_LINEAR : VK_FILTER_NEAREST`) fails all 29 sampler expectations
+// of the first test and none of the second.
+#if MOBILEGL_BUILD_DISAGGREGATED
+namespace {
+    using MobileGL::MG_Backend::DirectVulkan::WireBlitIsUnscaled;
+    using MobileGL::MG_Backend::DirectVulkan::WireBlitRect;
+    using MobileGL::MG_Backend::DirectVulkan::WireColorBlitFilterFor;
+
+    // Identity and the three turns BlitWireColorImage expresses.
+    constexpr VkSurfaceTransformFlagBitsKHR kExpressedTransforms[] = {
+        VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR, VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR,
+        VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR, VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR};
+} // namespace
+#endif
+
+TEST(PipelineQuirkTest, WireColorBlitSamplesNearestWhereTheBlitIsACopy) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // create-instancing's last pass (trace call 530331): glBlitFramebuffer(0,0,854,480 -> 0,0,854,480,
+    // GL_COLOR_BUFFER_BIT, GL_LINEAR) into FB 0, on an identity pbuffer.
+    EXPECT_EQ(WireColorBlitFilterFor({0, 0, 854, 480}, {0, 0, 854, 480}, GL_LINEAR,
+                                     VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR),
+              VK_FILTER_NEAREST)
+        << "a 1:1 GL_LINEAR blit is a copy (GL 4.6 core 18.3.1); linear sampling of it is not exact on Adreno";
+    const struct {
+        const char* what;
+        WireBlitRect source, destination;
+    } copies[] = {
+        {"offset on both sides", {10, 20, 110, 70}, {300, 5, 400, 55}},
+        {"source reversed on x", {854, 0, 0, 480}, {0, 0, 854, 480}},
+        {"destination reversed on both axes", {0, 0, 6, 4}, {48, 36, 42, 32}},
+        {"both reversed", {6, 4, 0, 0}, {42, 32, 48, 36}},
+        {"one texel", {3, 3, 4, 4}, {0, 0, 1, 1}},
+        {"negative corners", {-8, -4, 8, 4}, {100, 100, 116, 108}},
+        // 64-bit extents: INT_MAX - INT_MIN overflows a GLint.
+        {"full GLint range", {INT_MIN, 0, INT_MAX, 1}, {INT_MAX, 1, INT_MIN, 0}},
+    };
+    for (const auto& copy : copies) {
+        EXPECT_TRUE(WireBlitIsUnscaled(copy.source, copy.destination)) << copy.what;
+        // A quarter turn maps logical pixel centres onto native ones (the native extent is the
+        // logical one swapped), so a copy is still a copy on every rotated surface.
+        for (const auto transform : kExpressedTransforms) {
+            EXPECT_EQ(WireColorBlitFilterFor(copy.source, copy.destination, GL_LINEAR, transform), VK_FILTER_NEAREST)
+                << copy.what << ", surface transform 0x" << std::hex << static_cast<Uint32>(transform);
+        }
+    }
+#else
+    GTEST_SKIP() << "the wire shader blit exists only in the disaggregated build";
+#endif
+}
+
+TEST(PipelineQuirkTest, WireColorBlitKeepsLinearWhereTheBlitStretches) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    const struct {
+        const char* what;
+        WireBlitRect source, destination;
+    } stretches[] = {
+        {"2x on both axes", {0, 0, 854, 480}, {0, 0, 1708, 960}},
+        {"half on y only", {0, 0, 854, 480}, {0, 0, 854, 240}},
+        {"one texel wider on x only", {0, 0, 854, 480}, {0, 0, 855, 480}},
+        // GL has no transpose: swapped extents are a stretch on both axes, not a rotation.
+        {"extents transposed", {0, 0, 480, 854}, {0, 0, 854, 480}},
+        {"reversed and stretched", {0, 0, 6, 4}, {48, 36, 36, 28}},
+        // What GenerateMipmap's attachable arm asks for (source level -> the next level).
+        {"a mip step", {0, 0, 64, 32}, {0, 0, 32, 16}},
+        {"a 1xN mip step", {0, 0, 1, 8}, {0, 0, 1, 4}},
+        {"full GLint range against one texel", {INT_MIN, 0, INT_MAX, 1}, {0, 0, -1, 1}},
+    };
+    for (const auto& stretch : stretches) {
+        EXPECT_FALSE(WireBlitIsUnscaled(stretch.source, stretch.destination)) << stretch.what;
+        for (const auto transform : kExpressedTransforms) {
+            EXPECT_EQ(WireColorBlitFilterFor(stretch.source, stretch.destination, GL_LINEAR, transform),
+                      VK_FILTER_LINEAR)
+                << stretch.what << ": GL_LINEAR filters a stretched blit, surface transform 0x" << std::hex
+                << static_cast<Uint32>(transform);
+            EXPECT_EQ(WireColorBlitFilterFor(stretch.source, stretch.destination, GL_NEAREST, transform),
+                      VK_FILTER_NEAREST)
+                << stretch.what << ": GL_NEAREST never becomes linear";
+        }
+    }
+    for (const auto transform : kExpressedTransforms) {
+        EXPECT_EQ(WireColorBlitFilterFor({0, 0, 854, 480}, {0, 0, 854, 480}, GL_NEAREST, transform), VK_FILTER_NEAREST);
+    }
+    // A transform the pass cannot express is declined before a sampler is chosen; the helper keeps
+    // the filter's own mapping for one rather than claiming the copy is exact.
+    EXPECT_EQ(WireColorBlitFilterFor({0, 0, 854, 480}, {0, 0, 854, 480}, GL_LINEAR,
+                                     VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR),
+              VK_FILTER_LINEAR);
+#else
+    GTEST_SKIP() << "the wire shader blit exists only in the disaggregated build";
 #endif
 }

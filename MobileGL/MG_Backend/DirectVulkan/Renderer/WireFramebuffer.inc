@@ -1105,12 +1105,23 @@
                 // P7 wave 2-B, CONTRACT-P7 §3.2: `default-color-blit-shape@P7` RETIRES, in three
                 // pieces, because the one Fatal covered three unrelated situations.
                 //
-                // The shader blit is here for ROTATION and for nothing else. It can only SAMPLE
-                // its source - sampler2D, a float result, one of two 2D view types - so an
-                // RGBA8UI attachment, a 3D slice or an array layer made it return false, and the
-                // refusal fired even on a surface with NO rotation, where the ordinary
-                // vkCmdBlitImage arm twenty lines down would have done the blit correctly and
-                // does handle those shapes.
+                // The shader blit EXISTS for rotation, because an axis-aligned vkCmdBlitImage cannot
+                // express a quarter turn. It is still TAKEN FIRST on every transform it can
+                // express, identity included. That has been the routing since 38919d453: every
+                // host lane (all identity) and the Redmi pbuffer run their default-framebuffer
+                // colour blits through it, F1WireScenario.ColorBlitToDefaultHonorsScissorAndReversedRect
+                // among them. The ordinary vkCmdBlitImage arm below is reached on identity only
+                // when this pass declines the source. Because identity blits run here, the pass
+                // must copy exactly wherever GL says the blit is a copy: an unscaled blit samples
+                // NEAREST whatever `filter` says (WireColorBlitFilter.h, g3-blit; on Adreno 830,
+                // linear sampling of a 1:1 GL_LINEAR blit moved create-instancing's edge pixels by
+                // 1 LSB, where the monolith's vkCmdBlitImage is exact).
+                //
+                // The pass can only SAMPLE its source - sampler2D, a float result, one of two 2D
+                // view types - so an RGBA8UI attachment, a 3D slice or an array layer makes it
+                // return false. That refusal used to fire even on a surface with NO rotation,
+                // where the vkCmdBlitImage arm below does the blit correctly and does handle
+                // those shapes.
                 const auto transform = m_swapchainObject.GetPreTransform();
                 const Bool knownRotation = transform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ||
                                            transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
@@ -1154,9 +1165,11 @@
                                  static_cast<Uint32>(transform));
                     return;
                 }
-                // Identity: fall through to the ordinary vkCmdBlitImage arm below. It already
-                // maps GL's bottom row onto the native image's last row for a default target,
-                // and vkCmdBlitImage takes integer formats and array layers natively. Its 3D
+                // Identity, and the shader pass above declined this source (an integer format, a
+                // 3D slice, a view type it cannot sample): fall through to the ordinary
+                // vkCmdBlitImage arm below. It already maps GL's bottom row onto the native
+                // image's last row for a default target, and vkCmdBlitImage takes integer
+                // formats and array layers natively. Its 3D
                 // addressing was wrong and is fixed with this package - see the srcBaseLayer /
                 // srcZ note down there; the bug was invisible until now because a 3D source hit
                 // the Fatal above and never reached that arm.
