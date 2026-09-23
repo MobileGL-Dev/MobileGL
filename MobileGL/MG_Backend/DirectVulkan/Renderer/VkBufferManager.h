@@ -310,6 +310,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // for the census to count), shared by the host write that cannot wait for the GPU and
         // the watermark that cannot. `site` says which.
         [[noreturn]] static void WireBufferSyncFatal(const char* site);
+        // The wbuf[] gauges (PipeStats.h, Gauge::WireBuffers..WireDeferredSyncs). The peaks are
+        // taken at the two points the numbers can rise - a park and a mint - and published when
+        // the stats channel is on; MagmaWireReclaimScenario reads them off the server's line.
+        void NoteWireStorePeaks();
+        void PublishWireReclaimGauges();
 #endif
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
@@ -354,6 +359,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Live VkBuffers this arm owns: the stores held by m_wireBuffers plus the parked ones.
         // Maintained rather than counted, because the publish runs on every park.
         Uint64 m_wireStoreCount = 0;
+        // Run maxima of the two numbers above and the watermark's sync count, for the gauges.
+        Uint64 m_wireStoreCountPeak = 0;
+        Uint64 m_deferredWireBytesPeak = 0;
+        Uint64 m_wireDeferredSyncs = 0;
 #endif
     // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
     SizeT m_liveResourcesLastPruned = 0;

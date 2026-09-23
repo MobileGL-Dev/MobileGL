@@ -268,6 +268,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::abort();
         }
         ++m_wireStoreCount;
+        NoteWireStorePeaks();
+        PublishWireReclaimGauges();
         // Under transport, defined bytes follow as resource_subdata records. An
         // undefined store has no shadow to upload and no implicit zero snapshot.
         if (initialBytes != nullptr && desc.HasDefinedContent) {
@@ -576,6 +578,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DeferWireRelease(std::move(found->second.buffer), found->second.lastUseSerial);
         m_wireBuffers.erase(found);
         ++m_sliceEpochCounter;
+        PublishWireReclaimGauges();
     }
 
     void VkBufferManager::DeferWireRelease(VkBufferObject&& buffer, Uint64 lastUseSerial) {
@@ -599,6 +602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.buffer = std::move(buffer);
         m_deferredWireBytes += entry.bytes;
         m_deferredWireReleases.push_back(std::move(entry));
+        NoteWireStorePeaks();
         // EVERY PARK SWEEPS. The frame boundary is not a reclaim point this arm can lean on - a
         // pbuffer replay that snapshot-exits delivers ONE present for 1.3 M calls (ID-P7-32) -
         // so the only cadence that tracks the workload is the workload itself.
@@ -619,7 +623,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             !pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
             WireBufferSyncFatal("deferred-watermark");
         }
+        ++m_wireDeferredSyncs;
         SweepDeferredWireReleases();
+    }
+
+    void VkBufferManager::NoteWireStorePeaks() {
+        m_wireStoreCountPeak = std::max(m_wireStoreCountPeak, m_wireStoreCount);
+        m_deferredWireBytesPeak = std::max(m_deferredWireBytesPeak, m_deferredWireBytes);
+    }
+
+    void VkBufferManager::PublishWireReclaimGauges() {
+        if (!MG_Util::PipeStats::Enabled()) return;
+        using MG_Util::PipeStats::Gauge;
+        MG_Util::PipeStats::PublishGauge(Gauge::WireBuffers, static_cast<Uint64>(m_wireBuffers.size()));
+        MG_Util::PipeStats::PublishGauge(Gauge::WireStoresPeak, m_wireStoreCountPeak);
+        MG_Util::PipeStats::PublishGauge(Gauge::WireDeferredBytesPeak, m_deferredWireBytesPeak);
+        MG_Util::PipeStats::PublishGauge(Gauge::WireDeferredSyncs, m_wireDeferredSyncs);
     }
 
     void VkBufferManager::WireBufferSyncFatal(const char* site) {
@@ -715,6 +734,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // records still hold, so nothing this arm minted outlives the count.
         m_wireBuffers.clear();
         m_wireStoreCount = 0;
+        m_wireStoreCountPeak = 0;
+        m_deferredWireBytesPeak = 0;
+        m_wireDeferredSyncs = 0;
 #endif
         m_copyProvider = nullptr;
         m_initInfo = {};

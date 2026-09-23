@@ -3439,6 +3439,51 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# =====================================================================================
+# P7 WAVE 4 PACKAGE M2: THE WIRE ARM RECLAIMS ORPHANED BUFFER STORES INSIDE A FRAME
+# =====================================================================================
+#
+# ID-P7-27 / ID-P7-32: bsl-esc-menu-854 delivers one present per replay, and the split server
+# held every orphaned VkBuffer until a frame boundary that never came. The two cases read the
+# server's own wbuf[] gauges (PipeStats.h) off its `MGPipe stats:` line, so the flavour pins the
+# stats channel at one line per swap, and MOBILEGL_IPC_WIRE_DEFERRED_MB=8 keeps the watermark
+# case at 48 MiB of traffic instead of 400.
+#
+# INPROC AND SPAWN ONLY - the ID-P7-14 shape, named in scripts/ci/spawn_lane_parity.py
+# (MAGMA_SERVER_ENV_KNOB_NO_TCP, one tail per case). Both knobs the lane depends on are SERVER-process environment: under inproc
+# and spawn the server inherits this entry's ENVIRONMENT, under tcp the server is the
+# TcpServer.Start supervisor's session child, started once for the whole lane with the fixture's
+# environment - setting the stats channel and an 8 MiB watermark there would change every other
+# tcp entry's server - and its log is not this entry's private server log to read.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaWireReclaimScenario.cpp)
+    set(MGL_ITEST_MAGMA_RECLAIM_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_IPC_WIRE_DEFERRED_MB=8"
+        "MGITEST_MAGMA_RECLAIM_LANE=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})  # the ICD pin, see the Fm lane above
+    foreach(mglItestArm IN ITEMS Split Spawn)
+    mgl_itest_magma_arm_shape(${mglItestArm} reclaim)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_RECLAIM_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_RECLAIM_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+    foreach(reclaimCase
+            RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded
+            RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Reclaim."
+            TEST_FILTER "MagmaWireReclaimScenario.${reclaimCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_RECLAIM_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-reclaim${mglItestArmLogTag}-${reclaimCase}.log")
+    endforeach()
+    endforeach()
+endif()
+
 # P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:

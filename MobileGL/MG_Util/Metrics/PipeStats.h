@@ -345,6 +345,20 @@ namespace MobileGL::MG_Util::PipeStats {
         ServerParks,
         ClientWaits,
         ClientParks,
+        // P7 wave 4 M2 (ID-P7-32): THE MAGMA WIRE ARM'S BUFFER STORES, published by the SERVER
+        // role's VkBufferManager whenever they change (so, like `srv`, a two-process client
+        // prints 0 for all four). `WireBuffers` is the wire buffer records alive now;
+        // `WireStoresPeak` the most VkBuffers the arm ever held at once - the stores those
+        // records own plus orphaned ones still parked - and `WireDeferredBytesPeak` the most
+        // bytes ever parked. They are MAXIMA on purpose: the defect they exist for lived INSIDE
+        // one frame (bsl-esc-menu-854 held 25,923 dead stores against 28 live under a single
+        // present), and a value sampled at the swap that closes the window would read after
+        // the frame boundary's own sweep and prove nothing. `WireDeferredSyncs` counts the
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB watermark's forced sync points.
+        WireBuffers,
+        WireStoresPeak,
+        WireDeferredBytesPeak,
+        WireDeferredSyncs,
         Count
     };
 

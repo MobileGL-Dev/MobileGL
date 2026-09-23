@@ -305,6 +305,12 @@ namespace {
         EXPECT_NE(line.find("srvpark="), String::npos) << line;
         EXPECT_NE(line.find("cli="), String::npos) << line;
         EXPECT_NE(line.find("clipark="), String::npos) << line;
+        // P7 wave 4 M2's wire-buffer bracket: MagmaWireReclaimScenario reads these four by name
+        // off the server's line, so a rename reds that lane as "gauge absent", not as a leak.
+        EXPECT_NE(line.find("wbuf[wbufs="), String::npos) << line;
+        EXPECT_NE(line.find(" wlivepk="), String::npos) << line;
+        EXPECT_NE(line.find(" wdefpk="), String::npos) << line;
+        EXPECT_NE(line.find(" wdefsync="), String::npos) << line;
 #endif
     }
 

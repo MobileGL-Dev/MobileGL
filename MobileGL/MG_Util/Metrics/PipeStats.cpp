@@ -682,6 +682,13 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " srvpark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)]));
         line += " cli=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)]));
         line += " clipark=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)]));
+        // P7 wave 4 M2: the Magma wire arm's buffer stores (see the Gauge enum). RUN MAXIMA on
+        // a windowed line for the wait ledger's reason and one more: the number that matters is
+        // the peak INSIDE a frame, which no swap-time sample can see.
+        line += "] wbuf[wbufs=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)]));
+        line += " wlivepk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)]));
+        line += " wdefpk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)]));
+        line += " wdefsync=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)]));
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {
@@ -758,7 +765,16 @@ namespace MobileGL::MG_Util::PipeStats {
         json += "    \"client-waits\": " +
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)])) + ",\n";
         json += "    \"client-parks\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + "\n";
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + ",\n";
+        // P7 wave 4 M2's four, run maxima / a run count as on the summary line's wbuf[].
+        json += "    \"wire-buffers\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)])) + ",\n";
+        json += "    \"wire-stores-peak\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)])) + ",\n";
+        json += "    \"wire-deferred-bytes-peak\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)])) + ",\n";
+        json += "    \"wire-deferred-syncs\": " +
+                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)])) + "\n";
 #endif
         json += "  },\n  \"cmd-bytes-per-draw-histogram\": [";
         for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {

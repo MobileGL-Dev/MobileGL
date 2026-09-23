@@ -78,8 +78,15 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # two arms and the same tcp absence. One list, one mechanism, for every server-side knob.
 # `.MsFlip1.` (B2 review round 2) is the shader-resolve knob twin of the knob-free `.MsFlip.`,
 # which keeps its tcp entry.
+# P7 wave 4 M2: MagmaWireReclaimScenario reads the SERVER's wbuf[] PipeStats gauges off the server's
+# private log with the stats channel and MOBILEGL_IPC_WIRE_DEFERRED_MB=8 in the entry's environment -
+# server-process environment again, so the same two arms and the same tcp absence. Its three cases
+# are three tails (one key each) under the `.Reclaim.` prefix.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
-                                ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.")
+                                ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
+                                ".Reclaim.MagmaWireReclaimScenario.RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded",
+                                ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
+                                ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling")
 
 
 def lane_names(build_dir, label):
