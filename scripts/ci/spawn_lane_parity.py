@@ -72,8 +72,12 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # These are TAILS, not scenarios - the normaliser above keeps the sub-lane tail for the Magma
 # tier on purpose, so `.MsResolve1.` names the knob entry and `.MsResolve0.` (the default, which
 # does keep its tcp entry) is untouched.
+#
+# P7 wave 2-B3 (ID-P7-34) adds `.StaleSerial.`: MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL is read by
+# the server too (VkBufferManager.cpp), so the streamed subdata-then-draw red-once has the same
+# two arms and the same tcp absence. One list, one mechanism, for every server-side knob.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
-                                ".DefaultBlitShape1.", ".MsResolve1.")
+                                ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.")
 
 
 def lane_names(build_dir, label):
@@ -103,6 +107,7 @@ def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
     it on spawn, which is where it does most of its work.
 
     Returns True on failure, the way main() below counts them."""
+    not_on_arm = not_on_arm or {}
     sets = {}
     for arm, label in labels.items():
         names = lane_names(build_dir, label) - FIXTURE_ENTRIES

@@ -3125,13 +3125,23 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                 ${mglItestArmProperties}
                 ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata${mglItestArmLogTag}.log")
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.StaleSerial."
-            TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata-stale${mglItestArmLogTag}.log")
+        # SPLIT AND SPAWN ONLY - a parity exception, named in scripts/ci/spawn_lane_parity.py
+        # (MAGMA_SERVER_ENV_KNOB_NO_TCP, the same list as the B2 knobs above), not an omission.
+        # The knob is read by the SERVER, and the tcp arm's server is the lane fixture
+        # (scripts/ci/tcp_server_fixture.py) started once from its own environment: an
+        # entry-level ENVIRONMENT never reaches it, so a Tcp.StaleSerial. entry would run the
+        # plain Fm case under a name that claims the knob, and could never red. The inproc arm
+        # hosts the server in the test process and the spawn arm's server inherits the client's
+        # environment, so on those two the knob is real.
+        if(mglItestServerEnvKnobArm)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.StaleSerial."
+                TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata-stale${mglItestArmLogTag}.log")
+        endif()
         # `default-color-blit-shape@P7`'s retirement. TWO ENTRIES OVER ONE CASE, and the second
         # is the only way its arm is reachable here: every surface this lane creates reports
         # VK_SURFACE_TRANSFORM_IDENTITY, so the scratch path that exists FOR rotation would
