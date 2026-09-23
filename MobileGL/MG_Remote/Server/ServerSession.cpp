@@ -571,13 +571,21 @@ namespace MobileGL::MG_Remote::Server {
                 return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                        "stream needs a TCP control connection and a data-connection source");
             created = Transport::SocketTransport::MintNonce(dataNonce, sizeof(dataNonce));
+            if (created != MOBILEGL_OK) {
+                // (F fix round) The peer is told by name instead of seeing a bare close. The
+                // return value stays the fault it is - exit 67 in ServerMain, counted in
+                // sessionsFaulted - because a CSPRNG that gave nothing is this server's failure
+                // and not the peer's terms; the code is LinkTerms because the terms asked for a
+                // stream data plane and that is what could not be granted.
+                (void)RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                      "stream data plane unavailable: the server could not mint a data nonce");
+                return created;
+            }
+            auto link = std::make_unique<Transport::StreamLink>();
+            created = link->AttachOwnedDeferred(m_sizes, Transport::TransportRoleTag::ServerConsumer);
             if (created == MOBILEGL_OK) {
-                auto link = std::make_unique<Transport::StreamLink>();
-                created = link->AttachOwnedDeferred(m_sizes, Transport::TransportRoleTag::ServerConsumer);
-                if (created == MOBILEGL_OK) {
-                    pendingStream = link.get();
-                    AttachDataLink(std::move(link));
-                }
+                pendingStream = link.get();
+                AttachDataLink(std::move(link));
             }
         } else {
             created = m_link->Memory().Create(m_sizes, Transport::MemoryRole::Server);
@@ -619,9 +627,31 @@ namespace MobileGL::MG_Remote::Server {
                 ? builder.CreateVector(dataNonce, sizeof(dataNonce))
                 : ::flatbuffers::Offset<::flatbuffers::Vector<Uint8>>();
             const Uint64 maxReply = m_sizes.ReplyBytes / m_sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader);
+            const Uint64 cmdWindow = m_link->Memory().CmdRingCapacity();
+            const Uint64 stageWindow = m_link->Memory().StageBytes();
+            const Uint64 eventWindow = m_link->Memory().EventRingCapacity();
+            // PH-8 (F fix round). The Hello's four counts are IGNORED, not clamped: nothing above
+            // read them for sizing, and the session is the size this server chose. Said once when
+            // a peer asked for more than it is granted, so an operator comparing a client's
+            // configured windows with the server's sees which side sized the session (rule I: a
+            // silent difference is the kind this phase removes). The production client asks for
+            // nothing, so a session that was never mis-configured never logs this.
+            if (terms->cmdWindowBytes() > cmdWindow || terms->stageWindowBytes() > stageWindow ||
+                terms->eventWindowBytes() > eventWindow || terms->maxReplyBytes() > maxReply) {
+                MGLOG_W("MG_Remote server: Hello asked for windows the server does not grant "
+                        "(cmd=%llu stage=%llu event=%llu maxReply=%llu); the ask is ignored and the "
+                        "session is server-sized (cmd=%llu stage=%llu event=%llu maxReply=%llu) - PH-8",
+                        static_cast<unsigned long long>(terms->cmdWindowBytes()),
+                        static_cast<unsigned long long>(terms->stageWindowBytes()),
+                        static_cast<unsigned long long>(terms->eventWindowBytes()),
+                        static_cast<unsigned long long>(terms->maxReplyBytes()),
+                        static_cast<unsigned long long>(cmdWindow),
+                        static_cast<unsigned long long>(stageWindow),
+                        static_cast<unsigned long long>(eventWindow),
+                        static_cast<unsigned long long>(maxReply));
+            }
             auto negotiated = ::MobileGL::Wire::CreateLinkTerms(builder, terms->dataPlane(),
-                ::MobileGL::Wire::WireForm::StructImage, maxReply, m_link->Memory().CmdRingCapacity(),
-                m_link->Memory().StageBytes(), m_link->Memory().EventRingCapacity());
+                ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow, eventWindow);
             auto welcome = ::MobileGL::Wire::CreateWelcome(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
                 // CONTRACT-P6 4.3: THE SERVER'S OWN PID, not an echo of the client's.

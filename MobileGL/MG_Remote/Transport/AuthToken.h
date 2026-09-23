@@ -65,24 +65,35 @@ namespace MobileGL::MG_Remote::Transport {
         return token != nullptr && std::strlen(token) >= kMinimumAuthTokenBytes;
     }
 
-    // Constant time in the CONTENTS of both operands.
+    // The comparison's width. Up to this many bytes the loop's trip count is a constant; a
+    // configured token longer than it is compared in full (the loop extends to its length).
+    inline constexpr std::size_t kAuthTokenCompareBytes = 64;
+
+    // Constant time in the CONTENTS of both operands, and in their LENGTHS up to
+    // kAuthTokenCompareBytes.
     //
-    // The loop runs over the expected token's length and never leaves early, so the time depends
-    // on that length - which is this process's own configuration, fixed before any peer connects
-    // and not attacker-controlled - and on nothing the peer sent. The two lengths are folded into
-    // the accumulator rather than branched on, so a peer cannot learn the token's length from a
-    // faster answer either. Past the presented token's end the comparison reads a zero, which is
-    // a value, not a short-circuit: `presented` is never indexed out of its own bounds.
+    // The first shape of this loop ran over the configured token's length. That length is not the
+    // peer's to vary, but it is part of the operator's secret, and an answer whose time was
+    // proportional to it told a peer how long a token to guess (F fix round, review of slices
+    // 1-3). The loop now runs a fixed 64 iterations - or the configured token's length past that,
+    // so a longer token is still compared to its last byte and reveals only that it is longer than
+    // 64 - and reads BOTH operands as zero past their own ends: a zero is a value, not a
+    // short-circuit, and neither operand is ever indexed out of its own bounds. The two lengths
+    // are folded into the accumulator rather than branched on, and nothing leaves early. The
+    // presented length does not extend the loop: a peer's own bytes are the one thing it already
+    // knows, and letting it choose the trip count would let it choose our work.
     inline bool ConstantTimeTokenMatch(const char* expected, const char* presented,
                                        std::size_t presentedSize) {
         if (expected == nullptr) return false;
         const std::size_t expectedSize = std::strlen(expected);
+        const std::size_t width = expectedSize > kAuthTokenCompareBytes ? expectedSize : kAuthTokenCompareBytes;
         std::size_t difference = expectedSize ^ presentedSize;
-        for (std::size_t index = 0; index < expectedSize; ++index) {
+        for (std::size_t index = 0; index < width; ++index) {
+            const unsigned char ours =
+                index < expectedSize ? static_cast<unsigned char>(expected[index]) : 0u;
             const unsigned char theirs =
                 index < presentedSize ? static_cast<unsigned char>(presented[index]) : 0u;
-            difference |= static_cast<unsigned char>(
-                static_cast<unsigned char>(expected[index]) ^ theirs);
+            difference |= static_cast<unsigned char>(ours ^ theirs);
         }
         return difference == 0;
     }

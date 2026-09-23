@@ -89,10 +89,29 @@ void RefuseBusy(SocketTransport& transport, const char* detail) {
 constexpr std::uint32_t kFirstFrameWaitMs = 2000;
 constexpr std::uint64_t kFirstFrameMaxBytes = 1024 * 1024;
 
+// Whatever the peer has already sent, read and dropped (non-blocking, at most 1 MiB), so a close
+// with bytes still unread does not become an RST that discards the refusal in flight - the
+// reason RefuseBusy reads the Hello before refusing.
+void DrainUnread(int fd) {
+    char sink[4096];
+    for (int rounds = 0; rounds < 256; ++rounds) {
+        if (::recv(fd, sink, sizeof(sink), MSG_DONTWAIT) <= 0) return;
+    }
+}
+
 void RouteWhileBusy(SocketTransport& connection, int handoff) {
     std::vector<std::uint8_t> frame;
     const int fd = connection.StreamFd();
     const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
+    if (read == MOBILEGL_ERR_PROTOCOL_MISMATCH) {
+        // (F fix round) A first frame with the wrong magic or a length over 1 MiB is not a second
+        // client waiting its turn; it is not a control frame at all, and Busy would name a
+        // condition this connection does not have. The word is the one ServerSession::Accept uses
+        // for a first frame that is not a verifiable Hello.
+        DrainUnread(fd);
+        Refuse(connection, Protocol::RefuseCode::MalformedHello, "first frame is not a control frame");
+        return;
+    }
     std::uint8_t nonce[kDataNonceBytes] = {};
     if (read == MOBILEGL_OK && DecodeDataBind(frame, nonce)) {
         if (handoff >= 0 &&

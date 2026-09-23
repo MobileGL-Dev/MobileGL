@@ -180,6 +180,15 @@ TEST(SocketTransportTest, TheTokenComparisonAnswersLengthAndPrefixTheSameWay) {
                              '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     EXPECT_FALSE(ConstantTimeTokenMatch(expected, embedded, sizeof(embedded)));
     EXPECT_FALSE(ConstantTimeTokenMatch(nullptr, "anything", 8));
+    // F fix round: the loop runs a fixed kAuthTokenCompareBytes (64) so its trip count does not
+    // tell a peer the configured token's length; a token LONGER than that is still compared in
+    // full - the last byte of a 70-byte token decides, it is not past the width.
+    std::string longToken(70, 'k');
+    std::string longPresented = longToken;
+    EXPECT_TRUE(ConstantTimeTokenMatch(longToken.c_str(), longPresented.c_str(), longPresented.size()));
+    longPresented[69] = 'K';
+    EXPECT_FALSE(ConstantTimeTokenMatch(longToken.c_str(), longPresented.c_str(), longPresented.size()));
+    EXPECT_FALSE(ConstantTimeTokenMatch(longToken.c_str(), longToken.c_str(), 64));
 }
 
 // PH-7 (4), ID-P7-3. THE DATA CONNECTION'S FIRST FRAME IS READ EXACTLY, AND ONLY A DataBind

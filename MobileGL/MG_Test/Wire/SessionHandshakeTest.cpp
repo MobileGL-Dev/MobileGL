@@ -273,6 +273,12 @@ TEST(SessionHandshakeTest, ForkRefusesDifferentBuildWithIdenticalWire) {
 // Accept below then fails to create a 64 GiB private segment, or the EXPECT_EQs name the window
 // that was echoed. The two-process half, with the child's own VmPeak, is
 // TcpLane.SupervisorProtocolControls' `hello_asks_64_gib`.
+//
+// "Clamped" in the name is the plan's word; what Accept does is IGNORE the ask - it never reads
+// the four counts for sizing - and the session is server-sized. Since the F fix round that is
+// said out loud: an ask above the granted terms logs one MGLOG_W naming both sides (rule I: a
+// silent difference between what a client configured and what it got is the kind this phase
+// removes), and this case requires the line. RED before that fix: the line is absent.
 TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllocatesNothingOfIt) {
     using namespace ::MobileGL::Wire;
     constexpr Uint64 kAsk = 64ull << 30;
@@ -291,7 +297,12 @@ TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllo
     sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
     sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
     session.SetSegmentSizes(sizes);
+    const std::string before = ReadLog();
     ASSERT_EQ(session.Accept(*server, &first), MOBILEGL_OK);
+    const std::string delta = ReadLog().substr(before.size());
+    EXPECT_TRUE(Contains(delta, "MG_Remote server: Hello asked for windows the server does not grant"))
+        << "the 64 GiB ask was ignored silently; an operator comparing the client's configured "
+           "windows with the server's would see no line. Log delta:\n" << delta;
     const auto reply = ReadHandshakeFrame(*client);
     ASSERT_FALSE(reply.empty());
     ::flatbuffers::Verifier verifier(reply.data(), reply.size());

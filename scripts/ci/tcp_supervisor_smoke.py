@@ -591,6 +591,28 @@ def main():
                                                  'fresh_control': still_busy}
             assert process.poll() is None, 'the refused DataBinds killed the supervisor'
 
+            # ---- F fix round: A GARBAGE FIRST FRAME WHILE BUSY IS MalformedHello, NOT Busy ------
+            #
+            # While a session is live the supervisor reads a new connection's first frame to route
+            # it. A frame with the wrong magic (or a length over 1 MiB) was refused Busy, naming a
+            # condition the connection does not have: it is not a control frame at all, and it now
+            # gets the word ServerSession::Accept uses for a first frame that is not a verifiable
+            # Hello. Busy stays the answer for a well-formed frame that is not a DataBind (the
+            # `busy` control above). RED before the fix: code 7.
+            with held_session(port, schema, flatbuffers,
+                              hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                garbage = connect_control(port)
+                try:
+                    garbage.sendall(b'XXXX' + bytes(60))
+                    malformed = receive(garbage, schema)
+                finally:
+                    garbage.close()
+                assert malformed.get('code') == 8 and malformed.get('detail') == (
+                    'first frame is not a control frame'), malformed
+            evidence['garbage_first_frame_while_busy'] = malformed
+            assert process.poll() is None, 'a garbage first frame killed the supervisor'
+
         with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _, _log):
             strict = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert strict.get('code') == 3, strict
