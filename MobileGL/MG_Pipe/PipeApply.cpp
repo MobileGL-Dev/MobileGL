@@ -2081,7 +2081,7 @@ namespace MobileGL::MG_Pipe {
         if (!MGPipeRespecifyIsWholeResource(desc) &&
             !MGPipeRespecifiedExtentCarrierIsCanonical(desc)) {
             MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.ExtentCarrier\"} - "
-                                 "a named image level must carry nonzero width/height/depth with no high BufSize bits");
+                                 "a named image level's depth word must fit in 32 bits (no high BufSize bits)");
         }
         if (level == nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer) &&
             (desc.BufOffset != 0 || desc.BufSize != 0)) {

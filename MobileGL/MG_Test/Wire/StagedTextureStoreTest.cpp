@@ -164,6 +164,65 @@ TEST(StagedTextureStoreTest, AMutableNoncanonicalLevelKeepsItsExactDeclaredExten
     EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 2));
 }
 
+// AN EMPTY LEVEL IS A DEFINITION (P7 gate 5). glTexImage1D(width 0) / glTexImage2D(0 x 0) are
+// legal GL and dEQP's state reset issues them after every case; the frontend reports the level's
+// exact extent as {0,1,1} / {0,0,1}. The store must take it as a definition that REPLACES the
+// level (the old run and its coverage go), answer the exact empty extent, and give it no byte
+// bound - never a session Fatal. A negative component (a carrier word past INT_MAX) stays one.
+TEST(StagedTextureStoreTest, AnEmptyLevelIsADefinitionWithNoByteBound) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(42, 1));
+    constexpr Uint16 kTex1DTarget = static_cast<Uint16>(TextureUploadTarget::Texture1D);
+    const auto tex1D = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex1D);
+    const auto rgba8 = static_cast<Uint32>(TextureInternalFormat::RGBA8);
+
+    store.NoteLevelDefined(key, kTex1DTarget, 0, IntVec3{4, 1, 1}, tex1D, rgba8);
+    Vector<Uint8> bytes(16, 0x5A);
+    store.Adopt(key, kTex1DTarget, 0, IntVec3{4, 1, 1}, bytes.data(), bytes.size());
+    ASSERT_TRUE(store.IsCovered(key, kTex1DTarget, 0));
+
+    store.NoteLevelDefined(key, kTex1DTarget, 0, IntVec3{0, 1, 1}, tex1D, rgba8);
+    EXPECT_TRUE(store.IsLevelDefined(key, kTex1DTarget, 0)) << "an empty level still exists";
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex1DTarget, 0), IntVec3(0, 1, 1))
+        << "the store must answer the frontend's own exact extent for an empty level";
+    EXPECT_EQ(store.LevelDeclaredByteBound(key, kTex1DTarget, 0), 0u) << "an empty level has no texels";
+    EXPECT_EQ(store.LevelByteSize(key, kTex1DTarget, 0), 0u) << "the 4-texel run belongs to the old level";
+    EXPECT_FALSE(store.IsCovered(key, kTex1DTarget, 0));
+
+    // And back: the next non-empty definition takes its own bytes as usual.
+    store.NoteLevelDefined(key, kTex1DTarget, 0, IntVec3{2, 1, 1}, tex1D, rgba8);
+    Vector<Uint8> smaller(8, 0x3C);
+    store.Adopt(key, kTex1DTarget, 0, IntVec3{2, 1, 1}, smaller.data(), smaller.size());
+    EXPECT_TRUE(store.IsCovered(key, kTex1DTarget, 0));
+    EXPECT_EQ(store.LevelDeclaredByteBound(key, kTex1DTarget, 0), 8u);
+
+    // The 2D and 3D spellings of the same reset.
+    const Uint64 key2D = Server::StagedTextureStore::KeyForHandle(TestHandle(43, 1));
+    store.NoteLevelDefined(key2D, kTex2DTarget, 0, IntVec3{0, 0, 1},
+                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D), rgba8);
+    EXPECT_EQ(store.LevelExtentOrUndefined(key2D, kTex2DTarget, 0), IntVec3(0, 0, 1));
+    const Uint64 key3D = Server::StagedTextureStore::KeyForHandle(TestHandle(44, 1));
+    constexpr Uint16 kTex3DTarget = static_cast<Uint16>(TextureUploadTarget::Texture3D);
+    store.NoteLevelDefined(key3D, kTex3DTarget, 0, IntVec3{0, 0, 0},
+                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex3D), rgba8);
+    EXPECT_TRUE(store.IsLevelDefined(key3D, kTex3DTarget, 0));
+    EXPECT_EQ(store.LevelDeclaredByteBound(key3D, kTex3DTarget, 0), 0u);
+}
+
+// The wire half of the same rule: the carrier's only noncanonical shape is a depth word past
+// 32 bits. A zero component is an empty level, which the store above takes.
+TEST(StagedTextureStoreTest, AZeroExtentCarrierIsCanonicalAndAHighDepthWordIsNot) {
+    MG_Pipe::MGPResourceDesc desc{};
+    desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex1D);
+    MG_Pipe::MGPipeSetRespecifiedLevel(desc, kTex2DTarget, 0, 0, 1, 1);
+    EXPECT_TRUE(MG_Pipe::MGPipeRespecifiedExtentCarrierIsCanonical(desc))
+        << "glTexImage1D(width 0) is legal GL; its carrier must not be refused";
+    MG_Pipe::MGPipeSetRespecifiedLevel(desc, kTex2DTarget, 0, 0, 0, 0);
+    EXPECT_TRUE(MG_Pipe::MGPipeRespecifiedExtentCarrierIsCanonical(desc));
+    desc.BufSize |= (Uint64{1} << 32);
+    EXPECT_FALSE(MG_Pipe::MGPipeRespecifiedExtentCarrierIsCanonical(desc));
+}
+
 TEST(StagedTextureStoreTest, MultisampleAndTextureBufferTargetsCannotAcceptStagedTexelBytes) {
     EXPECT_FALSE(Server::StagedTextureTargetSupportsSubData(
         static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2DMS)));

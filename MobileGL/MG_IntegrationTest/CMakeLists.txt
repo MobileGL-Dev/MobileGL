@@ -104,6 +104,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageFormatQualifierScenario.cpp
     Scenarios/NonCoreImageFormatScenario.cpp
     Scenarios/ImageSizeAfterRespecScenario.cpp
+    Scenarios/EmptyTextureLevelScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/IoBlockNameCollisionScenario.cpp
@@ -2862,6 +2863,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_register_split_arms("${mglItestD2Scenario}.*" "")
     endforeach()
 
+    # P7 gate 5 (g5-msrbo): AN EMPTY TEXTURE LEVEL. glTexImage*D with a zero extent is legal GL
+    # and dEQP's resetStateGLCore issues it for every target after every case; PH-4's extent
+    # carrier refused it as ProtocolCorruption on the apply thread, so no KHR-GL case could
+    # finish on a split arm. Backend-agnostic (the refusal was in MGPipeApplyResourceRespecify),
+    # so the DirectGLES gated arms carry it here and the Magma gated lanes below carry it too.
+    mgl_itest_register_split_arms("EmptyTextureLevelScenario.*" "")
+
     # ProgramPipelineScenario BEYOND *StorageBlock*: the i1 block above already registers the two
     # storage-block cases. The other nine are pure name/state cases that draw nothing, and
     # ScenarioFixture's armed-lane rule (the client encoder's record ordinal must move) makes a
@@ -3070,6 +3078,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmCase}.log")
+        endforeach()
+        # P7 gate 5 (g5-msrbo): the empty-level pair, on the gated Magma lanes as well - the CTS
+        # arm gate 5 measures is inproc x DirectVulkan, and every one of its cases ends in the
+        # empty-level reset this scenario reproduces.
+        foreach(emptyLevelCase TheCtsStateResetDefinesEveryDefaultTargetEmpty
+                               ALevelDefinedEmptyThenRedefinedCarriesTheNewTexels)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
+                TEST_FILTER "EmptyTextureLevelScenario.${emptyLevelCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-emptylevel${mglItestArmLogTag}-${emptyLevelCase}.log")
         endforeach()
         # ---- P7 wave 2-B: THE TWO SHADER MIP ARMS, FORCED ------------------------------------
         #

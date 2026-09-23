@@ -376,6 +376,15 @@ namespace MobileGL::MG_Remote::Server {
         // extent carried by that accepted operation (including noncanonical mutable mips and
         // null-data glTexImage*D). Its byte bound is established here, before any upload arrives.
         // An extent move replaces the coordinate system, so old bytes and coverage go with it.
+        //
+        // AN EMPTY LEVEL IS A DEFINITION TOO. A zero width, height or depth is legal GL
+        // (glTexImage1D(width 0) is how dEQP's resetStateGLCore resets every texture target after
+        // every case) and it replaces the level's coordinate system like any other: the old bytes
+        // go, the level is defined at its exact empty extent - which is what the frontend's
+        // GetMipmapTexelSize answers for it, so both roles agree - and it gets NO byte bound, so
+        // a resource_subdata against it is RequireDeclaredLevel's refusal rather than a write
+        // into storage that has no texels. Only a NEGATIVE component (a 32-bit carrier word past
+        // INT_MAX) is malformed.
         void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                               Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
                               Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
@@ -383,10 +392,11 @@ namespace MobileGL::MG_Remote::Server {
             const std::lock_guard<std::mutex> lock(m_mutex);
             Uint64 byteBound = 0;
             const Bool supportsSubData = StagedTextureTargetSupportsSubData(resourceTarget);
-            const Bool validExtent = extent.x() > 0 && extent.y() > 0 && extent.z() > 0;
+            const Bool validExtent = extent.x() >= 0 && extent.y() >= 0 && extent.z() >= 0;
+            const Bool emptyExtent = validExtent && (extent.x() == 0 || extent.y() == 0 || extent.z() == 0);
             if (MG_Util::GetSizedInternalFormatSizeInBytes(
                     static_cast<TextureInternalFormat>(internalFormat)) == 0 || !validExtent ||
-                (supportsSubData && !StagedTextureDeclaredLevelByteBound(
+                (supportsSubData && !emptyExtent && !StagedTextureDeclaredLevelByteBound(
                     resourceTarget, internalFormat, extent, m_deviceLimits, &byteBound))) {
                 SessionFail(MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.NoteLevelDefined\"} - "
@@ -407,7 +417,7 @@ namespace MobileGL::MG_Remote::Server {
             shadow.Extent = extent;
             shadow.InternalFormat = internalFormat;
             shadow.ResourceTarget = resourceTarget;
-            shadow.DeclaredByteBound = byteBound; // zero for targets without glTexSubImage
+            shadow.DeclaredByteBound = byteBound; // zero for targets without glTexSubImage and for an empty level
             shadow.Defined = true;
             m_any.store(true, std::memory_order_release);
         }
@@ -591,7 +601,7 @@ namespace MobileGL::MG_Remote::Server {
                 SessionFail(MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"} - "
                             "resource_subdata is not legal for the server-declared texture target "
-                            "(key=%llu, uploadTarget=%u, level=%u, target=%u)",
+                            "or empty level (key=%llu, uploadTarget=%u, level=%u, target=%u)",
                             static_cast<unsigned long long>(key), uploadTarget, level,
                             static_cast<Uint32>(shadow.ResourceTarget));
             }

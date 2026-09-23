@@ -428,10 +428,15 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 MGPipeRespecifiedDepthOf(const MGPResourceDesc& desc) {
         return MGPipeRespecifyIsWholeResource(desc) ? 0u : static_cast<Uint32>(desc.BufSize);
     }
+    // A ZERO COMPONENT IS CANONICAL. glTexImage1D(width 0), glTexImage2D(0 x 0) and friends are
+    // legal GL that define an EMPTY level - dEQP's resetStateGLCore issues exactly that for every
+    // texture target after every case - and the frontend reports the level's exact extent as
+    // e.g. {0, 1, 1}. Requiring nonzero components made that legal call a session Fatal on every
+    // split arm. The carrier's only noncanonical shape is a depth word past 32 bits; whether an
+    // extent is USABLE is the staged store's question (an empty level has no byte bound, so any
+    // resource_subdata against it is refused there).
     inline constexpr Bool MGPipeRespecifiedExtentCarrierIsCanonical(const MGPResourceDesc& desc) {
-        return MGPipeRespecifyIsWholeResource(desc) ||
-               ((desc.BufSize >> 32) == 0 && MGPipeRespecifiedWidthOf(desc) != 0 &&
-                MGPipeRespecifiedHeightOf(desc) != 0 && MGPipeRespecifiedDepthOf(desc) != 0);
+        return MGPipeRespecifyIsWholeResource(desc) || (desc.BufSize >> 32) == 0;
     }
 
     inline constexpr void MGPipeSetRespecifiedLevel(MGPResourceDesc& desc, Uint16 uploadTarget,
