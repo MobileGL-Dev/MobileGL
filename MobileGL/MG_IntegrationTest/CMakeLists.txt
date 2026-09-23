@@ -2670,15 +2670,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # the Fm block (`DirectVulkan.<arm>.ImageUnitWindow.`), because that is where the wire arm's
     # gated flavour lives.
     #
-    # THE TEXTURE-VIEW CASE IS EXCLUDED FROM EVERY GATED ARM, and not for anything it asserts: at
-    # this package's base (p7/f2 f90afcd1) every glTextureView under a transport ends the session
-    # at Fatal{ProtocolCorruption, "StagedTextureStore.NoteLevelDefined"} (the view's descriptor
-    # carries internalFormat 0xFFFFFFFF) - the same death TextureViewScenario, TextureViewAliasScenario
-    # and F1WireScenario's two view cases already show on these arms. It runs in the Espryt
-    # view-enabled monolith entry (MGL_ITEST_GLES_VIEW_FILTER) and in the informational
-    # integration-magma-full-* tier, and joins the gated arms when that death is retired.
-    mgl_itest_register_split_arms(
-        "InvalidImageUnitScenario.*-InvalidImageUnitScenario.ALevelPastATextureViewsWindowReadsZero" "")
+    # ALL SIX CASES, THE TEXTURE-VIEW ONE INCLUDED. The view case waited outside the gated arms
+    # while every glTextureView under a transport ended the session at Fatal{ProtocolCorruption,
+    # "StagedTextureStore.NoteLevelDefined"} (p7/f2's view descriptor carried internalFormat
+    # 0xFFFFFFFF); the F2 repair (f2-latch slice A) retired that death, so it joins them here and
+    # in the Magma ImageUnitWindow foreach. The shared GLES split lists carry
+    # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1, so it does not green-skip on these arms.
+    mgl_itest_register_split_arms("InvalidImageUnitScenario.*" "")
 
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
@@ -3410,13 +3408,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # the storage placeholder for it. One entry per case for the private log path; NO KNOB,
         # so all three arms. The monolith `DirectVulkan.` entry of the same scenario skips by
         # name (it drops the draw: the gate 5 BASE, and a pull-build .text change to move).
-        # ALevelPastATextureViewsWindowReadsZero is not here: see the split-arm registration of
-        # this scenario for the base's glTextureView death it waits on.
+        # ALevelPastATextureViewsWindowReadsZero joined once the F2 repair retired the transport
+        # glTextureView death (see the split-arm registration of this scenario).
         foreach(imageWindowCase AMissingMipLevelOfAnIncompleteTextureReadsZeroInADraw
                                 AMissingMipLevelOfAnIncompleteTextureReadsZeroInADispatch
                                 ALevelPastAnImmutableTexturesStorageReadsZero
                                 ALayerPastAnArraysLastSliceReadsZero
-                                ATextureWithNoStorageReadsZero)
+                                ATextureWithNoStorageReadsZero
+                                ALevelPastATextureViewsWindowReadsZero)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitWindow."
                 TEST_FILTER "InvalidImageUnitScenario.${imageWindowCase}"
