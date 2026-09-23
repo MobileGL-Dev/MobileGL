@@ -15,9 +15,10 @@ deleting a row once a release has shipped it. This check is why it cannot rot.
 
 Sites reached through MGL_WIRE_DECLINE_AT satisfy both at once. A bare
 WireDeclineTally::Count(WireDeclineSite::X) is allowed ONLY when an MGLOG_W/E statement stands
-just above it IN THE SAME BLOCK: at the Count line's own indentation, with no line of lesser
-indentation (an enclosing `if (...) {`, a `} else {`) between them. A log in a sibling branch
-or a nested one is not this site's line.
+just above it IN THE SAME BLOCK: a line that BEGINS with the log call, at the Count line's own
+indentation, with no line of lesser indentation (an enclosing `if (...) {`, a `} else {`)
+between them. A log in a sibling branch or a nested one is not this site's line, and neither
+is a guarded one-liner (`if (g) MGLOG_W(...)`).
 
 Everything is matched on the text with comments and string/character literals blanked out
 (newlines kept, so every report cites the real line): a site or a log that is only a comment,
@@ -46,7 +47,12 @@ AT_SITE = re.compile(r"MGL_WIRE_DECLINE_AT\(\s*([A-Za-z][A-Za-z0-9]*)\s*,")
 COUNT_SITE = re.compile(r"WireDeclineTally::Count\(\s*WireDeclineSite::([A-Za-z][A-Za-z0-9]*)\s*\)")
 # Warning or error only: an MGLOG_D / MGLOG_V is compiled away in the Release builds that ship,
 # so it is not a line anybody can read off a device.
-LOGGED = re.compile(r"MGLOG_[WE](_ONCE)?\s*\(")
+#
+# ANCHORED TO THE STATEMENT START. The log must be the statement at the Count's indentation,
+# not a line that mentions one: `if (g) MGLOG_W("x");` and `g ? MGLOG_W("x") : (void)0;` at
+# the Count's own indentation are logs that run only sometimes, and a decline that is counted
+# every time but logged only sometimes is the unlogged site this check exists to refuse.
+LOGGED = re.compile(r"^\s*MGLOG_[WE](_ONCE)?\s*\(")
 RAW_PREFIX = re.compile(r"(?:^|[^A-Za-z0-9_])(?:u8|u|U|L)?R$")
 
 
@@ -123,7 +129,7 @@ def has_own_log(lines, i: int) -> bool:
         ind = indent_of(line)
         if ind < own:
             return False
-        if ind == own and LOGGED.search(line):
+        if ind == own and LOGGED.match(line):
             return True
     return False
 
@@ -238,6 +244,12 @@ SELF_TEST_FIXTURES = (
      "        MGLOG_D(\"compiled away in Release\");\n"
      "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
      "    }\n"
+     "}\n", 1, NO_LOG),
+    ("guarded one-liner log at the Count's indentation", _DEF_GHOST,
+     "void F(int g) {\n"
+     "    if (g) MGLOG_W(\"logged only when g\");\n"
+     "    g ? MGLOG_E(\"or only then\") : (void)0;\n"
+     "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
      "}\n", 1, NO_LOG),
     ("good sites (AT form, bare Count under its own W/E, def row with trailing comment)",
      "MGL_WIRE_DECLINE(GoodAt) // the macro form\nMGL_WIRE_DECLINE(GoodBare)\n",
