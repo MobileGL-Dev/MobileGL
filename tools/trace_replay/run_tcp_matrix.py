@@ -520,8 +520,20 @@ def main(argv=None):
                 try:
                     run_case(plan, args, row)
                 except KeyboardInterrupt:
-                    row.update(status="cancelled", returncode=130)
+                    # An outer timeout sends SIGTERM, which our handler turns
+                    # into KeyboardInterrupt. Preserve a terminal row in BOTH
+                    # ledgers; otherwise the wrapper sees rc=124 but no
+                    # results.json and cannot distinguish cancellation from a
+                    # driver that never wrote evidence.
+                    row.update(status="cancelled", returncode=130,
+                               completed_at_ns=time.time_ns())
+                    row.setdefault("seconds", round((row["completed_at_ns"] - row["started_at_ns"]) / 1e9, 3))
                     atomic_json(checkpoint_path, checkpoint)
+                    selected.append({**row, "resumed": False})
+                    atomic_json(args.out / "results.json", selected)
+                    print(json.dumps({k: row.get(k) for k in
+                                      ("case", "backend", "status", "returncode", "seconds", "timeout_kind", "error")}),
+                          flush=True)
                     return 130
                 except Exception as error:
                     row.update(status="failed", returncode=1, error=str(error))

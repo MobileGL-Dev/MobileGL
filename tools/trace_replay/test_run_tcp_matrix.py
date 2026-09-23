@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_tcp_matrix as matrix
@@ -152,6 +153,23 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(self.run_main('--resume'),1)
         self.assertEqual(len(self.checkpoint()),2)
         self.assertTrue(all(row['status']=='failed' and row['returncode']==7 for row in self.checkpoint()))
+
+    def test_interrupted_run_keeps_a_terminal_result_and_reruns_on_resume(self):
+        with mock.patch.object(matrix, 'run_case', side_effect=KeyboardInterrupt):
+            self.assertEqual(self.run_main(), 130)
+        checkpoint = self.checkpoint()
+        self.assertEqual(len(checkpoint), 1)
+        self.assertEqual(checkpoint[0]['status'], 'cancelled')
+        self.assertEqual(checkpoint[0]['returncode'], 130)
+        self.assertGreaterEqual(checkpoint[0]['seconds'], 0)
+        self.assertIn('completed_at_ns', checkpoint[0])
+        result = matrix.read_json(self.out/'results.json')
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['status'], 'cancelled')
+        self.assertFalse(result[0]['resumed'])
+        self.assertEqual(self.run_main('--resume'), 0)
+        self.assertEqual(len(self.checkpoint()), 2)
+        self.assertEqual(matrix.read_json(self.out/'results.json')[0]['status'], 'passed')
 
     def test_timeout_with_passed_json_is_not_resumed_as_success(self):
         self.write_inputs('timeout')
