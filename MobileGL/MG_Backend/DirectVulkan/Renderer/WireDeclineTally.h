@@ -150,11 +150,19 @@ private:
 
 // Every decline goes through this: the tally moves ALWAYS, the log line is once per site.
 // `return MGL_WIRE_DECLINE_FALSE(Site, "why", ...)` reads as the statement it replaces.
+//
+// A DECLINE IS NOT ALWAYS A SKIPPED DRAW, so the line does not say "draw". The Tex*, Shape* and
+// Upload* rows are counted per texture SYNC: SyncTextureResourceByHandle is reached from the
+// draw/dispatch texture preparation, but also from the descriptor resolver, framebuffer
+// attachments, CopyTexSubImage, mipmap generation and CopyImageSubData - each of which Fatals
+// right after a failed sync - and from texture readback, which falls back to the unbacked
+// shadow. A draw that samples three unsyncable textures counts three; a failed attachment
+// sync counts once and is then a Fatal, not a skipped draw.
 #define MGL_WIRE_DECLINE_AT(site, fmt, ...)                                                                            \
     do {                                                                                                               \
         ::MobileGL::MG_Backend::DirectVulkan::WireDeclineTally::Count(                                                  \
             ::MobileGL::MG_Backend::DirectVulkan::WireDeclineSite::site);                                              \
-        MGLOG_E_ONCE("Magma wire draw declined [" #site "]: " fmt, ##__VA_ARGS__);                                     \
+        MGLOG_E_ONCE("Magma wire decline [" #site "]: " fmt, ##__VA_ARGS__);                                           \
     } while (0)
 
 } // namespace MobileGL::MG_Backend::DirectVulkan

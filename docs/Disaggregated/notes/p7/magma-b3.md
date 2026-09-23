@@ -127,6 +127,13 @@ OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS s
 先撞上 `Fatal{UnmigratedVerb, "Magma:framebuffer-resource"}`——那是 framebuffer 路径自己的具名 Fatal，
 不是本表的出口，所以把强制收窄到只命中被采样的 1×1 源纹理。）
 
+**修正轮（fable 复审 nit）：`Tex*` / `Shape*` / `Upload*` 计数是「每次纹理同步」，不是「每个 draw」。**
+`SyncTextureResourceByHandle` 除了 draw/dispatch 的纹理准备，还从描述符解析、framebuffer 附件、
+`CopyTexSubImage`、mipmap 生成、`CopyImageSubData`（这几处同步失败后立刻具名 Fatal）以及纹理回读（退回 unbacked 影子）
+进来：一个采样三张不可同步纹理的 draw 计三次；附件同步失败计一次，随后是 Fatal，不是被跳过的 draw。
+所以 `MGL_WIRE_DECLINE_AT` 的日志行从 `Magma wire draw declined [Site]` 改为 **`Magma wire decline [Site]`**
+（`WireDeclineTally.h` 宏上的注释写明同样的事）。§1.3 与上面引用的日志是改名前的原样。
+
 ---
 
 ## 2. 机制（裁判 H1，本包在主机上按计数器确认）
