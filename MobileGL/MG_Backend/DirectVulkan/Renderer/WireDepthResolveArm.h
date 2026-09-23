@@ -75,8 +75,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (the queue may still be executing it), and nothing was read back.
         Bool fenceWaitTimedOut = false;
         String failureReason;
-        // Came from MGITEST_MAGMA_DEPTH_RESOLVE_PROBE, not from the device.
+        // Came from MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug|clean, not from the device.
         Bool fromKnob = false;
+        // Measured on the device, but with MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject: the probe
+        // recorded no render-pass resolve at all, so the subject's target kept its sentinel.
+        Bool subjectElided = false;
         Vector<WireDepthResolveFormatReading> formats;
     };
 
@@ -137,12 +140,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // with a canned one that says exactly that, and nothing else: the canned measurement still goes
     // through EvaluateWireDepthResolveProbe and the same member, so an entry that forces `bug` is red
     // when the evaluation stops detecting the defect.
-    enum class WireDepthResolveProbeKnob : Uint8 { Measure, ForceBug, ForceClean, Unrecognised };
+    //
+    // A canned measurement cannot see the REAL probe - its recording, readback and tally - stop
+    // detecting the defect, and on lavapipe the real subject is clean, so nothing would. The third
+    // value, MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, is that negative control: the REAL
+    // probe runs (ChooseWireDepthResolveArm treats it as Measure) and the caller passes it on as
+    // WireDepthResolveProbeContext::elideSubject, so the probe records no render-pass resolve and
+    // the real readback keeps the sentinel while the shader control still runs. The
+    // DirectVulkan.{Split,Spawn}.MsResolveElide. entries then require the defect verdict from the
+    // measurement itself.
+    enum class WireDepthResolveProbeKnob : Uint8 { Measure, ForceBug, ForceClean, ElideSubject, Unrecognised };
 
     inline WireDepthResolveProbeKnob ParseWireDepthResolveProbeKnob(const char* value) {
         if (value == nullptr || *value == '\0') return WireDepthResolveProbeKnob::Measure;
         if (std::strcmp(value, "bug") == 0) return WireDepthResolveProbeKnob::ForceBug;
         if (std::strcmp(value, "clean") == 0) return WireDepthResolveProbeKnob::ForceClean;
+        if (std::strcmp(value, "elide-subject") == 0) return WireDepthResolveProbeKnob::ElideSubject;
         return WireDepthResolveProbeKnob::Unrecognised;
     }
 
@@ -184,7 +197,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // The whole decision, with the Vulkan half behind `measure` (called at most once, and only when
     // the knob does not decide and the render-pass arm exists at all: without it the shader pass
-    // is the only arm and there is no order to choose).
+    // is the only arm and there is no order to choose). ElideSubject does not decide: it is
+    // measured like Measure, and the elision is the measuring callable's to apply.
     template <typename MeasureFn>
     WireDepthResolveArmChoice ChooseWireDepthResolveArm(WireDepthResolveProbeKnob knob, Bool renderPassArmAvailable,
                                                         MeasureFn&& measure) {

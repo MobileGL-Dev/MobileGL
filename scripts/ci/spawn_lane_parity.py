@@ -90,9 +90,11 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # in place of running its resolve probe - the knob-free `.MsResolve0.` / `.MsFlip.` keep their tcp
 # entries (MsResolve0's split/spawn copies also carry a client-read expectation marker for the
 # real probe's verdict, which the tcp copy cannot: same name on all three arms, no exception).
+# `.MsResolveElide.` (g5-msprobe critic) sets MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, which
+# the same server-side arm choice reads to run the REAL probe with its render-pass resolve left out.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
-                                ".MsResolveBug.", ".MsFlipBug.",
+                                ".MsResolveBug.", ".MsFlipBug.", ".MsResolveElide.",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",

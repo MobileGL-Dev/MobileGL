@@ -244,6 +244,12 @@ namespace MGITest {
             //     place of running the probe: the shader pass must resolve, the render pass never;
             //   - MsResolve1. / MsFlip1. set MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1, which drops
             //     the render-pass arm altogether: same assertion;
+            //   - MsResolveElide. sets MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, which runs the
+            //     REAL probe with its render-pass resolve left unrecorded: the measurement itself (not
+            //     a canned one) must report the defect - a reading whose render pass kept the sentinel
+            //     in every texel while the shader control resolved all of them - and the shader pass
+            //     must then resolve, the render pass never. The Bug entries cannot see the real
+            //     probe's recording, readback or tally stop detecting the defect; this one does;
             //   - MsResolve0. on split and spawn sets MGITEST_EXPECT_DEPTH_RESOLVE_PROBE=clean - a
             //     marker only this function reads - and asserts the REAL probe ran on the lane's
             //     device (lavapipe), found the render pass clean, and that the render pass resolved.
@@ -256,13 +262,16 @@ namespace MGITest {
             //
             // Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
             // measurement fails the four Bug entries here (the render-pass line is in the log and
-            // the verdict line says clean) while their pixels stay green.
+            // the verdict line says clean) while their pixels stay green. The two Elide entries go
+            // red under that too, and ALONE go red when the real probe's tally counts every subject
+            // texel as resolved (the canned Bug readings never pass through it).
             static void ExpectTheResolveArmWhereTheLaneAsks(const char* what) {
                 const std::string probe = SplitLane::MarkerValue("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
                 const bool forcedBug = probe == "bug";
+                const bool elidedSubject = probe == "elide-subject";
                 const bool renderPassDropped = SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
                 const bool measuredClean = SplitLane::MarkerValue("MGITEST_EXPECT_DEPTH_RESOLVE_PROBE") == "clean";
-                if (!forcedBug && !renderPassDropped && !measuredClean) return;
+                if (!forcedBug && !elidedSubject && !renderPassDropped && !measuredClean) return;
                 if (PipeStatsWindow::ServerLibraryLogPath().empty()) {
                     ADD_FAILURE() << what << ": the entry names the resolve arm (probe=" << probe
                                   << ", force-shader=" << renderPassDropped << ", expect-clean=" << measuredClean
@@ -277,7 +286,7 @@ namespace MGITest {
                 const bool renderPassResolved =
                     server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass") !=
                     std::string::npos;
-                if (forcedBug || renderPassDropped) {
+                if (forcedBug || elidedSubject || renderPassDropped) {
                     EXPECT_TRUE(shaderResolved) << what << ": the server never resolved with the shader pass (probe="
                                                 << probe << ", force-shader=" << renderPassDropped << ")";
                     EXPECT_FALSE(renderPassResolved)
@@ -287,6 +296,33 @@ namespace MGITest {
                     if (forcedBug) {
                         EXPECT_NE(server.find("verdict=render-pass-resolve-broken"), std::string::npos)
                             << what << ": the forced `bug` measurement did not evaluate to the defect verdict";
+                    }
+                    if (elidedSubject) {
+                        // The source phrase is the REAL measurement's (a canned one says "forced by"),
+                        // and ArmWireDepthResolveOrder states it once per process.
+                        EXPECT_NE(server.find("depth/stencil resolve probe (measured on this device with its render-pass "
+                                              "resolve elided by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject) "
+                                              "verdict=render-pass-resolve-broken"),
+                                  std::string::npos)
+                            << what << ": the real probe, its render-pass resolve elided, did not report the defect";
+                        // DescribeWireDepthResolveFormat's reading, one line per probed format: some
+                        // format's render pass matched no texel and kept the sentinel in all 16, and its
+                        // shader control resolved all 16.
+                        bool sentinelKeptBesideAResolvedControl = false;
+                        for (std::string::size_type at = server.find("depth/stencil resolve probe ");
+                             at != std::string::npos && !sentinelKeptBesideAResolvedControl;
+                             at = server.find("depth/stencil resolve probe ", at + 1)) {
+                            const std::string::size_type end = server.find('\n', at);
+                            const std::string line =
+                                server.substr(at, end == std::string::npos ? std::string::npos : end - at);
+                            sentinelKeptBesideAResolvedControl =
+                                line.find(" x4: ") != std::string::npos &&
+                                line.find("render pass 0/16 (first ") != std::string::npos &&
+                                line.find("sentinel 16), shader control 16/16") != std::string::npos;
+                        }
+                        EXPECT_TRUE(sentinelKeptBesideAResolvedControl)
+                            << what << ": no real reading shows the elided render pass's sentinel kept beside a "
+                                       "shader control that resolved";
                     }
                     return;
                 }

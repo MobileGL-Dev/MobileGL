@@ -706,6 +706,20 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
     EXPECT_EQ(measured, 1) << "an unrecognised value runs the probe as if the knob were unset";
     EXPECT_FALSE(other.measurement.fromKnob);
     EXPECT_EQ(other.verdict, WireDepthResolveProbeVerdict::Clean);
+    // `elide-subject` is the REAL probe's negative control: it decides nothing here - the device
+    // probe runs (the caller elides its render-pass resolve) and its reading is evaluated as-is.
+    EXPECT_EQ(ParseWireDepthResolveProbeKnob("elide-subject"), WireDepthResolveProbeKnob::ElideSubject);
+    const auto elided = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::ElideSubject, true, [&] {
+        ++measured;
+        return FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kRenderPassWroteNothing, kRenderPassWroteNothing)});
+    });
+    EXPECT_EQ(measured, 2) << "elide-subject must run the device probe, not a canned reading";
+    EXPECT_FALSE(elided.measurement.fromKnob);
+    EXPECT_EQ(elided.verdict, WireDepthResolveProbeVerdict::RenderPassResolveBroken);
+    EXPECT_TRUE(elided.preferShader);
+    const auto noArm = ChooseWireDepthResolveArm(WireDepthResolveProbeKnob::ElideSubject, false, measure);
+    EXPECT_EQ(measured, 2) << "without a render-pass arm there is nothing to elide or measure";
+    EXPECT_EQ(noArm.verdict, WireDepthResolveProbeVerdict::NotRun);
 #else
     GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
 #endif

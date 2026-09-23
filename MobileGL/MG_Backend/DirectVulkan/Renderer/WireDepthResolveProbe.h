@@ -86,6 +86,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResolveModeFlags depthResolveModes = 0;
         VkResolveModeFlags stencilResolveModes = 0;
         Bool shaderStencilExport = false;
+        // TEST ONLY (MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, WireDepthResolveArm.h): record
+        // NO render-pass resolve, so every subject target keeps its sentinel - the Adreno 830's
+        // reading - while the shader control runs as always. Everything else is the real probe.
+        Bool elideSubject = false;
     };
 
     // Per format the device can host as a 4x multisample depth/stencil attachment AND for which

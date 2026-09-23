@@ -405,6 +405,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     WireDepthResolveProbeMeasurement RunWireDepthResolveProbe(const WireDepthResolveProbeContext& context) {
         WireDepthResolveProbeMeasurement measurement;
+        measurement.subjectElided = context.elideSubject;
         const VkDevice device = context.device;
         if (device == VK_NULL_HANDLE || context.queue == VK_NULL_HANDLE || context.createRenderPass2 == nullptr) {
             measurement.failureReason = "no device, queue or vkCreateRenderPass2";
@@ -762,14 +763,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
                                  &memory, 0, nullptr, 0, nullptr);
         }
-        // (4) THE SUBJECT: the render-pass arm, begun and ended with no draw.
-        for (const FormatWork& item : work) {
-            VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-            begin.renderPass = item.resolvePass;
-            begin.framebuffer = item.resolveFramebuffer;
-            begin.renderArea = fullRect;
-            vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdEndRenderPass(cmd);
+        // (4) THE SUBJECT: the render-pass arm, begun and ended with no draw. Under the test-only
+        // elideSubject it is not recorded at all: its target keeps the sentinel cleared in (2) and
+        // the layout it was left in, which is what (6) expects either way.
+        if (!context.elideSubject) {
+            for (const FormatWork& item : work) {
+                VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                begin.renderPass = item.resolvePass;
+                begin.framebuffer = item.resolveFramebuffer;
+                begin.renderArea = fullRect;
+                vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
+                vkCmdEndRenderPass(cmd);
+            }
         }
         // (5) THE CONTROL: the shader arm on the twin source, which TransitionWireImage moves to
         // SHADER_READ_ONLY_OPTIMAL first (both aspects of a packed format).

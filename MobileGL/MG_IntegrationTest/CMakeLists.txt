@@ -3452,6 +3452,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                         ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${probeBugLog}${mglItestArmLogTag}.log")
             endforeach()
         endif()
+        # ---- P7 gate 5 (g5-msprobe critic): THE REAL PROBE'S NEGATIVE CONTROL ------------------
+        #
+        # The Bug entries above hand the arm choice a CANNED measurement, and MsResolve0 only pins
+        # lavapipe's clean answer, so no entry could see the REAL probe (WireDepthResolveProbe.cpp -
+        # its recording, readback and tally) stop detecting a render pass that writes nothing.
+        # MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject runs the real probe with its render-pass
+        # resolve left unrecorded - the subject's target keeps the sentinel, the Adreno 830's
+        # reading - while the shader control runs as always. The entry asserts the case's pixels,
+        # that the real measurement reports verdict=render-pass-resolve-broken with a reading whose
+        # render pass kept the sentinel beside a resolving control, and that the shader pass
+        # resolved and the render pass never did
+        # (DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks).
+        #
+        # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
+        # MAGMA_SERVER_ENV_KNOB_NO_TCP.
+        #
+        # Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
+        # measurement fails both entries; the probe's subject tally counting every texel as
+        # resolved fails both entries while the four Bug entries stay green.
+        if(mglItestServerEnvKnobArm)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolveElide."
+                TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolveelide${mglItestArmLogTag}.log")
+        endif()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
             gtest_discover_tests(MobileGLIntegrationTest

@@ -15826,7 +15826,10 @@ void main() {
     // lane runs on a device with the defect - and the DirectVulkan.{Split,Spawn}.MsResolveBug./
     // MsFlipBug. entries force `bug` and read ResolveWireDepthStencil's arm line back from the
     // server log. The canned measurement is evaluated like a real one, so those entries go red
-    // when the evaluation stops detecting the defect.
+    // when the evaluation stops detecting the defect. MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject
+    // runs the REAL probe with its render-pass resolve left unrecorded (the sentinel survives, the
+    // shader control still resolves), so the DirectVulkan.{Split,Spawn}.MsResolveElide. entries go
+    // red when the real recording, readback or tally stops detecting it too.
     void VulkanRenderer::ArmWireDepthResolveOrder() {
         m_wirePreferShaderDepthResolve = false;
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
@@ -15838,8 +15841,8 @@ void main() {
             const char* knobValue = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
             const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
             if (knob == WireDepthResolveProbeKnob::Unrecognised)
-                MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is neither `bug` nor `clean`; "
-                        "the resolve probe runs as if it were unset", knobValue);
+                MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is not `bug`, `clean` or "
+                        "`elide-subject`; the resolve probe runs as if it were unset", knobValue);
             WireDepthResolveArmChoice choice = ChooseWireDepthResolveArm(knob, renderPassArmAvailable, [&]() {
                 WireDepthResolveProbeContext context;
                 context.physicalDevice = m_physicalDevice.handle;
@@ -15850,6 +15853,7 @@ void main() {
                 context.depthResolveModes = m_wireDepthResolveModes;
                 context.stencilResolveModes = m_wireStencilResolveModes;
                 context.shaderStencilExport = m_wireShaderStencilExport;
+                context.elideSubject = knob == WireDepthResolveProbeKnob::ElideSubject;
                 return RunWireDepthResolveProbe(context);
             });
             if (choice.measurement.fenceWaitTimedOut) {
@@ -15865,8 +15869,11 @@ void main() {
             }
             MGLOG_I("DirectVulkan: depth/stencil resolve probe (%s) verdict=%s: %s%s%s",
                     choice.measurement.fromKnob ? "forced by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE"
-                    : renderPassArmAvailable    ? "measured on this device"
-                                                : "not run: no render-pass arm",
+                    : choice.measurement.subjectElided
+                        ? "measured on this device with its render-pass resolve elided by "
+                          "MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject"
+                    : renderPassArmAvailable ? "measured on this device"
+                                             : "not run: no render-pass arm",
                     WireDepthResolveProbeVerdictName(choice.verdict),
                     choice.preferShader ? "the shader pass resolves first, the no-draw render pass is the fallback"
                     : (renderPassArmAvailable || choice.measurement.fromKnob)
