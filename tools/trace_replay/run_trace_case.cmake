@@ -306,24 +306,8 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                 if(NOT split_log MATCHES "control=tcp data=stream server=[^ \r\n]+ pid=[1-9][0-9]*")
                     message(FATAL_ERROR "${split_case}: TCP session has no endpoint and server pid arm proof")
                 endif()
-                if(NOT EXISTS "${mobilegl_server_log}")
-                    message(FATAL_ERROR "${split_case}: TCP session has no forwarded server log")
-                endif()
             else()
                 set(split_expected_second "spawn ARMED - the server role runs in pid ")
-                # FAIL-CLOSED LIKE THE CLIENT LOG ABOVE AND THE TCP ARM'S SERVER LOG. Under spawn
-                # the server process writes its own file, and the lines this runner counts out of
-                # it - every applier Fatal{, and the MGWIRE-FLOOR line, which only the server's
-                # VulkanRenderer::OnSubmitsCompletedUpTo emits - exist nowhere else. A server that
-                # died before its first line leaves no file, and "no file" read as "0 lines" is a
-                # green census of the half of the session that was never seen.
-                if(NOT EXISTS "${mobilegl_server_log}")
-                    message(FATAL_ERROR
-                            "${split_case}: MOBILEGL_TRANSPORT=spawn but the run wrote no "
-                            "${mobilegl_server_log}, so the server role's Fatal{ and MGWIRE-FLOOR "
-                            "lines cannot be counted. A spawn retrace with no server log cannot be "
-                            "counted as a clean one.")
-                endif()
             endif()
         else()
             message(FATAL_ERROR
@@ -379,16 +363,38 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                         "resolved a transport and then replayed something else.")
             endif()
         endif()
+        # THE SERVER ROLE'S LOG MUST EXIST, FAIL-CLOSED LIKE THE CLIENT'S ABOVE, and for EVERY
+        # transport this runner admits. The lines the two censuses below count out of it - every
+        # applier Fatal{, and the MGWIRE-FLOOR line, which only the server's
+        # VulkanRenderer::OnSubmitsCompletedUpTo emits - exist nowhere else, and "no file" read
+        # as "0 lines" is a green census of the half of the session that was never seen.
+        #   * spawn: the server PROCESS writes it (over tcp, the fixture's forwarded lines land
+        #     in the same file). A server that died before its first line leaves none.
+        #   * inproc: the server role is the mgl-srv-apply THREAD of this process, and Log.h
+        #     routes every line by thread role to the same `.server.log` sink, opened lazily on
+        #     the first server-role line. At the INFO level this lane demands (see the marker
+        #     message above), ServerLoop writes one line when that thread starts, so a clean
+        #     inproc run always has the file too, and an inproc run without one never started
+        #     its server role.
+        # CHECKED AFTER THE MARKER AND THE SECOND SENTENCE, NOT BEFORE. A launch or handshake
+        # failure also leaves no server log; checked first, this would report "the server left
+        # no file" for a run whose more specific diagnosis is "resolved, but carries no spawn
+        # ARMED", and send the reader to the wrong process.
+        if(NOT EXISTS "${mobilegl_server_log}")
+            message(FATAL_ERROR
+                    "${split_case}: MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} but the run wrote no "
+                    "${mobilegl_server_log}, so the server role's Fatal{ and MGWIRE-FLOOR lines "
+                    "cannot be counted. A split retrace with no server log cannot be counted as a "
+                    "clean one.")
+        endif()
         # The refusal census. Recorded on every split run, pass or fail.
         #
         # BOTH FILES, and the server's is the one that matters most: under spawn every
         # applier refusal is raised over there, so a census reading only the client's would
         # report a confident zero for the half of the session it cannot see.
         file(STRINGS "${mobilegl_log}" split_fatals REGEX "Fatal\\{")
-        if(EXISTS "${mobilegl_server_log}")
-            file(STRINGS "${mobilegl_server_log}" split_server_fatals REGEX "Fatal\\{")
-            list(APPEND split_fatals ${split_server_fatals})
-        endif()
+        file(STRINGS "${mobilegl_server_log}" split_server_fatals REGEX "Fatal\\{")
+        list(APPEND split_fatals ${split_server_fatals})
         list(LENGTH split_fatals split_fatal_count)
         message(STATUS "MGPipe split: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT}, "
                        "Fatal{ lines across ${mobilegl_log} and ${mobilegl_server_log}: "
@@ -421,10 +427,8 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
         # before the fix and 0 after; any nonzero count is the floor asserting a completion it
         # never waited for, whether or not this driver's timing turned it into pixels.
         file(STRINGS "${mobilegl_log}" split_floor REGEX "MGWIRE-FLOOR unsound-serial-complete")
-        if(EXISTS "${mobilegl_server_log}")
-            file(STRINGS "${mobilegl_server_log}" split_server_floor REGEX "MGWIRE-FLOOR unsound-serial-complete")
-            list(APPEND split_floor ${split_server_floor})
-        endif()
+        file(STRINGS "${mobilegl_server_log}" split_server_floor REGEX "MGWIRE-FLOOR unsound-serial-complete")
+        list(APPEND split_floor ${split_server_floor})
         list(LENGTH split_floor split_floor_count)
         message(STATUS "MGPipe split: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT}, "
                        "MGWIRE-FLOOR unsound-serial-complete lines: ${split_floor_count}")
