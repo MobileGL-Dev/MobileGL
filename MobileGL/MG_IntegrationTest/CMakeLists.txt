@@ -4034,9 +4034,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
     # (VerifySplitArming's DirectGLES entry with MOBILEGL_TRANSPORT=spawn): the client's entry
     # compare aborts at the first verb with Fatal{PipeVerifyDiffer, "GetClearColor@Clear", verb=1,
     # where=entry}, because the fill leaves every record-supplied field to the applier and the
-    # applier now writes ANOTHER process's block; and the server process runs no compare at all,
-    # because MG_Impl is not in it and the read hook finds no live context. A spawn verify lane
-    # would be red at bring-up on the first half and blind on the second.
+    # applier now writes ANOTHER process's block; and the server process runs no compare at all.
+    #
+    # THE SECOND HALF IS NOT "MG_Impl IS NOT IN THE SERVER" - it is, and saying otherwise sent a
+    # reader looking for a link-time gap that does not exist. MobileGLServer is an executable over
+    # ServerEntry.cpp linked against the WHOLE library (top-level CMakeLists.txt), PipeFill.cpp
+    # included, so MGPipeVerifyReadHook is present in that process and is called on every backend
+    # read. What is absent is its ORACLE: the server image's main reaches
+    # MG_Backend::InitServerRoleForSpawn() and never MG_State::Init(), so MG_State::pGLContext is
+    # null and the hook returns at its `ctx == nullptr` line before comparing anything. Same
+    # conclusion, different mechanism, and the difference matters because the fix is a cross-
+    # process compare shape (CONTRACT-P7 §12) rather than a link edit.
 
     message(STATUS "Integration tests: P7 wave 3 - the verify comparator on the split (inproc) arm, "
                    "both backends, under integration-verify-split")

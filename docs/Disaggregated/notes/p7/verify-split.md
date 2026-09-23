@@ -268,8 +268,15 @@ MGPipe: Fatal{PipeVerifyDiffer, "GetClearColor@Clear", verb=1, where=entry}
 ```
 
 client 的 entry 比对在第一个动词上就死——fill 把每个 record-supplied 字段留给 applier，而 applier 现在写的是
-**另一个进程**的块；server 进程不跑任何比对（MG_Impl 不在其中，read hook 找不到活上下文，静默返回，server 日志里
-零行 verify）。spawn verify 车道会是「前一半 bring-up 即红、后一半瞎」。两条负控因此只登记 inproc。
+**另一个进程**的块；server 进程不跑任何比对（server 日志里零行 verify）。spawn verify 车道会是「前一半 bring-up
+即红、后一半瞎」。两条负控因此只登记 inproc。
+
+**后一半的机制不是「server 里没有 MG_Impl」（V1 修复轮更正）。** 它在：`MobileGLServer` 是 `ServerEntry.cpp` 的
+可执行文件，链的是**整个库**（顶层 `CMakeLists.txt` 的 `target_link_libraries(MobileGLServer PRIVATE
+${CMAKE_PROJECT_NAME})`），`PipeFill.cpp` 在内，所以 `MGPipeVerifyReadHook` 在那个进程里**是有的**、每次 backend 读
+**也确实被调用**。缺的是它的**预言**：server 镜像的 main 走到 `MG_Backend::InitServerRoleForSpawn()` 就停了，从不调
+`MG_State::Init()`，于是 `MG_State::pGLContext` 为空，hook 在 `ctx == nullptr` 那行就返回。结论不变（spawn 上没得比），
+但区别是承重的：要补它需要一个**跨进程的比对形状**，不是一次链接改动。
 
 ---
 
@@ -326,7 +333,9 @@ divergences, zero unmigrated reads` 与 `MGPipe split: <case> DirectVulkan trans
   Espryt 学会 decline 这些形状；归 P3b/P4b 的 Espryt 流（或用例作者），本包只按名减掉并记于此。
 - **server `ReadPixels` 上 pack 半边的字段级盲区**（§2.2 末段）：若要补，需要 server 侧把中性窗口显式告诉比对器
   （动 `MG_Remote/Server`，本包分区外）。
-- **spawn 上的 verify**（§3.3）：需要一个跨进程的比对形状（例如 server 把它读到的字段值随回复带回、由 client 比），
-  不是注册问题；门 2 的文本是 `{monolith, split(inproc)}`，不含 spawn。
+- **spawn 上的 verify 需要一个跨进程的比对形状**（§3.3，已记入 `CONTRACT-P7.md` §12 记录债）：hook 在 server 进程里
+  是有的、也被调用，缺的是预言（`MG_State::pGLContext` 为空，因为 server 的 main 不调 `MG_State::Init()`）。补它要让
+  server 把它读到的字段值随回复带回、由 client 比，或在 server 侧立一个等价的状态镜像；不是注册问题，也不是链接问题。
+  门 2 的文本是 `{monolith, split(inproc)}`，不含 spawn。
 - CI 作业 `integration-verify-split` 首次在 GitHub runner 上的读数（lavapipe / llvmpipe 版本不同，skip 数与
   arm 计数可能不同；arm 下限 850 留了余量）。
