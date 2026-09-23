@@ -13772,7 +13772,9 @@ void main() {
         ++m_drainsSinceLastPresent;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // B3 probe: a drain that reaches here found the GPU caught up and nothing recording.
-        // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. See the note.
+        // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. This probe is what REFUTED
+        // that as the OpenRA mechanism (one successful drain, zero boundary works across the
+        // replay; magma-b3.md §2.4): the cause was the floor in OnSubmitsCompletedUpTo.
         {
             static const Bool probe = [] {
                 const char* value = std::getenv("MOBILEGL_MAGMA_WIREBUF_PROBE");

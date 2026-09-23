@@ -2078,12 +2078,13 @@ TEST_F(F1WireScenario, CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone) {
 // somebody else's vertices. So the case cannot assert "no error"; it has to assert the pixels.
 //
 // Registered TWICE per arm. The plain entry is a regression gate on every driver. The
-// `StaleSerial.` entry carries MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1, which forces the
-// frame-counting half of the busy predicate to answer "idle" - the state a mid-frame idle drain
-// puts the wire arm into on the device, and one no host lane reaches by itself (measured: zero
-// mid-frame frame-boundary drains across the whole OpenRA replay). With the counting half
-// forced to lie, only the submission-fence half can still order the copy, which is exactly what
-// this package added and exactly what the entry pins.
+// `StaleSerial.` entry (split and spawn only - the tcp arm's server never sees an entry's
+// environment) carries MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1, which forces the serial half
+// of the busy predicate to answer "idle" - the state the unsound completed-serial floor put the
+// wire arm into on the device. With the serial half forced to lie, only the submission-fence
+// half can still order the copy, so the entry pins that DEFENCE term. The guarantee is the
+// floor (VulkanRenderer::OnSubmitsCompletedUpTo), which the knob bypasses; its lane is the
+// OpenRA split retrace's "MGWIRE-FLOOR unsound-serial-complete" red condition.
 TEST_F(F1WireScenario, StreamedBufferSubDataBeforeEachDrawIsOrdered) {
     if (!Ready()) return;
     constexpr int kSize = 8, kBatches = 4, kColumn = kSize / kBatches;

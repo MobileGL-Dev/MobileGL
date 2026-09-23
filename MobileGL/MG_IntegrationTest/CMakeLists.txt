@@ -3108,12 +3108,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # ---- P7 wave 2 package B3, EXIT GATE 3: the streamed `glBufferSubData -> draw` pair.
         #
         # TWO ENTRIES OVER ONE CASE, for the reason the ShaderMip pair gives. The plain entry is
-        # a regression gate that runs on every driver. The forced entry is the RED-ONCE: it makes
-        # the frame-counting half of VkBufferManager's busy predicate answer "idle", which is the
-        # state a mid-frame idle drain puts the wire arm into on the device and which no host
-        # lane reaches on its own - measured, zero mid-frame frame-boundary drains across the
-        # whole OpenRA replay, which is why the divergence is device-only and why the lane could
-        # not arm against it before this knob existed.
+        # a regression gate that runs on every driver. The forced entry is the red-once of the
+        # DEFENCE term: it makes the serial half of VkBufferManager's busy predicate answer
+        # "idle" - the state an unsound completed-serial floor put the wire arm into on the
+        # device - so only the submission-fence half is left to order the copy. It does NOT
+        # cover the floor fix itself (forcing the serial term bypasses the floor entirely); the
+        # floor's lane is the OpenRA split retrace, which run_trace_case.cmake reds on any
+        # "MGWIRE-FLOOR unsound-serial-complete" line.
         #
         # ITS OWN ENTRY RATHER THAN A LANE-WIDE FLIP: the knob changes how EVERY streamed buffer
         # write in the process is answered, so putting it in the shared Fm environment would

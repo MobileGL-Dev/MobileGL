@@ -228,11 +228,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkBufferObject buffer;
             Uint64 size = 0;
             Uint64 lastUseSerial = 0;
-            // P7 wave 2 package B3: the submission that carries the most recent GPU use of
-            // this buffer. lastUseSerial above is a FRAME COUNTER and cannot answer "has the
-            // GPU finished reading these bytes" (see WriteWireBuffer); this can, because
-            // IsSubmitIndexComplete polls the submission's own fence and reports an
-            // unsubmitted index as incomplete.
+            // P7 wave 2 package B3: the submission expected to carry the most recent GPU use
+            // of this buffer - the busy predicate's DEFENCE term, not its guarantee (see
+            // WriteWireBuffer). IsSubmitIndexComplete polls the real fence and reports an
+            // unsubmitted index as incomplete, but the stamp is taken before the draw is
+            // recorded and a mid-draw flush can submit it without the draw.
             Uint64 lastUseSubmitIndex = 0;
             Bool gpuWritesPending = false;
             // Only ranges actually submitted by resource_subdata are covered. No

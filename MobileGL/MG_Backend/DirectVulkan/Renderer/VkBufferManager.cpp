@@ -270,7 +270,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkBufferManager::WaitForWireBufferHostAccess(WireBufferResource& resource) {
-        if (resource.lastUseSerial <= GetCompletedSerial() && !resource.gpuWritesPending) return true;
+        // B3 review: the early return must consult the same submission term WriteWireBuffer
+        // does, or a caller that reaches here with the serial term idle skips the wait the
+        // term would have demanded.
+        if (resource.lastUseSerial <= GetCompletedSerial() && !resource.gpuWritesPending &&
+            (pVulkanRenderer == nullptr || pVulkanRenderer->IsSubmitIndexComplete(resource.lastUseSubmitIndex))) {
+            return true;
+        }
         if (!m_copyProvider || !pVulkanRenderer) return false;
         const VkCommandBuffer commands = m_copyProvider->AcquireBufferCopyCommandBuffer();
         if (commands == VK_NULL_HANDLE) return false;
@@ -303,27 +309,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint64 probeLastUse = resource->lastUseSerial;
         const Uint64 probeCompleted = GetCompletedSerial();
 
-        // ---- P7 wave 2 package B3: WHY THIS PREDICATE HAS TWO TERMS --------------------------
+        // ---- P7 wave 2 package B3: WHAT EACH TERM OF THIS PREDICATE IS FOR -----------------
         //
         // A streamed `glBufferSubData -> draw` pair is only correct if the write is ordered
-        // against every draw that still reads the bytes it overwrites. The question "is this
-        // buffer still busy?" used to be answered by the FRAME SERIAL alone, and that answer is
-        // a guess: GetCompletedSerial() is max(m_frameSerial - frameCount, m_completedSerialFloor)
-        // and its first term is PURE COUNTING - it asserts that work from frameCount serials ago
-        // has finished with no fence behind it. On the wire arm the serial is advanced not only
-        // by Present but by TryDrainFrameTransients -> VkBufferManager::BeginFrame on every 8th
-        // drain, which happens MID-FRAME (VulkanRenderer.cpp's drain block; ReadWireBuffer below
-        // already carries a comment acknowledging "even if the idle drain advanced the frame"),
-        // and package B established that mid-frame pooled-fence submissions are not covered by
-        // frame.imageInFlightFence. So the counting term can say "idle" about a buffer a
-        // recorded-or-in-flight draw is still reading, and the write is then applied as an
-        // unsynchronised host memcpy. The draw executes and reads bytes that are not its own -
-        // it renders another batch's geometry, or nothing at all. That is the OpenRA device
-        // divergence: one draw's quads missing, the terrain under them intact.
+        // against every draw that still reads the bytes it overwrites; a write this predicate
+        // answers "idle" is applied as an unsynchronised host memcpy, and a draw still reading
+        // the range then renders bytes that are not its own - silently, with no log line, no GL
+        // error and no Fatal. That was the OpenRA device divergence (magma-b3.md §2).
         //
-        // The second term is the fence-backed one and it is the fix. IsSubmitIndexComplete
-        // polls the real fences and answers false for an index that is not even submitted yet,
-        // which is exactly the state a draw being recorded right now is in.
+        // THE GUARANTEE IS THE SERIAL TERM, and it is sound because of the FLOOR, not because
+        // of anything here. GetCompletedSerial() is max(m_frameSerial - frameCount,
+        // m_completedSerialFloor). The floor used to be raised to a retired submission's frame
+        // serial even while another submission carrying the SAME serial was still executing -
+        // on the wire arm a serial has two (a mid-frame FlushPendingCommands under a pooled
+        // fence, then Present) - so "frame N-1 complete" was asserted on a fence nobody waited.
+        // VulkanRenderer::OnSubmitsCompletedUpTo now raises it only to a serial no in-flight
+        // submission still carries, and run_trace_case.cmake reds a split retrace on any
+        // "MGWIRE-FLOOR unsound-serial-complete" line, which is that fix's lane.
+        //
+        // THE SUBMISSION TERM IS A PROBE AND A DEFENCE, NOT A SECOND GUARANTEE. It is not sound
+        // on its own: lastUseSubmitIndex is stamped at AcquireWireSlice with the next submission
+        // index, but the draw that acquired the slice can still be pushed into a LATER
+        // submission - BindProgramUniformBuffers -> SyncWireTextureShape's preserve path ->
+        // FlushWirePendingCommandsForTextureUpdate submits the stamped index without the draw -
+        // so the stamp can name S1 while the draw rides S2. What it does do: with the floor
+        // sound it should never be the term that says "busy" (the WBUF probe reports bySubmit
+        // separately, so a device that shows one has found a floor hole), and it is the only
+        // thing the MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL knob leaves standing, which is what
+        // the StaleSerial. entries pin.
         Bool busyBySerial = resource->lastUseSerial > GetCompletedSerial();
         if (busyBySerial && ForceStaleSerialSelector() != 0) {
             const Uint64 index = ++g_orderedWireWriteCounter;
@@ -403,8 +416,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* resource = FindWireBuffer(res);
         if (!resource || !resource->buffer.IsValid() || resource->size == 0) return false;
         resource->lastUseSerial = m_frameSerial;
-        // B3: the draw this slice is being acquired for is recorded into the NEXT submission.
-        // Until that submission's fence signals, a host write to these bytes is a data race.
+        // B3: the draw this slice is being acquired for is normally recorded into the NEXT
+        // submission - normally, not always: a mid-draw flush (SyncWireTextureShape's preserve
+        // path) can submit this index without the draw. This stamp is the defence term's input
+        // (see WriteWireBuffer); the floor behind lastUseSerial is the guarantee.
         if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         outSlice = resource->buffer.GetSlice(0, resource->size);
         outSlice.mapped = nullptr;
@@ -429,6 +444,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // work, not the draw that will bind that previously acquired slice.
             // Preserve its reservation even if the idle drain advanced the frame.
             resource->lastUseSerial = m_frameSerial;
+            // B3 review: and the submission half of the same reservation - the wait cleared it,
+            // and the draw holding the slice has not been submitted yet.
+            if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         }
         if (!resource->buffer.Invalidate(size, offset)) return false;
         Memcpy(dst, static_cast<const Uint8*>(resource->buffer.GetMappedData()) + offset, static_cast<SizeT>(size));
