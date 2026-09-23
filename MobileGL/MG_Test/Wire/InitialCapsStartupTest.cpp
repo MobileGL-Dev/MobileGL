@@ -3,6 +3,8 @@
 // The peer publishes real CapsSnapshot bytes; no private run-ahead flag is set.
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Handshake.h>
+#include <MG_Remote/Transport/AuthToken.h>
 #include <MG_Remote/Transport/ControlInbox.h>
 #include <MG_Remote/Transport/SocketTransport.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
@@ -10,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -57,25 +60,52 @@ namespace {
             ::close(reserve);
             int listener = -1;
             ASSERT_EQ(Transport::SocketTransport::Listen(endpoint, &listener), MOBILEGL_OK);
-            MobileGLResult accepted = MOBILEGL_ERR_TIMEOUT;
-            std::thread accepting(
-                [&] { accepted = Transport::SocketTransport::AcceptPair(listener, 2000, controlPeer); });
-            const auto connected = Transport::SocketTransport::ConnectTo(endpoint, 2000, controlClient);
-            accepting.join();
-            ::close(listener);
+
+            // X2 (P7): THE PRODUCT'S TCP RENDEZVOUS, NOT ConnectTo/AcceptPair. Two loopback TCP
+            // connections opened back to back reach the listener's accept queue out of connect
+            // order under load (measured: 5 of 3000 with 20 CPU hogs on the host), and AcceptPair
+            // pairs them BY ORDER - the peer's control socket was then the client's data socket,
+            // the first CapsSnapshot landed on the StreamLink reader and the process died of
+            // Fatal{ProtocolCorruption, "StreamLink"} invalid data frame header. PH-7 (4) took
+            // exactly this pairing out of the product on TCP (SocketTransport.h: "never paired
+            // by arrival order"); the fixture now does what ServerMain's ListenerSource does -
+            // the control connection is accepted before the data connection is opened, and the
+            // data connection names itself with a DataBind nonce rather than by arrival.
+            const auto connected = Transport::SocketTransport::ConnectControl(endpoint, 2000, controlClient);
+            int peerControlFd = -1;
+            const auto accepted = Transport::SocketTransport::AcceptOne(listener, 2000, &peerControlFd);
+            if (accepted == MOBILEGL_OK)
+                controlPeer = std::make_unique<Transport::SocketTransport>(peerControlFd, -1,
+                                                                           Transport::TransportRole::Server);
             ASSERT_EQ(connected, MOBILEGL_OK);
             ASSERT_EQ(accepted, MOBILEGL_OK);
             ASSERT_TRUE(controlClient->IsTcp());
             ASSERT_TRUE(controlPeer->IsTcp());
+
+            Uint8 nonce[Transport::kDataNonceBytes];
+            ASSERT_EQ(Transport::SocketTransport::MintNonce(nonce, sizeof nonce), MOBILEGL_OK);
+            const auto bind = EncodeDataBind(nonce, sizeof nonce);
+            int clientDataFd = -1, peerDataFd = -1;
+            ASSERT_EQ(Transport::SocketTransport::ConnectDataConnection(
+                          endpoint, 2000, MobileGLByteSpan{bind.data(), bind.size()}, &clientDataFd),
+                      MOBILEGL_OK);
+            const auto dataAccepted = Transport::SocketTransport::AcceptOne(listener, 2000, &peerDataFd);
+            ::close(listener);
+            ASSERT_EQ(dataAccepted, MOBILEGL_OK);
+            std::vector<Uint8> first;
+            ASSERT_EQ(Transport::SocketTransport::ReceiveOneFrame(peerDataFd, 2000, 1024, &first), MOBILEGL_OK);
+            Uint8 presented[Transport::kDataNonceBytes] = {};
+            ASSERT_TRUE(DecodeDataBind(first, presented));
+            ASSERT_TRUE(Transport::ConstantTimeNonceMatch(nonce, presented));
 
             Transport::SessionSegmentSizes sizes;
             sizes.CmdRingBytes = 4096;
             sizes.StageBytes = 4096;
             sizes.EventRingBytes = 4096;
             sizes.ReplyBytes = 4096;
-            ASSERT_EQ(client.AttachStreamLink(controlClient->TakeDataFd(), sizes), MOBILEGL_OK);
-            ASSERT_EQ(Transport::CreateStreamLink(controlPeer->TakeDataFd(), sizes,
-                                                  Transport::TransportRoleTag::ServerConsumer, dataPeer),
+            ASSERT_EQ(client.AttachStreamLink(clientDataFd, sizes), MOBILEGL_OK);
+            ASSERT_EQ(Transport::CreateStreamLink(peerDataFd, sizes, Transport::TransportRoleTag::ServerConsumer,
+                                                  dataPeer),
                       MOBILEGL_OK);
             dataPeer->InitializeEndpoints();
             client.*StartupPeerMember(StartupControlTag{}) = controlClient.get();
