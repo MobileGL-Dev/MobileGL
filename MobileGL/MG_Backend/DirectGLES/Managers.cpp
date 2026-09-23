@@ -3012,7 +3012,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stops being twinned is the failure mode the refusal exists to replace.
             if (res.Slot >= BackendBufferResourceTable::kMaxHandleSlot) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
                     "buffer twin request named slot %u, past this table's %u bound",
@@ -3027,7 +3027,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint32 liveGen = g_backendBufferResources.LiveGenAt(res.Slot);
             if (liveGen != 0 && liveGen > res.Gen) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
                     "buffer twin request named generation %u at slot %u, behind live generation %u",
@@ -4348,7 +4348,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
             if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
                     "%s handle slot %u is past this table's %u bound",
@@ -4363,7 +4363,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
                     "%s handle {%u, %u} names generation behind live generation %u",

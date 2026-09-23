@@ -1692,8 +1692,8 @@ void main() {
             const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForTwinAddress(&resource);
             for (const auto uploadTarget : uploadTargets) {
                 for (Uint32 level = baseMipLevel + 1; level < requiredMipLevelCount; ++level) {
-                    // A level the shadow already tracks (an adopted base chain) keeps its bytes;
-                    // the generation made the GPU newer than either, which the mark says.
+                    // Bytes the shadow held for a generated level go: the declaration below moves its
+                    // format and byte bound (NoteLevelDefined clears them); the GPU copy is newer.
                     // PH-4: a twin-address key never receives a staged run (no Adopt names one),
                     // so these generated levels are declared BYTELESS - an Unknown format gives a
                     // zero byte bound and skips the Tex2D device-limit rule the defaults would

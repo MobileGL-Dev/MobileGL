@@ -32,7 +32,15 @@
 // stays name-for-name identical between the pull and the push trees.
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <string>
+
+#if !defined(_WIN32)
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 #include "Includes.h"
 #if MOBILEGL_PIPE_PUSH
@@ -348,6 +356,59 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
     EXPECT_TRUE(spirv.generatedSpirv.empty());
 #else
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
+#endif
+}
+
+// PH-5's DISCRIMINATING control (P7 F2 latch). The case above cannot fail on PH-5's account: its
+// count is one element past PH-5's bound, and with TakeCount put back to the old one-byte-per-
+// element charge the same count is admitted, resize() is tiny, and the element reads run out of
+// bytes - DecodeProgramArtifacts answers false either way (red-once: it stays green). What PH-5
+// actually changed is the ALLOCATION a count may cause before the reads, so this case forges the
+// count BETWEEN the two bounds - `count == Remaining()`, in an archive padded to 7 MiB - and
+// decodes it in a forked child whose address space has 64 MiB of headroom. PH-5 refuses before
+// the resize and the child exits 0; the old bound resizes to Remaining() elements of
+// sizeof(UniformReflection) each, far past the headroom, and the child dies of std::bad_alloc.
+// The same shape crosses the wire in PeerLatchTest's D11ArchiveVectorCount row.
+#if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
+namespace {
+    [[noreturn]] void DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit() {
+        Vector<Uint8> bytes;
+        EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, bytes);
+        constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
+        bytes.resize(SizeT{7} << 20, 0);
+        const Uint64 remaining = bytes.size() - countOffset - sizeof(Uint64);
+        std::memcpy(bytes.data() + countOffset, &remaining, sizeof(remaining));
+        constexpr Uint64 kHeadroom = Uint64{64} << 20;
+        if (remaining * sizeof(UniformReflection) < 4 * kHeadroom) ::_exit(64); // the case would prove nothing
+        Uint64 vmKb = 0;
+        {
+            std::ifstream status("/proc/self/status");
+            std::string line;
+            while (std::getline(status, line)) {
+                if (line.rfind("VmSize:", 0) == 0) vmKb = std::strtoull(line.c_str() + 7, nullptr, 10);
+            }
+        }
+        if (vmKb == 0) ::_exit(65);
+        rlimit cap{};
+        if (::getrlimit(RLIMIT_AS, &cap) != 0) ::_exit(66);
+        cap.rlim_cur = static_cast<rlim_t>(vmKb * 1024 + kHeadroom);
+        if (::setrlimit(RLIMIT_AS, &cap) != 0) ::_exit(67);
+        LinkArtifacts link;
+        SpirvArtifacts spirv;
+        const Bool decoded = DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv);
+        ::_exit(!decoded && link.uniformReflection.empty() ? 0 : 3);
+    }
+} // namespace
+#endif
+
+TEST(ProgramArtifactsCodec, ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize) {
+#if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
+    EXPECT_EXIT(DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "std::bad_alloc escaping the child is the resize PH-5 exists to refuse: the vector count was "
+           "charged one byte per element instead of sizeof(value_type); exit 3 is a decode that did not "
+           "refuse; 64+ is the fixture";
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off (the archive codec is push-only), or no RLIMIT_AS / fork here";
 #endif
 }
 

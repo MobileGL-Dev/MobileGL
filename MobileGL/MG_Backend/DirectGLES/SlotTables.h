@@ -351,7 +351,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // PH-2: handle.Slot is peer supplied on the disaggregated arm. Release builds
                 // must publish a named protocol fault instead of silently returning m_nullTwin.
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
                     "GetOrCreate(handle) named slot %u, past this table's %u bound",
@@ -385,7 +385,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // PH-2: a stale peer generation must not silently shed the incumbent twin in a
                 // release server. The funnel names the exact identity fault and notifies the peer.
-                MG_Pipe::MGPipeSessionFail(
+                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
                     "GetOrCreate(handle) named generation %u at slot %u, behind live generation %u",
