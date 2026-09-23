@@ -517,6 +517,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ResolveWireDepthStencil(WireImage source, WireImage destination,
                                      GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                      GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        // One aspect of a depth/stencil image through a buffer (source in TRANSFER_SRC_OPTIMAL,
+        // destination in TRANSFER_DST_OPTIMAL, one format). The returned buffer is named by the
+        // recorded commands and must be retired with them.
+        UniquePtr<VkBufferObject> CopyWireAspectThroughBuffer(VkImage srcImage, Uint32 srcLevel, Uint32 srcLayer,
+                                                              GLint sx, GLint sy, const WireImage& destination,
+                                                              GLint dx, GLint dy, Uint32 width, Uint32 height,
+                                                              VkImageAspectFlags aspect, VkFormat format,
+                                                              Bool mirrorY, const char* fatalDetail);
+        // A single-sample depth/stencil blit whose rectangles make it a plain copy, performed
+        // without vkCmdBlitImage (P7 gate 5). False when the shape is not a plain copy.
+        Bool CopyWireDepthStencilBlit(WireImage& source, WireImage& destination,
+                                      GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                      GLint dx0, GLint dy0, GLint dx1, GLint dy1, VkImageAspectFlags aspect);
         // True when the rectangles give a multisample depth/stencil resolve a shape it declines
         // (a scale, an X mirror, a Y mirror across two formats); the decline has then been
         // logged and its INVALID_OPERATION recorded. BlitWireFramebuffers asks it BEFORE any

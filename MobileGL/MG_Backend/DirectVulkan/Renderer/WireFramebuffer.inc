@@ -116,6 +116,11 @@
         return forced;
     }
 
+    static Bool WireFormatIsPackedDepthStencil(VkFormat format) {
+        return format == VK_FORMAT_D16_UNORM_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
+               format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+    }
+
     VulkanRenderer::WireImage VulkanRenderer::ResolveWireImage(
         const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
         VkImageAspectFlags aspect, Bool isWriteTarget) {
@@ -494,6 +499,136 @@
         return false;
     }
 
+    // ONE ASPECT OF A DEPTH/STENCIL IMAGE, MOVED THROUGH A BUFFER. The source image must be in
+    // TRANSFER_SRC_OPTIMAL and the destination in TRANSFER_DST_OPTIMAL, both of `format`. A
+    // buffer copy names exactly one aspect and moves exactly its texels, which an image copy of a
+    // packed depth-stencil format does not promise (some drivers move the whole native word, so
+    // a depth-only region would replace the destination's stencil). The multisample resolve's
+    // copy-out and the single-sample copy arm share this body; the returned buffer is still named
+    // by the recorded commands and must be retired with them.
+    UniquePtr<VkBufferObject> VulkanRenderer::CopyWireAspectThroughBuffer(
+        VkImage srcImage, Uint32 srcLevel, Uint32 srcLayer, GLint sx, GLint sy,
+        const WireImage& destination, GLint dx, GLint dy, Uint32 width, Uint32 height,
+        VkImageAspectFlags aspect, VkFormat format, Bool mirrorY, const char* fatalDetail) {
+        auto& frame = m_frameContext.GetCurrent();
+        const VkDeviceSize texelSize = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 :
+            (format == VK_FORMAT_D16_UNORM || format == VK_FORMAT_D16_UNORM_S8_UINT ? 2 : 4);
+        // THE ROW STRIDE IS PADDED TO 4 BYTES. A depth/stencil buffer<->image copy wants
+        // every bufferOffset on a multiple of 4 (VUID-vkCmdCopyBufferToImage-dstImage-07978,
+        // pRegions-07978 in older layers), and the mirror below starts a region on every
+        // row - so a tight row of 1-byte stencil texels whose width is not a multiple of 4,
+        // or of 2-byte D16 texels with an odd width, put every row after the first on an
+        // illegal offset. The scissor clip in BlitWireFramebuffers produces exactly such
+        // widths. Both copies name the padded length as bufferRowLength, so the buffer
+        // layout is one layout whichever way it is walked.
+        const VkDeviceSize texelsPer4Bytes = 4 / texelSize;
+        const VkDeviceSize paddedWidth =
+            (static_cast<VkDeviceSize>(width) + texelsPer4Bytes - 1) / texelsPer4Bytes * texelsPer4Bytes;
+        const VkDeviceSize bytes = paddedWidth * height * texelSize;
+        auto aspectBuffer = MakeUnique<VkBufferObject>();
+        if (!aspectBuffer->Create({.allocator = m_allocator, .size = bytes,
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE}))
+            MagmaWireFatal(fatalDetail);
+        VkBufferImageCopy copy{};
+        copy.bufferRowLength = static_cast<Uint32>(paddedWidth);
+        copy.imageSubresource = {aspect, srcLevel, srcLayer, 1};
+        copy.imageOffset = {sx, sy, 0};
+        copy.imageExtent = {width, height, 1};
+        vkCmdCopyImageToBuffer(frame.commandBuffer, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               aspectBuffer->GetHandle(), 1, &copy);
+        VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = aspectBuffer->GetHandle();
+        barrier.size = bytes;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 1, &barrier, 0, nullptr);
+        copy.imageSubresource = {aspect, destination.level, destination.layer, 1};
+        copy.imageOffset = {dx, dy, 0};
+        if (!mirrorY) {
+            vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        } else {
+            // THE VERTICAL MIRROR, and it costs one region per row rather than a pass. The
+            // buffer holds the band bottom row first (the image copy above wrote it from sy
+            // upwards, one padded stride per row); writing row r of that buffer to destination
+            // row dy + height - 1 - r reverses the band. Each region starts on a padded row,
+            // which is what keeps its bufferOffset a multiple of 4.
+            Vector<VkBufferImageCopy> rows(static_cast<SizeT>(height), copy);
+            const VkDeviceSize rowBytes = paddedWidth * texelSize;
+            for (Uint32 row = 0; row < height; ++row) {
+                auto& region = rows[static_cast<SizeT>(row)];
+                region.bufferOffset = static_cast<VkDeviceSize>(row) * rowBytes;
+                region.imageOffset = {dx, static_cast<Int32>(static_cast<Int64>(dy) + height - 1 - row), 0};
+                region.imageExtent = {width, 1, 1};
+            }
+            vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   static_cast<Uint32>(rows.size()), rows.data());
+        }
+        return aspectBuffer;
+    }
+
+    // P7 gate 5 (g5-msrbo): A SINGLE-SAMPLE DEPTH/STENCIL BLIT THAT IS A PLAIN COPY IS A COPY.
+    // Same size, same orientation on both axes, same native format, two distinct non-default,
+    // non-3D images, and the rectangle inside both: nothing a blit adds (scale, filter, flip,
+    // format conversion) is asked for, so the aspect moves with vkCmdCopyImage - or, for one
+    // aspect of a packed depth-stencil format, through CopyWireAspectThroughBuffer so the
+    // destination's other aspect survives. That is what the monolith arm does
+    // (VulkanRenderer::BlitNamedFramebuffer: vkCmdCopyImage at 1:1, CopyDepthStencilAspectThrough-
+    // Buffer for one aspect of a packed format), and neither command needs BLIT_SRC/BLIT_DST,
+    // which a depth/stencil format does not have to carry (the Adreno 830 reports BLIT_SRC and no
+    // BLIT_DST for every depth format). The wire arm sent every depth/stencil blit to
+    // vkCmdBlitImage, and for one aspect of a packed format that moved the whole native word:
+    // lavapipe replaced the destination's stencil on a depth-only blit. Returns false when the
+    // shape is not a plain copy; the caller then takes the vkCmdBlitImage arm as before.
+    Bool VulkanRenderer::CopyWireDepthStencilBlit(WireImage& source, WireImage& destination,
+        GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+        VkImageAspectFlags aspect) {
+        const Int64 spanX = static_cast<Int64>(sx1) - sx0;
+        const Int64 spanY = static_cast<Int64>(sy1) - sy0;
+        if (spanX == 0 || spanY == 0 || spanX != static_cast<Int64>(dx1) - dx0 ||
+            spanY != static_cast<Int64>(dy1) - dy0)
+            return false;
+        if (source.isDefault || destination.isDefault || source.is3D || destination.is3D ||
+            source.image == destination.image || source.format != destination.format)
+            return false;
+        const Int64 width = spanX < 0 ? -spanX : spanX;
+        const Int64 height = spanY < 0 ? -spanY : spanY;
+        const Int64 sxMin = std::min(sx0, sx1), syMin = std::min(sy0, sy1);
+        const Int64 dxMin = std::min(dx0, dx1), dyMin = std::min(dy0, dy1);
+        if (sxMin < 0 || syMin < 0 || dxMin < 0 || dyMin < 0 ||
+            sxMin + width > static_cast<Int64>(source.extent.width) ||
+            syMin + height > static_cast<Int64>(source.extent.height) ||
+            dxMin + width > static_cast<Int64>(destination.extent.width) ||
+            dyMin + height > static_cast<Int64>(destination.extent.height))
+            return false;
+        TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        TransitionWireImage(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        if (WireFormatIsPackedDepthStencil(source.format)) {
+            WireRetiredObjects retired{};
+            retired.buffers.push_back(CopyWireAspectThroughBuffer(
+                source.image, source.level, source.layer, static_cast<GLint>(sxMin),
+                static_cast<GLint>(syMin), destination, static_cast<GLint>(dxMin),
+                static_cast<GLint>(dyMin), static_cast<Uint32>(width), static_cast<Uint32>(height),
+                aspect, source.format, /*mirrorY=*/false, "depth-stencil-copy-buffer"));
+            RetireWireObjects(Move(retired));
+            return true;
+        }
+        VkImageCopy copy{};
+        copy.srcSubresource = {aspect, source.level, source.layer, 1};
+        copy.srcOffset = {static_cast<Int32>(sxMin), static_cast<Int32>(syMin), 0};
+        copy.dstSubresource = {aspect, destination.level, destination.layer, 1};
+        copy.dstOffset = {static_cast<Int32>(dxMin), static_cast<Int32>(dyMin), 0};
+        copy.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
+        vkCmdCopyImage(m_frameContext.GetCurrent().commandBuffer, source.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        return true;
+    }
+
     void VulkanRenderer::ResolveWireDepthStencil(WireImage source, WireImage destination,
         GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1) {
         // P7 wave 2-B2 (review round): A REVERSED RECTANGLE IS NOT A MALFORMED ONE. This guard
@@ -690,63 +825,11 @@
             // depth/stencil image-copy paths copy the complete native word even
             // for a single-aspect region. A stencil byte or depth-only word in
             // this GPU buffer cannot replace the destination's other aspect.
-            const VkDeviceSize texelSize = source.aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? 1 :
-                (source.format == VK_FORMAT_D16_UNORM || source.format == VK_FORMAT_D16_UNORM_S8_UINT ? 2 : 4);
-            // THE ROW STRIDE IS PADDED TO 4 BYTES. A depth/stencil buffer<->image copy wants
-            // every bufferOffset on a multiple of 4 (VUID-vkCmdCopyBufferToImage-dstImage-07978,
-            // pRegions-07978 in older layers), and the mirror below starts a region on every
-            // row - so a tight row of 1-byte stencil texels whose width is not a multiple of 4,
-            // or of 2-byte D16 texels with an odd width, put every row after the first on an
-            // illegal offset. The scissor clip in BlitWireFramebuffers produces exactly such
-            // widths. Both copies name the padded length as bufferRowLength, so the buffer
-            // layout is one layout whichever way it is walked.
-            const VkDeviceSize texelsPer4Bytes = 4 / texelSize;
-            const VkDeviceSize paddedWidth =
-                (static_cast<VkDeviceSize>(width) + texelsPer4Bytes - 1) / texelsPer4Bytes * texelsPer4Bytes;
-            const VkDeviceSize bytes = paddedWidth * height * texelSize;
-            aspectBuffer = MakeUnique<VkBufferObject>();
-            if (!aspectBuffer->Create({.allocator = m_allocator, .size = bytes,
-                    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE}))
-                MagmaWireFatal("multisample-depth-resolve-buffer");
-            VkBufferImageCopy copy{};
-            copy.bufferRowLength = static_cast<Uint32>(paddedWidth);
-            copy.imageSubresource = {source.aspect, 0, 0, 1};
-            copy.imageOffset = {sxMin, syMin, 0};
-            copy.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
-            vkCmdCopyImageToBuffer(frame.commandBuffer, resolved.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                   aspectBuffer->GetHandle(), 1, &copy);
-            VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.buffer = aspectBuffer->GetHandle();
-            barrier.size = bytes;
-            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 1, &barrier, 0, nullptr);
-            copy.imageSubresource = {source.aspect, destination.level, destination.layer, 1};
-            copy.imageOffset = {dxMin, dyMin, 0};
-            if (!mirrorY) {
-                vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-            } else {
-                // THE VERTICAL MIRROR, and it costs one region per row rather than a pass. The
-                // buffer holds the resolved band bottom row first (the image copy above wrote it
-                // from syMin upwards, one padded stride per row); writing row r of that buffer
-                // to destination row dyMin + height - 1 - r reverses the band. Each region
-                // starts on a padded row, which is what keeps its bufferOffset a multiple of 4.
-                Vector<VkBufferImageCopy> rows(static_cast<SizeT>(height), copy);
-                const VkDeviceSize rowBytes = paddedWidth * texelSize;
-                for (Int64 row = 0; row < height; ++row) {
-                    auto& region = rows[static_cast<SizeT>(row)];
-                    region.bufferOffset = static_cast<VkDeviceSize>(row) * rowBytes;
-                    region.imageOffset = {dxMin, static_cast<Int32>(dyMin + height - 1 - row), 0};
-                    region.imageExtent = {static_cast<Uint32>(width), 1, 1};
-                }
-                vkCmdCopyBufferToImage(frame.commandBuffer, aspectBuffer->GetHandle(), destination.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                       static_cast<Uint32>(rows.size()), rows.data());
-            }
+            aspectBuffer = CopyWireAspectThroughBuffer(resolved.image, 0, 0, sxMin, syMin, destination,
+                                                       dxMin, dyMin, static_cast<Uint32>(width),
+                                                       static_cast<Uint32>(height), source.aspect,
+                                                       source.format, mirrorY,
+                                                       "multisample-depth-resolve-buffer");
         } else {
             // A logical GL depth format may use different native renderbuffer
             // and texture formats. Re-encode only after producing real resolved
@@ -961,6 +1044,39 @@
                 retired.textures.push_back(Move(scratch));
                 RetireWireObjects(Move(retired));
                 return;
+            }
+            // P7 gate 5 (g5-msrbo): A SINGLE-SAMPLE DEPTH/STENCIL BLIT THAT IS A PLAIN COPY IS A COPY
+            // (CopyWireDepthStencilBlit): no blit feature, and one aspect of a packed format moves
+            // without touching the other. Anything else - a scale, a flip, the default framebuffer,
+            // a format change - still takes vkCmdBlitImage below, exactly as it did and as the
+            // monolith arm does. On a format without BLIT_SRC/BLIT_DST that command is outside the
+            // spec, and the Adreno 830 (which has no BLIT_DST on any depth format) executes it
+            // anyway: declining would have turned a working picture on the target device into a
+            // missing one. So it is named once, for the next device reading, and not refused.
+            if (aspect != VK_IMAGE_ASPECT_COLOR_BIT && source.samples == VK_SAMPLE_COUNT_1_BIT &&
+                destination.samples == VK_SAMPLE_COUNT_1_BIT) {
+                if (CopyWireDepthStencilBlit(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, aspect)) {
+                    if (dst.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                        m_textureManager->MarkWireTextureGpuWritten(destination.storage, destination.level,
+                                                                    destination.layer, 1);
+                    return;
+                }
+                VkFormatProperties sourceProperties{};
+                VkFormatProperties destinationProperties{};
+                vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &sourceProperties);
+                vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, destination.format,
+                                                    &destinationProperties);
+                if (!(sourceProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) ||
+                    !(destinationProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) {
+                    MGLOG_W_ONCE("DirectVulkan::BlitWireFramebuffers: aspect 0x%x from format %d (features 0x%x) "
+                                 "to format %d (features 0x%x) is not a plain copy and takes vkCmdBlitImage "
+                                 "without BLIT_SRC/BLIT_DST - the monolith arm's command, outside the spec; the "
+                                 "driver decides the picture",
+                                 static_cast<Uint32>(aspect), static_cast<Int>(source.format),
+                                 static_cast<Uint32>(sourceProperties.optimalTilingFeatures),
+                                 static_cast<Int>(destination.format),
+                                 static_cast<Uint32>(destinationProperties.optimalTilingFeatures));
+                }
             }
             // GL names logical window coordinates. Android's native swapchain may
             // be quarter-turned (e.g. logical 2620x1280 over an image 1280x2620).

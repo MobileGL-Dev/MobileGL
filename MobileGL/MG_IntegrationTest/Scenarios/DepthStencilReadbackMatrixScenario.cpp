@@ -682,6 +682,181 @@ namespace MGITest {
         Gl().EndFrame();
     }
 
+    // P7 gate 5 (g5-msrbo): A SINGLE-SAMPLED DEPTH/STENCIL BLIT, EVERY FORMAT, EVERY ASPECT.
+    //
+    // KHR-GL46.direct_state_access.renderbuffers_storage_multisample reduced to its samples == 0
+    // leg: two renderbuffers of one depth/stencil format (glNamedRenderbufferStorageMultisample
+    // with samples 0, the conformance case's own call), clear the first, glBlitFramebuffer
+    // COLOR|DEPTH|STENCIL into the second at 1:1, read both aspects back from the second. The
+    // wire arm moved every depth/stencil aspect with vkCmdBlitImage, which needs BLIT_SRC/BLIT_DST
+    // (optional for depth/stencil formats: the Adreno 830 has no BLIT_DST on any of them) where
+    // the monolith arm copies at 1:1 - and for ONE aspect of a packed format the blit moved the
+    // whole native word.
+    //
+    // THE SUB-RECTANGLE LEG is the red one without the copy arm, on any host: a depth-only blit
+    // of a packed DEPTH24_STENCIL8 replaced the destination's stencil on lavapipe. It also pins
+    // the min corners on both sides and a 1-byte stencil row whose width is not a multiple of 4
+    // (the buffer round trip's padded stride). THE SCALED LEG is the shape that still takes
+    // vkCmdBlitImage, so the copy arm must not have swallowed it.
+    TEST_F(DepthStencilReadbackMatrixScenario, ASingleSampledDepthStencilBlitCopiesEveryAspect) {
+        if (!Ready()) return;
+        struct BlitFormat {
+            const char* name;
+            GLenum internalFormat;
+        };
+        const BlitFormat formats[] = {
+            {"GL_DEPTH_COMPONENT16", GL_DEPTH_COMPONENT16},   {"GL_DEPTH_COMPONENT24", GL_DEPTH_COMPONENT24},
+            {"GL_DEPTH_COMPONENT32F", GL_DEPTH_COMPONENT32F}, {"GL_DEPTH24_STENCIL8", GL_DEPTH24_STENCIL8},
+            {"GL_DEPTH32F_STENCIL8", GL_DEPTH32F_STENCIL8},   {"GL_STENCIL_INDEX8", GL_STENCIL_INDEX8},
+        };
+        struct Extent {
+            int width, height;
+        };
+        // The conformance case's three shapes ({1,1}, {max/2,1}, {1,max/2}), with strips short
+        // enough for a CPU rasterizer, plus the matrix's own rectangle.
+        const Extent extents[] = {{1, 1}, {256, 1}, {1, 256}, {kWidth, kHeight}};
+
+        const auto makePair = [](GLenum internalFormat, int width, int height, GLuint (&fbo)[2], GLuint (&rbo)[2]) {
+            glGenFramebuffers(2, fbo);
+            glCreateRenderbuffers(2, rbo);
+            for (int i = 0; i < 2; ++i) {
+                glNamedRenderbufferStorageMultisample(rbo[i], 0, internalFormat, width, height);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[i]);
+                if (FormatHasDepth(internalFormat))
+                    glNamedFramebufferRenderbuffer(fbo[i], GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo[i]);
+                if (FormatHasStencil(internalFormat))
+                    glNamedFramebufferRenderbuffer(fbo[i], GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo[i]);
+            }
+        };
+        const auto clearBound = [](GLenum internalFormat, int width, int height, float depth, int stencil) {
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, width, height);
+            glDepthMask(GL_TRUE);
+            glStencilMask(0xFFu);
+            glClearDepth(depth);
+            glClearStencil(stencil);
+            GLbitfield mask = 0;
+            if (FormatHasDepth(internalFormat)) mask |= GL_DEPTH_BUFFER_BIT;
+            if (FormatHasStencil(internalFormat)) mask |= GL_STENCIL_BUFFER_BIT;
+            glClear(mask);
+        };
+
+        int exercised = 0;
+        for (const BlitFormat& format : formats) {
+            for (const Extent& extent : extents) {
+                SCOPED_TRACE(std::string(format.name) + " " + std::to_string(extent.width) + "x" +
+                             std::to_string(extent.height));
+                GLuint fbo[2] = {0, 0};
+                GLuint rbo[2] = {0, 0};
+                makePair(format.internalFormat, extent.width, extent.height, fbo, rbo);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+                const bool usable = SourceIsUsable();
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                if (!usable || !SourceIsUsable()) {
+                    glDeleteFramebuffers(2, fbo);
+                    glDeleteRenderbuffers(2, rbo);
+                    FirstGLError();
+                    continue;
+                }
+                ASSERT_EQ(FirstGLError(), 0u) << "creating the renderbuffer pair";
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                clearBound(format.internalFormat, extent.width, extent.height, kDepthPoison, kStencilPoison);
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+                clearBound(format.internalFormat, extent.width, extent.height, 0.5f, 7);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+                glBlitFramebuffer(0, 0, extent.width, extent.height, 0, 0, extent.width, extent.height,
+                                  GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+                EXPECT_EQ(FirstGLError(), 0u) << "a 1:1 single-sampled depth/stencil blit";
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+                if (FormatHasDepth(format.internalFormat))
+                    ExpectAllDepth(ReadDepthFloat(0, 0, extent.width, extent.height), 0.5f, "blitted depth");
+                if (FormatHasStencil(format.internalFormat))
+                    ExpectAllStencil(ReadStencilInt(0, 0, extent.width, extent.height), 7, "blitted stencil");
+                EXPECT_EQ(FirstGLError(), 0u);
+                ++exercised;
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(2, fbo);
+                glDeleteRenderbuffers(2, rbo);
+            }
+        }
+        // Six formats times four extents; a machine that hosts fewer than half is not a matrix.
+        EXPECT_GE(exercised, 12) << "too few depth/stencil renderbuffer pairs were usable";
+
+        // THE SUB-RECTANGLE LEG, packed DEPTH24_STENCIL8: a depth-only band, then a stencil-only
+        // band, each offset from the origin on both sides and narrow enough that a 1-byte stencil
+        // row is not a multiple of 4.
+        {
+            GLuint fbo[2] = {0, 0};
+            GLuint rbo[2] = {0, 0};
+            makePair(GL_DEPTH24_STENCIL8, kWidth, kHeight, fbo, rbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+            ASSERT_TRUE(SourceIsUsable());
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.75f, 99);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.25f, 11);
+            ASSERT_EQ(FirstGLError(), 0u);
+            constexpr int kSx = 5, kSy = 8, kDx = 20, kDy = 4, kW = 29, kH = 32;
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(kSx, kSy, kSx + kW, kSy + kH, kDx, kDy, kDx + kW, kDy + kH, GL_DEPTH_BUFFER_BIT,
+                              GL_NEAREST);
+            EXPECT_EQ(FirstGLError(), 0u) << "a depth-only sub-rectangle blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            const std::vector<float> depth = ReadDepthFloat(0, 0, kWidth, kHeight);
+            const std::vector<int> stencil = ReadStencilInt(0, 0, kWidth, kHeight);
+            size_t badDepth = 0, badStencil = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    const bool inside = x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH;
+                    const size_t at = static_cast<size_t>(y) * kWidth + x;
+                    if (std::fabs(depth[at] - (inside ? 0.75f : 0.25f)) > 1.0f / 4096.0f) ++badDepth;
+                    if (stencil[at] != 11) ++badStencil;
+                }
+            }
+            EXPECT_EQ(badDepth, 0u) << "the depth-only band landed somewhere other than its destination rectangle";
+            EXPECT_EQ(badStencil, 0u) << "a depth-only blit replaced the destination's stencil";
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(kSx, kSy, kSx + kW, kSy + kH, kDx, kDy, kDx + kW, kDy + kH, GL_STENCIL_BUFFER_BIT,
+                              GL_NEAREST);
+            EXPECT_EQ(FirstGLError(), 0u) << "a stencil-only sub-rectangle blit";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            const std::vector<float> depthAfter = ReadDepthFloat(0, 0, kWidth, kHeight);
+            const std::vector<int> stencilAfter = ReadStencilInt(0, 0, kWidth, kHeight);
+            badDepth = badStencil = 0;
+            for (int y = 0; y < kHeight; ++y) {
+                for (int x = 0; x < kWidth; ++x) {
+                    const bool inside = x >= kDx && x < kDx + kW && y >= kDy && y < kDy + kH;
+                    const size_t at = static_cast<size_t>(y) * kWidth + x;
+                    if (std::fabs(depthAfter[at] - (inside ? 0.75f : 0.25f)) > 1.0f / 4096.0f) ++badDepth;
+                    if (stencilAfter[at] != (inside ? 99 : 11)) ++badStencil;
+                }
+            }
+            EXPECT_EQ(badStencil, 0u) << "the stencil-only band landed somewhere other than its destination rectangle";
+            EXPECT_EQ(badDepth, 0u) << "a stencil-only blit replaced the destination's depth";
+
+            // THE SCALED LEG: half the source onto the whole destination - the shape that still
+            // takes vkCmdBlitImage.
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            clearBound(GL_DEPTH24_STENCIL8, kWidth, kHeight, 0.25f, 11);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo[1]);
+            glBlitFramebuffer(0, 0, kWidth / 2, kHeight / 2, 0, 0, kWidth, kHeight, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), 0u) << "a scaled depth blit with NEAREST is legal GL";
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo[1]);
+            ExpectAllDepth(ReadDepthFloat(0, 0, kWidth, kHeight), 0.75f, "a scaled depth blit");
+            EXPECT_EQ(FirstGLError(), 0u) << "the session survived the scaled leg";
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(2, fbo);
+            glDeleteRenderbuffers(2, rbo);
+        }
+        Gl().EndFrame();
+    }
+
     // A read whose rectangle is NOT the whole attachment. The staging copy has to carry
     // the requested rect (not the origin) and hand back its rows bottom-up, which a
     // full-extent uniform read is a fixed point of and therefore cannot see.

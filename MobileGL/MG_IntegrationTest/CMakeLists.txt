@@ -3364,6 +3364,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
         endforeach()
+        # ---- P7 gate 5 (g5-msrbo): the SINGLE-SAMPLED depth/stencil blit ----------------------
+        #
+        # KHR-GL46.direct_state_access.renderbuffers_storage_multisample's samples == 0 leg, every
+        # depth/stencil format: the wire arm moved every single-sample depth/stencil aspect with
+        # vkCmdBlitImage where the monolith copies at 1:1, and for one aspect of a packed format
+        # that moved the whole native word (a depth-only blit replaced the destination's stencil
+        # on lavapipe). NO KNOB: the packed-aspect leg is red on every host without the copy arm,
+        # so all three arms carry it.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.DsBlit."
+            TEST_FILTER "DepthStencilReadbackMatrixScenario.ASingleSampledDepthStencilBlitCopiesEveryAspect"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsblit${mglItestArmLogTag}.log")
         # P7 wave 2-B2 (review round): a FLIPPED multisample depth/stencil resolve is a legal blit
         # that used to end the session, and a SCALED one is INVALID_OPERATION that used to end it
         # too. Both shapes are decided on the rectangles, before any capability question, so this
