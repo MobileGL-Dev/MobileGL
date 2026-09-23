@@ -29,7 +29,9 @@
 // sends). Each plane runs in its own ctest entry under its own lane label.
 //
 // THE SCENARIOS (all but the first are the PH-6 fix round's):
-//   * the peer stops draining and stays - NotDraining after the knob;
+//   * the peer stops draining and stays - NotDraining after the knob - and keeps TALKING on
+//     control (a LogFlush every 100 ms), so the session must end without the control wait ever
+//     timing out;
 //   * the peer is KILLED while the server waits, with a knob longer than ServerLoop::Stop()'s
 //     5000 ms join - PeerGone well inside the knob, exit 0 (whichever of the data bell's death and
 //     the control EOF's stop reaches the waiting apply thread first);
@@ -52,6 +54,7 @@
 
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
+#include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSpawn.h>
 #include <MG_Remote/Server/SurfaceControlFrame.h>
@@ -80,6 +83,7 @@
 #include <csignal>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -364,6 +368,20 @@ namespace {
                control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) == MOBILEGL_OK;
     }
 
+    // A LogFlush that asks for an acknowledgement (ack=false is the REQUEST; the server's answer
+    // carries ack=true), exactly the frame ClientSession::SyncPeerLog sends - minus the drain that
+    // SyncPeerLog does first.
+    bool SendLogFlush(Client::ClientSession& client, std::uint64_t seq) {
+        flatbuffers::FlatBufferBuilder builder(64);
+        auto flush = ::MobileGL::Wire::CreateLogFlush(builder, seq, false);
+        auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::LogFlush, flush.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        auto* control = client.ControlSocketForTest();
+        return control != nullptr &&
+               control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) == MOBILEGL_OK;
+    }
+
     // Four bytes: too short to carry a CtrlEnvelope, which ServerMain answers by ending the session
     // (P7 wave 0's named refusal) - a control stream that ENDS while the peer is still there.
     bool SendMalformedControlFrame(Client::ClientSession& client) {
@@ -401,6 +419,21 @@ namespace {
                 sent = socket != nullptr && socket->ShutdownSend() == MOBILEGL_OK;
             }
             if (!sent) ::_exit(kRawFrame);
+        }
+        if (scenario == Scenario::StopsDraining) {
+            // SILENT ON SEG_EVENT, NOT ON CONTROL. A LogFlush every 100 ms, each of which the server
+            // answers (and this peer never reads): a peer that talks keeps the server's control
+            // wait from ever timing out, so the session may only end because its control loop asks
+            // about the apply thread on every turn and not only on a quiet one. Until the server has
+            // gone (a send fails) or the parent releases this peer.
+            std::uint64_t seq = 0x7f000000ull;
+            bool talking = true;
+            for (;;) {
+                struct pollfd wait{release, POLLIN, 0};
+                if (::poll(&wait, 1, 100) != 0) break;
+                if (talking) talking = SendLogFlush(client, ++seq);
+            }
+            ::_exit(kChildOk);
         }
         char go = 0;
         (void)::read(release, &go, 1);

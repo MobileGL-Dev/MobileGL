@@ -94,9 +94,10 @@ namespace MobileGL::MG_Remote::Client {
 
         // PH-6's fuzz arm 3 ONLY (EventForfeitPeerTest): the control stream, so a peer that has
         // stopped draining can still put on it the frames no ClientSession path would send at that
-        // moment - a malformed one, a surface op queued behind a wait it did not drain for, or a
-        // half-close. Every production path that writes control holds m_remoteControlMutex and
-        // drains first; a caller of this does neither, which is the point. Null unless spawned.
+        // moment - a malformed one, a surface op queued behind a wait it did not drain for, a
+        // LogFlush every 100 ms, or a half-close. Every production path that writes control holds
+        // m_remoteControlMutex and drains first; a caller of this does neither, which is the
+        // point. Null unless spawned.
         Transport::SocketTransport* ControlSocketForTest() { return m_socketTransport.get(); }
 
         // CONTRACT-P6 4.3: THE PID THE SERVER STATED IN ITS Welcome, which is not the same fact

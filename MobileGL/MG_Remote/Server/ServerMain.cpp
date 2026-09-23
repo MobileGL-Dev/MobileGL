@@ -369,18 +369,24 @@ void SendLogAck(void* pointer) {
     // later client Busy. Now each quiet interval asks whether the apply thread is still there;
     // when it is not (forfeit, or a dead data bell), the session takes the ordinary exit below:
     // Stop, Close, _exit(0). The interval is the supervisor's own accept poll.
+    //
+    // ASKED AT THE TOP OF EVERY TURN, NOT ONLY WHEN A WAIT TIMES OUT (PH-6 fix round). A peer that
+    // forfeited the reverse channel but keeps TALKING - a LogFlush or a surface op more often than
+    // every 250 ms, each of which this loop answers - never let ReceiveFrame time out, so the
+    // question was never asked and the session, with the supervisor's one slot, lived as long as
+    // the peer kept chattering.
     constexpr std::uint32_t kControlPollMs = 250;
     for (;;) {
-        std::uint64_t size = 0;
-        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlPollMs);
-        if (result == MOBILEGL_ERR_TIMEOUT) {
-            if (loop.Running()) continue;
+        if (!loop.Running()) {
             WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
                          "ending the session",
                          selfPid, session.ReverseChannelForfeited() ? "ReverseChannelForfeit" : "its bell died",
                          static_cast<unsigned long long>(session.ForfeitDrops()));
             break;
         }
+        std::uint64_t size = 0;
+        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlPollMs);
+        if (result == MOBILEGL_ERR_TIMEOUT) continue;
         if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
         if (result != MOBILEGL_OK) {
             // EOF or a transport error: the peer is gone. Said to the session BEFORE loop.Stop()
