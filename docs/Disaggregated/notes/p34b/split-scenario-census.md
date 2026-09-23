@@ -3,7 +3,7 @@
 `PLAN-PH-P34B-P7.md` §1.2, row **门：纹理 / program 场景 split 覆盖**: "~20 个候选场景…先在
 inproc 跑一遍记首阻塞，按 P7/P8/P9 归属决定注册或具名排除".
 
-Head `7ed5da52`, build `~/w7/p7-espryt-d2/build-split` (Release, clang, lavapipe ICD, WSL
+Head `cf7ca59f`, build `~/w7/p7-espryt-d2/build-split` (Release, clang, lavapipe ICD, WSL
 desktop). Every candidate was run under `MOBILEGL_TRANSPORT=inproc` first; the ones that passed
 were then registered through `mgl_itest_register_split_arms` and re-run under all three
 transports, which is the reading in the table.
@@ -28,14 +28,14 @@ un-exclusion makes it 77 on the integration tree, one per arm).
 
 The raw diff against that baseline reports **77** per arm at D2's head, not 76. The extra one is
 `DirectGLES.<arm>.Ct.CtWireScenario.TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable`,
-registered by the pre-existing `foreach(ctCase ...)` loop and added by `b56d70177` ("the server
+registered by the pre-existing `foreach(ctCase ...)` loop and added by `1255caa2f` ("the server
 publishes kCapResidentSubData off its own wire resource table") — one of the five P7 commits
 between the `p7-before` baseline and this package's base. No file under `CtWireScenario` is
 touched here.
 
 An earlier draft of this note said "+37 entries per split arm". That number came from
 differencing against `~/w7/pipe/build-split`, which is the integrator's LIVE build directory and
-had already moved past this package's base (`7ed5da52` -> `8c5dd6fc`); it matched nothing and is
+had already moved past this package's base (`cf7ca59f` -> `ae3f43ab`); it matched nothing and is
 withdrawn. The split-arm registration count recorded for the tier-2 Magma replay went from 33 to
 46.
 

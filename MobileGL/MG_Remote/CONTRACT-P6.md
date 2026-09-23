@@ -4,7 +4,7 @@ Authority: this file, beside `CONTRACT-P5.md` (table 0, byte carriers, field own
 `CONTRACT-P5B.md` (the class-C slots), `CONTRACT-P5C.md` (rule E, the two named exemptions, SEG_EVENT,
 the guards), `CONTRACT-P5E.md` (rule F, the barriered predicate, the wait rule) and
 `CONTRACT-MAGMA-RUNAHEAD.md`. Where it disagrees with any of them this file is newer and wins; §10
-lists every such place. Base: `feat/disaggregated @ 785fed0b`. Every `file:line` was read at that
+lists every such place. Base: `feat/disaggregated @ c25a7760`. Every `file:line` was read at that
 commit; paths are under `MobileGL/` unless they start with `docs/`.
 
 **How to change it.** Package `c6`'s file, edited by the integrator first. A P6 package
@@ -701,7 +701,7 @@ owed to P13. Method and full symbol list:
 
 **Gate (landed, P7 wave 0 — ID-P7-7)**: `scripts/link_ratchet.py` recomputes this set from an
 explicit per-object partition on every `build-linux-split` run and fails on any symbol absent from
-`scripts/data/link_ratchet_baseline.txt` — which stands at **186** on `78b7d6be`, the 184 plus
+`scripts/data/link_ratchet_baseline.txt` — which stands at **186** on `e8b2c4bd`, the 184 plus
 P6.5's `Client::ClientSession::StartSpawned()` and `MG_State::GLState::ProgramArtifactsSchemaFingerprint()`,
 with the three backend buckets reproducing a6's 101 / 14 / 60 exactly — while a symbol that
 disappears is reported rather than failed, so progress never turns the build red

@@ -1,6 +1,6 @@
 # gate8-wire-counters — 门 8 的两个 wire 计数器、首采，与 spawn server 侧的 wait 账
 
-> 头 `71aa9951`（`git rev-parse HEAD`，写报告时读取；工作树另有并行 agent 在修子模块指针，未 commit）。
+> 头 `94c130d6`（`git rev-parse HEAD`，写报告时读取；工作树另有并行 agent 在修子模块指针，未 commit）。
 > 环境：`wsl -d Ubuntu`，clang-20 / Ninja / Release / `MOBILEGL_BUILD_TYPE=Release`，
 > 快照 `~/w7/p6-gate8-src`（从 Windows 工作树 copy，见 §1），构建目录 `~/w7/p6-gate8-build`。
 > 交付内容：

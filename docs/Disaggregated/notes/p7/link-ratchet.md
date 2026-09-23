@@ -48,7 +48,7 @@
 
 ## 2 今天的数字
 
-基座 `78b7d6be`，`build-split`（Release，`-DMOBILEGL_BUILD_DISAGGREGATED=ON
+基座 `e8b2c4bd`，`build-split`（Release，`-DMOBILEGL_BUILD_DISAGGREGATED=ON
 -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_PIPE_PUSH=ON`），211 个 object：
 
 | | |
@@ -136,7 +136,7 @@ a6 §5 的叙述（「server 不该问 client 要答案」）本来就该把它�
 
 ## 4 red-once（R-16）
 
-在 `~/w7/p7-ratchet`（`78b7d6be`，`build-split`）里往一个**被分类为 SERVER 的** object
+在 `~/w7/p7-ratchet`（`e8b2c4bd`，`build-split`）里往一个**被分类为 SERVER 的** object
 加一次前端触及，只重编那一个 object，跑门，然后还原。
 
 **注意选哪个符号。** 计划书里举的例子 `SamplerObject s(0); s.GetMinFilter();` **不会让门变红**——

@@ -1,6 +1,6 @@
 # W4 复验 · p7w4（X1+F1+C+A+B+D1）真机：门 3 AFTER 矩阵、iterationt、OpenRA 改判为纯竞态
 
-APK `p7w4-8c5dd6fc`（`apk-p7w4.sha256` = `22472dc5…`；`apk-p7w4-install.txt`：`versionName=26.09.8c5dd6f-trace`），= `feat/disaggregated@8c5dd6fc` = wave 0 + X1 + F1 + C + A + B + D1。并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。全部 DirectVulkan × inproc × pbuffer；`--archive-dir .trace-work/p7w4/<run>`（不入库）。
+APK `p7w4-ae3f43ab`（`apk-p7w4.sha256` = `22472dc5…`；`apk-p7w4-install.txt`：`versionName=26.09.ae3f43a-trace`），= `feat/disaggregated@ae3f43ab` = wave 0 + X1 + F1 + C + A + B + D1。并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。全部 DirectVulkan × inproc × pbuffer；`--archive-dir .trace-work/p7w4/<run>`（不入库）。
 
 ## 1. iterationt ×2：`Fatal{UnmigratedVerb,"Magma:mipmap-shader-format-or-shape"}` 退役（`iterationt.log`）
 

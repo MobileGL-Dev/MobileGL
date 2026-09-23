@@ -1,6 +1,6 @@
 # F1 复验 + E7/E8 · OpenRA 的分歧是「冷驱动缓存」下的时序竞态
 
-APK `p7w3-3c8082cc`（wave 0 + X1 + F1；`../00-session/`），Redmi `2f7cbe2e`，DirectVulkan × `--use-pbuffer` × inproc。每次回放都是**新进程**（logcat pid 11917 → 12156 → 12478），所以「热」不在进程里，在 Adreno 驱动的磁盘 shader / pipeline 缓存里。
+APK `p7w3-3179c497`（wave 0 + X1 + F1；`../00-session/`），Redmi `2f7cbe2e`，DirectVulkan × `--use-pbuffer` × inproc。每次回放都是**新进程**（logcat pid 11917 → 12156 → 12478），所以「热」不在进程里，在 Adreno 驱动的磁盘 shader / pipeline 缓存里。
 
 ## F1 本身：生效，但不是分歧的原因
 

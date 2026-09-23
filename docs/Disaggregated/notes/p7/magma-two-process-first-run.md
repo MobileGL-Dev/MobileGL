@@ -1,7 +1,7 @@
 # P7 wave 0 包 L：Magma 两进程车道的首轮（2026-09-22）
 
 > 计划见 [`PLAN-PH-P34B-P7.md`](PLAN-PH-P34B-P7.md) §0 发现 1 / §1.3 出口门 1 / §3 wave 0 第 1 项。
-> 基线 `feat/disaggregated@78b7d6be`，分支 `p7/lane`，主机 WSL Arch + lavapipe
+> 基线 `feat/disaggregated@e8b2c4bd`，分支 `p7/lane`，主机 WSL Arch + lavapipe
 > (`/usr/share/vulkan/icd.d/lvp_icd.json`，系统唯一 ICD)，`build-split` = Release / clang / ccache /
 > `DISAGGREGATED=ON` `INPROC=ON` `PIPE_PUSH=ON` `BUILD_INTEGRATION_TEST=ON`，
 > `MOBILEGL_ITEST_TCP_ENDPOINT=tcp://127.0.0.1:40713`（本树专用端口，避免与兄弟树的 40613 撞车）。

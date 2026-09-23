@@ -41,7 +41,7 @@ Nine things this package changes that live outside its own files or outside its 
    notice it.
 
 
-Base: `p7/magma-c` off `feat/disaggregated @ a686131e` (pipe HEAD at branch time).
+Base: `p7/magma-c` off `feat/disaggregated @ 4f2d4c4e` (pipe HEAD at branch time).
 Build: `build-split` = `-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON
 -DMOBILEGL_PIPE_PUSH=ON -DMOBILEGL_BUILD_INTEGRATION_TEST=ON`, ICD pinned to
 `/usr/share/vulkan/icd.d/lvp_icd.json` (the same lavapipe ICD `~/w7/pipe/build-split` pins; the
@@ -53,7 +53,7 @@ wire arm), rule J / R-16 (every fix red once on a two-process arm first).
 
 ## Gates, on the four slices together
 
-| gate | base (`a686131e`) | after | |
+| gate | base (`4f2d4c4e`) | after | |
 |---|---|---|---|
 | `ctest -L unit` | 2402 | **2403 / 2403** | +1 = the OQ-8 order case |
 | `integration-magma-split` | 73 (71 P + 2 S) | **75 / 75, 0 skipped** | +2 vertex-layout; the 2 skips were the death cases |
@@ -69,10 +69,10 @@ wire arm), rule J / R-16 (every fix red once on a two-process arm first).
 | **G1** (`build-linux`, pull) | `.text` `0xa52203` | **`.text` `0xa52203` (10822147, +0)** | `.data`/`.bss`/`.rodata`/total all +0; 27837 → 27837 defined symbols, **0 added / 0 removed / 0 resized / 0 renamed**; the `.so` is byte-identical on disk (19143824) |
 
 **Ratchet buckets.** AFTER: `p7-magma` **101**, `p3b-p4b-espryt` **13**, `both-backends` **61**,
-`p6-core` **11**, total **186**. CONTRACT-P7 §4.1 records the `852e3c28` baseline as
+`p6-core` **11**, total **186**. CONTRACT-P7 §4.1 records the `8bb6309a` baseline as
 101 / 14 / 60 / 11. So one symbol sits in `both-backends` that the baseline recorded under
 `p3b-p4b-espryt`; the total, the monotone assertion and **P7's own target bucket (101)** are all
-unchanged. HONESTY NOTE: I did not separately re-measure the buckets at `a686131e`, so I cannot
+unchanged. HONESTY NOTE: I did not separately re-measure the buckets at `4f2d4c4e`, so I cannot
 attribute that single move to this package rather than to the two commits between the baseline
 and this branch point. Nothing here was aimed at gate 4 — §4.2's path from 101 to 0 is package
 B's `(B')`. (An attempt to identify the mover by rebuilding one object at the base failed to

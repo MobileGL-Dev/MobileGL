@@ -2,7 +2,7 @@
 
 ## P6.5 第一波（2026-09-22）
 
-实现、代码审查与主要正确性门已完成；**已落地并推送 `feat/disaggregated@fe27380a`（2026-09-22）**（原
+实现、代码审查与主要正确性门已完成；**已落地并推送 `feat/disaggregated@fe28bdb5`（2026-09-22）**（原
 在 `codex/p65-all-tcp` 的 WIP + 本次审查修复 + 收尾文档一并合入）。完整 39 例 device golden 矩阵与全套
 链路必测数按用户「本地代表性、CI 兜底」留 CI/后续，**尚未宣布阶段收官**。
 
@@ -46,9 +46,9 @@
 `2f7cbe2e` reboot-clean、同热窗口配对 A/B）判读为 **tie**——`inproc` 与 `spawn` 的 client CPU/帧
 差 −0.15%（会话 1）/ +0.16%（会话 2），都落在臂内散布之内，如实记录、不设门；门 8 的三个强制
 性能数（socket 门铃 vs condvar、`SEG_STAGE` 字节/帧、chunking 后记录/帧）已采齐，逐数见 §2；
-G1 pull 构建 **0/0/0/0** 且 `.text` 逐字节相同。测量期的源头：门 7 报告记 `98d0b96c`、门 8 的
-wire 计数器与真机第二轮记 `71aa9951`。分支 `feat/disaggregated` 其后又落地两个 P6.5 设计提交
-（`2d86e07a`、`2bd86664`），**现头 `2bd86664`，与 `origin` 同步**；**工作树另有未提交的 P6 收尾
+G1 pull 构建 **0/0/0/0** 且 `.text` 逐字节相同。测量期的源头：门 7 报告记 `75dd0cb1`、门 8 的
+wire 计数器与真机第二轮记 `94c130d6`。分支 `feat/disaggregated` 其后又落地两个 P6.5 设计提交
+（`872370ba`、`4e7bf0fe`），**现头 `4e7bf0fe`，与 `origin` 同步**；**工作树另有未提交的 P6 收尾
 改动**（wire 计数器、`ServerMain` 的 `PipeStats` 武装、`MOBILEGL_PIPE_STATS_FILE` 角色派生、设备行
 与工具入库、测试），见 §1.1。三种传输形态（`monolith` / `inproc` / `spawn`）在桌面（WSL lavapipe）
 与真机（Redmi `2f7cbe2e`）上都跑通了真实 trace 的两进程 retrace，逐像素对上 golden。性能**只记录、
@@ -62,25 +62,25 @@ wire 计数器与真机第二轮记 `71aa9951`。分支 `feat/disaggregated` 其
 
 | 包 | 落地什么 | 状态 / 证据 |
 |---|---|---|
-| **a6** | 进程装配与链接边界的核验；198 行审计；184 符号的链接实验（server 不能不链 `MG_Impl`） | ✅ `785fed0b`；[`notes/p6/a6-audit-v1.md`](notes/p6/a6-audit-v1.md)、[`a6-link-experiment.md`](notes/p6/a6-link-experiment.md) |
-| **c6** | 规范契约（21 条裁定）+ 数据面缝 `Transport/ILink.h` / `StreamLink.h`（声明不接线） | ✅ `0bbe41c2`；`CONTRACT-P6.md` |
-| **lk** | `RingControl` 按写者重组 + 可证伪的 per-field 断言；数据面缝的 pre-flight | ✅ `a54ae47a`、`f4cbaa89` |
-| **so** | `SocketTransport`（AF_UNIX SOCK_STREAM + SCM_RIGHTS），12 条 ITransport 契约用例 | ✅ `a3518361` |
-| **sm** | 两个**独立启动**的进程（非 fork），靠 name 汇合、共享匿名段；D1c 的六谓词里 D10 需要的三个，四个「编进来却永不武装」的守卫接线 | ✅ `e156ea5f`、`207c31f6`、`743d1fac` |
-| **cp** | EGL 控制帧跨进程并应答；`InitCapabilities` 上线（wire kind 11）；真实 trace 两进程 retrace 逐像素通过 | ✅ `b0f4f8b7`、`ea9fc7fa` |
-| **hs** | build stamp 从「静默空串」变成显式 present 标志入指纹；客户端补检 `abiMajor/Minor`；`Hello::pid` / `Welcome::serverPid` 携带真实 pid | ✅ `570ebde9` |
-| **dl** | device-lost 闩（取自描述符的挂断，绝不取自超时）；D5b「alive-but-silent」具名诊断；`MOBILEGL_IPC_RESPAWN` 具名拒绝；`Session::Fail` 漏斗（`FatalFamilies.def` 词表 + 90 站点归一 + `SessionFault` 帧向对端命名家族）；Fatal 普查门 | ✅ `f6a0bd30`、`e7663512`、`e50463dc`、`f98f2067`、`5968863f`、`91d0cb78`、`16bfab10` |
-| **st** | fb-slot memo 的具名 Fatal（`nullptr==nullptr` 读成缓存命中、返回未填槽的潜在崩溃，sm 关掉可达性、st 出声） | ✅ `743d1fac` |
-| **t6** | `integration-spawn` 车道（102/102）；集合一致做成结构性（一个宏两条臂）+ 校验门；per-role 日志 | ✅ `8cd00f42`、`b3155525` |
+| **a6** | 进程装配与链接边界的核验；198 行审计；184 符号的链接实验（server 不能不链 `MG_Impl`） | ✅ `c25a7760`；[`notes/p6/a6-audit-v1.md`](notes/p6/a6-audit-v1.md)、[`a6-link-experiment.md`](notes/p6/a6-link-experiment.md) |
+| **c6** | 规范契约（21 条裁定）+ 数据面缝 `Transport/ILink.h` / `StreamLink.h`（声明不接线） | ✅ `b6293957`；`CONTRACT-P6.md` |
+| **lk** | `RingControl` 按写者重组 + 可证伪的 per-field 断言；数据面缝的 pre-flight | ✅ `99649a90`、`db62d674` |
+| **so** | `SocketTransport`（AF_UNIX SOCK_STREAM + SCM_RIGHTS），12 条 ITransport 契约用例 | ✅ `5f846d96` |
+| **sm** | 两个**独立启动**的进程（非 fork），靠 name 汇合、共享匿名段；D1c 的六谓词里 D10 需要的三个，四个「编进来却永不武装」的守卫接线 | ✅ `70c45ab9`、`11807ac7`、`e3bb6d8b` |
+| **cp** | EGL 控制帧跨进程并应答；`InitCapabilities` 上线（wire kind 11）；真实 trace 两进程 retrace 逐像素通过 | ✅ `5239ae0c`、`7e244b37` |
+| **hs** | build stamp 从「静默空串」变成显式 present 标志入指纹；客户端补检 `abiMajor/Minor`；`Hello::pid` / `Welcome::serverPid` 携带真实 pid | ✅ `90f9a790` |
+| **dl** | device-lost 闩（取自描述符的挂断，绝不取自超时）；D5b「alive-but-silent」具名诊断；`MOBILEGL_IPC_RESPAWN` 具名拒绝；`Session::Fail` 漏斗（`FatalFamilies.def` 词表 + 90 站点归一 + `SessionFault` 帧向对端命名家族）；Fatal 普查门 | ✅ `557dc2c1`、`8b13d8a8`、`3399b879`、`3a12a48a`、`4bb4d4fa`、`b46da700`、`77cbd176` |
+| **st** | fb-slot memo 的具名 Fatal（`nullptr==nullptr` 读成缓存命中、返回未填槽的潜在崩溃，sm 关掉可达性、st 出声） | ✅ `e3bb6d8b` |
+| **t6** | `integration-spawn` 车道（102/102）；集合一致做成结构性（一个宏两条臂）+ 校验门；per-role 日志 | ✅ `15f5b54b`、`5fb54f03` |
 
 配套：CI 的 `retrace-split` 从「1 case × 1 后端 × inproc」扩成「全 CI 矩阵 × 两后端 × inproc/spawn」，
 `split` 键改成 opt-out；Android CI 新增 `spawn-acceptance` 臂，真机 App 从 `nativeLibraryDir` 解析
-server 路径（`94e2f2e0`、`15bd9a67`、`1039502e`、`2afa0002`）。
+server 路径（`dc5bd935`、`d83fc664`、`53406749`、`7c8120cc`）。
 
 ### 1.1 收尾（2026-09-22）
 
-下列改动**在两轮测量（门 7 的 `98d0b96c` 头、门 8 的 `71aa9951` 头）之后落地、目前仍在工作树里未
-提交**（其后两个提交 `2d86e07a`、`2bd86664` 只改文档与 `Transport/StreamLink.h` 的注释，不含这些代码）：
+下列改动**在两轮测量（门 7 的 `75dd0cb1` 头、门 8 的 `94c130d6` 头）之后落地、目前仍在工作树里未
+提交**（其后两个提交 `872370ba`、`4e7bf0fe` 只改文档与 `Transport/StreamLink.h` 的注释，不含这些代码）：
 
 - **wire 计数器**：`PipeStats` 新增 `ByteClass::StageSegmentBytes`（唯一收口点
   `PipeWireCodec.cpp:878` `StageAllocate`）与 `CallClass::WireRecords`（`:1188` `EncodeRecord` 提交

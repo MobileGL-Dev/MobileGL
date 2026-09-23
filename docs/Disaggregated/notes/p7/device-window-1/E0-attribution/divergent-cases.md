@@ -1,6 +1,6 @@
 # E0 · 分歧 case 名单（本窗口最重要的产出）
 
-E0a：39 例 × {monolith, inproc} × DirectVulkan × `--use-pbuffer` × 1 遍，APK `p7w1-d260f110`（`apk.sha256`），reboot-clean，`svc power stayon usb`。两臂各 39/39 回放完成；两臂所有有结果的 case 都逐位确定（`ssim vs first = 1.0`，E0b 的 3 遍确定性在 E1 上补做了 OpenRA 一遍——同样逐位相同）。
+E0a：39 例 × {monolith, inproc} × DirectVulkan × `--use-pbuffer` × 1 遍，APK `p7w1-9be62cbc`（`apk.sha256`），reboot-clean，`svc power stayon usb`。两臂各 39/39 回放完成；两臂所有有结果的 case 都逐位确定（`ssim vs first = 1.0`，E0b 的 3 遍确定性在 E1 上补做了 OpenRA 一遍——同样逐位相同）。
 
 ## 结论一句话
 

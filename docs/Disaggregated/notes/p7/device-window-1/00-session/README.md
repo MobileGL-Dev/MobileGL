@@ -26,4 +26,4 @@ available: 1100000000 1050000000 967000000 ... 160000000
 
 ## APK 身份
 
-见 `apk.sha256` / `apk-install.txt`（安装后写入）。构建：`~/w7/pipe@d260f110`，`assembleTraceRelease -Pmobilegl.buildDisaggregated=ON -Pmobilegl.buildDisaggregatedInproc=ON -Pmobilegl.pipePush=ON -Pmobilegl.debuggableRelease=true -Pmobilegl.applicationIdSuffix=.p7w1 -Pmobilegl.apkSuffix=p7w1`，显式 `MOBILEGL_BUILD_STAMP=p7w1-d260f110`，debug keystore 签名，并排安装为 `top.mobilegl.plugin.p7w1.trace`。
+见 `apk.sha256` / `apk-install.txt`（安装后写入）。构建：`~/w7/pipe@9be62cbc`，`assembleTraceRelease -Pmobilegl.buildDisaggregated=ON -Pmobilegl.buildDisaggregatedInproc=ON -Pmobilegl.pipePush=ON -Pmobilegl.debuggableRelease=true -Pmobilegl.applicationIdSuffix=.p7w1 -Pmobilegl.apkSuffix=p7w1`，显式 `MOBILEGL_BUILD_STAMP=p7w1-9be62cbc`，debug keystore 签名，并排安装为 `top.mobilegl.plugin.p7w1.trace`。

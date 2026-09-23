@@ -2,7 +2,7 @@
 
 > 计划见 [`PLAN-PH-P34B-P7.md`](PLAN-PH-P34B-P7.md) 「wave 3」与 §4 分母第 (7) 项；规范见
 > [`CONTRACT-P7.md`](../../../../MobileGL/MG_Remote/CONTRACT-P7.md) §6（门 2）、§0（规则 I / J）、§9。
-> 基线 = `ec46a550`。
+> 基线 = `3c2867d3`。
 >
 > 主机口径：WSL Arch + lavapipe（`/usr/share/vulkan/icd.d/lvp_icd.json`，钉在 `MOBILEGL_ITEST_VK_ICD`），
 > `build-split` = Release / clang / ccache / `DISAGGREGATED=ON` `INPROC=ON` `PIPE_PUSH=ON`
@@ -162,7 +162,7 @@ DirectVulkan 半边保留且绿。
 
 ### 2.5 车道计数（每臂，前 → 后）
 
-| 车道 | 臂 | 基线 `ec46a550` | 本包之后 | 结果 |
+| 车道 | 臂 | 基线 `3c2867d3` | 本包之后 | 结果 |
 |---|---|---|---|---|
 | `integration-verify` | monolith，DirectGLES / DirectVulkan | 568 / 568 = 1136（本配置下 2 红，§2.4） | 568 / 568 = **1136**（名不变） | 1136/1136，271 skip |
 | `integration-verify-split` | inproc，DirectGLES / DirectVulkan | 0 / 0（不存在） | 533 / 537 = **1070** | 1070/1070，117 skip（GLES 60、Magma 57） |

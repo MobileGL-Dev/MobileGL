@@ -1,6 +1,6 @@
 # wave 2 包 A — Magma 的 UBO / SSBO / texel 对齐与 range 簇
 
-基线 `feat/disaggregated @ 460a3a72`（pipe HEAD，wave 0 与 X1 已落地）。分支 `p7/magma-a`，
+基线 `feat/disaggregated @ 5c4235d7`（pipe HEAD，wave 0 与 X1 已落地）。分支 `p7/magma-a`，
 worktree `~/w7/p7-magma-a`。规范：`CONTRACT-P7.md` §0 规则 I / J、§3.2 退役表、§9 的文件分区。
 
 本包只改 `Renderer/UniformManager.{cpp,h}` 与 `Renderer/VkBufferManager.{cpp,h}` 里一个**新增**
@@ -168,7 +168,7 @@ G1 不动是结构性的，不是运气：本包所有改动都在 `#if MOBILEGL
 
 ### 6.1 census 为什么一个数都没动
 
-`abort_sites` 数的是 `std::abort()`。wave 0（`852e3c28`）已经把三个 Magma wire fatal 漏斗改走
+`abort_sites` 数的是 `std::abort()`。wave 0（`8bb6309a`）已经把三个 Magma wire fatal 漏斗改走
 `MGPipeSessionFailHook` → `SessionFail`，`abort` 本身住在 `FatalFunnel.cpp` 这个被 sanction 的
 漏斗里。所以**退役一个 `WireDescriptorFatal` 调用点不改变任何 census 数字**，
 `--write-baseline` 不需要跑。任务书里「retirements should LOWER abort_sites」的预期来自
@@ -188,9 +188,9 @@ golden half bits=(0x3a74, 0x4821); mismatched 1 of 262656 texels
 ```
 
 差别在于契约 §2.5 把这条记在 **tcp** 臂，这里它出现在 **split** 臂。`~/w7/pipe` 自己的
-`build-split` 上同一条用例是绿的，而 `~/w7/pipe` 已经走到 `610fa281`（本 worktree 从
-`460a3a72` 分出），两边 `build-split` 的 configure 也不是同一次生成的。**需要集成者裁定**：
-是 460a3a72→610fa281 之间被改掉了，还是 S1 本来就与 configure 有关而不只与 tcp 有关。
+`build-split` 上同一条用例是绿的，而 `~/w7/pipe` 已经走到 `206abdfa`（本 worktree 从
+`5c4235d7` 分出），两边 `build-split` 的 configure 也不是同一次生成的。**需要集成者裁定**：
+是 5c4235d7→206abdfa 之间被改掉了，还是 S1 本来就与 configure 有关而不只与 tcp 有关。
 本包只能确认「与包 A 无关」。
 
 ## 7. 还剩什么 / 需要真机

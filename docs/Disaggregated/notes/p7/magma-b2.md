@@ -3,7 +3,7 @@
 > 规范见 [`CONTRACT-P7.md`](../../../../MobileGL/MG_Remote/CONTRACT-P7.md) §0（规则 I / J）、
 > §3.2（`multisample-blit-shape` / `-aspect` 行）、§4.2（棘轮目标与 (B′) 路线）、§5.2；
 > 前一包见 [`magma-b.md`](magma-b.md)。基线 = `feat/disaggregated` 上 `~/w7/pipe` 的头
-> `ac8065a3`（X1、F1、C、A、B 全部落地）。
+> `09ba88e7`（X1、F1、C、A、B 全部落地）。
 >
 > 主机口径与包 B 相同：WSL Arch + lavapipe（`/usr/share/vulkan/icd.d/lvp_icd.json`），
 > `build-split` = Release / clang / ccache / `DISAGGREGATED=ON` `INPROC=ON` `PIPE_PUSH=ON`
@@ -13,7 +13,7 @@
 > 基线门读数（本树实测，非引自包 B）：`integration-magma-split` **88**、`-spawn` **67**、
 > `-tcp` **69**、`integration-magma-full-split` **521**、`ctest -L unit` **2420**，全绿。
 > 包 B 的报告写的是 84 / 63 / 65，差的四条**不是**「包 A 在它之后落地」——那句是错的，
-> 审查round 已更正：包 A 在 B **之前**落地（`5a14e5a1..2f48ccf4` 在 `c5fa52f9` 之前）且只有 +2
+> 审查round 已更正：包 A 在 B **之前**落地（`450d3075..2207b6d9` 在 `c4be3800` 之前）且只有 +2
 > （`magma-a.md:151-153`），另外 +2 是包 C（`magma-c.md:59-61`）。本树的基线因此是
 > 73 + 11（B）+ 2（A）+ 2（C）= **88 / 67 / 69**。
 
@@ -341,7 +341,7 @@ lifetime-id 探针——所以 P5c 给这两处 teardown 一个具名豁免，P5
 
 裁定 12 点了**四**处 Magma 站点（`VulkanRenderer.cpp` ×3、`ResourceTracker.h` ×1）。其中两处在 P7
 开始前就没了——`git log -S` 把 `ResourceTracker.h` 那处记在 P5f fv（`4f3d2d6b`）、第三处
-`VulkanRenderer.cpp` 记在 P5f fm（`036c3a3d`）——所以 P7 基线 `78b7d6be` 上只剩**两**处，就是本片
+`VulkanRenderer.cpp` 记在 P5f fm（`036c3a3d`）——所以 P7 基线 `e8b2c4bd` 上只剩**两**处，就是本片
 删掉的这两处。Magma 的 apply 线程分配器债现在是**零**处。
 
 ### 3.4 类型留下，并且写明了为什么

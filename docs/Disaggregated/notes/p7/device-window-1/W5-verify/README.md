@@ -1,6 +1,6 @@
 # W5 验收 · p7w5（B3 + B2 + D3 之上）真机：OpenRA 27/27 golden
 
-APK `p7w5-c89000f5`（`apk-p7w5.sha256` = `01040add…`；`apk-p7w5-install.txt`：`versionName=26.09.c89000f-trace`），= 集成树 `c89000f5` = `origin@be636ee5` + B3（`f62ceec6..38112dc6`）+ ID-P7-33。并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。全部 DirectVulkan × pbuffer；`--archive-dir .trace-work/p7w5/<run>`（不入库）。
+APK `p7w5-713bea9a`（`apk-p7w5.sha256` = `01040add…`；`apk-p7w5-install.txt`：`versionName=26.09.713bea9-trace`），= 集成树 `713bea9a` = `origin@b089e0de` + B3（`76bbb6c3..9a494b6f`）+ ID-P7-33。并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。全部 DirectVulkan × pbuffer；`--archive-dir .trace-work/p7w5/<run>`（不入库）。
 
 ## 1. 验收矩阵（ID-P7-25 定的判据：run-ahead 与 lockstep 各 6 遍全等 golden，冷热各半）
 

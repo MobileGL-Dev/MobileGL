@@ -2,7 +2,7 @@
 
 > 计划见 [`PLAN-PH-P34B-P7.md`](PLAN-PH-P34B-P7.md) §1.3 与 §3 wave 2-B；规范见
 > [`CONTRACT-P7.md`](../../../../MobileGL/MG_Remote/CONTRACT-P7.md) §0（规则 I / J）、§3.2（退役 vs
-> decline 表）、§5.1 / §5.2。基线 = `feat/disaggregated` 上 `~/w7/pipe` 的头 `8652bac0`
+> decline 表）、§5.1 / §5.2。基线 = `feat/disaggregated` 上 `~/w7/pipe` 的头 `801f8eda`
 > （wave 0 已落地：Magma 两进程三臂、`MGPipeSessionFailHook` → `Session::Fail` 漏斗、
 > `scripts/link_ratchet.py`）。
 >

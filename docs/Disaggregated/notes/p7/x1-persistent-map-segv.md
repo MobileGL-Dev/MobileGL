@@ -1,10 +1,10 @@
 # X1 — the client-thread SIGSEGV in a mapped buffer under inproc (device window #1)
 
-Wave 2, package X1. Base `a686131e`. Branch `p7/segv`.
+Wave 2, package X1. Base `4f2d4c4e`. Branch `p7/segv`.
 
 ## 1. What the tombstone actually said
 
-Three CI split-subset traces died on the Redmi (`2f7cbe2e`, Adreno 830, APK `p7w1-d260f110`)
+Three CI split-subset traces died on the Redmi (`2f7cbe2e`, Adreno 830, APK `p7w1-9be62cbc`)
 under `MOBILEGL_TRANSPORT=inproc` and passed under monolith on the same device and APK:
 `improved-transparency-minecraft-26.3`, `minecraft-1.21.1-neoforge-create-instancing-in-world`,
 `minecraft-1.21.1-neoforge-create-indirect-in-world`. Every one of them is

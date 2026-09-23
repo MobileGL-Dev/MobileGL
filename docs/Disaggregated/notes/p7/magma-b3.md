@@ -2,7 +2,7 @@
 
 > 计划见 [`PLAN-PH-P34B-P7.md`](PLAN-PH-P34B-P7.md) §3 wave 2；规范见
 > [`CONTRACT-P7.md`](../../../../MobileGL/MG_Remote/CONTRACT-P7.md) §0（规则 I / J）、§3.2、§7、§9；
-> 裁定 ID-P7-14 / 19 / 20 / 21 / 23。基线 = `feat/disaggregated` 上 `~/w7/pipe` 的头 `8c5dd6fc`。
+> 裁定 ID-P7-14 / 19 / 20 / 21 / 23。基线 = `feat/disaggregated` 上 `~/w7/pipe` 的头 `ae3f43ab`。
 > 本文所有 `file:line` 均在该提交上读取。
 >
 > 主机口径：WSL Arch + lavapipe（`/usr/share/vulkan/icd.d/lvp_icd.json`），`build-split` =

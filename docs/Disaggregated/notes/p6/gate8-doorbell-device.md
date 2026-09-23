@@ -1,6 +1,6 @@
 # Gate 8 item ① — the doorbell, measured on the device (server half included)
 
-2026-09-22, branch `feat/disaggregated`, source head `71aa9951`. `CONTRACT-P6.md` §9 item 8-①.
+2026-09-22, branch `feat/disaggregated`, source head `94c130d6`. `CONTRACT-P6.md` §9 item 8-①.
 
 The number this item asks for is the socket doorbell's cost against `inproc`'s condvar. The previous
 session (`gate7-device-ab.md`) delivered the **client** half of that ledger and reported the

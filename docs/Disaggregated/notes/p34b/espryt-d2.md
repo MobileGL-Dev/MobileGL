@@ -1,7 +1,7 @@
 # P3b/P4b wave 2-D package D2 — the Espryt stream, part 2
 
 The verification gates P3b/P4b owes, plus the texture / program split-scenario census.
-Base `7ed5da52` (`feat/disaggregated`), worktree `~/w7/p7-espryt-d2`, branch `p7/espryt-d2`.
+Base `cf7ca59f` (`feat/disaggregated`), worktree `~/w7/p7-espryt-d2`, branch `p7/espryt-d2`.
 
 Package D1 owns `MG_Backend/DirectGLES/{DirectGLES.cpp,Managers.cpp}`, the XFB/readback
 scenarios and their split-arm registrations. Nothing here touches those; every

@@ -266,7 +266,7 @@ Changes to be committed:
 | `git -C MobileGL status -sb` | 与修复前**逐字节相同**（12 个未初始化 `-<sha>` 不变） |
 | `git -C MobileGL submodule status` | 与修复前**逐字节相同** |
 | `git -C FoldCraftLauncher status -sb` | 与修复前**逐字节相同**（含原有的 `M .gitmodules`、`UU FCLauncher.java` 等，均非本次产生） |
-| 各仓库 HEAD | `MobileGL` = `fff9d639`、`MobileGL-disagg` = `71aa9951`、超项目 = `6d733f6f`，**均未移动** |
+| 各仓库 HEAD | `MobileGL` = `fff9d639`、`MobileGL-disagg` = `94c130d6`、超项目 = `6d733f6f`，**均未移动** |
 
 被改到的共享 admin 目录的 **index、HEAD、objects 全部未动**（只删了 `core.worktree` 配置项，以及给 flatbuffers 补建新 admin）。
 
@@ -319,7 +319,7 @@ Changes to be committed:
 - **没有回滚或修改任何源码**。`MobileGL/MG_Util/Metrics/PipeStats.{h,cpp}`、`MobileGL/MG_Util/Metrics/PipeStatsTest.cpp`、
   `MobileGL/MG_Remote/Wire/PipeWireCodec.cpp`、`tools/device_bench/pin_device.sh` 的工作区改动是并行代理的合法产物，
   本修复只读不写（只在 `git add`/`reset` 往返里短暂进过索引，已验证索引被跟踪内容 md5 与修复前一致）。
-- **没有新增/移动任何提交**：`MobileGL-disagg` 仍停在 `71aa9951`，与 `origin/feat/disaggregated` 同步；
+- **没有新增/移动任何提交**：`MobileGL-disagg` 仍停在 `94c130d6`，与 `origin/feat/disaggregated` 同步；
   `dev` 工作树仍在 `fff9d639`；超项目仍在 `6d733f6f`。
 - **没有改分支**：`feat/disaggregated` 原样。
 - **没有动 `3rdparty/*` 里的文件内容**（flatbuffers 的 admin 是建在 `.git/modules/...` 下的新 git 目录，

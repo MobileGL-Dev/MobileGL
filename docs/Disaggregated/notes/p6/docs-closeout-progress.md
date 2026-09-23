@@ -1,9 +1,9 @@
 # docs-closeout-progress — `CURRENT_STAGE_PROGRESS.md` 的 P6 收官写入报告
 
 2026-09-22。工作树 `C:/Users/geekerwan/AndroidStudioProjects/FoldCraftLauncher/MobileGL-disagg`，
-分支 `feat/disaggregated`，**现头 `2bd86664`**，与 `origin/feat/disaggregated` 同步。任务书给的
-头 `71aa9951` 是**两轮测量的源头**（门 7 报告记 `98d0b96c`、门 8 的 wire 计数器与真机第二轮记
-`71aa9951`）；它之后分支又落了两个 P6.5 设计提交（`2d86e07a`、`2bd86664`），非本报告所加。
+分支 `feat/disaggregated`，**现头 `4e7bf0fe`**，与 `origin/feat/disaggregated` 同步。任务书给的
+头 `94c130d6` 是**两轮测量的源头**（门 7 报告记 `75dd0cb1`、门 8 的 wire 计数器与真机第二轮记
+`94c130d6`）；它之后分支又落了两个 P6.5 设计提交（`872370ba`、`4e7bf0fe`），非本报告所加。
 
 **只改了一份文档**：`docs/Disaggregated/CURRENT_STAGE_PROGRESS.md`。未 commit。工作树里既有的
 未提交改动（`MobileGL/MG_Remote/**`、`MobileGL/MG_Util/**`、`tools/device_bench/pin_device.sh`、
@@ -38,17 +38,17 @@ P6.5、Ph、P12、seq/op 五条**逐字保留**（仅 `DirectVulkan` 条尾加�
 ### 1.1 头部状态段
 
 旧：「状态（2026-09-21）：P6 全部包已落地（a6…t6），出口门第 1–6 项达成；第 7 项…第 8 项…尚未
-正式采集，因此 P6 记为「实现完成、出口性能/设备数待补」，**未宣布收官**。分支 … 头 `16bfab10`」
+正式采集，因此 P6 记为「实现完成、出口性能/设备数待补」，**未宣布收官**。分支 … 头 `77cbd176`」
 
 新：`P6 已收官（2026-09-22）`，并把分支头写成**三层事实**，因为任务书要求"照实说"而
-`71aa9951` 已不是树头：
+`94c130d6` 已不是树头：
 
-- 门 7 报告头 `98d0b96c`（`gate7-device-ab.md:3`）、门 8 第二轮头 `71aa9951`
+- 门 7 报告头 `75dd0cb1`（`gate7-device-ab.md:3`）、门 8 第二轮头 `94c130d6`
   （`gate8-doorbell-device.md:3`、`gate8-wire-counters.md:3`）——**测量期的源头**；
-- 其后两个提交 `2d86e07a`、`2bd86664` 是 P6.5 设计（已核实：`2d86e07a` 的 diff 只含
+- 其后两个提交 `872370ba`、`4e7bf0fe` 是 P6.5 设计（已核实：`872370ba` 的 diff 只含
   `CONTRACT-P6.md` / `StreamLink.h`(+5 行注释) / `ARCHITECTURE.md` / `CURRENT_STAGE_PROGRESS.md` /
-  `P6-ENDSTATE-REVIEW.md` / `ROADMAP.md`；`2bd86664` 只含 `ROADMAP.md`）；
-- 现头 `2bd86664`，与 `origin` 同步（`git rev-parse origin/feat/disaggregated` = `2bd86664…`）；
+  `P6-ENDSTATE-REVIEW.md` / `ROADMAP.md`；`4e7bf0fe` 只含 `ROADMAP.md`）；
+- 现头 `4e7bf0fe`，与 `origin` 同步（`git rev-parse origin/feat/disaggregated` = `4e7bf0fe…`）；
   **工作树另有未提交的 P6 收尾改动**，指向 §1.1。
 
 ### 1.2 §1.1 收尾（2026-09-22）

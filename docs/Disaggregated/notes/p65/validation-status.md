@@ -4,8 +4,8 @@
 但当时实际为 lockstep，不能充作 run-ahead 验收。首 caps race 修复后的 READY7 已取得主机 TCP
 及 Redmi 各 **102 PASS / 0 FAIL / 0 SKIP**，每条实际 ARMED；正式 trace 矩阵与同模式性能数仍待补。
 
-当前源码基线为 `origin/feat/disaggregated@e6c51d07`，开发树 `codex/p65-all-tcp` 的
-HEAD 为 `52ffc6a7` 加未提交工作。两端曾共享的显式 `MOBILEGL_BUILD_STAMP` 是
+当前源码基线为 `origin/feat/disaggregated@90434424`，开发树 `codex/p65-all-tcp` 的
+HEAD 为 `018fab0f` 加未提交工作。两端曾共享的显式 `MOBILEGL_BUILD_STAMP` 是
 `410dfa94c3d92241e9ec01ddbba1bb911eb60d4b`，**它不是当前 HEAD**；后续 rebase 没有改变当时的
 生产字节，因此保留了这一制品标识。不能拿匹配的显式 stamp 替代每组产物 SHA、实际 arming
 状态和运行证据，也不能把较早制品的绿移记到新的修复头。
@@ -131,7 +131,7 @@ link seam 的七个负控与生产 ownership 门已接入 `test.yml`，结果见
 设备为 Redmi `2f7cbe2e`，aarch64 / Adreno 830，IP `192.168.21.181`。
 已安装并启动 trace flavour 的前台 Service，supervisor 监听 `tcp://0.0.0.0:40613`，
 两端令牌一致；使用显式设置的 `MOBILEGL_BUILD_STAMP`，不依赖 APK 的 `nogit` 文件名。
-当前沿用的 `410dfa94...` 是共享制品标识，不是当前 `52ffc6a7` 源码 HEAD。
+当前沿用的 `410dfa94...` 是共享制品标识，不是当前 `018fab0f` 源码 HEAD。
 已经收到真实 Welcome 与 Adreno caps，wire/build 指纹均接受。
 此前安装的 traceDebug 原生实际只有 `-g`、没有优化，以上只作功能诊断，不能作为 release 性能数。
 后续功能复验已使用原生 `-O2/NDEBUG` 的 debuggable traceRelease APK，并保持受信任签名；

@@ -1,6 +1,6 @@
 # X1 复验 · persistent-map tracker 在 arm64 上认领自己的 fault
 
-APK `p7w2-665cfefc`（`../00-session/apk-p7w2.sha256` = `4b11f647…`；`apk-p7w2-install.txt`），= wave 0 + X1（`0a41972b`，`notes/p7/x1-persistent-map-segv.md`）+ CTS skip list。同一 reboot-clean 会话（boot id `18d8d589…`），并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。DirectVulkan × inproc × pbuffer × 1 遍，外加 26.3 的 DirectGLES 臂：
+APK `p7w2-ec3ba00a`（`../00-session/apk-p7w2.sha256` = `4b11f647…`；`apk-p7w2-install.txt`），= wave 0 + X1（`4cbf78c2`，`notes/p7/x1-persistent-map-segv.md`）+ CTS skip list。同一 reboot-clean 会话（boot id `18d8d589…`），并排包 `top.mobilegl.plugin.p7w1.trace` 原地升级。DirectVulkan × inproc × pbuffer × 1 遍，外加 26.3 的 DirectGLES 臂：
 
 | case | 后端 | E0a / E4a（修前） | X1 后 | tracker DECLINED |
 |---|---|---|---|---|

@@ -1,7 +1,7 @@
 # espryt D1 — the Espryt (DirectGLES) stream, part 1
 
 P3b/P4b items landing under the P7 program (`notes/p7/PLAN-PH-P34B-P7.md` §1.2 rows XFB /
-回读 / `g_fboTextureSyncList`, §3 wave 2-D). Base `feat/disaggregated@665cfefc`, branch
+回读 / `g_fboTextureSyncList`, §3 wave 2-D). Base `feat/disaggregated@ec3ba00a`, branch
 `p7/espryt-d1`.
 
 Per-slice red-once notes (R-16). A slice is not done until the case it adds has been seen RED

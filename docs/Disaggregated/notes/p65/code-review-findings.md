@@ -1,6 +1,6 @@
 # P6.5 第一波 代码审查（4 切片，2026-09-22）
 
-审查对象：`codex/p65-all-tcp` HEAD `52ffc6a7` + 未提交工作树（含 archive v2 / Present-glFlush 尾批 / 取消 / half-close 修复）。
+审查对象：`codex/p65-all-tcp` HEAD `018fab0f` + 未提交工作树（含 archive v2 / Present-glFlush 尾批 / 取消 / half-close 修复）。
 四个并行 Opus 审查各读设计（ROADMAP §51–116）后逐文件核验。**结论：数据面、wire 布局、握手三块无硬正确性缺陷；实现整体谨慎、扎实。** 下表按严重度排序，两项已修，其余记为跟进。
 
 | 严重度 | 发现 | 出处 | 处置 |

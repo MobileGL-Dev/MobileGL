@@ -1,4 +1,4 @@
-# Ph / P3b-P4b / P7 统筹计划（2026-09-22，基线 `feat/disaggregated@a96875bf`）
+# Ph / P3b-P4b / P7 统筹计划（2026-09-22，基线 `feat/disaggregated@b95f5f1a`）
 
 > 用户指令：「查看 ROADMAP，统筹并推进实现，直到 P7 结束。先计划，看看 Ph、P3/4 深化、P7 有哪些任务已经完成、哪些不必要、哪些是必须的，然后开工实现直到 P7 结束。」
 >
@@ -147,4 +147,4 @@ P3b/P4b 余项（场景普查后半、CTS AFTER）→ Ph 大件（PH-1 (3)(4)、
 
 ## 6. 纪律（每个提交）
 
-沿用 ROADMAP「通用纪律」：ALL target 完整构建（**含 pull 构建的测试**——a96875bf 的 `build-linux` 因 `PipeStatsTest.cpp:137` 编不过，已修）；G1 pull `.text` 恒 `0xa52203`、符号 0/0/0/0（基线 `~/w7/p7-before/`）；G2/G14 名集合只增不删（split 4155 / linux 3049）；每门 red-once；性能只记录；拆分不顺手修 `dev`；先 commit+push 再进下一波（用户 2026-09-11 常规）。
+沿用 ROADMAP「通用纪律」：ALL target 完整构建（**含 pull 构建的测试**——b95f5f1a 的 `build-linux` 因 `PipeStatsTest.cpp:137` 编不过，已修）；G1 pull `.text` 恒 `0xa52203`、符号 0/0/0/0（基线 `~/w7/p7-before/`）；G2/G14 名集合只增不删（split 4155 / linux 3049）；每门 red-once；性能只记录；拆分不顺手修 `dev`；先 commit+push 再进下一波（用户 2026-09-11 常规）。

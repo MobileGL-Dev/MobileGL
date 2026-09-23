@@ -12,9 +12,9 @@
 
 ## 源码与制品身份
 
-- 基线：远端 `feat/disaggregated` 的 `e6c51d0711595f579decfaf78c1f5b0040ccd7fe`。
+- 基线：远端 `feat/disaggregated` 的 `9043442454ae38568315ddf2b1c1814b183aa235`。
   最后一次 fetch 已确认没有更新；该提交是当前分支的祖先。
-- 开发工作树：`codex/p65-all-tcp`，HEAD `52ffc6a7` 加未提交修改。
+- 开发工作树：`codex/p65-all-tcp`，HEAD `018fab0f` 加未提交修改。
   用户纠正提交偏好之前已有的两个本地提交随后只做了 rebase；之后未创建开发提交、未 push。
 - 两端显式 build stamp：`410dfa94c3d92241e9ec01ddbba1bb911eb60d4b`。
   它是本轮共享的构建标识，不代表当前 HEAD 或一份已提交的最终源码。

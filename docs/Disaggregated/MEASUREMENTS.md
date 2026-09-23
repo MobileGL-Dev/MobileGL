@@ -616,7 +616,7 @@ P6（spawn transport）的实现包（a6 / c6 / lk / so / sm / cp / hs / dl / st
 | 跑法 | `--benchmark-repeats 3`（门 7）/ `2`（门 8），`--benchmark-tail-frames 200`，`--benchmark-no-finish`，best-of-3 / best-of-2 |
 | split 开关 | `MOBILEGL_IPC_ROLE_SPLIT_STATE=1`、`MOBILEGL_IPC_STRICT_ERRORS=1`、`MOBILEGL_IPC_RUN_AHEAD=1` |
 | stats | `MOBILEGL_PIPE_STATS=1`、`MOBILEGL_PIPE_STATS_PERIOD=120` |
-| 源码头 | 门 7 会话 `98d0b96c`；门 8 两会话 `71aa9951` + §12.6 的收尾改动（工作树） |
+| 源码头 | 门 7 会话 `75dd0cb1`；门 8 两会话 `94c130d6` + §12.6 的收尾改动（工作树） |
 | 臂的证明 | 每个 spawn 臂必须在**自己的**私有日志里出现 `Config: MOBILEGL_TRANSPORT=spawn` 与 `spawn ARMED - the server role runs in pid N`；`--transport` 在 `--benchmark` 模式下被 runner 忽略（会静默跑成 monolith），所以传输一律用显式 `--env MOBILEGL_TRANSPORT=…`，跑完按库自己的日志核对 |
 
 **主指标 = client GL 线程自身的逐线程 CPU ms/帧**（§9 的规则：内核对本 app 的 `sched_setaffinity` 请求不生效，进程总量会把两个时钟域混在一起），由设备在**尾 200 帧**上汇总；`fps` 与 wall p50/p95 并列记录，不作主指标。
@@ -773,7 +773,7 @@ P6（spawn transport）的实现包（a6 / c6 / lk / so / sm / cp / hs / dl / st
 - **spawn client 的窗口化字段仍不可信**，而且这一项是**结构**不是缺陷：要让 spawn client 推进窗口，得让 client 进程到达一次 `PipeStats::OnPresent`，而 client 的帧边界在 spawn 下是 `EmitPresent`（每条 present 记录一次）——接上去会与 backend 的帧边界重复计数。**不要顺手接**。
 - **`MOBILEGL_IPC_STAGE_MB` 同时是 arena 大小与 chunk 预算的来源**，所以分块的净效果没有被单变量隔离（§12.5 的 `tex` +194%）。
 
-## 13. P3b/P4b wave 2-D 包 D2（`7ed5da52`，WSL 桌面 lavapipe/llvmpipe）
+## 13. P3b/P4b wave 2-D 包 D2（`cf7ca59f`，WSL 桌面 lavapipe/llvmpipe）
 
 ### 13.1 上传形状金标（R-11 / D-D4，`TextureUploadShapeScenario` 由记录升为门）
 

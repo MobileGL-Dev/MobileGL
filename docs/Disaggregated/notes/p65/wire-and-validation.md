@@ -1,6 +1,6 @@
 # P6.5 wire、计量与主机验证记录
 
-基线是 `origin/feat/disaggregated@2ec8e7f4`，实现树是 `410dfa94c3d92241e9ec01ddbba1bb911eb60d4b` 加本轮未提交修改。没有推送。以下数字注明采集边界，不代表整个 P6.5 已收官；设备、完整 integration 与最终阶段审查另记。
+基线是 `origin/feat/disaggregated@35b3283b`，实现树是 `410dfa94c3d92241e9ec01ddbba1bb911eb60d4b` 加本轮未提交修改。没有推送。以下数字注明采集边界，不代表整个 P6.5 已收官；设备、完整 integration 与最终阶段审查另记。
 
 ## wire 事实与握手
 
@@ -27,7 +27,7 @@ Hello/Welcome 新字段采用 append；保留旧 FlatBuffers 字段槽。`wireFi
 
 - 真正复制到临时树后，互换 `MGPRange::Offset`/`Size` 两个同宽 `Uint64` 成员；成员布局摘要由 `4304347197452401705` 变为 `6038841773737773369`，两次使用同一未改动 build header。证据 `/tmp/p65-wire-control-ehave5w9/{before.s,after.s}`。生产树没有被临时改坏。
 - `SessionHandshakeTest` 的生产 Accept 路径测试了 major=99、错误 wire 摘要的具名 Refuse、空 union 拒绝、Connect 异 build 成功、Fork 异 build 拒绝、Connect 强制同 build 拒绝；9/9 通过。
-- 真实 TCP supervisor 的开发期控制 `/home/swung/p65-supervisor-smoke/protocol-controls.json` 记录 major=99 → code 1、错误布局 → code 2、不同 build 的 Connect → Welcome、强制同 build → code 3，并验证拒绝后 supervisor 仍活着。该记录采于 rebase 前的 `2bd86664` 开发产物；不能据此冒称最新产物的所有进程退出条件均已重新取证。最终 control 复跑由阶段主报告记载。
+- 真实 TCP supervisor 的开发期控制 `/home/swung/p65-supervisor-smoke/protocol-controls.json` 记录 major=99 → code 1、错误布局 → code 2、不同 build 的 Connect → Welcome、强制同 build → code 3，并验证拒绝后 supervisor 仍活着。该记录采于 rebase 前的 `4e7bf0fe` 开发产物；不能据此冒称最新产物的所有进程退出条件均已重新取证。最终 control 复跑由阶段主报告记载。
 
 ## G1 与生成器
 

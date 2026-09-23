@@ -1,6 +1,6 @@
 # E0 · 出口门 3 分母之外的 case（按名单列，不在汇总表里悄悄删行）
 
-E0a monolith 臂（DirectVulkan × `--use-pbuffer` × 1 遍，APK `p7w1-d260f110`，Redmi `2f7cbe2e`）39 例全部回放、全部逐位确定（`ssim vs first = 1.0`），**3 例低于阈值**。它们都在 **monolith** 上就红，所以按 runbook §4 的判别「monolith 也分歧 ⇒ 问题不在分离」，从出口门 3 的分母里排除；分母 = 39 − 3 = **36**（另：rd12 in-world 本来不在 `--matrix` 里，ID-P7-4）。
+E0a monolith 臂（DirectVulkan × `--use-pbuffer` × 1 遍，APK `p7w1-9be62cbc`，Redmi `2f7cbe2e`）39 例全部回放、全部逐位确定（`ssim vs first = 1.0`），**3 例低于阈值**。它们都在 **monolith** 上就红，所以按 runbook §4 的判别「monolith 也分歧 ⇒ 问题不在分离」，从出口门 3 的分母里排除；分母 = 39 − 3 = **36**（另：rd12 in-world 本来不在 `--matrix` 里，ID-P7-4）。
 
 | case | monolith SSIM | 阈值 | 原因 | 归属 |
 |---|---|---|---|---|

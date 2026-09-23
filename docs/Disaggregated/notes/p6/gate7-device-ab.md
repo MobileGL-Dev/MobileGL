@@ -1,6 +1,6 @@
 # Gate 7 — Redmi `2f7cbe2e` paired A/B, and gate 8 item 1 (the doorbell)
 
-2026-09-22, branch `feat/disaggregated`, source head `98d0b96c`. `CONTRACT-P6.md` §9 items 7 and 8-①.
+2026-09-22, branch `feat/disaggregated`, source head `75dd0cb1`. `CONTRACT-P6.md` §9 items 7 and 8-①.
 
 Everything below was measured on one reboot-clean thermal window on Redmi `M332BF` (`2f7cbe2e`,
 SM8750, Adreno 830v2) from a **snapshot of the worktree** (`C:/Users/geekerwan/p6-snap/MobileGL-disagg`),
