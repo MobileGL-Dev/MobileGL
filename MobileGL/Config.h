@@ -497,6 +497,18 @@ namespace MobileGL::MG_Config {
         // stage chunk budget (MGPipeStageChunkBytes, a quarter of this), and a record type with
         // no cut is Fatal{RingOverrun, "SEG_STAGE"} rather than allowed to exceed it.
         Uint32 StageMb = 32;
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB (P7 wave 4 M2, ID-P7-32): the SERVER's budget, in MiB,
+        // for orphaned wire buffer stores - the old VkBuffer every glBufferData that crosses the
+        // wire leaves behind - that a GPU command recorded but not yet retired may still name.
+        // Stores no command names are destroyed at once and stores whose last submission has
+        // retired are destroyed at the next park; this bounds the REST. When the parked bytes
+        // exceed it after a sweep, the server flushes what it has recorded and waits for it
+        // (WaitForWireBufferHostAccess's sync point, mid-frame), which retires every one. It is
+        // not a frame count because a frame is not bounded: a snapshot-exiting pbuffer replay
+        // delivers one present for 1.3 M calls. 0 IS THE NEGATIVE CONTROL, not "unlimited by
+        // design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
+        // and MagmaWireReclaimScenario's watermark case must go red.
+        Uint32 WireDeferredMb = 64;
         // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
         Uint32 SpinUs = 50;
         // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.

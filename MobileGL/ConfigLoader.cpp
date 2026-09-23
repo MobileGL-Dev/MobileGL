@@ -392,6 +392,9 @@ namespace MobileGL::MG_ConfigLoader {
         // are sanity, not policy.
         ipc.RingMb = QueryEnvUint32("MOBILEGL_IPC_RING_MB", 8, 1, 1024);
         ipc.StageMb = QueryEnvUint32("MOBILEGL_IPC_STAGE_MB", 32, 1, 4096);
+        // P7 wave 4 M2 (Config.h has the semantics). 0 is admitted ON PURPOSE as the negative
+        // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
+        ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
         ipc.SpinUs = QueryEnvUint32("MOBILEGL_IPC_SPIN_US", 50, 0, 1000000);
         // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
         // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
@@ -462,10 +465,10 @@ namespace MobileGL::MG_ConfigLoader {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
-        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB spin=%uus persistent-block=%uKiB "
+        MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus persistent-block=%uKiB "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u strict=%d "
                 "audit=%d role-split-state=%d affinity='%s'",
-                ipc.RingMb, ipc.StageMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
+                ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.PersistentBlockKb, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str());
@@ -473,6 +476,11 @@ namespace MobileGL::MG_ConfigLoader {
             MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "
                     "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "
                     "live GLContext, so an unbarriered queue lets the server read future values");
+        }
+        if (ipc.WireDeferredMb == 0) {
+            MGLOG_W("Config: MOBILEGL_IPC_WIRE_DEFERRED_MB=0 is the M2 NEGATIVE CONTROL: the "
+                    "server never forces a sync for orphaned wire buffer stores, so a long frame "
+                    "that respecifies and draws holds every one of them until the frame ends");
         }
         if (ipc.PersistentBlockKb == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 is the E3(a) NEGATIVE CONTROL: "

@@ -294,13 +294,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // running total has to stay exact as entries leave.
             Uint64 bytes = 0;
         };
-        // Park a wire store, then sweep. `lastUseSerial` is the releasing resource's, captured
-        // before the caller resets it.
+        // Park a wire store, sweep, then hold the watermark. `lastUseSerial` is the releasing
+        // resource's, captured before the caller resets it.
         void DeferWireRelease(VkBufferObject&& buffer, Uint64 lastUseSerial);
         // Destroy every parked store proven dead by the rules above. Returns how many.
         SizeT SweepDeferredWireReleases();
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB (Config.h has the semantics): when the parked bytes
+        // still exceed the budget after a sweep, take the sync point WaitForWireBufferHostAccess
+        // takes - flush what is recorded, wait for it - and sweep again, which retires every
+        // parked store, because none can be tagged past the sync point it just waited out.
+        void EnforceWireDeferredWatermark();
         // Teardown: the caller has proven the device idle (Shutdown / RecreateTransientArenas).
         void DestroyAllDeferredWireReleases();
+        // THE one Fatal{ResourceUnavailable, "buffer-write-sync"} site (rule I: no second abort
+        // for the census to count), shared by the host write that cannot wait for the GPU and
+        // the watermark that cannot. `site` says which.
+        [[noreturn]] static void WireBufferSyncFatal(const char* site);
 #endif
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);

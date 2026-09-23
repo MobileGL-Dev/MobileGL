@@ -365,10 +365,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset),
                                                 static_cast<SizeT>(size));
             }
-            if (!uploaded && !WaitForWireBufferHostAccess(*resource)) {
-                MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-write-sync\"}");
-                std::abort();
-            }
+            if (!uploaded && !WaitForWireBufferHostAccess(*resource)) WireBufferSyncFatal("host-write");
         }
         if (!uploaded) {
             uploaded = resource->buffer.Upload(bytes, size, offset);
@@ -606,14 +603,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pbuffer replay that snapshot-exits delivers ONE present for 1.3 M calls (ID-P7-32) -
         // so the only cadence that tracks the workload is the workload itself.
         SweepDeferredWireReleases();
+        EnforceWireDeferredWatermark();
+    }
+
+    void VkBufferManager::EnforceWireDeferredWatermark() {
+        const Uint64 budget = static_cast<Uint64>(MG_Config::Ipc.WireDeferredMb) * 1024u * 1024u;
+        if (budget == 0 || m_deferredWireBytes <= budget) return;
+        // What is left after the sweep is named by work that is recorded but unsubmitted, or
+        // submitted but unretired. Every entry is tagged at or below the sync point taken HERE,
+        // so waiting it out - the host-access wait's own call, which flushes the recording first
+        // - proves all of them dead. A mid-frame flush is what WaitForWireBufferHostAccess and a
+        // glClientWaitSync already do to this command stream; it costs one submission per
+        // budget's worth of orphans, not one per glBufferData.
+        if (pVulkanRenderer == nullptr ||
+            !pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
+            WireBufferSyncFatal("deferred-watermark");
+        }
+        SweepDeferredWireReleases();
+    }
+
+    void VkBufferManager::WireBufferSyncFatal(const char* site) {
+        MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-write-sync\"} {site=%s}", site);
+        std::abort();
     }
 
     SizeT VkBufferManager::SweepDeferredWireReleases() {
-        if (m_deferredWireReleases.empty() || pVulkanRenderer == nullptr) return 0;
+        if (m_deferredWireReleases.empty()) return 0;
         SizeT dead = 0;
-        if (pVulkanRenderer->IsSubmitIndexComplete(pVulkanRenderer->GetSyncPointSubmitIndex())) {
-            // Idle: nothing recorded, every submission retired. Every parked store is dead,
-            // including one tagged for a batch that was abandoned instead of submitted.
+        if (pVulkanRenderer == nullptr ||
+            pVulkanRenderer->IsSubmitIndexComplete(pVulkanRenderer->GetSyncPointSubmitIndex())) {
+            // Idle: nothing recorded, every submission retired - or no renderer, so no queue.
+            // Every parked store is dead, including one tagged for a batch that was abandoned
+            // instead of submitted.
             dead = m_deferredWireReleases.size();
         } else {
             // The list is in park order and GetSyncPointSubmitIndex() never decreases, so the
