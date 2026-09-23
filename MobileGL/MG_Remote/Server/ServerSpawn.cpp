@@ -81,15 +81,27 @@ namespace MobileGL::MG_Remote::Server {
         // between fork and execve only async-signal-safe calls are allowed, and
         // allocating a vector of strings is not one of them.
         //
-        // EXCEPT A KNOB ONLY THE SERVER READS, named here one by one. P7 wave 4 M2's
+        // EXCEPT A KNOB THE SERVER READS, named here one by one. P7 wave 4 M2's
         // MOBILEGL_IPC_WIRE_DEFERRED_MB bounds the server's own orphaned wire buffer stores;
         // nothing in the client reads it, so scrubbing it did not make the child safer - it made
         // the knob mean something under inproc and silently nothing under spawn, the worst of
         // the three states (the tcp server reads its supervisor's environment, as for every
         // knob). It names no endpoint, no role and no segment size, so neither anti-recursion
         // catch has anything to say about it.
+        //
+        // M2 round 2 (review): three more the server reads and that were silently defaulting in
+        // the spawned child for the same reason - MOBILEGL_IPC_SPIN_US (the doorbell spin budget,
+        // read by BOTH roles, so the child should spin as the parent was told to),
+        // MOBILEGL_IPC_SERVER_AFFINITY (the apply thread's CPU mask, read only by the server) and
+        // MOBILEGL_IPC_AUDIT (the server's 0xDD fill of retired stage bytes). Each is a tuning or
+        // audit value, none names an endpoint, a role, a path or a segment size, and ServerMain's
+        // catch (b) keeps verifying the four it verifies (TRANSPORT, SERVER_PATH, RING_MB,
+        // STAGE_MB). Everything else under the prefix still goes.
         bool ShouldScrub(const char* entry) {
-            static constexpr const char* kServerOwned[] = {"MOBILEGL_IPC_WIRE_DEFERRED_MB="};
+            static constexpr const char* kServerOwned[] = {
+                "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=", "MOBILEGL_IPC_SERVER_AFFINITY=",
+                "MOBILEGL_IPC_AUDIT=",
+            };
             for (const char* kept : kServerOwned) {
                 if (std::strncmp(entry, kept, std::strlen(kept)) == 0) {
                     return false;
