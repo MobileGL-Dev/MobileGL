@@ -238,7 +238,7 @@ P5c 当时移交的对象类 BARRIER-PULLED、transport registry 前端键、EGL
 
 | 债务 | 去向 / 当前口径 |
 |---|---|
-| P5 的 27 个普通 inproc wrong-answer（历史计数） | 22（14 layered + 3 packed depth/stencil + 5 framebuffer recycle）→ P4b/P7 texture readback；3 → P7 query；1 inspection（`TextureParamsWithoutASamplerView`）→ 原记 P6，场景代码里已无 P6 引用，疑由 P5f fc / P6 cp 顺手关闭、**待核**；1 FBO/RBO delete 用例在 r1 定向验证中通过，完整像素因果未隔离。最终计数以 `MEASUREMENTS.md` §7.2 的同名比对为准 |
+| P5 的 27 个普通 inproc wrong-answer（历史计数） | **已结（2026-09-22，`1135c664` 同名重跑，`MEASUREMENTS.md` §7.2；inproc 与 spawn 逐名相同）**：原「22 → P4b/P7 texture readback」→ **19 绿**（14 layered、3 packed depth/stencil、2 framebuffer recycle），余 **3 条 framebuffer recycle 由错答变为具名停止**——三条都是 `integration-monolith-control` 里 `MOBILEGL_PIPE_PUSH=0` 的对照臂（DG `Legacy` → `Fatal{PipeLegacyMemosDisabled}`；DV `Legacy` / `AbaControl` → `Fatal{UnmigratedVerb, "Magma:clear-framebuffer-record"}`），旋钮在 split 下没有臂，不是 readback 欠账；原「3 → P7 query」→ **3 绿**；1 inspection（`TextureParamsWithoutASamplerView`）→ **绿，「待核」关**；1 FBO/RBO delete → 绿。同一重跑的 1267 名合并 lane 普查 811/203/62/191 → 1051/172/37/7，44 条非绿全是钉了非默认 `MOBILEGL_PIPE_PUSH` 的对照臂 |
 | `rsp` residual inputs | **P5f 已关闭残余读取**：字段归属 41 record / 6 derived / 0 barrier / 16 fatal；strict 与双块 marker 表均为空，双后端逐帧 RSP 门 2 PASS / 0 skip，Redmi 36 个统计窗口 rsp=0。P5e 的“rsp 只计被采纳设障 pull”是历史计数规则，八对 admitted 的历史观察不再是当前允许集合 |
 | `SEG_REPLY` 2 MiB 单槽 payload cap | → **P9**（契约 §10.2.3 改判，ID-47）；stream 链路上 reply 本就是消息，cap 变成 P6.5 nd 的 `maxReplyBytes` 窗口 |
 | `GetCaps` 的两个 blobref | 目前不骑 record；一旦运输，必须有 server→client carrier rule，不能套 `SEG_STAGE` |

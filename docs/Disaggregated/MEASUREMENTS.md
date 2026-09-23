@@ -333,6 +333,8 @@ Espryt T1（`0x1fff` − pull）= +1076.1，T2（`0x1ff` − pull）= +1064.7，
 | `TextureParamsWithoutASamplerView` | 1 | P6 inspection forwarder |
 | `P4aFinalFixScenario` FBO/RBO delete | 1 | 读回用 ReadPixels，完整像素因果未隔离；client-thread framebuffer death 归 r1 #2 |
 
+> 上表是 P5 的历史去向。**头上读数（`1135c664`，P7 wave 3 同名重跑）见 §7.2 末**：22 条 readback → 19 绿 + 3 条由错答变为具名停止（都是 `MOBILEGL_PIPE_PUSH=0` 的对照臂）；3 条 query 全绿；inspection 与 FBO/RBO 各 1 条绿。
+
 ### 6.3 R-10、逐帧 ledger 与内存
 
 规范 ledger（`ProtocolSmokeTest` 钉住）：**SEG_CMD 8 MiB / SEG_STAGE 32 MiB / SEG_REPLY 16 MiB / SEG_EVENT 256 KiB**。`MOBILEGL_PIPE_STATS_PERIOD=1` 下 persistent-map 场景 `pmap=600.00 B/帧, mpr=1, rsp=35`（`rsp` 只是有 stamp 读点的下界）。inproc 进程峰值 RSS：server accept 时 11.5 MB、client teardown 141 MB（两角色共享一个进程，不是两个独立峰值）。
@@ -382,7 +384,7 @@ splitctl 相对 push 的帧 p50 −0.1% – +1.6%（split build 的 monolith 臂
 
 包报告：`~/w7/notes/p5b/p5b-results/{d1-codex-v1,i1-v1,t2-codex-v1,f1-v1,r1-codex-v1,r2-v1,blit-codex-v1,mip-codex-v1,sync-codex-v1}.md`。
 
-### 7.2 主机收尾门与合并普查（`348d22a4`，`~/w7/p5b-final-host-348d22a4/`）
+### 7.2 主机收尾门与合并普查（`348d22a4`，`~/w7/p5b-final-host-348d22a4/`；同名重跑 @ `1135c664` 见本节末）
 
 | 车道 | Selected | Passed | Skipped | Failed |
 |---|---:|---:|---:|---:|
@@ -394,7 +396,29 @@ splitctl 相对 push 的帧 p50 −0.1% – +1.6%（split build 的 monolith 臂
 
 G1 27,814 符号 0/0/0/0、`.text` 10,806,611 → 10,806,611；G5 两族 + pin 自测；生成器 / 纯度检查；G2 / G14 rc=0；E1 / E3(a)（精选 4 case）rc=0；E2 OpenRA 2/2、draw-drop SSIM 0.000036 / 758 records、pull-library 拒绝与库 SHA 恢复一致；smoke 16 core + 12 private。retrace-push **79/79**；retrace-verify 在 WSL 重启前完成 4/79，其余 75 条以 SHA-256 钉住的同一 verify 库串行续跑，合并 **79/79**；对账无缺步、无非零退出（`reconciliation-20260916.md`），`complete=true`、exit 0。一次 shell 异常（追加 runner 行触发 `-test-dir: command not found`）保留在原始输出，不冒充测试失败。
 
-合并 inproc 普查（`~/w7/p5b-final-census-348d22a4/`）：integration lane 显式 32 MiB，**1267 selected = 811 passed / 203 skipped / 62 aborted / 191 failed**；旧 1149 名全部保留、新增 118；旧 432 passes 全保留、零回退；旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。完整 trace 显式 256 MiB（容纳单次 128 MiB 上传，不是默认容量修复）：**79 = 72 passed / 6 aborted / 1 failed**（主跑止于 73/79，三轮续跑补齐；`create-indirect` DirectVulkan 在 llvmpipe 上内存膨胀 >60 GiB RSS 被守护杀死，两次复现，记 failed）。7 条未过项首阻塞：`rd12` DirectGLES `Fatal{InitialBytesNotCarried,"resource_respecify"}`、DirectVulkan `Fatal{BarrierTimeout,"Present"}`；`iris-photon`、`iris-derivative`、`create-indirect` 三个 DirectGLES `Fatal{UnmigratedEmulation,"texture-remint-pull"}`；`iris-bsl-esc-menu-854` DirectGLES `InitialBytesNotCarried`；`create-indirect` DirectVulkan 内存守护。通过项含 `improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914、`iris-iterationrp` DirectVulkan 0.995833、`iris-bsl-esc-menu-854` DirectVulkan 0.998402。逐 trace 见 `joint-codex-v1.md` 的 census 块与 `identity.json` / `counts.json` / `trace-transitions.json`。
+**P5b 基线。** 合并 inproc 普查（`~/w7/p5b-final-census-348d22a4/`）：integration lane 显式 32 MiB，**1267 selected = 811 passed / 203 skipped / 62 aborted / 191 failed**；旧 1149 名全部保留、新增 118；旧 432 passes 全保留、零回退；旧 505 abort → 265 passed / 18 skipped / 58 aborted / 164 failed；旧 27 failed → 1 passed / 26 failed。完整 trace 显式 256 MiB（容纳单次 128 MiB 上传，不是默认容量修复）：**79 = 72 passed / 6 aborted / 1 failed**（主跑止于 73/79，三轮续跑补齐；`create-indirect` DirectVulkan 在 llvmpipe 上内存膨胀 >60 GiB RSS 被守护杀死，两次复现，记 failed）。7 条未过项首阻塞：`rd12` DirectGLES `Fatal{InitialBytesNotCarried,"resource_respecify"}`、DirectVulkan `Fatal{BarrierTimeout,"Present"}`；`iris-photon`、`iris-derivative`、`create-indirect` 三个 DirectGLES `Fatal{UnmigratedEmulation,"texture-remint-pull"}`；`iris-bsl-esc-menu-854` DirectGLES `InitialBytesNotCarried`；`create-indirect` DirectVulkan 内存守护。通过项含 `improved-transparency-minecraft-26.3` DirectGLES SSIM 1.0 / DirectVulkan 0.999914、`iris-iterationrp` DirectVulkan 0.995833、`iris-bsl-esc-menu-854` DirectVulkan 0.998402。逐 trace 见 `joint-codex-v1.md` 的 census 块与 `identity.json` / `counts.json` / `trace-transitions.json`。
+
+**同名重跑 @ `1135c664`（P7 wave 3 包 E1，2026-09-22，WSL `~/w7/p7-census-e1`，lavapipe）。** 方法逐字沿用上段普查的 helper（`~/w7/p5b-final-census-348d22a4/artifacts/census-helper.py`）：取 monolith 条目的命令与 ENVIRONMENT，`MOBILEGL_IPC_STAGE_MB=32` 与 `MOBILEGL_ITEST_REQUIRE_GPU=1` 作环境底、条目自己的 ENVIRONMENT 覆盖之，再强制 `MOBILEGL_TRANSPORT`、私有 `MOBILEGL_LOG_FILE_PATH`、tcache 关，状态映射相同；名单 = 上段 1267 个名字（头上 0 个缺失）。跑器 `~/w7/e1bin/{wa27,walane}.py`，证据 `~/w7/e1-census/{wa27,lane-inproc2}-1135c664/`；lane 普查单并发墙钟 426 s。
+
+| 读数 | P5b `348d22a4` | 头 `1135c664` | delta |
+|---|---|---|---|
+| 27 个 wrong-answer 同名，inproc | 1 passed / 26 failed | **24 passed / 3 aborted / 0 failed** | 23 转绿；3 条由错答变为具名停止 |
+| 同上，spawn（P5b 未测） | — | 24 passed / 3 aborted / 0 failed | 与 inproc 逐名相同 |
+| 合并 lane 普查 1267 同名，inproc | 811 / 203 skipped / 62 aborted / 191 failed | **1051 / 172 / 37 / 7** | failed→passed 187、aborted→passed 62、skipped→passed 31；passed→非绿 40、failed→aborted 4 |
+| trace（CI split 子集），inproc | 79 = 72 / 6 aborted / 1 failed（含 `rd12` × 2，256 MiB） | **77 = 77 / 0 / 0**（默认 32 MiB；spawn 同为 77 / 0 / 0） | `rd12` 已 `ci: false` 出分母；其余 7 格全活（[`notes/p7/iris-census-1135c664.md`](notes/p7/iris-census-1135c664.md) §6） |
+
+27 条按 §6.2 的家族：
+
+| 家族 | 条 | 头（inproc = spawn） | 机制 / 读法 |
+|---|---:|---|---|
+| `LayeredAttachmentShapeScenario` | 14 | **14 绿** | 未二分到提交；DirectVulkan 的 7 条在 `integration-magma-full-{split,spawn}` 的同名注册条目上也绿 |
+| packed depth/stencil `GetTexImage` | 3 | **3 绿** | DirectGLES `Split/Spawn.ForcedDs` 与 DirectVulkan `Split/Spawn.Full` 的注册条目同绿 |
+| framebuffer `HandleRecycleScenario` | 5 | **2 绿**（DG `Handles`、DV `AbaControlHandles`）/ **3 具名停止** | 停止的 3 条都是 `integration-monolith-control` 里 `MOBILEGL_PIPE_PUSH=0` 的对照臂：DG `Legacy` → `Fatal{PipeLegacyMemosDisabled, "MOBILEGL_TRANSPORT is not monolith and kMGPipeSubsystemSamplers (bit 11) is clear …"}`（`MobileGL/MG_Backend/DirectGLES/Managers.cpp:4289` 经 `StopOnArmlessPipeSubsystem`，`MobileGL/MG_Backend/DirectGLES/Managers.cpp:2915-2918`）；DV `Legacy` / `AbaControl` → server `Fatal{UnmigratedVerb, "Magma:clear-framebuffer-record"}`（`MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp:8008`：push 全关时 transport 下没有 framebuffer record），spawn 臂 client 另记 `Fatal{ReadbackDeclined, "ReadPixels"}`。旋钮矛盾的响亮停止，不是错答；push 打开的两条同名兄弟全绿 |
+| `PrimitivesGeneratedNoXfbScenario` | 3 | **3 绿** | DV `Split/Spawn.Full` 的 `CountsADrawMadeWithNoCaptureSpan` 同绿（`TheRerouteIsActuallyArmed…` 在 full 车道因不钉旋钮而 skip，按设计） |
+| `TextureParamsWithoutASamplerView` | 1 | **绿** | DG `Split` / `Spawn` 注册条目同绿——ROADMAP 债务表的「待核」关闭 |
+| `P4aFinalFixScenario` FBO/RBO delete | 1 | **绿** | 与 P5b 同 |
+
+lane 的 44 条非绿（37 aborted + 7 failed）**全部是 `integration-monolith-control` 条目、且自己的 ENVIRONMENT 钉了非默认 `MOBILEGL_PIPE_PUSH`**（0 / 0x7f / 0x1ff / 0x5ff / 0x9ff / 0x1fff / 0x8000000000001fff）——普查方法把 monolith 对照臂也强制上了 transport，这 44 条读的是「这组旋钮在 split 下没有臂」：35 条具名停止（18 × `Magma:clear-framebuffer-record`、17 × `PipeLegacyMemosDisabled`），2 条 `Fatal{UnmigratedPipeInput, "GetBufferBindingPoint@DispatchCompute"}`（掩码 0x1fff），7 条断言失败在单体专用仪器上（4 × `CsoContentAddressingScenario` 在 client 日志里找带 `cso[csom= csob=]` 的统计窗口，而 split 下 CSO 在 server 铸造、那一行在 server 日志；3 × DV `HandleRecycle.AbaControlHandles` 的 buffer / VAO 用例是负控，期望 STALE，wire 路径读到 FRESH——即像素正确、负控不起作用）。这 44 条之外的 1223 条全部 passed 或 skipped。其中 40 条在 P5b 是 passed，头上转为上述读法；没有一条是默认旋钮下的产品回归。
 
 ### 7.3 唯一收官审查与定向修复
 
