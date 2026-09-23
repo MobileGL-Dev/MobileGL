@@ -2315,8 +2315,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (imageFormatResult != VK_SUCCESS ||
                 (isMultisample && (imageFormatProperties.sampleCounts & resolvedSampleCount) == 0)) {
-                // Was an MGLOG_D, which a Release build compiles away: the one Shape* exit that
-                // left no line on the builds that ship.
+                // Was an MGLOG_D, which a Release build compiles away, so on the builds that ship
+                // this exit left no line - one of five Shape* exits that did (with ViewOf,
+                // NoLevels, preserve-flush and preserve-copy) before B3's review round.
                 MGL_WIRE_DECLINE_AT(ShapeImageFlagsUnsupported,
                                     "texture {slot=%u, gen=%u}: image flags=0x%x sampleCount=%d are unsupported "
                                     "by the device",
