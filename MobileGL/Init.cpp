@@ -21,6 +21,9 @@
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
+#if MOBILEGL_PIPE_VERIFY
+#include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeVerifyFlushSummary, before Debug::Close in DestroyImpl
+#endif
 
 #include <atomic>
 #include <mutex>
@@ -99,6 +102,14 @@ namespace MobileGL {
             MG_State::GLState::ClearProgramTranslationCache();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
+#if MOBILEGL_PIPE_VERIFY
+            // BEFORE Close, and from here rather than from a static destructor (V1 fix round 2):
+            // Close() nulls the role's sink and Log.cpp's next write reopens it with "w", so the
+            // FATAL=0 summary the comparator used to write from __run_exit_handlers truncated the
+            // client half of every such run to that one line. Verify builds only - the guard is
+            // the compile definition, not a runtime knob, and the pull build gains no byte (G1).
+            MG_Pipe::MGPipeVerifyFlushSummary();
+#endif
             if (logLifecycle) {
                 MG_Util::Debug::Close();
             }

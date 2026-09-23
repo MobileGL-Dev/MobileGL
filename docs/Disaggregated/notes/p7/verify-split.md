@@ -228,9 +228,26 @@ hook 跑在 server 的 apply 线程上**，是这条臂每次 backend 读唯一�
 [mgl-srv-apply/FATAL]: MGPipe: Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels", verb=6, where=read}
 ```
 
-本机实测：**2/2 绿**，server 半边 DirectGLES 3 行 / DirectVulkan 2 行，client 半边 **0 行**（入口比对在这个
-字段上不报，所以这条红线**只能**来自读臂）。反证（把 hook 里的两处扰动去掉、重编、再跑、再还原）：两条条目
-**2/2 红**，两个 server 半边 `PipeVerifyDiffer` **各 0 行**。
+本机实测：**2/2 绿**，server 半边 DirectGLES 3 行 / DirectVulkan 2 行。**「≥ 2 行」是断言的一部分（修复轮 2）**：
+server 在 ReadPixels 窗口内读这个字段**两次**——`PipeApplier::read_pixels` 装中性 pack **之前**先经 accessor 保存应用的
+pack，backend 的 `ReadPixels` 在装好**之后**再读——两次都落在 `ServerReadsInsideTheNeutralPackWindow` 里。hook 的第一处
+扰动只能把前者变红（过了首次比对之后，应用 pack 对中性预言本来就不等）；覆写之后再扰一次的那处只能把后者变红（那里
+存的值**就是**中性 pack）。只接受一行的断言，两处扰动任留一处都满足，所以哪一处都证伪不了；用例与 CI 步现在都要求
+server 半边 `where=read` **≥ 2 行**。反证（只去掉其中一处、重编、再跑、再还原）：只去覆写之后那处，两条条目 **2/2 红**、
+两个 server 半边各降到 **1 行**；只去第一处，DirectVulkan 降到 **1 行**（红）、DirectGLES 仍 **2 行**（绿——GLES backend 装好之后读两次，3 = 1 + 2），所以第一处的证伪者是 DirectVulkan 那条条目、CI 步两后端都要过；两处都去（修复轮 1 的反证）：**各 0 行**。
+
+这条红线**只能来自读臂**，理由是两个字段：`where=read`（`ReportDivergence` 标的是哪个比对器在说话）加上它落在
+**server 角色的文件**里（`Log.cpp` 按写入线程的角色选文件，入口比对跑在 client 线程）。**不是**因为 client 半边空——
+修复轮 1 在这里写的「入口比对在这个字段上不报」是错的：入口比对**确实报**它（`kReadback` 的填充掩码带这个字段，
+client 的 summary 行自己就写着 DirectGLES `4 divergence(s)` / DirectVulkan `3`）。client 半边当时 0 行，是因为文件在
+**退出时被截断**（修复轮 2 修掉的一个既有 bug）：`MobileGL::Destroy`（`Init.cpp` 的 `DestroyImpl`）调 `Debug::Close()`
+关掉 sink，之后静态 `~VerifyState` 才写 summary，`Log.cpp` 的 `WriteToFile` 见 sink 为空就重跑 `InitFile()`、以 `"w"`
+重开 client 文件——于是每个 FATAL=0 运行的 client 半边只剩 summary 这一行（121 B；monolith 臂的 `VerifyCorrupted.`
+日志同样被抹）。修法在 verify 专属代码里（`Log.cpp` 在 pull 构建里，G1 不许动）：`MGPipeVerifyFlushSummary()` 由
+`DestroyImpl` 在 `Close()` 之前调用（`#if MOBILEGL_PIPE_VERIFY`），静态析构随后无事可做。修前后同一条目
+`pipe-verify-split-read-corrupt-DirectGLES.client.log`：**121 B / 1 行 → 7461 B / 85 行**
+（DirectVulkan：121 B / 1 行 → 7386 B / 85 行），其中 `where=entry` 各 @GLES_ENTRY@ / @VK_ENTRY@ 行，
+summary 行仍在、且现在在文件**末尾**而不是独占一文件。
 
 **B（G5）** `MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters` 打
 `(DirectGLES|DirectVulkan)\.VerifySplit\.PoisonOmissionScenario\.WithoutOmissionCompletes`：**2/2 红**，子进程

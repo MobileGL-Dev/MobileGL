@@ -582,12 +582,25 @@ namespace MobileGL::MG_Pipe {
             Optional<MGPipeInputField> Corrupt;
             String CorruptKnob; // the MOBILEGL_PIPE_VERIFY_CORRUPT value the last arm saw
             std::atomic<Uint64> Divergences{0};
-            ~VerifyState() {
+            Uint64 Summarised = 0; // how many of them the summary line has reported so far
+            // THE SUMMARY IS WRITTEN FROM MobileGL::Destroy, NOT FROM HERE (V1 fix round 2). This
+            // is a namespace-scope static, so this destructor runs from __run_exit_handlers, AFTER
+            // DestroyImpl has called MG_Util::Debug::Close(). Close nulls the role's sink; Log.cpp's
+            // WriteToFile then re-runs InitFile() for the next line, and InitFile opens the role's
+            // file with "w". So the one line this destructor wrote was the only line the client half
+            // of every FATAL=0 run kept - 121 bytes, the summary itself, with the entry compare's
+            // own reports, the arming line and the config dump gone (and the monolith arm's
+            // VerifyCorrupted. log wiped the same way). MGPipeVerifyFlushSummary runs before Close,
+            // so by the time this destructor runs there is nothing new to say and it says nothing;
+            // the arm is kept for a process that never called Destroy, where no Close ran and the
+            // line lands in the still-open file as it always did.
+            ~VerifyState() { FlushSummary(); }
+            void FlushSummary() {
                 const Uint64 count = Divergences.load(std::memory_order_relaxed);
-                if (count != 0) {
-                    MGLOG_E("MGPipe: verify summary - %llu divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0",
-                            static_cast<unsigned long long>(count));
-                }
+                if (count == 0 || count == Summarised) return;
+                Summarised = count;
+                MGLOG_E("MGPipe: verify summary - %llu divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0",
+                        static_cast<unsigned long long>(count));
             }
         };
         VerifyState g_verify;
@@ -796,6 +809,11 @@ namespace MobileGL::MG_Pipe {
                 index0, index1);
         ReportDivergence(field, "read");
     }
+
+    // PipeInputs.h. The FATAL=0 summary, written while the role's log is still open:
+    // MobileGL::Destroy calls this right before MG_Util::Debug::Close() - see VerifyState for why
+    // the static destructor cannot be the writer.
+    void MGPipeVerifyFlushSummary() { g_verify.FlushSummary(); }
 #endif // MOBILEGL_PIPE_VERIFY
 
     // ---- push on mutation (P1 lane finding F2) ----

@@ -1050,5 +1050,12 @@ namespace MobileGL::MG_Pipe {
     // dereferenced, the snapshot is only ever compared). Returns false for a forwarded field,
     // which has nothing to corrupt.
     Bool MGPipeApplyVerifyCorruption(PipeInputs& snapshot, MGPipeInputField field);
+    // PipeFill.cpp. Writes the MOBILEGL_PIPE_VERIFY_FATAL=0 summary line ("N divergence(s)
+    // survived") NOW, while the role's log file is still open. MobileGL::Destroy calls it right
+    // before MG_Util::Debug::Close(): the line used to come from a namespace-scope static's
+    // destructor, which runs AFTER Close, and Log.cpp reopens a closed sink with "w" - so that
+    // summary was the only line the client half of every FATAL=0 run kept. Idempotent: a second
+    // call with nothing new to report, the destructor's own included, writes nothing.
+    void MGPipeVerifyFlushSummary();
 #endif
 } // namespace MobileGL::MG_Pipe
