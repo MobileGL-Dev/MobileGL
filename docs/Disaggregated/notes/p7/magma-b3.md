@@ -507,7 +507,8 @@ Present（`:14094`）三处「等一条 fence、把它之前的都记成完成�
     「**Mid-frame drains do not advance m_frameSerial**」在今天的树上**是错的**（`TryDrainFrameTransients`
     每第 8 次 drain 会调 `BeginFrame`）。结论（不在该处回收 arena 存储）仍然正确，只是理由写错了；
     改注释会和 B2 在同文件区域的改动打架。
-  - `VulkanRenderer::WaitForFrameSerial`（本树 `VulkanRenderer.cpp:13400-13403`）的
+  - `VulkanRenderer::WaitForFrameSerial` 里 fence 等待循环上方的注释（包树 `774bc17f` 为
+    `VulkanRenderer.cpp:13400-13403`，落地树 `pipe@6207c9c9` 为 `:13530-13533`；以函数名为准）的
     「OnSubmitsCompletedUpTo calls NotifyFrameSerialComplete for every record it retires, so the
     completed-serial floor still advances correctly after one fence wait」——disagg 构建上 §3.1 之后
     **不再逐记录通知**，地板只推到无在飞持有的序号。该函数是 pull 与 disagg 共用代码，注释归 B4 一起改。
