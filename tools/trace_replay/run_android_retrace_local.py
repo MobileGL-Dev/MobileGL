@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -95,8 +96,27 @@ def find_trace_apk():
     return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
 
 
+# THE HOST SHELL, PER PLATFORM. This runner was written for Git Bash on Windows, where
+# trace-replay-ci.sh has to be started through Git's bash.exe and every host path handed to it
+# spelled /c/... . On Linux (WSL included - the device window's detachable `setsid nohup` runs
+# live there) that bash.exe does not exist, so every case died with FileNotFoundError before the
+# first adb call, and a /c/... spelling of a native path is not a path at all. trace-replay-ci.sh
+# itself is POSIX shell (it converts with cygpath only when cygpath exists), so on a POSIX host
+# the right answer is the system bash and the path unchanged.
+def on_windows():
+    return os.name == "nt"
+
+
+def bash_executable():
+    if on_windows():
+        return "C:/Program Files/Git/bin/bash.exe"
+    return shutil.which("bash") or "/bin/bash"
+
+
 def bash_path(path):
     path = Path(path).resolve()
+    if not on_windows():
+        return str(path)
     drive = path.drive.rstrip(":").lower()
     parts = path.parts[1:]
     return "/" + drive + "/" + "/".join(parts)
@@ -187,7 +207,7 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides
         alternate = None
 
     command = [
-        "C:/Program Files/Git/bin/bash.exe",
+        bash_executable(),
         "android-plugin/trace-replay-ci.sh",
         "--apk-file",
         bash_path(apk),
@@ -243,7 +263,9 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides
     if env_overrides:
         command.extend(["--env", ";".join(env_overrides)])
     env = dict(**__import__("os").environ)
-    env["PYTHON"] = "python"
+    # trace-replay-ci.sh reads its verdicts with "${PYTHON}". Git Bash on Windows has `python`
+    # on PATH; a POSIX host is only guaranteed the interpreter running this script.
+    env["PYTHON"] = "python" if on_windows() else sys.executable
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"
     if backend_info["use_angle"]:
         env["MOBILEGL_ESPRYT_USE_ANGLE"] = "1"
@@ -307,6 +329,28 @@ def archive_repeat(archive_dir, case, backend, repeat_index):
         if not target.exists():
             shutil.copyfile(golden, target)
     return destination
+
+
+# WHAT ONE REPEAT LEAVES IN THE RESULT ROOT, and why it is cleared before the next one starts.
+# trace-replay-ci.sh refreshes the logs on every run, but it writes result.json and the actual /
+# diff PNGs only when the app produced them - a repeat whose app died before result.json (the
+# bsl-esc-menu scudo abort), or whose adb dropped, leaves the PREVIOUS repeat's files in place.
+# archive_repeat then copies them into this repeat's directory, and compare_actuals.py reports a
+# repeat that rendered nothing as a passing, bit-identical one: exactly the false green gate 3's
+# "three passes bit-identical" would read. A stale adb-disconnected.txt would likewise make the
+# next repeat look like a disconnect. Goldens are inputs, not outputs, and are kept.
+PER_REPEAT_OUTPUTS = ARCHIVED_PER_REPEAT + ("retrace.log", "adb-disconnected.txt")
+
+
+def clear_repeat_outputs(case, backend):
+    result_dir = RESULT_ROOT / f"{safe_case(case['name'])}-{backend}"
+    if not result_dir.is_dir():
+        return
+    for name in PER_REPEAT_OUTPUTS:
+        (result_dir / name).unlink(missing_ok=True)
+    for pattern in ("*-actual.png", "*-diff.png"):
+        for path in result_dir.glob(pattern):
+            path.unlink()
 
 
 def write_archive_manifest(archive_dir, args, backends, cases):
@@ -694,6 +738,7 @@ def main():
                     # re-installing between them would put an installer inside the window and
                     # would not change a byte of the input.
                     extra.append("--reuse-fixture")
+                clear_repeat_outputs(resolved, backend)
                 rc = run_case(resolved, backend, extra_args=extra,
                               env_overrides=transport_env(args) + list(args.env),
                               use_pbuffer=args.use_pbuffer)

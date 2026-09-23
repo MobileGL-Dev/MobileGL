@@ -8,14 +8,18 @@ The summary half runs on a fabricated --archive-dir tree, because the failure it
 of the DIRECTORY, not of the images.
 """
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compare_actuals as ca
 import run_android_retrace_local as retrace
+import trace_cases
 
 
 # The two closed forms the self-test derives. Written out here as literals rather than
@@ -282,6 +286,112 @@ class Archive(unittest.TestCase):
         self.assertNotIn("actual_sha256", report["rows"][1])
         self.assertEqual(report["arms"][0]["errors"], 1)
         self.assertFalse(report["arms"][0]["all_bitwise_identical"])
+
+
+class RepeatIsolation(unittest.TestCase):
+    """The repeat loop itself: a repeat that rendered nothing must archive nothing.
+
+    The Archive class above pins what archive_repeat copies. This pins what main() leaves in the
+    result root for it to copy: trace-replay-ci.sh writes result.json and the actual PNG only
+    when the app produced them, so without a clear between repeats the second repeat of a case
+    whose app died (bsl-esc-menu's scudo abort) archives the FIRST repeat's picture, and the
+    summary calls it a passing, bit-identical repeat - the false green gate 3 reads.
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="retrace-repeat-")
+        self.root = Path(self.temp.name)
+        apk = self.root / "pinned.apk"
+        apk.write_bytes(b"not really an apk")
+        self.patches = [
+            mock.patch.object(retrace, "RESULT_ROOT", self.root / "result-root"),
+            mock.patch.object(retrace, "render_summary", lambda: None),
+            mock.patch.dict(os.environ, {"MOBILEGL_TRACE_APK": str(apk)}),
+        ]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self):
+        for patch in reversed(self.patches):
+            patch.stop()
+        self.temp.cleanup()
+
+    def test_a_repeat_whose_app_died_archives_no_stale_picture(self):
+        calls = []
+
+        def fake_run_case(case, backend, extra_args=None, timeout_seconds=None,
+                          env_overrides=None, use_pbuffer=False):
+            calls.append(list(extra_args or []))
+            arm = retrace.RESULT_ROOT / (retrace.safe_case(case["name"]) + "-" + backend)
+            arm.mkdir(parents=True, exist_ok=True)
+            # trace-replay-ci.sh refreshes the logs on every run, success or not ...
+            (arm / "logcat.txt").write_text("run %d\n" % len(calls), encoding="utf-8")
+            if len(calls) == 1:
+                # ... but only a run whose app lived writes result.json and the actual.
+                write_png(arm / (arm.name + "-actual.png"), 8, 4, solid(8, 4, 10))
+                (arm / "result.json").write_text(json.dumps(
+                    {"passed": True, "statusCode": 0, "backend": backend, "ssim": 1.0,
+                     "ssimThreshold": 0.99, "matchedGoldenPath": "/x/g.png",
+                     "mismatchPixels": 0, "cropX": 0, "cropY": 0, "cropWidth": 0,
+                     "cropHeight": 0}), encoding="utf-8")
+                return 0
+            return 1
+
+        archive = self.root / "archive"
+        argv = ["run_android_retrace_local.py", "--case", "OpenRA", "--backend", "DirectVulkan",
+                "--repeat", "2", "--archive-dir", str(archive)]
+        with mock.patch.object(retrace, "run_case", fake_run_case), \
+                mock.patch.object(sys, "argv", argv):
+            self.assertEqual(retrace.main(), 1)
+        self.assertEqual(len(calls), 2)
+        arm = archive / "OpenRA-DirectVulkan"
+        self.assertTrue((arm / "repeat-01" / "result.json").is_file())
+        self.assertTrue((arm / "repeat-01" / "OpenRA-DirectVulkan-actual.png").is_file())
+        self.assertFalse((arm / "repeat-02" / "result.json").exists())
+        self.assertFalse((arm / "repeat-02" / "OpenRA-DirectVulkan-actual.png").exists())
+        report = ca.summarize(archive)
+        self.assertEqual(report["rows"][1]["error"], "no result.json")
+        self.assertFalse(report["arms"][0]["all_bitwise_identical"])
+        self.assertFalse(report["arms"][0]["passed_all"])
+
+
+@unittest.skipIf(os.name == "nt", "the Git Bash spelling is the Windows branch of the same code")
+class PosixHost(unittest.TestCase):
+    """The device window runs detached from WSL, so the runner has to start on a POSIX host.
+
+    It used to hardcode Git Bash's `C:/Program Files/Git/bin/bash.exe` and spell every host path
+    /c/...: on Linux every case died with FileNotFoundError before its first adb call.
+    """
+
+    def test_run_case_starts_a_posix_bash_with_native_paths(self):
+        with tempfile.TemporaryDirectory(prefix="retrace-posix-") as directory:
+            root = Path(directory)
+            case = retrace.case_with_defaults(trace_cases.find_trace_case("OpenRA"))
+            fixtures = root / "fixtures"
+            fixtures.mkdir()
+            (fixtures / case["trace_archive"]).write_bytes(b"a real archive, not an LFS pointer")
+            write_png(fixtures / case["golden"], 8, 4, solid(8, 4, 0))
+            apk = root / "pinned.apk"
+            apk.write_bytes(b"apk")
+            captured = {}
+
+            def fake_run(command, cwd=None, env=None, **_):
+                captured.update(command=command, env=env)
+                return subprocess.CompletedProcess(command, 0)
+
+            with mock.patch.object(retrace, "FIXTURES", fixtures), \
+                    mock.patch.object(retrace, "RESULT_ROOT", root / "result-root"), \
+                    mock.patch.object(retrace, "FIXTURE_ROOT", root / "fixture-root"), \
+                    mock.patch.dict(os.environ, {"MOBILEGL_TRACE_APK": str(apk)}), \
+                    mock.patch.object(retrace.subprocess, "run", fake_run):
+                self.assertEqual(retrace.run_case(case, "DirectVulkan"), 0)
+            command = captured["command"]
+            self.assertNotIn("Program Files", command[0])
+            self.assertTrue(Path(command[0]).is_file(), command[0])
+            self.assertEqual(command[command.index("--apk-file") + 1], str(apk.resolve()))
+            self.assertEqual(command[command.index("--golden") + 1],
+                             str((fixtures / case["golden"]).resolve()))
+            self.assertEqual(captured["env"]["PYTHON"], sys.executable)
 
 
 if __name__ == "__main__":
