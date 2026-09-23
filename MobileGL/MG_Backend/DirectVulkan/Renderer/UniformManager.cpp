@@ -3027,6 +3027,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                (samplerBindingOverrides == nullptr || samplerBindingOverrides->empty());
         if (cacheable && samplerDescriptorsUnchangedHint && m_fastRebindMemo.valid &&
             m_fastRebindMemo.frameIndex == frameIndex &&
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A wire store destroyed since the memo was taken may have handed its handle
+            // value to a later mint (see FastRebindMemo): "same VkBuffer" then names a
+            // different store, so the memo is refused and the full walk re-records it.
+            m_fastRebindMemo.wireStoreDestroyEpoch == m_bufferManager->GetWireStoreDestroyEpoch() &&
+#endif
             m_fastRebindMemo.programLifetimeId == program.GetLifetimeId() &&
             m_fastRebindMemo.programHash == programObj.hash) {
             VkBuffer uboBuffer = VK_NULL_HANDLE;
@@ -3323,6 +3329,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             };
             mixWords(&programObj.descriptorSetLayout, sizeof(programObj.descriptorSetLayout));
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P7 M2 round 2 (ID-P7-43): the buffer infos below name WIRE stores by VkBuffer
+            // handle, and a wire store can be destroyed mid-frame (VkBufferManager::
+            // DeferredWireRelease) with its handle value re-minted before this frame's memo
+            // is cleared. Folding the destroy epoch in makes every entry taken before such a
+            // destroy miss, so a byte-identical info can never revive a set baked to a dead
+            // store. NOT the slice epoch: that moves on every glBufferSubData and would make
+            // the memo miss on every draw.
+            mix64(m_bufferManager->GetWireStoreDestroyEpoch());
+#endif
             for (const auto& write : writes) {
                 mix64((static_cast<Uint64>(write.dstBinding) << 40) ^
                       (static_cast<Uint64>(write.descriptorType) << 8) ^
@@ -3377,7 +3393,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_fastRebindMemo = FastRebindMemo{
                 /*valid=*/true,          frameIndex,      program.GetLifetimeId(), programObj.hash,
                 fastRebindUboBinding,    bufferInfos[0].buffer,
-                bufferInfos[0].range,    descriptorSet};
+                bufferInfos[0].range,    descriptorSet,
+#if MOBILEGL_BUILD_DISAGGREGATED
+                m_bufferManager->GetWireStoreDestroyEpoch(),
+#endif
+            };
         } else {
             m_fastRebindMemo.valid = false;
         }

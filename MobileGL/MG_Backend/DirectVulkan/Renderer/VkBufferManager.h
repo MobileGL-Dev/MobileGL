@@ -208,6 +208,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // back, and none was persistently mapped, in between - so a memo of resolved
         // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
         Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Bumped every time this manager destroys a WIRE store's VkBuffer (see
+        // m_wireStoreDestroyEpoch). Unchanged since a memo was taken means no VkBuffer handle
+        // that memo names can have been freed and re-minted in between, which is the one
+        // fact a handle-keyed memo of wire descriptors needs and cannot read off the handle.
+        Uint64 GetWireStoreDestroyEpoch() const { return m_wireStoreDestroyEpoch; }
+#endif
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
@@ -283,9 +290,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // THE FRAME-SERIAL FLOOR IS DELIBERATELY NOT A PROOF HERE. It cannot move inside a
         // frame (NotifyFrameSerialComplete refuses the current serial), so it frees nothing in
-        // the one-present replay this exists for, and on this package's base it is the floor
-        // B3 found unsound (a serial with two submissions was declared complete on the first
-        // fence, 6a92a10dd): a free on that floor is a GPU use-after-free, not a wrong pixel.
+        // the one-present replay this exists for; the submit index above is the fact that CAN
+        // move mid-frame, and it is a fence observation rather than a count.
+        //
+        // AND EVERY DESTROY HERE HAPPENS MID-FRAME, which the memos above this manager were not
+        // written for. UniformManager's descriptor memos are keyed on the VkBuffer HANDLE, and
+        // before M2 a wire store only ever died at the same boundary that clears those memos
+        // (UniformManager::BeginFrame, from Present or a drain). A store destroyed here can
+        // have its handle value re-minted by the next Create - a heap pointer under lavapipe -
+        // while a memo still maps that handle to a descriptor set baked to the dead store's
+        // memory: silent wrong bytes, no Fatal (ID-P7-43). m_wireStoreDestroyEpoch is the
+        // fact the memos fold in: every wire-store destroy bumps it, so a memo taken before
+        // the destroy cannot match after it. Deliberately NOT m_sliceEpochCounter, which every
+        // WriteWireBuffer bumps and which would defeat the memo on every glBufferSubData.
         struct DeferredWireRelease {
             VkBufferObject buffer;
             Uint64 lastUseSerial = 0;
@@ -367,6 +384,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_wireStoreCountPeak = 0;
         Uint64 m_deferredWireBytesPeak = 0;
         Uint64 m_wireDeferredSyncs = 0;
+        // See GetWireStoreDestroyEpoch and the DeferredWireRelease comment. Bumped on every
+        // path that destroys a wire store's VkBuffer, and never reset (not even by Shutdown),
+        // for m_sliceEpochCounter's reason: a memo taken before a re-initialize must not match
+        // a handle minted after it.
+        Uint64 m_wireStoreDestroyEpoch = 0;
 #endif
     // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
     SizeT m_liveResourcesLastPruned = 0;

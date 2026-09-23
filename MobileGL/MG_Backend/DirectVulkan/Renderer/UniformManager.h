@@ -442,6 +442,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // drops the hint upstream; an arena wrap or growth resolves a different
         // VkBuffer and misses. AcquireDescriptorSet's per-frame cursor only
         // advances, so the recorded set is never re-written within its frame.
+        // P7 M2 round 2 (ID-P7-43): a WIRE store can die MID-FRAME on the reclaim
+        // path (VkBufferManager::DeferredWireRelease), and the next mint can hand
+        // its VkBuffer handle value back - a heap pointer under lavapipe - so "the
+        // same VkBuffer+range" is no longer proof of the same store. The memo
+        // therefore records VkBufferManager::GetWireStoreDestroyEpoch() and misses
+        // once any wire store has been destroyed since; the descriptor-reuse
+        // signature below folds the same epoch in. On the wire arm this memo is
+        // never consulted (SetupWireDraw passes no sampler hint), so the field is
+        // the defensive half; the signature is the half the wire arm reaches.
         struct FastRebindMemo {
             Bool valid = false;
             Uint32 frameIndex = 0;
@@ -451,6 +460,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkBuffer uboBuffer = VK_NULL_HANDLE;
             VkDeviceSize uboRange = 0;
             VkDescriptorSet set = VK_NULL_HANDLE;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            Uint64 wireStoreDestroyEpoch = 0;
+#endif
         };
         FastRebindMemo m_fastRebindMemo;
 

@@ -590,6 +590,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // DeferredWireRelease - so there is nothing to wait for.
         if (m_deferredBufferReleases.empty() || lastUseSerial == 0) {
             buffer.Destroy();
+            ++m_wireStoreDestroyEpoch;
             if (m_wireStoreCount > 0) --m_wireStoreCount;
             return;
         }
@@ -662,11 +663,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // instead of submitted.
             dead = m_deferredWireReleases.size();
         } else {
-            // The list is in park order and GetSyncPointSubmitIndex() never decreases, so the
-            // submit indices are non-decreasing and the dead entries are a PREFIX: the first
-            // entry the renderer will not call complete proves none after it is either. That
-            // bounds the walk to a couple of fence polls, which matters because this runs on
-            // every glBufferData the wire carries.
+            // The list is in park order and GetSyncPointSubmitIndex() steps back only when a
+            // pending recording is abandoned instead of submitted (RecreateSwapchain and the
+            // minimized Present force-clear the recording flags, so `m_submitCounter + 1`
+            // becomes `m_submitCounter`). Everywhere else the submit indices are non-decreasing
+            // and the dead entries are a PREFIX: the first entry the renderer will not call
+            // complete proves none after it is either. Across an abandonment a later entry can
+            // carry the LOWER index; the walk then stops at the earlier, higher one and holds
+            // both until the next submission takes that index and retires - conservative, never
+            // early, and the idle rule above retires them regardless. That bounds the walk to a
+            // couple of fence polls, which matters because this runs on every glBufferData the
+            // wire carries.
             while (dead < m_deferredWireReleases.size() &&
                    pVulkanRenderer->IsSubmitIndexComplete(m_deferredWireReleases[dead].submitIndex)) {
                 ++dead;
@@ -678,6 +685,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_deferredWireBytes -= entry.bytes;
             entry.buffer.Destroy();
         }
+        // One bump per sweep that destroyed anything is enough: what a memo needs to know
+        // is "some handle it may name has been freed since", not how many.
+        ++m_wireStoreDestroyEpoch;
         m_deferredWireReleases.erase(m_deferredWireReleases.begin(),
                                      m_deferredWireReleases.begin() + static_cast<std::ptrdiff_t>(dead));
         const Uint64 destroyedCount = static_cast<Uint64>(dead);
@@ -686,6 +696,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::DestroyAllDeferredWireReleases() {
+        if (!m_deferredWireReleases.empty()) ++m_wireStoreDestroyEpoch;
         for (auto& entry : m_deferredWireReleases) {
             entry.buffer.Destroy();
             if (m_wireStoreCount > 0) --m_wireStoreCount;
@@ -738,6 +749,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // DestroyAllDeferredReleases above emptied the parked list; this destroys the stores the
         // records still hold, so nothing this arm minted outlives the count.
+        if (!m_wireBuffers.empty()) ++m_wireStoreDestroyEpoch;
         m_wireBuffers.clear();
         m_wireStoreCount = 0;
         m_wireStoreCountPeak = 0;
