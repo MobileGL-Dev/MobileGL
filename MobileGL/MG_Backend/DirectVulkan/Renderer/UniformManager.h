@@ -61,6 +61,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static constexpr Uint32 kWireDescriptorSetBudget = 2048;
         Bool WireDescriptorSetBudgetReached(Uint32 frameIndex) const;
         SizeT RewindWireDescriptorSets(Uint32 frameIndex);
+        // How the wire arm answers a STORAGE image unit that GL 4.6 core 8.26 makes invalid (no
+        // texture, or a (level, layer) its texture lacks): a load returns zero, a store and an
+        // atomic are discarded. `deviceNullDescriptor` is the renderer's enablement of
+        // VK_EXT_robustness2's nullDescriptor at device creation. With it the unit binds a NULL
+        // storage-image descriptor, which is exactly that rule. Without it (or under
+        // MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1, the host lanes' way onto this arm) the
+        // unit binds a placeholder PRIVATE to its (binding, unit), cleared before each use, so no
+        // two units ever alias; what that cannot give is a load of the SAME unit after its own
+        // store inside one pass reading zero (CONTRACT-P7 §12). Called after Initialize.
+        void SetWireInvalidStorageImageArm(Bool deviceNullDescriptor);
 #endif
         // A command buffer (re)began recording: descriptor bindings recorded into
         // the previous buffer do not carry over, so drop the bind-dedup shadow.
@@ -210,13 +220,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             Uint32 layers = 1;
         };
-        mutable UnorderedMap<Uint64, WirePlaceholderImage> m_wirePlaceholderImages;
+        // The placeholder's shape (format, target, storage, shadow) and, for a STORAGE placeholder
+        // on the arm without a null descriptor, the (binding, unit) it is private to. A sampled
+        // placeholder is never written, so it stays shared: its binding and unit are ~0u.
+        struct WirePlaceholderKey {
+            Uint64 shape = 0;
+            Uint32 binding = ~0u;
+            Uint32 unit = ~0u;
+            Bool operator==(const WirePlaceholderKey& other) const {
+                return shape == other.shape && binding == other.binding && unit == other.unit;
+            }
+        };
+        struct WirePlaceholderKeyHash {
+            SizeT operator()(const WirePlaceholderKey& key) const {
+                Uint64 h = key.shape * 0x9E3779B97F4A7C15ull;
+                h ^= (static_cast<Uint64>(key.binding) << 32 | key.unit) + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+                return static_cast<SizeT>(h);
+            }
+        };
+        mutable UnorderedMap<WirePlaceholderKey, WirePlaceholderImage, WirePlaceholderKeyHash> m_wirePlaceholderImages;
+        // See SetWireInvalidStorageImageArm.
+        Bool m_wireInvalidStorageImagesBindNull = false;
         // boundStorageFormat: for a storage binding with no reflected format, the format the
         // unit's glBindImageTexture named, when the unit holds a texture it cannot address
-        // (GL 4.6 core 8.26); UNDEFINED keeps the numeric-domain R32 default.
+        // (GL 4.6 core 8.26); UNDEFINED keeps the numeric-domain R32 default. `unit` is the image
+        // unit of a storage binding (the key of its private placeholder); unused for a sampler.
         Bool ResolveWirePlaceholderImage(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
-            VkDescriptorImageInfo& out, VkFormat boundStorageFormat = VK_FORMAT_UNDEFINED) const;
+            VkDescriptorImageInfo& out, VkFormat boundStorageFormat = VK_FORMAT_UNDEFINED, Uint32 unit = ~0u) const;
         void DestroyWirePlaceholderImage(WirePlaceholderImage& image) const;
 #endif
 

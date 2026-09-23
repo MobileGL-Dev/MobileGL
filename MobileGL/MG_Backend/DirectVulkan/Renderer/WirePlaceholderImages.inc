@@ -13,9 +13,28 @@
         image = {};
     }
 
+    void UniformManager::SetWireInvalidStorageImageArm(Bool deviceNullDescriptor) {
+        const char* forced = std::getenv("MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER");
+        const Bool forcePrivate = forced != nullptr && std::strcmp(forced, "1") == 0;
+        m_wireInvalidStorageImagesBindNull = deviceNullDescriptor && !forcePrivate;
+        MGLOG_I("Magma wire: an invalid or unbound image unit binds %s (VK_EXT_robustness2 nullDescriptor %s%s)",
+                m_wireInvalidStorageImagesBindNull ? "a NULL storage descriptor"
+                                                   : "a placeholder private to its (binding, unit)",
+                deviceNullDescriptor ? "enabled" : "unavailable",
+                deviceNullDescriptor && forcePrivate ? "; MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1" : "");
+    }
+
     Bool UniformManager::ResolveWirePlaceholderImage(VkCommandBuffer commands, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
-            VkDescriptorImageInfo& out, VkFormat boundStorageFormat) const {
+            VkDescriptorImageInfo& out, VkFormat boundStorageFormat, Uint32 unit) const {
+        // GL 4.6 core 8.26, codex closeout finding 2: every access through an invalid image unit
+        // is invalid - a load returns zero, a store and an atomic are discarded. A NULL storage
+        // descriptor (VK_EXT_robustness2 nullDescriptor) is exactly that, for any target, format
+        // and sample count, so nothing below is needed.
+        if (storage && m_wireInvalidStorageImagesBindNull) {
+            out = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL};
+            return true;
+        }
         if (binding >= programObj.samplerTextureTargetByBinding.size() ||
             binding >= programObj.samplerNumericDomainByBinding.size()) return false;
         const auto target = programObj.samplerTextureTargetByBinding[binding];
@@ -74,8 +93,18 @@
             break;
         default: return false;
         }
-        const Uint64 key = static_cast<Uint32>(format) | (static_cast<Uint64>(target) << 32) |
-                           (static_cast<Uint64>(storage) << 48) | (static_cast<Uint64>(shadow) << 49);
+        // A STORAGE placeholder is private to its (binding, unit). Shared by shape alone, a store
+        // through invalid unit A was visible, after a barrier, to a load through invalid unit B of
+        // the same shape - one Vulkan image behind both (codex closeout finding 2). The clear
+        // below still runs before each use; what a private image cannot hide is the SAME unit's
+        // own store to its own later load inside one pass (CONTRACT-P7 §12).
+        WirePlaceholderKey key;
+        key.shape = static_cast<Uint32>(format) | (static_cast<Uint64>(target) << 32) |
+                    (static_cast<Uint64>(storage) << 48) | (static_cast<Uint64>(shadow) << 49);
+        if (storage) {
+            key.binding = binding;
+            key.unit = unit;
+        }
         auto found = m_wirePlaceholderImages.find(key);
         if (found == m_wirePlaceholderImages.end()) {
             WirePlaceholderImage image{};
@@ -169,7 +198,7 @@
         auto& image = found->second;
         // Sampled incomplete textures remain immutable opaque black. A storage
         // placeholder is reset before each use, so a prior discarded store cannot
-        // leak into an unrelated invocation's unbound image loads.
+        // leak into a later pass's loads through the same (binding, unit).
         if (storage || image.layout == VK_IMAGE_LAYOUT_UNDEFINED) {
             VkClearValue clear{};
             if (!storage) {

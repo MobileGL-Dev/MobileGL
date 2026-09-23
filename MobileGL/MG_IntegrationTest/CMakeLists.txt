@@ -3506,7 +3506,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                 ALevelPastAnImmutableTexturesStorageReadsZero
                                 ALayerPastAnArraysLastSliceReadsZero
                                 ATextureWithNoStorageReadsZero
-                                ALevelPastATextureViewsWindowReadsZero)
+                                ALevelPastATextureViewsWindowReadsZero
+                                AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself
+                                AStoreThroughAnEmptyUnitIsLoadedThroughNeitherAnotherEmptyUnitNorItself)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitWindow."
                 TEST_FILTER "InvalidImageUnitScenario.${imageWindowCase}"
@@ -3515,6 +3517,30 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imagewindow${mglItestArmLogTag}-${imageWindowCase}.log")
         endforeach()
+        # ---- Codex closeout finding 2 (cf-magma): THE ARM WITHOUT A NULL DESCRIPTOR -----------
+        #
+        # The two AStoreThrough... cases above run the null-descriptor arm on this host: lavapipe
+        # enables VK_EXT_robustness2 nullDescriptor, so an invalid or empty storage unit binds a
+        # null descriptor. A device without it binds a placeholder PRIVATE to the (binding, unit)
+        # instead; MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1 puts the server on that arm
+        # (UniformManager::SetWireInvalidStorageImageArm), and the client reads the same marker to
+        # expect it: B's load zero (no alias), A's own load of its store = the recorded CONTRACT-P7
+        # §12 residual, which is also what proves the knob reached the server.
+        #
+        # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
+        # MAGMA_SERVER_ENV_KNOB_NO_TCP.
+        if(mglItestServerEnvKnobArm)
+            foreach(privateCase AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself
+                                AStoreThroughAnEmptyUnitIsLoadedThroughNeitherAnotherEmptyUnitNorItself)
+                gtest_discover_tests(MobileGLIntegrationTest
+                    TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitPrivate."
+                    TEST_FILTER "InvalidImageUnitScenario.${privateCase}"
+                    DISCOVERY_TIMEOUT 30
+                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                        ${mglItestArmProperties}
+                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imageprivate${mglItestArmLogTag}-${privateCase}.log")
+            endforeach()
+        endif()
     endforeach()
 endif()
 

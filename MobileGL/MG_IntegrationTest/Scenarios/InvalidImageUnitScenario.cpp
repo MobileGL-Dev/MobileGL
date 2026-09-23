@@ -28,6 +28,15 @@
 // the store through the invalid unit changed no texel the invalid texture does have, and no GL
 // error was raised.
 //
+// The two `AStoreThrough...` cases (codex closeout finding 2) store FIRST, through invalid unit A,
+// then load through invalid unit B of the same shape and through A: a discarded store must never be
+// loaded back. Magma's wire arm answered every invalid storage unit of one (format, target) from
+// one shared placeholder image and failed both loads; it now binds a NULL storage descriptor
+// (VK_EXT_robustness2 nullDescriptor), or, without one, a placeholder private to the (binding,
+// unit) - forced on the host by MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1 (the
+// `DirectVulkan.{Split,Spawn}.ImageUnitPrivate.` entries), where A's own load is the recorded
+// CONTRACT-P7 §12 residual.
+//
 // Arms. Split/spawn/tcp on both backends. Espryt forwards the unit to the driver, which applies
 // 8.26 itself. The MONOLITH DirectVulkan arm is skipped by name: it resolves the same binding to
 // "no descriptor" and drops the whole draw (VkTextureManager::GetOrCreateStorageImageView's
@@ -41,6 +50,7 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
 #include "../Harness/SplitRuntimePeek.h"
 
 #ifdef GLAPI
@@ -78,6 +88,30 @@ void main() {
 void main() {
     vec2 positions[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
     gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+}
+)";
+
+        // Codex closeout finding 2: TWO INVALID UNITS MUST NOT ALIAS, AND AN INVALID STORE MUST NOT BE
+        // LOADED BACK. Magma's wire arm bound every invalid (and every empty) storage unit of one
+        // (format, target) to ONE shared placeholder image, cleared before the pass - so inside the
+        // pass a store through invalid unit A was there to be loaded through invalid unit B, and
+        // through A itself. 8.26: the store is discarded, both loads return zero. The store comes
+        // FIRST here (the four-unit shader above loads its invalid source before it stores to its
+        // invalid destination, so it could not see this), then an image barrier, then both loads,
+        // each into a complete destination that starts non-zero.
+        constexpr GLubyte kStoredThroughInvalid = 0x7F;
+        constexpr const char* kAliasComputeSource = R"(#version 430 core
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(rgba8, binding = 0) writeonly uniform image2D u_loadedThroughB;
+layout(rgba8, binding = 1) writeonly uniform image2D u_loadedThroughA;
+layout(rgba8, binding = 2) coherent uniform image2D u_invalidA;
+layout(rgba8, binding = 3) coherent readonly uniform image2D u_invalidB;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(u_invalidA, p, vec4(127.0 / 255.0));
+    memoryBarrierImage();
+    imageStore(u_loadedThroughB, p, imageLoad(u_invalidB, p));
+    imageStore(u_loadedThroughA, p, imageLoad(u_invalidA, p));
 }
 )";
 
@@ -289,9 +323,9 @@ void main() {
                 return texels;
             }
 
-            GLuint BuildCompute() {
+            GLuint BuildCompute(const char* source = kComputeSource) {
                 const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
-                glShaderSource(shader, 1, &kComputeSource, nullptr);
+                glShaderSource(shader, 1, &source, nullptr);
                 glCompileShader(shader);
                 GLint ok = GL_FALSE;
                 glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
@@ -409,6 +443,99 @@ void main() {
                 EXPECT_EQ(FirstGLError(), 0u) << "the readbacks raised a GL error (" << what << ")";
             }
 
+            // Every texel of `texels` (one kEdge x kEdge RGBA8 level) loaded zero: R, G and B, which
+            // is what 8.26 fixes, and A as well where `strictAlpha` (the named-but-missing texel,
+            // whose conformance case compares all four; an EMPTY unit's placeholder on the arm
+            // without a null descriptor is the numeric-domain R32 one, which expands A to 1 - legal,
+            // 8.26 leaves A undefined). `storedAtOrigin` instead expects the stored 0x7F at (0, 0)
+            // in R, the one channel every placeholder format carries.
+            static void ExpectLoadedZero(const std::vector<GLubyte>& texels, bool storedAtOrigin, bool strictAlpha,
+                                         const char* through, const char* what) {
+                int wrong = 0;
+                int firstX = -1, firstY = -1;
+                for (int y = 0; y < kEdge; ++y) {
+                    for (int x = 0; x < kEdge; ++x) {
+                        const std::size_t at = static_cast<std::size_t>((y * kEdge + x) * 4);
+                        const bool ok = storedAtOrigin && x == 0 && y == 0
+                                            ? texels[at] == kStoredThroughInvalid
+                                            : texels[at] == 0 && texels[at + 1] == 0 && texels[at + 2] == 0 &&
+                                                  (!strictAlpha || texels[at + 3] == 0);
+                        if (!ok) {
+                            if (wrong++ == 0) {
+                                firstX = x;
+                                firstY = y;
+                            }
+                        }
+                    }
+                }
+                if (wrong != 0) {
+                    const std::size_t at = static_cast<std::size_t>((firstY * kEdge + firstX) * 4);
+                    ADD_FAILURE() << wrong << " of " << kEdge * kEdge << " texels loaded through " << through << " ("
+                                  << what << ") were not what 8.26 gives; first at (" << firstX << ", " << firstY
+                                  << ") = (" << int(texels[at]) << ", " << int(texels[at + 1]) << ", "
+                                  << int(texels[at + 2]) << ", " << int(texels[at + 3]) << ") (127 is the value "
+                                  << "stored through the invalid unit A, 17/34 means the pass never ran)";
+                }
+            }
+
+            // Units 2 (A) and 3 (B) are both invalid and of ONE shape - either both name the
+            // conformance case's missing mip level of a same-format texture, or both are empty.
+            // One dispatch stores 0x7F through A, barriers, and loads through B and through A.
+            void ExpectNoAliasThroughInvalidUnits(bool empty, const char* what) {
+                if (!LimitIsAtLeast(GL_MAX_COMPUTE_IMAGE_UNIFORMS, 4)) {
+                    GTEST_SKIP() << "the compute stage has fewer than four image uniforms";
+                }
+                // The Magma wire arm without a null storage descriptor (a device lacking
+                // VK_EXT_robustness2 nullDescriptor; forced on the host by the knob): each invalid
+                // unit gets a placeholder private to its (binding, unit). B's load is still zero -
+                // the units no longer alias - but A's load of A's own store in the same pass is
+                // not: that is the CONTRACT-P7 §12 residual, and here it is what PROVES the knob
+                // reached the server (the null-descriptor arm would read zero there too).
+                const bool privatePlaceholderArm = m_wire && Gl().BackendName() == "DirectVulkan" &&
+                                                   SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER");
+                const GLuint loadedThroughB = MakeComplete2D(kCompleteDestinationMagic);
+                const GLuint loadedThroughA = MakeComplete2D(kCompleteSourceMagic);
+                InvalidTexture invalidA{};
+                InvalidTexture invalidB{};
+                if (!empty) {
+                    invalidA = MakeInvalid(Invalidity::MissingMipLevel, kInvalidDestinationMagic);
+                    invalidB = MakeInvalid(Invalidity::MissingMipLevel, kInvalidSourceMagic);
+                }
+                ASSERT_EQ(FirstGLError(), 0u) << "building the textures raised a GL error (" << what << ")";
+
+                glBindImageTexture(0, loadedThroughB, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+                glBindImageTexture(1, loadedThroughA, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+                glBindImageTexture(2, invalidA.texture, invalidA.bindLevel, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+                glBindImageTexture(3, invalidB.texture, invalidB.bindLevel, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+                ASSERT_EQ(FirstGLError(), 0u) << "glBindImageTexture raised a GL error (" << what << ")";
+
+                m_program = BuildCompute(kAliasComputeSource);
+                ASSERT_NE(m_program, 0u);
+                glUseProgram(m_program);
+                glDispatchCompute(1, 1, 1);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                EXPECT_EQ(FirstGLError(), 0u) << "the pass raised a GL error (" << what << ")";
+
+                ExpectLoadedZero(ReadLevel(GL_TEXTURE_2D, loadedThroughB, 0, 1), false, !empty,
+                                 "invalid unit B after a store through invalid unit A of the same shape", what);
+                ExpectLoadedZero(ReadLevel(GL_TEXTURE_2D, loadedThroughA, 0, 1), privatePlaceholderArm, !empty,
+                                 privatePlaceholderArm
+                                     ? "invalid unit A itself on the private-placeholder arm (0x7F at the origin "
+                                       "is the recorded same-unit residual AND the proof this arm ran; zero means "
+                                       "MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER did not reach the server)"
+                                     : "invalid unit A itself after its own store",
+                                 what);
+                if (!empty) {
+                    // The discarded store changed nothing the texture has.
+                    for (const InvalidTexture* invalid : {&invalidA, &invalidB}) {
+                        EXPECT_EQ(ReadLevel(GL_TEXTURE_2D, invalid->texture, 0, 1),
+                                  Pattern(kEdge, kEdge, 1, invalid->magic))
+                            << "a store through an invalid unit modified the level its texture has (" << what << ")";
+                    }
+                }
+                EXPECT_EQ(FirstGLError(), 0u) << "the readbacks raised a GL error (" << what << ")";
+            }
+
             bool m_wire = false;
             std::vector<GLuint> m_textures;
             unsigned int m_program = 0;
@@ -453,6 +580,20 @@ void main() {
             }
         }
         ExpectInvalidAccess(Invalidity::PastViewWindow, false, "past-view-window");
+    }
+
+    // Codex closeout finding 2: a store through invalid unit A, an image barrier, then loads
+    // through invalid unit B of the same (format, target) and through A - both zero.
+    TEST_F(InvalidImageUnitScenario, AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectNoAliasThroughInvalidUnits(false, "missing-mip-level units");
+    }
+
+    // The same through two EMPTY units (glBindImageTexture(unit, 0, ...)): 8.26 makes those
+    // accesses invalid too, and Magma's wire arm answered them from the same shared placeholder.
+    TEST_F(InvalidImageUnitScenario, AStoreThroughAnEmptyUnitIsLoadedThroughNeitherAnotherEmptyUnitNorItself) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectNoAliasThroughInvalidUnits(true, "empty units");
     }
 
 } // namespace MGITest

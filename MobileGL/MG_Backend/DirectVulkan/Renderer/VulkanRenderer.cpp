@@ -3409,6 +3409,9 @@ void main() {
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        m_uniformManager->SetWireInvalidStorageImageArm(m_wireNullDescriptor);
+#endif
 #if MOBILEGL_PIPE_PUSH
         m_vertexInputStateFactory =
             MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle, m_pipeIdentity);
@@ -15625,6 +15628,41 @@ void main() {
                         "multi-draw batches use the indirect or unrolled tier");
             }
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Codex closeout finding 2 (cf-magma): GL 4.6 core 8.26 makes an access through an
+        // invalid image unit load zero and DISCARD stores and atomics. A null storage-image
+        // descriptor is that rule exactly, so the wire arm binds one for such a unit
+        // (UniformManager::SetWireInvalidStorageImageArm). ONLY nullDescriptor is requested:
+        // robustBufferAccess2 / robustImageAccess2 would put a bounds check on every access of
+        // every draw. Wire arms only, on the same terms as the depth-resolve extensions above -
+        // the monolith arm resolves image units elsewhere and keeps its device as it was.
+        m_wireNullDescriptor = false;
+        VkPhysicalDeviceRobustness2FeaturesEXT robustness2Features{};
+        robustness2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT;
+        const char* robustness2Name =
+            IsExtensionSupported(availableExtensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
+            : IsExtensionSupported(availableExtensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
+                                                                                            : nullptr;
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && robustness2Name != nullptr &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            featureQuery.pNext = &robustness2Features;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (robustness2Features.nullDescriptor == VK_TRUE) {
+                EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, robustness2Name);
+                robustness2Features.robustBufferAccess2 = VK_FALSE;
+                robustness2Features.robustImageAccess2 = VK_FALSE;
+                robustness2Features.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &robustness2Features;
+                m_wireNullDescriptor = true;
+            }
+        }
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            MGLOG_I("Magma wire: robustness2 nullDescriptor %s (%s)", m_wireNullDescriptor ? "enabled" : "unavailable",
+                    robustness2Name != nullptr ? robustness2Name : "no robustness2 extension");
+        }
+#endif
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();

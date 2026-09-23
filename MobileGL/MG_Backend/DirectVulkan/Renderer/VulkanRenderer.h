@@ -556,6 +556,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireMultisampleResolveResources* m_wireMultisampleResolveResources = nullptr;
         void DestroyWireMultisampleResolveResources();
         Bool m_wireShaderStencilExport = false;
+        // VK_EXT_robustness2 (or its KHR promotion) with ONLY nullDescriptor enabled, wire arms
+        // only: an invalid image unit binds a null storage descriptor (codex closeout finding 2).
+        Bool m_wireNullDescriptor = false;
         // The resolve probe's verdict for this device (WireDepthResolveArm.h,
         // WireDepthResolveProbe.h): true when the no-draw render pass was measured leaving its
         // target unwritten while the shader control resolved - the shader arm then resolves

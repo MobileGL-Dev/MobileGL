@@ -92,9 +92,13 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # real probe's verdict, which the tcp copy cannot: same name on all three arms, no exception).
 # `.MsResolveElide.` (g5-msprobe critic) sets MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject, which
 # the same server-side arm choice reads to run the REAL probe with its render-pass resolve left out.
+# Codex closeout finding 2 (cf-magma): `.ImageUnitPrivate.` sets
+# MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1, which the SERVER's UniformManager reads to bind a
+# (binding, unit)-private placeholder for an invalid image unit instead of a null descriptor - the
+# knob-free `.ImageUnitWindow.` copies of the same two cases keep their tcp entries.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
-                                ".MsResolveBug.", ".MsFlipBug.", ".MsResolveElide.",
+                                ".MsResolveBug.", ".MsFlipBug.", ".MsResolveElide.", ".ImageUnitPrivate.",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",
