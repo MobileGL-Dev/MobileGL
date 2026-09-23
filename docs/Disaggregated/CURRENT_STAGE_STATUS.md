@@ -4,19 +4,19 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `87584d0b`；集成树 `~/w7/pipe` 领先 30 提交（B3 修复 r2、V1 修复轮、B2 r3、**M2**），M2 门 / 审查在跑；**窗口 1b 逐例分步矩阵在跑**（配对窗口在直连 LAN 上同样触发，ID-P7-41）。
+**更新：2026-09-22 夜** · `origin/feat/disaggregated` = `87584d0b`；集成树 `~/w7/pipe` 领先 40 提交（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2、F 修复轮），M2 与 F 修复门全绿、审查在跑；窗口 1b 逐例矩阵在跑（ID-P7-42）。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
 | # | 子系统 | 状态 | 证据 |
 |---|---|---|---|
-| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 97 / 76 / 71，full-split 535（pipe，B2 r2 + B3 修复之后；tcp 少 6 = 六个 server 端旋钮条目的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（每个包的门都跑） |
+| 1 | Magma 两进程车道三臂同数绿 | ✅ | `integration-magma-{split,spawn,tcp}` 100 / 79 / 71，full-split 538（pipe，M2 之后；tcp 少 9 = 十条 server 端旋钮 / 计量 tail 的具名 parity 例外 `MAGMA_SERVER_ENV_KNOB_NO_TCP`）；OpenRA DirectVulkan inproc + spawn 回放 1.000000 且 0 条 `unsound-serial-complete`（每个包的门都跑） |
 | 2 | §3.2 六个 `@P7` 退役 | ✅ | A（byte-tail、native-range、对齐 decline）、B（copy-image、default-color-blit、mip 半退役）、B2（multisample shape/aspect）、C（vertex-layout 拆分）；树上 `@P7` 拒绝站点 **0** |
 | 3 | `StateObjectDeathOps` | ✅ | C，`dce9953d..cf7ca59f` |
 | 4 | 烘焙 (A)(D) + (B′) | ✅ | B 深度 mip 烘焙；B2 disaggregated 构建的 monolith 臂改用烘焙模块 |
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
-| 7 | verify × split（门 2） | ✅（修复轮在跑） | V1 落地 pipe：pipe 的 verify 构建上 monolith verify **1140**、`integration-verify-split` **1074**（双后端 inproc，逐条武装证明）全绿；`VERIFY_CORRUPT` 10/10 红、`POISON_OMIT` 2/2 红（split 臂）；8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；fable 审查 land with fixes（server 侧 read hook 补红、poison 分角色、中性 pack 共享函数、逐条武装证明）→ 修复轮在跑 |
+| 7 | verify × split（门 2） | ✅（修复 r2 在跑） | pipe 的 verify 构建：monolith verify **1148**、`integration-verify-split` **1082**（双后端 inproc，逐条武装普查 + 56 名具名例外表）全绿；`VERIFY_CORRUPT` 10/10 红、read 侧控制 server 半边红、`POISON_OMIT` server 半边红（split 臂）；8 verify trace × DV × inproc 0 分歧；verify 只能 inproc（比对器要求推送态与 GL 上下文同进程）；修复 r2 = read 侧断言 ≥ 2 行 + client 日志退出截断的既有缺陷 |
 | 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄（M2 已到集成树，等 p7w6 真机） | p7w4：34/36 与 monolith 差 ≤ 0.0005；**OpenRA 已关**（ID-P7-33/34：真因 = wire 臂 frame-serial floor 不健全，B3 修；p7w5 **27/27 golden**，[`W5-verify/`](notes/p7/device-window-1/W5-verify/README.md)）；**bsl-esc-menu** = server 死 VkBuffer 无界累积（ID-P7-32，**M2** 在修）；终局形式（三遍逐位 + spawn 臂同会话）留 p7w6 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
@@ -45,7 +45,9 @@
 | B3 修复轮 | 审计剥注释 / 字面量 + 按块回溯 + `--self-test`、spawn 无 server 日志 FATAL、注记双行 + `WaitForFrameSerial` 债 | `origin@87584d0b`（审查 land with fixes → 修复 r2 在跑，ID-P7-38） |
 | F 片 1–3 | 常量时间令牌 / ≥16 字节 / 无令牌只 loopback / smoke 进 CI；`Welcome.dataNonce` 绑定（TCP 250 ms 配对窗口消失，指纹变更）；PH-8 钳制证明 | `origin@87584d0b`（审查 land with fixes → 修复轮在跑，ID-P7-39） |
 | E1 | Iris 普查 231/231 全活、70/77 逐字节同、P9 例外表空；§7.2 同名重跑 24 绿 / 3 具名停止 / 0 错答 | `origin@87584d0b`（docs only，ID-P7-38） |
-| M2 | 孤儿 wire store 在 defer 路径回收 + `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + 1,024 计数上限 + `wbuf[]` 计量 + `MagmaWireReclaimScenario`；主机 bsl spawn server 825 → 546 MiB、映射 41k → 5.8k | pipe `b81a8827..7d131527`（门 + 审查在跑，ID-P7-41） |
+| M2 | 孤儿 wire store 在 defer 路径回收 + `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + 1,024 计数上限 + `wbuf[]` 计量 + `MagmaWireReclaimScenario`；主机 bsl spawn server 825 → 546 MiB、映射 41k → 5.8k | pipe `b81a8827..7d131527`（门全绿 magma 100 / 79 / 71，审查在跑，ID-P7-42） |
+| F 修复轮 | hand-off 端绑定后关 + `MSG_DONTWAIT`（多余 DataBind 具名拒绝）、listener 绑定后关、`sha256(protocol.fbs)` 钉到控制修订、定宽令牌比较、超额 Hello 记警、`MalformedHello`、文档更正 | pipe `0293aebb..9cea5140`（门全绿，审查在跑，ID-P7-42） |
+| B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门在跑，ID-P7-42） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
@@ -61,10 +63,11 @@
 | B3 修复 r2 审查（fable） | 剥注释 / 字面量的边界、块回溯规则、自测覆盖、fail-closed 顺序、pull-library 控制 | 进行中；代码已在 pipe，门全绿（ID-P7-40） |
 | V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 进行中；代码已在 pipe（ID-P7-40） |
 | M2 审查（fable） | 提前释放的三个条件、水位线同步的可重入性、`ServerSpawn.cpp` 放行的形状、计量 / 场景的双向性 | 进行中；代码已在 pipe（ID-P7-41） |
-| B3 修复 r3（fable） | 审计 `#endif` 只对 disagg 守卫放行、缩进 `#else` 停走、注记行号、模式位、`EVIDENCE` 保护 | 进行中（ID-P7-41） |
-| B2 r4（fable） | 窗口腿独一无二的底色 + 错面演示、去掉死合取项、按符号引用 | 进行中（ID-P7-41） |
+| V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | 进行中（ID-P7-42） |
+| X2（fable） | `InitialCapsStartup.ANullInitialSnapshot…` 在负载下的 flake：复现、测试 vs 产品判定、修复 + 500 次循环 | 进行中（ID-P7-42） |
+| B3 r3 + B2 r4 审查（fable） | 守卫感知的 `#endif` 规则、`EVIDENCE` 保护、窗口腿底色 | 进行中（ID-P7-42） |
 | 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中；已见 ReadPixels 被设备 server 拒、main-menu server 死亡（ID-P7-41） |
-| F 修复轮（fable） | child 绑定后关 hand-off 端 + `MSG_DONTWAIT`（后续 DataBind 具名拒绝而非挂起）、listener 绑定后关、`protocol.fbs` 摘要 pin、旧 server + 新 client 症状写明、unix 配对 §12 债、nit ×6 | 进行中（ID-P7-39） |
+| F 修复轮审查（fable） | hand-off 关闭的竞态窗口、listener 关闭的路径、摘要 pin 的 LF 归一化、`MalformedHello` 词表、G14 的 `CapsMirrorTest` 一名 | 进行中；代码已在 pipe（ID-P7-42） |
 
 ## 5. 下一步（按序）
 
