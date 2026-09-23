@@ -104,6 +104,7 @@ TCP harness 的 fork pre-flight 也曾先占用远端单会话，使真正测试
 这是既有 verify-only “全资源 respecify”断言与后来合法 per-level producer 的冲突，
 不是 TCP 前送失败。证据 `/home/swung/p65-lf-verify/` 与 `/home/swung/p65-verify-controls/`；
 此项尚未宣称通过。
+（P7 wave 3 V1 更新：断言已放宽为「按 level 的 producer 覆盖其宣告范围」，verify × split 车道 1070/1070，见 [`notes/p7/verify-split.md`](../p7/verify-split.md)。）
 
 CI 的 `runtime_mode_proof.py` 曾读取无角色后缀的日志名，导致真实两后端用例通过后仍 FileNotFoundError。
 修复为读取 client/server 两份，并保留任一缺失为硬失败。除了正反 self-test，
