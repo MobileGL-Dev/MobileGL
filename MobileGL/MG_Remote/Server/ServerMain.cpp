@@ -240,9 +240,36 @@ void CloseHandoffRefusingQueued(int handoff) {
             std::fflush(nullptr);
             ::_exit(0);
         }
-        if (received != MOBILEGL_ERR_BUFFER_TOO_SMALL) ::_exit(0);
-        helloFrame.resize(static_cast<std::size_t>(bytes));
-        if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) ::_exit(0);
+        if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+            // Fix round: this used to be a bare `_exit(0)` whatever had arrived. A close INSIDE
+            // the frame is answered by name, as the TCP supervisor answers it (the peer may have
+            // closed only its write side); a close before any byte has nobody to answer, and the
+            // log says which of the two it was.
+            if (control->BufferedBytes() != 0)
+                Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
+            else
+                WireLogError("MG_Remote server: pid=%d control peer closed before sending a first frame", selfPid);
+            std::fflush(nullptr);
+            ::_exit(0);
+        }
+        if (received == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
+            // The reassembler holds the whole frame already; this second call copies it out.
+            helloFrame.resize(static_cast<std::size_t>(bytes));
+            if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) {
+                WireLogError("MG_Remote server: pid=%d first frame of %llu bytes could not be copied out", selfPid,
+                             static_cast<unsigned long long>(helloFrame.size()));
+                std::fflush(nullptr);
+                ::_exit(0);
+            }
+        } else if (received != MOBILEGL_OK) {
+            WireLogError("MG_Remote server: pid=%d first frame could not be read (rc=%d)", selfPid,
+                         static_cast<int>(received));
+            std::fflush(nullptr);
+            ::_exit(0);
+        }
+        // MOBILEGL_OK with nothing copied is a ZERO-LENGTH frame. It was the one complete frame
+        // this read exited on without a word (fix round); `helloFrame` stays empty and the
+        // classification below names it, as the TCP supervisor's does ("no identifier").
     }
     // THE FIRST FRAME, CLASSIFIED BY THE SAME FUNCTION THE TCP SUPERVISOR USES (plan §1.1, fuzz
     // arm 1 row: "ServerMain.cpp:193 CtrlEnvelopeBufferHasIdentifier"). The identifier is asked

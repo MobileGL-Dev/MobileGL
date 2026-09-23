@@ -33,8 +33,14 @@ Five malformations, delivered at the two places a control frame is read:
     (the truncated frame and the wrong union type) ended the session without a word.
 
 (3) SINGLE-SESSION SHAPE (no --serve), where the session process reads its own first frame
-    through the same classification: a wrong identifier and a silent peer are each answered by
-    name and the process exits 0, where it used to `_exit(67)` without a word.
+    through the same classification: a wrong identifier, a zero-length frame, a truncated header
+    and a silent peer are each answered by name and the process exits 0, where it used to
+    `_exit(67)` (or `_exit(0)`) without a word. And the one place RunSession's own token-first
+    order is reachable: an unauthenticated Hello with a wrong layout or wire major is answered
+    Refuse{Authentication} with nothing of ours in it.
+
+The first-frame phase also carries the two shapes the f2-auth fix round added: a zero-length
+frame, and a DataBind whose nonce is not 16 bytes (the supervisor's own named refusal).
 
 The supervisor runs with the authentication backoff OFF (MOBILEGL_IPC_AUTH_BACKOFF_AFTER=0): every
 malformation above is an authentication failure from 127.0.0.1, and with the default threshold the
@@ -171,11 +177,15 @@ def main():
                 'wrong_union_type': (8, smoke.kDetailNotAHello),
                 'bad_magic': (8, smoke.kDetailNotAFrame),
                 'null_hello_table': (8, smoke.kDetailNotAHello),
+                'zero_length': (8, smoke.kDetailNoIdentifier),
+                'short_nonce_data_bind': (8, smoke.kDetailBadDataBind),
                 'silent': (4, smoke.kDetailDeadline),
             }
             cases = dict(malformations(schema, flatbuffers, fingerprint))
             cases['bad_magic'] = (b'XXXX' + bytes(60), False)
             cases['null_hello_table'] = (envelope(schema, flatbuffers, schema['CtrlMsg'].CtrlMsg.Hello), False)
+            cases['zero_length'] = (framed(b''), False)
+            cases['short_nonce_data_bind'] = (smoke.data_bind(schema, flatbuffers, os.urandom(8)), False)
             cases['silent'] = (b'', False)
             reaped_before = reap_lines(serverLog)
             for name, (payload, half_close) in cases.items():
@@ -253,20 +263,43 @@ def main():
         # itself (the unix endpoint's children do the same), through the same classification.
         # That read used to `_exit(67)` on every malformation without a word; now the peer is
         # answered by name and the process exits 0 - the malformation is the peer's, not a fault.
+        #
+        # f2-auth fix round, two more kinds of case here:
+        #   - zero_length / truncated_length_prefix: the two first frames this read still ended on
+        #     with a bare `_exit(0)` - a complete frame of length 0, and a close inside the header.
+        #     RED before the fix: RuntimeError('control channel closed before a complete frame').
+        #   - unauthenticated_*: THE TOKEN IS ASKED BEFORE THE WIRE HERE TOO (PH-7 (5), ph-f.md
+        #     §6.4 (b)). On TCP --serve the supervisor refuses these before any fork, so the
+        #     supervisor smoke's unauthenticated controls never reach RunSession's own order; this
+        #     shape is the one that does (and the unix endpoint runs the same lines). A Hello with a
+        #     wrong token AND fingerprint 0 (or wire major 99) must be answered
+        #     Refuse{Authentication} carrying nothing of ours. RED with ValidatePeerHandshake moved
+        #     back before AuthenticatePeerToken: code 2 with our fingerprint in `expected` (code 1
+        #     with our version).
         evidence['single_session'] = {}
-        for name, payload, code, detail in (
+        for name, payload, half_close, code, detail in (
                 ('bad_identifier', smoke.hello(schema, flatbuffers, fingerprint=fingerprint, identifier=b'XXXX'),
-                 8, smoke.kDetailNoIdentifier),
-                ('silent', b'', 4, smoke.kDetailDeadline)):
+                 False, 8, smoke.kDetailNoIdentifier),
+                ('zero_length', framed(b''), False, 8, smoke.kDetailNoIdentifier),
+                ('truncated_length_prefix', b'MGLF\x10', True, 8, smoke.kDetailTruncated),
+                ('unauthenticated_wrong_layout', smoke.hello(schema, flatbuffers, fingerprint=0, token='wrong-token'),
+                 False, 4, 'token mismatch'),
+                ('unauthenticated_wire_major_99',
+                 smoke.hello(schema, flatbuffers, fingerprint=fingerprint, major=99, token='wrong-token'),
+                 False, 4, 'token mismatch'),
+                ('silent', b'', False, 4, smoke.kDetailDeadline)):
             with smoke.supervisor(args.server, args.out / f'single-session-{name}.log', serve=False,
                                   extra_env=knobs) as (port, process, serverLog):
-                answer = send_first_frame(port, schema, payload, False)
+                answer = send_first_frame(port, schema, payload, half_close)
                 try:
                     exited = process.wait(timeout=10)
                 except Exception:  # noqa: BLE001 - still running is the red shape here
                     exited = None
             assert answer.get('code') == code and answer.get('detail') == detail, (
                 f'single-session {name}: expected Refuse code {code} "{detail}", got {answer}; see {serverLog}')
+            assert answer.get('expected') == 0, (
+                f'single-session {name}: the refusal carried {answer.get("expected")} in `expected`; '
+                f'our fingerprint is {fingerprint}')
             assert exited == 0, f'single-session {name}: the session process exited {exited}, not 0'
             evidence['single_session'][name] = {'refusal': answer, 'exit': exited}
         (args.out / 'fuzz-control-frames.json').write_text(json.dumps(evidence, indent=2))
