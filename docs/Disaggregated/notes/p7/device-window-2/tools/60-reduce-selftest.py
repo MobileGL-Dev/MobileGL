@@ -6,8 +6,8 @@ reducer on each exactly as window.sh does (a subprocess, <stamp> --logroot --too
 the printed verdict, verdict.json and the exit status. Gate 3 is canned at the gate's own
 denominator - the canonical 36, derived here as 30-gate3.sh derives gate3/cases.txt (the tree's
 trace_cases.json CI split DirectVulkan cases minus CONTRACT-P7 7.1's three exclusions) - with
-monolith / inproc x3 / spawn x3 / ra0, one boot_id, reboot-clean, unless a scenario says
-otherwise. The scenarios:
+monolith x3 (ID-P7-62) / inproc x3 / spawn x3 / ra0, one boot_id, reboot-clean, unless a scenario
+says otherwise. The scenarios:
 
   control         gate 3 and all five CTS blocks equal to $BASE    -> GATE3 PASS, CTS PASS, exit 0
   missing-block   ssbo never finished, dsa's report is empty, texture's has no results; and a
@@ -33,6 +33,18 @@ otherwise. The scenarios:
                   NEEDS-ADJUDICATION naming it; one case differing, adjudicated (+ a stale line) ->
                   PASS; one inproc repeat differs from its siblings -> FAIL (within-arm identity)
   unfinished      a pair without .done; a repeat without an actual PNG -> GATE3 INCOMPLETE
+  monolith-determinism  ID-P7-62, on synthetic 8x8 pictures (base grey 128, the first n px at
+                  another level): a bit-identical monolith x3 + a nondeterministic inproc -> FAIL
+                  (strict clause); a nondeterministic monolith (3 distinct / 3 passes, 10 px / delta
+                  4 apart) + split pictures inside 1.25x (10 px / delta 5) -> PASS, exit 0, no
+                  adjudication line needed, the numbers printed; the same with the stdlib decoder
+                  (W2_REDUCE_PNG_DECODER=pure) -> the same numbers; split beyond 1.25x in delta
+                  (6 > 5) or in pixels (13 > 12.5) -> FAIL; one split ssim 0.0005+ from ONE
+                  monolith reading -> FAIL; the pre-ID-P7-62 monolith x1 + a nondeterministic
+                  split -> FAIL naming the >= 3 passes it lacks; a finished monolith pair short of
+                  arms.txt's monolith_repeat -> FAIL; --extra-monolith DIR@BOOT adding two passes
+                  to that x1 archive -> the rule applies, GATE3 PASS-WITH-EXTRA-READINGS (exit 1),
+                  without @BOOT or with another boot -> INVALID-SESSION
   rate-gate       the gate rate alone decides (no crash anywhere): k $BASE-Pass dsa cases
                   turn Fail. k=1: 367/370, -0.270 pp -> PASS, exit 0; k=2: -0.541 pp -> FAIL on
                   the rate; k=4: 364/6/0/1/0, -1.081 pp -> FAIL, CTS FAIL
@@ -102,7 +114,10 @@ CASES, A, B = (), None, None
 OPENRA = "OpenRA"
 REPEAT = 3
 GONE = "/nonexistent/p7w7-tree-deadbeef/tools/cts/caselists/p7-%s-gl46.txt"
-ARMS = (("monolith", 1), ("inproc", REPEAT), ("spawn", REPEAT), ("inproc-ra0", 1))
+ARMS = (("monolith", REPEAT), ("inproc", REPEAT), ("spawn", REPEAT), ("inproc-ra0", 1))
+# The pre-ID-P7-62 30-gate3.sh: monolith x1, and no monolith_repeat= in gate3/arms.txt.
+ARMS_MONO1 = (("monolith", 1),) + ARMS[1:]
+ARMS_TXT_MONO1 = "arms=monolith inproc spawn inproc-ra0\nrepeat=3\n"
 DSA_STORAGE = "KHR-GL46.direct_state_access.renderbuffers_storage"
 SI_INCOMPLETE = "KHR-GL46.shader_image_load_store.incomplete_textures"
 CODEX_RULING = "ruling: integrator 2026-09-23 after codex closeout review"
@@ -126,6 +141,14 @@ def write(path, data):
         path.write_bytes(data)
     else:
         path.write_text(data, encoding="utf-8")
+
+
+def lookup(table, arm, case, repeat, default):
+    """A canned per-repeat value: (arm, case, repeat), else (arm, case), else arm, else default."""
+    for key in ((arm, case, repeat), (arm, case), arm):
+        if key in table:
+            return table[key]
+    return default
 
 
 def read_list(path):
@@ -163,21 +186,31 @@ class Canned:
         self.root, self.tree, self.ca = root, tree, ca
 
     def png(self, value):
+        """value: a grey level (a solid 8x8 picture), or (n, level): grey 128 with its first n pixels
+        (row-major) at `level` - the synthetic 'speckle' the ID-P7-62 scenarios move around."""
+        if isinstance(value, tuple):
+            n, level = value
+            rgba = bytearray(self.ca._solid(8, 8, 128))
+            for i in range(n):
+                rgba[i * 4:i * 4 + 3] = bytes([level] * 3)
+            return self.ca._png_bytes(8, 8, bytes(rgba))
         return self.ca._png_bytes(8, 8, self.ca._solid(8, 8, value))
 
     def gate3(self, out, picture=None, boot=BOOT, cases=None, reboot_clean=True, arms=ARMS, arms_txt=None,
-              excluded=EXCLUDED):
-        """30-gate3.sh's output. picture: {arm or (arm, case): grey value} (default 128 everywhere);
-        arms: ((arm, repeats), ...) actually run; arms_txt: gate3/arms.txt's text (default: what
-        30-gate3.sh writes for `arms`)."""
-        picture = picture or {}
+              excluded=EXCLUDED, ssim=None):
+        """30-gate3.sh's output. picture: {arm, (arm, case) or (arm, case, repeat): Canned.png value}
+        (default 128 everywhere); ssim: the same keys -> result.json's ssim (default 0.998, OpenRA
+        1.0); arms: ((arm, repeats), ...) actually run; arms_txt: gate3/arms.txt's text (default:
+        what 30-gate3.sh writes for `arms`)."""
+        picture, ssim = picture or {}, ssim or {}
         cases = CASES if cases is None else cases
         g = out / "gate3"
         write(g / "cases.txt", "\n".join(cases) + "\n")
         write(g / "excluded.txt", "\n".join(excluded) + "\n")
         repeat = max([n for a, n in arms if a in ("inproc", "spawn")] or [REPEAT])
         write(g / "arms.txt", arms_txt if arms_txt is not None
-              else "arms=%s\nrepeat=%d\n" % (" ".join(a for a, _ in arms), repeat))
+              else "arms=%s\nrepeat=%d\nmonolith_repeat=%d\n" % (" ".join(a for a, _ in arms), repeat,
+                                                                   dict(arms).get("monolith", repeat)))
         write(out / "session/boot-id.txt", boot + "\n")
         write(out / "session/reboot-clean.txt",
               ("reboot-clean: 00000000-0000-0000-0000-000000000000 -> %s\n" % boot) if reboot_clean
@@ -189,10 +222,11 @@ class Canned:
                 for i in range(1, n + 1):
                     rep = g / "archive" / arm / name / ("repeat-%02d" % i)
                     write(rep / "result.json", json.dumps({
-                        "passed": True, "statusCode": 0, "backend": "DirectVulkan", "ssim": 1.0 if openra else 0.998,
+                        "passed": True, "statusCode": 0, "backend": "DirectVulkan",
+                        "ssim": lookup(ssim, arm, case, i, 1.0 if openra else 0.998),
                         "ssimThreshold": 0.99, "mismatchPixels": 0 if openra else 17,
                         "matchedGoldenPath": "/in/golden.png", "cropX": 0, "cropY": 0, "cropWidth": 0, "cropHeight": 0}))
-                    write(rep / (name + "-actual.png"), self.png(picture.get((arm, case), picture.get(arm, 128))))
+                    write(rep / (name + "-actual.png"), self.png(lookup(picture, arm, case, i, 128)))
                     write(rep / "logcat.txt", "canned logcat %s %s repeat %d\n" % (arm, case, i))
                     write(rep / "mobilegl.log", LOGS[arm])
                     if arm in ("inproc", "spawn"):
@@ -202,6 +236,23 @@ class Canned:
                       "rc=0 seconds=7 attempts=1 passed_lines=%d boot_id=%s boot_id_before=%s "
                       "finished=2026-09-23T12:00:00-04:00\n" % (n, boot, boot))
         return g
+
+    def extra_monolith(self, d, case, pictures, boot=None):
+        """A run_android_retrace_local.py --archive-dir tree of monolith passes outside gate3/ (the
+        g3det E1-mono shape): one repeat per `pictures` value; boot: stamp repeat-NN/boot_id.txt."""
+        name = case + "-DirectVulkan"
+        for i, value in enumerate(pictures, 1):
+            rep = d / name / ("repeat-%02d" % i)
+            write(rep / "result.json", json.dumps({
+                "passed": True, "statusCode": 0, "backend": "DirectVulkan", "ssim": 0.998, "ssimThreshold": 0.99,
+                "mismatchPixels": 17, "matchedGoldenPath": "/in/golden.png", "cropX": 0, "cropY": 0,
+                "cropWidth": 0, "cropHeight": 0}))
+            write(rep / (name + "-actual.png"), self.png(value))
+            write(rep / "logcat.txt", "canned extra logcat %s repeat %d\n" % (case, i))
+            write(rep / "mobilegl.log", LOGS["monolith"])
+            if boot:
+                write(rep / "boot_id.txt", "boot_id=%s boot_id_before=%s\n" % (boot, boot))
+        return d
 
     def base(self, b):
         return dict(json.loads((self.tree / CTS_BASE_REL / ("report-%s.json" % b)).read_text(encoding="utf-8"))["results"])
@@ -269,11 +320,14 @@ class Canned:
         return out
 
 
-def run_reducer(logroot, stamp, tree, json_out=None):
+def run_reducer(logroot, stamp, tree, json_out=None, extra=(), env=None):
     cmd = [sys.executable, str(REDUCER), stamp, "--logroot", str(logroot), "--tools", str(tree)]
     if json_out:
         cmd += ["--json", str(json_out)]
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+    for spec in extra:
+        cmd += ["--extra-monolith", str(spec)]
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True,
+                       env=dict(os.environ, **(env or {})))
     vpath = Path(json_out) if json_out else Path(logroot) / stamp / "verdict.json"
     verdict = json.loads(vpath.read_text(encoding="utf-8")) if vpath.is_file() else {}
     return p.returncode, p.stdout, verdict
@@ -420,7 +474,7 @@ def scenario_monolith_arm(k, cn, tree):
              e.get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0
              and any("NOT proven monolith" in r for r in e.get("reasons", [])), e)
     k.expect("the other case still PASS", case(v, B).get("verdict") == "PASS")
-    k.expect("arm identity line counts 35/36 monolith", "monolith 35/36 repeat(s)" in text, text)
+    k.expect("arm identity line counts 107/108 monolith passes (x3)", "monolith 107/108 repeat(s)" in text, text)
 
     out = cn.window("mono-nolog")
     (out / "gate3/archive/monolith" / (B + "-DirectVulkan") / "repeat-01" / "mobilegl.log").unlink()
@@ -493,7 +547,8 @@ def scenario_arms(k, cn, tree):
     k.expect("a run started without spawn -> GATE3 FAIL-ARMS", overall(v) == "FAIL-ARMS" and rc != 0
              and any("arm spawn has no archive" in p for p in contract(v, "arms")), overall(v))
 
-    cn.window("ra0-planned", gate3_args={"arms": three, "arms_txt": "arms=monolith inproc spawn inproc-ra0\nrepeat=3\n"})
+    cn.window("ra0-planned", gate3_args={"arms": three, "arms_txt": "arms=monolith inproc spawn inproc-ra0\nrepeat=3\n"
+                                                                     "monolith_repeat=3\n"})
     rc, text, v = run_reducer(cn.root, "ra0-planned", tree)
     k.expect("inproc-ra0 named in arms.txt but not reached yet -> GATE3 INCOMPLETE (not PASS), exit != 0",
              overall(v) == "INCOMPLETE" and rc != 0 and contract(v, "arms") == []
@@ -556,10 +611,10 @@ def scenario_cross_arm(k, cn, tree):
              and g3(v, "cross_arm_unadjudicated") == list(CASES))
     x = case(v, B).get("cross_arm", {})
     k.expect("the list carries the archived px!=golden and the direct px counts (8x8: 64 between 128 and 129)",
-             x.get("px_vs_golden") == {"monolith": 17, "inproc": [17, 17, 17], "spawn": [17, 17, 17]}
+             x.get("px_vs_golden") == {"monolith": [17, 17, 17], "inproc": [17, 17, 17], "spawn": [17, 17, 17]}
              and x.get("px_direct") == {"inproc-monolith": 0, "spawn-monolith": 64, "inproc-spawn": 64}
-             and "px!=golden (archived mismatchPixels) monolith 17, inproc 17..17, spawn 17..17; px between the arms' "
-                 "first repeats: inproc-monolith 0, spawn-monolith 64, inproc-spawn 64" in text, x)
+             and "px!=golden (archived mismatchPixels) monolith 17..17, inproc 17..17, spawn 17..17; px between the "
+                 "arms' first repeats: inproc-monolith 0, spawn-monolith 64, inproc-spawn 64" in text, x)
     k.expect("both rulings are named", "ruling: integrator 2026-09-23;" in text and CODEX_RULING in text)
 
     out = cn.window("cross-adj", gate3_args={"picture": {"spawn": 129}})
@@ -612,6 +667,131 @@ def scenario_unfinished(k, cn, tree):
     e = case(v, A)
     k.expect("repeat without actual PNG -> INCOMPLETE", e.get("verdict") == "INCOMPLETE"
              and any("no *-actual.png" in r for r in e.get("reasons", [])), e)
+
+
+def scenario_determinism(k, cn, tree):
+    print("[monolith-determinism] ID-P7-62: a monolith not bit-identical over >= 3 passes swaps the split arms' "
+          "bit-identity clause for the distributional check")
+    # A nondeterministic monolith: 3 distinct pictures, pairwise 10 px apart, largest delta 4 -> the
+    # split bound is 12.5 px / delta 5.0.
+    mono = {("monolith", A, 1): (10, 128), ("monolith", A, 2): (10, 132), ("monolith", A, 3): (10, 130)}
+    inside = {("inproc", A, 1): (10, 129), ("inproc", A, 2): (10, 131), ("inproc", A, 3): (10, 133),
+              ("spawn", A, 1): (10, 130), ("spawn", A, 2): (10, 132), ("spawn", A, 3): (10, 128)}
+    rule_line = "nondeterministic monolith (3 distinct / 3 passes) -> distributional check (ID-P7-62)"
+    numbers = {"passes": 3, "distinct": 3, "rule": "distributional", "mono_pairs": 3, "mono_px_max": 10,
+               "mono_delta_max": 4, "split_pairs": 18, "split_px_max": 10, "split_delta_max": 5, "within": True}
+
+    def det(v):
+        return case(v, A).get("monolith_determinism", {})
+
+    def has(v, needle):
+        return any(needle in r for r in case(v, A).get("reasons", []))
+
+    # (a) the strict clause stands when the monolith is bit-identical over its 3 passes.
+    cn.window("det-strict", gate3_args={"picture": {("inproc", A, 2): (10, 131)}})
+    rc, text, v = run_reducer(cn.root, "det-strict", tree)
+    k.expect("bit-identical monolith x3 + a nondeterministic inproc -> %s FAIL (strict clause), GATE3 FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0 and det(v).get("rule") == "strict"
+             and has(v, "inproc repeats NOT bit-identical (2 distinct pictures); the same-session monolith is "
+                        "bit-identical over 3 passes") and case(v, B).get("verdict") == "PASS",
+             (case(v, A).get("reasons"), det(v)))
+
+    # (b) a nondeterministic monolith, the split pictures inside its spread -> PASS, no adjudication.
+    cn.window("det-inside", gate3_args={"picture": {**mono, **inside}})
+    rc, text, v = run_reducer(cn.root, "det-inside", tree)
+    k.expect("nondeterministic monolith (3 distinct / 3 passes) + split inside 1.25x -> %s PASS, GATE3 PASS, exit 0" % A,
+             case(v, A).get("verdict") == "PASS" and overall(v) == "PASS" and rc == 0
+             and "GATE3 PASS: 36/36 cases PASS\n" in text, (case(v, A).get("reasons"), overall(v), text[-400:]))
+    k.expect("...the rule line and the numbers: 10 px / delta 4 over 3 monolith pairs, 10 px / delta 5 over 18 "
+             "split pairs, bound 12.50 px / 5.00",
+             {key: det(v).get(key) for key in numbers} == numbers and rule_line in text
+             and "monolith-vs-monolith max 10 px / delta 4 (3 pairs); split-vs-monolith max 10 px / delta 5 (18 pairs); "
+                 "bound 1.25x = 12.50 px / 5.00: within" in text
+             and g3(v, "determinism", {}).get("distributional") == [A], (det(v), text[:1500]))
+    k.expect("...its cross-arm difference needs no gate3/adjudication.tsv line (decided by the rule)",
+             case(v, A).get("cross_arm", {}).get("identical") is False
+             and case(v, A).get("cross_arm", {}).get("distributional") is True
+             and g3(v, "cross_arm_unadjudicated") == [] and "compared by the ID-P7-62 distributional check" in text,
+             case(v, A).get("cross_arm"))
+    decoder = det(v).get("decoder", "")
+    rc, text, v = run_reducer(cn.root, "det-inside", tree, env={"W2_REDUCE_PNG_DECODER": "pure"})
+    k.expect("...the stdlib PNG decoder (W2_REDUCE_PNG_DECODER=pure) gives the same numbers (default decoder: %s)"
+             % decoder, {key: det(v).get(key) for key in numbers} == numbers
+             and det(v).get("decoder", "").startswith("pure-python") and rc == 0, det(v))
+
+    # (c) beyond 1.25x: in the per-channel delta, then in the pixel count.
+    cn.window("det-delta", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): (10, 134)}})
+    rc, text, v = run_reducer(cn.root, "det-delta", tree)
+    k.expect("...one split picture at delta 6 > 1.25 x 4 -> %s FAIL, GATE3 FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0
+             and det(v).get("split_delta_max") == 6 and det(v).get("within") is False
+             and has(v, "split-vs-monolith max per-channel delta 6 > 1.25 x the monolith-vs-monolith max 4 (= 5.00)")
+             and not has(v, "differing px"), case(v, A).get("reasons"))
+    cn.window("det-px", gate3_args={"picture": {**mono, **inside, ("inproc", A, 3): (13, 131)}})
+    rc, text, v = run_reducer(cn.root, "det-px", tree)
+    k.expect("...one split picture 13 px off > 1.25 x 10 (delta inside) -> %s FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and rc != 0 and det(v).get("split_px_max") == 13
+             and det(v).get("split_delta_max") == 4
+             and has(v, "split-vs-monolith max 13 differing px > 1.25 x the monolith-vs-monolith max 10 (= 12.50)")
+             and not has(v, "per-channel delta"), (det(v), case(v, A).get("reasons")))
+
+    # (d) clause (1) holds against EVERY monolith reading, not one of them.
+    ssim = {("monolith", A, 1): 0.9978, ("monolith", A, 2): 0.998, ("monolith", A, 3): 0.9982, ("spawn", A, 2): 0.99831}
+    cn.window("det-ssim", gate3_args={"picture": {**mono, **inside}, "ssim": ssim})
+    rc, text, v = run_reducer(cn.root, "det-ssim", tree)
+    k.expect("...a spawn ssim 0.00051 from ONE monolith reading (0.00011 from another) -> %s FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and rc != 0 and det(v).get("within") is True
+             and case(v, A).get("reasons") == ["spawn rep2 |ssim-monolith|=0.000510 > 0.0005 (max over 3 monolith readings)"],
+             case(v, A).get("reasons"))
+
+    # (e) the pre-ID-P7-62 archives (monolith x1, no monolith_repeat= in arms.txt): the rule cannot apply.
+    cn.window("det-mono1", gate3_args={"arms": ARMS_MONO1, "arms_txt": ARMS_TXT_MONO1, "picture": inside})
+    rc, text, v = run_reducer(cn.root, "det-mono1", tree)
+    k.expect("monolith x1 (the earlier 30-gate3.sh) + a nondeterministic split -> %s FAIL naming the >= 3 monolith "
+             "passes the rule needs" % A,
+             case(v, A).get("verdict") == "FAIL" and overall(v) == "FAIL" and rc != 0 and g3(v, "monolith_repeat") == 1
+             and det(v).get("rule") == "strict (< 3 monolith passes)"
+             and has(v, "inproc repeats NOT bit-identical (3 distinct pictures); the ID-P7-62 nondeterministic-monolith "
+                        "rule needs >= 3 same-session monolith passes, this session has 1")
+             and case(v, B).get("verdict") == "PASS", (det(v), case(v, A).get("reasons")))
+
+    # (f) the monolith pair's own bookkeeping: arms.txt monolith_repeat=3 holds a finished pair to 3.
+    out = cn.window("det-short")
+    shutil.rmtree(out / "gate3/archive/monolith" / (A + "-DirectVulkan") / "repeat-03")
+    rc, text, v = run_reducer(cn.root, "det-short", tree)
+    k.expect("a finished monolith pair with 2 of arms.txt's monolith_repeat=3 -> %s FAIL" % A,
+             case(v, A).get("verdict") == "FAIL" and rc != 0
+             and has(v, "monolith: 2 repeat(s) in a finished pair < gate3/arms.txt monolith_repeat=3"), case(v, A))
+    (out / "gate3/state/monolith" / (A + ".done")).unlink()
+    rc, text, v = run_reducer(cn.root, "det-short", tree)
+    k.expect("...the same pair without its .done -> INCOMPLETE (a resume re-runs it)",
+             case(v, A).get("verdict") == "INCOMPLETE" and overall(v) == "INCOMPLETE"
+             and "monolith: 2/3 repeats" in case(v, A).get("reasons", []), case(v, A).get("reasons"))
+
+    # (g) --extra-monolith: the g3det E1-mono re-reduction shape (x1 archive + passes outside gate3/).
+    cn.window("det-extra", gate3_args={"arms": ARMS_MONO1, "arms_txt": ARMS_TXT_MONO1, "picture": inside})
+    extra = cn.extra_monolith(cn.root / "extra-unstamped", A, [(10, 132), (10, 130)])
+    rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=["%s@%s" % (extra, BOOT)])
+    k.expect("x1 archive + 2 extra monolith passes attested @session boot -> the rule applies (3 distinct / 3), "
+             "%s PASS, GATE3 PASS-WITH-EXTRA-READINGS, exit 1" % A,
+             case(v, A).get("verdict") == "PASS" and det(v).get("rule") == "distributional"
+             and overall(v) == "PASS-WITH-EXTRA-READINGS" and rc == 1
+             and "GATE3 PASS-WITH-EXTRA-READINGS: 36/36 cases PASS" in text and "NOT a gate verdict" in text
+             and "monolith 38/38 repeat(s) (2 of them --extra-monolith)" in text,
+             (overall(v), case(v, A).get("reasons"), det(v), text[-600:]))
+    rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=[extra])
+    s = g3(v, "session", {})
+    k.expect("...the same extra passes with no boot_id.txt and no @BOOT_ID -> GATE3 INVALID-SESSION",
+             overall(v) == "INVALID-SESSION" and rc != 0
+             and any("carry no boot_id" in p and "--extra-monolith" in p for p in s.get("problems", [])), s)
+    rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=["%s@%s" % (extra, OTHER_BOOT)])
+    k.expect("...attested @another boot -> GATE3 INVALID-SESSION naming it",
+             overall(v) == "INVALID-SESSION" and rc != 0
+             and any(OTHER_BOOT in p for p in g3(v, "session", {}).get("problems", [])), g3(v, "session"))
+    stamped = cn.extra_monolith(cn.root / "extra-stamped", A, [(10, 132), (10, 130)], boot=BOOT)
+    rc, text, v = run_reducer(cn.root, "det-extra", tree, extra=[stamped])
+    k.expect("...extra passes whose own boot_id.txt is the session's (no @BOOT_ID) -> PASS-WITH-EXTRA-READINGS",
+             overall(v) == "PASS-WITH-EXTRA-READINGS" and rc == 1 and case(v, A).get("verdict") == "PASS", overall(v))
 
 
 def pass_cases(cn, b):
@@ -954,6 +1134,7 @@ def main():
         scenario_case_set(k, cn, tree)
         scenario_cross_arm(k, cn, tree)
         scenario_unfinished(k, cn, tree)
+        scenario_determinism(k, cn, tree)
         scenario_rate_gate(k, cn, tree)
         scenario_cts_lost(k, cn, tree)
         scenario_vacuous(k, cn, tree)

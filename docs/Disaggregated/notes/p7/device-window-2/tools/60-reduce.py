@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""60-reduce.py <stamp> [--logroot DIR] [--tools TREE] [--json OUT]
+"""60-reduce.py <stamp> [--logroot DIR] [--tools TREE] [--json OUT] [--extra-monolith DIR[@BOOT_ID] ...]
    60-reduce.py --check-block RUN_DIR REPORT_JSON
 
 Device window 2 verdicts, read from the window's own output directory (<logroot>/<stamp>).
@@ -24,13 +24,35 @@ GATE 3 (CONTRACT-P7 7.1/7.2), per case of gate3/cases.txt:
     every arm, carries one boot_id, equal to session/boot-id.txt. A second boot_id, a record that
     carries none, or no session/boot-id.txt makes the whole gate GATE3 INVALID-SESSION, whatever
     the pictures say (the gate is a same-session reading);
-  * monolith x1 is the same-session control: it must itself pass, and its role logs must show no
-    'Config: IPC' / MOBILEGL_TRANSPORT line (the arm really was the monolith);
+  * the monolith arm (x gate3/arms.txt's monolith_repeat: 3 from ID-P7-62 on; an arms.txt without
+    the key is the earlier script's x1) is the same-session control: every pass must itself pass,
+    and its role logs must show no 'Config: IPC' / MOBILEGL_TRANSPORT line (the arm really was the
+    monolith); a finished monolith pair with fewer passes than monolith_repeat is that case FAIL;
   * inproc and spawn: the pair finished (state .done), every expected repeat present and
     error-free, each repeat's arm proof (transport-proof.json passed), the device's own pass
     verdict (ssim >= case threshold), ALL repeats OF THE ARM bit-identical (actual PNG SHA-256;
-    within-arm identity is the gate), and |ssim - monolith ssim| <= 0.0005 on every repeat; a
-    repeat whose logcat is byte-identical to the previous repeat's is flagged STALE;
+    within-arm identity is the gate), and |ssim - m| <= 0.0005 on every repeat for EVERY monolith
+    reading m of the session; a repeat whose logcat is byte-identical to the previous repeat's is
+    flagged STALE;
+  * NONDETERMINISTIC MONOLITH (ID-P7-62, g3det VERDICT.md section 2): the bit-identity clause
+    presupposes a bit-reproducible reference. A case whose same-session monolith pictures are NOT
+    all bit-identical over >= 3 passes has none, so for it the split arms' bit-identity clause is
+    replaced by the distributional check: (1) the |ssim - m| clause above, for every monolith
+    reading m; (2) over every split-vs-monolith picture pair (inproc and spawn repeats x monolith
+    passes) the maximum differing-pixel count (any RGBA channel differs) and the maximum
+    per-channel delta are each <= 1.25 x the monolith-vs-monolith maximum. The pixels are read
+    from the archived actual PNGs (numpy + PIL; without them, or with W2_REDUCE_PNG_DECODER=pure,
+    compare_actuals' stdlib decoder - the same numbers, slower). Such a case prints
+    'nondeterministic monolith (N distinct / M passes) -> distributional check' and its numbers,
+    and its cross-arm difference is decided by (2), not by gate3/adjudication.tsv. A case whose
+    monolith is bit-identical, or that has fewer than 3 monolith passes (the pre-ID-P7-62 x1
+    archives), keeps the strict clause;
+  * --extra-monolith DIR[@BOOT_ID] (repeatable; an adjudication re-reduction, never the gate):
+    adds the passes under DIR/<case>-DirectVulkan/repeat-NN (a run_android_retrace_local.py
+    --archive-dir tree) to the case's monolith readings. Each must be the session's: a repeat's
+    boot_id.txt, else the BOOT_ID the operator attests for DIR from the run's own boot_id checks;
+    none, or another boot, is INVALID-SESSION. A reading that uses one is at best
+    GATE3 PASS-WITH-EXTRA-READINGS, never PASS;
   * OpenRA: 1.000000 and mismatch 0 on every repeat of both split arms AND on monolith;
   * cross-arm picture identity (inproc vs spawn vs monolith) is not a per-case gate (ruling:
     integrator 2026-09-23, ID-P7-59): a mismatch prints a WARN line and leaves the case's verdict
@@ -42,8 +64,9 @@ GATE 3 (CONTRACT-P7 7.1/7.2), per case of gate3/cases.txt:
   * inproc-ra0 (RUN_AHEAD=0): required on every case (one archived repeat with its .done) and its
     role log must prove run-ahead=0 (else that case FAIL: it is not the control arm); its picture
     and ssim are recorded, never gating;
-  * a reading that passes but is not the gate's - a proper subset of the canonical 36, or a
-    session that is not reboot-clean - is GATE3 PASS-SUBSET / PASS-NOT-REBOOT-CLEAN, never PASS.
+  * a reading that passes but is not the gate's - a proper subset of the canonical 36, a session
+    that is not reboot-clean, or one that used --extra-monolith - is GATE3 PASS-SUBSET /
+    PASS-NOT-REBOOT-CLEAN / PASS-WITH-EXTRA-READINGS, never PASS.
 BSL STATS: per arm, maps-line / VmRSS / VmHWM peaks and the wbuf[] gauges (information).
 CTS AFTER (CONTRACT-P7 7.3), per block vs device-window-1/CTS-base/report-<block>.json, over the
   cases the AFTER run was asked to run (so a --limit subset is compared like for like):
@@ -79,15 +102,16 @@ CTS AFTER (CONTRACT-P7 7.3), per block vs device-window-1/CTS-base/report-<block
     the NotSupported count moved.
 Exit status: 0 only when GATE 3 is PASS (the canonical 36, >= 3 repeats, four arms, reboot-clean,
 one session, every cross-arm mismatch adjudicated) and CTS is PASS (five full blocks); 1 otherwise
-(a section that did not run, a PASS-SUBSET / PASS-NOT-REBOOT-CLEAN / PASS-NEEDS-ADJUDICATION
-reading, INCOMPLETE / INVALID-SESSION, FAIL-REPEATS / FAIL-ARMS / FAIL-CASESET, or FAIL); 2 on
-bad input.
+(a section that did not run, a PASS-SUBSET / PASS-NOT-REBOOT-CLEAN / PASS-NEEDS-ADJUDICATION /
+PASS-WITH-EXTRA-READINGS reading, INCOMPLETE / INVALID-SESSION, FAIL-REPEATS / FAIL-ARMS /
+FAIL-CASESET, or FAIL); 2 on bad input.
 --check-block RUN_DIR REPORT_JSON: the completeness test 50-cts-after.sh applies before it writes
 a block's .done (the same code the verdict uses): exit 0 when the report has a result for every
 non-skipped case of the run's caselist and unrun.txt is empty, 3 when not (the reason is printed).
 """
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -96,6 +120,13 @@ from collections import Counter
 from pathlib import Path
 
 TOL = 0.0005
+# ID-P7-62 (g3det VERDICT.md section 2): a case whose same-session monolith is not bit-identical
+# over >= MONOLITH_RULE_PASSES passes is judged by the distributional check, whose pixel bound is
+# SPREAD_FACTOR x the monolith's own spread.
+MONOLITH_RULE_PASSES = 3
+SPREAD_FACTOR = 1.25
+RULING_62 = "ID-P7-62"
+UUID = re.compile(r"^(.+)@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$")
 # CONTRACT-P7 7.1/7.2's constants: the gate is held to these, never to what gate3/arms.txt,
 # gate3/cases.txt or gate3/excluded.txt record about the run (ruling: integrator 2026-09-23 after
 # codex closeout review).
@@ -182,8 +213,9 @@ def read_adjudication(path):
 # ------------------------------------------------------------------------------------------------
 # gate 3
 # ------------------------------------------------------------------------------------------------
-def gate3_session(out, g):
-    """One boot session for every record of every arm (ruling c)."""
+def gate3_session(out, g, extras=()):
+    """One boot session for every record of every arm (ruling c), and of every --extra-monolith
+    reading (its repeat's boot_id.txt, else the BOOT_ID attested for its directory)."""
     want = first_line(out / "session" / "boot-id.txt")
     problems, seen, unstamped = [], {}, []
 
@@ -210,6 +242,13 @@ def gate3_session(out, g):
                 note(rec.get("boot_id"), where)
                 if "boot_id_before" in rec:
                     note(rec["boot_id_before"], where + " (boot_id_before)")
+    for extra in extras:
+        for row in extra["rows"]:
+            where = "--extra-monolith %s/%s/repeat-%02d" % (extra["dir"], row["arm"], row["repeat"])
+            rec = read_record(Path(row["dir"]) / "boot_id.txt") or {}
+            note(rec.get("boot_id") or extra["boot"], where)
+            if "boot_id_before" in rec:
+                note(rec["boot_id_before"], where + " (boot_id_before)")
     if not want:
         problems.append("no session/boot-id.txt: 21-preflight.sh records the session's boot_id there")
     if unstamped:
@@ -276,7 +315,108 @@ def px_between(ca, left, right):
         return "n/a (%s)" % error
 
 
-def gate3(out, ca):
+# ---- ID-P7-62: the pixel spread of a nondeterministic monolith, and the split arms' against it ----
+class NumpyPictures:
+    """Archived actual PNGs as int16 RGBA arrays (numpy + PIL)."""
+    name = "numpy+PIL"
+
+    def __init__(self):
+        import numpy  # noqa: F401 - both imported here so a missing one selects the fallback
+        from PIL import Image
+        self.np, self.image = numpy, Image
+
+    def load(self, path):
+        with self.image.open(path) as picture:
+            return self.np.asarray(picture.convert("RGBA"), dtype=self.np.int16)
+
+    def diff(self, a, b):
+        """-> (pixels where any RGBA channel differs, the largest per-channel delta)."""
+        if a.shape != b.shape:
+            raise ValueError("picture sizes differ: %s vs %s" % (a.shape, b.shape))
+        d = self.np.abs(a - b)
+        return int((d.max(axis=2) > 0).sum()), int(d.max())
+
+
+class PurePictures:
+    """The same numbers with compare_actuals' stdlib PNG decoder (no numpy / PIL)."""
+    name = "pure-python (compare_actuals.read_png_rgba)"
+
+    def __init__(self, ca):
+        self.ca = ca
+
+    def load(self, path):
+        return self.ca.read_png_rgba(path)
+
+    def diff(self, a, b):
+        if (a.width, a.height) != (b.width, b.height):
+            raise ValueError("picture sizes differ: %dx%d vs %dx%d" % (a.width, a.height, b.width, b.height))
+        stride, px, delta = a.width * 4, 0, 0
+        for y in range(a.height):
+            ra, rb = a.pixels[y * stride:(y + 1) * stride], b.pixels[y * stride:(y + 1) * stride]
+            if ra == rb:
+                continue
+            for i in range(0, stride, 4):
+                if ra[i:i + 4] != rb[i:i + 4]:
+                    px += 1
+                    delta = max(delta, max(abs(ra[i + c] - rb[i + c]) for c in range(4)))
+        return px, delta
+
+
+def picture_reader(ca):
+    """numpy + PIL when importable (and W2_REDUCE_PNG_DECODER != pure), else the stdlib decoder."""
+    if os.environ.get("W2_REDUCE_PNG_DECODER", "") != "pure":
+        try:
+            return NumpyPictures()
+        except ImportError:
+            pass
+    return PurePictures(ca)
+
+
+def spread(reader, mono, split):
+    """ID-P7-62 clause (2). mono, split: [(sha, path)] over every reading (a picture repeated in
+    several readings is decoded and compared once; an identical pair counts as 0 px / delta 0).
+    -> {mono_pairs, mono_px_max, mono_delta_max, split_pairs, split_px_max, split_delta_max}."""
+    cache, memo = {}, {}
+
+    def load(sha, path):
+        if sha not in cache:
+            cache[sha] = reader.load(path)
+        return cache[sha]
+
+    def worst(pairs):
+        px = delta = 0
+        for (sa, pa), (sb, pb) in pairs:
+            if sa == sb:
+                continue
+            key = (sa, sb) if sa < sb else (sb, sa)
+            if key not in memo:
+                memo[key] = reader.diff(load(sa, pa), load(sb, pb))
+            px, delta = max(px, memo[key][0]), max(delta, memo[key][1])
+        return px, delta
+    mono_pairs = list(itertools.combinations(mono, 2))
+    split_pairs = list(itertools.product(split, mono))
+    mono_px, mono_delta = worst(mono_pairs)
+    split_px, split_delta = worst(split_pairs)
+    return {"mono_pairs": len(mono_pairs), "mono_px_max": mono_px, "mono_delta_max": mono_delta,
+            "split_pairs": len(split_pairs), "split_px_max": split_px, "split_delta_max": split_delta}
+
+
+def extra_monolith(ca, specs):
+    """--extra-monolith DIR[@BOOT_ID] -> [{dir, boot, rows}] (rows: compare_actuals.summarize rows,
+    arm = <case>-DirectVulkan), or raises ValueError on a directory that is not an archive."""
+    extras = []
+    for spec in specs or []:
+        m = UUID.match(spec)
+        path, boot = (m.group(1), m.group(2)) if m else (spec, None)
+        d = Path(path).expanduser()
+        if not d.is_dir():
+            raise ValueError("--extra-monolith %s: not a directory" % path)
+        rows = ca.summarize(d)["rows"]
+        extras.append({"dir": str(d), "boot": boot, "rows": rows})
+    return extras
+
+
+def gate3(out, ca, extras=()):
     g = out / "gate3"
     cases_file = g / "cases.txt"
     if not cases_file.is_file():
@@ -289,12 +429,24 @@ def gate3(out, ca):
         repeat = int(meta.get("repeat", str(CONTRACT_REPEATS)))
     except ValueError:
         repeat = 0
+    # 30-gate3.sh records monolith_repeat= from ID-P7-62 on (the monolith runs x --repeat); an
+    # arms.txt without the key was written by the earlier script, which ran the monolith x1.
+    try:
+        mono_repeat = int(meta.get("monolith_repeat", "1"))
+    except ValueError:
+        mono_repeat = 0
     planned = meta.get("arms", "").split()
     arms_present = [a for a in REQUIRED_ARMS if (g / "archive" / a).is_dir()]
     summaries = {a: ca.summarize(g / "archive" / a) for a in arms_present}
-    session = gate3_session(out, g)
-    identity = {"monolith_repeats": 0, "monolith_proven": 0, "split_repeats": 0, "split_proofs_passed": 0}
+    session = gate3_session(out, g, extras)
+    identity = {"monolith_repeats": 0, "monolith_proven": 0, "monolith_extra": 0, "split_repeats": 0,
+                "split_proofs_passed": 0}
     adjudicated, adjudication_problems = read_adjudication(g / "adjudication.tsv")
+    reader = None  # the PNG reader of the distributional check, made on first use
+    extra_rows = {}
+    for extra in extras:
+        for row in extra["rows"]:
+            extra_rows.setdefault(row["arm"], []).append(dict(row, extra=extra["dir"]))
 
     # ---- the contract's constants (ruling: integrator 2026-09-23 after codex closeout review) ----
     contract = {"repeats": [], "arms": [], "cases": []}
@@ -362,26 +514,57 @@ def gate3(out, ca):
     for case in cases:
         reasons, incomplete = [], []
         entry = {"case": case, "arms": {}}
-        mono = rows("monolith", case)
-        mono_row = mono_ssim = mono_sha = None
+        # The monolith readings: the gate's own x monolith_repeat, then any --extra-monolith pass.
+        gate_mono = rows("monolith", case)
+        extra_mono = extra_rows.get(case + "-DirectVulkan", [])
         if "monolith" in summaries and not finished("monolith", case):
             incomplete.append("monolith: no state .done (pair unfinished; 30-gate3.sh retries it)")
-        if len(mono) != 1 or mono[0].get("error"):
-            incomplete.append("monolith: %s" % mono[0].get("error") if mono else not_run("monolith"))
-        else:
-            m = mono_row = mono[0]
-            mono_ssim, mono_sha = m.get("ssim_vs_golden"), m.get("actual_sha256")
+        if not gate_mono:
+            incomplete.append(not_run("monolith"))
+        elif len(gate_mono) != mono_repeat:
+            if finished("monolith", case) and len(gate_mono) < mono_repeat:
+                reasons.append("monolith: %d repeat(s) in a finished pair < gate3/arms.txt monolith_repeat=%d"
+                               % (len(gate_mono), mono_repeat))
+            else:
+                incomplete.append("monolith: %d/%d repeats" % (len(gate_mono), mono_repeat))
+        mono_rows, not_monolith = [], []
+        for m in gate_mono + extra_mono:
+            where = "monolith rep%d" % m["repeat"] if not m.get("extra") else \
+                "monolith (--extra-monolith %s) rep%d" % (m["extra"], m["repeat"])
+            if m.get("error"):
+                incomplete.append("%s: %s" % (where, m["error"]))
+                continue
+            mono_rows.append(m)
             not_mono = monolith_identity(m)
+            if not_mono:
+                not_monolith.append("%s: %s" % (where, not_mono))
             identity["monolith_repeats"] += 1
             identity["monolith_proven"] += not_mono is None
-            entry["arms"]["monolith"] = {"ssim": mono_ssim, "sha": mono_sha, "identity": not_mono or "monolith",
-                                         "mismatch": m.get("mismatch_pixels_vs_golden"), "passed": m.get("passed")}
+            identity["monolith_extra"] += bool(m.get("extra"))
+            m_ssim = m.get("ssim_vs_golden")
             if not_mono:
-                reasons.append("monolith arm is NOT proven monolith (%s)" % not_mono)
+                reasons.append("%s is NOT proven monolith (%s)" % (where, not_mono))
             if m.get("passed") is not True:
-                reasons.append("monolith control did not pass (ssim %s)" % mono_ssim)
-            if case == OPENRA and not (m.get("mismatch_pixels_vs_golden") == 0 and (mono_ssim or 0) >= 0.9999995):
-                reasons.append("OpenRA monolith not 1.000000/0 (%s/%s)" % (mono_ssim, m.get("mismatch_pixels_vs_golden")))
+                reasons.append("%s: the monolith control did not pass (ssim %s)" % (where, m_ssim))
+            if case == OPENRA and not (m.get("mismatch_pixels_vs_golden") == 0 and (m_ssim or 0) >= 0.9999995):
+                reasons.append("OpenRA %s not 1.000000/0 (%s/%s)" % (where, m_ssim, m.get("mismatch_pixels_vs_golden")))
+        mono_row = mono_rows[0] if mono_rows else None
+        mono_ssims = [m["ssim_vs_golden"] for m in mono_rows if isinstance(m.get("ssim_vs_golden"), (int, float))]
+        mono_shas = [m["actual_sha256"] for m in mono_rows if m.get("actual_sha256")]
+        if mono_rows:
+            entry["arms"]["monolith"] = {
+                "repeats": len(gate_mono), "extra": len(extra_mono), "ssim": [m.get("ssim_vs_golden") for m in mono_rows],
+                "sha": sorted(set(mono_shas)), "mismatch": [m.get("mismatch_pixels_vs_golden") for m in mono_rows],
+                "passed": all(m.get("passed") is True for m in mono_rows), "identity": not_monolith or "monolith"}
+        # ID-P7-62: is the same-session reference itself bit-reproducible?
+        det = entry["monolith_determinism"] = {"passes": len(mono_shas), "distinct": len(set(mono_shas))}
+        distributional = det["passes"] >= MONOLITH_RULE_PASSES and det["distinct"] > 1
+        if distributional:
+            det["rule"] = "distributional"
+        elif det["passes"] >= MONOLITH_RULE_PASSES:
+            det["rule"] = "strict"
+        else:
+            det["rule"] = "strict (< %d monolith passes)" % MONOLITH_RULE_PASSES
         split_rows = {}
         for arm in SPLIT_ARMS:
             rs = split_rows[arm] = rows(arm, case)
@@ -412,19 +595,54 @@ def gate3(out, ca):
                 else:
                     a["proofs_passed"] += 1
                     identity["split_proofs_passed"] += 1
-                if mono_ssim is not None and r.get("ssim_vs_golden") is not None:
-                    d = abs(r["ssim_vs_golden"] - mono_ssim)
+                if mono_ssims and r.get("ssim_vs_golden") is not None:
+                    # Against EVERY monolith reading of the session (ID-P7-62 clause (1)); with one
+                    # reading, or a bit-identical monolith, this is the contract's single difference.
+                    d = max(abs(r["ssim_vs_golden"] - m) for m in mono_ssims)
                     if d > TOL:
-                        reasons.append("%s rep%d |ssim-monolith|=%.6f > %.4f" % (arm, r["repeat"], d, TOL))
+                        reasons.append("%s rep%d |ssim-monolith|=%.6f > %.4f%s" % (
+                            arm, r["repeat"], d, TOL,
+                            "" if len(set(mono_ssims)) == 1 else " (max over %d monolith readings)" % len(mono_ssims)))
                 if case == OPENRA and not (r.get("mismatch_pixels_vs_golden") == 0 and (r.get("ssim_vs_golden") or 0) >= 0.9999995):
                     reasons.append("OpenRA %s rep%d not 1.000000/0 (%s/%s)" % (arm, r["repeat"], r.get("ssim_vs_golden"), r.get("mismatch_pixels_vs_golden")))
             shas = [r.get("actual_sha256") for r in rs if r.get("actual_sha256")]
-            if len(set(shas)) > 1:
-                reasons.append("%s repeats NOT bit-identical (%d distinct pictures)" % (arm, len(set(shas))))
+            if len(set(shas)) > 1 and not distributional:
+                # The strict clause; under ID-P7-62 the distributional check below replaces it.
+                if det["passes"] >= MONOLITH_RULE_PASSES:
+                    why = "; the same-session monolith is bit-identical over %d passes" % det["passes"]
+                else:
+                    why = ("; the %s nondeterministic-monolith rule needs >= %d same-session monolith passes, this "
+                           "session has %d" % (RULING_62, MONOLITH_RULE_PASSES, det["passes"]))
+                reasons.append("%s repeats NOT bit-identical (%d distinct pictures)%s" % (arm, len(set(shas)), why))
             lc = [logcat_sha(r) for r in rs]
             for i in range(1, len(lc)):
                 if lc[i] and lc[i] == lc[i - 1]:
                     reasons.append("%s rep%d STALE (logcat identical to rep%d)" % (arm, rs[i]["repeat"], rs[i - 1]["repeat"]))
+        if distributional:
+            # ID-P7-62 clause (2): the split pictures lie inside the monolith's own spread.
+            split_valid = [r for arm in SPLIT_ARMS for r in split_rows[arm] if not r.get("error") and r.get("actual")]
+            split_ssims = [r["ssim_vs_golden"] for r in split_valid if isinstance(r.get("ssim_vs_golden"), (int, float))]
+            det["max_dssim"] = max((abs(s - m) for s in split_ssims for m in mono_ssims), default=None)
+            reader = reader or picture_reader(ca)
+            det["decoder"] = reader.name
+            try:
+                det.update(spread(reader, [(m["actual_sha256"], picture(m)) for m in mono_rows if m.get("actual")],
+                                  [(r["actual_sha256"], picture(r)) for r in split_valid]))
+            except Exception as error:  # an unreadable / mis-sized picture: no measurement, no pass
+                det["error"] = "%s: %s" % (type(error).__name__, error)
+                reasons.append("%s distributional check cannot be measured (%s)" % (RULING_62, det["error"]))
+            else:
+                det["px_bound"] = SPREAD_FACTOR * det["mono_px_max"]
+                det["delta_bound"] = SPREAD_FACTOR * det["mono_delta_max"]
+                det["within"] = det["split_px_max"] <= det["px_bound"] and det["split_delta_max"] <= det["delta_bound"]
+                if det["split_px_max"] > det["px_bound"]:
+                    reasons.append("%s: split-vs-monolith max %d differing px > %.2f x the monolith-vs-monolith max %d "
+                                   "(= %.2f)" % (RULING_62, det["split_px_max"], SPREAD_FACTOR, det["mono_px_max"],
+                                                 det["px_bound"]))
+                if det["split_delta_max"] > det["delta_bound"]:
+                    reasons.append("%s: split-vs-monolith max per-channel delta %d > %.2f x the monolith-vs-monolith "
+                                   "max %d (= %.2f)" % (RULING_62, det["split_delta_max"], SPREAD_FACTOR,
+                                                        det["mono_delta_max"], det["delta_bound"]))
         # The RUN_AHEAD=0 control arm: required on every case (CONTRACT-P7 7.2 "RUN_AHEAD=0 对照臂一遍
         # 记录"), and it must be that arm; its picture is recorded, never gating.
         ra0 = rows("inproc-ra0", case)
@@ -440,16 +658,20 @@ def gate3(out, ca):
                 incomplete.append("inproc-ra0 rep%d: %s" % (r["repeat"], r["error"]))
             elif entry["arms"]["inproc-ra0"]["proof"] != "run-ahead=0":
                 reasons.append("inproc-ra0 is not proven the RUN_AHEAD=0 arm (%s)" % entry["arms"]["inproc-ra0"]["proof"])
-        # Cross-arm identity: not a per-case gate (ruling d), but every mismatch needs an adjudication.
+        # Cross-arm identity: not a per-case gate (ruling d), but every mismatch needs an adjudication -
+        # except under ID-P7-62, where the monolith has no one picture to be identical to and clause
+        # (2) above is the cross-arm judgment.
         ip = set(entry["arms"].get("inproc", {}).get("sha", []))
         sp = set(entry["arms"].get("spawn", {}).get("sha", []))
+        mp = set(mono_shas)
         entry["inproc_eq_spawn"] = bool(ip) and ip == sp
-        entry["split_eq_monolith"] = bool(ip) and ip == sp == {mono_sha}
-        x = entry["cross_arm"] = {"monolith": mono_sha, "inproc": sorted(ip), "spawn": sorted(sp),
-                                  "identical": (entry["split_eq_monolith"] if (ip and sp and mono_sha) else None)}
-        if x["identical"] is False:
+        entry["split_eq_monolith"] = bool(ip) and ip == sp == mp
+        x = entry["cross_arm"] = {"monolith": sorted(mp), "inproc": sorted(ip), "spawn": sorted(sp),
+                                  "identical": (entry["split_eq_monolith"] if (ip and sp and mp) else None),
+                                  "distributional": distributional}
+        if x["identical"] is False and not distributional:
             first = {arm: picture(split_rows[arm][0]) if split_rows[arm] else None for arm in SPLIT_ARMS}
-            x["px_vs_golden"] = {"monolith": mono_row.get("mismatch_pixels_vs_golden") if mono_row else None,
+            x["px_vs_golden"] = {"monolith": [m.get("mismatch_pixels_vs_golden") for m in mono_rows],
                                  "inproc": [r.get("mismatch_pixels_vs_golden") for r in split_rows["inproc"]],
                                  "spawn": [r.get("mismatch_pixels_vs_golden") for r in split_rows["spawn"]]}
             x["px_direct"] = {"inproc-monolith": px_between(ca, first["inproc"], picture(mono_row)),
@@ -463,7 +685,8 @@ def gate3(out, ca):
         contract["repeats"].append("%d finished inproc/spawn pair(s) archived fewer than CONTRACT-P7 7.2's %d repeats "
                                    "(arms.txt repeat=%s): %s%s" % (len(short), CONTRACT_REPEATS, meta.get("repeat", "?"),
                                                                     ", ".join(short[:4]), ", ..." if len(short) > 4 else ""))
-    mismatched = [e["case"] for e in results if e["cross_arm"]["identical"] is False]
+    mismatched = [e["case"] for e in results if e["cross_arm"]["identical"] is False
+                  and not e["cross_arm"]["distributional"]]
     unadjudicated = [c for c in mismatched if c not in adjudicated]
     stale = sorted(c for c in adjudicated if c not in set(mismatched))
     verdicts = [e["verdict"] for e in results]
@@ -479,6 +702,10 @@ def gate3(out, ca):
     if unadjudicated:
         not_a_gate.append("%d cross-arm mismatch(es) without a gate3/adjudication.tsv line (%s): %s%s" % (
             len(unadjudicated), CODEX_RULING, ", ".join(unadjudicated[:3]), ", ..." if len(unadjudicated) > 3 else ""))
+    if extras:
+        not_a_gate.append("%d extra monolith reading(s) from outside gate3/archive (--extra-monolith %s): an "
+                          "adjudication re-reduction, NOT a gate verdict" % (
+                              sum(len(x["rows"]) for x in extras), ", ".join(x["dir"] for x in extras)))
     if not session["valid"]:
         overall = "INVALID-SESSION"
     elif contract["repeats"]:
@@ -495,11 +722,20 @@ def gate3(out, ca):
             overall = "PASS-NOT-REBOOT-CLEAN"
         elif unadjudicated:
             overall = "PASS-NEEDS-ADJUDICATION"
+        elif extras:
+            overall = "PASS-WITH-EXTRA-READINGS"
     elif "FAIL" in verdicts:
         overall = "FAIL"
     else:
         overall = "INCOMPLETE"
-    return {"cases": results, "excluded": excluded, "repeat": repeat, "denominator": len(cases),
+    rule_of = [(e["case"], e["monolith_determinism"]["rule"]) for e in results]
+    return {"cases": results, "excluded": excluded, "repeat": repeat, "monolith_repeat": mono_repeat,
+            "determinism": {"distributional": [c for c, r in rule_of if r == "distributional"],
+                            "strict": [c for c, r in rule_of if r == "strict"],
+                            "strict_under_3_passes": [c for c, r in rule_of if r.startswith("strict (")]},
+            "extra_monolith": [{"dir": x["dir"], "boot_attested": x["boot"], "repeats": len(x["rows"]),
+                                "cases": sorted({r["arm"] for r in x["rows"]})} for x in extras],
+            "denominator": len(cases),
             "overall": overall, "not_a_gate": not_a_gate, "arms_present": arms_present, "arms_planned": planned,
             "contract": contract, "canonical": canonical, "canonical_problems": canonical_problems,
             "cross_arm_mismatched": mismatched, "cross_arm_unadjudicated": unadjudicated,
@@ -509,11 +745,15 @@ def gate3(out, ca):
 
 
 def print_gate3(g3):
-    print("== GATE 3 (DirectVulkan x pbuffer; split repeat=%d, contract >= %d; tol |ssim-monolith| <= %.4f) =="
-          % (g3["repeat"], CONTRACT_REPEATS, TOL))
+    print("== GATE 3 (DirectVulkan x pbuffer; split repeat=%d, contract >= %d; monolith repeat=%d; "
+          "tol |ssim-monolith| <= %.4f) ==" % (g3["repeat"], CONTRACT_REPEATS, g3["monolith_repeat"], TOL))
     s = g3["session"]
     print("-- session: boot_id %s; %d record(s) stamped; %s" % (s["session_boot_id"] or "?", s["records"],
                                                                s["reboot_clean"] or "no session/reboot-clean.txt"))
+    for x in g3["extra_monolith"]:
+        print("-- extra monolith readings (--extra-monolith, NOT the gate's own archive): %s: %d repeat(s) over %d "
+              "case(s); unstamped repeats attested boot_id %s" % (x["dir"], x["repeats"], len(x["cases"]),
+                                                                  x["boot_attested"] or "(none)"))
     for problem in s["problems"]:
         print("   ! INVALID-SESSION: " + problem)
     c = g3["contract"]
@@ -529,7 +769,8 @@ def print_gate3(g3):
         print("WARN gate3/excluded.txt [%s] is not CONTRACT-P7 7.1's [%s] (the case set above is held to the contract's)"
               % (" ".join(g3["excluded"]), " ".join(CONTRACT_EXCLUDED)))
     w = max([len(e["case"]) for e in g3["cases"]] + [4])
-    print("%-*s  %-10s  %-11s  %-24s  %-24s  %-11s  %s" % (w, "case", "verdict", "monolith", "inproc(min..max) #sha", "spawn(min..max) #sha", "ra0", "i==s==m"))
+    print("%-*s  %-10s  %-24s  %-24s  %-24s  %-11s  %s" % (w, "case", "verdict", "monolith(min..max) #sha",
+                                                          "inproc(min..max) #sha", "spawn(min..max) #sha", "ra0", "i==s==m"))
     for e in g3["cases"]:
         def cell(arm):
             a = e["arms"].get(arm)
@@ -539,39 +780,63 @@ def print_gate3(g3):
             if not vals:
                 return "err"
             return "%.6f..%.6f #%d" % (min(vals), max(vals), len(a["sha"]))
-        mono = e["arms"].get("monolith", {}).get("ssim")
         ra0 = e["arms"].get("inproc-ra0", {}).get("ssim")
-        print("%-*s  %-10s  %-11s  %-24s  %-24s  %-11s  %s" % (
-            w, e["case"], e["verdict"], "%.6f" % mono if isinstance(mono, (int, float)) else "-",
+        print("%-*s  %-10s  %-24s  %-24s  %-24s  %-11s  %s" % (
+            w, e["case"], e["verdict"], cell("monolith"),
             cell("inproc"), cell("spawn"), "%.6f" % ra0 if isinstance(ra0, (int, float)) else "-",
             "yes" if e["split_eq_monolith"] else ("i==s" if e["inproc_eq_spawn"] else "no")))
+        det = e["monolith_determinism"]
+        if det["rule"] == "distributional":
+            print("%-*s    nondeterministic monolith (%d distinct / %d passes) -> distributional check (%s)" % (
+                w, "", det["distinct"], det["passes"], RULING_62))
+            if "error" not in det:
+                print("%-*s      monolith-vs-monolith max %d px / delta %d (%d pairs); split-vs-monolith max %d px / "
+                      "delta %d (%d pairs); bound %.2fx = %.2f px / %.2f: %s; max |ssim - monolith| %s; decoder %s" % (
+                          w, "", det["mono_px_max"], det["mono_delta_max"], det["mono_pairs"], det["split_px_max"],
+                          det["split_delta_max"], det["split_pairs"], SPREAD_FACTOR, det["px_bound"],
+                          det["delta_bound"], "within" if det["within"] else "OUTSIDE",
+                          "-" if det["max_dssim"] is None else "%.1e" % det["max_dssim"], det["decoder"]))
         for reason in e["reasons"]:
             print("%-*s    ! %s" % (w, "", reason))
+    dt = g3["determinism"]
+    print("-- monolith determinism (%s; same-session monolith passes): %d case(s) bit-identical over >= %d passes "
+          "(strict clause), %d nondeterministic -> distributional check%s, %d with < %d passes (strict clause; the "
+          "rule cannot apply)" % (RULING_62, len(dt["strict"]), MONOLITH_RULE_PASSES, len(dt["distributional"]),
+                                  " (%s)" % ", ".join(dt["distributional"]) if dt["distributional"] else "",
+                                  len(dt["strict_under_3_passes"]), MONOLITH_RULE_PASSES))
     ra0s = [(e["case"], e["arms"]["inproc-ra0"]) for e in g3["cases"] if "inproc-ra0" in e["arms"]]
     print("-- RUN_AHEAD=0 control (required on every case, picture recorded, not gating): %d/%d case(s); proofs: %s" % (
         len(ra0s), len(g3["cases"]), ", ".join(sorted({r["proof"] for _, r in ra0s})) or "-"))
     i = g3["identity"]
-    print("-- arm identity: monolith %d/%d repeat(s) with no Config: IPC / MOBILEGL_TRANSPORT line; "
-          "inproc+spawn transport-proof passed %d/%d" % (i["monolith_proven"], i["monolith_repeats"],
-                                                        i["split_proofs_passed"], i["split_repeats"]))
+    print("-- arm identity: monolith %d/%d repeat(s)%s with no Config: IPC / MOBILEGL_TRANSPORT line; "
+          "inproc+spawn transport-proof passed %d/%d" % (
+              i["monolith_proven"], i["monolith_repeats"],
+              " (%d of them --extra-monolith)" % i["monolith_extra"] if i["monolith_extra"] else "",
+              i["split_proofs_passed"], i["split_repeats"]))
     judged = [e for e in g3["cases"] if e["cross_arm"]["identical"] is not None]
     adj = g3["adjudication"]
+    distributional = [e for e in judged if e["cross_arm"]["distributional"] and not e["cross_arm"]["identical"]]
     print("-- cross-arm picture identity (NOT a per-case gate, %s; every mismatch needs a gate3/adjudication.tsv "
-          "line, %s): %d/%d case(s) inproc==spawn==monolith; %d mismatch(es), %d unadjudicated" % (
+          "line, %s): %d/%d case(s) inproc==spawn==monolith; %d mismatch(es), %d unadjudicated; %d nondeterministic-"
+          "monolith case(s) compared by the %s distributional check instead" % (
               RULING, CODEX_RULING, sum(e["cross_arm"]["identical"] for e in judged), len(judged),
-              len(g3["cross_arm_mismatched"]), len(g3["cross_arm_unadjudicated"])))
+              len(g3["cross_arm_mismatched"]), len(g3["cross_arm_unadjudicated"]), len(distributional), RULING_62))
 
     def px(v):
         if isinstance(v, list):
             nums = [n for n in v if isinstance(n, int)]
             return "%d..%d" % (min(nums), max(nums)) if nums else "-"
         return "-" if v is None else str(v)
+    for e in distributional:
+        print("     note: cross-arm %s: nondeterministic monolith (%d distinct pictures): the arms are compared by the "
+              "%s distributional check above, not by gate3/adjudication.tsv" % (
+                  e["case"], e["monolith_determinism"]["distinct"], RULING_62))
     for e in judged:
-        if not e["cross_arm"]["identical"]:
+        if not e["cross_arm"]["identical"] and not e["cross_arm"]["distributional"]:
             x = e["cross_arm"]
             g, d = x["px_vs_golden"], x["px_direct"]
             print("WARN cross-arm %s: monolith %s | inproc %s | spawn %s" % (
-                e["case"], (x["monolith"] or "-")[:12], ",".join(v[:12] for v in x["inproc"]) or "-",
+                e["case"], ",".join(v[:12] for v in x["monolith"]) or "-", ",".join(v[:12] for v in x["inproc"]) or "-",
                 ",".join(v[:12] for v in x["spawn"]) or "-"))
             print("     px!=golden (archived mismatchPixels) monolith %s, inproc %s, spawn %s; px between the arms' "
                   "first repeats: inproc-monolith %s, spawn-monolith %s, inproc-spawn %s" % (
@@ -581,9 +846,14 @@ def print_gate3(g3):
                              else "UNADJUDICATED: no gate3/adjudication.tsv line"))
     for problem in adj["problems"]:
         print("WARN " + problem)
-    if adj["stale"]:
+    by_rule = set(g3["determinism"]["distributional"])
+    agree = [c for c in adj["stale"] if c not in by_rule]
+    if agree:
         print("     note: gate3/adjudication.tsv names case(s) whose arms agree (nothing to adjudicate): "
-              + ", ".join(adj["stale"]))
+              + ", ".join(agree))
+    if len(agree) != len(adj["stale"]):
+        print("     note: gate3/adjudication.tsv names nondeterministic-monolith case(s) the %s distributional check "
+              "decides (the line is not used): %s" % (RULING_62, ", ".join(c for c in adj["stale"] if c in by_rule)))
     print("-- excluded (red on monolith, CONTRACT-P7 7.1): " + (", ".join(g3["excluded"]) or "none"))
     n = len(g3["cases"])
     npass = sum(e["verdict"] == "PASS" for e in g3["cases"])
@@ -922,6 +1192,10 @@ def main():
     ap.add_argument("--json", help="write every section as JSON here (default <out>/verdict.json)")
     ap.add_argument("--check-block", nargs=2, metavar=("RUN_DIR", "REPORT_JSON"),
                     help="only test one block's completeness (50-cts-after.sh, before it writes .done)")
+    ap.add_argument("--extra-monolith", action="append", metavar="DIR[@BOOT_ID]",
+                    help="add DIR/<case>-DirectVulkan/repeat-NN as extra same-session monolith readings (%s "
+                         "adjudication re-reduction; never PASS); @BOOT_ID attests the session of the repeats that "
+                         "carry no boot_id.txt" % RULING_62)
     args = ap.parse_args()
     if args.check_block:
         return check_block(Path(args.check_block[0]), Path(args.check_block[1]))
@@ -941,7 +1215,12 @@ def main():
     import compare_actuals as ca
     base_dir = Path(tools) / "docs/Disaggregated/notes/p7/device-window-1/CTS-base"
     report = {"stamp": args.stamp, "out": str(out)}
-    g3 = gate3(out, ca)
+    try:
+        extras = extra_monolith(ca, args.extra_monolith)
+    except ValueError as error:  # (compare_actuals.ImageError is one)
+        print(str(error), file=sys.stderr)
+        return 2
+    g3 = gate3(out, ca, extras)
     if g3:
         print_gate3(g3)
     else:
