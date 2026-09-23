@@ -70,7 +70,9 @@ void RefuseBusy(SocketTransport& transport, const char* detail) {
 // The single-session TCP shape's wait for its data connection's DataBind (ListenerSource).
 constexpr std::uint32_t kFirstFrameWaitMs = 2000;
 constexpr std::uint64_t kFirstFrameMaxBytes = Server::kPreAuthFirstFrameMaxBytes;
-// The detail a data connection the live session's hand-off will not take is refused with.
+// The one detail both ends of the hand-off use for a data connection the live session will not
+// take: the supervisor when the send fails, and the child for the ones queued before it closed
+// its end (CloseHandoffRefusingQueued).
 constexpr const char* kHandoffRefused = "data connection could not be handed to the live session";
 
 // Whatever the peer has already sent, read and dropped (non-blocking, at most 1 MiB), so a close
@@ -176,6 +178,35 @@ void SendLogAck(void* pointer) {
     (void)ack.transport->SendFrame({builder.GetBufferPointer(), builder.GetSize()});
 }
 
+// What `sourceFd` is, so RunSession knows how to let go of it (ID-P7-44).
+enum class DataSource { None, Handoff, Listener };
+
+// ID-P7-44. THE HAND-OFF CLOSES WITHOUT A WINDOW.
+//
+// The F fix round closed the child's end of the hand-off the moment Accept returned, so that a
+// DataBind arriving after the session bound fails to send and the supervisor refuses it by name.
+// Between BindDataConnection taking the matching descriptor and that close, though, the
+// supervisor could still queue one more - and a close with datagrams queued drops their
+// descriptors in the kernel: the peer saw its connection end with no frame at all. So the end is
+// cut for reading FIRST (after shutdown(SHUT_RD) every further sendmsg to it fails with EPIPE, which
+// FdPassing reports as "peer gone" and the supervisor answers by name), and then whatever was
+// queued before the cut is received here and refused with the supervisor's own words. No
+// DataBind can be in neither place.
+void CloseHandoffRefusingQueued(int handoff) {
+    (void)::shutdown(handoff, SHUT_RD);
+    for (;;) {
+        int fd = -1;
+        std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
+        std::uint64_t size = 0;
+        if (FdPassing::ReceiveFd(handoff, &fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &size, 0) !=
+                MOBILEGL_OK ||
+            fd < 0)
+            break;
+        RefuseAndClose(fd, Protocol::RefuseCode::Authentication, kHandoffRefused);
+    }
+    ::close(handoff);
+}
+
 // Called only after fork (or, in the single-session shape, instead of it): the supervisor never
 // creates a backend or EGL context. `dataSource` is set on TCP (PH-7 (4)) and empty on a unix
 // endpoint, whose second connection is the SCM_RIGHTS socket AcceptPair already paired.
@@ -188,7 +219,7 @@ void SendLogAck(void* pointer) {
 // `helloWaitMs`.
 [[noreturn]] void RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
                              Server::ServerSession::DataConnectionSource dataSource, int sourceFd,
-                             std::uint32_t helloWaitMs) {
+                             DataSource sourceKind, std::uint32_t helloWaitMs) {
     const int selfPid = static_cast<int>(::getpid());
     const bool tcp = control->IsTcp();
     if (helloFrame.empty()) {
@@ -297,9 +328,11 @@ void SendLogAck(void* pointer) {
     // retry is refused at connect (ECONNREFUSED, as before PH-7 (4)) rather than completing a
     // TCP handshake this process would never accept and waiting out its whole connect budget.
     // The source object goes with it, so no later call can poll a descriptor number the kernel
-    // may have reused.
+    // may have reused. The hand-off is cut before it is closed, and what was already queued on
+    // it is refused by name rather than dropped (ID-P7-44, CloseHandoffRefusingQueued).
     if (sourceFd >= 0) {
-        ::close(sourceFd);
+        if (sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
+        else ::close(sourceFd);
         session.SetDataConnectionSource({});
     }
     if (accepted != MOBILEGL_OK) {
@@ -769,9 +802,9 @@ private:
                 Refuse(*connection, Protocol::RefuseCode::Authentication, "data connection names no live session");
                 return;
             }
-            // The send is MSG_DONTWAIT and the child closes its end the moment Accept returns
-            // (RunSession), so this either queues the descriptor for the child or fails and is
-            // refused here.
+            // The send is MSG_DONTWAIT and the child cuts its end the moment its own data
+            // connection is bound (CloseHandoffRefusingQueued), so this either queues the
+            // descriptor for a child that will read or refuse it, or fails and is refused here.
             if (m_handoff >= 0 && FdPassing::SendFd(m_handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)},
                                                     /*dontWait=*/true) == MOBILEGL_OK) {
                 // The child holds its own descriptor now; ours goes without a shutdown(2), which
@@ -830,7 +863,8 @@ private:
             for (const auto& other : m_ready)
                 if (other.fd >= 0) ::close(other.fd);
             const int controlFd = connection->StreamFd();
-            RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1], 0);
+            RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1], DataSource::Handoff,
+                       0);
         }
         if (child < 0) {
             ::close(pair[0]);
@@ -933,11 +967,11 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                 // deadline and the token is still asked first.
                 const int controlFd = control->StreamFd();
                 RunSession(std::move(control), {}, ListenerSource(listener, controlFd), listener,
-                           knobs.deadlineMs);
+                           DataSource::Listener, knobs.deadlineMs);
             }
             ::close(listener);
             if (endpoint[0] != '@') ::unlink(endpoint.c_str());
-            RunSession(std::move(control), {}, {}, -1, 10000);
+            RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000);
         }
         reap();
         // exit_group closes files just before waitpid can observe the exit.
@@ -955,7 +989,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         const pid_t child = ::fork();
         if (child == 0) {
             ::close(listener);
-            RunSession(std::move(control), {}, {}, -1, 10000);
+            RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000);
         }
         if (child < 0) {
             RefuseBusy(*control, "could not create session child");

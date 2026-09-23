@@ -17,8 +17,9 @@ P7 F2, PH-7 (5): the supervisor now reads and authenticates every first frame be
 the controls here assert that an unauthenticated peer learns nothing of ours
 (`unauthenticated_wrong_layout`), that a silent one costs no fork and is answered at the pre-auth
 deadline (`silent_peer`), that Busy is the answer to an AUTHENTICATED second client (`busy`), the
-pending cap and the backoff (`pending_cap`, `auth_backoff`). The five malformed-frame shapes
-are fuzz arm 1's own entry, scripts/ci/ph_fuzz_control_frames.py.
+pending cap and the backoff (`pending_cap`, `auth_backoff`), and ID-P7-44's queued-DataBind
+refusal (`data_bind_queued_before_bound`). The five malformed-frame shapes are fuzz arm 1's own
+entry, scripts/ci/ph_fuzz_control_frames.py.
 
 It needs flatc, which is deliberately absent from the default build graph (gen_protocol.py's
 header block says why). Resolution order is gen_protocol.py's, minus the build-it-for-you arm:
@@ -723,6 +724,65 @@ def main():
                                                  'fresh_control': still_busy}
             assert process.poll() is None, 'the refused DataBinds killed the supervisor'
 
+            # ---- ID-P7-44: A DataBind QUEUED TO THE CHILD BEFORE IT LET GO IS REFUSED, NOT DROPPED
+            #
+            # The F fix round closed the child's end of the hand-off the moment Accept returned;
+            # between the bind and that close the supervisor could still queue a DataBind, and a
+            # close with descriptors queued drops them in the kernel - that peer's connection just
+            # ended, with no frame. The window is microseconds in the wild, so it is held open
+            # here: the session child is SIGSTOPped right after its Welcome, its own data
+            # connection and three extra DataBinds are then routed to it (the supervisor forwards
+            # to a stopped child as readily as to a running one), and it is continued. It binds
+            # its own connection and lets go of the hand-off with the three still queued. Each
+            # extra must be answered by name - "nonce mismatch" if the child happened to read it
+            # before its own, the supervisor's hand-off words if it was still queued when the
+            # child let go - and the session must come up. RED before the fix: the extras' reads
+            # end with EOF and no frame ("control channel closed before a complete frame").
+            held = hello(schema, flatbuffers, fingerprint=fingerprint)
+            for _ in range(30):
+                control = connect_control(port)
+                control.sendall(held)
+                welcome = receive(control, schema)
+                if welcome.get('code') != 7:
+                    break
+                control.close()
+                time.sleep(.05)
+            extras = []
+            right = None
+            try:
+                assert welcome.get('welcome', 0), welcome
+                child = welcome['welcome']
+                os.kill(child, signal.SIGSTOP)
+                try:
+                    right = open_data(port, schema, flatbuffers, bytes.fromhex(welcome['nonce']))
+                    time.sleep(.3)  # routed first, so it is first in the child's queue
+                    for _ in range(3):
+                        extras.append(open_data(port, schema, flatbuffers, os.urandom(16)))
+                    time.sleep(.5)  # every one of them routed into the stopped child's queue
+                finally:
+                    os.kill(child, signal.SIGCONT)
+                queued = []
+                for extra in extras:
+                    extra.settimeout(10)
+                    try:
+                        queued.append(receive(extra, schema))
+                    except (RuntimeError, OSError) as error:
+                        queued.append({'error': repr(error)})
+                ready = wait_for_log(serverLog, f'pid={child} transport=spawn role=server ready')
+            finally:
+                for extra in extras:
+                    extra.close()
+                if right is not None:
+                    right.close()
+                control.close()
+            for answer in queued:
+                assert answer.get('code') == 4 and answer.get('detail') in (
+                    'data connection nonce mismatch', kDetailHandoff), (
+                    f'a DataBind queued to session pid={child} before it let go of the hand-off was '
+                    f'answered {answer}, not refused by name (ID-P7-44); all: {queued}')
+            assert ready is not None, f'session pid={child} did not come up; see {serverLog}'
+            evidence['data_bind_queued_before_bound'] = {'refused': queued}
+            assert process.poll() is None, 'the queued DataBinds killed the supervisor'
 
             # ---- F fix round: A GARBAGE FIRST FRAME WHILE BUSY IS MalformedHello, NOT Busy ------
             #
