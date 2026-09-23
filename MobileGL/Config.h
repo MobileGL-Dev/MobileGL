@@ -516,13 +516,17 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_IPC_EVENT_WAIT_MS (PH-6, ID-P7-2): the SERVER's patience, in ms, for ONE
         // reverse-channel event that finds SEG_EVENT full under run-ahead. The apply thread
         // publishes, rings the client and parks until the client drains enough room; a client
-        // that has not made room when this runs out - it stopped draining, it drains a slot at
-        // a time, or it went away - FORFEITS the reverse channel: that event and every later
-        // one is dropped and counted (eventDropped), and the session stops by the ordinary
-        // stop path rather than by Fatal{EventRingOverflow}. It bounds the whole reservation,
-        // not one park, so a trickling peer cannot stretch it. Was a 30000 ms constant spent
-        // twice. Read by the server only (ServerSpawn.cpp passes it to a spawned child); the
-        // lockstep arm (no kCapRunAheadApply, i.e. Magma) never waits and keeps P5C's Fatal.
+        // that has not made room when this runs out - it stopped draining (NotDraining) or it
+        // drains a slot at a time (TooSlow) - FORFEITS the reverse channel: that event and every
+        // later one is dropped and counted (eventDropped), and the session stops by the ordinary
+        // stop path rather than by Fatal{EventRingOverflow}. A peer that goes away (PeerGone) or
+        // a session that is stopped (Stopped) ends the wait at once instead, so the knob may
+        // exceed ServerLoop::Stop()'s 5000 ms join. It bounds the whole reservation, not one
+        // park, so a trickling peer cannot stretch it - nor can a shm peer that writes the
+        // (peer-writable) eventRingFull latch to 0 itself, though that one keeps the apply
+        // thread spinning rather than parked until the budget runs out. Was a 30000 ms constant
+        // spent twice. Read by the server only (ServerSpawn.cpp passes it to a spawned child);
+        // the lockstep arm (no kCapRunAheadApply, i.e. Magma) never waits and keeps P5C's Fatal.
         Uint32 EventWaitMs = 2000;
         // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.
         // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and

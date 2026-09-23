@@ -284,8 +284,9 @@ namespace MobileGL::MG_Remote::Server {
                 SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
                         "caps ONE record at %llu (half its capacity). Flow control cannot help: "
                         "no amount of draining makes a record fit a ring that is too small for "
-                        "it. Raise MOBILEGL_IPC_EVENT_KB or slice the event at its producer, as "
-                        "the writeback path already does",
+                        "it. SEG_EVENT's size is fixed (SessionSegmentSizes::EventRingBytes; the "
+                        "MOBILEGL_IPC_EVENT_KB knob P5e proposed was never built), so slice the "
+                        "event at its producer, as the writeback path already does",
                         eventName, static_cast<unsigned long long>(payloadBytes),
                         static_cast<unsigned long long>(cap));
             }
