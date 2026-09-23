@@ -111,6 +111,25 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             return value != nullptr && *value != '\0';
         }
 
+        // The number of LINES in `text` that carry `needle` and `where=read`: one per backend read
+        // the compare-at-read hook reported for that field and verb (ReportDivergence is a single
+        // MGLOG_F, so a report never spans lines and two reports never share one).
+        std::size_t CountReadReports(const std::string& text, const std::string& needle) {
+            std::size_t count = 0;
+            std::size_t pos = 0;
+            while (pos < text.size()) {
+                const std::size_t eol = text.find('\n', pos);
+                const std::string line =
+                    text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+                if (line.find(needle) != std::string::npos && line.find("where=read") != std::string::npos) {
+                    ++count;
+                }
+                if (eol == std::string::npos) break;
+                pos = eol + 1;
+            }
+            return count;
+        }
+
         class PipeVerifyArmingScenario : public ScenarioTest {
         protected:
             // The library log this process is writing, or an empty path when none was configured.
@@ -350,6 +369,26 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "arm - `where=` says which comparator spoke, and only `read` is this case's "
                    "subject. Line:\n"
                 << line;
+
+            // TWO REPORTS, NOT ONE (V1 fix round 2) - the count is what makes BOTH perturbation
+            // blocks in the hook load-bearing. The server reads this field twice inside the
+            // ReadPixels window, and both reads sit inside the hook's neutral-pack branch:
+            // PipeApplier::read_pixels saves the application's pack BEFORE it installs the neutral
+            // one, and the backend's ReadPixels reads the field AFTER. The hook's first perturbation
+            // is what turns the saved-pack read red (past the first compare, the application's
+            // pack against the neutral oracle differs on its own); only the perturbation re-applied
+            // after the window's overwrite can turn the post-install read red, because there the
+            // stored value IS the neutral pack. A control satisfied by ONE line is satisfied by
+            // either block alone and so falsified neither. Measured at landing the server half
+            // carries 3 (DirectGLES) / 2 (DirectVulkan); removing either block drops it to 1.
+            const std::size_t reads = CountReadReports(server, expected);
+            EXPECT_GE(reads, std::size_t{2})
+                << "the server half carries " << reads << " `where=read` report(s) for " << expected
+                << ", ...}. The server reads that field twice inside the ReadPixels window (the "
+                   "applier's saved-pack read and the backend's post-install read) and the hook "
+                   "perturbs the oracle once per read, so fewer than two means one perturbation has "
+                   "stopped reaching its read. Server half of the log appended by this case:\n"
+                << server;
         }
 
     } // namespace

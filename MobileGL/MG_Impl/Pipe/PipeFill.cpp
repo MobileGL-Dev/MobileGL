@@ -738,6 +738,17 @@ namespace MobileGL::MG_Pipe {
         // exactly like a hook with nothing to report. The perturbation goes on the ORACLE, for
         // EntryCompare's reason: the arm under test is the stored value, so corrupting THAT would
         // be testing the corruption.
+        //
+        // WHICH READ THIS BLOCK TURNS RED (V1 fix round 2). The server reads the pack field TWICE
+        // inside the ReadPixels verb window, and both reads sit inside
+        // ServerReadsInsideTheNeutralPackWindow below (the verb stamp is up for the whole apply):
+        // PipeApplier::read_pixels saves the application's pack through the accessor BEFORE it
+        // installs the neutral one, and the backend's ReadPixels reads the field AFTER. This block
+        // is what turns the FIRST of them red: at that read `self` still holds the application's
+        // pack, so the first compare only reaches the window if this perturbation made it differ,
+        // and inside the window the application's pack against the neutral oracle differs on its
+        // own. It does nothing for the second read - `self` IS the neutral pack there - which is
+        // what the re-application inside the window is for.
         if (g_verify.Corrupt && *g_verify.Corrupt == field) {
             MGPipeApplyVerifyCorruption(g_readScratch, field);
         }
@@ -758,10 +769,18 @@ namespace MobileGL::MG_Pipe {
             });
             // AND THE CONTROL IS RE-APPLIED, because the overwrite above replaces the pack half
             // WHOLESALE - the corruption included, since CorruptStorage perturbs an array's FIRST
-            // ELEMENT and the pack half is element 0. Without this line the one window in which
-            // this arm is most load-bearing (the server's read_pixels, 8530 reads over 220 of the
-            // lane's entries) would be the one window MOBILEGL_PIPE_VERIFY_CORRUPT=
-            // GetPixelStoreParameters cannot turn red.
+            // ELEMENT and the pack half is element 0. This is the block for the POST-INSTALL read
+            // (the backend's ReadPixels, after PipeApplier::read_pixels installed the neutral pack
+            // into gPipeInputs): there `self` is the neutral pack, the overwrite just made the
+            // oracle equal to it, and only a perturbation applied AFTER the overwrite can make
+            // that compare differ - the block above cannot reach it. Without this line the one
+            // window in which this arm is most load-bearing (the server's read_pixels, 8530 reads
+            // over 220 of the lane's entries) would be the one window MOBILEGL_PIPE_VERIFY_CORRUPT=
+            // GetPixelStoreParameters cannot turn red - and a control that accepted ONE report
+            // would never notice, because the saved-pack read still reports through the block
+            // above. The VerifySplitReadCorrupted. entries and the CI step therefore require at
+            // least TWO `where=read` reports in the server half: one per block, each falsified
+            // alone (V1 fix round 2).
             if (g_verify.Corrupt && *g_verify.Corrupt == field) {
                 MGPipeApplyVerifyCorruption(g_readScratch, field);
             }
