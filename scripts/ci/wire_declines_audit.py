@@ -24,10 +24,14 @@ Everything is matched on the text with comments and string/character literals bl
 or only a string, is not one.
 
 usage: wire_declines_audit.py [repo-root]
+       wire_declines_audit.py --self-test     (negative controls on inline fixtures)
 """
+import contextlib
+import io
 import os
 import re
 import sys
+import tempfile
 
 RENDERER = "MobileGL/MG_Backend/DirectVulkan/Renderer"
 DEF = os.path.join(RENDERER, "WireDeclines.def")
@@ -184,7 +188,102 @@ def audit(root: str) -> int:
     return 1 if bad else 0
 
 
+# --self-test: each fixture is (name, def rows text, Fixture.cpp text, expected rc, text the
+# audit must print - so a red is red for the reason the fixture is about). The red ones are
+# the holes the B3 fix round closed; the green one proves the audit still accepts the two
+# shapes the tree uses.
+NO_SITE = "has NO SITE"
+NO_LOG = "with no MGLOG_W/E in its own block"
+_DEF_GHOST = "MGL_WIRE_DECLINE(GhostRow)\n"
+SELF_TEST_FIXTURES = (
+    ("comment-only site (//)", _DEF_GHOST,
+     "void F() {\n"
+     "    // MGL_WIRE_DECLINE_AT(GhostRow, \"never counted\");\n"
+     "}\n", 1, NO_SITE),
+    ("comment-only site (/* */)", _DEF_GHOST,
+     "void F() {\n"
+     "    /* retired:\n"
+     "       MGL_WIRE_DECLINE_AT(GhostRow, \"never counted\"); */\n"
+     "}\n", 1, NO_SITE),
+    ("string-literal site", _DEF_GHOST,
+     "const char* kDoc = \"MGL_WIRE_DECLINE_AT(GhostRow, x);\";\n", 1, NO_SITE),
+    ("other-branch log", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x == 1) {\n"
+     "        MGLOG_W(\"x is one\");\n"
+     "    }\n"
+     "    if (x == 2) {\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "    }\n"
+     "}\n", 1, NO_LOG),
+    ("nested-branch log", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x) {\n"
+     "        if (x == 1) {\n"
+     "            MGLOG_W(\"x is one\");\n"
+     "        }\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "    }\n"
+     "}\n", 1, NO_LOG),
+    ("log only in a /* */ comment above", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x) {\n"
+     "        /* MGLOG_W(\"x\"); */\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "    }\n"
+     "}\n", 1, NO_LOG),
+    ("nearest log is MGLOG_D", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x) {\n"
+     "        MGLOG_D(\"compiled away in Release\");\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "    }\n"
+     "}\n", 1, NO_LOG),
+    ("good sites (AT form, bare Count under its own W/E, def row with trailing comment)",
+     "MGL_WIRE_DECLINE(GoodAt) // the macro form\nMGL_WIRE_DECLINE(GoodBare)\n",
+     "bool F(int x) {\n"
+     "    if (x == 1) {\n"
+     "        MGL_WIRE_DECLINE_AT(GoodAt, \"x=%d\", x);\n"
+     "        return false;\n"
+     "    }\n"
+     "    if (x == 2) {\n"
+     "        MGLOG_E_ONCE(\"x is two: %d, \"\n"
+     "                     \"declined\", x);\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GoodBare);\n"
+     "        return false;\n"
+     "    }\n"
+     "    return true;\n"
+     "}\n", 0, "0 unlogged, 0 unknown"),
+)
+
+
+def self_test() -> int:
+    failures = 0
+    for name, def_text, src_text, want, why in SELF_TEST_FIXTURES:
+        with tempfile.TemporaryDirectory(prefix="wire-declines-selftest-") as root:
+            src_dir = os.path.join(root, RENDERER)
+            os.makedirs(src_dir)
+            with open(os.path.join(src_dir, "WireDeclines.def"), "w", encoding="utf-8") as f:
+                f.write(def_text)
+            with open(os.path.join(src_dir, "Fixture.cpp"), "w", encoding="utf-8") as f:
+                f.write(src_text)
+            captured = io.StringIO()
+            with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+                got = audit(root)
+        ok = got == want and why in captured.getvalue()
+        failures += 0 if ok else 1
+        print("wire-declines self-test: %-4s %s -> rc %d (want %d, printing \"%s\")"
+              % ("ok" if ok else "FAIL", name, got, want, why))
+        if not ok:
+            sys.stdout.write("".join("    " + l + "\n" for l in captured.getvalue().splitlines()))
+    print("wire-declines self-test: %d/%d fixtures as expected"
+          % (len(SELF_TEST_FIXTURES) - failures, len(SELF_TEST_FIXTURES)))
+    return 1 if failures else 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        return self_test()
     return audit(os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "."))
 
 

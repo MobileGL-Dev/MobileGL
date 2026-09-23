@@ -2393,9 +2393,13 @@ jobs:
         run: python3 scripts/ci/fatal_census.py
 
       # The decline half of rule I (P7 B3): every WireDeclines.def row has a site, every site a
-      # warning-or-error line. Same shape as the census - tree-only, no build.
+      # warning-or-error line. Same shape as the census - tree-only, no build. The self-test
+      # runs first: its fixtures (a site only in a comment or a string, a log in another
+      # branch, an MGLOG_D) must red, so a green audit is one that could have been red.
       - name: Wire declines audit (B3)
-        run: python3 scripts/ci/wire_declines_audit.py
+        run: |
+          python3 scripts/ci/wire_declines_audit.py --self-test
+          python3 scripts/ci/wire_declines_audit.py
 
       - name: Load trace cases
         id: trace-cases
