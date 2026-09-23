@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-22 夜（M2 r2 落地，ID-P7-46）** · 交接清单 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)；在跑 agent 的报告落到 WSL `~/w7/notes/handoff/`。`origin/feat/disaggregated` = 集成树头（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2 + **M2 r2**、F 修复轮、X2；门全绿）；M2 审查的 must-fix（memo 句柄复用 ABA）**已由 M2 r2 关闭**（ID-P7-46）；V1 修复 r2 落地中（ID-P7-47）。
+**更新：2026-09-22 夜（M2 r2 + V1 修复 r2 落地，ID-P7-46/47）** · 交接清单 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)；在跑 agent 的报告落到 WSL `~/w7/notes/handoff/`。`origin/feat/disaggregated` = 集成树头（B3 修复 r2/r3、V1 修复轮、B2 r3/r4、M2 + **M2 r2**、F 修复轮、X2、**V1 修复 r2**；门全绿）；M2 审查的 must-fix（memo 句柄复用 ABA）**已由 M2 r2 关闭**（ID-P7-46）；V1 修复 r2 已落地（ID-P7-47）；窗口 1b 矩阵的中期读数与息屏假设见 ID-P7-48。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -61,15 +61,15 @@
 |---|---|---|
 | B2 r3 审查（fable） | transport 门控的真值域、默认 framebuffer pre-pass 的解析、新腿的读面 | 完成：land with fixes → B2 r4 已落地（ID-P7-44） |
 | B3 修复 r2 审查（fable） | 剥注释 / 字面量的边界、块回溯规则、自测覆盖、fail-closed 顺序、pull-library 控制 | 完成：land with fixes → B3 r3 已落地（ID-P7-44） |
-| V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 完成：land with fixes → V1 修复 r2（落地中，ID-P7-47） |
+| V1 修复轮审查（fable） | read 侧 corrupt 的两次施加、server 半边断言、逐条武装普查的双向性、例外表 5 类 | 完成：land with fixes → V1 修复 r2 已落地（ID-P7-47） |
 | M2 r2（fable） | **must-fix**：`m_wireStoreDestroyEpoch` 进 `UniformManager` 两个 memo（§9 例外已批）+ red-once；note SHA、`ASSERT_GE`、注释、`lastUseSubmitIndex` 清零、清洗名单 | **已落地**，集成者审查 land（ID-P7-46） |
-| V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | 完成 → `~/w7/notes/handoff/v1-fix-r2.md`；落地中（ID-P7-47） |
+| V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | **已落地**，集成者审查 land（ID-P7-47） |
 | X2（fable） | `InitialCapsStartup.ANullInitialSnapshot…` 在负载下的 flake：复现、测试 vs 产品判定、修复 + 500 次循环 | **已落地**（test-only；真因 = 夹具按 accept 顺序配对，ID-P7-45） |
-| 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中；已见 ReadPixels 被设备 server 拒、main-menu server 死亡（ID-P7-41） |
+| 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中（44 / 78）；pass 1 27/39 红，11 例聚在 57–61 s 处对端挂断——手机息屏 60 s 的假设，见 ID-P7-48 |
 
 ## 5. 下一步（按序；机械步骤与命令见 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)）
 
-1. ~~推送~~ 已推；~~四个修复轮（B2 r3、B3 修复 r2、V1 修复、F 修复）回来 → 各自门 + 复审 → 下一次推送~~ 已落地并推送（ID-P7-44/45/46）；V1 修复 r2 门在跑 → 落地（ID-P7-47）。
+1. ~~推送~~ 已推；~~四个修复轮（B2 r3、B3 修复 r2、V1 修复、F 修复）回来 → 各自门 + 复审 → 下一次推送~~ 已落地并推送（ID-P7-44/45/46）；V1 修复 r2 已落地并推送（ID-P7-47）。
 2. **F2**：D11 五处 + PH-2、PH-6 drop-with-latch、PH-1 (3)(4)、PH-7 (5) fork 前认证——先要一个能向 spawn / TCP server 发畸形记录的对端字节驱动（fuzz 臂 2 的第一块）。
 3. ~~M2 门 + 审查绿 → 推送~~ 已推（M2 + r2，ID-P7-46）→ p7w6 APK（**含 F 的 wireFingerprint 变更：手机 server 必须重部署**）→ bsl-esc-menu spawn 臂通过（并重跑窗口 1b 作 `DataBind` 对照）→ **M3**（descriptor set 在长帧内无界，M2 的新发现） → 门 3 分母 36 全部与 monolith 同（三遍逐位相同 + spawn 臂，§7.2）。
 4. **B4**：裁判的 `WaitForSubmitsUpTo` 聚合等待（`Present:14094` / `WaitForSubmitIndex` / `WaitForFrameSerial`）+ 裁判点名的 Magma 债（§12）。
