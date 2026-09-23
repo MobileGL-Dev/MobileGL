@@ -38,42 +38,6 @@ namespace MobileGL {
                 }
             };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (gt, CONTRACT-P5C §6 layer 1): the NAMED EXEMPTION to the texture legacy-arm
-            // guard, the texture analogue of hd's MGPipeFrontendKeyedRegistryScope
-            // (MG_Impl/Pipe/SlotAllocator.h). Magma's texture sync (VkTextureManager::SyncTexture
-            // and the UploadDirtyMipLevels it drives) still reads and clears the CLIENT's mip
-            // shadow - the one texture family tx did not migrate (CONTRACT-P5C §2 names Espryt's
-            // sync reads and Magma's T5 writes; Magma's upload read path is absent from it), and
-            // inproc was green on it because the barrier and the shared address space held.
-            // Inside this scope the guard's surfaces stay legal - read-only-or-clean, barrier-
-            // held, and greppable as exactly this name; retiring the scope is P7's server-side
-            // Magma texture sync. Every OTHER apply-thread touch of a guarded surface is still
-            // Fatal{RoleViolation, "texture-legacy-arm"}.
-            //
-            // The depth is counted ONLY on the apply thread (P5d round 3, package D), exactly
-            // as hd's two scopes in MG_Impl/Pipe/SlotAllocator.h are: the guard above is the
-            // counter's only reader and it returns before it looks unless
-            // ServerLoop::OnApplyThread() is true, so a depth kept on any other thread could
-            // never change an answer. m_counted remembers the constructor's decision so the
-            // destructor undoes exactly what the constructor did. The query is spelled
-            // ActiveOnApplyThread() rather than Active() because the precondition belongs in
-            // the name: off the apply thread it now answers false however many scopes are
-            // open, and a future second reader must be made to see that rather than trust a
-            // bare Active().
-            class MGPipeTextureLegacyArmScope {
-            public:
-                MGPipeTextureLegacyArmScope();
-                ~MGPipeTextureLegacyArmScope();
-                MGPipeTextureLegacyArmScope(const MGPipeTextureLegacyArmScope&) = delete;
-                MGPipeTextureLegacyArmScope& operator=(const MGPipeTextureLegacyArmScope&) = delete;
-                static Bool ActiveOnApplyThread();
-
-            private:
-                Bool m_counted;
-            };
-#endif
-
             class MipmapStorage {
             public:
                 SizeT GetLevelCount() const;

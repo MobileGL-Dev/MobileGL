@@ -1807,8 +1807,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // SyncTexture reads the frontend ITextureObject: the target, the format, the level
     // chain, the dirty scan and - through UploadDirtyMipLevels - the CLIENT's mip shadow
     // texels. Under an active transport none of that memory is the server's to read
-    // (rule E), which is exactly what Magma's texture-legacy-arm scope has been waiving
-    // since P5c. This arm is the same sync re-sourced: the SHAPE comes from the applier's
+    // (rule E), which is exactly what Magma's texture-legacy-arm scope waived from P5c until
+    // P7 retired it (SyncTexture). This arm is the same sync re-sourced: the SHAPE comes from the applier's
     // resource record (MGPipeApplier().TextureResources - the resource_create /
     // resource_respecify descriptors), the TEXELS from the server's staged-texture store
     // (P5c tx, adopted at apply time), and the WHICH-LEVELS from the record's
@@ -2958,16 +2958,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (gt): Magma's texture sync still reads - and clears - the CLIENT's mip shadow:
-        // the dirty scan below, and UploadDirtyMipLevels' texel reads / region reads /
-        // MarkStorageDirty(false) clears. CONTRACT-P5C §2 migrated Espryt's sync and Magma's
-        // T5 writes, and left THIS path on the legacy arm; under the verb barrier and one
-        // address space the reads answer correctly, and the migration is P7's server-side
-        // sync. The scope is the debt's greppable form (MipmapStorage.h); outside it the
-        // layer-1 guard still aborts.
-        const MG_State::GLState::MGPipeTextureLegacyArmScope textureLegacyArm;
-#endif
+        // This is the FRONTEND-object sync: it reads - and clears - the client's mip shadow (the
+        // dirty scan below, UploadDirtyMipLevels' texel / region reads and MarkStorageDirty(false)
+        // clears), so it belongs to the monolith arm only. Under an active transport every wire
+        // verb syncs through the handle-keyed arm (SyncTextureResourceByHandle, and the sampled
+        // wire descriptors in UniformManager) from the applier's record and the staged-texture
+        // store. P5c's named exemption for this function (MGPipeTextureLegacyArmScope) was retired
+        // in P7 (ratchet88) once a probe proved it never armed on the apply thread; a regression
+        // now meets the layer-1 guard (Fatal{RoleViolation, "texture-legacy-arm"},
+        // MipmapStorage.cpp) by accessor name. This block is exactly as many lines as the one it
+        // replaced: __LINE__ reaches this file's pull .text, and G1 compares the bytes.
         // Cross-draw fast path: if the resource is already built and neither the texture's
         // pixel content (bumped in MarkStorageDirty), its SHAPE (bumped in BumpShapeVersion)
         // nor its params changed since the last sync, there is nothing to re-check or
