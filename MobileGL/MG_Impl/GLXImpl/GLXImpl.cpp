@@ -174,7 +174,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         }
 
         struct ContextObject {
-            Display* XDisplay = nullptr;
+            ::Display* XDisplay = nullptr;
             EGLDisplay Display = EGL_NO_DISPLAY;
             EGLConfig Config = nullptr;
             EGLContext Context = EGL_NO_CONTEXT;

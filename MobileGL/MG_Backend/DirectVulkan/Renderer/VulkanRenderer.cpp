@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "VulkanRenderer.h"
+#include "SubmitFencePrefix.h"
 
 #include "MG_Backend/DirectVulkan/SubgroupSupportPolicy.h"
 #include "MG_Backend/DirectGLES/Utils.h"
@@ -13679,12 +13680,8 @@ void main() {
         if (submitIndex <= m_completedSubmitCounter) return true;
         if (submitIndex > m_submitCounter || m_device == VK_NULL_HANDLE) return false;
         Vector<VkFence> fences;
-        for (const auto& record : m_inFlightSubmits) {
-            if (record.submitIndex > submitIndex) break;
-            if (record.fence == VK_NULL_HANDLE) return false;
-            fences.push_back(record.fence);
-        }
-        if (fences.empty()) return false;
+        if (!CollectSubmitFencePrefix(m_inFlightSubmits, submitIndex, VkFence{}, fences))
+            return false;
         const VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(fences.size()),
                                                 fences.data(), VK_TRUE, timeoutNs);
         if (result == VK_SUCCESS) {
