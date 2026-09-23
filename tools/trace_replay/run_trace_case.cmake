@@ -380,9 +380,14 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
         # failure also leaves no server log; checked first, this would report "the server left
         # no file" for a run whose more specific diagnosis is "resolved, but carries no spawn
         # ARMED", and send the reader to the wrong process.
+        # THE MESSAGE NAMES MOBILEGL_IPC_CONTROL AS WELL. The tcp arm is MOBILEGL_TRANSPORT=spawn
+        # plus MOBILEGL_IPC_CONTROL=tcp://..., so the transport alone reads the same for the spawn
+        # arm and for the tcp arm, whose missing file is the fixture's forwarded server log (the
+        # check this one absorbed used to say "TCP session has no forwarded server log").
         if(NOT EXISTS "${mobilegl_server_log}")
             message(FATAL_ERROR
-                    "${split_case}: MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} but the run wrote no "
+                    "${split_case}: MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} "
+                    "MOBILEGL_IPC_CONTROL='$ENV{MOBILEGL_IPC_CONTROL}' but the run wrote no "
                     "${mobilegl_server_log}, so the server role's Fatal{ and MGWIRE-FLOOR lines "
                     "cannot be counted. A split retrace with no server log cannot be counted as a "
                     "clean one.")
