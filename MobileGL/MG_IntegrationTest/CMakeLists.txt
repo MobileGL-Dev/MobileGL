@@ -3469,10 +3469,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_magma_arm_shape(${mglItestArm} reclaim)
     mgl_itest_join_environment(MGL_ITEST_MAGMA_RECLAIM_ENVIRONMENT
         ${MGL_ITEST_MAGMA_RECLAIM_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+    # Round 2 (ID-P7-43) adds the fourth: the reclaim's own memo hazard. It reads no gauge, but it
+    # is the same fixture, the same in-frame shape and the same two arms, so it rides this list.
     foreach(reclaimCase
             RespecifiesWithNoDrawBetweenKeepTheLiveStoreCountBounded
             RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget
-            ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling)
+            ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling
+            ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.${mglItestArm}.Reclaim."
             TEST_FILTER "MagmaWireReclaimScenario.${reclaimCase}"

@@ -29,6 +29,10 @@
 //     store destroyed while its draw was pending shows up as a wrong strip (or a dead lavapipe).
 //   * ManySmallRespecifyAndDrawRounds... - the same with stores too small to reach any byte
 //     budget; the fixed 1024-store ceiling on the same sync point is what bounds them.
+//   * ADrawAfterTheEarlyReclaim... (round 2, ID-P7-43) - the reclaim's own hazard: a store that
+//     dies mid-frame frees a VkBuffer handle value the descriptor memos still map to a set baked
+//     to its memory, and the next mint can get that value back. The pixel of a draw made
+//     through the re-minted handle must follow the new store's bytes.
 //
 // READ FROM THE SERVER, NOT THE PICTURE. The numbers are the wbuf[] gauges the server role's
 // VkBufferManager publishes (PipeStats.h, Gauge::WireBuffers..WireDeferredSyncs): RUN MAXIMA,
@@ -86,6 +90,16 @@ namespace MGITest {
         constexpr std::size_t kSmallDrawnStoreBytes = 256;
         constexpr long long kDeferredCountCeiling = 1024;
 
+        // Case 4: the memo ABA. The store that dies is SMALL and the one minted through its
+        // handle afterwards is LARGE, with a pinned 1 MiB store minted right after the small one
+        // so its hole stays a hole: a same-size mint would take the just-freed memory range back
+        // (VMA's best-fit bucket) and the stale descriptor would read the new bytes by aliasing
+        // accident, which is a green that proves nothing. 64 KiB cannot land in a 256-byte hole.
+        constexpr std::size_t kAbaDeadStoreBytes = 256;
+        constexpr std::size_t kAbaPinStoreBytes = static_cast<std::size_t>(kMiB);
+        constexpr std::size_t kAbaNewStoreBytes = 64 * 1024;
+        constexpr GLuint64 kAbaWaitNs = 2000000000ull; // 2 s: a 64x16 draw on lavapipe retires in ms
+
         constexpr const char* kVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); })";
@@ -94,6 +108,15 @@ void main() { gl_Position = vec4(aPos, 0.0, 1.0); })";
 uniform vec4 uColor;
 out vec4 fragColor;
 void main() { fragColor = uColor; })";
+
+        // Case 4 paints from a uniform BLOCK, because a block bound through glBindBufferBase is
+        // what the wire arm binds directly - the descriptor names the store's own VkBuffer
+        // (UniformManager::ResolveWireUniformBufferPayload) - while a plain uniform goes
+        // through a transient slice that no store handle can alias.
+        constexpr const char* kBlockFragment = R"(#version 330 core
+layout(std140) uniform Block { vec4 color; };
+out vec4 fragColor;
+void main() { fragColor = color; })";
 
         // Two triangles covering pixel columns [x0, x1) over the whole height, in NDC.
         void WriteStripQuad(float* out, int x0, int x1) {
@@ -346,6 +369,9 @@ void main() { fragColor = uColor; })";
             const long long livePeak = PipeStatsWindow::CounterOrAbsent(window, "wlivepk");
             const long long syncs = PipeStatsWindow::CounterOrAbsent(window, "wdefsync");
             ASSERT_GT(wireBuffers, 0) << "the server published no wbufs= gauge: " << window.line;
+            // An absent gauge reads -1, which would pass the one-sided bound below as a leak that
+            // never happened; the peak has to be a reading before it can be a small one.
+            ASSERT_GE(livePeak, 0) << "the server published no wlivepk= gauge: " << window.line;
             RecordProperty("wire_buffers", static_cast<int>(wireBuffers));
             RecordProperty("wire_stores_peak", static_cast<int>(livePeak));
             RecordProperty("wire_deferred_syncs", static_cast<int>(syncs));
@@ -357,6 +383,127 @@ void main() { fragColor = uColor; })";
                 << kSmallDrawnRespecifies << " small respecify-and-draw rounds in one frame; the "
                    "records plus the " << kDeferredCountCeiling << "-store ceiling allow " << liveBound
                 << ". A count that tracks the rounds is the bsl-esc-menu-854 shape. " << window.line;
+        }
+
+        // --------------------------------------------------------------------------------------
+        // CASE 4 (round 2, ID-P7-43). THE EARLY RECLAIM MUST NOT LEAVE A DESCRIPTOR MEMO NAMING
+        // THE DEAD STORE'S HANDLE. UniformManager memoizes descriptor sets by VkBuffer handle
+        // (m_descriptorReuseMemo's signature hashes the VkDescriptorBufferInfo words,
+        // FastRebindMemo compares uboBuffer) and clears them at the frame boundary - before M2
+        // the only point a wire store could die. With M2 a store dies at a park mid-frame, the
+        // next mint gets its handle value back (a heap pointer under lavapipe; glibc's tcache
+        // hands the last chunk freed to the next same-size malloc), and a draw that resolves the
+        // SAME (handle, range) reuses a set baked to the dead store's memory: wrong bytes, no
+        // Fatal. The fix folds VkBufferManager's wire-store destroy epoch into both memos.
+        //
+        // THE SHAPE, all in one frame, every step deterministic (no sleep, no fence poll race):
+        //   1. D1 draws with UBO store S1 (256 B, colour A): the memo now maps S1's handle to
+        //      D1's descriptor set.
+        //   2. glBufferData(U, 0) orphans S1 - parked, tagged for the batch D1 is recorded in -
+        //      and mints nothing in its place, so the handle value stays free once S1 dies.
+        //   3. glClientWaitSync(fence, FLUSH_COMMANDS, 0) SUBMITS that batch without waiting:
+        //      the review's "flush without wait".
+        //   4. glBufferSubData on the vertex store D1 named records a staged copy, so the
+        //      recording is pending again and the wait in 5 CANNOT take the frame-boundary
+        //      drain that would clear the memos (TryDrainFrameTransients refuses with work
+        //      pending).
+        //   5. glClientWaitSync(fence, 0, 2 s): D1's batch has retired; the memos are intact.
+        //   6. glBufferData(V, 0) parks the vertex store, and THAT park's sweep finds S1's
+        //      batch complete and destroys S1: its handle value is free, its memory a 256-byte
+        //      hole bounded by the pin store minted right after it.
+        //   7. glBufferData(U, 64 KiB, colour B) mints through the freed handle value; 64 KiB
+        //      cannot land in the hole, so the dead store's bytes stay where D1's set points.
+        //   8. D2 draws with U: it resolves (S1's handle value, 16 bytes) - a memo hit before
+        //      the fix, and D1's set reads A off the dead store.
+        // The pixel is the whole assertion: it has to be B, the bytes the live store holds.
+        TEST_F(MagmaWireReclaimScenario, ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle) {
+            if (!Ready() || IsSkipped()) return;
+            std::string error;
+            const GLuint program = CompileProgram(kVertex, kBlockFragment, &error);
+            ASSERT_NE(program, 0u) << error;
+            const GLuint block = glGetUniformBlockIndex(program, "Block");
+            ASSERT_NE(block, GLuint(GL_INVALID_INDEX));
+            glUniformBlockBinding(program, block, 0);
+
+            const PipeStatsWindow::LogMark mark = SetupFrame();
+            ClearTo(0.0f, 0.0f, 0.0f, 0.0f);
+
+            const Rgba8 colourA{200, 60, 30, 255};
+            const Rgba8 colourB{60, 200, 90, 255};
+            const auto blockBytes = [](std::size_t size, const Rgba8& c) {
+                // The block's vec4 at offset 0; every other slot holds a colour no step draws, so a
+                // read off any other offset is as visible as a read off the dead store.
+                std::vector<std::uint8_t> bytes(size, 0);
+                float* f = reinterpret_cast<float*>(bytes.data());
+                for (std::size_t i = 0; i + 4 <= size / sizeof(float); i += 4) {
+                    f[i] = 1.0f, f[i + 1] = 0.0f, f[i + 2] = 1.0f, f[i + 3] = 1.0f;
+                }
+                f[0] = c.r / 255.0f, f[1] = c.g / 255.0f, f[2] = c.b / 255.0f, f[3] = 1.0f;
+                return bytes;
+            };
+
+            // Step 1's stores, in this order: S1, then the pin right after it, then the vertex
+            // quad D1 names (m_buffer, a store this frame's recording will name and step 6 parks).
+            GLuint ubo = 0, pin = 0;
+            glGenBuffers(1, &ubo);
+            glGenBuffers(1, &pin);
+            glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+            const std::vector<std::uint8_t> bytesA = blockBytes(kAbaDeadStoreBytes, colourA);
+            glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytesA.size()), bytesA.data(), GL_DYNAMIC_DRAW);
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+            glBindBuffer(GL_COPY_WRITE_BUFFER, pin);
+            glBufferData(GL_COPY_WRITE_BUFFER, GLsizeiptr(kAbaPinStoreBytes), nullptr, GL_STATIC_DRAW);
+            std::vector<std::uint8_t> quad(kUndrawnStoreBytes, 0);
+            glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+            Respecify(quad, 0, kWidth);
+            glUseProgram(program);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            // Step 2: S1 orphaned, nothing minted.
+            glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+            glBufferData(GL_UNIFORM_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+            // Step 3: the batch D1 is in, submitted and not waited for.
+            GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            ASSERT_NE(fence, nullptr);
+            const GLenum flushed = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+            RecordProperty("flush_wait_result", static_cast<int>(flushed));
+            // Step 4: a recorded copy into the busy vertex store keeps the recording pending.
+            glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, 4, quad.data());
+            // Step 5: D1's batch retires; the memos survive because step 4 is still recorded.
+            const GLenum waited = glClientWaitSync(fence, 0, kAbaWaitNs);
+            ASSERT_TRUE(waited == GL_ALREADY_SIGNALED || waited == GL_CONDITION_SATISFIED)
+                << "glClientWaitSync returned " << waited << ": the batch that drew from the first "
+                   "store did not retire within " << (kAbaWaitNs / 1000000) << " ms";
+            // Step 6: the vertex store's park sweeps S1 out - the destroy the memos must notice.
+            glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+            // Step 7: a new store through the freed handle value, holding B.
+            glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+            const std::vector<std::uint8_t> bytesB = blockBytes(kAbaNewStoreBytes, colourB);
+            glBufferData(GL_UNIFORM_BUFFER, GLsizeiptr(bytesB.size()), bytesB.data(), GL_DYNAMIC_DRAW);
+            glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+            glBindBuffer(GL_ARRAY_BUFFER, m_buffer);
+            Respecify(quad, 0, kWidth);
+            // Step 8.
+            glUseProgram(program);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            const Image image = ReadPixels(kWidth, kHeight);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            const Rgba8 got = image.At(kWidth / 2, kHeight / 2);
+            EXPECT_TRUE(Near(got, colourB))
+                << "read " << got << ", wanted " << colourB << " (the live store's bytes). " << colourA
+                << " is the DEAD store's colour: the draw through the re-minted VkBuffer handle reused a "
+                   "descriptor set memoized under the first store's handle and read its freed memory "
+                   "(ID-P7-43); anything else is that memory already reused";
+
+            glDeleteSync(fence);
+            glDeleteBuffers(1, &pin);
+            glDeleteBuffers(1, &ubo);
+            glDeleteProgram(program);
+            const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
+            if (window.found) RecordProperty("wire_stores_peak",
+                                             static_cast<int>(PipeStatsWindow::CounterOrAbsent(window, "wlivepk")));
         }
 
     } // namespace
