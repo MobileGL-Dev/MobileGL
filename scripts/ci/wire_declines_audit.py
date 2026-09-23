@@ -16,9 +16,12 @@ deleting a row once a release has shipped it. This check is why it cannot rot.
 Sites reached through MGL_WIRE_DECLINE_AT satisfy both at once. A bare
 WireDeclineTally::Count(WireDeclineSite::X) is allowed ONLY when an MGLOG_W/E statement stands
 just above it IN THE SAME BLOCK: a line that BEGINS with the log call, at the Count line's own
-indentation, with no line of lesser indentation (an enclosing `if (...) {`, a `} else {`, a
-`#else`) and no same-indent `return`/`break`/`case`/... between them. A log in a sibling branch
-or a nested one is not this site's line, and neither is a guarded one-liner (`if (g) MGLOG_W`).
+indentation, with no line of lesser indentation (an enclosing `if (...) {`, a `} else {`), no
+`#else`/`#elif` at any indentation and no same-indent `return`/`break`/`case`/... between
+them. A log in a sibling branch or a nested one is not this site's line, neither is a guarded
+one-liner (`if (g) MGLOG_W`), and neither is one compiled under anything but
+`#if MOBILEGL_BUILD_DISAGGREGATED` (`#if 0`, a verbosity macro): that guard is the build this
+tally exists in, and it is the ONLY conditional the block walk is fail-open for.
 
 Everything is matched on the text with comments and string/character literals blanked out
 (newlines kept, so every report cites the real line): a site or a log that is only a comment,
@@ -61,10 +64,25 @@ CHAR_PREFIX = re.compile(r"(?:^|[^A-Za-z0-9_])(?:u8|u|U|L)$")
 # A statement control cannot flow past. A log ABOVE one of these at the Count's indentation is
 # on a path that ends there, so it is not the Count's log.
 FLOW_STOP = re.compile(r"^\s*(?:case\b|default\s*:|break\s*;|return\b|continue\s*;|goto\b|throw\b)")
-# Conditional-compilation lines the block walk steps over: a log and its Count that straddle a
-# `#if MOBILEGL_BUILD_DISAGGREGATED` are in one block on both sides of the preprocessor. `#else`
-# and `#elif` are NOT here - a log on the other side of one is in a different build, not this one.
-PP_SKIP = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef|endif)\b")
+# Conditional compilation in the block walk. A log and its Count that straddle a
+# `#if MOBILEGL_BUILD_DISAGGREGATED` are one block on both sides of the preprocessor, and that
+# guard is the ONLY one the walk is FAIL-OPEN for: it is the build this tally exists in, so a log
+# compiled under it is compiled wherever the Count is. Any other guard around the log (`#if 0`,
+# `#ifdef MOBILEGL_VERBOSE_DECLINES`) is a log that may not be in the shipped build, and a Count
+# that reads as logged because of one is the unlogged site this check exists to refuse.
+#   * `#endif` is COUNTED. A same-indent log met with one outstanding is compiled only under its
+#     opener(s), and is accepted only if every opener enclosing it (reached by continuing
+#     upward, past LOG_WINDOW if need be) is the disaggregated guard - the whole line, so
+#     `#if MOBILEGL_BUILD_DISAGGREGATED && X` is not it either;
+#   * `#if`/`#ifdef`/`#ifndef` with NO `#endif` outstanding is the Count's own guard, not the
+#     log's (the log above it is unconditional), and is stepped over;
+#   * `#else` and `#elif` at ANY indentation stop the walk - a log on the other side of one is
+#     in a different build, not this one. (A column-0 one stopped it before as a line of lesser
+#     indentation; an indented one at the Count's indentation walked straight through.)
+PP_OPEN = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
+PP_CLOSE = re.compile(r"^\s*#\s*endif\b")
+PP_STOP = re.compile(r"^\s*#\s*(?:else|elif)\b")
+PP_DISAGGREGATED = re.compile(r"^\s*#\s*(?:if|ifdef)\s+MOBILEGL_BUILD_DISAGGREGATED\s*$")
 
 
 def strip_code(text: str) -> str:
@@ -130,25 +148,65 @@ def indent_of(line: str) -> int:
 def has_own_log(lines, i: int) -> bool:
     """Is there an MGLOG_W/E statement above line i in the same block, within LOG_WINDOW?
 
-    Walk upwards; blank lines, `#if`/`#ifdef`/`#ifndef`/`#endif` lines and deeper lines (a
-    log's continuation lines, a nested block) are passed over, but only a line at exactly the
-    Count's indentation can be its log. The first line indented LESS than the Count is the
-    block's opening (or a sibling branch's `} else {`, or a `#else`) and ends the walk; so does
-    a same-indent `case`/`default`/`break`/`return`/`continue`/`goto`/`throw`, past which
-    control cannot reach the Count."""
+    Walk upwards; blank lines and deeper lines (a log's continuation lines, a nested block) are
+    passed over, but only a line at exactly the Count's indentation can be its log. The first
+    line indented LESS than the Count is the block's opening (or a sibling branch's `} else {`)
+    and ends the walk; so does a `#else`/`#elif` at any indentation, and a same-indent
+    `case`/`default`/`break`/`return`/`continue`/`goto`/`throw`, past which control cannot
+    reach the Count. `#if`/`#ifdef`/`#ifndef`/`#endif` are stepped over with the `#endif`s
+    counted: a log met with one outstanding is compiled only under its opener(s), and counts
+    only if log_guards_are_disaggregated says each of those is the disaggregated guard."""
     own = indent_of(lines[i])
+    outstanding = 0  # `#endif` lines crossed whose opener has not been reached yet
     for k in range(i - 1, max(-1, i - 1 - LOG_WINDOW), -1):
         line = lines[k]
-        if not line.strip() or PP_SKIP.match(line):
+        if not line.strip():
+            continue
+        if PP_STOP.match(line):
+            return False
+        if PP_CLOSE.match(line):
+            outstanding += 1
+            continue
+        if PP_OPEN.match(line):
+            if outstanding:
+                outstanding -= 1
             continue
         ind = indent_of(line)
         if ind < own:
             return False
         if ind == own:
             if LOGGED.match(line):
-                return True
+                return outstanding == 0 or log_guards_are_disaggregated(lines, k, outstanding)
             if FLOW_STOP.match(line):
                 return False
+    return False
+
+
+def log_guards_are_disaggregated(lines, k: int, enclosing: int) -> bool:
+    """The log at line k sits under `enclosing` `#endif`s whose openers are above it. Is every
+    one of those openers `#if MOBILEGL_BUILD_DISAGGREGATED`?
+
+    Continue upward from the log. A group opened and closed above it (its `#endif` is met
+    first, going up) does not enclose it and is stepped over whatever its guard; an
+    `#else`/`#elif` met at the log's own depth puts the log in a branch the guard does not
+    select, and that is a no. Not capped by LOG_WINDOW: preprocessor distance is not code
+    distance, and the code between the log and the Count was already walked."""
+    inner = 0
+    for j in range(k - 1, -1, -1):
+        line = lines[j]
+        if PP_CLOSE.match(line):
+            inner += 1
+        elif PP_OPEN.match(line):
+            if inner:
+                inner -= 1
+                continue
+            if not PP_DISAGGREGATED.match(line):
+                return False
+            enclosing -= 1
+            if enclosing == 0:
+                return True
+        elif PP_STOP.match(line) and not inner:
+            return False
     return False
 
 
@@ -216,7 +274,9 @@ def audit(root: str) -> int:
 # audit must print - so a red is red for the reason the fixture is about). The red ones are
 # the holes the B3 fix rounds closed; the green ones prove the audit still accepts the shapes
 # the tree uses, and the two shapes (a prefixed char literal, a `#if` between log and Count)
-# that a fail-closed strip or walk would have reddened for no defect.
+# that a fail-closed strip or walk would have reddened for no defect. The two `#if` reds pin
+# the walk's fail-open to the disaggregated guard alone: a log under `#if 0` and a log on the
+# far side of an INDENTED `#else` were both green on the round-2 audit.
 NO_SITE = "has NO SITE"
 NO_LOG = "with no MGLOG_W/E in its own block"
 _DEF_GHOST = "MGL_WIRE_DECLINE(GhostRow)\n"
@@ -297,6 +357,24 @@ SELF_TEST_FIXTURES = (
      "#else\n"
      "    MGLOG_D(\"compiled away\");\n"
      "#endif\n"
+     "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "}\n", 1, NO_LOG),
+    ("log only under a #if 0 above the Count", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x) {\n"
+     "#if 0\n"
+     "        MGLOG_W(\"x\");\n"
+     "#endif\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "    }\n"
+     "}\n", 1, NO_LOG),
+    ("log only on the other side of an INDENTED #else at the Count's indentation", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    #if MOBILEGL_BUILD_DISAGGREGATED\n"
+     "    MGLOG_W(\"x\");\n"
+     "    #else\n"
+     "    MGLOG_D(\"compiled away\");\n"
+     "    #endif\n"
      "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
      "}\n", 1, NO_LOG),
     ("prefixed char literals (L'\"', u8'\"') before a site on the same line",
