@@ -14,8 +14,13 @@
 # Arm proof before any block: mgprobe (the SKILL step-5 preflight) and one glcts case, each under
 # the AFTER environment, must log ConfigLoader's "Config: MOBILEGL_TRANSPORT=inproc - the MGPipe
 # record stream" and a "Config: IPC" line with strict=1 role-split-state=1 run-ahead=1.
-# RESUMABLE per block (<out>/cts/runs/<block>/.done). --limit N runs the first N cases of each
-# block (the dry run). --restore-base-lib re-pushes the $BASE library afterwards (dry run only).
+# RESUMABLE per block (<out>/cts/runs/<block>/.done), and a block's .done is written ONLY when its
+# report-<block>.json exists and holds results: a block without one is logged INCOMPLETE and redone
+# from scratch by the next run (exit 3 = the loop finished with such blocks; window.sh carries on
+# and leaves the step for the next run). 60-reduce.py requires all five blocks. The UBO block
+# (GTF-GL46 uniform_buffer_object) is not run: this glcts has no GTF module (ID-P7-16).
+# --limit N runs the first N cases of each block (the dry run). --restore-base-lib re-pushes the
+# $BASE library at once; 90-restore.sh does it at the end of every window anyway.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -92,10 +97,12 @@ if [ ! -f "$OUT/preflight.done" ]; then
 fi
 
 # ---- blocks -------------------------------------------------------------------------------------
+INCOMPLETE=0
 for b in $BLOCKS; do
     run="$OUT/runs/$b"
     [ -f "$run/.done" ] && { log "block $b already done"; continue; }
-    rm -rf "$run"; mkdir -p "$run"
+    # A report left by an interrupted attempt must not stand in for this one.
+    rm -rf "$run"; rm -f "$OUT/report-$b.json" "$OUT/report-$b.txt"; mkdir -p "$run"
     caselist="$W2_TOOLS/tools/cts/caselists/p7-$b-gl46.txt"
     [ -f "$caselist" ] || die "no caselist $caselist"
     if [ "$LIMIT" -gt 0 ]; then
@@ -115,12 +122,19 @@ for b in $BLOCKS; do
     t1=$(date +%s)
     python3 "$W2_TOOLS/tools/cts/scripts/qpa_report.py" "$run" --label "DirectVulkan-inproc-$b" \
         --json "$OUT/report-$b.json" > "$OUT/report-$b.txt" 2>&1
+    qrc=$?
     pin=$(w2_pin_check "$W2_TOOLS" "$OUT/pin-after-$b.txt")
     for f in unrun hung crashed; do [ -s "$run/$f.txt" ] && log "  [$b] $f.txt: $(wc -l < "$run/$f.txt") lines"; done
     grep -E 'Pass|Fail|NotSupported|Crash|rate' "$OUT/report-$b.txt" | head -8 | sed "s/^/  [$b] /"
-    printf 'rc=%s seconds=%s pin_after=%s finished=%s\n' "$rc" "$((t1 - t0))" "$pin" "$(date -Is)" > "$run/.done"
     w2_timing "$(w2_out "$STAMP")" "cts-$b" "$t0" "$t1" "limit=$LIMIT"
-    log "block $b rc=$rc $((t1 - t0))s"
+    if [ -s "$OUT/report-$b.json" ] && python3 -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))["results"] else 1)' \
+            "$OUT/report-$b.json" 2> /dev/null; then
+        printf 'rc=%s seconds=%s pin_after=%s finished=%s\n' "$rc" "$((t1 - t0))" "$pin" "$(date -Is)" > "$run/.done"
+        log "block $b rc=$rc $((t1 - t0))s"
+    else
+        INCOMPLETE=$((INCOMPLETE + 1))
+        log "block $b rc=$rc $((t1 - t0))s INCOMPLETE: no report-$b.json with results (qpa_report rc=$qrc, see $OUT/report-$b.txt); no .done, the next run redoes the block"
+    fi
 done
 
 # The same machine-readable shape as $BASE (tools/cts/baselines/base-DirectVulkan-monolith-p7w1-
@@ -136,11 +150,11 @@ if [ ${#suites[@]} -gt 0 ]; then
 fi
 
 if [ $RESTORE_BASE -eq 1 ]; then
-    BASE_LIB="$W2_CTS_BUNDLE/libMobileGL.so"
-    BASE_SHA=$(awk '/^libMobileGL.so  *sha256:/ {print $3}' "$W2_CTS_BUNDLE/IDENTITY.txt")
-    A push "$BASE_LIB" "$W2_CTS_DEV/libMobileGL.so" >/dev/null 2>&1
-    GOT=$(Ash "sha256sum $W2_CTS_DEV/libMobileGL.so" | cut -d' ' -f1)
-    [ "$GOT" = "$BASE_SHA" ] && log "restored the \$BASE library ($BASE_SHA)" || log "WARN: restore mismatch $GOT != $BASE_SHA"
+    w2_restore_base_lib | tee "$OUT/deploy/restored-base.txt" || log "WARN: the \$BASE library is NOT back in $W2_CTS_DEV"
 fi
-w2_timing "$(w2_out "$STAMP")" cts "$t_all" "$(date +%s)" "blocks=[$BLOCKS] limit=$LIMIT"
+w2_timing "$(w2_out "$STAMP")" cts "$t_all" "$(date +%s)" "blocks=[$BLOCKS] limit=$LIMIT incomplete=$INCOMPLETE"
+if [ $INCOMPLETE -gt 0 ]; then
+    log "=== CTS AFTER INCOMPLETE $STAMP: $INCOMPLETE block(s) without a report; run the same command again to redo them ==="
+    exit 3
+fi
 log "=== CTS AFTER DONE $STAMP ==="

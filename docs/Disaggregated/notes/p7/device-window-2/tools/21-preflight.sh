@@ -4,7 +4,11 @@
 # Session start (runbook 1 section 2, CONTRACT-P7 7.2 "same reboot-clean session"):
 #   --reboot   records boot_id, reboots, waits for boot_completed, records boot_id again; the two
 #              must differ or the window is NOT reboot-clean. Gate 3 requires it; the dry run
-#              does not reboot.
+#              does not reboot. Refused while gate3/state holds finished pairs (they belong to
+#              the old session). session/boot-id.txt is THE session every gate-3 record must match;
+#   without --reboot on a stamp that already has session/boot-id.txt: a resume - the phone must
+#              still be in that boot session (else stop), and boot-id.txt / reboot-clean.txt are
+#              kept, not rewritten (session/resumed.txt logs the re-entry);
 #   records the state 90-restore.sh puts back: TCP supervisor up or not, stay-on setting, pin
 #   state, Doze whitelist line, focused activity;
 #   wakes the phone and sets `svc power stayon true` (息屏 cut child TCP in window 1b, ID-P7-48);
@@ -42,6 +46,10 @@ EOF
     log "found: supervisor=$sup stayon=$stayon pin=$pinstate"
 fi
 
+SESSION_BOOT=$(w2_session_boot_id "$STAMP")
+if [ $REBOOT -eq 1 ] && compgen -G "$(w2_out "$STAMP")/gate3/state/*/*.done" > /dev/null; then
+    die "gate 3 has finished pairs from boot session ${SESSION_BOOT:-?}; --reboot starts a NEW session and would void them (60-reduce.py: INVALID-SESSION). Delete them first (RUNBOOK section 1 'phone rebooted') or use a new stamp"
+fi
 if [ $REBOOT -eq 1 ]; then
     Ash "cat /proc/sys/kernel/random/boot_id" > "$OUT/boot-id-before.txt"
     log "rebooting for a reboot-clean session"
@@ -61,12 +69,20 @@ if [ $REBOOT -eq 1 ]; then
     done
     [ "$(Ash 'getprop sys.user.0.ce_available')" = true ] || die "user 0 storage still locked after 10 min"
 fi
-Ash "cat /proc/sys/kernel/random/boot_id" > "$OUT/boot-id.txt"
-if [ $REBOOT -eq 1 ]; then
-    if cmp -s "$OUT/boot-id-before.txt" "$OUT/boot-id.txt"; then die "boot_id unchanged: the reboot did not happen"; fi
-    echo "reboot-clean: $(cat "$OUT/boot-id-before.txt") -> $(cat "$OUT/boot-id.txt")" | tee "$OUT/reboot-clean.txt"
+if [ $REBOOT -eq 0 ] && [ -n "$SESSION_BOOT" ]; then
+    # Re-entering this stamp's session (window.sh after 90-restore.sh ran with steps still open, or
+    # by hand): the phone must still be in it, and boot-id.txt / reboot-clean.txt stay as the
+    # session's first preflight wrote them. Stay-on and the pin are set again below.
+    w2_same_session "$SESSION_BOOT" "preflight (resume of $STAMP)"
+    echo "resumed $(date -Is): boot_id $SESSION_BOOT unchanged ($(cat "$OUT/reboot-clean.txt" 2>/dev/null))" | tee -a "$OUT/resumed.txt"
 else
-    echo "NOT reboot-clean (no --reboot): boot_id $(cat "$OUT/boot-id.txt"), up $(Ash 'cat /proc/uptime' | cut -d' ' -f1)s" | tee "$OUT/reboot-clean.txt"
+    Ash "cat /proc/sys/kernel/random/boot_id" > "$OUT/boot-id.txt"
+    if [ $REBOOT -eq 1 ]; then
+        if cmp -s "$OUT/boot-id-before.txt" "$OUT/boot-id.txt"; then die "boot_id unchanged: the reboot did not happen"; fi
+        echo "reboot-clean: $(cat "$OUT/boot-id-before.txt") -> $(cat "$OUT/boot-id.txt")" | tee "$OUT/reboot-clean.txt"
+    else
+        echo "NOT reboot-clean (no --reboot): boot_id $(cat "$OUT/boot-id.txt"), up $(Ash 'cat /proc/uptime' | cut -d' ' -f1)s" | tee "$OUT/reboot-clean.txt"
+    fi
 fi
 
 w2_wake

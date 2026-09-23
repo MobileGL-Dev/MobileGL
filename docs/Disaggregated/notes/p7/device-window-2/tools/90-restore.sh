@@ -4,8 +4,10 @@
 # Puts the phone back the way 21-preflight.sh found it (<out>/session/found.env): Home screen,
 # the TCP supervisor restarted on the INSTALLED package if it was running (every replay's
 # `am force-stop` kills it; tcp_device_server.py start with the same listen/token and the saved
-# Doze state file, which it never overwrites), the pin released if this window set it, and the
-# stay-on setting as found. Prints the final state; never uninstalls anything.
+# Doze state file, which it never overwrites), the pin released if this window set it, the
+# stay-on setting as found, and the $BASE library back in /data/local/tmp/mgcts (50-cts-after.sh
+# leaves the AFTER one there; pushed and verified by sha256 only when the device differs).
+# Prints the final state; never uninstalls anything. Idempotent: window.sh runs it on every pass.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -34,6 +36,7 @@ if [ "${FOUND_SUPERVISOR:-0}" = 1 ]; then
     w2_supervisor_running && log "supervisor restarted on $W2_LISTEN" || log "WARN: supervisor NOT listening (see $OUT/supervisor-restart.txt)"
     Ash "input keyevent KEYCODE_HOME"
 fi
+BASE_LIB_STATE=$(w2_restore_base_lib) || log "WARN: $BASE_LIB_STATE"
 if [ -f "$OUT/pinned-by-window" ]; then
     bash "$W2_TOOLS/tools/device_bench/pin_device.sh" "$W2_SERIAL" unpin > "$OUT/pin-session-end.txt" 2>&1
     rm -f "$OUT/pinned-by-window"
@@ -55,6 +58,7 @@ sleep 2
     echo "pin        : $pin (found: ${FOUND_PIN:-?})"
     echo "stayon     : $(Ash 'settings get global stay_on_while_plugged_in') (found: ${FOUND_STAYON:-?})"
     echo "doze wl    : $(Ash 'dumpsys deviceidle whitelist' | grep -i mobilegl | tr '\n' ' ')"
+    echo "$BASE_LIB_STATE"
 } | tee "$OUT/restored.txt"
 w2_timing "$(w2_out "$STAMP")" restore "$t0" "$(date +%s)"
 log "=== RESTORE DONE $STAMP ==="

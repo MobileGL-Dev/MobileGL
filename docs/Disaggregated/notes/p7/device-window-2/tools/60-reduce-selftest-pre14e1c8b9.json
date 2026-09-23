@@ -1,0 +1,70 @@
+{
+ "what": "CTS AFTER dry run of pipe head 14e1c8b9 (arm64 lib, inproc x DirectVulkan, Redmi 2f7cbe2e, 2026-09-23), stored as its differences from $BASE (device-window-1/CTS-base/report-<block>.json): AFTER results = BASE results updated with after_differences. after_counts are the real report's counts (a check that the rebuild is exact).",
+ "source": "~/w7/logs/devprep/w2/pre-14e1c8b9/cts/report-<block>.json (qpa_report.py --json)",
+ "evidence": "docs/Disaggregated/notes/p7/device-window-2/dry-run/pre-14e1c8b9-cts/",
+ "blocks": {
+  "shader-image": {
+   "after_differences": {
+    "KHR-GL46.shader_image_load_store.advanced-sync-drawIndirect": "Pass",
+    "KHR-GL46.shader_image_load_store.advanced-sync-textureUpdate": "Pass",
+    "KHR-GL46.shader_image_load_store.advanced-sync-vertexArray": "Fail",
+    "KHR-GL46.shader_image_load_store.incomplete_textures": "Crash",
+    "KHR-GL46.shader_image_load_store.non-layered_binding": "Pass"
+   },
+   "after_counts": {
+    "Crash": 1,
+    "Fail": 3,
+    "NotSupported": 56,
+    "Pass": 65
+   },
+   "after_sha256_of_sorted_results": "06052360198585ad9b8784d39081a0072c05045bac569df2a3d5a24fea811c47"
+  },
+  "ssbo": {
+   "after_differences": {},
+   "after_counts": {
+    "Pass": 124
+   },
+   "after_sha256_of_sorted_results": "753fce812b22c65e341c3a7c147f3431b9d514e5801a185205fb6340bc71eae2"
+  },
+  "dsa": {
+   "after_differences": {
+    "KHR-GL46.direct_state_access.renderbuffers_storage": "Crash",
+    "KHR-GL46.direct_state_access.renderbuffers_storage_multisample": "Fail"
+   },
+   "after_counts": {
+    "CompatibilityWarning": 1,
+    "Crash": 1,
+    "Fail": 3,
+    "Pass": 366
+   },
+   "after_sha256_of_sorted_results": "ae644a78b6dccd831b3baabac45f05308f348584f70d4f3a0abb2dbedee9ce25"
+  },
+  "texture": {
+   "after_differences": {
+    "KHR-GL46.texture_barrier.disjoint-texels": "Pass",
+    "KHR-GL46.texture_barrier.overlapping-texels": "Pass",
+    "KHR-GL46.texture_barrier.same-texel-rw": "Pass",
+    "KHR-GL46.texture_barrier.same-texel-rw-multipass": "Pass",
+    "KHR-GL46.texture_border_clamp.Texture2DArrayCompressed": "Fail",
+    "KHR-GL46.texture_size_promotion.functional": "Pass",
+    "KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_7": "Pass",
+    "KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_8": "Pass",
+    "KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_7": "Pass",
+    "KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_8": "Pass"
+   },
+   "after_counts": {
+    "Fail": 10,
+    "NotSupported": 221,
+    "Pass": 823
+   },
+   "after_sha256_of_sorted_results": "dae6aac473ee5ecce31eaf49217f44f017a10190233d4965fac8b1205e1e3f55"
+  },
+  "packed-pixels": {
+   "after_differences": {},
+   "after_counts": {
+    "Pass": 4732
+   },
+   "after_sha256_of_sorted_results": "d373e2b192baa92bc2a9f42e0e5fb682dad1719331149bf6ae05c35ab7fcaa38"
+  }
+ }
+}

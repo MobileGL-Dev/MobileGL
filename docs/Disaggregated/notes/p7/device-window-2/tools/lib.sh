@@ -92,6 +92,40 @@ w2_supervisor_running() {
     return 1
 }
 
+# ---- one boot session (CONTRACT-P7 7.2; ruling: integrator 2026-09-23) ------------------------
+# The phone's current boot_id ('' when adb cannot read it).
+w2_boot_id() { timeout 20 adb -s "$W2_SERIAL" shell cat /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '\r\n '; }
+# The window's session boot_id, as 21-preflight.sh recorded it.
+w2_session_boot_id() {
+    local f; f="$(w2_out "$1")/session/boot-id.txt"
+    if [ -f "$f" ]; then tr -d '\r\n ' < "$f"; fi
+}
+# <session-boot-id> <where> [<current>]: die unless the phone is still in that boot session.
+w2_same_session() {
+    local now=${3-$(w2_boot_id)}
+    [ -n "$now" ] || die "$2: cannot read the phone's boot_id (adb)"
+    [ "$now" = "$1" ] || die "$2: the phone left this window's session (boot_id $1 -> $now; it rebooted). Gate 3 is a one-session reading: its finished pairs are void. RUNBOOK section 1 'phone rebooted' says what to delete before a new --reboot session"
+}
+
+# ---- the $BASE library back into mgcts ---------------------------------------------------------
+# 50-cts-after.sh leaves the AFTER library in $W2_CTS_DEV; whoever uses mgcts next expects $BASE
+# (device-window-1/CTS-base, the p7w1 monolith). Push the bundle's lib unless the device already has
+# it, verify by sha256 on the device, print one status line. 0 = the device carries $BASE.
+w2_restore_base_lib() {
+    local want have got
+    want=$(awk '/^libMobileGL.so  *sha256:/ {print $3}' "$W2_CTS_BUNDLE/IDENTITY.txt" 2>/dev/null)
+    [ -n "$want" ] || { echo "mgcts lib : NOT restored - no \$BASE sha256 in $W2_CTS_BUNDLE/IDENTITY.txt"; return 1; }
+    [ "$(Ash "test -d $W2_CTS_DEV && echo ok")" = ok ] || { echo "mgcts lib : no $W2_CTS_DEV on the device, nothing to restore"; return 0; }
+    got=$(Ash "sha256sum $W2_CTS_DEV/libMobileGL.so 2>/dev/null" | cut -d' ' -f1)
+    if [ "$got" = "$want" ]; then echo "mgcts lib : \$BASE $want (already)"; return 0; fi
+    have=$(sha256sum "$W2_CTS_BUNDLE/libMobileGL.so" 2>/dev/null | cut -d' ' -f1)
+    [ "$have" = "$want" ] || { echo "mgcts lib : NOT restored - bundle lib ${have:-missing} != \$BASE $want"; return 1; }
+    A push "$W2_CTS_BUNDLE/libMobileGL.so" "$W2_CTS_DEV/libMobileGL.so" > /dev/null 2>&1
+    local now; now=$(Ash "sha256sum $W2_CTS_DEV/libMobileGL.so 2>/dev/null" | cut -d' ' -f1)
+    if [ "$now" = "$want" ]; then echo "mgcts lib : \$BASE $want restored (was ${got:-absent})"; return 0; fi
+    echo "mgcts lib : RESTORE FAILED (${now:-absent} != \$BASE $want)"; return 1
+}
+
 w2_timing() {  # <out> <step> <start-epoch> <end-epoch> [note]
     printf '%s\t%s\t%s\t%s\t%s\n' "$2" "$(date -d @"$3" +%FT%T)" "$(date -d @"$4" +%FT%T)" \
         "$(( $4 - $3 ))" "${5:-}" >> "$1/timing.tsv"
