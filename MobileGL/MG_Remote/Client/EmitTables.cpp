@@ -947,10 +947,10 @@ namespace MobileGL::MG_Remote::Client {
             // KHR-GL46.direct_state_access.renderbuffers_storage reads 256x512 RGBA/FLOAT =
             // 2,097,152 bytes, sixteen over MaxReplyBytes, and that used to be
             // Fatal{ReplyTooLarge} on every split arm while the monolith passed. Each band below
-            // is an ordinary read_pixels record - its own box, its own TIGHT DstSize - so every
-            // answer still fits one slot (ID-47) and the server's PH-3 bound (`tight == DstSize
-            // <= LinkTerms.maxReplyBytes`, PipeApplier.cpp OnReadPixels) holds unchanged: no
-            // reply is chunked, the READ is. The cap is the link's own, read live, exactly as
+            // is an ordinary read_pixels record - its own box, and a DstSize that IS its tight
+            // w*h*bpp extent (ID-49) - so every answer still fits one slot (ID-47) and the
+            // server's PH-3 bound (its tight answer against its own LinkTerms.maxReplyBytes,
+            // PipeApplier.cpp OnReadPixels) holds unchanged: no reply is chunked, the READ is. The cap is the link's own, read live, exactly as
             // before, so a different SEG_REPLY geometry or a stream link needs no edit here.
             ReadbackBandPlan plan;
             if (!PlanReadbackBands(static_cast<Uint64>(width), static_cast<Uint64>(height),

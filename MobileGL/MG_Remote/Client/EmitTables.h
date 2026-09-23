@@ -149,8 +149,8 @@ namespace MobileGL::MG_Remote::Client {
     // P7 gate 5 (g5-readback). A glReadPixels whose tight answer is larger than one reply slot
     // is NOT one record: the client splits the w*h rectangle into BANDS, emits each band as an
     // ordinary read_pixels record with its own box and its own tight DstSize (so every answer
-    // still fits one slot, ID-47, and the server's PH-3 bound `tight == DstSize <= maxReplyBytes`
-    // holds unchanged), and scatters each band into the application's destination under its
+    // still fits one slot, ID-47, and the server's PH-3 bound - its tight answer against its own
+    // LinkTerms.maxReplyBytes - holds unchanged), and scatters each band into the application's destination under its
     // own GL_PACK_* state. No reply is chunked; the READ is.
     //
     // THE SHAPE. Whole-width row bands of floor(maxReplyBytes / rowBytes) rows when a row fits

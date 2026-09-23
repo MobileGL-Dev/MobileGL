@@ -1246,7 +1246,8 @@ TEST(RemoteReadback, TheCtsReadOfExactlyTwoMiBIsTwoBandsThatEachFitASlot) {
     // KHR-GL46.direct_state_access.renderbuffers_storage's own read: 256x512 RGBA/FLOAT is
     // 2,097,152 bytes against ID-47's 2,097,136. It used to be Fatal{ReplyTooLarge}; it is now two
     // records - 511 rows (2,093,056 bytes) and the single top row - and BOTH are answers one slot
-    // holds, so the server's PH-3 bound (tight == DstSize <= maxReplyBytes) is met per record.
+    // holds, and each record's DstSize is its own tight extent, so the server's PH-3 bound (its
+    // tight answer against its own maxReplyBytes) is met per record.
     constexpr Uint64 kCap = 2u * 1024u * 1024u - 16u;
     const Uint64 bpp = 16;
     ASSERT_EQ(TightReadbackByteCount(256, 512, 0x1908 /*RGBA*/, 0x1406 /*FLOAT*/), 2097152u);
