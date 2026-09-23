@@ -136,6 +136,7 @@ namespace MobileGL::MG_Remote::Server {
         // The server's private backend. Null until ServerLoop::CreateBackend has run, and a
         // verb that arrives before then declines by name rather than dereferencing.
         void SetBackend(MG_Backend::BackendObject* backend);
+        void SetMaxReplyBytes(Uint64 bytes) { m_maxReplyBytes = bytes; }
 
         Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override;
         Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) override;
@@ -328,6 +329,8 @@ namespace MobileGL::MG_Remote::Server {
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.
         Vector<Uint8> m_readbackScratch;
+        // Server-declared LinkTerms.maxReplyBytes, copied from the attached server link.
+        Uint64 m_maxReplyBytes = 0;
         // P5b d1: the multi-draw arrays the glMultiDraw* slots take, rebuilt from the ranges
         // per record (rule C: bounded by NumDraws, owned here, never handed out past the call),
         // and the last-record witness above.

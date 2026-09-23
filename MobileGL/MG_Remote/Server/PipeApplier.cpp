@@ -30,6 +30,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace MobileGL::MG_Remote::Server {
 
@@ -396,50 +397,42 @@ namespace MobileGL::MG_Remote::Server {
                     "and a client blocked on seq %llu would never be answered",
                     static_cast<unsigned long long>(seq));
         }
-        const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
-        if (table == nullptr || table->GL.ReadPixels == nullptr) {
-            // DECLINED IS A REAL ANSWER (table 0's slot-header row) and it is the RIGHT one
-            // here: the client is parked on this seq inside the verb barrier, so returning
-            // false without posting would convert "not implemented" into "never returns".
-            replies->PostReply(seq, Wire::ReplySink::kStatusDeclined, nullptr, 0);
-            return false;
-        }
-        if (info.DstSize == 0) {
-            replies->PostReply(seq, Wire::ReplySink::kStatusError, nullptr, 0);
-            return false;
-        }
-        // ID-49: THE REPLY CROSSES TIGHT AND PACK STATE NEVER CROSSES FOR A READ. The server reads
-        // with NEUTRAL pack state - ROW_LENGTH 0, SKIP_ROWS/PIXELS/IMAGES 0, ALIGNMENT 1 - into a
-        // w*h*bytesPerPixel extent that IS the reply payload, and restores the pack state
-        // afterwards; the CLIENT scatters those tight rows into the application's pointer per its
-        // own GL_PACK_* state (c1's half). Reading with the client's pack state HERE was the
-        // codex-1 blocker: the backend's ReadPixels honours ROW_LENGTH/SKIP_* and writes PAST a
-        // DstSize the client sized without the initial skip (a 4x3 RGBA8 read with ROW_LENGTH=8,
-        // SKIP_ROWS=1, SKIP_PIXELS=2 allocates 80 and lands its last write at 120), which is the
-        // two DepthReadbackHonoursThePackPixelStoreParameters SEGFAULTs the census omitted. THE
-        // DstSize FORMULA BOTH SIDES AGREE ON: w * h * bytesPerPixel. A non-default server-visible
-        // pack state can no longer change either the reply's size or its bytes.
         const SizeT bytesPerPixel = MG_Util::GetInputBytesPerPixel(
             MG_Util::ConvertGLEnumToTextureInputFormat(static_cast<GLenum>(info.Format)),
             MG_Util::ConvertGLEnumToTexturePixelDataType(static_cast<GLenum>(info.Type)));
-        // Tight size = w*h*bpp, the whole of ID-49's formula. If this build cannot size the
-        // (format, type) pair (bpp == 0) it trusts the client's DstSize - a neutral read still
-        // cannot overflow it via row length or skips, and an unsizeable pair is c1's
-        // Fatal{UnsizedReadback} at emission, not this side's.
-        const Uint64 tight = bytesPerPixel != 0
-                                 ? static_cast<Uint64>(info.Box.W) * static_cast<Uint64>(info.Box.H) *
-                                       static_cast<Uint64>(bytesPerPixel)
-                                 : info.DstSize;
-        if (bytesPerPixel != 0 && tight != info.DstSize) {
-            // Both halves compute w*h*bpp under ID-49, so a disagreement is the two sides
-            // disagreeing about the frame. Read (and post) the tight extent this side owns rather
-            // than the client's number, so a wrong DstSize can never make this a short read into
-            // uninitialised scratch.
-            MGLOG_E_ONCE("MG_Remote server: read_pixels DstSize %llu != tight w*h*bpp %llu "
-                         "(%ux%u, bpp %zu); reading the tight extent (ID-49)",
-                         static_cast<unsigned long long>(info.DstSize),
-                         static_cast<unsigned long long>(tight), info.Box.W, info.Box.H,
-                         bytesPerPixel);
+        // The server's LinkTerms.maxReplyBytes is copied from its attached ILink capabilities.
+        // Reject malformed shapes and oversized replies before growing m_readbackScratch. The
+        // client-side guard is not a trust boundary: a peer can write this record directly.
+        const auto rejectReadback = [&] {
+            replies->PostReply(seq, Wire::ReplySink::kStatusError, nullptr, 0);
+            return false;
+        };
+        if (bytesPerPixel == 0 || info.Box.W == 0 || info.Box.H == 0 ||
+            info.Box.W > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
+            info.Box.H > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
+            info.DstSize == 0 || m_maxReplyBytes == 0) {
+            return rejectReadback();
+        }
+
+        const Uint64 width = info.Box.W;
+        const Uint64 height = info.Box.H;
+        const Uint64 bpp = static_cast<Uint64>(bytesPerPixel);
+        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
+        if (width > kUint64Max / height) return rejectReadback();
+        const Uint64 pixels = width * height;
+        if (pixels > kUint64Max / bpp) return rejectReadback();
+        const Uint64 tight = pixels * bpp;
+        if (tight != info.DstSize || tight > m_maxReplyBytes ||
+            tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+            return rejectReadback();
+        }
+
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
+        if (table == nullptr || table->GL.ReadPixels == nullptr) {
+            // A well-formed call can still be unsupported by this server; return the
+            // established decline status after the peer-controlled size has been checked.
+            replies->PostReply(seq, Wire::ReplySink::kStatusDeclined, nullptr, 0);
+            return false;
         }
         if (tight > m_readbackScratch.size()) {
             m_readbackScratch.resize(static_cast<SizeT>(tight));
@@ -1200,6 +1193,7 @@ namespace MobileGL::MG_Remote::Server {
         if (!link || !link->Attached() || !m_segments)
             SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, PipeApplier::Attach missing link}");
         m_verbs.SetBackend(backend);
+        m_verbs.SetMaxReplyBytes(link->Capabilities().MaxReplyBytes);
         m_decoder = Wire::PipeWireDecoder(link, m_segments, m_replies);
         m_decoder.SetVerbSink(&m_verbs);
         MG_Pipe::MGPipeServerBlockNoteIdentity(); m_attached = true;

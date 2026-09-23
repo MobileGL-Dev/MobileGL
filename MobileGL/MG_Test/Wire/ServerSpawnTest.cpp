@@ -95,13 +95,14 @@ namespace {
         }
     };
 
-    // A peer can mutate the command-ring bytes AFTER the production encoder has
-    // accepted and written them. The sequence, framing size, and submitted
-    // watermark stay valid; only the opcode becomes unknown to the server.
-    // This is the seam the later D11/PH-2 controls will use for payload fields.
+    // A peer can mutate command-ring record bytes AFTER the production encoder
+    // accepts and writes them. Sequence, framing size, and submitted watermark stay
+    // valid; selected payload fields bypass the encoder's client-side checks.
     template <class Payload, class Mutator>
     bool EncodeThenMutateHeaderAndPublish(Client::ClientSession& session, MobileGL::MG_Pipe::MGPWireOp op,
-                                           const Payload& payload, Mutator&& mutate) {
+                                           const Payload& payload, Mutator&& mutate,
+                                           std::uint64_t* outSeq = nullptr) {
+        if (outSeq != nullptr) *outSeq = Wire::kInvalidSeq;
         auto* link = session.DataLink();
         if (link == nullptr || !link->Attached()) return false;
         Wire::WireRecordLayout layout{};
@@ -125,7 +126,9 @@ namespace {
         // and the producer-owned submittedSeq stay monotone and teardown knows
         // the record's sequence. Only the record bytes bypass encoder checks.
         session.Producer().PublishAndNotify(seq);
-        return link->Flush() == MOBILEGL_OK;
+        if (link->Flush() != MOBILEGL_OK) return false;
+        if (outSeq != nullptr) *outSeq = seq;
+        return true;
     }
 
     std::string ServerImage() {
@@ -285,6 +288,59 @@ TEST(ServerSpawnTest, RawPeerOutOfRangeRenderStateCsoSlotGetsNamedProtocolCorrup
               std::string::npos)
         << "the server process exited without the named protocol corruption diagnostic";
     client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerOversizedReadbackGetsErrorAndSessionContinues) {
+    const std::string endpoint = Endpoint("bad-readback-size");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-readback-size", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPReadbackInfo info{};
+    info.Res = MobileGL::MG_Pipe::kMGPipeNullHandle;
+    info.Box = MobileGL::MG_Pipe::MGPBox{0, 0, 0, 1, 1, 1};
+    info.Format = GL_RGBA;
+    info.Type = GL_UNSIGNED_BYTE;
+    info.DstSize = 4;
+
+    const std::uint64_t maxReplyBytes = client.MaxReplyBytes();
+    ASSERT_GT(maxReplyBytes, 0u);
+    std::uint64_t readSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ReadPixels, info,
+        [maxReplyBytes](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireInfo = reinterpret_cast<MobileGL::MG_Pipe::MGPReadbackInfo*>(payloadBytes);
+            const auto width = static_cast<MobileGL::Uint32>(maxReplyBytes / 4 + 1);
+            wireInfo->Box.W = width;
+            wireInfo->Box.H = 1;
+            wireInfo->DstSize = static_cast<std::uint64_t>(width) * 4;
+        }, &readSeq)) << "the peer failed to mutate and publish the encoder-accepted readback";
+    ASSERT_NE(readSeq, Wire::kInvalidSeq);
+    ASSERT_EQ(client.WaitForApplied(readSeq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::Int32 status = Wire::ReplySink::kStatusDeclined;
+    std::uint64_t replySize = 99;
+    ASSERT_TRUE(client.ReadReply(readSeq, nullptr, 0, &status, &replySize));
+    EXPECT_EQ(status, Wire::ReplySink::kStatusError);
+    EXPECT_EQ(replySize, 0u);
+
+    // A valid follow-up record proves this refusal answered the slot without ending the
+    // server session or stranding the command consumer.
+    MobileGL::MG_Pipe::MGPMemoryBarrier barrier{};
+    barrier.Bits = 0x2000u;
+    const auto followupSeq = client.EmitAndWait(
+        MobileGL::MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier),
+        nullptr, 0, nullptr, 0, nullptr);
+    ASSERT_NE(followupSeq, Wire::kInvalidSeq);
+    EXPECT_EQ(client.WaitForApplied(followupSeq, 5000), Transport::SessionWait::Reached);
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0);
 }
 
 TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {
