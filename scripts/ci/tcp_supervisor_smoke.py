@@ -222,13 +222,16 @@ def refused_listen(server, log, endpoint, token):
 
 
 @contextmanager
-def supervisor(server, log, same_build=False):
+def supervisor(server, log, same_build=False, serve=True):
+    """A supervisor on its own free loopback port. `serve=False` is the single-session shape
+    (no fork; the process IS the session and exits with it), which `single_session_listener`
+    below needs and nothing else does."""
     port = free_loopback_port()
     base = log.with_suffix('.library.log')
     env = supervisor_environment(base, kToken, same_build=same_build)
     with log.open('wb') as output:
-        child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}', '--serve'], env=env,
-                                 stdout=output, stderr=output, start_new_session=True)
+        child = subprocess.Popen([server, f'tcp://127.0.0.1:{port}'] + (['--serve'] if serve else []),
+                                 env=env, stdout=output, stderr=output, start_new_session=True)
     try:
         # Log.cpp's RoleLogPath: the base name is a BASE, and the server role writes
         # `<stem>.server<ext>`. Yielded rather than recomputed at the call site, so the one
@@ -240,6 +243,20 @@ def supervisor(server, log, same_build=False):
         except ProcessLookupError:
             pass
         child.wait(timeout=10)
+
+
+def connect_control(port, seconds=5):
+    """A connection to the supervisor's port, retried on ECONNREFUSED for `seconds`: a supervisor
+    just started may not have reached listen() yet, and a refused connect before it has is
+    startup, not a finding."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return socket.create_connection(('127.0.0.1', port), timeout=3)
+        except ConnectionRefusedError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(.02)
 
 
 @contextmanager
@@ -258,7 +275,7 @@ def held_session(port, schema, flatbuffers, message):
     data = None
     reply = None
     for _ in range(30):
-        control = socket.create_connection(('127.0.0.1', port), timeout=3)
+        control = connect_control(port)
         control.sendall(message)
         reply = receive(control, schema)
         if reply.get('code') != 7:
@@ -305,15 +322,7 @@ def pair(port):
     two connections paired by arrival order, and this opened both. The data connection is now
     opened after Welcome with the nonce it carries (open_data), so a control that stops at the
     handshake - every one but held_session's - never opens one."""
-    deadline = time.monotonic() + 5
-    while True:
-        try:
-            control = socket.create_connection(('127.0.0.1', port), timeout=3)
-            break
-        except ConnectionRefusedError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(.02)
+    control = connect_control(port)
     try:
         yield control
     finally:
@@ -543,10 +552,76 @@ def main():
                 assert peak < ask, f'session pid={welcome["welcome"]} reached VmPeak={peak} for a 64 GiB ask'
             evidence['hello_asks_64_gib'] = {'asked': ask, 'terms': terms, 'childVmPeakBytes': peak}
 
+            # ---- F fix round: A BOUND SESSION'S SUPERVISOR REFUSES EVERY LATER DataBind BY NAME --
+            #
+            # The session child reads its hand-off socketpair only while binding; after that it
+            # never reads it again. Until this control the supervisor kept forwarding every later
+            # DataBind into it anyway: each descriptor sat in the child's receive queue with NO
+            # reply, its TCP connection was held open until the session ended, and once the queue
+            # reached net.unix.max_dgram_qlen (10 on the phone's kernel, 512 on this host's) the
+            # supervisor blocked in sendmsg for the rest of the session - no accepts, no Busy, no
+            # reaping. Now the child closes its end the moment Accept returns and the send is
+            # non-blocking, so each of these twelve is answered on its own connection with
+            # Refuse{Authentication} "data connection could not be handed to the live session",
+            # and a fresh control connection afterwards is still answered Busy. RED before the fix
+            # at the very first `receive`: a 3 s socket timeout, because nothing ever answered.
+            with held_session(port, schema, flatbuffers,
+                              hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                # Bound, not merely welcomed: an extra DataBind that arrived while the child was
+                # still in BindDataConnection would be forwarded and refused as a nonce mismatch,
+                # which is the other control's line, not this one's.
+                ready = wait_for_log(serverLog, f'pid={welcome["welcome"]} transport=spawn role=server ready')
+                assert ready is not None, f'the held session never came up; see {serverLog}'
+                answered = []
+                for _ in range(12):
+                    extra = open_data(port, schema, flatbuffers, os.urandom(16))
+                    try:
+                        answered.append(receive(extra, schema))
+                    finally:
+                        extra.close()
+                for answer in answered:
+                    assert answer.get('code') == 4 and answer.get('detail') == (
+                        'data connection could not be handed to the live session'), answer
+                with pair(port) as fresh:
+                    fresh.sendall(hello(schema, flatbuffers, fingerprint=fingerprint))
+                    still_busy = receive(fresh, schema)
+                assert still_busy.get('code') == 7, still_busy
+            evidence['data_bind_after_bound'] = {'refused': len(answered), 'last': answered[-1],
+                                                 'fresh_control': still_busy}
+            assert process.poll() is None, 'the refused DataBinds killed the supervisor'
+
         with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _, _log):
             strict = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))
             assert strict.get('code') == 3, strict
             evidence['same_build_required'] = strict
+
+        # ---- F fix round: THE SINGLE-SESSION SERVER CLOSES ITS LISTENER ONCE THE SESSION IS BOUND
+        #
+        # Without --serve the process is the session; it keeps the listener open only so the
+        # session's data connection can arrive on it (ListenerSource). Until this control nothing
+        # closed it afterwards, so the kernel went on completing TCP handshakes into a backlog no
+        # accept() would ever drain: a second client, or a retry, hung for its whole connect budget
+        # (kSpawnConnectTimeoutMs, 20 s) instead of the ECONNREFUSED it got before PH-7 (4). Now
+        # RunSession closes the listener the moment Accept returns, and a connect after `ready`
+        # is refused at once. RED before the fix: the connect below succeeds.
+        with supervisor(args.server, args.out / 'single-session.log', serve=False) as (port, process, serverLog):
+            with held_session(port, schema, flatbuffers,
+                              hello(schema, flatbuffers, fingerprint=fingerprint)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                ready = wait_for_log(serverLog, f'pid={welcome["welcome"]} transport=spawn role=server ready')
+                assert ready is not None, f'the single session never came up; see {serverLog}'
+                try:
+                    second = socket.create_connection(('127.0.0.1', port), timeout=3)
+                except ConnectionRefusedError as refused:
+                    second = None
+                    at_connect = repr(refused)
+                else:
+                    second.close()
+                assert second is None, (
+                    'the single-session server still completed a TCP handshake after its data '
+                    'connection bound; the listener was not closed')
+            evidence['single_session_listener'] = {'second_connect': at_connect}
         (args.out / 'protocol-controls.json').write_text(json.dumps(evidence, indent=2))
         print(json.dumps(evidence, indent=2))
     return 0

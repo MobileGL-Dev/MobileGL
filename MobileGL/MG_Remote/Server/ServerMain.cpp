@@ -74,6 +74,18 @@ void RefuseBusy(SocketTransport& transport, const char* detail) {
 // the child that minted it. This replaces AcceptPair's rule that the second connection to
 // arrive inside the window IS the data plane: over a Windows `adb forward` the two arrived
 // reordered, the data connection was read as control, and every child exited 67.
+//
+// THE HAND-OFF HAS ONE READER, AND IT STOPS READING (F fix round, review of slices 1-3). The
+// child reads the hand-off only inside BindDataConnection; once its data connection is bound
+// it never reads it again. The first shape of this function kept forwarding every later
+// DataBind regardless: each descriptor sat in the child's receive queue with no reply, its TCP
+// connection was held open until the session ended, and once the queue reached
+// net.unix.max_dgram_qlen (10 on the phone's kernel, 512 on a desktop's) the supervisor BLOCKED
+// in sendmsg for the rest of the session - no accepts, no Busy refusals, no reaping. Two halves
+// close it: the child closes its end of the pair the moment Accept returns (RunSession), so the
+// send fails with "peer gone" and the refusal below fires by name; and the send is MSG_DONTWAIT,
+// so a queue that is full for any other reason refuses too rather than stalling the one process
+// that answers the port.
 constexpr std::uint32_t kFirstFrameWaitMs = 2000;
 constexpr std::uint64_t kFirstFrameMaxBytes = 1024 * 1024;
 
@@ -83,7 +95,8 @@ void RouteWhileBusy(SocketTransport& connection, int handoff) {
     const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
     std::uint8_t nonce[kDataNonceBytes] = {};
     if (read == MOBILEGL_OK && DecodeDataBind(frame, nonce)) {
-        if (handoff >= 0 && FdPassing::SendFd(handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)}) == MOBILEGL_OK) {
+        if (handoff >= 0 &&
+            FdPassing::SendFd(handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)}, /*dontWait=*/true) == MOBILEGL_OK) {
             // The child holds its own descriptor for this connection now; ours goes without a
             // shutdown(2), which would disconnect the child's too.
             connection.CloseLocalCopy();
@@ -172,9 +185,11 @@ void SendLogAck(void* pointer) {
 
 // Called only after fork: the supervisor never creates a backend or EGL context.
 // `dataSource` is set on TCP (PH-7 (4)) and empty on a unix endpoint, whose second connection
-// is the SCM_RIGHTS socket AcceptPair already paired.
+// is the SCM_RIGHTS socket AcceptPair already paired. `sourceFd` is the descriptor that source
+// reads from - the child's end of the hand-off socketpair under --serve, the listener itself in
+// the single-session shape - and -1 when there is none; it is closed the moment Accept returns.
 [[noreturn]] void RunSession(std::unique_ptr<SocketTransport> control,
-                             Server::ServerSession::DataConnectionSource dataSource) {
+                             Server::ServerSession::DataConnectionSource dataSource, int sourceFd) {
     const int selfPid = static_cast<int>(::getpid());
     const bool tcp = control->IsTcp();
     std::vector<std::uint8_t> helloFrame;
@@ -237,6 +252,21 @@ void SendLogAck(void* pointer) {
     }
     if (tcp) session.SetDataConnectionSource(std::move(dataSource));
     const auto accepted = session.Accept(*control, &helloFrame);
+    // THE SOURCE IS DONE WHEN ACCEPT IS, whichever way Accept went (F fix round). Under --serve
+    // this is the child's end of the hand-off pair: closing it turns every later DataBind the
+    // supervisor would have queued here into a send failure the supervisor refuses by name on
+    // that connection ("data connection could not be handed to the live session"), instead of a
+    // descriptor nobody will read holding a peer's connection open and, past max_dgram_qlen,
+    // holding the supervisor itself. In the single-session shape it is the listener: kept open
+    // only until the data connection arrived on it, and closed here so a second client or a
+    // retry is refused at connect (ECONNREFUSED, as before PH-7 (4)) rather than completing a
+    // TCP handshake this process would never accept and waiting out its whole connect budget.
+    // The source object goes with it, so no later call can poll a descriptor number the kernel
+    // may have reused.
+    if (sourceFd >= 0) {
+        ::close(sourceFd);
+        session.SetDataConnectionSource({});
+    }
     if (accepted != MOBILEGL_OK) {
         WireLogError("MG_Remote server: pid=%d Accept failed (rc=%d)", selfPid, static_cast<int>(accepted));
         std::fflush(nullptr);
@@ -498,13 +528,14 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         if (accepted != MOBILEGL_OK) { LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
         if (!serve) {
             if (tcpEndpoint) {
-                // The listener stays open: this session's data connection has yet to arrive on it.
+                // The listener stays open until this session's data connection has arrived on
+                // it; RunSession closes it the moment Accept returns.
                 const int controlFd = control->StreamFd();
-                RunSession(std::move(control), ListenerSource(listener, controlFd));
+                RunSession(std::move(control), ListenerSource(listener, controlFd), listener);
             }
             ::close(listener);
             if (endpoint[0] != '@') ::unlink(endpoint.c_str());
-            RunSession(std::move(control), {});
+            RunSession(std::move(control), {}, -1);
         }
         reap();
         // exit_group closes files just before waitpid can observe the exit.
@@ -531,7 +562,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             if (pair[0] >= 0) ::close(pair[0]);
             const int controlFd = control->StreamFd();
             RunSession(std::move(control), tcpEndpoint ? HandoffSource(pair[1], controlFd)
-                                                       : Server::ServerSession::DataConnectionSource{});
+                                                       : Server::ServerSession::DataConnectionSource{},
+                       pair[1]);
         }
         if (child < 0) {
             if (pair[0] >= 0) ::close(pair[0]);

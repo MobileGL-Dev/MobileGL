@@ -48,7 +48,15 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
     // Sends `fd` with `sideband` attached. The caller keeps ownership of `fd`
     // (the peer gets its own descriptor for the same open file description).
     // sideband.size must be <= kMaxSidebandBytes.
-    MobileGLResult SendFd(int socket, int fd, MobileGLByteSpan sideband);
+    //
+    // `dontWait` sends with MSG_DONTWAIT: a receive queue the peer is not draining
+    // (net.unix.max_dgram_qlen datagrams, 10 on an Android kernel) answers
+    // MOBILEGL_ERR_TIMEOUT at once instead of blocking the sender until the peer
+    // reads. A peer that has closed its end answers MOBILEGL_ERR_TRANSPORT_CLOSED
+    // either way. The TCP supervisor's hand-off (ServerMain.cpp RouteWhileBusy)
+    // sends this way because the session child stops reading the hand-off once its
+    // data connection is bound, and a supervisor blocked in sendmsg serves nobody.
+    MobileGLResult SendFd(int socket, int fd, MobileGLByteSpan sideband, bool dontWait = false);
 
     // Receives one descriptor and its sideband bytes.
     //

@@ -38,7 +38,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
 
     MobileGLResult CreateSocketPair(int[2]) { return MOBILEGL_ERR_UNSUPPORTED; }
 
-    MobileGLResult SendFd(int, int, MobileGLByteSpan) { return MOBILEGL_ERR_UNSUPPORTED; }
+    MobileGLResult SendFd(int, int, MobileGLByteSpan, bool) { return MOBILEGL_ERR_UNSUPPORTED; }
 
     MobileGLResult ReceiveFd(int, int*, MobileGLMutableByteSpan, std::uint64_t*, std::uint32_t) {
         return MOBILEGL_ERR_UNSUPPORTED;
@@ -105,7 +105,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         return MOBILEGL_OK;
     }
 
-    MobileGLResult SendFd(int socket, int fd, MobileGLByteSpan sideband) {
+    MobileGLResult SendFd(int socket, int fd, MobileGLByteSpan sideband, bool dontWait) {
         if (socket < 0 || fd < 0) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -148,8 +148,9 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         cmsg->cmsg_len = CMSG_LEN(sizeof(int));
         std::memcpy(CMSG_DATA(cmsg), &fd, sizeof(fd));
 
+        const int flags = MSG_NOSIGNAL | (dontWait ? MSG_DONTWAIT : 0);
         for (;;) {
-            const ssize_t sent = ::sendmsg(socket, &msg, MSG_NOSIGNAL);
+            const ssize_t sent = ::sendmsg(socket, &msg, flags);
             if (sent >= 0) {
                 if (static_cast<std::size_t>(sent) != payloadSize) {
                     // A datagram socket sends all or nothing.
@@ -162,8 +163,17 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
             if (errno == EINTR) {
                 continue;
             }
-            if (errno == EPIPE || errno == ECONNRESET) {
+            // A connected AF_UNIX datagram socket whose peer closed answers ECONNREFUSED on the
+            // first send after the close and ENOTCONN on every later one; a stream peer answers
+            // EPIPE / ECONNRESET. All four are "the peer is gone", which is an answer and not a
+            // fault, so none of them is logged here - the caller names what it does about it.
+            if (errno == EPIPE || errno == ECONNRESET || errno == ECONNREFUSED || errno == ENOTCONN) {
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            if (dontWait && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                MGLOG_E("MG_Remote fd passing: the peer's receive queue is full and it is not "
+                        "reading; the descriptor was not queued");
+                return MOBILEGL_ERR_TIMEOUT;
             }
             MGLOG_E("MG_Remote fd passing: sendmsg failed (errno=%d)", errno);
             return MOBILEGL_ERR_TRANSPORT_CLOSED;
