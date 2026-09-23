@@ -76,6 +76,15 @@ def read_exact(peer, size):
     return result
 
 
+def welcome_terms(welcome):
+    """The four byte counts a Welcome states, or {} when it carries no LinkTerms."""
+    terms = welcome.LinkTerms()
+    if terms is None:
+        return {}
+    return {'maxReply': terms.MaxReplyBytes(), 'cmdWindow': terms.CmdWindowBytes(),
+            'stageWindow': terms.StageWindowBytes(), 'eventWindow': terms.EventWindowBytes()}
+
+
 def receive(peer, schema):
     magic, size = struct.unpack('<4sI', read_exact(peer, 8))
     if magic != b'MGLF' or size > 64 * 1024 * 1024:
@@ -93,17 +102,26 @@ def receive(peer, schema):
         welcome = schema['Welcome'].Welcome()
         welcome.Init(table.Bytes, table.Pos)
         return {'welcome': welcome.ServerPid(), 'fingerprint': welcome.WireFingerprint(),
-                'nonce': bytes(welcome.DataNonce(j) for j in range(welcome.DataNonceLength())).hex()}
+                'nonce': bytes(welcome.DataNonce(j) for j in range(welcome.DataNonceLength())).hex(),
+                'terms': welcome_terms(welcome)}
     raise RuntimeError(f'unexpected first control reply {kind}')
 
 
-def hello(schema, flatbuffers, fingerprint=0, major=1, token=kToken, identifier=b'MGLC'):
+def hello(schema, flatbuffers, fingerprint=0, major=1, token=kToken, identifier=b'MGLC', ask=0):
     builder = flatbuffers.Builder(512)
     build = builder.CreateString('intentionally-different-build-for-p65-control')
     auth = builder.CreateString(token)
     terms = schema['LinkTerms']
     terms.Start(builder)
     terms.AddDataPlane(builder, 1)
+    if ask:
+        # PH-8: a client ASKING for windows. The server sizes the session itself; see
+        # `hello_asks_64_gib` below.
+        terms.AddWireForm(builder, 0)
+        terms.AddMaxReplyBytes(builder, ask)
+        terms.AddCmdWindowBytes(builder, ask)
+        terms.AddStageWindowBytes(builder, ask)
+        terms.AddEventWindowBytes(builder, ask)
     link = terms.End(builder)
     message = schema['Hello']
     message.Start(builder)
@@ -504,6 +522,26 @@ def main():
             evidence['stale_nonce'] = {'refusal': mismatch, 'line': next(
                 l.strip() for l in named.splitlines() if 'data connection nonce mismatch' in l)}
             assert process.poll() is None, 'a refused data connection killed the supervisor'
+
+            # ---- PH-8: THE SERVER SIZES THE SESSION; THE CLIENT ONLY ASKS -------------------
+            #
+            # A Hello that asks for 64 GiB in every window is welcomed with the server's own
+            # terms, and the session child that answered it - named by the Welcome's serverPid -
+            # never had 64 GiB of address space at any point (VmPeak, read after its data
+            # connection bound, i.e. after every segment of the session exists).
+            ask = 64 << 30
+            with held_session(port, schema, flatbuffers,
+                              hello(schema, flatbuffers, fingerprint=fingerprint, ask=ask)) as (control, welcome):
+                assert welcome.get('welcome', 0), welcome
+                terms = welcome['terms']
+                assert terms and all(0 < value < (1 << 30) for value in terms.values()), (
+                    f'the Welcome did not clamp a 64 GiB ask to the server\'s own terms: {terms}')
+                ready = wait_for_log(serverLog, f'pid={welcome["welcome"]} transport=spawn role=server ready')
+                assert ready is not None, f'the 64 GiB-asking session never came up; see {serverLog}'
+                status = Path(f'/proc/{welcome["welcome"]}/status').read_text()
+                peak = int(re.search(r'VmPeak:\s+(\d+) kB', status).group(1)) * 1024
+                assert peak < ask, f'session pid={welcome["welcome"]} reached VmPeak={peak} for a 64 GiB ask'
+            evidence['hello_asks_64_gib'] = {'asked': ask, 'terms': terms, 'childVmPeakBytes': peak}
 
         with supervisor(args.server, args.out / 'same-build-supervisor.log', same_build=True) as (port, _, _log):
             strict = exchange(port, schema, hello(schema, flatbuffers, fingerprint=fingerprint))

@@ -261,6 +261,59 @@ TEST(SessionHandshakeTest, ForkRefusesDifferentBuildWithIdenticalWire) {
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
                    ::MobileGL::Wire::DialMode::Fork, ::MobileGL::Wire::RefuseCode::BuildFingerprint);
 }
+// PH-8. THE SERVER SIZES THE SESSION; THE CLIENT'S HELLO ONLY ASKS.
+//
+// Hello.linkTerms carries four byte counts a client may fill in, and nothing on the server reads
+// them for sizing: Accept builds the segments from its own SetSegmentSizes and Welcome states
+// those. That was stated (CONTRACT-P65 LinkTerms) and never pinned, so a refactor that "honoured
+// the client's request" would have handed any peer a 64 GiB allocation per connection. Here a
+// Hello asks for 64 GiB in every window and the Welcome must come back with the server's own
+// 4 KiB terms and 4 KiB segments - the allocation that happened is the one Welcome describes.
+// RED ONCE by making Accept size from the Hello's terms (m_sizes <- hello->linkTerms()): the
+// Accept below then fails to create a 64 GiB private segment, or the EXPECT_EQs name the window
+// that was echoed. The two-process half, with the child's own VmPeak, is
+// TcpLane.SupervisorProtocolControls' `hello_asks_64_gib`.
+TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllocatesNothingOfIt) {
+    using namespace ::MobileGL::Wire;
+    constexpr Uint64 kAsk = 64ull << 30;
+    std::unique_ptr<Transport::InProcessTransport> client, server;
+    Transport::InProcessTransport::CreatePair(client, server);
+    ::flatbuffers::FlatBufferBuilder builder(512);
+    auto terms = CreateLinkTerms(builder, DataPlane::SharedSegments, WireForm::StructImage, kAsk, kAsk, kAsk, kAsk);
+    auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
+                                   BuildFingerprint(), 0, 1, nullptr, WireFingerprint(), WireFingerprint(),
+                                   terms, nullptr, DialMode::No);
+    auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
+    FinishCtrlEnvelopeBuffer(builder, root);
+    std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
+    Server::ServerSession session;
+    Transport::SessionSegmentSizes sizes;
+    sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
+    sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+    session.SetSegmentSizes(sizes);
+    ASSERT_EQ(session.Accept(*server, &first), MOBILEGL_OK);
+    const auto reply = ReadHandshakeFrame(*client);
+    ASSERT_FALSE(reply.empty());
+    ::flatbuffers::Verifier verifier(reply.data(), reply.size());
+    ASSERT_TRUE(VerifyCtrlEnvelopeBuffer(verifier));
+    const auto* welcome = GetCtrlEnvelope(reply.data())->msg_as_Welcome();
+    ASSERT_NE(welcome, nullptr);
+    ASSERT_NE(welcome->linkTerms(), nullptr);
+    EXPECT_EQ(welcome->linkTerms()->cmdWindowBytes(), 4096u) << "the command window echoed the Hello";
+    EXPECT_EQ(welcome->linkTerms()->stageWindowBytes(), 4096u) << "the stage window echoed the Hello";
+    EXPECT_EQ(welcome->linkTerms()->eventWindowBytes(), 4096u) << "the event window echoed the Hello";
+    EXPECT_EQ(welcome->linkTerms()->maxReplyBytes(),
+              4096u / sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader)) << "the reply bound echoed the Hello";
+    // The segments that EXIST are the server's: each announced size is a few pages at most, never
+    // the ask. A 64 GiB request that had been honoured would show here even if Welcome's terms
+    // had been rewritten afterwards.
+    for (const auto* segment : {welcome->cmdRing(), welcome->stageRing(), welcome->replyPool(), welcome->eventRing()}) {
+        ASSERT_NE(segment, nullptr);
+        EXPECT_LE(segment->sizeBytes(), 64u * 1024u);
+    }
+    session.Close();
+}
+
 TEST(SessionHandshakeTest, ConnectCanRequireTheSameBuild) {
     ScopedHandshakeEnvironment required("MOBILEGL_IPC_REQUIRE_SAME_BUILD", "1");
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
