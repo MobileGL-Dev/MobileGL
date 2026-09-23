@@ -21,6 +21,15 @@ on:
         required: false
         default: "087685d1"
 
+# ONE LIVE RUN PER BRANCH. The disaggregation branch pushes (often docs-only) commits minutes apart
+# and each push fans out to ~330 retrace legs here and ~275 jobs in apk.yml; with no group, runs
+# sat queued for 10+ hours behind their own successors. A manual dispatch gets a group of its own,
+# so a push never cancels a hand-started baseline (monolith-symbol-report) run; dev queues rather
+# than cancels. No paths-ignore here, unlike apk.yml: this workflow hosts the doc citation lint.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest

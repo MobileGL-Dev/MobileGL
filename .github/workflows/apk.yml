@@ -11,7 +11,18 @@ on:
       # someone remembering to dispatch the workflow by hand.
       - feat/disaggregated
       - codex/fix-github-ci
+    # A docs-only push builds nothing this workflow tests (231 emulator legs per run). The Test
+    # workflow keeps running for docs: it hosts the doc citation lint.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
+
+# ONE LIVE RUN PER BRANCH, as in test.yml: a superseded push is cancelled rather than left queued
+# behind its successor; a manual dispatch gets a group of its own; dev queues rather than cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
 
 jobs:
   build:
