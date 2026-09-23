@@ -37,9 +37,11 @@
 # CAPS, LIMITS AND EXTENSION ADVERTISEMENT - answered from the client's CapsMirror, no verb (22)
 # These call glGetIntegerv / glGetString / glGetInternalformativ and compare the answer
 # against a floor or against the other width of the same query. Nothing in them reaches a fill
-# point, so the arming line - latched at the process's FIRST fill - is honestly absent. They are
-# the same 13 entries per backend that tier 3 measured as reds under MGITEST_SPLIT_LANE=1, for
-# the same reason (a query answered without moving the encoder's record ordinal).
+# point, so the arming line - latched at the process's FIRST fill - is honestly absent. This is
+# the same property tier 3 measured from the other side: its 13 reds under MGITEST_SPLIT_LANE=1
+# (AdvertisedLimitsScenario x8, SpirvShaderBinaryScenario x4, ProgramPipelineScenario's reserved
+# name) were all queries answered without moving the encoder's record ordinal, and they are
+# spread across this class and the next one - which is why this lane sets no such marker.
 # --------------------------------------------------------------------------------------------
 DirectGLES.VerifySplit.AdvertisedLimitsScenario.ComputeLocalSizeComesFromTheLinkedProgram
 DirectGLES.VerifySplit.AdvertisedLimitsScenario.ComputeUniformBlocksIsAnAmountAnApplicationCouldActuallyAllocate
