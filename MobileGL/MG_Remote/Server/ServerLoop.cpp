@@ -708,12 +708,12 @@ namespace MobileGL::MG_Remote::Server {
             }
             if (!popped) break;
             ++applied;
+            if (SessionLatched()) break;  // PH-1 (3): the per-record check the top of this function describes
             // PH-6: the record whose event forfeited the reverse channel is the last one this
             // session applies. Checked only AFTER a popped record, so the empty-ring answer above
-            // still costs its two loads and nothing else.
+            // still costs its two loads and nothing else. (The latch check sits directly under
+            // `++applied` because ph_latch_sites.py's MECHANICS row pins exactly that shape.)
             if (session.ReverseChannelForfeited()) break;
-            // PH-1 (3): the per-record latch check described at the top of this function.
-            if (SessionLatched()) break;
         }
         if (applied != 0) {
             // THE TWO TALLIES MUST AGREE, AND THAT IS WHAT MAKES R-9's BATCHING BAN CHECKABLE.
