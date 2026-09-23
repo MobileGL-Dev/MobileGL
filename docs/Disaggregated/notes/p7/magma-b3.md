@@ -35,6 +35,10 @@ spawn）每跑一次是金图 `ace2af04` 与错图 `fb75d412`（14658 px）之�
 | 8 | 复审第 3 条 | 注释改正：**地板是保证、提交项是探针/纵深**；`WaitForWireBufferHostAccess` 早返回加提交项、`ReadWireBuffer` 补盖戳（§3.2） |
 | 9 | 复审第 2 条 | `run_trace_case.cmake`：split retrace 见 `MGWIRE-FLOOR unsound-serial-complete` 即红——主修有了车道（§4.1） |
 | 10 | 本文（复审轮） | — |
+| 11–13 | 修正轮（fable 复审，land with fixes） | 审计：去注释/字符串后再匹配（§1.5）；裸 `Count` 的日志须在**本块**同缩进；`.def` 行可带尾注释；`--self-test` 负对照进 CI |
+| 14 | 修正轮 | `run_trace_case.cmake`：spawn 无服务端日志即 FATAL（§4.1） |
+| 15–16 | 修正轮 | 注释/日志措辞：image-flags 出口的注释；`Magma wire decline [Site]`（§1.5） |
+| 17–19 | 本文（修正轮） | §5 标明包树/落地树；§7.2 行号；§7.2 `WaitForFrameSerial` 答 true 的债 |
 
 ---
 
@@ -104,6 +108,12 @@ OpenRA / DirectVulkan / `MOBILEGL_TRANSPORT=inproc` / lavapipe：retrace `PASS s
 - `scripts/ci/wire_declines_audit.py`（进 CI，与 fatal census 同一个只读树的 job）：
   行无站点、站点不在 `.def`、裸 `Count()` 上方 8 行内没有 `MGLOG_W`/`MGLOG_E`——任一即 rc 1。
   定义宏的 `WireDeclineTally.h` 不算站点（初版审计的误报就在这里）。
+  **修正轮（fable 复审）**：上面那条规则有三个洞——注释或字符串里的 `MGL_WIRE_DECLINE_AT(...)` 也算站点、
+  8 行窗口不分分支（上一个 `if` 里的日志也算）、带尾注释的 `.def` 行被丢掉。现在审计先把 `//`、`/* */`、
+  字符串与字符字面量抹成空格（保留换行，行号不变）再匹配；裸 `Count()` 的日志必须在**同一块**、**同缩进**、
+  8 行之内（向上遇到缩进更浅的行即停）；`.def` 同样去注释后再认行。`--self-test` 的 8 个内联夹具
+  （// 注释站点、/* */ 注释站点、字符串站点、别的分支的日志、嵌套分支的日志、注释里的日志、`MGLOG_D` → rc 1；
+  好站点 → rc 0，且都要打出对应的那句话）在 CI 同一步里先跑。树上仍是 53 / 53 / 0。
 
 | 审计 | 行 | 有站点 | 未记日志 | rc |
 |---|---|---|---|---|
@@ -325,6 +335,23 @@ MobileGLTraceReplay.OpenRA.DirectVulkan.SPAWN   ***Failed   (transport=spawn, 26
 .SPLIT / .SPAWN   Passed   ssim=1.000000 / 0 px / 0 行
 ```
 
+**修正轮（fable 复审）：spawn 的服务端日志缺失即红。** 这行只由**服务端**的 `OnSubmitsCompletedUpTo` 打；
+复审轮的 runner 对服务端日志是 `if(EXISTS …)`，一个在第一行之前就死掉的服务端读作「0 行」= 绿。
+client 日志缺失与 tcp 臂的服务端日志缺失本就是 FATAL，普通 spawn 现在也是。演示：SPAWN 的 ctest 命令行，
+把 `TRACE_REPLAY_EXE` 换成「跑真回放、然后删掉 `output/mobilegl.server.log`（541 行）」的包装：
+
+```
+复审轮 runner（aab01275）   rc 0   Fatal{ lines ...: 0 / MGWIRE-FLOOR unsound-serial-complete lines: 0
+修正轮 runner               rc 1
+CMake Error at run_trace_case.cmake:321 (message):
+  OpenRA DirectVulkan: MOBILEGL_TRANSPORT=spawn but the run wrote no
+  .../output/mobilegl.server.log, so the server role's Fatal{ and MGWIRE-FLOOR
+  lines cannot be counted.  A spawn retrace with no server log cannot be
+  counted as a clean one.
+```
+
+inproc 也写 `mobilegl.server.log`（apply 线程），但本轮按复审只收紧了 spawn；inproc 仍是 `if(EXISTS …)`。
+
 **图是金的、用例是红的**——这正是这条门要的：它红在「地板断言了一次没等过的完成」，
 不管这台驱动的时序有没有把它变成像素。
 
@@ -445,6 +472,12 @@ OpenRA DirectVulkan inproc + spawn retrace ssim **1.000000**、**0 px**、`MGWIR
 | `link_ratchet.py` | 186 | 186 | 173 |
 
 落地树的车道数含同一波其它包合入的条目，与包树之差不是本包的增量。
+
+**修正轮的门——包树 `88d1a913`（修正轮最后一个代码/文档提交），合并前**（`~/w7/b3bin/r2/gate2.log`）：
+split 构建 rc 0；G1 rc 0、`.text` **`0xa52203`**、nm **0 / 0**（唯一的产品文件改动是 disagg-only 的注释与一条日志措辞）；
+census rc 0 **79**；audit `--self-test` **8/8** rc 0、树上 **53 / 53 / 0** rc 0；ratchet **unchanged at 186**；parity rc 0；
+`unit` **2420/2420**、`integration-magma-split` **90/90**、`integration-magma-spawn` **69/69**；
+OpenRA DirectVulkan SPLIT / SPAWN PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。
 
 包树上外加 `MobileGLTraceReplay.OpenRA.DirectVulkan.SPLIT` / `.SPAWN`（带 §4.1 的新红条件）：
 PASS、ssim 1.000000、0 px、`MGWIRE-FLOOR` 0 行。为跑这两条，本树 `build-split` 以
