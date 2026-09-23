@@ -1141,7 +1141,32 @@ namespace MobileGL::MG_Pipe {
     struct MGPRespecifiedLevel {
         Uint16 UploadTarget = 0;
         Uint16 Level = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P7 PH-4: mutable mip dimensions do not follow from the base descriptor. These fields
+        // are carried by the split resource_respecify record; the pull helper remains 4 bytes.
+        Uint32 Width = 0;
+        Uint32 Height = 0;
+        Uint32 Depth = 0;
+#endif
     };
+
+    inline MGPRespecifiedLevel MGPipeMakeRespecifiedLevel(Uint16 uploadTarget, Uint16 level,
+                                                          Uint32 width = 0, Uint32 height = 0,
+                                                          Uint32 depth = 0) {
+        MGPRespecifiedLevel value{};
+        value.UploadTarget = uploadTarget;
+        value.Level = level;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        value.Width = width;
+        value.Height = height;
+        value.Depth = depth;
+#else
+        (void)width;
+        (void)height;
+        (void)depth;
+#endif
+        return value;
+    }
 
     // THE THREE ACCEPTANCE RETURNS, AND WHY ALL THREE (ID-18 M3, clientfb review M3). D-D5
     // step 1 says the client clears a level's dirty flags "for the levels whose record the

@@ -92,6 +92,7 @@ TEST(StagedTextureStoreTest, TheSplitArmCopiesAndSurvivesTheSourceBeingPoisoned)
 
     Vector<Uint8> staged(64, 0xAB);
     const IntVec3 extent{4, 4, 1};
+    splitStore.NoteLevelDefined(key, kTex2DTarget, 0, extent);
     const Uint8* splitBase = splitStore.Adopt(key, kTex2DTarget, 0, extent, staged.data(), staged.size());
     const Uint8* monolithBase =
         monolithStore.Adopt(key, kTex2DTarget, 0, extent, staged.data(), staged.size());
@@ -148,6 +149,32 @@ TEST(StagedTextureStoreTest, DefinednessIsTrackedAndAnExtentMoveDropsTheBytes) {
     EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 0), IntVec3(8, 8, 1));
 }
 
+TEST(StagedTextureStoreTest, AMutableNoncanonicalLevelKeepsItsExactDeclaredExtentAndBound) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(41, 1));
+    const IntVec3 noncanonical{3, 2, 1};
+
+    store.NoteLevelDefined(key, kTex2DTarget, 2, noncanonical,
+                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                           static_cast<Uint32>(TextureInternalFormat::RGBA8));
+    EXPECT_TRUE(store.IsLevelDefined(key, kTex2DTarget, 2));
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 2), noncanonical)
+        << "a null-data mutable mip lost the exact extent accepted by resource_respecify";
+    EXPECT_EQ(store.LevelDeclaredByteBound(key, kTex2DTarget, 2), 24u);
+    EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 2));
+}
+
+TEST(StagedTextureStoreTest, MultisampleAndTextureBufferTargetsCannotAcceptStagedTexelBytes) {
+    EXPECT_FALSE(Server::StagedTextureTargetSupportsSubData(
+        static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2DMS)));
+    EXPECT_FALSE(Server::StagedTextureTargetSupportsSubData(
+        static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2DMSArray)));
+    EXPECT_FALSE(Server::StagedTextureTargetSupportsSubData(
+        static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::TexBuffer)));
+    EXPECT_TRUE(Server::StagedTextureTargetSupportsSubData(
+        static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D)));
+}
+
 // Keys are independent, ResetLevels drops one resource's whole chain, Drop one key and
 // DropAll every one - the three events the contract names (respecify, destroy, context death)
 // each have their call site, and these are the answers those call sites rely on.
@@ -155,11 +182,15 @@ TEST(StagedTextureStoreTest, ResetDropAndDropAllForgetExactlyWhatTheyName) {
     Server::StagedTextureStore store(/*copies=*/true);
     const Uint64 a = Server::StagedTextureStore::KeyForHandle(TestHandle(5, 1));
     const Uint64 b = Server::StagedTextureStore::KeyForHandle(TestHandle(6, 1));
-    Vector<Uint8> bytes(16, 0x22);
+    Vector<Uint8> bytes4x4(64, 0x22);
+    Vector<Uint8> bytes2x2(16, 0x22);
 
-    store.Adopt(a, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes.data(), bytes.size());
-    store.Adopt(a, kTex2DTarget, 1, IntVec3{2, 2, 1}, bytes.data(), bytes.size());
-    store.Adopt(b, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes.data(), bytes.size());
+    store.NoteLevelDefined(a, kTex2DTarget, 0, IntVec3{4, 4, 1});
+    store.Adopt(a, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes4x4.data(), bytes4x4.size());
+    store.NoteLevelDefined(a, kTex2DTarget, 1, IntVec3{2, 2, 1});
+    store.Adopt(a, kTex2DTarget, 1, IntVec3{2, 2, 1}, bytes2x2.data(), bytes2x2.size());
+    store.NoteLevelDefined(b, kTex2DTarget, 0, IntVec3{4, 4, 1});
+    store.Adopt(b, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes4x4.data(), bytes4x4.size());
     ASSERT_EQ(store.TrackedResources(), 2u);
     ASSERT_EQ(store.TrackedLevelCount(a), 2u);
 
@@ -167,7 +198,8 @@ TEST(StagedTextureStoreTest, ResetDropAndDropAllForgetExactlyWhatTheyName) {
     EXPECT_FALSE(store.HasShadow(a)) << "a whole-resource respecify forgets every level";
     EXPECT_TRUE(store.IsCovered(b, kTex2DTarget, 0));
 
-    store.Adopt(a, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes.data(), bytes.size());
+    store.NoteLevelDefined(a, kTex2DTarget, 0, IntVec3{4, 4, 1});
+    store.Adopt(a, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes4x4.data(), bytes4x4.size());
     store.Drop(a);
     EXPECT_EQ(store.TrackedResources(), 1u);
     EXPECT_TRUE(store.IsCovered(b, kTex2DTarget, 0));
@@ -247,6 +279,7 @@ TEST(StagedTextureStoreTest, StageChunkRunsAssembleTheLevelImageAndAGapIsNotCove
     Vector<Uint8> lower(32, 0x33);
     Vector<Uint8> upper(32, 0x77);
 
+    store.NoteLevelDefined(key, kTex2DTarget, 0, extent);
     // THE SECOND RUN FIRST, deliberately: coverage is a SET and the placement comes from the
     // record, so the order the pieces land in cannot matter.
     EXPECT_EQ(monolithStore.AdoptRun(key, kTex2DTarget, 0, extent, 32, upper.data(), upper.size()),
@@ -277,22 +310,20 @@ TEST(StagedTextureStoreTest, StageChunkRunsAssembleTheLevelImageAndAGapIsNotCove
     // AND A GAP IS NOT COVERAGE: it is the missing-piece case, which is the one thing the covered
     // set exists to make visible instead of papered over.
     const Uint64 holed = Server::StagedTextureStore::KeyForHandle(TestHandle(12, 1));
+    store.NoteLevelDefined(holed, kTex2DTarget, 0, extent);
     Vector<Uint8> part(16, 0x11);
     store.AdoptRun(holed, kTex2DTarget, 0, extent, 0, part.data(), part.size());
-    store.AdoptRun(holed, kTex2DTarget, 0, extent, 32, part.data(), part.size());
+    store.AdoptRun(holed, kTex2DTarget, 0, extent, 32, upper.data(), upper.size());
     EXPECT_EQ(store.LevelCoveredRunCount(holed, kTex2DTarget, 0), 2u)
         << "two runs with a 16-byte gap merged into one";
     EXPECT_FALSE(store.IsCovered(holed, kTex2DTarget, 0)) << "a span across the gap reads covered";
-    // AND WHAT THE CHECK CANNOT SEE, written down rather than left to be discovered: the store
-    // knows no format, so it cannot know how many bytes a level SHOULD have. A leading run that
-    // already reaches the image's high-water mark therefore reads as covered - the check is "the
-    // range the reader asks for is covered", not "the level is the size the client meant", and no
-    // reader runs between the pieces of one level anyway (they are records of ONE verb, and the
-    // texture sync runs at the barrier that closes it).
+    // A short leading run is not a complete level even if its current high-water mark ends at
+    // that run. The store checks coverage against the server-derived byte bound, not its prefix.
     const Uint64 leading = Server::StagedTextureStore::KeyForHandle(TestHandle(14, 1));
+    store.NoteLevelDefined(leading, kTex2DTarget, 0, IntVec3{4, 4, 1});
     store.AdoptRun(leading, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, part.data(), part.size());
-    EXPECT_TRUE(store.IsCovered(leading, kTex2DTarget, 0))
-        << "a leading run is the whole image as far as this store can tell";
+    EXPECT_FALSE(store.IsCovered(leading, kTex2DTarget, 0))
+        << "the leading prefix must not stand in for the declared level";
     EXPECT_EQ(store.LevelByteSize(leading, kTex2DTarget, 0), 16u);
     // Filling the gap merges all three into one run: adjacency, not proximity, is the rule.
     store.AdoptRun(holed, kTex2DTarget, 0, extent, 16, part.data(), part.size());
@@ -308,23 +339,31 @@ TEST(StagedTextureStoreTest, StageChunkRunsAssembleTheLevelImageAndAGapIsNotCove
 }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+// B4's rule under PH-4's declared extents: a level redefined at a new extent (the respecify's
+// NoteLevelDefined, which every run now needs before it lands) starts with no coverage, so the
+// first run of the new definition cannot be completed by the old definition's bytes. A run that
+// still carries the old extent is StagedTextureStore.LevelExtent's refusal (ServerSpawnTest's
+// raw-peer control), so the new-extent runs are the only ones that can land here.
 TEST(StagedTextureStoreTest, AdoptRunExtentMoveDoesNotInheritOldCoverage) {
     Server::StagedTextureStore store(/*copies=*/true);
     const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(15, 1));
-    Vector<Uint8> oldRun(16, 0x44);
-    Vector<Uint8> newRun(16, 0x99);
+    Vector<Uint8> oldRun(64, 0x44);  // the whole 4x4 RGBA8 level
+    Vector<Uint8> newRun(64, 0x99);  // the upper half of the 8x4 RGBA8 level
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{4, 4, 1});
     store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, oldRun.data(), oldRun.size());
     ASSERT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
-    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{8, 4, 1}, 16, newRun.data(), newRun.size());
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{8, 4, 1});
+    ASSERT_EQ(store.LevelDeclaredByteBound(key, kTex2DTarget, 0), 128u);
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{8, 4, 1}, 64, newRun.data(), newRun.size());
     EXPECT_FALSE(store.IsCovered(key, kTex2DTarget, 0))
-        << "the old level's [0,16) run was mistaken for bytes of the new extent";
+        << "the old level's [0,64) run was mistaken for bytes of the new extent";
     EXPECT_EQ(store.LevelCoveredRunCount(key, kTex2DTarget, 0), 1u);
-    Vector<Uint8> newLower(16, 0xAA);
+    Vector<Uint8> newLower(64, 0xAA);
     store.AdoptRun(key, kTex2DTarget, 0, IntVec3{8, 4, 1}, 0, newLower.data(), newLower.size());
     const Uint8* base = store.RequireLevelBytes(key, kTex2DTarget, 0, "unit_extent_move");
     ASSERT_NE(base, nullptr);
     EXPECT_EQ(base[0], 0xAAu);
-    EXPECT_EQ(base[16], 0x99u);
+    EXPECT_EQ(base[64], 0x99u);
 }
 #endif
 
@@ -390,7 +429,8 @@ TEST(StagedTextureStoreTest, TheRunImageOffsetIsReadOffTheRecordsOwnRunAndBox) {
 TEST(StagedTextureStoreTest, ATexelReadOutsideTheStagedCoverageIsFatalByName) {
     Server::StagedTextureStore store(/*copies=*/true);
     const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(8, 1));
-    Vector<Uint8> bytes(16, 0x33);
+    Vector<Uint8> bytes(64, 0x33);
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{4, 4, 1});
     store.Adopt(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, bytes.data(), bytes.size());
 
     // In coverage: no Fatal, asserted first so the death below cannot be a function that
@@ -434,6 +474,8 @@ TEST(StagedTextureStoreTest, ALevelWithAPieceMissingIsRefusedAsAWholeLevelReadBy
     const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(13, 1));
     Vector<Uint8> part(16, 0x55);
     Vector<Uint8> whole(64, 0x22);
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{4, 4, 1});
+    store.NoteLevelDefined(key, kTex2DTarget, 1, IntVec3{4, 4, 1});
     // TWO RUNS WITH A HOLE BETWEEN THEM, which is what a missing piece looks like from here: the
     // image's high-water mark is the level's size and the covered set does not reach across it.
     store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, part.data(), part.size());
@@ -553,9 +595,8 @@ TEST(StagedTextureProductionTest, HooklessTextureConsumerOwnsBytesAndScopedStora
     desc.Height = 4;
     desc.Depth = 1;
     desc.Levels = 3;
-    MG_Pipe::MGPRespecifiedLevel level{};
-    level.UploadTarget = MG_Pipe::MGPipePackSubDataTarget(desc.Target, kTex2DTarget);
-    level.Level = 0;
+    MG_Pipe::MGPRespecifiedLevel level = MG_Pipe::MGPipeMakeRespecifiedLevel(
+        MG_Pipe::MGPipePackSubDataTarget(desc.Target, kTex2DTarget), 0, 4, 4, 1);
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, &level));
     EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 0), IntVec3(4, 4, 1))
         << "null-data glTexImage defines the level even though no upload follows";

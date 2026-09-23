@@ -342,16 +342,19 @@ namespace MobileGL::MG_Pipe {
         // It exists because the applier ALREADY takes that scope - as a trailing
         // const MGPRespecifiedLevel* (PipeApply.h:792-795) - and MGPResourceDesc could not
         // express it, so it was the second of resource_respecify's two companions with no wire
-        // carrier. The difference is not cosmetic: a null scope drops EVERY pending upload,
+        // carrier. PH-4 extends that carrier with exact W/H/D for the named level, which the
+        // server validates before staging bytes. The difference is not cosmetic: a null scope drops EVERY pending upload,
         // because every level's coordinate system has just been replaced, while a per-level
         // one drops only that key. Crossing without the scope would make every mutable
         // per-level glTexImage*D on the far side look like a whole-resource redefinition and
         // silently eat the texels of every other level - exactly the loss the server-side
         // pending-upload set exists to prevent.
         //
-        // READ IT THROUGH THE THREE HELPERS BELOW, never by touching the fields: the
-        // presence byte and the pair are one value in three pieces, and an open-coded reader
-        // that forgets the presence byte reads level 0 of upload target 0 as a real scope.
+        // READ IT THROUGH THE HELPERS BELOW, never by touching the fields: the presence byte,
+        // target/level pair and exact per-level extent form one value. For a named image level,
+        // BufOffset/BufSize temporarily carry W/H/D; the target makes this safe because a
+        // texture-buffer range cannot legally name a mip level. The applier clears that carrier
+        // before storing the descriptor.
         //
         // NOT STORAGE-DEFINING, and not metadata either: it does not describe the resource at
         // all, it describes what this CALL replaces. MGPipeResourceRespecifyNeedsAck and the
@@ -378,7 +381,9 @@ namespace MobileGL::MG_Pipe {
         Uint16 RespecifiedLevel;
         MGPipeHandle ViewOf;             // storage owner for a texture view
         MGPipeHandle BufferForTexBuffer; // texture-buffer backing store
-        Uint64 BufOffset, BufSize;       // kWholeBuffer == ~0, resolved live
+        // TexBuffer's backing range; on a named non-buffer mip respecify the same words carry
+        // exact width/height/depth until the applier accepts and normalizes the descriptor.
+        Uint64 BufOffset, BufSize;
     };
     MGP_ASSERT_POD(MGPResourceDesc, 88);
     // The scope fields went into the two existing pads, so the descriptor did not grow and this
@@ -401,9 +406,9 @@ namespace MobileGL::MG_Pipe {
         return desc.HasRespecifiedLevel == 0;
     }
 
-    // The single (uploadTarget, level) a per-level respecify replaces. Reading either half of a
-    // whole-resource descriptor is a caller error; both answer 0 so that a misuse is at least
-    // deterministic rather than whatever the pad happened to hold.
+    // The single (uploadTarget, level, width, height, depth) a per-level respecify replaces.
+    // Reading any component of a whole-resource descriptor is a caller error; helpers answer
+    // zero so a misuse is deterministic rather than whatever the pad/range held.
     inline constexpr Uint16 MGPipeRespecifiedUploadTargetOf(const MGPResourceDesc& desc) {
         return MGPipeRespecifyIsWholeResource(desc) ? Uint16(0) : desc.RespecifiedUploadTarget;
     }
@@ -411,16 +416,49 @@ namespace MobileGL::MG_Pipe {
         return MGPipeRespecifyIsWholeResource(desc) ? Uint16(0) : desc.RespecifiedLevel;
     }
 
-    // The two writers. A producer sets the scope with one call so the presence byte cannot be
-    // left behind, and clears it with the other; a descriptor built by value-initialization is
-    // already whole-resource, which is the safe default and the only one P5 produces.
+    // A producer sets the scope and its exact mutable-level extent with one call so the
+    // presence byte cannot be left behind, and clears scope with the other. A descriptor built
+    // by value-initialization is already whole-resource, which is the safe default.
+    inline constexpr Uint32 MGPipeRespecifiedWidthOf(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ? 0u : static_cast<Uint32>(desc.BufOffset >> 32);
+    }
+    inline constexpr Uint32 MGPipeRespecifiedHeightOf(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ? 0u : static_cast<Uint32>(desc.BufOffset);
+    }
+    inline constexpr Uint32 MGPipeRespecifiedDepthOf(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ? 0u : static_cast<Uint32>(desc.BufSize);
+    }
+    inline constexpr Bool MGPipeRespecifiedExtentCarrierIsCanonical(const MGPResourceDesc& desc) {
+        return MGPipeRespecifyIsWholeResource(desc) ||
+               ((desc.BufSize >> 32) == 0 && MGPipeRespecifiedWidthOf(desc) != 0 &&
+                MGPipeRespecifiedHeightOf(desc) != 0 && MGPipeRespecifiedDepthOf(desc) != 0);
+    }
+
     inline constexpr void MGPipeSetRespecifiedLevel(MGPResourceDesc& desc, Uint16 uploadTarget,
-                                                   Uint16 level) {
+                                                   Uint16 level, Uint32 width = 0, Uint32 height = 0,
+                                                   Uint32 depth = 0) {
         desc.HasRespecifiedLevel = 1;
         desc.RespecifiedUploadTarget = uploadTarget;
         desc.RespecifiedLevel = level;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Non-buffer texture targets leave this descriptor range unused. A named-level
+        // respecify repurposes it as exact W/H/D; TexBuffer cannot legally name a mip level.
+        desc.BufOffset = (static_cast<Uint64>(width) << 32) | static_cast<Uint64>(height);
+        desc.BufSize = depth;
+#else
+        (void)width;
+        (void)height;
+        (void)depth;
+#endif
     }
     inline constexpr void MGPipeClearRespecifiedLevel(MGPResourceDesc& desc) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (desc.HasRespecifiedLevel != 0 &&
+            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
+            desc.BufOffset = 0;
+            desc.BufSize = 0;
+        }
+#endif
         desc.HasRespecifiedLevel = 0;
         desc.RespecifiedUploadTarget = 0;
         desc.RespecifiedLevel = 0;

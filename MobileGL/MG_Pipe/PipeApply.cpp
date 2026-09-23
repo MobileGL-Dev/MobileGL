@@ -1138,18 +1138,22 @@ namespace MobileGL::MG_Pipe {
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
             auto& store = MG_Remote::Server::ServerStagedTexture();
             const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(desc.Resource);
-            const auto define = [&](Uint16 target, Uint16 mip) {
-                store.NoteLevelDefined(key, target, mip, MG_Remote::Server::StagedTextureMipExtent(
-                    desc.Target, desc.Width, desc.Height, desc.Depth, mip));
+            const auto define = [&](Uint16 target, Uint16 mip, const IntVec3& extent) {
+                store.NoteLevelDefined(key, target, mip, extent, desc.Target, desc.InternalFormat);
             };
             if (level) {
-                define(MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level);
+                define(MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level,
+                       IntVec3{static_cast<Int>(level->Width), static_cast<Int>(level->Height),
+                               static_cast<Int>(level->Depth)});
                 return;
             }
             store.ResetLevels(key);
             if (!desc.Immutable || !desc.Levels) return;
             const auto defineChain = [&](TextureUploadTarget target) {
-                for (Uint32 mip = 0; mip < desc.Levels; ++mip) define(static_cast<Uint16>(target), static_cast<Uint16>(mip));
+                for (Uint32 mip = 0; mip < desc.Levels; ++mip)
+                    define(static_cast<Uint16>(target), static_cast<Uint16>(mip),
+                           MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width,
+                                                                    desc.Height, desc.Depth, mip));
             };
             switch (static_cast<MGPipeResourceTarget>(desc.Target)) {
             case MGPipeResourceTarget::Tex1D: defineChain(TextureUploadTarget::Texture1D); break;
@@ -1975,6 +1979,17 @@ namespace MobileGL::MG_Pipe {
     // ================================================================================
 
     Bool MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!MGPipeRespecifyIsWholeResource(desc)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceCreate.RespecifyScope\"} - "
+                                 "resource_create cannot carry a per-level respecify extent");
+        }
+        if (desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer) &&
+            (desc.BufOffset != 0 || desc.BufSize != 0)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceCreate.BufferRange\"} - "
+                                 "only a texture-buffer resource may carry BufOffset/BufSize");
+        }
+#endif
         MOBILEGL_ASSERT(desc.Resource.Slot >= kMGPipeFirstAllocatableSlot,
                         "resource_create named the reserved slot 0");
         if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return false;
@@ -2055,6 +2070,25 @@ namespace MobileGL::MG_Pipe {
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
         PinRespecifyScopeCoversItsDeclaration(desc, level, desc.Resource, "resource_respecify");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (level != nullptr &&
+            (desc.Target == kMGPipeResourceTargetBuffer ||
+             desc.Target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
+             desc.Target == static_cast<Uint8>(MGPipeResourceTarget::TexBuffer))) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.Target\"} - "
+                                 "this resource target cannot name a texture mip level");
+        }
+        if (!MGPipeRespecifyIsWholeResource(desc) &&
+            !MGPipeRespecifiedExtentCarrierIsCanonical(desc)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.ExtentCarrier\"} - "
+                                 "a named image level must carry nonzero width/height/depth with no high BufSize bits");
+        }
+        if (level == nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer) &&
+            (desc.BufOffset != 0 || desc.BufSize != 0)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.BufferRange\"} - "
+                                 "a whole non-buffer resource may not carry BufOffset/BufSize");
+        }
+#endif
 
         // IS THIS A REDEFINITION AT ALL? Asked BEFORE the descriptor is replaced, because the
         // stored one is the only thing there is to compare against (ID-18 M4). See
@@ -2069,6 +2103,14 @@ namespace MobileGL::MG_Pipe {
         // asking a frontend object for them. A metadata update replaces it too - that is how
         // the mask arrives - and by construction only the non-storage fields differ.
         record->Desc = desc;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (level != nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
+            // Scope and BufOffset/BufSize are transient respecify carriers, not resource state.
+            MGPipeClearRespecifiedLevel(record->Desc);
+            record->Desc.BufOffset = 0;
+            record->Desc.BufSize = 0;
+        }
+#endif
         // THE SERIAL MOVES EITHER WAY, and for a metadata update it is the entire publication:
         // the twin re-derives its storage flags from the new mask at its next sync and decides
         // for itself whether the backend needs a recreate.
@@ -2107,14 +2149,11 @@ namespace MobileGL::MG_Pipe {
         //     glTexSubImage2D and the sync that consumes it; eating those texels there would be
         //     C1's bug with a different trigger, and just as silent.
         //
-        //   - A NAMED LEVEL IS DROPPED WHETHER OR NOT THE DESCRIPTOR MOVED (P4a final review
-        //     C-1, refining wire's W11 clause). The level pointer is the CALLER's statement that
-        //     it reallocated that level, and the descriptor cannot contradict it: a non-base
-        //     level redefined at a new size moves no descriptor field at all (the descriptor
-        //     carries the base extent and the level count), so "identical storage fields" says
-        //     nothing about that level's coordinate system, and a box kept against the old
-        //     level would be uploaded past the end of the new one. The client's mask republish
-        //     passes null, so this arm can never eat a standing upload on its behalf.
+        //   - A NAMED LEVEL IS DROPPED WHETHER OR NOT THE base descriptor moved (P4a final
+        //     review C-1). The companion scope now carries that level's exact W/H/D as well as
+        //     its (uploadTarget, level) key, so the texture twin and staged-byte store update the
+        //     same coordinate system. A metadata-only mask republish passes null and therefore
+        //     cannot consume a standing upload on its behalf.
         //
         // A buffer never has a pending upload at all, so all three arms are inert for P3a's
         // half - which is also why a buffer is never classified as metadata-only (below).

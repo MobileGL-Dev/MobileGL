@@ -13,6 +13,7 @@
 
 #include "ServerSession.h"
 #include "../Transport/ReplySlot.h"
+#include "StagedTextureStore.h"
 
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
@@ -87,6 +88,12 @@ namespace MobileGL::MG_Remote::Server {
             ReleaseFences();
         }
         m_backend = backend;
+        if (backend != nullptr) {
+            const auto& limits = backend->GetDynamicParameters();
+            ServerStagedTexture().SetDeviceLimits(
+                limits.MaxTextureSize, limits.Max3DTextureSize, limits.MaxCubeMapTextureSize,
+                limits.MaxArrayTextureLayers, limits.MaxTextureBufferSize);
+        }
     }
 
     const MG_Backend::GlobalBackendFunctionsTable* ServerVerbSink::Table(const char* verb) const {

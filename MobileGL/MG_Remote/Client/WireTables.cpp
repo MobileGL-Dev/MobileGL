@@ -421,13 +421,17 @@ namespace MobileGL::MG_Remote::Client {
                         "resource_subdata; a caller that still passes it has bytes nothing will "
                         "carry");
             }
-            // The scope rides in the descriptor's own pads (CONTRACT-P5 table 1 row 19b, LANDED)
-            // and is written only through MGPipeSetRespecifiedLevel - three fields are one
-            // value, and an open-coded writer that forgets the presence byte says "level 0 of
-            // upload target 0" where it meant "the whole resource".
+            // Scope and exact mutable mip extent travel together through the descriptor helper.
+            // It temporarily reuses BufOffset/BufSize on non-buffer image targets; the server
+            // checks and clears that carrier before persisting the resource descriptor.
             MG_Pipe::MGPResourceDesc record = *desc;
             if (level != nullptr) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSetRespecifiedLevel(record, level->UploadTarget, level->Level,
+                                                   level->Width, level->Height, level->Depth);
+#else
                 MG_Pipe::MGPipeSetRespecifiedLevel(record, level->UploadTarget, level->Level);
+#endif
             } else {
                 MG_Pipe::MGPipeClearRespecifiedLevel(record);
             }

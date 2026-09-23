@@ -33,6 +33,9 @@ namespace MobileGL::MG_Pipe {
     }
     inline constexpr Uint64 kMGPipeWireMemberLayoutDigest = WireMemberLayoutDigest(
         kMGPipeWireLayoutMembers, sizeof(kMGPipeWireLayoutMembers) / sizeof(WireLayoutMember));
+    // Bump when a fixed-layout pipe carrier keeps its bytes but changes their meaning. The
+    // mutable-level extent carrier reuses BufOffset/BufSize only on named image respecifies.
+    inline constexpr Uint32 kMGPipeResourceRespecifyExtentCarrierRevision = 1;
 
     constexpr Uint64 WireCatalogueDigest() {
         Uint64 hash = 1469598103934665603ull;

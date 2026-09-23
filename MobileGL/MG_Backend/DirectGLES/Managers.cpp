@@ -2734,12 +2734,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!store.CopiesIntoServerStorage()) return;
                 const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
                 if (level != nullptr) {
-                    // ONE glTexImage*D redefined one level: it exists from here on, at the
-                    // derived extent (§1). NoteLevelDefined keeps a same-extent level's bytes.
+                    // ONE glTexImage*D redefined one level: its exact extent crossed with the
+                    // accepted scope carrier, including a legal noncanonical mutable mip.
                     store.NoteLevelDefined(
                         key, MG_Pipe::MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level,
-                        MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
-                                                                  desc.Depth, level->Level));
+                        IntVec3{static_cast<Int>(level->Width), static_cast<Int>(level->Height),
+                                static_cast<Int>(level->Depth)},
+                        desc.Target, desc.InternalFormat);
                     return;
                 }
                 // A whole-resource redefinition: every level's old coordinate system is gone.
@@ -2754,7 +2755,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         store.NoteLevelDefined(
                             key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(levelIndex),
                             MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
-                                                                      desc.Depth, levelIndex));
+                                                                      desc.Depth, levelIndex),
+                            desc.Target, desc.InternalFormat);
                     }
                 }
             }
@@ -3009,17 +3011,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // refusal, because MOBILEGL_ASSERT compiles out at INFO and a resource that silently
             // stops being twinned is the failure mode the refusal exists to replace.
             if (res.Slot >= BackendBufferResourceTable::kMaxHandleSlot) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                    "buffer twin request named slot %u, past this table's %u bound",
+                    res.Slot, BackendBufferResourceTable::kMaxHandleSlot);
+#else
                 MGLOG_E_ONCE("MGPipe: resource handle slot %u is past the backend table's %u bound - "
                              "refusing to twin it",
                              res.Slot, BackendBufferResourceTable::kMaxHandleSlot);
                 return nullptr;
+#endif
             }
             const Uint32 liveGen = g_backendBufferResources.LiveGenAt(res.Slot);
             if (liveGen != 0 && liveGen > res.Gen) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                    "buffer twin request named generation %u at slot %u, behind live generation %u",
+                    res.Gen, res.Slot, liveGen);
+#else
                 MGLOG_E_ONCE("MGPipe: resource handle {%u, %u} names a generation BEHIND the live twin's "
                              "%u - refusing rather than dropping the incumbent's driver storage",
                              res.Slot, res.Gen, liveGen);
                 return nullptr;
+#endif
             }
             auto& twin = g_backendBufferResources.GetOrCreate(res);
             if (!twin) {
@@ -4329,13 +4347,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool PipeTwinHandleIsAdoptable(Registry& registry, MG_Pipe::MGPipeHandle handle, const char* kindName) {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
             if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                    "%s handle slot %u is past this table's %u bound",
+                    kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
+#else
                 MGLOG_E_ONCE("MGPipe: %s handle slot %u is past the backend table's %u bound - "
                              "refusing to twin it",
                              kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
                 return false;
+#endif
             }
             const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                    "%s handle {%u, %u} names generation behind live generation %u",
+                    kindName, handle.Slot, handle.Gen, liveGen);
+#else
                 // SlotTables.h:301-321: forward is a recycle and resets the twin, BACKWARD is
                 // refused, because adopting it would release the incumbent LIVE twin's driver
                 // id and then stamp the slot back to the dead object's generation, after which
@@ -4347,6 +4380,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "object",
                              kindName, handle.Slot, handle.Gen, liveGen);
                 return false;
+#endif
             }
             return true;
         }

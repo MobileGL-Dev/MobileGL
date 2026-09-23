@@ -476,7 +476,14 @@ namespace MobileGL::MG_Remote {
         inputs.ProgramArtifactsCodecVersion = MG_State::GLState::kProgramArtifactsCodecVersion;
         inputs.ProgramArtifactsSchema = MG_State::GLState::ProgramArtifactsSchemaFingerprint();
         inputs.OpCount = static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        inputs.ControlSchemaRevision =
+            (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
+            MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
+#else
+        // The pull build has no respecify extent carrier; preserve its pre-P7 wire fingerprint.
         inputs.ControlSchemaRevision = MOBILEGL_PROTOCOL_CONTROL_REVISION;
+#endif
         inputs.AbiVersion = MOBILEGL_ABI_VERSION(MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR);
         inputs.PointerBits = sizeof(void*) * 8;
         const Uint32 endian = 1;

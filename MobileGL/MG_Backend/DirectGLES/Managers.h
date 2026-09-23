@@ -479,9 +479,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendPtr* GetOrCreateByHandle(MG_Pipe::MGPipeHandle handle) {
             if (!EsprytSlotTablesEnabled()) return nullptr;
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
-            if (handle.Slot >= SlotTable::kMaxHandleSlot) return nullptr;
+            if (handle.Slot >= SlotTable::kMaxHandleSlot) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                    "GetOrCreateByHandle named slot %u, past this table's %u bound",
+                    handle.Slot, SlotTable::kMaxHandleSlot);
+#else
+                return nullptr;
+#endif
+            }
             const Uint32 liveGen = m_slotTable.LiveGenAt(handle.Slot);
-            if (liveGen != 0 && liveGen > handle.Gen) return nullptr;
+            if (liveGen != 0 && liveGen > handle.Gen) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                    "GetOrCreateByHandle named generation %u at slot %u, behind live generation %u",
+                    handle.Gen, handle.Slot, liveGen);
+#else
+                return nullptr;
+#endif
+            }
             return &m_slotTable.GetOrCreate(handle);
         }
 

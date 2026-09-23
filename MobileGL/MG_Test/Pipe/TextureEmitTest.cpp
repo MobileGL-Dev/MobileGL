@@ -2149,14 +2149,14 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
 
     // glTexImage2D(level 0, data): the respecify names the level it defines, and the drain then
     // emits level 0's shape, which the applier accepts.
-    const MGPRespecifiedLevel levelZero{kTex2D, 0};
+    const MGPRespecifiedLevel levelZero = MGPipeMakeRespecifiedLevel(kTex2D, 0, 64, 64, 1);
     MGPipeApplyResourceRespecify(levelDesc(1, 0x8058u /*GL_RGBA8*/), nullptr, &levelZero);
     ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels));
     // A SECOND FACE OF THE SAME LEVEL, keyed the way the packed Target keys it (ID-12: high
     // byte = the cube-face upload target, low byte = the resource target), so what survives is
     // a SET and not one lucky entry - and so that the level number alone cannot be what matched.
     const Uint16 secondFace = MGPipePackSubDataTarget(kTex2D, 1u);
-    const MGPRespecifiedLevel faceOfLevelZero{secondFace, 0};
+    const MGPRespecifiedLevel faceOfLevelZero = MGPipeMakeRespecifiedLevel(secondFace, 0, 64, 64, 1);
     MGPipeApplyResourceRespecify(levelDesc(1, 0x8058u), nullptr, &faceOfLevelZero);
     MGPSubData otherFace = TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0);
     otherFace.Target = secondFace;
@@ -2168,7 +2168,7 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
     //
     // glTexImage2D(level 1, data): this redefines level 1 of the (kTex2D, *) face only, and the
     // level count moves 1 -> 2 with it.
-    const MGPRespecifiedLevel levelOne{kTex2D, 1};
+    const MGPRespecifiedLevel levelOne = MGPipeMakeRespecifiedLevel(kTex2D, 1, 32, 32, 1);
     MGPipeApplyResourceRespecify(levelDesc(2, 0x8058u), nullptr, &levelOne);
 
     ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u)
@@ -2256,10 +2256,10 @@ TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel)
     // glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, level 0, data), then the same for -X. Espryt
     // bails on both (a cube map with one face defined is not cube-complete), so both are still
     // owed when the next call arrives.
-    const MGPRespecifiedLevel positiveXLevelZero{positiveX, 0};
+    const MGPRespecifiedLevel positiveXLevelZero = MGPipeMakeRespecifiedLevel(positiveX, 0, 64, 64, 1);
     MGPipeApplyResourceRespecify(faceDesc(0x8058u /*GL_RGBA8*/), nullptr, &positiveXLevelZero);
     ASSERT_TRUE(MGPipeApplyResourceSubData(faceUpload(positiveX), texels));
-    const MGPRespecifiedLevel negativeXLevelZero{negativeX, 0};
+    const MGPRespecifiedLevel negativeXLevelZero = MGPipeMakeRespecifiedLevel(negativeX, 0, 64, 64, 1);
     MGPipeApplyResourceRespecify(faceDesc(0x8058u), nullptr, &negativeXLevelZero);
     ASSERT_TRUE(MGPipeApplyResourceSubData(faceUpload(negativeX), texels));
     ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 2u)
@@ -2498,12 +2498,12 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
     // nothing about that level's coordinate system. Level 1's entry goes; level 0's stays.
     ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels));
     ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 2u);
-    const MGPRespecifiedLevel levelOne{kTex2D, 1};
+    const MGPRespecifiedLevel levelOne = MGPipeMakeRespecifiedLevel(kTex2D, 1, 32, 32, 1);
     ASSERT_TRUE(MGPipeApplyResourceRespecify(maskedAgain, nullptr, &levelOne));
     ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
         << "a level-scoped respecify on an unchanged descriptor did not drop the level it named";
     EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].Level, 0u) << "it dropped the wrong level";
-    const MGPRespecifiedLevel levelZero{kTex2D, 0};
+    const MGPRespecifiedLevel levelZero = MGPipeMakeRespecifiedLevel(kTex2D, 0, 64, 64, 1);
 
     // THE NEGATIVE CONTROL, in the same case: move ONE storage-defining field and the same call
     // is a redefinition again, which takes the level it names with it.

@@ -704,7 +704,7 @@ TEST_F(PipeWireCodecTest, KNeedsAckRespecifyCarriesItsRedefinitionScope) {
     ASSERT_TRUE(wire.PumpOne(&applied));
 
     MGPResourceDesc respecify = create;
-    MGPipeSetRespecifiedLevel(respecify, 0x0102u, 1u);
+    MGPipeSetRespecifiedLevel(respecify, 0x0102u, 1u, 4u, 4u, 1u);
     EXPECT_FALSE(MGPipeRespecifyIsWholeResource(respecify));
     ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify)),
               kInvalidSeq);
@@ -836,7 +836,7 @@ TEST_F(PipeWireCodecTest, ResourceDescPadsCrossToo) {
     desc.ArrayLayers = 6;
     desc.Levels = 3;
     desc.Samples = 1;
-    MGPipeSetRespecifiedLevel(desc, 0x0304u, 2u);
+    MGPipeSetRespecifiedLevel(desc, 0x0304u, 2u, 4u, 4u, 1u);
 
     ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &desc, sizeof(desc)),
               kInvalidSeq);
@@ -851,6 +851,9 @@ TEST_F(PipeWireCodecTest, ResourceDescPadsCrossToo) {
     EXPECT_FALSE(MGPipeRespecifyIsWholeResource(*crossed));
     EXPECT_EQ(MGPipeRespecifiedUploadTargetOf(*crossed), 0x0304u);
     EXPECT_EQ(MGPipeRespecifiedLevelOf(*crossed), 2u);
+    EXPECT_EQ(MGPipeRespecifiedWidthOf(*crossed), 4u);
+    EXPECT_EQ(MGPipeRespecifiedHeightOf(*crossed), 4u);
+    EXPECT_EQ(MGPipeRespecifiedDepthOf(*crossed), 1u);
 
 }
 

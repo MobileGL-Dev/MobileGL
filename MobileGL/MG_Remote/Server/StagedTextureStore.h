@@ -105,12 +105,14 @@
 // rather than left to StagedShadow.h's copy of the same include.
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_Util/Math/VectorTypes.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <limits>
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
@@ -125,6 +127,97 @@ namespace MobileGL::MG_Remote::Server {
     // TextureCubeMapArray shrink x and y; every other target shrinks all three. This is the
     // mip chain's definition (MG_State's IsMipmapCompleteForFilter applies the same split,
     // TextureObject.cpp:705-734), so two honest ends compute the same number.
+    struct StagedTextureDeviceLimits {
+        Int MaxTextureSize = 16384;
+        Int MaxRectangleTextureSize = 16384;
+        Int Max3DTextureSize = 2048;
+        Int MaxCubeMapTextureSize = 16384;
+        Int MaxArrayTextureLayers = 2048;
+        Int MaxTextureBufferSize = 65536;
+    };
+
+    // Multisample and buffer textures have no legal glTexSubImage producer. Keep their
+    // definedness in the store, but never accept a byte-backed staged level for them.
+    inline Bool StagedTextureTargetSupportsSubData(Uint8 resourceTarget) {
+        switch (static_cast<MG_Pipe::MGPipeResourceTarget>(resourceTarget)) {
+        case MG_Pipe::MGPipeResourceTarget::Tex1D:
+        case MG_Pipe::MGPipeResourceTarget::Tex2D:
+        case MG_Pipe::MGPipeResourceTarget::Tex3D:
+        case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+        case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+        case MG_Pipe::MGPipeResourceTarget::TexCube:
+        case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+        case MG_Pipe::MGPipeResourceTarget::TexRect:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    inline Bool StagedTextureExtentWithinDeviceLimits(Uint8 resourceTarget, const IntVec3& extent,
+                                                       const StagedTextureDeviceLimits& limits) {
+        if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return false;
+        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(resourceTarget);
+        switch (target) {
+        case MG_Pipe::MGPipeResourceTarget::Tex1D:
+            return extent.x() <= limits.MaxTextureSize && extent.y() == 1 && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex2D:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxTextureSize &&
+                   extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::TexRect:
+            return extent.x() <= limits.MaxRectangleTextureSize &&
+                   extent.y() <= limits.MaxRectangleTextureSize && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex3D:
+            return extent.x() <= limits.Max3DTextureSize && extent.y() <= limits.Max3DTextureSize &&
+                   extent.z() <= limits.Max3DTextureSize;
+        case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxArrayTextureLayers &&
+                   extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+            return extent.x() <= limits.MaxTextureSize && extent.y() <= limits.MaxTextureSize &&
+                   extent.z() <= limits.MaxArrayTextureLayers;
+        case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray:
+            return false; // defined levels only; multisample subimage records are never legal
+        case MG_Pipe::MGPipeResourceTarget::TexCube:
+            return extent.x() <= limits.MaxCubeMapTextureSize &&
+                   extent.y() <= limits.MaxCubeMapTextureSize && extent.z() == 1;
+        case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+            return extent.x() <= limits.MaxCubeMapTextureSize &&
+                   extent.y() <= limits.MaxCubeMapTextureSize && extent.z() <= limits.MaxArrayTextureLayers;
+        case MG_Pipe::MGPipeResourceTarget::TexBuffer:
+            return false; // texture buffers have no glTexSubImage entry point
+        default:
+            return false;
+        }
+    }
+
+    // The descriptor's InternalFormat is already the server's uncompressed storage fallback.
+    // Compute the maximum byte coordinate of one declared level without trusting upload bytes.
+    inline Bool StagedTextureDeclaredLevelByteBound(Uint8 resourceTarget, Uint32 internalFormat,
+                                                     const IntVec3& extent,
+                                                     const StagedTextureDeviceLimits& limits,
+                                                     Uint64* outBound) {
+        if (outBound == nullptr || !StagedTextureTargetSupportsSubData(resourceTarget) ||
+            !StagedTextureExtentWithinDeviceLimits(resourceTarget, extent, limits)) return false;
+        const SizeT bytesPerTexel = MG_Util::GetSizedInternalFormatSizeInBytes(
+            static_cast<TextureInternalFormat>(internalFormat));
+        if (bytesPerTexel == 0) return false;
+        const Uint64 x = static_cast<Uint64>(extent.x());
+        const Uint64 y = static_cast<Uint64>(extent.y());
+        const Uint64 z = static_cast<Uint64>(extent.z());
+        const Uint64 bpp = static_cast<Uint64>(bytesPerTexel);
+        constexpr Uint64 max = std::numeric_limits<Uint64>::max();
+        if (x > max / y) return false;
+        const Uint64 xy = x * y;
+        if (xy > max / z) return false;
+        const Uint64 texels = xy * z;
+        if (texels > max / bpp) return false;
+        const Uint64 bytes = texels * bpp;
+        if (bytes > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) return false;
+        *outBound = bytes;
+        return true;
+    }
+
     inline Int StagedTextureShrinkingAxisCount(Uint8 pipeResourceTarget) {
         switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
         case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
@@ -205,6 +298,12 @@ namespace MobileGL::MG_Remote::Server {
         explicit StagedTextureStore(Bool copies) : m_copies(copies) {}
 
         Bool CopiesIntoServerStorage() const { return m_copies; }
+        void SetDeviceLimits(Int maxTextureSize, Int max3DTextureSize, Int maxCubeMapTextureSize,
+                             Int maxArrayTextureLayers, Int maxTextureBufferSize) {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_deviceLimits = {maxTextureSize, std::min<Int>(16384, maxTextureSize), max3DTextureSize,
+                              maxCubeMapTextureSize, maxArrayTextureLayers, maxTextureBufferSize};
+        }
 
         // The wire handle the record carried, tagged so it can never alias a twin address.
         // Slot and Gen are the client allocator's identity for one live object, so a recycled
@@ -236,20 +335,23 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+            RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
 #if MOBILEGL_BUILD_DISAGGREGATED
             // A run can be the first piece of a redefined level. Old coverage
             // belongs to the previous coordinate system even when the new run
             // happens to touch its old range; retaining it invents bytes that
-            // the current definition never supplied.
+            // the current definition never supplied (B4). The redefinition itself
+            // is NoteLevelDefined's, which drops the old bytes and coverage on an
+            // extent move, and RequireDeclaredLevel above refuses a run whose
+            // extent disagrees with that declaration (PH-4) - so this reset is the
+            // belt that keeps B4's rule if that refusal is ever relaxed.
             if (!shadow.Defined || shadow.Extent != extent) {
                 shadow.Bytes.clear();
                 shadow.Covered.clear();
             }
 #endif
-            shadow.Extent = extent;
-            shadow.Defined = true;
             shadow.GpuDirty = false;
-            return CopyRunInto(shadow, imageOffset, bytes, byteSize);
+            return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize);
         }
 
         // THE WHOLE-LEVEL SPELLING: the run is the level's COMPLETE current content, beginning at
@@ -263,25 +365,39 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
-            shadow.Extent = extent;
-            shadow.Defined = true;
+            RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
             shadow.GpuDirty = false;
             shadow.Bytes.clear();
             shadow.Covered.clear();
-            return CopyRunInto(shadow, 0, bytes, byteSize);
+            return CopyRunInto(shadow, key, uploadTarget, level, 0, bytes, byteSize);
         }
 
-        // A storage-defining respecify named this level: it EXISTS from here on, at this
-        // extent (null-data glTexImage*D, a generated level). An extent move redefines the
-        // level's coordinate system, so the bytes and the dirty mark of the old one go with
-        // it; an extent-restating one keeps them, which is the same answer the driver gives
-        // (a same-shape redefinition that carries no new upload leaves the old texels in
-        // place - undefined content is allowed to be the old content).
-        void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent) {
+        // A storage-defining respecify named this level: it EXISTS from here on, at the exact
+        // extent carried by that accepted operation (including noncanonical mutable mips and
+        // null-data glTexImage*D). Its byte bound is established here, before any upload arrives.
+        // An extent move replaces the coordinate system, so old bytes and coverage go with it.
+        void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
+                              Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                              Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
             if (!m_copies) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
+            Uint64 byteBound = 0;
+            const Bool supportsSubData = StagedTextureTargetSupportsSubData(resourceTarget);
+            const Bool validExtent = extent.x() > 0 && extent.y() > 0 && extent.z() > 0;
+            if (MG_Util::GetSizedInternalFormatSizeInBytes(
+                    static_cast<TextureInternalFormat>(internalFormat)) == 0 || !validExtent ||
+                (supportsSubData && !StagedTextureDeclaredLevelByteBound(
+                    resourceTarget, internalFormat, extent, m_deviceLimits, &byteBound))) {
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.NoteLevelDefined\"} - "
+                            "the accepted respecify has no valid server-bounded texture level "
+                            "(key=%llu, target=%u, level=%u, extent=%d,%d,%d, internalFormat=%u)",
+                            static_cast<unsigned long long>(key), uploadTarget, level,
+                            extent.x(), extent.y(), extent.z(), internalFormat);
+            }
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
-            if (!shadow.Defined || shadow.Extent != extent) {
+            if (!shadow.Defined || shadow.Extent != extent || shadow.InternalFormat != internalFormat ||
+                shadow.ResourceTarget != resourceTarget || shadow.DeclaredByteBound != byteBound) {
                 shadow.Bytes.clear();
                 // The covered set is a statement about THIS coordinate system, so it goes with
                 // the bytes it described.
@@ -289,6 +405,9 @@ namespace MobileGL::MG_Remote::Server {
                 shadow.GpuDirty = false;
             }
             shadow.Extent = extent;
+            shadow.InternalFormat = internalFormat;
+            shadow.ResourceTarget = resourceTarget;
+            shadow.DeclaredByteBound = byteBound; // zero for targets without glTexSubImage
             shadow.Defined = true;
             m_any.store(true, std::memory_order_release);
         }
@@ -340,8 +459,10 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_copies) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
-            if (shadow != nullptr && shadow->Defined && !shadow->Bytes.empty() &&
-                StagedShadowStore::CoverageHas(shadow->Covered, 0, shadow->Bytes.size())) {
+            if (shadow != nullptr && shadow->Defined && shadow->DeclaredByteBound != 0 &&
+                shadow->Bytes.size() == shadow->DeclaredByteBound &&
+                StagedShadowStore::CoverageHas(shadow->Covered, 0,
+                                               static_cast<SizeT>(shadow->DeclaredByteBound))) {
                 return shadow->Bytes.data();
             }
             // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
@@ -363,12 +484,12 @@ namespace MobileGL::MG_Remote::Server {
         Bool IsCovered(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
-            if (shadow == nullptr || !shadow->Defined || shadow->Bytes.empty()) return false;
-            // THE WHOLE LEVEL, not merely "some bytes": a level assembled out of stage-chunk
-            // pieces is covered only once every piece has landed, and both readers of this
-            // answer then read the image whole - the image-promotion merge and Magma's
-            // unbacked-level readback.
-            return StagedShadowStore::CoverageHas(shadow->Covered, 0, shadow->Bytes.size());
+            if (shadow == nullptr || !shadow->Defined || shadow->DeclaredByteBound == 0 ||
+                shadow->Bytes.size() != shadow->DeclaredByteBound) return false;
+            // THE WHOLE LEVEL, not merely the currently assembled prefix: all runs must cover
+            // the server-derived bound before a reader can treat the level as complete.
+            return StagedShadowStore::CoverageHas(
+                shadow->Covered, 0, static_cast<SizeT>(shadow->DeclaredByteBound));
         }
         // How many runs this level's coverage is made of: 1 for a whole-level adoption, one per
         // piece for a level cut into stage-chunk slabs. Diagnostics for the unit cases, so a
@@ -406,6 +527,12 @@ namespace MobileGL::MG_Remote::Server {
             if (shadow == nullptr || !shadow->Defined) return 0;
             return shadow->Bytes.size();
         }
+        Uint64 LevelDeclaredByteBound(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return 0;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow == nullptr || !shadow->Defined ? 0 : shadow->DeclaredByteBound;
+        }
         Bool HasShadow(Uint64 key) const {
             if (!m_any.load(std::memory_order_acquire)) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
@@ -436,6 +563,9 @@ namespace MobileGL::MG_Remote::Server {
             // adopted for this level: a gap in it is a piece that never arrived, which is the
             // Fatal below (StagedShadowStore's coverage rules, same helpers).
             Vector<Range1D> Covered;
+            Uint32 InternalFormat = 0;
+            Uint8 ResourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Count);
+            Uint64 DeclaredByteBound = 0;
             Bool Defined = false;
             Bool GpuDirty = false;
         };
@@ -447,15 +577,69 @@ namespace MobileGL::MG_Remote::Server {
         // hold the run, place it, and widen the covered set by exactly its range. An empty run
         // (a level defined with no bytes, or a null pointer) covers nothing - emptiness is the
         // coverage answer for such a level, not an error.
-        const Uint8* CopyRunInto(LevelShadow& shadow, Uint64 imageOffset, const void* bytes,
-                                 SizeT byteSize) {
+        void RequireDeclaredLevel(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget,
+                                  Uint16 level, const IntVec3& extent) {
+            if (!shadow.Defined || shadow.InternalFormat == 0) {
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
+                            "resource_subdata arrived before the server declared texture level "
+                            "(key=%llu, uploadTarget=%u, level=%u)",
+                            static_cast<unsigned long long>(key), uploadTarget, level);
+            }
+            if (!StagedTextureTargetSupportsSubData(shadow.ResourceTarget) ||
+                shadow.DeclaredByteBound == 0) {
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"} - "
+                            "resource_subdata is not legal for the server-declared texture target "
+                            "(key=%llu, uploadTarget=%u, level=%u, target=%u)",
+                            static_cast<unsigned long long>(key), uploadTarget, level,
+                            static_cast<Uint32>(shadow.ResourceTarget));
+            }
+            if (shadow.Extent == extent) return;
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
+                        "resource_subdata extent disagrees with the server-declared texture level "
+                        "(key=%llu, uploadTarget=%u, level=%u, declared=%d,%d,%d, record=%d,%d,%d)",
+                        static_cast<unsigned long long>(key), uploadTarget, level,
+                        shadow.Extent.x(), shadow.Extent.y(), shadow.Extent.z(),
+                        extent.x(), extent.y(), extent.z());
+        }
+
+        // Check the run's exclusive end against the extent recorded by the server's prior
+        // resource_respecify before any cast, coverage edit, or vector growth.
+        const Uint8* CopyRunInto(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget, Uint16 level,
+                                 Uint64 imageOffset, const void* bytes, SizeT byteSize) {
             if (bytes != nullptr && byteSize != 0) {
+                constexpr Uint64 max = std::numeric_limits<Uint64>::max();
+                const Uint64 runBytes = static_cast<Uint64>(byteSize);
+                if (imageOffset > max - runBytes) {
+                    SessionFail(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
+                                "texture run end overflows (handle=%llu, uploadTarget=%u, level=%u, "
+                                "offset=%llu, size=%llu)",
+                                static_cast<unsigned long long>(key), uploadTarget, level,
+                                static_cast<unsigned long long>(imageOffset),
+                                static_cast<unsigned long long>(runBytes));
+                }
+                const Uint64 end = imageOffset + runBytes;
+                if (end > shadow.DeclaredByteBound ||
+                    end > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+                    SessionFail(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
+                                "texture run exceeds the server-declared level byte bound "
+                                "(handle=%llu, uploadTarget=%u, level=%u, offset=%llu, size=%llu, "
+                                "bound=%llu)",
+                                static_cast<unsigned long long>(key), uploadTarget, level,
+                                static_cast<unsigned long long>(imageOffset),
+                                static_cast<unsigned long long>(runBytes),
+                                static_cast<unsigned long long>(shadow.DeclaredByteBound));
+                }
                 const auto* raw = static_cast<const Uint8*>(bytes);
-                const SizeT needed = static_cast<SizeT>(imageOffset) + byteSize;
+                const SizeT begin = static_cast<SizeT>(imageOffset);
+                const SizeT needed = static_cast<SizeT>(end);
                 if (shadow.Bytes.size() < needed) shadow.Bytes.resize(needed, 0);
-                std::memcpy(shadow.Bytes.data() + imageOffset, raw, byteSize);
-                StagedShadowStore::CoverageAdd(shadow.Covered, static_cast<SizeT>(imageOffset),
-                                               needed);
+                std::memcpy(shadow.Bytes.data() + begin, raw, byteSize);
+                StagedShadowStore::CoverageAdd(shadow.Covered, begin, needed);
             }
             m_any.store(true, std::memory_order_release);
             return shadow.Bytes.empty() ? nullptr : shadow.Bytes.data();
@@ -470,6 +654,7 @@ namespace MobileGL::MG_Remote::Server {
 
         const Bool m_copies;
         mutable std::mutex m_mutex;
+        StagedTextureDeviceLimits m_deviceLimits{};
         ska::flat_hash_map<Uint64, TextureShadow> m_shadows;
         // Read on every IsLevelGpuDirty / LevelExtentOrUndefined, so the monolith cost is one
         // acquire load of a never-written flag rather than a mutex and two hash lookups.

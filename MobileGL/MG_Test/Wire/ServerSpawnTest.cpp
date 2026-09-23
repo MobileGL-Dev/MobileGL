@@ -44,6 +44,7 @@
 #include <MG_Remote/Wire/PipeWireCodec.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/TextureState/TextureEnum.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <gtest/gtest.h>
@@ -101,7 +102,9 @@ namespace {
     template <class Payload, class Mutator>
     bool EncodeThenMutateHeaderAndPublish(Client::ClientSession& session, MobileGL::MG_Pipe::MGPWireOp op,
                                            const Payload& payload, Mutator&& mutate,
-                                           std::uint64_t* outSeq = nullptr) {
+                                           std::uint64_t* outSeq = nullptr,
+                                           const Wire::WireTail* tails = nullptr,
+                                           MobileGL::Uint32 tailCount = 0) {
         if (outSeq != nullptr) *outSeq = Wire::kInvalidSeq;
         auto* link = session.DataLink();
         if (link == nullptr || !link->Attached()) return false;
@@ -109,7 +112,9 @@ namespace {
         if (!Wire::MGPipeWireRecordLayout(op, &payload, layout) ||
             layout.PayloadBytes != sizeof(payload)) return false;
         auto& encoder = session.Encoder();
-        const std::uint64_t seq = encoder.EncodeRecord(op, &payload, sizeof(payload));
+        const std::uint64_t seq = tailCount == 0
+                                      ? encoder.EncodeRecord(op, &payload, sizeof(payload))
+                                      : encoder.EncodeRecord(op, &payload, sizeof(payload), tails, tailCount);
         if (seq == Wire::kInvalidSeq) return false;
         auto& commands = link->CommandsOut();
         const auto* arena = link->RecordArena();
@@ -129,6 +134,53 @@ namespace {
         if (link->Flush() != MOBILEGL_OK) return false;
         if (outSeq != nullptr) *outSeq = seq;
         return true;
+    }
+
+    template <class Payload>
+    bool PublishRawRecordAndWait(Client::ClientSession& session, MobileGL::MG_Pipe::MGPWireOp op,
+                                 const Payload& payload, std::uint64_t* outSeq = nullptr) {
+        std::uint64_t seq = Wire::kInvalidSeq;
+        if (!EncodeThenMutateHeaderAndPublish(
+                session, op, payload, [](Transport::RingRecordHeader&, std::uint8_t*) {}, &seq)) {
+            return false;
+        }
+        if (outSeq != nullptr) *outSeq = seq;
+        return session.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
+    }
+
+    MobileGL::MG_Pipe::MGPFramebufferState RawColorAttachmentFramebuffer(
+        MobileGL::MG_Pipe::MGPipeHandle fbo, MobileGL::MG_Pipe::MGPipeHandle texture,
+        MobileGL::Uint64 contentHash) {
+        MobileGL::MG_Pipe::MGPFramebufferState state{};
+        state.Fbo = fbo;
+        state.Target = static_cast<MobileGL::Uint8>(
+            MobileGL::MG_Pipe::MGPipeFramebufferTarget::Both);
+        state.IsDefault = 0;
+        state.Complete = 1;
+        state.Width = state.Height = state.Layers = state.Samples = 1;
+        state.FixedSampleLocations = 1;
+        for (auto& drawBuffer : state.DrawBuffers) drawBuffer = -1;
+        state.DrawBuffers[0] = 0;
+        state.Color[0].Res = texture;
+        state.Color[0].InternalFormat =
+            static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+        state.Color[0].Kind = MobileGL::MG_Pipe::kMGPipeSurfaceKindTexture;
+        state.Color[0].UploadTarget =
+            static_cast<MobileGL::Uint16>(MobileGL::TextureUploadTarget::Texture2D);
+        state.Color[0].TextureTarget =
+            static_cast<MobileGL::Uint16>(MobileGL::TextureTarget::Texture2D);
+        state.ContentHash = contentHash;
+        return state;
+    }
+
+    MobileGL::MG_Pipe::MGPClear RawColorClear(MobileGL::MG_Pipe::MGPipeHandle fbo) {
+        MobileGL::MG_Pipe::MGPClear clear{};
+        clear.Fbo = fbo;
+        clear.Kind = MobileGL::MG_Pipe::kMGPipeClearKindWhole;
+        clear.DrawBufferIndex = -1;
+        clear.BufferMask = GL_COLOR_BUFFER_BIT;
+        clear.ValueClass = MobileGL::MG_Pipe::kMGPipeClearValueClassFloat;
+        return clear;
     }
 
     std::string ServerImage() {
@@ -341,6 +393,506 @@ TEST(ServerSpawnTest, RawPeerOversizedReadbackGetsErrorAndSessionContinues) {
     int exitCode = -1;
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
     EXPECT_EQ(exitCode, 0);
+}
+
+TEST(ServerSpawnTest, RawPeerTextureRunPastDeclaredLevelBoundIsNamedProtocolCorruption) {
+    const std::string endpoint = Endpoint("bad-texture-run-bound");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-texture-run-bound", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = {73u, 1u};
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.ArrayLayers = 1;
+    desc.Levels = 1;
+    desc.Samples = 1;
+
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
+    respecify.HasDefinedContent = 1;
+    MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
+        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+                       static_cast<MobileGL::Uint32>(respecify.Target),
+                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        0, 4, 4, 1);
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
+                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    // Reserve the post-mutation 96-byte stage run, but declare an encoder-accepted 48-byte
+    // 4x3 box from Y=1. The mutation changes only the declared run geometry/size.
+    std::vector<std::uint8_t> staged(96, 0x5A);
+    MobileGL::MG_Pipe::MGPSubData upload{};
+    upload.Res = desc.Resource;
+    upload.Target = MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+        static_cast<MobileGL::Uint32>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D),
+        static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D));
+    upload.Level = 0;
+    upload.UnionBox = MobileGL::MG_Pipe::MGPBox{0, 1, 0, 4, 3, 1};
+    upload.RegionCount = 1;
+    upload.Blob = client.Encoder().StageBytes(staged.data(), staged.size());
+    upload.Blob.Size = 48;
+    upload.LevelWidth = 4;
+    upload.LevelHeight = 4;
+    upload.LevelDepth = 1;
+    MobileGL::MG_Pipe::MGPSubRegion region{};
+    region.Y = 1;
+    region.W = 4;
+    region.H = 3;
+    region.D = 1;
+    region.SrcOffset = 0;
+    region.SrcRowStride = 16;
+    region.SrcSliceStride = 64;
+    const Wire::WireTail tail{&region, sizeof(region)};
+    std::uint64_t uploadSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ResourceSubData, upload,
+        [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireUpload = reinterpret_cast<MobileGL::MG_Pipe::MGPSubData*>(payloadBytes);
+            wireUpload->Blob.Size = 96;
+            auto* wireRegion = reinterpret_cast<MobileGL::MG_Pipe::MGPSubRegion*>(
+                payloadBytes + sizeof(MobileGL::MG_Pipe::MGPSubData));
+            wireRegion->SrcRowStride = 32;
+            wireRegion->SrcSliceStride = 96;
+        }, &uploadSeq, &tail, 1))
+        << "the peer failed to publish the encoder-accepted texture run";
+    ASSERT_NE(uploadSeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the out-of-level run promptly";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto boundFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"}");
+    EXPECT_NE(boundFatal, std::string::npos)
+        << "the server did not reject the run at the declared level byte bound";
+    EXPECT_EQ(firstProtocolFatal, boundFatal)
+        << "the run was refused before it reached the staged-level byte bound";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerTextureSubDataMustMatchTheAcceptedMutableLevelExtent) {
+    const std::string endpoint = Endpoint("bad-texture-level-extent");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-texture-level-extent", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = {74u, 1u};
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.ArrayLayers = 1;
+    desc.Levels = 1;
+    desc.Samples = 1;
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
+    respecify.HasDefinedContent = 1;
+    MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
+        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+                       static_cast<MobileGL::Uint32>(respecify.Target),
+                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        0, 4, 4, 1);
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
+                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    std::vector<std::uint8_t> staged(64, 0x5A);
+    MobileGL::MG_Pipe::MGPSubData upload{};
+    upload.Res = desc.Resource;
+    upload.Target = MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+        static_cast<MobileGL::Uint32>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D),
+        static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D));
+    upload.Level = 0;
+    upload.UnionBox = MobileGL::MG_Pipe::MGPBox{0, 0, 0, 4, 4, 1};
+    upload.Blob = client.Encoder().StageBytes(staged.data(), staged.size());
+    upload.LevelWidth = 4;
+    upload.LevelHeight = 4;
+    upload.LevelDepth = 1;
+    std::uint64_t uploadSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ResourceSubData, upload,
+        [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireUpload = reinterpret_cast<MobileGL::MG_Pipe::MGPSubData*>(payloadBytes);
+            // Still within the device limit and still contains the dirty box; the server must
+            // refuse it because ResourceRespecify accepted 4x4 for this exact level.
+            wireUpload->LevelWidth = 8;
+        }, &uploadSeq))
+        << "the peer failed to publish the encoder-accepted texture record";
+    ASSERT_NE(uploadSeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject a changed mutable-level extent promptly";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto extentFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"}");
+    EXPECT_NE(extentFatal, std::string::npos)
+        << "server did not refuse the upload extent that disagreed with ResourceRespecify";
+    EXPECT_EQ(firstProtocolFatal, extentFatal)
+        << "the record was refused before staged-level extent matching";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerMultisampleTextureSubDataIsNamedProtocolCorruption) {
+    const std::string endpoint = Endpoint("bad-multisample-texture-subdata");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-multisample-texture-subdata", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = {75u, 1u};
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2DMS);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.ArrayLayers = 1;
+    desc.Levels = 1;
+    desc.Samples = 4;
+    desc.Immutable = 1;
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
+    respecify.HasDefinedContent = 1;
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
+                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    std::vector<std::uint8_t> staged(64, 0x5A);
+    MobileGL::MG_Pipe::MGPSubData upload{};
+    upload.Res = desc.Resource;
+    upload.Target = MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+        static_cast<MobileGL::Uint32>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2DMS),
+        static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2DMultisample));
+    upload.Level = 0;
+    upload.UnionBox = MobileGL::MG_Pipe::MGPBox{0, 0, 0, 4, 4, 1};
+    upload.Blob = client.Encoder().StageBytes(staged.data(), staged.size());
+    upload.LevelWidth = 4;
+    upload.LevelHeight = 4;
+    upload.LevelDepth = 1;
+    std::uint64_t uploadSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ResourceSubData, upload,
+        [](Transport::RingRecordHeader&, std::uint8_t*) {}, &uploadSeq));
+    ASSERT_NE(uploadSeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server accepted an illegal multisample subimage record";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto targetFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"}");
+    EXPECT_NE(targetFatal, std::string::npos)
+        << "server did not refuse multisample bytes through the staged texture target gate";
+    EXPECT_EQ(firstProtocolFatal, targetFatal)
+        << "multisample record was refused before the staged target gate";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerNoncanonicalMutableExtentCarrierIsRefused) {
+    const std::string endpoint = Endpoint("bad-respecify-extent-carrier");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-respecify-extent-carrier", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = {76u, 1u};
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.ArrayLayers = 1;
+    desc.Levels = 1;
+    desc.Samples = 1;
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
+    respecify.HasDefinedContent = 1;
+    MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
+        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+                       static_cast<MobileGL::Uint32>(respecify.Target),
+                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        0, 4, 4, 1);
+    std::uint64_t respecifySeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, respecify,
+        [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPResourceDesc*>(payloadBytes);
+            wireDesc->BufSize |= (std::uint64_t{1} << 32);
+        }, &respecifySeq));
+    ASSERT_NE(respecifySeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server accepted a noncanonical mip extent carrier";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto carrierFatal = log.find("Fatal{ProtocolCorruption, \"ResourceRespecify.ExtentCarrier\"}");
+    EXPECT_NE(carrierFatal, std::string::npos)
+        << "server did not reject high BufSize bits in the mutable extent carrier";
+    EXPECT_EQ(firstProtocolFatal, carrierFatal)
+        << "carrier was refused before the canonicality gate";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerWholeImageRespecifyCannotSmuggleBufferRangeFields) {
+    const std::string endpoint = Endpoint("bad-whole-respecify-buffer-range");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-whole-respecify-buffer-range", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = {77u, 1u};
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = 4;
+    desc.Height = 4;
+    desc.Depth = 1;
+    desc.ArrayLayers = 1;
+    desc.Levels = 1;
+    desc.Samples = 1;
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
+    respecify.HasDefinedContent = 1;
+    std::uint64_t respecifySeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, respecify,
+        [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPResourceDesc*>(payloadBytes);
+            wireDesc->BufOffset = 1;
+        }, &respecifySeq));
+    ASSERT_NE(respecifySeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server accepted a buffer range on a whole image texture";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto rangeFatal = log.find("Fatal{ProtocolCorruption, \"ResourceRespecify.BufferRange\"}");
+    EXPECT_NE(rangeFatal, std::string::npos)
+        << "server did not reject BufOffset/BufSize on the whole image descriptor";
+    EXPECT_EQ(firstProtocolFatal, rangeFatal)
+        << "descriptor was refused before the canonical buffer-range gate";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerFramebufferAttachmentPastBackendSlotLimitIsNamedProtocolCorruption) {
+    const std::string endpoint = Endpoint("bad-fbo-texture-slot");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-fbo-texture-slot", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    auto& client = Client::ClientSessionInstance();
+
+    const MobileGL::MG_Pipe::MGPipeHandle fbo{20u, 1u};
+    const MobileGL::MG_Pipe::MGPipeHandle outOfRange{1u << 20, 1u};
+    const auto framebuffer = RawColorAttachmentFramebuffer(fbo, outOfRange, 1);
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
+                                        framebuffer));
+    const auto clear = RawColorClear(fbo);
+    std::uint64_t clearSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear,
+        [](Transport::RingRecordHeader&, std::uint8_t*) {}, &clearSeq));
+    ASSERT_NE(clearSeq, Wire::kInvalidSeq);
+    // This final clear is expected to kill the server, so there is no applied watermark to wait on.
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK)
+        << "server did not reject the FBO attachment whose texture slot exceeded BackendSlotTable's cap";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto slotFatal = log.find("Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"}");
+    EXPECT_NE(slotFatal, std::string::npos) << "server did not name the backend texture slot bound";
+    EXPECT_EQ(firstProtocolFatal, slotFatal)
+        << "the peer record was refused before the backend twin adoption guard";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerFramebufferAttachmentBackwardGenerationIsNamedProtocolCorruption) {
+    const std::string endpoint = Endpoint("bad-fbo-texture-generation");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-fbo-texture-generation", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    auto& client = Client::ClientSessionInstance();
+
+    const MobileGL::MG_Pipe::MGPipeHandle texture{37u, 2u};
+    MobileGL::MG_Pipe::MGPResourceDesc desc{};
+    desc.Resource = texture;
+    desc.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Mipmap);
+    desc.BindMask = MobileGL::MG_Pipe::kMGPipeBindRenderTarget;
+    desc.InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+    desc.Width = desc.Height = desc.Depth = 1;
+    desc.ArrayLayers = desc.Levels = desc.Samples = 1;
+    MobileGL::Int32 status = Wire::ReplySink::kStatusError;
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
+                                  nullptr, 0, nullptr, 0, &status);
+    ASSERT_NE(seq, Wire::kInvalidSeq);
+    ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
+    ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
+
+    const MobileGL::MG_Pipe::MGPipeHandle fbo{20u, 1u};
+    auto current = RawColorAttachmentFramebuffer(fbo, texture, 1);
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
+                                        current));
+    const auto clear = RawColorClear(fbo);
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear));
+
+    // PipeApply accepts this attachment verbatim; the server's already-live {37,2} twin is
+    // the only fact that lets the apply-side adoption guard identify the stale generation.
+    current.Color[0].Res.Gen = 1;
+    current.ContentHash = 2;
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
+                                        current));
+    std::uint64_t badClearSeq = Wire::kInvalidSeq;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear,
+        [](Transport::RingRecordHeader&, std::uint8_t*) {}, &badClearSeq));
+    ASSERT_NE(badClearSeq, Wire::kInvalidSeq);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK)
+        << "server did not reject the FBO attachment whose generation moved backwards";
+    EXPECT_EQ(exitCode, -SIGABRT);
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
+    const auto generationFatal = log.find("Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"}");
+    EXPECT_NE(generationFatal, std::string::npos)
+        << "server did not name the stale attachment generation";
+    EXPECT_EQ(firstProtocolFatal, generationFatal)
+        << "the peer record was refused before the backend twin generation guard";
+    client.Stop();
 }
 
 TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {

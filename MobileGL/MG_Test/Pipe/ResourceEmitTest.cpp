@@ -1422,9 +1422,9 @@ namespace {
         // The split shape, both halves in agreement: the carrier says (kTex2DUpload, 1) and the
         // trailing pointer the codec rebuilt from it says the same.
         MGPResourceDesc perLevel = Tex2DDesc(res, 4, 2, 91);
-        MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1);
+        MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1, 2, 2, 1);
         ASSERT_FALSE(MGPipeRespecifyIsWholeResource(perLevel));
-        const MGPRespecifiedLevel covered{kTex2DUpload, 1};
+        const MGPRespecifiedLevel covered = MGPipeMakeRespecifiedLevel(kTex2DUpload, 1, 2, 2, 1);
         EXPECT_TRUE(MGPipeApplyResourceRespecify(perLevel, nullptr, &covered));
 
         EXPECT_TRUE(HasPendingUpload(res.Slot, kTex2DUpload, 0))
@@ -1476,8 +1476,8 @@ namespace {
         for (const Drive& drive : drives) {
             const ChildResult child = RunInChild([&res, &drive]() {
                 MGPResourceDesc perLevel = Tex2DDesc(res, 4, 2, 92);
-                MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1);
-                const MGPRespecifiedLevel named{drive.PointerTarget, drive.PointerLevel};
+                MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1, 2, 2, 1);
+                const MGPRespecifiedLevel named = MGPipeMakeRespecifiedLevel(drive.PointerTarget, drive.PointerLevel, 2, 2, 1);
                 MGPipeApplyResourceRespecify(perLevel, nullptr,
                                              drive.HasPointer ? &named : nullptr);
             });

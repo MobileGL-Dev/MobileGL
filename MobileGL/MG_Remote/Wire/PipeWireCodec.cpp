@@ -1671,14 +1671,17 @@ namespace MobileGL::MG_Remote::Wire {
             // resource_subdata records immediately after this one, which is what the texture
             // path already does (TextureEmit.h:1137).
             //
-            // The SCOPE is contract table 1 row 19b's carrier, read only through the helpers:
-            // the presence byte and the pair are one value in three pieces, and an open-coded
-            // reader that forgets the byte reads level 0 of upload target 0 as a real scope.
+            // The scope and exact mutable-level extent are one carrier value. Read each part
+            // through the helpers; forgetting the presence byte would turn a whole-resource
+            // respecify into level 0 of upload target 0.
             MGPRespecifiedLevel level{};
             const MGPRespecifiedLevel* scope = nullptr;
             if (!MGPipeRespecifyIsWholeResource(desc)) {
-                level.UploadTarget = MGPipeRespecifiedUploadTargetOf(desc);
-                level.Level = MGPipeRespecifiedLevelOf(desc);
+                level = MGPipeMakeRespecifiedLevel(MGPipeRespecifiedUploadTargetOf(desc),
+                                                   MGPipeRespecifiedLevelOf(desc),
+                                                   MGPipeRespecifiedWidthOf(desc),
+                                                   MGPipeRespecifiedHeightOf(desc),
+                                                   MGPipeRespecifiedDepthOf(desc));
                 scope = &level;
             }
             noteAcceptance(MGPipeApplyResourceRespecify(desc, nullptr, scope));

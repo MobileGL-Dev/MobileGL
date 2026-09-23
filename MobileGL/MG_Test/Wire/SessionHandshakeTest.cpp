@@ -130,7 +130,13 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.ProgramArtifactsCodecVersion, MG_State::GLState::kProgramArtifactsCodecVersion);
     EXPECT_EQ(inputs.ProgramArtifactsSchema, MG_State::GLState::ProgramArtifactsSchemaFingerprint());
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
+#if MOBILEGL_BUILD_DISAGGREGATED
+    EXPECT_EQ(inputs.ControlSchemaRevision,
+              (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
+                  MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision);
+#else
     EXPECT_EQ(inputs.ControlSchemaRevision, static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION));
+#endif
     EXPECT_EQ(inputs.PointerBits, sizeof(void*) * 8);
     const auto perturbed = [&](auto mutate) {
         auto copy = inputs;

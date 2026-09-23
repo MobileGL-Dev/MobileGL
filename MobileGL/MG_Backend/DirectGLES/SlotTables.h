@@ -14,6 +14,9 @@
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Pipe/PipeSessionFail.h>
+#endif
 
 // Espryt 0b, the first Track H slice: the DENSE, {slot, gen}-keyed twin table that replaces
 // StateBackendObjectRegistry's UnorderedMap<StateObject*, Entry>.
@@ -345,9 +348,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // already orders of magnitude past any real GL object count, while a corrupt 32-bit
             // slot asks for a four-billion-entry resize.
             if (handle.Slot >= kMaxHandleSlot) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // PH-2: handle.Slot is peer supplied on the disaggregated arm. Release builds
+                // must publish a named protocol fault instead of silently returning m_nullTwin.
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                    "GetOrCreate(handle) named slot %u, past this table's %u bound",
+                    handle.Slot, kMaxHandleSlot);
+#else
                 MOBILEGL_ASSERT(false, "GetOrCreate(handle) named slot %u, past this table's %u bound",
                                 handle.Slot, kMaxHandleSlot);
                 return m_nullTwin;
+#endif
             }
 
             // Same arming as the minting overload, and for the same reason: twin creation is
@@ -369,11 +382,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // below already gives the same input.
             Entry& entry = EntryAt(handle.Slot);
             if (entry.Live && entry.Gen > handle.Gen) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // PH-2: a stale peer generation must not silently shed the incumbent twin in a
+                // release server. The funnel names the exact identity fault and notifies the peer.
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                    "GetOrCreate(handle) named generation %u at slot %u, behind live generation %u",
+                    handle.Gen, handle.Slot, entry.Gen);
+#else
                 MOBILEGL_ASSERT(false,
                                 "GetOrCreate(handle) named generation %u at slot %u, which is BEHIND "
                                 "the live entry's %u - refusing rather than destroying the incumbent",
                                 handle.Gen, handle.Slot, entry.Gen);
                 return m_nullTwin;
+#endif
             }
             if (entry.Live && entry.Gen != handle.Gen) entry.backend.reset();
             entry.Gen = handle.Gen;
