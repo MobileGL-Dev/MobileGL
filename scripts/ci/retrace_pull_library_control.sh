@@ -68,6 +68,16 @@ mkdir -p "${CONTROL_TMPDIR}"
 # retrace-evidence-nolog mode reproduces the shape.
 EVIDENCE='never reported resolving it
 no evidence the transport ever resolved'
+# EVERY LINE OF EVIDENCE IS A PATTERN, SO AN EMPTY LINE IS A PATTERN THAT MATCHES EVERYTHING. A
+# trailing newline, or a blank line between the two sentences, would turn hole 2's check below
+# into "any red will do". The smoke test's "red without the transport-resolution message" case
+# would catch that (22/23), but only once somebody ran it; this refuses it here, before the
+# selection is counted or the library is swapped.
+case "${EVIDENCE}" in
+  *$'\n\n'*|*$'\n'|$'\n'*)
+    echo "::error::EVIDENCE carries an empty grep -F pattern (a blank line or a leading/trailing newline), which would match every failure"
+    exit 1;;
+esac
 
 selector="^MobileGLTraceReplay\.${CASE}\.${BACKEND}$"
 
