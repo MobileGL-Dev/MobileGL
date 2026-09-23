@@ -17,14 +17,17 @@
 
 ## 0. 提交
 
-| # | 提交 | 一句话 |
-|---|---|---|
-| 1 | `736b16a4` | `[MG_Backend]` wire 臂被 `glBufferData` 孤立的 store 在 defer 路径上一证明无 GPU 命令还能引用就销毁，不再等帧界 |
-| 2 | `e47e2eb6` | `[MG_Backend]` 仍停放的孤立 store 超过 `MOBILEGL_IPC_WIRE_DEFERRED_MB`（默认 64）时，server 在帧中取 host-access 同步点并全部回收 |
-| 3 | `09901bae` | `[MG_Remote]` spawn 启动器把 `MOBILEGL_IPC_WIRE_DEFERRED_MB` 透传给 server 子进程（环境清洗唯一保留的 `MOBILEGL_IPC_*`） |
-| 4 | `c4d77917` | `[MG_Backend, MG_Util, MG_Test, MG_IntegrationTest, scripts]` `MagmaWireReclaimScenario` 进 `integration-magma-{split,spawn}`，读 server 的 `wbuf[]` gauge |
-| 5 | `7db41ff4` | `[MG_Backend, MG_IntegrationTest]` 同一同步点在停放超过 1024 个 store 时也触发 |
-| 6 | 本文 | `[docs]` |
+M2 已按下表的 **pipe 列**挑进集成树（`~/w7/pipe`）；全文引用一律用 pipe 树上的 SHA，分支
+`p7/magma-m2` 上的原提交列在旁边只作对照。第二轮（§9）的提交在分支 `6f67fd7f` 之上，尚未挑入。
+
+| # | pipe 树 | 分支 | 一句话 |
+|---|---|---|---|
+| 1 | `b81a8827` | `736b16a4` | `[MG_Backend]` wire 臂被 `glBufferData` 孤立的 store 在 defer 路径上一证明无 GPU 命令还能引用就销毁，不再等帧界 |
+| 2 | `c569c916` | `e47e2eb6` | `[MG_Backend]` 仍停放的孤立 store 超过 `MOBILEGL_IPC_WIRE_DEFERRED_MB`（默认 64）时，server 在帧中取 host-access 同步点并全部回收 |
+| 3 | `0acee60a` | `09901bae` | `[MG_Remote]` spawn 启动器把 `MOBILEGL_IPC_WIRE_DEFERRED_MB` 透传给 server 子进程（环境清洗当时唯一保留的 `MOBILEGL_IPC_*`；第二轮再留三个，§9.3） |
+| 4 | `9328bdc7` | `c4d77917` | `[MG_Backend, MG_Util, MG_Test, MG_IntegrationTest, scripts]` `MagmaWireReclaimScenario` 进 `integration-magma-{split,spawn}`，读 server 的 `wbuf[]` gauge |
+| 5 | `f0356dbe` | `7db41ff4` | `[MG_Backend, MG_IntegrationTest]` 同一同步点在停放超过 1024 个 store 时也触发 |
+| 6 | `5d8a2b99` | `6f67fd7f` | `[docs]` 本文第一轮 |
 
 `VulkanRenderer.cpp` 一行未动（B3 的文件）；`WriteWireBuffer` / `GetCompletedSerial` /
 `NotifyFrameSerialComplete` 语义未动（`WriteWireBuffer` 只把它那条 Fatal 换成共享的
@@ -50,7 +53,7 @@ transient arena 的帧界节奏未动。
 
 ## 2. 修复
 
-### 2.1 serial/submit 门控回收（`736b16a4`，仅 `VkBufferManager.{h,cpp}`，`#if MOBILEGL_BUILD_DISAGGREGATED`）
+### 2.1 serial/submit 门控回收（`b81a8827`，仅 `VkBufferManager.{h,cpp}`，`#if MOBILEGL_BUILD_DISAGGREGATED`）
 
 wire 臂的孤立 store 不再进按帧槽分桶的 `m_deferredBufferReleases`，而进一张扁平的
 `m_deferredWireReleases`，每条带三个事实：`lastUseSerial`（**在 `RespecifyWireBuffer` 把它清零之前**读）、
@@ -68,10 +71,10 @@ wire 臂的孤立 store 不再进按帧槽分桶的 `m_deferredBufferReleases`�
 （二者已证明设备空闲）整表销毁。
 
 **帧 serial 地板刻意不作证明**：它在帧内不动（`NotifyFrameSerialComplete` 拒绝当前 serial），对单 present
-回放一个也放不掉；而且在本包的基线上它正是 B3 证明不可靠的那个地板（一个 serial 两次提交，第一次 fence 就被
-记成完成，`6a92a10dd`）——在它上面 free 是 GPU use-after-free，不是错像素。B3 落地后可以补上（§6.3）。
+回放一个也放不掉；帧内能动的只有 submit index，而它是 fence 观测不是计数。（第一轮此处还引 B3 把地板判为不可靠
+作第二条理由——那是对集成树上已修的地板的过期引用，第二轮删去；决定不变。）可作第四条证明的扩展见 §6.3。
 
-### 2.2 水位线（`e47e2eb6` + `7db41ff4`）
+### 2.2 水位线（`c569c916` + `f0356dbe`）
 
 扫描之后若仍停放 `> MOBILEGL_IPC_WIRE_DEFERRED_MB` 字节**或** `> 1024` 个 store，停放点调
 `pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, /*flush*/true)`
@@ -81,11 +84,11 @@ wire 臂的孤立 store 不再进按帧槽分桶的 `m_deferredBufferReleases`�
 `MGLOG_F` + `abort` 挪进 `WireBufferSyncFatal(site)`，两处共用，`{site=host-write|deferred-watermark}` 区分；
 `fatal_census.py` 79 个 abort 站点不变，家族词不变。
 
-**为什么还要个数上限（`7db41ff4`）**：只有字节水位线时，bsl spawn 的某段无提交区间停放了 12 497 个 store
+**为什么还要个数上限（`f0356dbe`）**：只有字节水位线时，bsl spawn 的某段无提交区间停放了 12 497 个 store
 而只占 39.5 MB（低于 64 MiB），一次同步也没触发（§5.1 中间行）。VkBuffer 按对象计价，小孤立永远碰不到字节
 预算。1024 是常量 `VkBufferManager::kWireDeferredCountCeiling`，不是旋钮。
 
-### 2.3 spawn 透传（`09901bae`）
+### 2.3 spawn 透传（`0acee60a`）
 
 `ServerSpawn.cpp` 的 `BuildChildEnv` 清洗掉所有 `MOBILEGL_IPC_*`（`:83` `ShouldScrub`），于是新旋钮在 inproc
 有意义、在 spawn 静默无意义——实测 spawn server 在 8 MiB 的车道预算下停放 47 MiB、0 次同步，它从一个已经没有
@@ -135,16 +138,16 @@ red-once（R-16，已执行并还原；数字是 server 的 gauge）：
 | 用例 1，split & spawn | 基线 defer 路径（`ec46a550` 的 `DeferRelease` 进帧桶，计数照记）：`wlivepk` **1025 vs 4** | `wlivepk=1`（`wbufs=1`） |
 | 用例 2，split & spawn | 同上：`wdefpk` **49 287 168 vs 9 437 184**、`wlivepk` **49 vs 11** | `wdefpk=9 437 184`、`wlivepk=9`、`wdefsync=5` |
 | 用例 2，`MOBILEGL_IPC_WIRE_DEFERRED_MB=0`（旋钮负对照，已提交代码） | `wdefpk` **49 287 168 vs 9 437 184**、`wlivepk` **49 vs 11**，两臂 | — |
-| 用例 3，split & spawn | `c4d77917`（只有字节水位线）：`wlivepk` **3001 vs 1027** | `7db41ff4`：`wlivepk=1025`、`wdefsync=2` |
-| 修 spawn 透传前（`e47e2eb6` + 本场景） | spawn 臂 `wdefpk=49 287 168`、`wdefsync=0`（server 没拿到 8 MiB） | `09901bae` 后与 split 臂相同 |
+| 用例 3，split & spawn | `9328bdc7`（只有字节水位线）：`wlivepk` **3001 vs 1027** | `f0356dbe`：`wlivepk=1025`、`wdefsync=2` |
+| 修 spawn 透传前（`c569c916` + 本场景） | spawn 臂 `wdefpk=49 287 168`、`wdefsync=0`（server 没拿到 8 MiB） | `0acee60a` 后与 split 臂相同 |
 
-用例 2 的负对照（在 `7db41ff4` 上重跑）里 48 条带仍全部正确——红的是回收，不是画面。
+用例 2 的负对照（在 `f0356dbe` 上重跑）里 48 条带仍全部正确——红的是回收，不是画面。
 
 ## 5. 主机测量（M1 的采样器与探针；lavapipe；pbuffer；DirectVulkan）
 
 ### 5.1 `minecraft-1.21.4-fabric-iris-bsl-esc-menu-854`（854×480）
 
-「前」= `ec46a550` + 探针；「字节线」= `c4d77917`（只有字节水位线）；「后」= `7db41ff4`。三臂的 ssim 与 mismatch
+「前」= `ec46a550` + 探针；「字节线」= `9328bdc7`（只有字节水位线）；「后」= `f0356dbe`。三臂的 ssim 与 mismatch
 前 / 字节线 / 后完全相同：ssim **0.998402**、mismatch **306 892**。
 
 | 臂 / 进程 | 峰值 RSS（VmHWM） | maps 峰值 | 结束时活 VkBuffer（其中停放） | VMA 分配 / 字节 | `wbuf[]` |
@@ -159,7 +162,7 @@ red-once（R-16，已执行并还原；数字是 server 的 gauge）：
 | spawn server，后 | **546.3 MiB** | **5 832** | 1 053（1 025） | 1 109 / 236.7 MB | `wlivepk=1052 wdefpk=3312832 wdefsync=23` |
 | spawn client，前 / 后 | 359.8 / 358.8 MiB | 69 / 66 | — | — | — |
 
-† monolith 的 VMA 读数取自 `c4d77917` 测量树上的 monolith 一遍（本包不碰 monolith 臂，`7db41ff4` 只改 wire 路径）。
+† monolith 的 VMA 读数取自 `9328bdc7` 测量树上的 monolith 一遍（本包不碰 monolith 臂，`f0356dbe` 只改 wire 路径）。
 
 spawn server 的 RSS / maps 逐 ~10 s 序列（`mem.tsv` 十分位）：
 
@@ -167,7 +170,7 @@ spawn server 的 RSS / maps 逐 ~10 s 序列（`mem.tsv` 十分位）：
 前（ec46a550）  t(s)   0    9.6   19.2  29.2  39.9  50.8  61.6  72.5  83.2  93.9  104.7
    RSS MiB            9   465   750   763   774   785   796   807   788   800   825
    maps              58  7160 27361 30324 32589 35019 37429 39828 29574 32799 28301
-后（7db41ff4）  t(s)   0    9.6   19.4  29.2  38.8  48.2  57.9  67.6  77.5  87.0  96.4
+后（f0356dbe）  t(s)   0    9.6   19.4  29.2  38.8  48.2  57.9  67.6  77.5  87.0  96.4
    RSS MiB           19   239   453   455   458   462   465   468   473   477   546
    maps             200  2296  5783  5329  5197  5204  5051  4738  5686  5429  4664
 ```
@@ -225,16 +228,21 @@ memfd 映射」是相关不是因果（两者都随调用数涨）。「后」�
    `VkTextureManager::BeginFrame` 每第 64 个帧界的 `PruneDeadTextures`（`:729`），一 present 的回放上等于不跑：
    死的 wire texture / renderbuffer 记录与其图像一直留着（bsl 上量不大：`wireTex=48`、`deferredTex=3`）。
    按指示未修（`VulkanRenderer.cpp` 是 B3 的）。
-3. **帧 serial 证明**：B3 的 `6a92a10dd` 合入后地板可靠，可以把 `lastUseSerial <= GetCompletedSerial()` 加作第四条
-   证明（放掉「上一帧用过、本帧没碰」的 store 而不必等当前批提交）。本包没加，理由见 §2.1。
+3. **帧 serial 证明**：集成树上的地板（B3 之后）可靠，可以把 `lastUseSerial <= GetCompletedSerial()` 加作第四条
+   证明（放掉「上一帧用过、本帧没碰」的 store 而不必等当前批提交）。本包没加：它在帧内不动，对本包针对的
+   单 present 回放不增加任何回收（§2.1）。
 4. **tcp 臂**：`wbuf[]` 是 server 进程的 gauge，tcp 的 fixture server 够不着——与 `MAGMA_INPROC_ONLY` 的两条同类，
    是「跨进程 peek」那条 §12 债的又一个实例。
 5. **范围外的一处改动**：`MG_Remote/Server/ServerSpawn.cpp`（§2.3）不在指派的文件里，但没有它旋钮在 spawn 上是空的；
    请集成者追认，CONTRACT-P6 §3.1 的 S3（清洗被证伪）不受影响。旋钮本身按 `Config.h` 的规矩应经集成者（§3）。
 6. **性能只记录**（ID-P7-9）：bsl 一次回放 23 次帧中强制提交；主机上 spawn 回放墙钟 104.8 s（前）/ 96.5 s（后），
    共享主机噪声大，不作结论。
+7. **（第二轮，只在 pipe 树上能做）`RespecifyWireBuffer` 把 `lastUseSerial` 清零时也要把 B3 的
+   `lastUseSubmitIndex` 清零**（`resource->lastUseSubmitIndex = 0;`，紧跟 `resource->lastUseSerial = 0;`）。审阅指出
+   它在 respecify 后残留旧值；这个字段是 B3 在集成树上加的，本分支（`6f67fd7f` 之上）没有它，加了编译不过。
+   请集成者在挑入第二轮提交时顺手补这一行——它属于本包的 `RespecifyWireBuffer`，不是 B3 的文件。
 
-## 7. 门（`7db41ff4`）
+## 7. 门（`f0356dbe`）
 
 - **G1**：pull 构建 rc 0，`.text` = **0xa52203**，`nm --defined-only` 对 `~/w7/p7-before/pull-syms.txt` **+0 / −0**
   （`~/w7/logs/m2-g1.sh`）。
@@ -261,3 +269,88 @@ memfd 映射」是相关不是因果（两者都随调用数涨）。「后」�
 4. **若 server 仍在 scudo 里死**：先看 maps 行数与 RSS 斜率——主机上剩下的帧内增长是 §6.1 的 descriptor set，
    它在设备上是驱动堆而不是 memfd，那是下一个包，不是本包的回退。
 5. 可选对照：`MOBILEGL_IPC_WIRE_DEFERRED_MB=0` 一遍 spawn，应复现 W4 的形状（或更早死），证明旋钮在设备上生效。
+
+## 9. 第二轮：审阅的 must-fix（ID-P7-43）与小项（分支 `p7/magma-m2`，`6f67fd7f` 之上）
+
+### 9.1 缺陷：句柄复用 ABA 打穿 `UniformManager` 的 memo
+
+M2 让 wire store 在**帧中**死（serial-0 停放即毁、扫描前缀、水位线），而 `UniformManager` 的两个 descriptor memo
+都按 **VkBuffer 句柄**记：`m_descriptorReuseMemo` 的签名混入 `VkDescriptorBufferInfo` 的字（`UniformManager.cpp`
+签名块），`FastRebindMemo` 直接比 `uboBuffer`。它们只在 `UniformManager::BeginFrame`（present / drain）清空——M2 之前
+wire store 也只在那同一个边界死，所以配对成立；M2 打破了它。wire 臂上直接绑定的 UBO 描述符就是 store 自己的句柄
+（`ResolveWireUniformBufferPayload` 的 `out.buffer = source.buffer`），SSBO 同样。于是：D1 用 store S1（句柄 H）画 →
+memo 记下 (H, range) → DS1；`glBufferData` 停放 S1；一次不等待的 flush 提交；下一次停放的扫描销毁 S1；下一次铸造拿回 H
+（lavapipe 的句柄是堆指针，glibc tcache 后进先出）；D2 同一程序解析出 (H, range) → memo 命中 → 重绑一个 descriptor
+还指着 S1 已释放内存的 set。像素错、无 Fatal。serial-0 路径同理。
+
+### 9.2 修复：一个 destroy epoch
+
+`VkBufferManager` 加 `m_wireStoreDestroyEpoch`（`GetWireStoreDestroyEpoch()`），**每条**销毁 wire store 的路径都 `++`：
+`DeferWireRelease` 的即时销毁、`SweepDeferredWireReleases`（每次有销毁的扫描一次）、`DestroyAllDeferredWireReleases`、
+`Shutdown` 清 record 持有的 store；与 `m_sliceEpochCounter` 一样**永不复位**。`UniformManager`：签名 `mix64(epoch)`，
+`FastRebindMemo` 记录 epoch 并在命中判断里比对——全部 `#if MOBILEGL_BUILD_DISAGGREGATED`。**不用 `m_sliceEpochCounter`**：
+它每次 `WriteWireBuffer` 都动，会让 memo 每次 `glBufferSubData` 都失效。wire 臂上 `SetupWireDraw` 不传 sampler hint，
+所以 `FastRebindMemo` 在 wire 臂上从不命中——签名那半是 wire 臂真正走到的，`FastRebindMemo` 那半是防御性的。
+代价：每次销毁事件之后第一笔 draw 多一次 descriptor set 分配 + 写（bsl 整次回放 ~2.6 万次销毁对 130 万次调用），
+顺带把 §6.1 的 descriptor set 增长每事件多推一个 set。`§9` 分区例外（`UniformManager.{h,cpp}`）由集成者授予。
+
+### 9.3 场景与 red-once（规则 J）
+
+`MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle`，Split + Spawn 的 Reclaim
+条目（与前三条同一 fixture、同一车道环境；`spawn_lane_parity.py` 按前缀例外，不动）。**每一步都是确定的，没有 sleep、
+没有 fence 轮询竞态**：
+
+1. D1 用 UBO store S1（256 B，颜色 A）画——memo 记下 S1 的句柄；
+2. `glBufferData(U, 0)`：S1 孤立（停放，标在 D1 所在的待提交批），**不铸新 store**；
+3. `glClientWaitSync(fence, FLUSH_COMMANDS, 0)`：把那批**提交而不等**（审阅说的 flush-without-wait）；
+4. 对 D1 用过的 vertex store `glBufferSubData` 4 字节：store 忙 → `StagedWireRangeCopy` 录一条拷贝 → 录制又是 pending，
+   于是第 5 步的等待**不能**取会清 memo 的帧界 drain（`TryDrainFrameTransients` 见 pending 就拒绝）；
+5. `glClientWaitSync(fence, 0, 2 s)`：D1 那批退休，memo 完好；
+6. `glBufferData(V, 0)`：vertex store 停放，**这次停放的扫描**发现 S1 那批已完成 → 销毁 S1；
+7. `glBufferData(U, 64 KiB, 颜色 B)`：铸造拿回 S1 的句柄值（tcache LIFO）；64 KiB 放不进 S1 那个 256 B 的洞（紧接 S1
+   铸的 1 MiB pin store 把洞封住），所以 DS1 指的内存还是 S1 的旧字节——同尺寸铸造会被 VMA best-fit 塞回同一段内存，
+   靠别名意外读到 B，那是证明不了任何东西的绿；
+8. D2 再画：解析出同一 (句柄, 16 B) → 修复前 memo 命中。断言只有一条：像素必须是 B。
+
+| 臂 | 红（修复前：两处 epoch 判断去掉，`VkBufferManager` 的 epoch 留着不读） | 绿（修复后） |
+|---|---|---|
+| Split | `read rgba(200,60,30,255), wanted rgba(60,200,90,255)`——读到的正是死 store 的颜色 A | 过 |
+| Spawn | 同上 | 过 |
+
+**一个方法学发现**：`MobileGLIntegrationTest` 在桌面上**静态链接** `MobileGL_s`（`ldd` 无 `libMobileGL.so`，`nm` 里
+`glDrawArrays` 在二进制内），inproc 臂跑的是编进测试二进制的 backend，只有 spawn 臂跑 `libMobileGL.so`。所以只
+`ninja MobileGL MobileGLServer` 的变体到不了 Split 臂——本轮 red-once 第一次跑 Split 就是这样「绿」的。第二轮的
+red-once 脚本三个目标都建；并用同样方式把第一轮的 base 变体（`DeferWireRelease` 回到帧桶）重跑了一遍：两臂三条用例的
+红与 §4 表逐字相同（`wlivepk` 1025 vs 4；`wdefpk` 49 287 168 vs 9 437 184、`wlivepk` 49 vs 11；`wlivepk` 3001 vs 1027），
+用例 4 在那个 base 上两臂都绿（没有帧中销毁就没有 ABA）。探针（只在临时变体上打的 `MGLOG_I`，spawn server 日志）
+把机制照了出来：`destroy-sweep handle=0x7a0329f75dd0` → `mint slot=2 handle=0x7a0329f75dd0 size=65536` → `memo-hit
+buffer=0x7a0329f75dd0`。
+
+### 9.4 审阅的小项
+
+- `ManySmallRespecifyAndDrawRounds...` 加 `ASSERT_GE(livePeak, 0)`：缺 gauge 读成 −1 会把单边上界当作「没漏」过掉。
+- `SweepDeferredWireReleases` 的注释不再说 `GetSyncPointSubmitIndex()`「不减」：录制被丢弃（`RecreateSwapchain`、最小化
+  Present 强清录制标志）时它退一；前缀扫描在那之后停在较高的旧 index 上，直到下一次提交占用该 index 并退休——保守、
+  不早放，空闲规则照样兜底。
+- `VkBufferManager.h` 的「地板不作证明」只留第一条理由（§2.1 同步改）。
+- `ServerSpawn.cpp` 的保留集加 `MOBILEGL_IPC_SPIN_US`（两侧都读的 doorbell 自旋预算）、`MOBILEGL_IPC_SERVER_AFFINITY`
+  （apply 线程 CPU 掩码）、`MOBILEGL_IPC_AUDIT`（退休 stage 字节 0xDD 填充）：都是调优 / 审计值，不指名端点、角色、路径
+  或段尺寸，`ServerMain` 的 catch (b) 仍核验它核验的那四个。前缀下其余的照旧清掉（其中 `STRICT_ERRORS`、`RUN_AHEAD`、
+  `VERB_BARRIER`、`BATCH_WAITS`、`PRESENT_CREDIT`、`PERSISTENT_*`、`ADOPT_TIER`、`RESPAWN` 要么是协议两侧要一致的形状、
+  要么是 client 读的，超出审阅所列，未动）。
+- `RespecifyWireBuffer` 的 `lastUseSubmitIndex = 0`：字段只在 pipe 树上有，见 §6.7。
+
+### 9.5 门（第二轮，本分支 HEAD）
+
+- `ninja -C build-split` 绿；G1：pull 构建 rc 0，`.text` = **0xa52203**，`nm --defined-only` 对 `~/w7/p7-before/pull-syms.txt`
+  **+0 / −0**。
+- `fatal_census.py` rc 0：**79** 个 abort 站点 / 20 文件，44 家族词，3 拒绝词，0 无标记（不变）。
+- `link_ratchet.py --assert-monotone`：**173**，不变。
+- `spawn_lane_parity.py build-split` rc 0：gated 三臂 97 / 76 / 72，not-on-tcp 按名 4 条；informational 206×3；full-suite 537×3。
+- 车道（逐条，`-j 8`）：`unit` **2429/2429**、`integration-split` **303/303**、`integration-magma-split` **97/97**（+1）、
+  `-spawn` **76/76**（+1）、`-tcp` **74/74**（`-j 8` 首跑 73/74：`Tcp.Fm.F1WireScenario.CopyTexSubImage2DPixels` 在会话
+  建立前就 `no Welcome from the spawned server within 5000 ms`，任何记录都没发；单条重跑 3/3、整车道重跑 74/74——
+  配对窗口的瞬时形状，与本轮改动无关：该车道 `audit=0 spin=50us affinity='auto'` 全是默认值）、
+  `integration-magma-full-split` **537/537**（+1，无车道标记 skip）。
+- retrace（主机，`run_trace_case.cmake`，本树）：OpenRA DirectVulkan monolith / inproc / spawn **ssim 1.000000、mismatch 0**，
+  0 条 unsound。
