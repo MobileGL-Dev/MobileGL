@@ -46,8 +46,8 @@
 | F 片 1–3 | 常量时间令牌 / ≥16 字节 / 无令牌只 loopback / smoke 进 CI；`Welcome.dataNonce` 绑定（TCP 250 ms 配对窗口消失，指纹变更）；PH-8 钳制证明 | `origin@87584d0b`（审查 land with fixes → 修复轮在跑，ID-P7-39） |
 | E1 | Iris 普查 231/231 全活、70/77 逐字节同、P9 例外表空；§7.2 同名重跑 24 绿 / 3 具名停止 / 0 错答 | `origin@87584d0b`（docs only，ID-P7-38） |
 | M2 | 孤儿 wire store 在 defer 路径回收 + `MOBILEGL_IPC_WIRE_DEFERRED_MB` 水位线 + 1,024 计数上限 + `wbuf[]` 计量 + `MagmaWireReclaimScenario`；主机 bsl spawn server 825 → 546 MiB、映射 41k → 5.8k | pipe `b81a8827..7d131527`（门全绿 magma 100 / 79 / 71，审查在跑，ID-P7-42） |
-| F 修复轮 | hand-off 端绑定后关 + `MSG_DONTWAIT`（多余 DataBind 具名拒绝）、listener 绑定后关、`sha256(protocol.fbs)` 钉到控制修订、定宽令牌比较、超额 Hello 记警、`MalformedHello`、文档更正 | pipe `0293aebb..9cea5140`（门全绿，审查在跑，ID-P7-42） |
-| B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门在跑，ID-P7-42） |
+| F 修复轮 | hand-off 端绑定后关 + `MSG_DONTWAIT`（多余 DataBind 具名拒绝）、listener 绑定后关、`sha256(protocol.fbs)` 钉到控制修订、定宽令牌比较、超额 Hello 记警、`MalformedHello`、文档更正 | pipe `0293aebb..9cea5140`（门全绿，集成者审查 land，ID-P7-44） |
+| B3 修复 r3 + B2 r4 | 审计跨 `#endif` 只放行 disagg 守卫 + 缩进 `#else` 停走（16/16）、`EVIDENCE` 保护、tcp 信息；窗口腿独一底色、去死合取项、按符号引用 | pipe `bd849b28..4b96f55d`（门全绿，集成者审查 land，ID-P7-44） |
 
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
@@ -65,9 +65,7 @@
 | M2 r2（fable） | **must-fix**：`m_wireStoreDestroyEpoch` 进 `UniformManager` 两个 memo（§9 例外已批）+ red-once；note SHA、`ASSERT_GE`、注释、`lastUseSubmitIndex` 清零、清洗名单 | 进行中 → `~/w7/notes/handoff/m2-r2.md`（ID-P7-43） |
 | V1 修复 r2（fable） | read 侧控制断言 ≥ 2 行、verify 摘要在 `Close()` 前 flush（client 日志不再被截断）、措辞 | 进行中（ID-P7-42） |
 | X2（fable） | `InitialCapsStartup.ANullInitialSnapshot…` 在负载下的 flake：复现、测试 vs 产品判定、修复 + 500 次循环 | 进行中（ID-P7-42） |
-| B3 r3 + B2 r4 审查（fable） | 守卫感知的 `#endif` 规则、`EVIDENCE` 保护、窗口腿底色 | 进行中（ID-P7-42） |
 | 窗口 1b 矩阵 | 38 例 DirectGLES × TCP（WSL ↔ 手机 p7w5，逐例 3 s 间隔、两遍、逐例 logcat） | 进行中；已见 ReadPixels 被设备 server 拒、main-menu server 死亡（ID-P7-41） |
-| F 修复轮审查（fable） | hand-off 关闭的竞态窗口、listener 关闭的路径、摘要 pin 的 LF 归一化、`MalformedHello` 词表、G14 的 `CapsMirrorTest` 一名 | 进行中；代码已在 pipe（ID-P7-42） |
 
 ## 5. 下一步（按序；机械步骤与命令见 [`notes/p7/HANDOFF-2026-09-22.md`](notes/p7/HANDOFF-2026-09-22.md)）
 
