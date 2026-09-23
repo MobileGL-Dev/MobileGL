@@ -241,6 +241,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
+    // The renderer's identity from its device's VkPhysicalDeviceProperties - the ONE place the fields
+    // are filled (VulkanRenderer::ArmWireDepthResolveOrder calls it), so the unit test proves that each
+    // property reaches the key: with only the cache tested, a field left out here stayed green.
+    inline WireDepthResolveDeviceIdentity MakeWireDepthResolveDeviceIdentity(const VkPhysicalDeviceProperties& properties,
+                                                                             Bool renderPassArmAvailable,
+                                                                             WireDepthResolveProbeKnob knob) {
+        WireDepthResolveDeviceIdentity identity;
+        identity.vendorID = properties.vendorID;
+        identity.deviceID = properties.deviceID;
+        identity.driverVersion = properties.driverVersion;
+        static_assert(sizeof(identity.pipelineCacheUUID) == sizeof(properties.pipelineCacheUUID));
+        std::memcpy(identity.pipelineCacheUUID, properties.pipelineCacheUUID, sizeof(identity.pipelineCacheUUID));
+        identity.renderPassArmAvailable = renderPassArmAvailable;
+        identity.knob = knob;
+        return identity;
+    }
+
     class WireDepthResolveArmCache {
     public:
         // The identity's memoized choice, or `decide()`'s - called at most once per identity, under

@@ -15880,14 +15880,8 @@ void main() {
         const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
         // Memoized per DEVICE IDENTITY, not per process (codex closeout finding 7; see
         // WireDepthResolveArmCache): a second renderer on another device or driver probes for itself.
-        WireDepthResolveDeviceIdentity identity;
-        identity.vendorID = m_physicalDevice.properties.vendorID;
-        identity.deviceID = m_physicalDevice.properties.deviceID;
-        identity.driverVersion = m_physicalDevice.properties.driverVersion;
-        std::memcpy(identity.pipelineCacheUUID, m_physicalDevice.properties.pipelineCacheUUID,
-                    sizeof(identity.pipelineCacheUUID));
-        identity.renderPassArmAvailable = renderPassArmAvailable;
-        identity.knob = knob;
+        const WireDepthResolveDeviceIdentity identity =
+            MakeWireDepthResolveDeviceIdentity(m_physicalDevice.properties, renderPassArmAvailable, knob);
         static WireDepthResolveArmCache s_choices;
         const WireDepthResolveArmChoice resolved = s_choices.Resolve(identity, [&]() {
             if (knob == WireDepthResolveProbeKnob::Unrecognised)

@@ -19,7 +19,7 @@
         m_wireInvalidStorageImagesBindNull = deviceNullDescriptor && !forcePrivate;
         MGLOG_I("Magma wire: an invalid or unbound image unit binds %s (VK_EXT_robustness2 nullDescriptor %s%s)",
                 m_wireInvalidStorageImagesBindNull ? "a NULL storage descriptor"
-                                                   : "a placeholder private to its (binding, unit)",
+                                                   : "a placeholder private to its unit",
                 deviceNullDescriptor ? "enabled" : "unavailable",
                 deviceNullDescriptor && forcePrivate ? "; MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1" : "");
     }
@@ -93,17 +93,21 @@
             break;
         default: return false;
         }
-        // A STORAGE placeholder is private to its (binding, unit). Shared by shape alone, a store
+        // A STORAGE placeholder is private to its unit (per shape). Shared by shape alone, a store
         // through invalid unit A was visible, after a barrier, to a load through invalid unit B of
         // the same shape - one Vulkan image behind both (codex closeout finding 2). The clear
         // below still runs before each use; what a private image cannot hide is the SAME unit's
-        // own store to its own later load inside one pass (CONTRACT-P7 §12).
-        WirePlaceholderKey key;
-        key.shape = static_cast<Uint32>(format) | (static_cast<Uint64>(target) << 32) |
-                    (static_cast<Uint64>(storage) << 48) | (static_cast<Uint64>(shadow) << 49);
-        if (storage) {
-            key.binding = binding;
-            key.unit = unit;
+        // own store to its own later load inside one pass (CONTRACT-P7 §12). Not per binding: GL
+        // aliases per unit, and a (binding, unit) key only multiplied allocations. Past
+        // kWirePrivateStoragePlaceholderCap a new (shape, unit) shares its shape's (WirePlaceholderKey.h).
+        const Uint64 shape = static_cast<Uint32>(format) | (static_cast<Uint64>(target) << 32) |
+                             (static_cast<Uint64>(storage) << 48) | (static_cast<Uint64>(shadow) << 49);
+        const WirePlaceholderKey key = ChooseWirePlaceholderKey(shape, storage, unit, m_wirePrivateStoragePlaceholders,
+            [this](const WirePlaceholderKey& candidate) { return m_wirePlaceholderImages.count(candidate) != 0; });
+        if (storage && unit != WirePlaceholderKey::kShared && key.unit == WirePlaceholderKey::kShared) {
+            MGLOG_W_ONCE("Magma wire: %zu image-unit-private placeholders exist (the cap); a further invalid or "
+                         "unbound unit shares its shape's placeholder, so two such units of one shape can alias",
+                         static_cast<size_t>(m_wirePrivateStoragePlaceholders));
         }
         auto found = m_wirePlaceholderImages.find(key);
         if (found == m_wirePlaceholderImages.end()) {
@@ -194,11 +198,12 @@
                 if (vkCreateFramebuffer(m_device, &framebuffer, nullptr, &image.clearFramebuffer) != VK_SUCCESS) return fail();
             }
             found = m_wirePlaceholderImages.emplace(key, image).first;
+            if (key.unit != WirePlaceholderKey::kShared) ++m_wirePrivateStoragePlaceholders;
         }
         auto& image = found->second;
         // Sampled incomplete textures remain immutable opaque black. A storage
         // placeholder is reset before each use, so a prior discarded store cannot
-        // leak into a later pass's loads through the same (binding, unit).
+        // leak into a later pass's loads through the same unit.
         if (storage || image.layout == VK_IMAGE_LAYOUT_UNDEFINED) {
             VkClearValue clear{};
             if (!storage) {

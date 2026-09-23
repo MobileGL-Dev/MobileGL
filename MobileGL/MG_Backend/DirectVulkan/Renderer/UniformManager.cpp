@@ -113,7 +113,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // checks the level's and the layer's signs) nor at the draw. It is the observable an empty
     // unit has, so the answer is the empty unit's (ResolveWirePlaceholderImage): a NULL storage
     // descriptor where the device enables VK_EXT_robustness2 nullDescriptor, else a storage
-    // placeholder private to the (binding, unit), cleared before each use, of the dimensionality
+    // placeholder private to the unit (per shape), cleared before each use, of the dimensionality
     // the SHADER declared.
     //
     // KHR-GL46.shader_image_load_store.incomplete_textures is the shape that found it: level 2
@@ -169,7 +169,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto handle = storage ? state.BoundShaderImages[unit].Res : state.BoundSamplerViews[unit].Texture;
         // An EMPTY image unit is the same 8.26 invalid access as the named-but-missing texel
         // below, so it takes the same answer: a null storage descriptor where the device has
-        // one, else the (binding, unit)-private placeholder (codex closeout finding 2).
+        // one, else the unit-private placeholder (codex closeout finding 2).
         if (MG_Pipe::MGPipeHandleIsNull(handle))
             return ResolveWirePlaceholderImage(commandBuffer, program, programObj, binding, storage, out,
                                                VK_FORMAT_UNDEFINED, static_cast<Uint32>(unit));
@@ -659,6 +659,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
         for (auto& entry : m_wirePlaceholderImages) DestroyWirePlaceholderImage(entry.second);
         m_wirePlaceholderImages.clear();
+        m_wirePrivateStoragePlaceholders = 0;
         m_wireInvalidStorageImagesBindNull = false;
 #endif
 

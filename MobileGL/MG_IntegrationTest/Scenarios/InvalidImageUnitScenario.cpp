@@ -487,7 +487,7 @@ void main() {
                 }
                 // The Magma wire arm without a null storage descriptor (a device lacking
                 // VK_EXT_robustness2 nullDescriptor; forced on the host by the knob): each invalid
-                // unit gets a placeholder private to its (binding, unit). B's load is still zero -
+                // unit gets a placeholder private to its unit. B's load is still zero -
                 // the units no longer alias - but A's load of A's own store in the same pass is
                 // not: that is the CONTRACT-P7 §12 residual, and here it is what PROVES the knob
                 // reached the server (the null-descriptor arm would read zero there too).

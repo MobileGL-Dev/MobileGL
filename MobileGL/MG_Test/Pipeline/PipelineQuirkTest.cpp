@@ -14,6 +14,7 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Backend/DirectVulkan/Renderer/WireRenderPassCompatibility.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
+#include <MG_Backend/DirectVulkan/Renderer/WirePlaceholderKey.h>
 #endif
 
 using namespace MobileGL;
@@ -730,9 +731,12 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeKnobReplacesTheMeasurementNotTheVer
 // second physical device, or under a changed driver, in the same process took the first device's
 // order without probing. ArmWireDepthResolveOrder now asks WireDepthResolveArmCache, keyed by
 // (vendor, device, driver version, pipeline-cache UUID) plus the choice's own inputs; this pins that
-// two identities are decided independently and that one identity is still decided once.
+// two identities are decided independently and that one identity is still decided once. Every
+// identity is built by MakeWireDepthResolveDeviceIdentity - the helper ArmWireDepthResolveOrder
+// fills its key with - from VkPhysicalDeviceProperties, so a property the helper drops goes red too.
 TEST(PipelineQuirkTest, WireDepthResolveVerdictIsMemoizedPerDeviceIdentityNotPerProcess) {
 #if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Backend::DirectVulkan::MakeWireDepthResolveDeviceIdentity;
     using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveArmCache;
     using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveArmChoice;
     using MobileGL::MG_Backend::DirectVulkan::WireDepthResolveDeviceIdentity;
@@ -747,19 +751,33 @@ TEST(PipelineQuirkTest, WireDepthResolveVerdictIsMemoizedPerDeviceIdentityNotPer
         };
     };
     // The Redmi's device, whose render pass writes nothing ...
-    WireDepthResolveDeviceIdentity adreno;
-    adreno.vendorID = 0x5143;
-    adreno.deviceID = 0x44050001;
-    adreno.driverVersion = 0x80000000u | 512;
-    adreno.pipelineCacheUUID[0] = 0xA8;
-    adreno.renderPassArmAvailable = true;
+    VkPhysicalDeviceProperties adrenoDevice{};
+    adrenoDevice.vendorID = 0x5143;
+    adrenoDevice.deviceID = 0x44050001;
+    adrenoDevice.driverVersion = 0x80000000u | 512;
+    adrenoDevice.pipelineCacheUUID[0] = 0xA8;
+    const WireDepthResolveDeviceIdentity adreno =
+        MakeWireDepthResolveDeviceIdentity(adrenoDevice, true, WireDepthResolveProbeKnob::Measure);
     // ... and, later in the same process, a device whose render pass resolves.
-    WireDepthResolveDeviceIdentity lavapipe;
-    lavapipe.vendorID = 0x10005;
-    lavapipe.deviceID = 0;
-    lavapipe.driverVersion = 1;
-    lavapipe.pipelineCacheUUID[0] = 0x3E;
-    lavapipe.renderPassArmAvailable = true;
+    VkPhysicalDeviceProperties lavapipeDevice{};
+    lavapipeDevice.vendorID = 0x10005;
+    lavapipeDevice.deviceID = 0;
+    lavapipeDevice.driverVersion = 1;
+    lavapipeDevice.pipelineCacheUUID[0] = 0x3E;
+    const WireDepthResolveDeviceIdentity lavapipe =
+        MakeWireDepthResolveDeviceIdentity(lavapipeDevice, true, WireDepthResolveProbeKnob::Measure);
+    // The helper copies every property it is given, the UUID's last byte included.
+    adrenoDevice.pipelineCacheUUID[VK_UUID_SIZE - 1] = 0x5A;
+    const WireDepthResolveDeviceIdentity copied =
+        MakeWireDepthResolveDeviceIdentity(adrenoDevice, false, WireDepthResolveProbeKnob::ForceBug);
+    EXPECT_EQ(copied.vendorID, 0x5143u);
+    EXPECT_EQ(copied.deviceID, 0x44050001u);
+    EXPECT_EQ(copied.driverVersion, 0x80000000u | 512);
+    EXPECT_EQ(copied.pipelineCacheUUID[0], 0xA8);
+    EXPECT_EQ(copied.pipelineCacheUUID[VK_UUID_SIZE - 1], 0x5A);
+    EXPECT_FALSE(copied.renderPassArmAvailable);
+    EXPECT_EQ(copied.knob, WireDepthResolveProbeKnob::ForceBug);
+    adrenoDevice.pipelineCacheUUID[VK_UUID_SIZE - 1] = 0;
 
     Bool decided = false;
     const WireDepthResolveArmChoice first = cache.Resolve(adreno, probeReading(kRenderPassWroteNothing), &decided);
@@ -777,35 +795,103 @@ TEST(PipelineQuirkTest, WireDepthResolveVerdictIsMemoizedPerDeviceIdentityNotPer
     EXPECT_TRUE(again.preferShader);
     EXPECT_EQ(probes, 2);
 
-    // Each field of the identity separates: a driver update (version or pipeline-cache UUID alone),
-    // another device of the vendor, and the choice's own inputs.
-    const auto separates = [&](WireDepthResolveDeviceIdentity other, const char* what) {
+    // Each property separates, through the helper: a driver update (version or pipeline-cache UUID
+    // alone), another device of the vendor, and the choice's own inputs.
+    const auto separates = [&](const VkPhysicalDeviceProperties& other, Bool renderPassArm,
+                               WireDepthResolveProbeKnob knob, const char* what) {
         const Int before = probes;
-        const auto choice = cache.Resolve(other, probeReading(kBothArmsResolve), &decided);
+        const auto choice = cache.Resolve(MakeWireDepthResolveDeviceIdentity(other, renderPassArm, knob),
+                                          probeReading(kBothArmsResolve), &decided);
         EXPECT_TRUE(decided) << what << " reused another identity's verdict";
         EXPECT_EQ(probes, before + 1) << what;
         EXPECT_FALSE(choice.preferShader) << what;
     };
-    auto updatedDriver = adreno;
+    const auto measured = WireDepthResolveProbeKnob::Measure;
+    auto updatedDriver = adrenoDevice;
     updatedDriver.driverVersion += 1;
-    separates(updatedDriver, "a changed driver version");
-    auto rebuiltDriver = adreno;
-    rebuiltDriver.pipelineCacheUUID[15] = 0x01;
-    separates(rebuiltDriver, "a changed pipeline-cache UUID");
-    auto sibling = adreno;
+    separates(updatedDriver, true, measured, "a changed driver version");
+    auto rebuiltDriver = adrenoDevice;
+    rebuiltDriver.pipelineCacheUUID[VK_UUID_SIZE - 1] = 0x01;
+    separates(rebuiltDriver, true, measured, "a changed pipeline-cache UUID (its last byte)");
+    auto sibling = adrenoDevice;
     sibling.deviceID += 1;
-    separates(sibling, "another device of the same vendor");
-    auto otherVendor = adreno;
+    separates(sibling, true, measured, "another device of the same vendor");
+    auto otherVendor = adrenoDevice;
     otherVendor.vendorID = 0x13B5;
-    separates(otherVendor, "another vendor with the same device id");
-    auto noRenderPassArm = adreno;
-    noRenderPassArm.renderPassArmAvailable = false;
-    separates(noRenderPassArm, "a renderer without the render-pass arm");
-    auto forcedClean = adreno;
-    forcedClean.knob = WireDepthResolveProbeKnob::ForceClean;
-    separates(forcedClean, "a different probe knob");
+    separates(otherVendor, true, measured, "another vendor with the same device id");
+    separates(adrenoDevice, false, measured, "a renderer without the render-pass arm");
+    separates(adrenoDevice, true, WireDepthResolveProbeKnob::ForceClean, "a different probe knob");
+    EXPECT_EQ(cache.Size(), 8u);
+    // A property the identity does not hold does not split it: the device NAME is not the device.
+    auto renamed = adrenoDevice;
+    std::snprintf(renamed.deviceName, sizeof(renamed.deviceName), "%s", "Adreno (TM) 830 renamed");
+    (void)cache.Resolve(MakeWireDepthResolveDeviceIdentity(renamed, true, measured), probeReading(kBothArmsResolve),
+                        &decided);
+    EXPECT_FALSE(decided) << "the device name is not part of the identity";
     EXPECT_EQ(cache.Size(), 8u);
 #else
     GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
+#endif
+}
+
+// Codex closeout finding 2, the cf-magma critic's follow-up: WHICH PLACEHOLDER AN INVALID OR EMPTY
+// STORAGE UNIT TAKES on the arm without a null descriptor. Private per (shape, UNIT) - GL aliases per
+// unit, so the unit is the no-alias guarantee (the ImageUnitPrivate integration entries go red when it
+// leaves the key) and the binding is not in the key at all - and bounded: every private placeholder
+// is an allocation freed only at Shutdown, so past kWirePrivateStoragePlaceholderCap a NEW (shape,
+// unit) shares its shape's placeholder while the units that have one keep it. A sampled placeholder
+// is never written and stays shared.
+TEST(PipelineQuirkTest, WirePlaceholderKeysArePrivatePerShapeAndUnitAndBounded) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Backend::DirectVulkan::ChooseWirePlaceholderKey;
+    using MobileGL::MG_Backend::DirectVulkan::kWirePrivateStoragePlaceholderCap;
+    using MobileGL::MG_Backend::DirectVulkan::WirePlaceholderKey;
+    using MobileGL::MG_Backend::DirectVulkan::WirePlaceholderKeyHash;
+    constexpr Uint32 kUnits = MobileGL::MG_Pipe::kMGPipeMaxImageUnits;
+    static_assert(kWirePrivateStoragePlaceholderCap >= kUnits,
+                  "one shape on every image unit must stay private");
+    UnorderedMap<WirePlaceholderKey, Int, WirePlaceholderKeyHash> cache;
+    SizeT privateCount = 0;
+    // What ResolveWirePlaceholderImage does with the key: find it, or make (and count) it.
+    const auto take = [&](Uint64 shape, Bool storage, Uint32 unit) {
+        const WirePlaceholderKey key = ChooseWirePlaceholderKey(shape, storage, unit, privateCount,
+            [&](const WirePlaceholderKey& candidate) { return cache.count(candidate) != 0; });
+        if (cache.emplace(key, 0).second && key.unit != WirePlaceholderKey::kShared) ++privateCount;
+        return key;
+    };
+    const Uint64 rgba8Storage2D = 37u | (1ull << 48);
+    const Uint64 r32uiStorage3D = 98u | (4ull << 32) | (1ull << 48);
+    const Uint64 rgba8Sampled2D = 37u;
+
+    // Units A and B of one shape: two placeholders (the finding) ...
+    const WirePlaceholderKey a = take(rgba8Storage2D, true, 2);
+    const WirePlaceholderKey b = take(rgba8Storage2D, true, 3);
+    EXPECT_FALSE(a == b) << "two invalid units of one shape share a placeholder";
+    EXPECT_EQ(a.unit, 2u);
+    // ... and unit A through a second binding is A's own placeholder, not a third allocation.
+    EXPECT_TRUE(take(rgba8Storage2D, true, 2) == a) << "a second binding on unit A made another placeholder";
+    EXPECT_EQ(privateCount, 2u);
+    // A sampled placeholder is shared by shape, whatever unit it came from.
+    EXPECT_EQ(take(rgba8Sampled2D, false, 2).unit, WirePlaceholderKey::kShared);
+    EXPECT_TRUE(take(rgba8Sampled2D, false, 7) == take(rgba8Sampled2D, false, 2));
+    EXPECT_EQ(privateCount, 2u);
+
+    // A peer rotating two shapes across every unit, then a third: the map stops at the cap (plus
+    // the shared placeholders), every unit that got a private placeholder keeps it, and the ones
+    // past the cap share their shape's.
+    for (Uint32 unit = 0; unit < kUnits; ++unit) {
+        (void)take(rgba8Storage2D, true, unit);
+        (void)take(r32uiStorage3D, true, unit);
+    }
+    for (Uint32 unit = 0; unit < kUnits; ++unit) {
+        const WirePlaceholderKey rotated = take(37u | (2ull << 32) | (1ull << 48), true, unit);
+        EXPECT_EQ(rotated.unit, WirePlaceholderKey::kShared) << "unit " << unit << " past the cap still allocated";
+    }
+    EXPECT_EQ(privateCount, kWirePrivateStoragePlaceholderCap);
+    EXPECT_LE(cache.size(), kWirePrivateStoragePlaceholderCap + 3u);
+    EXPECT_TRUE(take(rgba8Storage2D, true, 3) == b) << "a unit that had its private placeholder lost it at the cap";
+    EXPECT_EQ(take(r32uiStorage3D, true, kUnits - 1).unit, kUnits - 1);
+#else
+    GTEST_SKIP() << "the wire placeholders exist only in the disaggregated build";
 #endif
 }

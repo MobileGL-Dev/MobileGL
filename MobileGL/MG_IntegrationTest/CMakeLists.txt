@@ -3495,8 +3495,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # KHR-GL46.shader_image_load_store.incomplete_textures ended the inproc Redmi run at
         # Fatal{UnmigratedVerb, "Magma:image-view-window"}: the unit named level 2 of a texture
         # with only level 0, a monolith Fail turned into a SIGABRT. GL 4.6 core 8.26 makes that
-        # access invalid - zero loads, dropped stores - and the wire descriptor resolve now binds
-        # the storage placeholder for it. One entry per case for the private log path; NO KNOB,
+        # access invalid - zero loads, dropped stores - and the wire descriptor resolve now binds a
+        # null storage descriptor for it where the device enables VK_EXT_robustness2 nullDescriptor,
+        # else a placeholder private to the unit (UniformManager::ResolveWireImageDescriptor and
+        # ResolveWirePlaceholderImage). One entry per case for the private log path; NO KNOB,
         # so all three arms. The monolith `DirectVulkan.` entry of the same scenario skips by
         # name (it drops the draw: the gate 5 BASE, and a pull-build .text change to move).
         # ALevelPastATextureViewsWindowReadsZero joined once the F2 repair retired the transport
@@ -3521,7 +3523,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         #
         # The two AStoreThrough... cases above run the null-descriptor arm on this host: lavapipe
         # enables VK_EXT_robustness2 nullDescriptor, so an invalid or empty storage unit binds a
-        # null descriptor. A device without it binds a placeholder PRIVATE to the (binding, unit)
+        # null descriptor. A device without it binds a placeholder PRIVATE to the unit (per shape)
         # instead; MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1 puts the server on that arm
         # (UniformManager::SetWireInvalidStorageImageArm), and the client reads the same marker to
         # expect it: B's load zero (no alias), A's own load of its store = the recorded CONTRACT-P7

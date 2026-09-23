@@ -94,7 +94,7 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # the same server-side arm choice reads to run the REAL probe with its render-pass resolve left out.
 # Codex closeout finding 2 (cf-magma): the `.ImageUnitPrivate.` entries set
 # MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1, which the SERVER's UniformManager reads to bind a
-# (binding, unit)-private placeholder for an invalid image unit instead of a null descriptor - the
+# unit-private placeholder for an invalid image unit instead of a null descriptor - the
 # knob-free `.ImageUnitWindow.` copies of the same two cases keep their tcp entries. Two cases, so two
 # tails (one case each), as for `.Reclaim.`.
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
