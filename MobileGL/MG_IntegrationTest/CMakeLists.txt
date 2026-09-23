@@ -144,6 +144,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/RelinkStageSetScenario.cpp
     Scenarios/GuiBatchScenario.cpp
     Scenarios/UnboundImageDescriptorScenario.cpp
+    # P7 gate 5: an image unit naming a (level, layer) its texture lacks (GL 4.6 core 8.26).
+    Scenarios/InvalidImageUnitScenario.cpp
     Scenarios/IntegerBorderColorScenario.cpp
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
     Scenarios/RenderbufferBlendFormatScenario.cpp
@@ -778,7 +780,7 @@ set(MGL_ITEST_MONOLITH_MECHANISM_FILTER
 # (ConfigLoader.cpp:213). In the ambient entry it would green-skip on every run and the gate
 # would be a name in a list.
 set(MGL_ITEST_GLES_VIEW_FILTER
-    "TextureViewScenario.*:TextureViewAliasScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow")
+    "TextureViewScenario.*:TextureViewAliasScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow:InvalidImageUnitScenario.ALevelPastATextureViewsWindowReadsZero")
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES."
@@ -2660,6 +2662,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_register_split_arms("${MGL_SPLIT_I1_FILTER_${mglItestI1Scenario}}" "")
     endforeach()
 
+    # ---- P7 gate 5 (g5-imgwin): AN IMAGE UNIT NAMING A (LEVEL, LAYER) ITS TEXTURE LACKS ------
+    #
+    # GL 4.6 core 8.26 makes every access through such a unit invalid - zero loads, dropped
+    # stores - and never an error. Espryt forwards the unit to the driver, which applies the rule
+    # itself; these are its three arms. The Magma arms of the same scenario are laid by hand in
+    # the Fm block (`DirectVulkan.<arm>.ImageUnitWindow.`), because that is where the wire arm's
+    # gated flavour lives.
+    #
+    # THE TEXTURE-VIEW CASE IS EXCLUDED FROM EVERY GATED ARM, and not for anything it asserts: at
+    # this package's base (p7/f2 f90afcd1) every glTextureView under a transport ends the session
+    # at Fatal{ProtocolCorruption, "StagedTextureStore.NoteLevelDefined"} (the view's descriptor
+    # carries internalFormat 0xFFFFFFFF) - the same death TextureViewScenario, TextureViewAliasScenario
+    # and F1WireScenario's two view cases already show on these arms. It runs in the Espryt
+    # view-enabled monolith entry (MGL_ITEST_GLES_VIEW_FILTER) and in the informational
+    # integration-magma-full-* tier, and joins the gated arms when that death is retired.
+    mgl_itest_register_split_arms(
+        "InvalidImageUnitScenario.*-InvalidImageUnitScenario.ALevelPastATextureViewsWindowReadsZero" "")
+
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
     # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
@@ -3380,6 +3400,30 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-copyinplace${mglItestArmLogTag}-${inPlaceCase}.log")
+        endforeach()
+        # ---- P7 gate 5 (g5-imgwin): the image-unit window ------------------------------------
+        #
+        # KHR-GL46.shader_image_load_store.incomplete_textures ended the inproc Redmi run at
+        # Fatal{UnmigratedVerb, "Magma:image-view-window"}: the unit named level 2 of a texture
+        # with only level 0, a monolith Fail turned into a SIGABRT. GL 4.6 core 8.26 makes that
+        # access invalid - zero loads, dropped stores - and the wire descriptor resolve now binds
+        # the storage placeholder for it. One entry per case for the private log path; NO KNOB,
+        # so all three arms. The monolith `DirectVulkan.` entry of the same scenario skips by
+        # name (it drops the draw: the gate 5 BASE, and a pull-build .text change to move).
+        # ALevelPastATextureViewsWindowReadsZero is not here: see the split-arm registration of
+        # this scenario for the base's glTextureView death it waits on.
+        foreach(imageWindowCase AMissingMipLevelOfAnIncompleteTextureReadsZeroInADraw
+                                AMissingMipLevelOfAnIncompleteTextureReadsZeroInADispatch
+                                ALevelPastAnImmutableTexturesStorageReadsZero
+                                ALayerPastAnArraysLastSliceReadsZero
+                                ATextureWithNoStorageReadsZero)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitWindow."
+                TEST_FILTER "InvalidImageUnitScenario.${imageWindowCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imagewindow${mglItestArmLogTag}-${imageWindowCase}.log")
         endforeach()
     endforeach()
 endif()

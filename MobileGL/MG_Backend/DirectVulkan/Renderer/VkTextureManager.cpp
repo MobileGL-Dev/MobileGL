@@ -2677,9 +2677,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     MG_Pipe::MGPipeHandle VkTextureManager::ResolveWireTextureStorage(
         MG_Pipe::MGPipeHandle handle, Uint32& level, Uint32& layer,
-        VkFormat* viewFormat, Uint32* layerCount) {
+        VkFormat* viewFormat, Uint32* layerCount, Bool* outsideWindow) {
         const auto& state = MG_Pipe::MGPipeApplier();
         if (viewFormat) *viewFormat = VK_FORMAT_UNDEFINED;
+        if (outsideWindow) *outsideWindow = false;
+        const auto outside = [outsideWindow] {
+            if (outsideWindow) *outsideWindow = true;
+            return MG_Pipe::kMGPipeNullHandle;
+        };
         Uint32 mappedLevel = level, mappedLayer = layer;
         Uint32 remainingLayers = ~Uint32{0};
         VkFormat outerFormat = VK_FORMAT_UNDEFINED;
@@ -2691,12 +2696,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto& record = state.TextureResources[handle.Slot];
             if (!record.Live || record.Gen != handle.Gen) return MG_Pipe::kMGPipeNullHandle;
             if (MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
-                if (mappedLevel >= record.Desc.Levels) return MG_Pipe::kMGPipeNullHandle;
+                // Levels == 0 is a texture with no storage at all: every level is outside it.
+                if (mappedLevel >= record.Desc.Levels) return outside();
                 const Uint32 layers = record.Desc.Target ==
                     static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex3D)
                         ? std::max(record.Desc.Depth >> mappedLevel, 1u)
                         : std::max<Uint32>(record.Desc.ArrayLayers, 1u);
-                if (mappedLayer >= layers) return MG_Pipe::kMGPipeNullHandle;
+                if (mappedLayer >= layers) return outside();
                 level = mappedLevel;
                 layer = mappedLayer;
                 if (viewFormat) *viewFormat = outerFormat;
@@ -2708,9 +2714,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return MG_Pipe::kMGPipeNullHandle;
             const auto& viewRecord = state.SamplerViewCsos[viewHandle.Slot];
             const auto& view = viewRecord.View;
-            if (!viewRecord.Live || viewRecord.Gen != viewHandle.Gen || view.Texture != handle ||
-                mappedLevel >= view.NumLevels || mappedLayer >= view.NumLayers)
+            if (!viewRecord.Live || viewRecord.Gen != viewHandle.Gen || view.Texture != handle)
                 return MG_Pipe::kMGPipeNullHandle;
+            if (mappedLevel >= view.NumLevels || mappedLayer >= view.NumLayers) return outside();
             if (outerFormat == VK_FORMAT_UNDEFINED) {
                 outerFormat = ResolveTextureFormatInfo(static_cast<TextureInternalFormat>(view.InternalFormat)).format;
                 if (outerFormat == VK_FORMAT_UNDEFINED) return MG_Pipe::kMGPipeNullHandle;

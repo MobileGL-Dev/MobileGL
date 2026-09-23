@@ -99,6 +99,47 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // GL ignores Layer/Layered for a target with no layers. In particular image1D stays a 1D
+    // view, and an ignored nonzero Layer must not address another slice.
+    static Bool WireTargetHasLayers(MG_Pipe::MGPipeResourceTarget target) {
+        using T = MG_Pipe::MGPipeResourceTarget;
+        return target == T::Tex1DArray || target == T::Tex2DArray || target == T::Tex2DMSArray ||
+               target == T::Tex3D || target == T::TexCube || target == T::TexCubeArray;
+    }
+
+    // GL 4.6 core 8.26: an access through an image unit whose texture does not HAVE the
+    // (level, layer) the unit names is INVALID. A load returns zero, a store does nothing, an
+    // atomic updates nothing - and none of it is an error, neither at bind time (the bind only
+    // checks the level's and the layer's signs) nor at the draw. It is the observable an empty
+    // unit has, so the answer is the empty unit's: the storage placeholder, cleared before each
+    // use, of the dimensionality the SHADER declared (ResolveWirePlaceholderImage).
+    //
+    // KHR-GL46.shader_image_load_store.incomplete_textures is the shape that found it: level 2
+    // of a texture that defines only level 0 (MAX_LEVEL 7, a mipmapping filter). The same
+    // question comes up empty for a level past an immutable texture's storage, a layer past an
+    // array's last slice, a texture that has no storage at all, and a level past a texture
+    // view's own window even where its owner has one. The record carries exactly what
+    // glBindImageTexture was given, so it is decided here, by the walk every wire consumer uses
+    // to find a texel's storage, and from that walk's "not there" answer ONLY: a null for any
+    // other reason (a dead record, a stale view CSO) stays the descriptor resolve's refusal.
+    //
+    // NOT DECIDED HERE, deliberately: a level that IS in storage but lies outside
+    // [BASE_LEVEL, MAX_LEVEL], or of a texture that is not mipmap-complete. The monolith arm
+    // binds those as it finds them too, and the P7 gate 5 comparison is against that arm.
+    static Bool WireShaderImageNamesNoTexel(VkTextureManager& textures, const MG_Pipe::MGPImageView& image) {
+        const auto& state = MG_Pipe::MGPipeApplier();
+        if (MG_Pipe::MGPipeHandleIsNull(image.Res) || image.Res.Slot >= state.TextureResources.size()) return false;
+        const auto& record = state.TextureResources[image.Res.Slot];
+        if (!record.Live || record.Gen != image.Res.Gen) return false;
+        const Bool selectsLayer =
+            WireTargetHasLayers(static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target)) && !image.Layered;
+        Uint32 level = image.Level;
+        Uint32 layer = selectsLayer ? image.Layer : 0;
+        Bool outsideWindow = false;
+        (void)textures.ResolveWireTextureStorage(image.Res, level, layer, nullptr, nullptr, &outsideWindow);
+        return outsideWindow;
+    }
+
     static VkComponentSwizzle WireSwizzle(Uint8 value) {
         switch (static_cast<TextureSwizzleParam>(value)) {
         case TextureSwizzleParam::Red: return VK_COMPONENT_SWIZZLE_R;
@@ -129,18 +170,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (handle.Slot >= state.TextureResources.size()) WireDescriptorFatal("image-record");
         const auto& record = state.TextureResources[handle.Slot];
         if (!record.Live || record.Gen != handle.Gen) WireDescriptorFatal("image-record-generation");
+        // Before the sync: a texture with no storage at all is one of the shapes, and syncing
+        // it would refuse rather than answer.
+        if (storage && WireShaderImageNamesNoTexel(*m_textureManager, state.BoundShaderImages[unit])) {
+            const VkFormat bound = MG_Util::ConvertTextureInternalFormatToVkEnum(
+                MG_Util::ConvertGLEnumToTextureInternalFormat(state.BoundShaderImages[unit].InternalFormat));
+            return ResolveWirePlaceholderImage(commandBuffer, program, programObj, binding, storage, out, bound);
+        }
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
         if (!resource) WireDescriptorFatal("image-resource");
         m_textureManager->FlushPendingUploads();
 
         const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
-        using Target = MG_Pipe::MGPipeResourceTarget;
-        const Bool layerable = target == Target::Tex1DArray || target == Target::Tex2DArray ||
-            target == Target::Tex2DMSArray || target == Target::Tex3D ||
-            target == Target::TexCube || target == Target::TexCubeArray;
+        const Bool layerable = WireTargetHasLayers(target);
         Uint32 level = storage ? state.BoundShaderImages[unit].Level : record.Params.BaseLevel;
-        // GL ignores Layer/Layered for non-layerable targets. In particular image1D
-        // stays a 1D view, and an ignored nonzero Layer must not address another slice.
+        // GL ignores Layer/Layered for non-layerable targets (WireTargetHasLayers).
         Uint32 layer = storage && layerable && !state.BoundShaderImages[unit].Layered
             ? state.BoundShaderImages[unit].Layer : 0;
         const Uint32 localLevel = level;
@@ -3014,6 +3058,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // Null is the wire's unbound/incomplete binding. Its native
                     // placeholder needs no resource upload or frontend allocation.
                     if (MG_Pipe::MGPipeHandleIsNull(handle)) continue;
+                    // Nor does an image unit naming a (level, layer) its texture lacks: the
+                    // descriptor resolve binds that same placeholder (GL 4.6 core 8.26), and
+                    // preparing the texture would decline a storage-less one and lose the pass.
+                    if (storage && WireShaderImageNamesNoTexel(*m_textureManager, state.BoundShaderImages[unit]))
+                        continue;
                     if (!m_textureManager->SyncTextureResourceByHandle(handle, false, storage)) return false;
                 }
             }

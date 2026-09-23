@@ -211,9 +211,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 layers = 1;
         };
         mutable UnorderedMap<Uint64, WirePlaceholderImage> m_wirePlaceholderImages;
+        // boundStorageFormat: for a storage binding with no reflected format, the format the
+        // unit's glBindImageTexture named, when the unit holds a texture it cannot address
+        // (GL 4.6 core 8.26); UNDEFINED keeps the numeric-domain R32 default.
         Bool ResolveWirePlaceholderImage(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
-            VkDescriptorImageInfo& out) const;
+            VkDescriptorImageInfo& out, VkFormat boundStorageFormat = VK_FORMAT_UNDEFINED) const;
         void DestroyWirePlaceholderImage(WirePlaceholderImage& image) const;
 #endif
 

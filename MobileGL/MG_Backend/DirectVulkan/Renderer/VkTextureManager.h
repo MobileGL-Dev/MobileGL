@@ -566,8 +566,13 @@ public:
     // Map a texture/view-relative subresource to its live storage owner. layerCount, when
     // supplied, receives the number of accessible layers starting at the input layer.
     // viewFormat is UNDEFINED for an ordinary texture, or the outer view's format.
+    // outsideWindow, when supplied, says WHY a null came back: true only when every record on
+    // the way was live and consistent and the (level, layer) simply is not there - past the
+    // owner's levels or layers, or past a view's own window. A dead record, a missing or stale
+    // view CSO and an unresolvable view format leave it false.
     MG_Pipe::MGPipeHandle ResolveWireTextureStorage(MG_Pipe::MGPipeHandle handle, Uint32& level,
-        Uint32& layer, VkFormat* viewFormat = nullptr, Uint32* layerCount = nullptr);
+        Uint32& layer, VkFormat* viewFormat = nullptr, Uint32* layerCount = nullptr,
+        Bool* outsideWindow = nullptr);
     // Grows the live image of a handle-keyed resource to `requiredMipLevels`, carrying the
     // existing levels' content across with an in-command-buffer copy. The caller
     // (GenerateMipmap's record arm) has flushed every pending submission first, so the old

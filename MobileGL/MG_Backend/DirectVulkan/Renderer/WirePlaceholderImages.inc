@@ -15,7 +15,7 @@
 
     Bool UniformManager::ResolveWirePlaceholderImage(VkCommandBuffer commands, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
-            VkDescriptorImageInfo& out) const {
+            VkDescriptorImageInfo& out, VkFormat boundStorageFormat) const {
         if (binding >= programObj.samplerTextureTargetByBinding.size() ||
             binding >= programObj.samplerNumericDomainByBinding.size()) return false;
         const auto target = programObj.samplerTextureTargetByBinding[binding];
@@ -36,6 +36,20 @@
         if (storage) {
             if (binding >= programObj.storageImageFormatByBinding.size()) return false;
             format = programObj.storageImageFormatByBinding[binding];
+            // A formatless declaration of an INVALID binding (a unit whose texture lacks the
+            // named level or layer) takes the format the application bound, where the device can
+            // store to it and it is in the shader's numeric class. The R32 default expands a load
+            // to (0, 0, 0, 1); a four-channel carrier cleared to zero reads (0, 0, 0, 0), which
+            // is what KHR-GL46.shader_image_load_store.incomplete_textures compares against.
+            if (format == VK_FORMAT_UNDEFINED && boundStorageFormat != VK_FORMAT_UNDEFINED) {
+                const Bool classMatches = domain == SamplerNumericDomain::Float
+                    ? !vkuFormatIsUINT(boundStorageFormat) && !vkuFormatIsSINT(boundStorageFormat)
+                    : domain == SamplerNumericDomain::SignedInteger ? vkuFormatIsSINT(boundStorageFormat)
+                    : domain == SamplerNumericDomain::UnsignedInteger && vkuFormatIsUINT(boundStorageFormat);
+                VkFormatProperties properties{};
+                if (classMatches) vkGetPhysicalDeviceFormatProperties(m_physicalDevice, boundStorageFormat, &properties);
+                if (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) format = boundStorageFormat;
+            }
             if (format == VK_FORMAT_UNDEFINED) format = PlaceholderFormatForNumericDomain(domain);
         } else if (shadow) format = VK_FORMAT_D16_UNORM;
         else if (domain == SamplerNumericDomain::Float) format = VK_FORMAT_R8G8B8A8_UNORM;
