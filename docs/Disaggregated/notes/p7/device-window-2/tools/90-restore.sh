@@ -20,23 +20,31 @@ w2_lock
 t0=$(date +%s)
 
 Ash "input keyevent KEYCODE_HOME"
+# A replay's app process stays cached after its Activity finishes, and a spawn replay's server
+# child (libMobileGLServer.so @mgl-<pid>-...) stays with it, holding its few hundred MB (seen after
+# the dry run). Stop the package first so nothing of the window outlives it, then bring the
+# supervisor back if it was up when the window opened.
+Ash "am force-stop $W2_PKG"
+sleep 1
 if [ "${FOUND_SUPERVISOR:-0}" = 1 ]; then
-    if w2_supervisor_running; then
-        log "supervisor already listening on $W2_LISTEN"
-    else
-        python3 "$W2_TOOLS/tools/trace_replay/tcp_device_server.py" start --serial "$W2_SERIAL" \
-            --package "$W2_PKG" --listen "$W2_LISTEN" --token "$W2_TOKEN" --allow-idle \
-            --state-file "$W2_IDLE_STATE" > "$OUT/supervisor-restart.txt" 2>&1
-        for _ in $(seq 1 20); do w2_supervisor_running && break; sleep 1; done
-        w2_supervisor_running && log "supervisor restarted on $W2_LISTEN" || log "WARN: supervisor NOT listening (see $OUT/supervisor-restart.txt)"
-    fi
+    python3 "$W2_TOOLS/tools/trace_replay/tcp_device_server.py" start --serial "$W2_SERIAL" \
+        --package "$W2_PKG" --listen "$W2_LISTEN" --token "$W2_TOKEN" --allow-idle \
+        --state-file "$W2_IDLE_STATE" > "$OUT/supervisor-restart.txt" 2>&1
+    for _ in $(seq 1 20); do w2_supervisor_running && break; sleep 1; done
+    w2_supervisor_running && log "supervisor restarted on $W2_LISTEN" || log "WARN: supervisor NOT listening (see $OUT/supervisor-restart.txt)"
     Ash "input keyevent KEYCODE_HOME"
 fi
 if [ -f "$OUT/pinned-by-window" ]; then
     bash "$W2_TOOLS/tools/device_bench/pin_device.sh" "$W2_SERIAL" unpin > "$OUT/pin-session-end.txt" 2>&1
     rm -f "$OUT/pinned-by-window"
 fi
-pin=$(w2_pin_check "$W2_TOOLS" "$OUT/pin-check-final.txt")
+# MIUI's launch boost clamps both CPU policies at max for a few seconds after the service start,
+# which `check` reads as DRIFT ("clamped by something other than this script"): re-read it.
+for _ in 1 2 3 4; do
+    pin=$(w2_pin_check "$W2_TOOLS" "$OUT/pin-check-final.txt")
+    [ "$pin" = "${FOUND_PIN:-UNPINNED}" ] && break
+    sleep 5
+done
 if [ -n "${FOUND_STAYON:-}" ] && [ "$(Ash 'settings get global stay_on_while_plugged_in')" != "$FOUND_STAYON" ]; then
     Ash "settings put global stay_on_while_plugged_in $FOUND_STAYON"
 fi

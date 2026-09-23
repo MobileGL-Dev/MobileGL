@@ -43,7 +43,7 @@ CTS 逐块写 `cts/runs/<block>/.done`。只重跑一例：删它的 `.done` 再
 | 5 | `40-bsl-stats.sh <stamp>` | bsl-esc-menu × {inproc, spawn} 各 1 遍，`MOBILEGL_PIPE_STATS=1 PERIOD=1`；先 force-stop 再起设备端 root 采样器（0.25 s：maps 行数、VmRSS、VmHWM；排除 argv 带 `tcp://` 的 supervisor server）；`wbuf[]` 从归档日志取 | ~1 min |
 | 6 | `50-cts-after.sh <stamp>` | APK 的 arm64 `libMobileGL.so` 推到 `mgcts` 并在设备上核 sha256；AFTER 环境 = `$BASE` 的 flag + `MOBILEGL_TRANSPORT=inproc` + `ROLE_SPLIT_STATE=1 STRICT_ERRORS=1 RUN_AHEAD=1`；臂证明（mgprobe PASS 且 logcat 有 inproc 解析句与 `Config: IPC … strict=1 role-split-state=1 run-ahead=1`、0 Fatal；再用一个 glcts 用例证一次）；五块依次跑（顺序同 `$BASE`），每块 `qpa_report --json`，最后 `cts_multi_report` 出与 `$BASE` 同形的 JSON | 6–7 min（pipe 头 lib inproc 实测 358 s；`$BASE` monolith 372 s） |
 | 7 | `60-reduce.py <stamp>` | 写 `verdict.txt` / `verdict.json`（见 §3） | <10 s |
-| 8 | `90-restore.sh <stamp>` | Home；supervisor 若开窗时在跑则以 `tcp_device_server.py start --allow-idle`（同 listen / token / Doze 状态文件）在**新 APK**上重启并核实在听；解钉频；stay-on 复原 | ~10 s |
+| 8 | `90-restore.sh <stamp>` | Home；`am force-stop` 包（回放后缓存的 app 进程与 spawn 回放留下的 `libMobileGLServer.so @mgl-…` 子进程会一直占着几百 MB）；supervisor 若开窗时在跑则以 `tcp_device_server.py start --allow-idle`（同 listen / token / Doze 状态文件）在**新 APK**上重启并核实在听；解钉频（MIUI 启动 boost 会让 `check` 短暂读成 DRIFT，重读至多 20 s）；stay-on 复原 | ~15 s |
 
 合计：构建 ~6 min + 设备 ~65–80 min ≈ **1.3–1.5 h**。外推依据见 §5。
 
