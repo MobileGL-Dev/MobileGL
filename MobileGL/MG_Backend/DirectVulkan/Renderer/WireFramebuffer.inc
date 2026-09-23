@@ -819,16 +819,23 @@
         // images, so it is asked here, before any aspect runs, for every depth/stencil aspect
         // the mask names that would take the multisample resolve arm.
         //
-        // A default READ framebuffer is never multisampled here, and a default DRAW one behind a
-        // multisample read is ResolveWireDepthStencil's region Fatal whatever the shape - and
-        // resolving the default draw image early would move its write index - so both are left
-        // to the lambda.
-        if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) && !read->IsDefault && !draw->IsDefault) {
+        // A default READ framebuffer is never multisampled here, so it is left to the lambda. A
+        // default DRAW framebuffer is asked like any other (review round 3): round 2 left it out
+        // on the belief that a default draw behind a multisample read was ResolveWireDepthStencil's
+        // region Fatal whatever the shape, but that arm asks DeclineWireDepthStencilResolveShape
+        // BEFORE its region check - so a scaled (or X-mirrored) COLOR|DEPTH blit out of a
+        // multisample framebuffer onto the window scaled and wrote its colour through
+        // BlitWireColorToDefault and then recorded INVALID_OPERATION on its depth, the very
+        // partial effect this block exists to close. Both sides are resolved as READS
+        // (isWriteTarget=false): only their format and samples are consulted here, and a write
+        // resolve of the default framebuffer would re-point it at the acquired swapchain image
+        // before anything had been written to it.
+        if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) && !read->IsDefault) {
             const auto declines = [&](const MG_Pipe::MGPSurface& src, const MG_Pipe::MGPSurface& dst,
                                       VkImageAspectFlags aspect) -> Bool {
                 const WireImage source = ResolveWireImage(*read, src, aspect, /*isWriteTarget=*/false);
                 if (!source.image || source.samples == VK_SAMPLE_COUNT_1_BIT) return false;
-                const WireImage destination = ResolveWireImage(*draw, dst, aspect, /*isWriteTarget=*/true);
+                const WireImage destination = ResolveWireImage(*draw, dst, aspect, /*isWriteTarget=*/false);
                 if (!destination.image || destination.samples != VK_SAMPLE_COUNT_1_BIT) return false;
                 return DeclineWireDepthStencilResolveShape(source, destination, sx0, sy0, sx1, sy1,
                                                            dx0, dy0, dx1, dy1);

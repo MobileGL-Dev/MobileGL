@@ -614,6 +614,59 @@ namespace MGITest {
                        "the empty-destination decline must have left the depth alone");
         EXPECT_EQ(FirstGLError(), 0u) << "the session survived the empty-destination decline";
 
+        // THE SAME SCALE ONTO THE WINDOW (review round 3). The default framebuffer was the one
+        // destination the round-2 pre-pass left to the per-aspect lambdas, on the belief that a
+        // default draw framebuffer behind a multisample read was the resolve arm's region Fatal
+        // whatever the shape - but that arm asks the shape question BEFORE its region check, so
+        // a scaled COLOR|DEPTH resolve onto the window scaled and wrote its colour through the
+        // swapchain blit and then recorded INVALID_OPERATION on its depth: the partial effect
+        // the previous leg pins for a user framebuffer, reproduced on the only other kind of
+        // destination there is. The window is primed blue at depth 0.5, the source (red below,
+        // green above) is blown up over the whole of it, and three probes - a corner, the
+        // centre, the far corner - must all still read the priming on both aspects. The
+        // harness's pbuffer default framebuffer has no other way of being looked at than
+        // glReadPixels, which is what both probes use.
+        {
+            HeadlessGL& gl = Gl();
+            const int windowWidth = gl.Width();
+            const int windowHeight = gl.Height();
+            ASSERT_GE(windowWidth, 4);
+            ASSERT_GE(windowHeight, 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, windowWidth, windowHeight);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_TRUE);
+            glClearColor(0, 0, 1, 1);
+            glClearDepth(0.5);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            ASSERT_EQ(FirstGLError(), 0u) << "priming the default framebuffer";
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, windowWidth, windowHeight,
+                              GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+            glFinish();
+            EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+                << "a scaled multisample COLOR|DEPTH blit onto the default framebuffer is INVALID_OPERATION as a whole";
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            const int probeX[3] = {1, windowWidth / 2, windowWidth - 2};
+            const int probeY[3] = {1, windowHeight / 2, windowHeight - 2};
+            for (int i = 0; i < 3; ++i) {
+                const int x = probeX[i], y = probeY[i];
+                std::array<GLubyte, 4> window{};
+                glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, window.data());
+                EXPECT_EQ(window, (std::array<GLubyte, 4>{0, 0, 255, 255}))
+                    << "the declined COLOR|DEPTH scale onto the window must not have written its colour at ("
+                    << x << ", " << y << ")";
+                float depth = kDepthPoison;
+                glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+                EXPECT_NEAR(depth, 0.5f, 1.0f / 4096.0f)
+                    << "the declined COLOR|DEPTH scale onto the window must have left its depth alone at ("
+                    << x << ", " << y << ")";
+            }
+            EXPECT_EQ(FirstGLError(), 0u) << "the session survived the default-framebuffer decline";
+        }
+
         DestroySource(resolved);
         DestroySource(multisampled);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
