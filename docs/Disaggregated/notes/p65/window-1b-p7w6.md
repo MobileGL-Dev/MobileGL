@@ -4,7 +4,9 @@
 
 清单共 38 例。续跑时 9 例已有终态并跳过（8 PASS、1 idle timeout），本轮新尝试 29 例：16 PASS、8 case-level idle timeout、2 视觉失败、3 missing-result timeout。B4 主机全门与本矩阵有一段时间重叠，可能影响超时耗时；所有超时均保留为未完成/timeout，不能按视觉错图计数。缓存跳过的结果仍计入 38 例分母。
 
-两项真实视觉失败：Iris Photon v1.3b（SSIM 0.008877075，403,024 mismatch）与 Iris Derivative Main D24.4.14（SSIM 0.850784981，402,598 mismatch），阈值 0.99。Photon 输出几乎全黑，仅见准星和快捷栏；phone logcat 记载 clouds/fog shader varying 类型不匹配，server program unusable 后绑定 program 0。D24 输出保留森林岸边，但前景块发黑、地形/水色偏且玩家手缺失；没有显式应用 shader link failure 或 fatal。两例 server child 均记录 exit=0 / sessionsFaulted=1，client frame reply metrics 仍在推进。两例都需要后续同设备 DirectGLES monolith 对照，才能区分分离路径与本地 GLES 行为。
+两项真实视觉失败：Iris Photon v1.3b（SSIM 0.008877075，403,024 mismatch）与 Iris Derivative Main D24.4.14（SSIM 0.850784981，402,598 mismatch），阈值 0.99。Photon 输出几乎全黑，仅见准星和快捷栏；phone logcat 记载 clouds/fog shader varying 类型不匹配，server program unusable 后绑定 program 0。D24 输出保留森林岸边，但前景块发黑、地形/水色偏且玩家手缺失；没有显式应用 shader link failure 或 fatal。两例 server child 均记录 exit=0 / sessionsFaulted=1，client frame reply metrics 仍在推进。
+
+同一设备、同一 trace、同一已安装 APK（测前后 SHA-256 均为 `780bb00e81b9cf2e84298543692c1b005c281dfc2a0f499bfa1af86772625590`）随后跑 DirectGLES monolith：Photon 得到完全相同的 SSIM / mismatch（0.008877075 / 403,024），并复现相同 varying link errors；D24 得到 0.850671535 / 402,596（TCP 为 0.850784981 / 402,598），两臂均见 attribute location 超设备限制。两项视觉失败都能在 monolith 复现，不是 TCP 分离路径特有回归。对照输入 trace SHA 分别为 Photon `217d4939…a69b3`、D24 `fe89d01b…9228b0`。
 
 八个本轮 idle timeout：REI normal-world 302.162s、Xaero minimap normal-world 302.244s、Xaero world-map normal-world 328.432s、JourneyMap normal-world 308.783s、ModernUI inventory normal-world 376.767s、Create indirect 380.309s、Improved Transparency 26.3 313.152s、Iris BSL ESC menu 854 302.749s。若无 phone reap 证据，表中标“未知”，不推断服务仍活或已退出。
 
@@ -57,4 +59,4 @@
 
 ## 证据位置与注意事项
 
-原始 runner log、results/checkpoints、diff PNG、client/server logs 和 phone logcat 位于 /home/swung/w7/logs/p7w6-matrix-resume/pass1/；清单在 /home/swung/w7/logs/p7w6-matrix-resume/cases.txt。B4 host gate 与未知子集的 matrix attempts 重叠，timeout 墙钟可能受主机竞争影响；必要时干净重跑 timeout 项和两个视觉失败的 DirectGLES monolith 设备对照。p7w6 APK 早于 M3，后续门 3/CTS 仍须用最终 APK。
+TCP 原始 runner log、results/checkpoints、diff PNG、client/server logs 和 phone logcat 位于 /home/swung/w7/logs/p7w6-matrix-resume/pass1/；清单在 /home/swung/w7/logs/p7w6-matrix-resume/cases.txt。DirectGLES monolith 对照的 actual/diff PNG、result.json、logcat 和应用日志位于 /home/swung/w7/logs/p7w6-monolith-compare/（`archive/.../repeat-01` 与 `archive-d24/.../repeat-01`）。B4 host gate 与未知子集的 matrix attempts 重叠，timeout 墙钟可能受主机竞争影响；这些超时仍只按各自状态记录。p7w6 APK 早于 M3，后续门 3/CTS 仍须用最终 APK。

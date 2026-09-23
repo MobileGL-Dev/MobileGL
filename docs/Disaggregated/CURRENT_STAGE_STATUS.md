@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-23（ID-P7-49–52）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。集成树已含 M3 与 B4（pipe b19297d5，B4 源码审查 land、完整主机门通过）；B4 的 docs/citation/push 收尾中。p7w6 DirectGLES TCP 38 例矩阵已结案，逐例结果见 [window-1b-p7w6.md](notes/p65/window-1b-p7w6.md)。门 3 终局和 CTS AFTER 尚未完成；F2 在独立包分支继续。
+**更新：2026-09-23（ID-P7-49–54）** · 当前交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。M3、B4 与 W6 文档已在 pipe e036b4e0 验证并推送；Photon / D24 同 APK monolith 对照已证明两项错图不是 TCP 分离回归。F2 的 PH-4/5/PH-2 已在 `p7-f2-driver` 经 Luna 审查落地；还剩 PH-6、PH-1 (3)(4)、PH-7 (5) 和 F2 完整门。门 3 / CTS AFTER 尚未完成。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -17,7 +17,7 @@
 | 5 | OQ-8 反射归档 `storageBlocks` | ✅ | C |
 | 6 | OQ-10 `kCapResidentSubData` 按 server 表发布 | ✅ | C |
 | 7 | verify × split（门 2） | ✅ | B4 集成树 verify build：unit 2439、integration-verify 1152、integration-verify-split 1086，全绿；V1/V1 r2 负控与 8 verify trace 证据仍有效 |
-| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu DirectVulkan inproc/spawn 6/6 且图像 SHA 与 monolith 相同；另有 p7w6 DirectGLES × TCP 38 例窗口矩阵报告（非门 3）：16/29 pass、8 idle timeout、2 visual failure、3 missing result；36 例 DirectVulkan 三遍、同会话 monolith 对照和 M3 后 APK 回归待跑 |
+| 8 | 真机 ssim 1.0（门 3，分母 36） | 🔄 | p7w5 OpenRA 27/27 golden；p7w6 bsl-esc-menu DirectVulkan inproc/spawn 6/6 且图像 SHA 与 monolith 相同；DirectGLES × TCP 38 例窗口矩阵 16/29 pass、8 idle timeout、2 visual failure、3 missing result。Photon / D24 两项错图已由同 APK DirectGLES monolith 复现；36 例 DirectVulkan 三遍、同会话 monolith 对照和 M3 后 APK 回归待跑 |
 | 9 | CTS 五块 AFTER ≤ 0.5 pp（门 5） | ⏳ | `$BASE` 已取（`notes/p7/device-window-1/CTS-base/`）；AFTER 在 wave 4 |
 
 **40% 检查点（§8 中点）已过：6/9**，不触发重定基线。G1 全程恒等（pull `.text` `0xa52203`、符号 0/0）；census 79 站点 / 0 未标；棘轮 186 → **173**（B2 重基线，余 88 = monolith draw 路径，wave 3）。
@@ -54,23 +54,23 @@
 ## 3. 真机（Redmi 2f7cbe2e，Adreno 830）
 
 - 当前 APK：**p7w6**，stamp `p7w6-0e16ca27`，已重装并重起 TCP supervisor；屏幕常亮设置 `stayon=15`。bsl-esc-menu DirectVulkan × pbuffer inproc/spawn 各三遍 **6/6**，PNG SHA 均与 E0a monolith 相同；OpenRA 的 p7w5 27/27 结论保留。p7w6 在 M3 落地前构建，后续设备回归需新 APK。
-- DirectGLES × TCP 窗口 1b（p7w6）已结案，逐例状态与 phone reap 证据见 notes/p65/window-1b-p7w6.md：9 缓存跳过、29 次尝试（16 pass、8 idle timeout、2 visual failure、3 missing-result）。Photon v1.3b 与 D24.4.14 需做设备 DirectGLES monolith 对照。
+- DirectGLES × TCP 窗口 1b（p7w6）已结案，逐例状态与 phone reap 证据见 notes/p65/window-1b-p7w6.md：9 缓存跳过、29 次尝试（16 pass、8 idle timeout、2 visual failure、3 missing-result）。Photon v1.3b 与 D24.4.14 的 DirectGLES monolith 对照已在同设备、同 APK 下复现相同错误，见报告中的证据路径。
 - 门 3 的 36 例 DirectVulkan 三遍逐位与同会话 monolith 对照仍待手机新 APK；CTS AFTER 五块也未运行。
 
 ## 4. 在跑
 
 | 工作 | 状态 |
 |---|---|
-| p7w6 DirectGLES TCP 38 例对照 | `~/w7/logs/p7w6-matrix-resume.sh` 以 setsid/nohup 续跑，进度 `~/w7/logs/p7w6-matrix-resume.log`；手机服务不可在此期间 force-stop |
-| F2 | p7-f2-driver 包分支有 raw-record 驱动、D11 CSO slot 与 PH-3 readback 上限（db80dd16 / adf2cbe0）；定向测试和 G1 已过。PH-4 staged texture byte bound 正在修复并待独立验证；还剩 D11 ArchiveVector、PH-2、PH-6、PH-1 (3)(4)、PH-7 (5) |
+| 最终真机验收 | p7w6 TCP 矩阵与 Photon / D24 monolith 对照结束；待最终 APK 的门 3 与 CTS AFTER |
+| F2 | `p7-f2-driver` 已提交 raw-record driver、D11 CSO、PH-3 readback、PH-4 exact mip extent / byte bound、PH-5 ArchiveVector、PH-2 named slot/generation refusal（`db80dd16`, `adf2cbe0`, `2c6a6e25`, `51480f8c`）；Luna review land，build-split 49/49、G1 与生成器门全绿；余 PH-6、PH-1(3)(4)、PH-7(5) / fuzz 臂2 |
 
 ## 5. 下一步
 
-1. p7w6 TCP 矩阵已结案；保留的 idle/missing-result 项在主机空闲时按需重跑，Photon v1.3b 与 D24.4.14 先做设备 DirectGLES monolith 对照，结案报告见 notes/p65/window-1b-p7w6.md。
+1. p7w6 TCP 矩阵及 Photon / D24 DirectGLES monolith 对照已结案；保留的 idle/missing-result 项在主机空闲时按需重跑，细节见 notes/p65/window-1b-p7w6.md。
 2. 最终功能 APK 部署后完成门 3（36 例 DirectVulkan × pbuffer × inproc/spawn，三遍逐位一致并与同会话 monolith 差 ≤0.0005）和 CTS AFTER 五块（相对 BASE ≤0.5 pp、新 crash=0）；另采 PipeStats bsl 映射峰值与 wbuf[]。
-3. F2 继续 PH-4（StagedTextureStore level bound）、PH-5 ArchiveVector、PH-2 SlotTables，并完成 PH-6、PH-1 (3)(4)、PH-7 (5) 与 fuzz 三臂；每个字节可达负控由两进程 raw-record 驱动触发并经过完整包门。
+3. F2 继续 PH-6、PH-1 (3)(4)、PH-7 (5) 与 fuzz 臂 2；每个字节可达负控由两进程 raw-record 驱动触发，之后跑 F2 完整包门与集成审查。
 
 ## 6. 阻塞 / 需要人
 
-- p7w6 TCP 矩阵已终止；任何补跑或设备 monolith 对照不得与门 3/CTS 同时 force-stop 同包 Service。当前没有需要用户决策的阻塞。
+- p7w6 TCP 矩阵和设备 monolith 对照已结束；后续门 3/CTS 仍不可同时 force-stop 同包 Service。当前没有需要用户决策的阻塞。
 - X2 已关闭 `InitialCapsStartup` 的测试夹具乱序 flake；不再列为待修。
