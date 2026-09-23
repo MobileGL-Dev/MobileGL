@@ -311,6 +311,19 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                 endif()
             else()
                 set(split_expected_second "spawn ARMED - the server role runs in pid ")
+                # FAIL-CLOSED LIKE THE CLIENT LOG ABOVE AND THE TCP ARM'S SERVER LOG. Under spawn
+                # the server process writes its own file, and the lines this runner counts out of
+                # it - every applier Fatal{, and the MGWIRE-FLOOR line, which only the server's
+                # VulkanRenderer::OnSubmitsCompletedUpTo emits - exist nowhere else. A server that
+                # died before its first line leaves no file, and "no file" read as "0 lines" is a
+                # green census of the half of the session that was never seen.
+                if(NOT EXISTS "${mobilegl_server_log}")
+                    message(FATAL_ERROR
+                            "${split_case}: MOBILEGL_TRANSPORT=spawn but the run wrote no "
+                            "${mobilegl_server_log}, so the server role's Fatal{ and MGWIRE-FLOOR "
+                            "lines cannot be counted. A spawn retrace with no server log cannot be "
+                            "counted as a clean one.")
+                endif()
             endif()
         else()
             message(FATAL_ERROR
