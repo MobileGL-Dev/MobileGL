@@ -3778,6 +3778,167 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                    "integration-magma-full-{split,spawn,tcp} labels (no CI gate)")
 endif()
 
+# =====================================================================================
+# P7 WAVE 3 (V1): integration-verify-split - THE COMPARATOR ON THE SPLIT ARM
+# =====================================================================================
+#
+# CONTRACT-P7 §6, exit gate 2: "verify x {monolith, split(inproc)} x Magma, zero divergence".
+# Until this block the verify block near the top of this file registered `MOBILEGL_TRANSPORT=
+# monolith` on every one of its 1136 entries, so the gate's second column had no entries at all
+# - not merely unmet, UNMEASURABLE, exactly as package L found exit gate 1's Magma column.
+#
+# IT HAD A PREREQUISITE AND THE PREREQUISITE IS PAID. A verify build under `inproc` used to die
+# on the server apply thread before one case could arm:
+#
+#   Fatal{PipeRespecifyScope} resource_respecify {slot=12, gen=0}: the descriptor carries a
+#   per-level respecify scope (target=258, level=0), and no path in this phase may set one
+#
+# That pin is now "a per-level producer must cover the range it declares"
+# (MG_Pipe/PipeApply.cpp), which is the invariant it was actually guarding.
+#
+# BOTH BACKENDS, AND THE MAGMA HALF IS THE HALF THE GATE NAMES. `${MGL_ITEST_VULKAN_ENV}` and
+# not `${MGL_ITEST_COMMON_ENV}` on the DirectVulkan entries, for package L's reason: that list
+# carries VK_ICD_FILENAMES and the three lavapipe iterationRP repairs the monolith `DirectVulkan.`
+# arm has been pinned to, and a lane that appended the common list would measure a different
+# driver from the gate it is compared against. `MOBILEGL_ITEST_REQUIRE_GPU=1` is pinned for the
+# same reason every split-family lane pins it: a lane that skipped everything and a lane that
+# passed everything are the same green in ctest, and this lane is here to be an ARM.
+#
+# THE CASE SET IS THE MONOLITH VERIFY LANE'S, MINUS THREE THINGS, the first two because
+# this arm carries a TRANSPORT and that lane does not:
+#
+#   1. ${MGL_ITEST_MONOLITH_MECHANISM_FILTER}. Those oracles toggle process-local push masks,
+#      pointer-key ABA, direct persistent adoption or synchronous stats slots and must not
+#      inherit a transport - which is why the ambient DirectGLES./DirectVulkan. registrations
+#      subtract them too and re-register them with MOBILEGL_TRANSPORT=monolith pinned. The
+#      monolith verify lane keeps them because there the pin and the lane agree. NOTE that the
+#      filter names PipeVerifyArmingScenario.* and PoisonOmissionScenario.*, which is why the
+#      arming entry and the two negative controls below are registered by hand, one per backend,
+#      exactly as the monolith verify block registers its own.
+#   2. DualBlockScenario.*. Its green REQUIRES MOBILEGL_IPC_ROLE_SPLIT_STATE=1, and pinning that
+#      knob here would replace this lane's subject (the comparator) with a different experiment;
+#      without it the case is red by name. Tier 3 above filters it for the same reason and says
+#      so at more length. Its own lane, `integration-dualblock-split`, is where it is read.
+#   3. On the DirectGLES half only, four Magma wire-arm decline cases that are red on DirectGLES
+#      x inproc with the comparator OFF (MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER below
+#      says which and why).
+#
+# NO MGITEST_SPLIT_LANE=1, AND THIS IS THE ONE PLACE THAT COSTS SOMETHING, so it is stated
+# rather than discovered. That marker arms ScenarioFixture's destructor assertion "this case
+# must have MOVED the client encoder's record ordinal", which is right for a curated lane where
+# every entry draws and wrong for a whole-binary set: tier 3 measured 13 reds from it
+# (AdvertisedLimitsScenario x8, SpirvShaderBinaryScenario x4, ProgramPipelineScenario's reserved
+# name), every one of them a query answered from the client's CapsMirror without a verb. They
+# would red on a DirectGLES set too - a property of the census, not of the transport.
+#
+# WHAT REPLACES IT IS STRONGER HERE THAN IT IS IN TIER 3, and it is why this lane is armed
+# rather than green-skipping: EVERY ENTRY GETS A PRIVATE LOG PATH (below, through
+# MGL_VERIFY_SPLIT_TEST_LISTS), and `.github/workflows/test.yml`'s integration-verify-split job
+# reads all of them: ConfigLoader's resolved `MOBILEGL_TRANSPORT=inproc` line is required in EVERY
+# client log, so a lane that silently ran monolith fails that step by name. The comparator's
+# `MGPipe: verify armed` line is latched at a process's FIRST FILL, so it is absent - honestly -
+# from the processes that never reach a verb (limits queries, CapsMirror answers, the poison
+# parent that only forks; 155 of 1064 on the landing run, 99 of them skips); the step therefore
+# requires it in both VerifySplitArming. logs and holds the per-entry count to a stated floor.
+# The VerifySplitArming. entries assert it from inside the process as well, which is the shape
+# the monolith lane's VerifyArming. entries already have.
+if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
+    # The transport half, joined onto each backend's own list. One place says what "the verify
+    # split arm" means, as MGL_ITEST_SPLIT_ARM_TRANSPORT_ENV does for the Magma lanes.
+    set(MGL_ITEST_VERIFY_SPLIT_ARM_ENV
+        "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}"
+        "MOBILEGL_PIPE_VERIFY=1" "MOBILEGL_ITEST_REQUIRE_GPU=1")
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" ${MGL_ITEST_VERIFY_SPLIT_ARM_ENV}
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" ${MGL_ITEST_VERIFY_SPLIT_ARM_ENV}
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+
+    # THE FOUR MAGMA DECLINE CASES ARE SUBTRACTED FROM THE DirectGLES HALF ONLY, and not because
+    # of the comparator. They assert Magma's wire-arm decline contract (`@P7` retirements: the
+    # depth-stencil mip decline, the two multisample blit declines, the overlapping in-place copy)
+    # and skip on every monolith arm, so the only arm that registers them is DirectVulkan's
+    # split family. On DirectGLES x inproc they are RED WITH THE COMPARATOR OFF - measured on
+    # this build with MOBILEGL_PIPE_VERIFY=0 in the same environment, the same four assertions
+    # (GL error 0x0502 where the decline promises none, or none where it promises one; the
+    # overlap copy writes the level the decline leaves alone) - because Espryt does not decline
+    # those shapes at all. No DirectGLES split lane had ever run them; that is a finding about the
+    # DirectGLES whole-binary set on split, not about verify, and it is recorded in
+    # notes/p7/verify-split.md rather than hidden in a green. The DirectVulkan half keeps them.
+    set(MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER
+        "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession:F1WireScenario.CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone")
+
+    set(MGL_VERIFY_SPLIT_TEST_LISTS "")
+    # The ambient set, per backend. The GLES half is registered TWICE for the monolith verify
+    # lane's reason and with its spelling: the texture-view cases need
+    # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 or DirectGLES withholds GL_ARB_texture_view and they
+    # green-skip, so they are subtracted from the first registration and re-registered with the
+    # knob. "Every existing verify case on the split arm" is false without the second block.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.VerifySplit."
+        TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES
+        TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}:DualBlockScenario.*:${MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER}"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-verify-split"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.VerifySplit."
+        TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES_VIEW
+        TEST_FILTER "${MGL_ITEST_GLES_VIEW_FILTER}"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-verify-split"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.VerifySplit."
+        TEST_LIST MGL_VERIFY_SPLIT_TESTS_VULKAN
+        TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-verify-split"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT}"
+    )
+    list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS MGL_VERIFY_SPLIT_TESTS_GLES
+         MGL_VERIFY_SPLIT_TESTS_GLES_VIEW MGL_VERIFY_SPLIT_TESTS_VULKAN)
+
+    # The arming assertion on this arm, one entry per backend, with a log path nothing else
+    # writes to - the monolith VerifyArming. entries' shape and their reason (the case reads the
+    # whole file, and a path shared with 500 neighbours races them under `-j 4`). This is the
+    # entry that cannot be green against a library with no comparator compiled in, and unlike the
+    # monolith pair it also cannot be green against one whose comparator never survived the
+    # server's bring-up - which is precisely what the relaxed respecify pin unblocked.
+    #
+    # MGITEST_PIPE_ARMING_LANE=1 is a harness marker the library never reads; it is what makes
+    # the case skip in an ambient lane rather than race there.
+    foreach(mglItestVerifyBackend DirectGLES DirectVulkan)
+        if (mglItestVerifyBackend STREQUAL "DirectGLES")
+            set(mglItestVerifyArmEnv "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}")
+        else()
+            set(mglItestVerifyArmEnv "${MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT}")
+        endif()
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitArming."
+            TEST_FILTER "PipeVerifyArmingScenario.Armed"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-verify-split"
+                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+                ENVIRONMENT "${mglItestVerifyArmEnv}\;MGITEST_PIPE_ARMING_LANE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-arming-${mglItestVerifyBackend}.log"
+                RESOURCE_LOCK "pipe-verify-split-arming-${mglItestVerifyBackend}.log"
+        )
+    endforeach()
+
+    message(STATUS "Integration tests: P7 wave 3 - the verify comparator on the split (inproc) arm, "
+                   "both backends, under integration-verify-split")
+endif()
+
 if (MOBILEGL_BUILD_DISAGGREGATED)
     # LAST, so every mgl_itest_register_split_arms call above has already contributed its list
     # name. Apply per-entry paths after GoogleTest discovery has populated the TEST_LISTs.

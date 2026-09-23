@@ -852,6 +852,206 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
+  # P7 WAVE 3 (V1), CONTRACT-P7 §6 - EXIT GATE 2's SECOND COLUMN: the comparator on the split
+  # (inproc) arm, both backends, and the two negative controls red on that arm.
+  #
+  # ITS OWN BUILD, because neither existing one can carry it: build-linux-verify configures
+  # without MOBILEGL_BUILD_DISAGGREGATED (so MG_Remote and the transport parser do not exist and
+  # `MOBILEGL_TRANSPORT=inproc` would be accepted and ignored), and build-linux-split configures
+  # without MOBILEGL_PIPE_VERIFY (so the comparator does not exist). The integration-verify-split
+  # entries are registered only when BOTH options are on, so `--no-tests=error` below reds a build
+  # that lost either one instead of reporting a green run of nothing. Built and run in one job:
+  # nothing downstream consumes this library.
+  #
+  # INPROC ONLY, BY THE INSTRUMENT'S NATURE: the comparator's two arms (the applier-written
+  # gPipeInputs and the frontend GLContext) are co-resident only when both roles share a process.
+  # MG_IntegrationTest/CMakeLists.txt's verify-split block records the spawn measurement.
+  integration-verify-split:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      actions: write
+      contents: read
+    env:
+      BUILD_DIR: build-verify-split
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          # recursive for build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself
+          # back to OFF when 3rdparty/flatbuffers/include is missing.
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1
+
+      - name: Configure CMake
+        # Release/INFO for build-linux-verify's reason, and INFO is load-bearing here for
+        # build-linux-split's: ConfigLoader's resolved-transport line is logged at INFO and the
+        # arm-proof step below reads it back out of every entry's client log.
+        run: |
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 \
+            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=ON \
+            -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
+            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_PIPE_PUSH=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
+            -DMOBILEGL_PIPE_VERIFY=ON \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      # Both options, both directions of "did it take" - the two jobs this one is the product of
+      # each check one of them, and this library has to pass both checks.
+      - name: The library carries both the comparator and MG_Remote
+        run: |
+          test -f "${BUILD_DIR}/libMobileGL.so"
+          defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
+          if [ "${defined}" -lt 1000 ]; then
+            echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the checks below could not have failed honestly"
+            exit 1
+          fi
+          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "MGPipeVerifyInputs"; then
+            echo "::error::libMobileGL.so defines no MGPipeVerifyInputs: -DMOBILEGL_PIPE_VERIFY=ON did not take, and the verify-split lane would compare nothing"
+            exit 1
+          fi
+          remote=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -c -i "MG_Remote" || true)
+          if [ "${remote}" -lt 1 ]; then
+            echo "::error::libMobileGL.so defines no MG_Remote symbol: -DMOBILEGL_BUILD_DISAGGREGATED=ON did not take, and every entry would run monolith under a name that says split"
+            exit 1
+          fi
+          echo "libMobileGL.so defines MGPipeVerifyInputs and ${remote} MG_Remote symbol(s) (${defined} defined symbols)"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+
+      # The lane. `^...$` because ctest -L is a regex (ID-131) and `integration-verify` would
+      # otherwise also match this label and the monolith one would match both.
+      - name: Integration scenarios under MOBILEGL_PIPE_VERIFY on the split (inproc) arm
+        working-directory: build-verify-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4
+
+      # THE ARM PROOF, per entry. Every ambient entry has a private log path (SplitLogPaths.cmake.in),
+      # so this grep - unlike integration-verify's, over a shared log - is a census:
+      #   * ConfigLoader's `MOBILEGL_TRANSPORT=inproc` line in EVERY client log: an entry that ran
+      #     monolith would have passed every assertion above and fails here by name;
+      #   * `MGPipe: verify armed` in both VerifySplitArming. logs, and in at least 850 per-entry
+      #     client logs. The line is latched at a process's first fill, so the processes that never
+      #     reach a verb (limits queries, CapsMirror answers, the poison parent) honestly lack it -
+      #     909 of 1064 carried it on the landing run - and a count that falls through the floor
+      #     means the comparator stopped arming somewhere after bring-up.
+      - name: The verify-split entries ran inproc and armed the comparator
+        working-directory: build-verify-split/MobileGL/MG_IntegrationTest
+        run: |
+          shopt -s nullglob
+          logs=(verify-split-logs/*.client.log)
+          if [ ${#logs[@]} -lt 1000 ]; then
+            echo "::error::found ${#logs[@]} per-entry client logs under verify-split-logs (expected ~1064): the private log paths did not take, so nothing below is a per-entry proof"
+            exit 1
+          fi
+          missing=$(grep -L 'Config: MOBILEGL_TRANSPORT=inproc' "${logs[@]}" | wc -l)
+          if [ "${missing}" -ne 0 ]; then
+            grep -L 'Config: MOBILEGL_TRANSPORT=inproc' "${logs[@]}" | head -20
+            echo "::error::${missing} verify-split entries carry no resolved MOBILEGL_TRANSPORT=inproc line: they did not run on the split arm"
+            exit 1
+          fi
+          for backend in DirectGLES DirectVulkan; do
+            if ! grep -q "MGPipe: verify armed" "pipe-verify-split-arming-${backend}.client.log"; then
+              echo "::error::pipe-verify-split-arming-${backend}.client.log carries no arming line"
+              exit 1
+            fi
+          done
+          armed=$(grep -l 'MGPipe: verify armed' "${logs[@]}" | wc -l)
+          if [ "${armed}" -lt 850 ]; then
+            echo "::error::only ${armed} of ${#logs[@]} verify-split entries armed the comparator (floor 850, 909 at landing)"
+            exit 1
+          fi
+          echo "${#logs[@]} entries resolved inproc; ${armed} of them armed the comparator"
+
+      - name: Upload verify-split lane logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-verify-split-logs
+          path: |
+            build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs/**
+            build-verify-split/MobileGL/MG_IntegrationTest/pipe-*split*.log*
+          if-no-files-found: warn
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-verify-split-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
   # P5's split build. The verify pair cloned, because the problem is the same one: a third
   # configuration of the same sources whose whole value depends on the option having taken.
   #

@@ -1,6 +1,7 @@
 # Included by CTest after all GoogleTest discovery files (ID-53).
 # CTest appends ENVIRONMENT here; keep all previously discovered lane settings.
 file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/split-logs")
+file(MAKE_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@/verify-split-logs")
 # P5b t2's two lanes ride the same rule: one private log path per entry, or
 # SplitLogPaths.PrivateAndDistinct is red for them (ID-53).
 # P5e vi's client-array lane joins the same list for the same reason: its two entries are the
@@ -52,6 +53,25 @@ foreach(listName IN ITEMS @MGL_MAGMA_FULL_TEST_LISTS@)
         endif()
     endforeach()
 endforeach()
+# P7 wave 3 (V1): the verify comparator on the split arm. A LIST OF ITS OWN, like tier 3's and
+# for tier 3's reason - the first loop also arms the strict-arming, pmap and server-counter lane
+# markers by entry name, and this lane is here to compare fields, not to opt three unrelated
+# oracles into a whole-binary set.
+#
+# THE PATH IS WHAT MAKES THE LANE ARMED RATHER THAN MERELY GREEN. These entries carry no
+# MGITEST_SPLIT_LANE marker (MG_IntegrationTest/CMakeLists.txt says why: it reds 13 query-only
+# cases that never move a verb), so the proof that the transport really resolved to inproc and
+# that the comparator really armed is READ FROM THESE FILES by test.yml's verify-split job -
+# ConfigLoader's `MOBILEGL_TRANSPORT=inproc` line and `MGPipe: verify armed`, per entry, in the
+# CLIENT role's log. A shared path would make both unattributable, and under inproc the server
+# role writes its own half of the same base name.
+foreach(listName IN ITEMS @MGL_VERIFY_SPLIT_TEST_LISTS@)
+    foreach(entry IN LISTS ${listName})
+        set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
+            "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/verify-split-logs/${entry}.log")
+    endforeach()
+endforeach()
+
 foreach(entry IN LISTS MGL_SPLIT_PA_STRICT_DRAW_TESTS MGL_SPLIT_PA_STRICT_DISPATCH_TESTS)
     set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
         "MOBILEGL_LOG_FILE_PATH=@CMAKE_CURRENT_BINARY_DIR@/split-logs/${entry}.log")
