@@ -621,11 +621,17 @@ namespace MGITest {
         // a scaled COLOR|DEPTH resolve onto the window scaled and wrote its colour through the
         // swapchain blit and then recorded INVALID_OPERATION on its depth: the partial effect
         // the previous leg pins for a user framebuffer, reproduced on the only other kind of
-        // destination there is. The window is primed blue at depth 0.5, the source (red below,
-        // green above) is blown up over the whole of it, and three probes - a corner, the
-        // centre, the far corner - must all still read the priming on both aspects. The
-        // harness's pbuffer default framebuffer has no other way of being looked at than
-        // glReadPixels, which is what both probes use.
+        // destination there is. The window is primed MAGENTA at depth 0.625 - values no other
+        // surface in this test holds (review round 4): the user framebuffer above is blue at 0.5
+        // and still is after its own declined blit, and the source is red/green at 0.25/0.75.
+        // Round 3 primed the window blue at 0.5 as well, so a glBindFramebuffer(0) that landed
+        // on the user framebuffer, or a default-framebuffer readback that resolved the wrong
+        // surface, read the same priming and passed for nothing; pointing the probes at the
+        // user framebuffer now fails on both aspects, shown once and restored. The source (red
+        // below, green above) is blown up over the whole of the window, and three probes - a
+        // corner, the centre, the far corner - must all still read the priming on both
+        // aspects. The harness's pbuffer default framebuffer has no other way of being looked
+        // at than glReadPixels, which is what both probes use.
         {
             HeadlessGL& gl = Gl();
             const int windowWidth = gl.Width();
@@ -637,8 +643,8 @@ namespace MGITest {
             glViewport(0, 0, windowWidth, windowHeight);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glDepthMask(GL_TRUE);
-            glClearColor(0, 0, 1, 1);
-            glClearDepth(0.5);
+            glClearColor(1, 0, 1, 1);
+            glClearDepth(0.625);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             ASSERT_EQ(FirstGLError(), 0u) << "priming the default framebuffer";
             glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
@@ -655,12 +661,12 @@ namespace MGITest {
                 const int x = probeX[i], y = probeY[i];
                 std::array<GLubyte, 4> window{};
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, window.data());
-                EXPECT_EQ(window, (std::array<GLubyte, 4>{0, 0, 255, 255}))
+                EXPECT_EQ(window, (std::array<GLubyte, 4>{255, 0, 255, 255}))
                     << "the declined COLOR|DEPTH scale onto the window must not have written its colour at ("
                     << x << ", " << y << ")";
                 float depth = kDepthPoison;
                 glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
-                EXPECT_NEAR(depth, 0.5f, 1.0f / 4096.0f)
+                EXPECT_NEAR(depth, 0.625f, 1.0f / 4096.0f)
                     << "the declined COLOR|DEPTH scale onto the window must have left its depth alone at ("
                     << x << ", " << y << ")";
             }
