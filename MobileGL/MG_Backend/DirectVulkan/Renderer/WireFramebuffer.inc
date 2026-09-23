@@ -723,7 +723,22 @@
         VkImageView views[2]{};
         VkRenderPass pass = VK_NULL_HANDLE;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
-        if (extensionResolve) {
+        // P7 gate 5 (g5-msrbo): WHERE THE EXTENSION ARM IS KNOWN NOT TO RESOLVE, THE SHADER ARM
+        // GOES FIRST. The extension arm is a render pass with no draw in it, and on the Redmi
+        // (Adreno 830, driver 512.800.71) that pass left the resolve target unwritten:
+        // KHR-GL46.direct_state_access.renderbuffers_storage_multisample read every resolved depth
+        // and stencil value back as 0 on the inproc arm - exactly its samples 2/4/4 iterations,
+        // every format - and the same case PASSED on that device with
+        // MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1. The shader arm draws, so nothing about it
+        // can be elided. It still declines what it cannot express (a stencil aspect without
+        // VK_EXT_shader_stencil_export), and then the extension arm is the fallback rather than
+        // a decline. m_wirePreferShaderDepthResolve is WirePrefersShaderDepthResolve's answer for
+        // this device (WireDepthResolveArm.h); everywhere else the order is the one B2 chose.
+        const Bool shaderFirst = m_wirePreferShaderDepthResolve || !extensionResolve;
+        const Bool resolvedByShader =
+            shaderFirst && ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sxMin, syMin,
+                                                             static_cast<Uint32>(width), static_cast<Uint32>(height));
+        if (!resolvedByShader && extensionResolve) {
         TransitionWireImage(source, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         TransitionWireImage(resolved, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
@@ -780,8 +795,7 @@
         begin.renderArea = {{sxMin, syMin}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
         vkCmdBeginRenderPass(m_frameContext.GetCurrent().commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(m_frameContext.GetCurrent().commandBuffer);
-        } else if (!ResolveWireDepthStencilWithShader(source, resolved, source.aspect, sxMin, syMin,
-                                                      static_cast<Uint32>(width), static_cast<Uint32>(height))) {
+        } else if (!resolvedByShader) {
             // NEITHER ARM, and rule I (a) says what that is: this device has no
             // VK_KHR_depth_stencil_resolve and the pass cannot stand in for it either - the
             // commonest reason being a stencil-only resolve without VK_EXT_shader_stencil_export,

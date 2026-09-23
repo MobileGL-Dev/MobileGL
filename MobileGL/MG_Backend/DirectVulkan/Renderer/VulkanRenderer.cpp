@@ -52,6 +52,7 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
 #include "WireDeclineTally.h"
+#include "WireDepthResolveArm.h"
 #endif
 #include <algorithm>
 #include <bit>
@@ -15147,6 +15148,14 @@ void main() {
         if (m_wireShaderStencilExport)
             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
                                           VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+        // P7 gate 5 (g5-msrbo): the Adreno's no-draw depth/stencil resolve pass writes nothing,
+        // so the shader resolve goes first there (WireDepthResolveArm.h says why and where).
+        m_wirePreferShaderDepthResolve = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            WirePrefersShaderDepthResolve(m_physicalDevice.properties.vendorID);
+        if (m_wirePreferShaderDepthResolve)
+            MGLOG_I("DirectVulkan: vendor 0x%x - the wire arm resolves multisample depth/stencil with the "
+                    "shader pass first (the no-draw resolve render pass is the fallback)",
+                    m_physicalDevice.properties.vendorID);
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {

@@ -13,6 +13,7 @@
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Backend/DirectVulkan/Renderer/WireRenderPassCompatibility.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
 #endif
 
 using namespace MobileGL;
@@ -513,5 +514,22 @@ TEST(WirePipelineCompatibility, HashUsesCompatibilityIdentityAndSeparatesNativeD
     EXPECT_NE(factory.ComputeHash(payload), native);
 #else
     GTEST_SKIP() << "wire pipeline compatibility requires disaggregated build";
+#endif
+}
+
+// P7 gate 5 (g5-msrbo): the multisample depth/stencil resolve's arm order. On the Redmi (Adreno
+// 830) the no-draw VK_KHR_depth_stencil_resolve render pass left its target unwritten and the
+// shader arm resolved correctly, so a Qualcomm device takes the shader arm first; every other
+// vendor keeps P7 wave 2-B2's order (render pass first) until a device says otherwise.
+TEST(PipelineQuirkTest, WireDepthResolvePrefersTheShaderArmOnQualcommOnly) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    using MobileGL::MG_Backend::DirectVulkan::WirePrefersShaderDepthResolve;
+    EXPECT_TRUE(WirePrefersShaderDepthResolve(kVendorIdQualcomm))
+        << "the Adreno's no-draw resolve pass wrote nothing; the shader arm must go first there";
+    EXPECT_FALSE(WirePrefersShaderDepthResolve(kVendorIdArm));
+    EXPECT_FALSE(WirePrefersShaderDepthResolve(0x10005u)) << "Mesa (lavapipe) keeps the render-pass arm first";
+    EXPECT_FALSE(WirePrefersShaderDepthResolve(0x10DEu));
+#else
+    GTEST_SKIP() << "the wire resolve arms exist only in the disaggregated build";
 #endif
 }
