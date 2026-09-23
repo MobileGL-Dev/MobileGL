@@ -1667,10 +1667,22 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
         MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
                         "create_render_state named the reserved slot 0");
-        if (desc.Cso.Slot >= g_applier.RenderStateCsos.size()) {
-            g_applier.RenderStateCsos.resize(desc.Cso.Slot + 1);
+        MGPipeRenderStateCsoRecord* recordAt =
+            RecordAt(g_applier.RenderStateCsos, desc.Cso.Slot, kMGPipeMaxRenderStateCsoSlots);
+        if (recordAt == nullptr) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MGPipeSessionFail(MGPipeFatalFamily::ProtocolCorruption,
+                              "MGPipe: Fatal{ProtocolCorruption, \"CreateRenderState.Cso.Slot\"} - "
+                              "create_render_state {slot=%u, gen=%u} is outside the record table bound (%u)",
+                              desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxRenderStateCsoSlots);
+#else
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_render_state {slot=%u, gen=%u} is outside the record table bound (%u)",
+                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxRenderStateCsoSlots);
+#endif
+            return;
         }
-        MGPipeRenderStateCsoRecord& record = g_applier.RenderStateCsos[desc.Cso.Slot];
+        MGPipeRenderStateCsoRecord& record = *recordAt;
 
         // NEITHER BRANCH MAY LEAVE ITS BAD CASE TO MOBILEGL_ASSERT. The slot the client is
         // naming may be a RECYCLED one whose record still holds the previous occupant's 396

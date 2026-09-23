@@ -54,6 +54,10 @@ namespace MobileGL::MG_Pipe {
         UnmigratedVerb,
         // A call that reached an arm this build did not compile, or ran on the wrong role.
         RoleViolation,
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A malformed peer record rejected by the server-side applier.
+        ProtocolCorruption,
+#endif
     };
 
     // What the layer above installs. `line` is the FULLY FORMATTED message, so the hook forwards

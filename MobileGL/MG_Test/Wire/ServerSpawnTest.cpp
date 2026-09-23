@@ -39,10 +39,20 @@
 #include <MG_Remote/Transport/Doorbell.h>
 #include <MG_Remote/Transport/FdPassing.h>
 #include <MG_Remote/Transport/SocketTransport.h>
+#include <MG_Remote/Transport/ILink.h>
+#include <MG_Remote/Transport/Ring.h>
+#include <MG_Remote/Wire/PipeWireCodec.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_Util/Debug/Log.h>
 
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <csignal>
 #include <cstdlib>
 #include <memory>
@@ -68,6 +78,56 @@ namespace {
         return std::string("/tmp/mgl-sm-") + label + "-" + std::to_string(::getpid()) + ".sock";
     }
 
+    struct ScopedEnvironment {
+        std::string name;
+        std::string oldValue;
+        bool hadOldValue = false;
+        ScopedEnvironment(const char* key, const std::string& value) : name(key) {
+            if (const char* prior = std::getenv(key)) {
+                oldValue = prior;
+                hadOldValue = true;
+            }
+            ::setenv(key, value.c_str(), 1);
+        }
+        ~ScopedEnvironment() {
+            if (hadOldValue) ::setenv(name.c_str(), oldValue.c_str(), 1);
+            else ::unsetenv(name.c_str());
+        }
+    };
+
+    // A peer can mutate the command-ring bytes AFTER the production encoder has
+    // accepted and written them. The sequence, framing size, and submitted
+    // watermark stay valid; only the opcode becomes unknown to the server.
+    // This is the seam the later D11/PH-2 controls will use for payload fields.
+    template <class Payload, class Mutator>
+    bool EncodeThenMutateHeaderAndPublish(Client::ClientSession& session, MobileGL::MG_Pipe::MGPWireOp op,
+                                           const Payload& payload, Mutator&& mutate) {
+        auto* link = session.DataLink();
+        if (link == nullptr || !link->Attached()) return false;
+        Wire::WireRecordLayout layout{};
+        if (!Wire::MGPipeWireRecordLayout(op, &payload, layout) ||
+            layout.PayloadBytes != sizeof(payload)) return false;
+        auto& encoder = session.Encoder();
+        const std::uint64_t seq = encoder.EncodeRecord(op, &payload, sizeof(payload));
+        if (seq == Wire::kInvalidSeq) return false;
+        auto& commands = link->CommandsOut();
+        const auto* arena = link->RecordArena();
+        const std::uint64_t head = commands.LocalHead();
+        if (arena == nullptr || arena->Base == nullptr || arena->Capacity == 0 ||
+            head < layout.TotalBytes) return false;
+        const std::uint64_t start = head - layout.TotalBytes;
+        auto* bytes = static_cast<std::uint8_t*>(arena->Base) + (start & arena->Mask);
+        auto* header = reinterpret_cast<Transport::RingRecordHeader*>(bytes);
+        if (header->kind != static_cast<std::uint16_t>(op) || header->size != layout.TotalBytes)
+            return false;
+        mutate(*header, bytes + sizeof(Transport::RingRecordHeader));
+        // Use the real session publisher after mutation so both the ring head
+        // and the producer-owned submittedSeq stay monotone and teardown knows
+        // the record's sequence. Only the record bytes bypass encoder checks.
+        session.Producer().PublishAndNotify(seq);
+        return link->Flush() == MOBILEGL_OK;
+    }
+
     std::string ServerImage() {
         if (const char* explicitPath = std::getenv("MOBILEGL_TEST_SERVER_PATH")) {
             return explicitPath;
@@ -78,6 +138,22 @@ namespace {
     struct Session {
         Server::LaunchedServer server;
         std::unique_ptr<Transport::SocketTransport> client;
+    };
+
+    // Keep the negative-path case leak-free even when an ASSERT returns early.
+    struct ScopedSessionCleanup {
+        Session& session;
+        ~ScopedSessionCleanup() {
+            Client::ClientSessionInstance().Stop();
+            if (session.client) session.client->Shutdown();
+            if (session.server.pid > 0) {
+                int ignored = -1;
+                if (Server::ReapServer(session.server, 50, &ignored) != MOBILEGL_OK) {
+                    ::kill(session.server.pid, SIGKILL);
+                    (void)Server::ReapServer(session.server, 5000, &ignored);
+                }
+            }
+        }
     };
 
     // The two halves a real deployment does separately: start a process, then
@@ -128,6 +204,88 @@ namespace {
     }
 
 } // namespace
+
+TEST(ServerSpawnTest, ARawPeerMutatesARecordAfterTheClientEncoderAcceptedIt) {
+    const std::string endpoint = Endpoint("raw-peer");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("raw-peer", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    MobileGL::MG_Pipe::MGPMemoryBarrier barrier{};
+    barrier.Bits = 0x2000u;
+    barrier.ByRegion = 0;
+    auto& client = Client::ClientSessionInstance();
+    auto* link = client.DataLink();
+    ASSERT_NE(link, nullptr);
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::MemoryBarrier, barrier,
+        [](Transport::RingRecordHeader& header, std::uint8_t*) { header.kind = 0xFFFFu; }))
+        << "the test peer failed to mutate and publish the accepted record bytes";
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the mutated record promptly";
+    EXPECT_EQ(exitCode, -SIGABRT) << "the malformed opcode did not reach the server decoder";
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    EXPECT_NE(log.find("protocol corruption applying"), std::string::npos)
+        << "the server process exited without the protocol corruption diagnostic";
+    EXPECT_NE(log.find("unknown opcode"), std::string::npos)
+        << "the malformed opcode was not identified in the server log";
+    client.Stop();
+}
+
+TEST(ServerSpawnTest, RawPeerOutOfRangeRenderStateCsoSlotGetsNamedProtocolCorruption) {
+    const std::string endpoint = Endpoint("bad-renderstate-slot");
+    const std::string logBase = endpoint + ".log";
+    ScopedEnvironment logPath("MOBILEGL_LOG_FILE_PATH", logBase);
+    Session session;
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_TRUE(Bring("bad-renderstate-slot", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+
+    auto& client = Client::ClientSessionInstance();
+    MobileGL::MG_Pipe::MGPRenderStateDesc desc{};
+    desc.Cso = {7u, 1u};
+    desc.ChunkMask = MobileGL::MG_Pipe::MGPipeRenderStateChunkDetail::kAllPipelineHalfBits;
+    const auto chunkBytes = MobileGL::MG_Pipe::MGPipePipelineChunkBlobBytes(desc.ChunkMask);
+    std::vector<std::uint8_t> chunks(chunkBytes, 0x5A);
+    desc.Blob = client.Encoder().StageBytes(chunks.data(), chunks.size());
+    const MobileGL::Uint32 encoderAcceptedSlot = desc.Cso.Slot;
+    ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
+        client, MobileGL::MG_Pipe::MGPWireOp::CreateRenderState, desc,
+        [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
+            auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPRenderStateDesc*>(payloadBytes);
+            wireDesc->Cso.Slot = MobileGL::MG_Pipe::kMGPipeMaxRenderStateCsoSlots;
+        })) << "the test peer failed to mutate and publish the encoder-accepted record bytes";
+    EXPECT_LT(encoderAcceptedSlot, MobileGL::MG_Pipe::kMGPipeMaxRenderStateCsoSlots);
+
+    int exitCode = -1;
+    const auto reaped = Server::ReapServer(session.server, 5000, &exitCode);
+    if (reaped != MOBILEGL_OK) {
+        client.Stop();
+        if (session.server.pid > 0) {
+            ::kill(session.server.pid, SIGKILL);
+            (void)Server::ReapServer(session.server, 5000, &exitCode);
+        }
+    }
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the mutated record promptly";
+    EXPECT_EQ(exitCode, -SIGABRT) << "the malformed CSO slot did not reach the server applier";
+    const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
+    EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"CreateRenderState.Cso.Slot\"}"),
+              std::string::npos)
+        << "the server process exited without the named protocol corruption diagnostic";
+    client.Stop();
+}
 
 TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {
     const int before = Server::CountOwnChildren();

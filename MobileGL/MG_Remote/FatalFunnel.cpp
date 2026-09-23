@@ -53,6 +53,11 @@ namespace MobileGL::MG_Remote {
             case MG_Pipe::MGPipeFatalFamily::RoleViolation:
                 mapped = MGFatalFamily::RoleViolation;
                 break;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            case MG_Pipe::MGPipeFatalFamily::ProtocolCorruption:
+                mapped = MGFatalFamily::ProtocolCorruption;
+                break;
+#endif
             }
             SessionFail(mapped, "%s", line);
         }

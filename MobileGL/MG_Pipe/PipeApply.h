@@ -162,6 +162,9 @@ namespace MobileGL::MG_Pipe {
     // bounded by kMGPipeMaxResourceSlots and each grows only to its own dense high-water mark.
     inline constexpr Uint32 kMGPipeMaxResourceSlots = 1u << 20;
     inline constexpr Uint32 kMGPipeMaxVertexElementsSlots = 1u << 16;
+    // create_render_state records retain one 396-byte pipeline half each. Keep their
+    // slot-indexed table bounded independently so a peer cannot request a huge resize.
+    inline constexpr Uint32 kMGPipeMaxRenderStateCsoSlots = 1u << 16;
     // P4a's three, and the argument is written out for each because the records differ in
     // size. None is ever allocated by being named: the tables grow to the client's own dense
     // high-water mark and no further, so the bound costs nothing until a record is corrupt.
