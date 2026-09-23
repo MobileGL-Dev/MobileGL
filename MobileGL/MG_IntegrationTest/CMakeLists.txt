@@ -3935,9 +3935,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
     # this build with MOBILEGL_PIPE_VERIFY=0 in the same environment, the same four assertions
     # (GL error 0x0502 where the decline promises none, or none where it promises one; the
     # overlap copy writes the level the decline leaves alone) - because Espryt does not decline
-    # those shapes at all. No DirectGLES split lane had ever run them; that is a finding about the
-    # DirectGLES whole-binary set on split, not about verify, and it is recorded in
-    # notes/p7/verify-split.md rather than hidden in a green. The DirectVulkan half keeps them.
+    # those shapes at all. That is a finding about the DirectGLES whole-binary set on split, not
+    # about verify, and it is recorded in notes/p7/verify-split.md rather than hidden in a green.
+    # This lane was NOT the only DirectGLES split lane to reach them: the primary integration job
+    # runs every integration-gpu entry under MOBILEGL_TRANSPORT=inproc, and there the same four
+    # were red in CI (the depth-stencil and overlap pair from run 35781886930, the two blits from
+    # 35793903365). Each case now skips by backend name at its top (F1WireScenario.cpp,
+    # "Magma wire-arm decline"), in every DirectGLES lane; this subtraction is therefore
+    # redundant, and kept so the verify-split registration and its counts do not move. The
+    # DirectVulkan half keeps them.
     set(MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER
         "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession:F1WireScenario.CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone")
 

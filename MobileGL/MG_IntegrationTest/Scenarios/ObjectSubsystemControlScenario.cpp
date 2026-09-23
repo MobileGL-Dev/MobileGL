@@ -188,11 +188,21 @@ void main() { oColor = texture(uTex, vUv); }
         //     ORDER - see the direction check below.
         //
         // Espryt's text is one MGLOG_E from the helper the three dependent families share
-        // (Managers.cpp, PipeSubsystemDependencyMissing): "MGPipe: <A> (bit N) is set but <B>
-        // (bit M) is clear; <why> - REFUSING the dependent bit and running the legacy arm. Set
-        // both bits, or clear both". Three spellings are accepted per bit - the constant's name,
-        // "(bit N)", and the hexadecimal mask - so the assertion pins the DECISION and the
-        // DIRECTION, and not the family-specific prose in <why>.
+        // (Managers.cpp, PipeSubsystemDependencyMissing). Since P3b/P4b wave 2-D package D3
+        // (1c36987e, ID-P7-28) that helper reads the family's row from MG_Pipe/SubsystemDeps.def
+        // instead of taking one hand-written dependency bit, and it computes the missing bits
+        // rather than naming them: "MGPipe: <A> (bit N) is set but MOBILEGL_PIPE_PUSH=0x<mask>
+        // does not carry every bit MG_Pipe/SubsystemDeps.def says it requires (requires 0x<R>,
+        // missing 0x<M>): <why> - REFUSING the dependent bit and running the legacy arm. Set every
+        // bit of the row, or clear the family's own". The SET bit is accepted in three spellings -
+        // the constant's name, "(bit N)", and the hexadecimal mask - and the NEEDED bit is read
+        // from the one place the helper names it, the "missing 0x<M>)" field, so the assertion
+        // pins the DECISION and the DIRECTION, and not the family-specific prose in <why>.
+        //
+        // THE OLD SENTENCE ("<A> (bit N) is set but <B> (bit M) is clear; ...") IS GONE FROM THE
+        // TREE, and this matcher used to require its " is clear": after D3 both refusal lanes went
+        // red with the refusal sitting on the ERROR line the lane was reading (CI run
+        // 35792628470 onward). Nothing about the decision changed - only the wording did.
         //
         // THE DIRECTION IS THE HALF THIS FILE USED TO BE MISSING (review F-v2-m1). The first form
         // of the matcher asked "does the line name bit A?" AND "does the line name bit B?", which
@@ -207,12 +217,18 @@ void main() { oColor = texture(uTex, vUv); }
         // away at all times.
         //
         // What makes the direction readable is the sentence's own shape: the SET bit is named
-        // before " is set but " and the NEEDED bit between that and " is clear". So the check is
-        // four offsets in strictly increasing order, and it is the sentence Espryt emits rather
-        // than a re-statement of it.
+        // before " is set but " and the NEEDED bit in the "missing 0x<M>)" field after it. So the
+        // check is three offsets in strictly increasing order, and it is the sentence Espryt
+        // emits rather than a re-statement of it. The field is matched WITH its closing
+        // parenthesis, so "missing 0x400)" cannot be satisfied by "missing 0x4000)" (bit 14), and
+        // the mirror sentence cannot satisfy it either: there the SET-bit spellings first occur
+        // inside that field, after " is set but ".
         constexpr const char* kSaysItRefused = "REFUSING the dependent bit and running the legacy arm";
         constexpr const char* kSaysWhichIsSet = " is set but ";
-        constexpr const char* kSaysWhichIsClear = " is clear";
+
+        std::string SaysWhichIsMissing(const std::string& neededMaskHex) {
+            return "missing " + neededMaskHex + ")";
+        }
 
         // The earliest offset at which any accepted spelling of one bit appears, or npos. The
         // EARLIEST rather than any: a spelling that also occurs later in <why> (Espryt's
@@ -234,7 +250,8 @@ void main() { oColor = texture(uTex, vUv); }
         // what it found: a reader of a green refusal lane must be able to see the sentence.
         std::string FindTheRefusalLine(const std::string& log,
                                        const std::vector<std::string>& bitThatWasSet,
-                                       const std::vector<std::string>& bitThatWasNeeded) {
+                                       const std::string& neededMaskHex) {
+            const std::string missingField = SaysWhichIsMissing(neededMaskHex);
             std::size_t pos = 0;
             while (pos <= log.size()) {
                 const std::size_t newline = log.find('\n', pos);
@@ -244,18 +261,15 @@ void main() { oColor = texture(uTex, vUv); }
                 const std::size_t refusedAt = line.find(kSaysItRefused);
                 const std::size_t setAt = EarliestSpellingOffset(line, bitThatWasSet);
                 const std::size_t setClauseAt = line.find(kSaysWhichIsSet);
-                const std::size_t neededAt = EarliestSpellingOffset(line, bitThatWasNeeded);
-                const std::size_t clearClauseAt = line.find(kSaysWhichIsClear);
+                const std::size_t missingAt = line.find(missingField);
                 const bool everyPartIsThere =
                     refusedAt != std::string::npos && setAt != std::string::npos &&
-                    setClauseAt != std::string::npos && neededAt != std::string::npos &&
-                    clearClauseAt != std::string::npos;
-                // "<set bit> ... is set but ... <needed bit> ... is clear", strictly in that
-                // order. Swapping the caller's two arguments breaks the chain, which is the
-                // whole of F-v2-m1.
+                    setClauseAt != std::string::npos && missingAt != std::string::npos;
+                // "<set bit> ... is set but ... missing <needed bit>)", strictly in that order.
+                // Swapping the caller's two arguments breaks the chain, which is the whole of
+                // F-v2-m1.
                 const bool inTheRightDirection =
-                    everyPartIsThere && setAt < setClauseAt && setClauseAt < neededAt &&
-                    neededAt < clearClauseAt;
+                    everyPartIsThere && setAt < setClauseAt && setClauseAt < missingAt;
                 if (atErrorSeverity && inTheRightDirection) {
                     return line;
                 }
@@ -266,14 +280,18 @@ void main() { oColor = texture(uTex, vUv); }
         }
 
         // The three accepted spellings of each of the two P4a bits this file's two refusal lanes
-        // are about. MGPipe.h: bit 10 = kMGPipeSubsystemTextureResources = 0x400,
-        // bit 11 = kMGPipeSubsystemSamplers = 0x800.
+        // are about, when the bit is the one that was SET; the mask alone when it is the one that
+        // was NEEDED (the helper prints `required & ~mask` with %llx). MGPipe.h: bit 10 =
+        // kMGPipeSubsystemTextureResources = 0x400, bit 11 = kMGPipeSubsystemSamplers = 0x800.
+        constexpr const char* kSamplerBitMask = "0x800";
+        constexpr const char* kTextureResourceBitMask = "0x400";
+
         std::vector<std::string> SamplerBitSpellings() {
-            return {"kMGPipeSubsystemSamplers", "(bit 11)", "0x800"};
+            return {"kMGPipeSubsystemSamplers", "(bit 11)", kSamplerBitMask};
         }
 
         std::vector<std::string> TextureResourceBitSpellings() {
-            return {"kMGPipeSubsystemTextureResources", "(bit 10)", "0x400"};
+            return {"kMGPipeSubsystemTextureResources", "(bit 10)", kTextureResourceBitMask};
         }
 
         class ObjectSubsystemControlScenario : public ScenarioTest {
@@ -626,15 +644,16 @@ void main() { oColor = texture(uTex, vUv); }
             // FindTheRefusalLine: a substring search over the whole file cannot go red for the
             // reason this case claims (F-M6).
             const std::string refusal =
-                FindTheRefusalLine(log, SamplerBitSpellings(), TextureResourceBitSpellings());
+                FindTheRefusalLine(log, SamplerBitSpellings(), kTextureResourceBitMask);
             EXPECT_FALSE(refusal.empty())
                 << "MOBILEGL_PIPE_PUSH=0x9ff sets the sampler subsystem (bit 11) without the texture "
                    "resource subsystem (bit 10) it depends on, and no single ERROR line of the "
                    "library's log both says it REFUSED and names the two bits. D-K2 requires ONE "
                    "MGLOG_E naming both and a fall back to the legacy sampler arm; a mask that is "
                    "silently half-honoured is the failure this case exists to catch, and it is "
-                   "invisible in the pixels by construction. Accepted spellings per bit are the "
-                   "constant's name, '(bit 11)' / '(bit 10)', and '0x800' / '0x400'. The log was "
+                   "invisible in the pixels by construction. The set bit may be spelled by the "
+                   "constant's name, '(bit 11)' or '0x800', before ' is set but '; the needed bit "
+                   "must be the helper's 'missing 0x400)' field after it. The log was "
                 << log.size() << " bytes and is at " << PipeStatsWindow::LibraryLogPath() << ".";
             if (!refusal.empty()) {
                 // Printed on the pass as well: a reader of a green refusal lane must be able to
@@ -742,15 +761,17 @@ void main() { oColor = texture(uTex, vUv); }
             // The same line shape as the 0x9ff arm, with the two bits' roles swapped: the bit that
             // was SET is the texture-resource one and the bit it NEEDED is the sampler one. The
             // swap is now a REAL difference between the two cases: FindTheRefusalLine requires the
-            // set bit to be named before " is set but " and the needed bit after it (F-v2-m1), so
-            // this call and the 0x9ff one above accept disjoint sentences. Espryt's is
-            // "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemSamplers
-            // (bit 11) is clear; MGPTextureParams::BuiltinSampler is a SamplerCso handle, only
-            // bit 11 mints sampler CSOs, and the applier's verdict for a null one is
-            // Fatal{ProtocolCorruption} - REFUSING the dependent bit and running the legacy arm.
-            // Set both bits, or clear both" (Managers.cpp, ResolveTextureResourceSubsystemArm).
+            // set bit to be named before " is set but " and the needed bit in the "missing 0x<M>)"
+            // field after it (F-v2-m1), so this call and the 0x9ff one above accept disjoint
+            // sentences. Espryt's is "kMGPipeSubsystemTextureResources (bit 10) is set but
+            // MOBILEGL_PIPE_PUSH=0x5ff does not carry every bit MG_Pipe/SubsystemDeps.def says it
+            // requires (requires 0x880, missing 0x800): <the row's why> - REFUSING the dependent
+            // bit and running the legacy arm. Set every bit of the row, or clear the family's own"
+            // (Managers.cpp, PipeSubsystemDependencyMissing via
+            // ResolveTextureResourceSubsystemArm). The row requires bit 7 as well; 0x5ff carries
+            // it, so the missing field is bit 11 alone.
             const std::string refusal =
-                FindTheRefusalLine(log, TextureResourceBitSpellings(), SamplerBitSpellings());
+                FindTheRefusalLine(log, TextureResourceBitSpellings(), kSamplerBitMask);
             EXPECT_FALSE(refusal.empty())
                 << "MOBILEGL_PIPE_PUSH=0x5ff sets the texture resource subsystem (bit 10) without "
                    "the sampler subsystem (bit 11) that MGPTextureParams::BuiltinSampler depends on, "
@@ -758,8 +779,9 @@ void main() { oColor = texture(uTex, vUv); }
                    "two bits. Only bit 11 mints sampler CSOs, so every set_texture_params emitted "
                    "under this mask would carry a null BuiltinSampler and the applier's Fatal is the "
                    "next thing that happens - which is why this pair is a refusal at bring-up and "
-                   "not the harmless mirror of the 0x9ff one. Accepted spellings per bit are the "
-                   "constant's name, '(bit 10)' / '(bit 11)', and '0x400' / '0x800'. The log was "
+                   "not the harmless mirror of the 0x9ff one. The set bit may be spelled by the "
+                   "constant's name, '(bit 10)' or '0x400', before ' is set but '; the needed bit "
+                   "must be the helper's 'missing 0x800)' field after it. The log was "
                 << log.size() << " bytes and is at " << PipeStatsWindow::LibraryLogPath() << ".";
             if (!refusal.empty()) {
                 std::cout << "[ ObjectSubsystemControl ] refusal line: " << refusal << std::endl;

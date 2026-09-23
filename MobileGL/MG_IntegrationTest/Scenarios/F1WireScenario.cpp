@@ -633,8 +633,20 @@ TEST_F(F1WireScenario, GenerateMipmapDepthWithoutNativeBlitPixels) {
 // so it fires on every driver.
 // Red once (executed, reverted): restore the MagmaWireFatal and this case dies with
 // Fatal{UnmigratedVerb, "Magma:depth-stencil-mipmap@P7"}.
+//
+// MAGMA ONLY, like the three other `*Declines*` cases below. Rule I and §3.2 are MG_Backend/
+// DirectVulkan's wire-arm contract, but the DirectGLES whole-binary entry discovers this case
+// too and reaches its body whenever the process resolves a split transport - the primary
+// integration lane runs every integration-gpu entry under MOBILEGL_TRANSPORT=inproc. Espryt
+// answers this shape with GL_INVALID_OPERATION and leaves level zero and the session intact
+// (measured, DirectGLES x inproc on lavapipe): a different answer, not a broken decline.
 TEST_F(F1WireScenario, GenerateMipmapDepthStencilDeclinesAndKeepsTheSession) {
     if (!Ready()) return;
+    if (Gl().BackendName() != "DirectVulkan")
+        GTEST_SKIP() << "Magma wire-arm decline (CONTRACT-P7 3.2, depth-stencil-mipmap): Espryt ("
+                     << Gl().BackendName()
+                     << ") answers a depth/stencil glGenerateMipmap with GL_INVALID_OPERATION and "
+                        "leaves level 0 intact, which is not the no-error decline this case pins";
     GLuint depthStencil = 0;
     glGenTextures(1, &depthStencil);
     glBindTexture(GL_TEXTURE_2D, depthStencil);
@@ -1767,6 +1779,15 @@ TEST_F(F1WireScenario, MultisampleColorBlitScalesAndFlipsThroughTheResolveScratc
 // case dies as Fatal{UnmigratedVerb, "Magma:multisample-blit-shape@P7"}.
 TEST_F(F1WireScenario, MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession) {
     if (!Ready()) return;
+    // Magma only (see GenerateMipmapDepthStencilDeclinesAndKeepsTheSession). Espryt on the split
+    // arm leaves the destination untouched but no GL_INVALID_OPERATION reaches the client, which
+    // GL 4.6 core 18.3.1 asks for here - an Espryt debt of the same class as
+    // DepthStencilReadbackMatrixScenario's scaled-resolve gate, not this decline's to pin.
+    if (Gl().BackendName() != "DirectVulkan")
+        GTEST_SKIP() << "Magma wire-arm decline (CONTRACT-P7 3.2, multisample-blit-shape): Espryt ("
+                     << Gl().BackendName()
+                     << ") writes nothing for a scaled blit onto a multisample destination but "
+                        "records no GL_INVALID_OPERATION - a P3b/P4b debt, not this decline";
     GLuint msFbo = 0, msRenderbuffer = 0;
     glGenFramebuffers(1, &msFbo);
     glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
@@ -1854,6 +1875,15 @@ TEST_F(F1WireScenario, MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeep
 // case dies as Fatal{UnmigratedVerb, "Magma:multisample-blit-aspect@P7"}.
 TEST_F(F1WireScenario, MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession) {
     if (!Ready()) return;
+    // Magma only (see GenerateMipmapDepthStencilDeclinesAndKeepsTheSession). The decline itself
+    // is a recorded Magma debt (CONTRACT-P7 §12: a same-rectangle 1 -> N blit is legal sample
+    // replication in GL 4.6 core 18.3.1); Espryt on the split arm neither replicates nor
+    // records an error, which is neither answer this case can pin.
+    if (Gl().BackendName() != "DirectVulkan")
+        GTEST_SKIP() << "Magma wire-arm decline (CONTRACT-P7 3.2, multisample-blit-aspect): Espryt ("
+                     << Gl().BackendName()
+                     << ") writes nothing for a single-sample to multisample blit and records no "
+                        "GL error - a P3b/P4b debt, not this decline";
     GLuint msFbo = 0, msRenderbuffer = 0;
     glGenFramebuffers(1, &msFbo);
     glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
@@ -2047,6 +2077,12 @@ TEST_F(F1WireScenario, CopyImageInPlaceAcrossLevelsAndLayers) {
 // no GL error, and the level still holds exactly what it held.
 TEST_F(F1WireScenario, CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone) {
     if (!Ready()) return;
+    // Magma only (see GenerateMipmapDepthStencilDeclinesAndKeepsTheSession). GL leaves this copy
+    // undefined and Espryt performs it; only the Magma wire arm promises to record nothing.
+    if (Gl().BackendName() != "DirectVulkan")
+        GTEST_SKIP() << "Magma wire-arm decline (CONTRACT-P7 3.2, copy-image-in-place): GL 4.6 core "
+                        "18.3.2 leaves an overlapping same-subresource copy undefined and Espryt ("
+                     << Gl().BackendName() << ") performs it";
     const GLuint array = MakeInPlaceCopyTexture();
     ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyInPlaceOverlap.setup";
     // (0,0)-(4,4) onto (2,2): four of the sixteen texels are in both rectangles.
