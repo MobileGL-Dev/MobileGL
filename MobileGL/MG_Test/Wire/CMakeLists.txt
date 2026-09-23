@@ -176,6 +176,11 @@ if (Python3_Interpreter_FOUND)
     add_test(NAME PeerLatch.SiteMap
              COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/ph_latch_sites.py --self-test)
     set_tests_properties(PeerLatch.SiteMap PROPERTIES LABELS unit)
+    # The census's rule 2 now covers SessionLatch as well as SessionFail / WireLogFatal; its
+    # self-test feeds it one unmarked call of each and requires every one to be reported.
+    add_test(NAME FatalCensus.RuleTwoSelfTest
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/fatal_census.py --self-test)
+    set_tests_properties(FatalCensus.RuleTwoSelfTest PROPERTIES LABELS unit)
 endif ()
 
 # Ph fuzz arm 3 (PH-6, ID-P7-2): a `--serve` supervisor, a peer that stops draining SEG_EVENT, and

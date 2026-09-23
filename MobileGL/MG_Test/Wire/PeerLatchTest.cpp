@@ -30,6 +30,15 @@
 // WHY FORKED PEERS: ClientSession is a process singleton whose device-lost latch never resets,
 // so a process that watched session A die cannot be session B. Each peer is a fork of this
 // gtest process taken before any session exists; it reports through a pipe and _exits.
+//
+// THE DECLINE-AND-CLOSE HALF has its own cases below the table (they are not sites, so they are
+// not rows; scripts/ci/ph_latch_sites.py's MECHANICS list names them): a latched record is the
+// last one its batch applies (DrainRing's two latch checks), and a latch raised on the apply
+// thread closes the session while the peer is still connected and silent (RunSession's sliced
+// control wait). ServerLoopTest holds the in-process half of the same checks.
+//
+// A PASSING CASE LEAVES NOTHING IN /tmp: the socket and both role logs are removed with the
+// supervisor. A failing case keeps its logs, since the assertion messages point at them.
 
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/FatalFunnel.h>
@@ -59,6 +68,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -69,6 +79,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -169,29 +180,61 @@ namespace {
             }
             server.pid = -1;
         }
-        ~Supervisor() { Stop(); }
+        // SIGTERM ends the supervisor without its own unlink, so the socket is removed here; the
+        // role logs go too unless the case failed - then they are the evidence its messages
+        // quote, and they stay.
+        ~Supervisor() {
+            Stop();
+            if (!tcp && !endpoint.empty()) ::unlink(endpoint.c_str());
+            if (logBase.empty() || ::testing::Test::HasFailure()) return;
+            namespace Debug = MobileGL::MG_Util::Debug;
+            std::error_code ec;
+            std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Server), ec);
+            std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
+            std::filesystem::remove(logBase, ec);
+        }
     };
 
     bool Launch(const std::string& label, bool tcp, Supervisor* sup) {
         const std::string stem = "/tmp/mgl-latch-" + label + "-" + std::to_string(::getpid());
         sup->logBase = stem + ".log";
         sup->tcp = tcp;
-        if (tcp) {
-            const int port = FreeLoopbackPort();
-            if (port <= 0) return false;
-            sup->endpoint = "tcp://127.0.0.1:" + std::to_string(port);
-        } else {
-            sup->endpoint = stem + ".sock";
-            ::unlink(sup->endpoint.c_str());
-        }
         ::setenv("MOBILEGL_LOG_FILE_PATH", sup->logBase.c_str(), 1);
-        MobileGL::MG_Util::Debug::TruncateRoleLogs(sup->logBase.c_str());
         PinHeadlessEgl();
-        if (Server::LaunchServerWithArgs(ServerImage(), sup->endpoint, {"--serve"}, &sup->server) !=
-            MOBILEGL_OK) {
-            return false;
+        // FreeLoopbackPort's port can be taken by another process between its close() and the
+        // supervisor's bind (ctest -j on a shared host). A supervisor that could not listen exits
+        // 72 at once, so that is retried on a fresh port rather than read as a failure.
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (tcp) {
+                const int port = FreeLoopbackPort();
+                if (port <= 0) return false;
+                sup->endpoint = "tcp://127.0.0.1:" + std::to_string(port);
+            } else {
+                sup->endpoint = stem + ".sock";
+                ::unlink(sup->endpoint.c_str());
+            }
+            MobileGL::MG_Util::Debug::TruncateRoleLogs(sup->logBase.c_str());
+            if (Server::LaunchServerWithArgs(ServerImage(), sup->endpoint, {"--serve"}, &sup->server) !=
+                MOBILEGL_OK) {
+                return false;
+            }
+            bool listening = false;
+            bool exited = false;
+            (void)WaitFor(
+                [&] {
+                    if (sup->Log().find("listening on") != std::string::npos) return listening = true;
+                    int status = 0;
+                    if (::waitpid(sup->server.pid, &status, WNOHANG) == sup->server.pid) {
+                        sup->server.pid = -1; // reaped here; Stop() owes it nothing
+                        return exited = true;
+                    }
+                    return false;
+                },
+                10000);
+            if (listening) return true;
+            if (!exited || !tcp) return false;
         }
-        return WaitFor([&] { return sup->Log().find("listening on") != std::string::npos; }, 10000);
+        return false;
     }
 
     // ------------------------------------------------------------------------------------
@@ -217,8 +260,11 @@ namespace {
 
     // Runs `body` in a forked peer connected to `sup`. `stopCleanly` sends the orderly EOF (a
     // session that must end exit=0); otherwise the peer just exits once its session is gone.
+    // `holdMs` > 0: the peer reports as soon as `body` returns and then HOLDS its connections open
+    // and silent for that long before it exits; the caller gets its pid in `heldPeer` and owes it
+    // a kill + waitpid (the silent-peer cases' shape).
     PeerReport RunPeer(const Supervisor& sup, const PeerBody& body, bool stopCleanly,
-                       int timeoutMs = 30000) {
+                       int timeoutMs = 30000, int holdMs = 0, pid_t* heldPeer = nullptr) {
         PeerReport report{};
         int fds[2] = {-1, -1};
         if (::pipe(fds) != 0) {
@@ -251,6 +297,7 @@ namespace {
             const ssize_t wrote = ::write(fds[1], &r, sizeof(r));
             (void)wrote;
             std::fflush(nullptr);
+            if (holdMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(holdMs));
             ::_exit(0);
         }
         ::close(fds[1]);
@@ -272,9 +319,21 @@ namespace {
             ::kill(pid, SIGKILL);
         }
         ::close(fds[0]);
+        if (holdMs > 0 && heldPeer != nullptr && ready > 0) {
+            *heldPeer = pid;
+            return report;
+        }
         int status = 0;
         ::waitpid(pid, &status, 0);
         return report;
+    }
+
+    // The held peer's end: it has done its part, so it is killed rather than waited out.
+    void ReleaseHeldPeer(pid_t peer) {
+        if (peer <= 0) return;
+        ::kill(peer, SIGKILL);
+        int status = 0;
+        ::waitpid(peer, &status, 0);
     }
 
     // After the row's bytes: give the session time to reach them. The peer does not have to
@@ -331,45 +390,64 @@ namespace {
     // the filler's bytes with the image, optionally mutates the header, and publishes.
     //   16 bytes          MemoryBarrier
     //   24 .. 1560 bytes  BindSamplerStates with (total - 24) / 8 handles in its tail
-    bool PublishImage(Client::ClientSession& client, const std::vector<Uint8>& image,
-                      Uint64* outSeq,
-                      const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
+    //
+    // SEVERAL IMAGES, ONE PUBLISH: each gets its own filler (its ring position is taken right
+    // after that filler is encoded, so a wrap pad between two of them cannot shift it), all are
+    // overwritten, and one PublishAndNotify makes them visible to the server together - the shape
+    // of a peer that batches, which is what DrainRing's per-record latch check is for.
+    // `mutateHeader` applies to the FIRST image's header; `outSeq` is the LAST record's seq.
+    bool PublishImages(Client::ClientSession& client, const std::vector<std::vector<Uint8>>& images,
+                       Uint64* outSeq,
+                       const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
         if (outSeq != nullptr) *outSeq = Wire::kInvalidSeq;
         auto* link = client.DataLink();
-        if (link == nullptr || !link->Attached()) return false;
-        const Uint64 total = image.size();
+        if (link == nullptr || !link->Attached() || images.empty()) return false;
         auto& encoder = client.Encoder();
-        Uint64 seq = Wire::kInvalidSeq;
-        if (total == 16) {
-            P::MGPMemoryBarrier barrier{};
-            barrier.Bits = 0x2000u;
-            seq = encoder.EncodeRecord(P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
-        } else {
-            const Uint64 base = Align8(sizeof(P::MGPWireRecHeader) + sizeof(P::MGPSamplerStates));
-            if (total < base || (total - base) % 8 != 0 || (total - base) / 8 > P::kMGPipeMaxTextureUnits)
-                return false;
-            P::MGPSamplerStates filler{};
-            filler.Start = 0;
-            filler.Count = static_cast<Uint32>((total - base) / 8);
-            std::vector<P::MGPipeHandle> handles(filler.Count);
-            seq = encoder.EncodeRecord(P::MGPWireOp::BindSamplerStates, &filler, sizeof(filler),
-                                       handles.empty() ? nullptr : handles.data(),
-                                       handles.size() * sizeof(P::MGPipeHandle));
-        }
-        if (seq == Wire::kInvalidSeq) return false;
         auto& commands = link->CommandsOut();
         const auto* arena = link->RecordArena();
-        const Uint64 head = commands.LocalHead();
-        if (arena == nullptr || arena->Base == nullptr || head < total) return false;
-        auto* bytes = static_cast<Uint8*>(arena->Base) + ((head - total) & arena->Mask);
-        auto* header = reinterpret_cast<Transport::RingRecordHeader*>(bytes);
-        if (header->size != total) return false;
-        std::memcpy(bytes, image.data(), image.size());
-        if (mutateHeader) mutateHeader(*header);
+        if (arena == nullptr || arena->Base == nullptr) return false;
+        std::vector<Uint8*> at;
+        Uint64 seq = Wire::kInvalidSeq;
+        for (const auto& image : images) {
+            const Uint64 total = image.size();
+            if (total == 16) {
+                P::MGPMemoryBarrier barrier{};
+                barrier.Bits = 0x2000u;
+                seq = encoder.EncodeRecord(P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+            } else {
+                const Uint64 base = Align8(sizeof(P::MGPWireRecHeader) + sizeof(P::MGPSamplerStates));
+                if (total < base || (total - base) % 8 != 0 ||
+                    (total - base) / 8 > P::kMGPipeMaxTextureUnits)
+                    return false;
+                P::MGPSamplerStates filler{};
+                filler.Start = 0;
+                filler.Count = static_cast<Uint32>((total - base) / 8);
+                std::vector<P::MGPipeHandle> handles(filler.Count);
+                seq = encoder.EncodeRecord(P::MGPWireOp::BindSamplerStates, &filler, sizeof(filler),
+                                           handles.empty() ? nullptr : handles.data(),
+                                           handles.size() * sizeof(P::MGPipeHandle));
+            }
+            if (seq == Wire::kInvalidSeq) return false;
+            const Uint64 head = commands.LocalHead();
+            if (head < total) return false;
+            auto* bytes = static_cast<Uint8*>(arena->Base) + ((head - total) & arena->Mask);
+            if (reinterpret_cast<Transport::RingRecordHeader*>(bytes)->size != total) return false;
+            at.push_back(bytes);
+        }
+        for (std::size_t i = 0; i < images.size(); ++i) {
+            std::memcpy(at[i], images[i].data(), images[i].size());
+        }
+        if (mutateHeader) mutateHeader(*reinterpret_cast<Transport::RingRecordHeader*>(at.front()));
         client.Producer().PublishAndNotify(seq);
         if (link->Flush() != MOBILEGL_OK) return false;
         if (outSeq != nullptr) *outSeq = seq;
         return true;
+    }
+
+    bool PublishImage(Client::ClientSession& client, const std::vector<Uint8>& image,
+                      Uint64* outSeq,
+                      const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
+        return PublishImages(client, {image}, outSeq, mutateHeader);
     }
 
     bool Forge(Client::ClientSession& client, PeerReport& r, P::MGPWireOp op,
@@ -532,6 +610,11 @@ namespace {
         bool (*forge)(Client::ClientSession&, PeerReport&);
     };
 
+    // A failed row names itself, not "56-byte object <...>".
+    void PrintTo(const Row& row, std::ostream* os) {
+        *os << row.name << " (" << row.file << ", " << (row.marker != nullptr ? row.marker : "refusal") << ")";
+    }
+
     // Setup helpers the rows share.
     P::MGPBlobRef Stage(Client::ClientSession& client, Uint64 bytes, Uint8 fill = 0x5A) {
         std::vector<Uint8> data(static_cast<std::size_t>(bytes), fill);
@@ -665,22 +748,59 @@ namespace {
     }
 
 #if MOBILEGL_PIPE_PUSH
-    // PH-5's fixture, framed as the wire carries it: a valid archive whose first LinkArtifacts
-    // vector count is one element past what the remaining bytes can hold
-    // (ProgramArtifactsCodecTest.AVectorCountCannotReservePastTheRemainingArchiveBytes).
-    std::vector<Uint8> ArchiveWithAnOversizedVectorCount() {
+    // PH-5's RAW-PEER CONTROL, MADE TO DISCRIMINATE. What PH-5 changed (ProgramArtifactsCodec.cpp
+    // TakeCount, 1ae7474d) is the CHARGE for a vector count: it used to be one byte per element
+    // (`count <= Remaining()`), and PH-5 charges sizeof(value_type) per element before the
+    // resize. So the control is a count BETWEEN the two bounds - one the byte bound admits and
+    // PH-5 refuses: `count == Remaining()`, in an archive padded out to kArchiveBytes. Under PH-5
+    // the decode refuses before anything is allocated and the session latches by name. Under the
+    // byte bound the same count reaches `resize(count)` - Remaining() elements of
+    // sizeof(ResourceReflection) each, hundreds of MiB - which the session child's address space
+    // has been capped not to fit (CapTheSessionsAddressSpace), so it dies of std::bad_alloc
+    // (signal 6), with no `Fatal{` line, instead of latching: the row goes red on the reap line
+    // and on the first-fault line. (A count merely one element past PH-5's bound, the first
+    // version of this row, was refused by name either way: the element reads run out of bytes.)
+    constexpr Uint64 kArchiveBytes = 7ull << 20;
+    constexpr Uint64 kSessionHeadroom = 320ull << 20;
+
+    std::vector<Uint8> ArchiveWhoseCountOnlyTheByteBoundAdmits(std::size_t* elementBytes) {
         using namespace MobileGL::MG_State::GLState;
         MobileGL::Vector<Uint8> codec;
         EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, codec);
         MobileGL::Vector<Uint8> archive;
         EncodeProgramArchive(LinkArtifacts{}, SpirvArtifacts{}, MobileGL::Vector<Uint32>{}, archive);
         const std::size_t prefix = archive.size() - codec.size();
+        // The codec's version (Uint32) and schema (Uint64) words, then LinkArtifacts' first
+        // field - uniformReflection's count.
         const std::size_t countOffset = prefix + sizeof(Uint32) + sizeof(Uint64);
-        const std::size_t available = archive.size() - countOffset - sizeof(Uint64);
+        archive.resize(static_cast<std::size_t>(kArchiveBytes), 0);
+        const Uint64 remaining = archive.size() - countOffset - sizeof(Uint64);
+        std::memcpy(archive.data() + countOffset, &remaining, sizeof(remaining));
         using Element = std::remove_reference_t<decltype(LinkArtifacts{}.uniformReflection)>::value_type;
-        const Uint64 forged = static_cast<Uint64>(available / sizeof(Element)) + 1;
-        std::memcpy(archive.data() + countOffset, &forged, sizeof(forged));
+        *elementBytes = sizeof(Element);
         return std::vector<Uint8>(archive.begin(), archive.end());
+    }
+
+    // Caps the SESSION CHILD's address space (not this peer's, not the supervisor's) at what it
+    // maps now plus kSessionHeadroom: room for everything a latched session does on its way out,
+    // and far short of the resize the byte bound would allow. Same uid, so prlimit may.
+    bool CapTheSessionsAddressSpace(Uint32 sessionPid, PeerReport& r) {
+        std::ifstream status("/proc/" + std::to_string(sessionPid) + "/status");
+        std::string line;
+        Uint64 vmKb = 0;
+        while (std::getline(status, line)) {
+            if (line.rfind("VmSize:", 0) == 0) vmKb = std::strtoull(line.c_str() + 7, nullptr, 10);
+        }
+        if (vmKb == 0) return Note(r, "the session child's VmSize is unreadable"), false;
+        rlimit current{};
+        if (::prlimit(static_cast<pid_t>(sessionPid), RLIMIT_AS, nullptr, &current) != 0)
+            return Note(r, "prlimit(RLIMIT_AS) read failed"), false;
+        rlimit capped = current;
+        capped.rlim_cur = static_cast<rlim_t>(vmKb * 1024 + kSessionHeadroom);
+        if (current.rlim_max != RLIM_INFINITY && capped.rlim_cur > current.rlim_max) capped.rlim_cur = current.rlim_max;
+        if (::prlimit(static_cast<pid_t>(sessionPid), RLIMIT_AS, &capped, nullptr) != 0)
+            return Note(r, "prlimit(RLIMIT_AS) write failed"), false;
+        return true;
     }
 #endif
 
@@ -1175,10 +1295,19 @@ namespace {
              return true;
          }},
 #if MOBILEGL_PIPE_PUSH
-        {"D11ArchiveVectorCount", "PipeWireCodec.cpp", "CreateShaderState.Reflection (PH-5)", Outcome::Latched,
-         "Fatal{ProtocolCorruption, \"CreateShaderState.Reflection\"}", false,
+        // PH-5. Its file is the codec's, not PipeWireCodec.cpp's: the line it ends on is the
+        // decoder's CreateShaderState.Reflection latch, but what it CONTROLS is TakeCount's
+        // element charge (see ArchiveWhoseCountOnlyTheByteBoundAdmits), so the site map does
+        // not credit it to the decoder's site (CreateShaderStateReflectionGarbage covers that).
+        {"D11ArchiveVectorCount", "ProgramArtifactsCodec.cpp", "PH-5 TakeCount count x sizeof(element)",
+         Outcome::Latched, "Fatal{ProtocolCorruption, \"CreateShaderState.Reflection\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
-             const std::vector<Uint8> archive = ArchiveWithAnOversizedVectorCount();
+             std::size_t element = 0;
+             const std::vector<Uint8> archive = ArchiveWhoseCountOnlyTheByteBoundAdmits(&element);
+             // The row proves nothing unless the resize the byte bound allows is far past the cap.
+             if (static_cast<Uint64>(archive.size()) * element < 2 * kSessionHeadroom)
+                 return Note(r, "fixture: the byte-bound resize would fit the session's headroom"), false;
+             if (!CapTheSessionsAddressSpace(c.PeerServerPid(), r)) return false;
              P::MGPProgramDesc d{};
              d.Cso = {3u, 1u};
              d.Reflection = c.Encoder().StageBytes(archive.data(), archive.size());
@@ -1330,6 +1459,8 @@ namespace {
         return "?";
     }
 
+    void ExpectARenderingNextSession(Supervisor& sup, const char* forgeName, Uint32 previousPid);
+
     // The two-session walk every row and the PH-1 (4) headline share. `forgeName` labels the
     // assertions.
     void RunRowAgainst(Supervisor& sup, const char* forgeName, Outcome outcome, const char* marker,
@@ -1378,15 +1509,30 @@ namespace {
         }
 
         // ---- session B: the same supervisor serves the next connection, and it renders
+        ExpectARenderingNextSession(sup, forgeName, a.serverPid);
+    }
+
+    // SESSION B, shared by the rows and the mechanics cases: the same supervisor serves the next
+    // connection from a new session child, applies a record, reaps it clean, and - with headless
+    // EGL - reads back a green clear. The last step of every caller (it may GTEST_SKIP).
+    void ExpectARenderingNextSession(Supervisor& sup, const char* forgeName, Uint32 previousPid) {
         const PeerReport b = RunPeer(sup, HealthyNextSession, /*stopCleanly=*/true);
         ASSERT_EQ(b.started, 1) << forgeName << ": the next connection got no Welcome (" << b.note << ")";
-        EXPECT_NE(b.serverPid, a.serverPid) << forgeName << ": the next session is not a new session child";
+        EXPECT_NE(b.serverPid, previousPid) << forgeName << ": the next session is not a new session child";
         EXPECT_EQ(b.applied, 1) << forgeName << ": the next session did not apply a record";
         std::string reapB;
         EXPECT_TRUE(WaitFor([&] { return !(reapB = sup.ReapLine(b.serverPid)).empty(); }, 15000))
             << forgeName << ": the next session was never reaped";
         EXPECT_NE(reapB.find("exit=0 "), std::string::npos)
             << forgeName << ": the next session did not end cleanly: `" << reapB << "`";
+        // WHERE HEADLESS EGL IS ABSENT THE CASE REPORTS SKIPPED, AND ONLY AFTER THE LATCH HALF HAS
+        // RUN. Every assertion above - the reap line, the first named fault, the SessionLatch line,
+        // Welcome, the applied record and the clean reap of the next session - has been evaluated
+        // by now, and a GTEST_SKIP after a failed EXPECT still reports the case FAILED; so on such a
+        // host "Skipped" means "latched and served, render half not run". The CI unit job
+        // (.github/workflows/test.yml `test`) installs libegl1, whose Recommends brings the Mesa
+        // vendor library on an Ubuntu runner; a runner without it shows these rows as Skipped and
+        // PresentFrameSerialZero (which needs a context to reach its site) as skipped outright.
         if (b.egl == 0) {
             GTEST_SKIP() << forgeName << ": latch and next-session Welcome proven; the render half "
                                          "needs headless EGL, absent here (" << b.note << ")";
@@ -1443,6 +1589,122 @@ TEST(PeerLatchTest, AMalformedControlFrameOverTcpLatchesAndTheNextConnectionRend
     RunRowAgainst(sup, "headline-tcp-ctrl", Outcome::Latched,
                   "Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op failed validation: UnknownOpKind",
                   false, [](Client::ClientSession& c, PeerReport& r) { return SendSurfaceOp(c, r, 200, 0); });
+}
+
+// =====================================================================================
+// THE DECLINE-AND-CLOSE HALF: "declines all further work, closes the session cleanly"
+// =====================================================================================
+//
+// Every row above publishes ONE forged record as the ring's last entry and then lets go of the
+// connection, so none of them can tell whether the session stopped applying at the latch or merely
+// ran out of records, nor whether it closed on the latch or on the peer's EOF. These cases can.
+// ServerLoopTest's latched-batch, post-after-latch and short-record cases hold the same checks in
+// process; scripts/ci/ph_latch_sites.py's MECHANICS list maps each check to its cases.
+namespace {
+    P::MGPHandleOnly DeathOfKind999() {
+        P::MGPHandleOnly death{};
+        death.Handle = {5u, 1u};
+        death.Kind = 999;
+        return death;
+    }
+
+    // Two records that each latch on their own - ObjectDeath with Kind 999, then ObjectDeath with
+    // a null handle - under ONE publish, so one DrainRing sees both.
+    bool ForgeTwoFaultsInOneBatch(Client::ClientSession& c, PeerReport& r) {
+        const P::MGPHandleOnly kind = DeathOfKind999();
+        const P::MGPHandleOnly null{};
+        Uint64 seq = Wire::kInvalidSeq;
+        if (!PublishImages(c,
+                           {RecordImage(P::MGPWireOp::ObjectDeath, Bytes(kind)),
+                            RecordImage(P::MGPWireOp::ObjectDeath, Bytes(null))},
+                           &seq)) {
+            Note(r, "the two forged records could not be published");
+            return false;
+        }
+        r.forged = 1;
+        // Not WaitForApplied(seq): the second record is the one that must NOT be applied.
+        AwaitSessionEnd(c, Wire::kInvalidSeq);
+        return true;
+    }
+
+    // One latching record, then silence (RunPeer's holdMs keeps both connections open).
+    bool ForgeAndFallSilent(Client::ClientSession& c, PeerReport& r) {
+        const P::MGPHandleOnly kind = DeathOfKind999();
+        Uint64 seq = Wire::kInvalidSeq;
+        if (!PublishImage(c, RecordImage(P::MGPWireOp::ObjectDeath, Bytes(kind)), &seq)) {
+            Note(r, "the forged record could not be published");
+            return false;
+        }
+        r.forged = 1;
+        // The consumer publishes appliedSeq for the latched record too, so this returns at once.
+        (void)c.WaitForApplied(seq, 3000);
+        return true;
+    }
+
+    constexpr int kSilentHoldMs = 10000;
+    constexpr int kCloseDeadlineMs = 3000;
+
+    void ExpectTheLatchClosesTheSessionUnderASilentPeer(const char* label, bool tcp) {
+        Supervisor sup;
+        ASSERT_TRUE(Launch(label, tcp, &sup)) << "the --serve supervisor did not start";
+        pid_t held = -1;
+        const PeerReport a = RunPeer(
+            sup, [](Client::ClientSession& c, PeerReport& r) { (void)ForgeAndFallSilent(c, r); },
+            /*stopCleanly=*/false, /*timeoutMs=*/30000, kSilentHoldMs, &held);
+        if (a.started != 1 || a.forged != 1) ReleaseHeldPeer(held);
+        ASSERT_EQ(a.started, 1) << label << ": no Welcome (" << a.note << ")";
+        ASSERT_EQ(a.forged, 1) << label << ": the peer could not publish its bytes (" << a.note << ")";
+
+        std::string reap;
+        bool peerStillConnected = false;
+        const bool reaped = WaitFor(
+            [&] {
+                if ((reap = sup.ReapLine(a.serverPid)).empty()) return false;
+                peerStillConnected = held > 0 && ::waitpid(held, nullptr, WNOHANG) == 0;
+                return true;
+            },
+            kCloseDeadlineMs);
+        ReleaseHeldPeer(held);
+        ASSERT_TRUE(reaped)
+            << label << ": the session latched on its apply thread and was still open " << kCloseDeadlineMs
+            << " ms later while its peer held the connection, silent - RunSession is waiting for a control "
+               "frame or an EOF instead of noticing the latch (ServerMain.cpp's sliced control wait)\n"
+            << sup.Log();
+        EXPECT_TRUE(peerStillConnected)
+            << label << ": the session ended only once the peer had gone, which says nothing about the latch";
+        EXPECT_NE(reap.find("exit=" + std::to_string(kSessionLatchedExitCode) + " (latched fault)"),
+                  std::string::npos)
+            << label << ": `" << reap << "`";
+        ExpectARenderingNextSession(sup, label, a.serverPid);
+    }
+} // namespace
+
+// DrainRing's two latch checks, over the wire: the record behind the latched one in the same batch
+// is never applied - its own named fault never reaches the log - and the session closes having
+// latched exactly one. Red with either check deleted: the top one (the apply thread's exit-path
+// drain then applies the second record) or the per-record one (the same drain does).
+TEST(PeerLatchTest, ALatchedRecordIsTheLastRecordItsBatchApplies) {
+    Supervisor sup;
+    ASSERT_TRUE(Launch("batch", /*tcp=*/false, &sup));
+    RunRowAgainst(sup, "batch", Outcome::Latched, "Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - 999", false,
+                  &ForgeTwoFaultsInOneBatch);
+    const std::string log = sup.Log();
+    EXPECT_EQ(log.find("\"ObjectDeath.Handle\""), std::string::npos)
+        << "the record published behind the latched one was applied after the latch:\n" << log;
+    EXPECT_NE(log.find("session closed on a latched fault (ProtocolCorruption; 1 named fault(s)"), std::string::npos)
+        << "the session did not close on exactly one latched fault:\n" << log;
+}
+
+// RunSession's sliced control wait: a latch raised on the APPLY thread while the peer sits connected
+// and silent still ends the session within a few slices - not at the peer's EOF, which here is ten
+// seconds away. Red with the wait put back to kWaitForever. Over the unix pair and over TCP, whose
+// control transports time out differently.
+TEST(PeerLatchTest, ALatchOnTheApplyThreadClosesTheSessionWhileAUnixPeerHoldsItOpen) {
+    ExpectTheLatchClosesTheSessionUnderASilentPeer("silent-unix", /*tcp=*/false);
+}
+
+TEST(PeerLatchTest, ALatchOnTheApplyThreadClosesTheSessionWhileATcpPeerHoldsItOpen) {
+    ExpectTheLatchClosesTheSessionUnderASilentPeer("silent-tcp", /*tcp=*/true);
 }
 
 #endif // !_WIN32

@@ -286,6 +286,45 @@ def sanctioned(rel, anchor_window):
     return any(anchor in anchor_window for anchor, _reason in FUNNEL_SITES.get(rel, ()))
 
 
+def unnamed_funnel_call_lines(lines):
+    """Rule 2 on one file's comment-stripped lines: the 0-based index of every WireLogFatal /
+    SessionFail / SessionLatch call whose window carries no `Fatal{Word` marker."""
+    found = []
+    for index, line in enumerate(lines):
+        if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line) or
+                SESSION_LATCH_CALL.search(line)):
+            continue
+        window = "\n".join(lines[index:index + kMarkerWindow])
+        if not MARKER.search(window):
+            found.append(index)
+    return found
+
+
+# RULE 2's OWN NEGATIVE CONTROL (P7 F2 latch). Each case is a one-line call and the number of
+# unmarked funnel calls rule 2 must find in it. The first row is the one PH-1 (3) added the
+# SessionLatch pattern for: drop SESSION_LATCH_CALL from unnamed_funnel_call_lines and it reads 0,
+# which is how a site converted from SessionFail to SessionLatch would silently leave the census.
+# The last two pin the lookbehind: MG_Pipe's seams are funnels of their own, not calls to these.
+SELF_TEST_CASES = (
+    ('SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: no family word %d", x);', 1),
+    ('SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \\"w\\"} %d", x);', 0),
+    ('SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: no family word");', 1),
+    ('SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \\"w\\"}");', 0),
+    ('WireLogFatal("MGPipe: no family word");', 1),
+    ('MGPipeSessionLatch(family, format);', 0),
+    ('MGPipeSessionFail(family, format);', 0),
+)
+
+
+def self_test():
+    failures = []
+    for source, expected in SELF_TEST_CASES:
+        got = len(unnamed_funnel_call_lines(strip_comments(source).split("\n")))
+        if got != expected:
+            failures.append(f"rule 2 found {got} unmarked funnel call(s) in `{source}`, expected {expected}")
+    return failures
+
+
 def census():
     unmarked = []
     families = set()
@@ -306,16 +345,11 @@ def census():
                 refusals.setdefault(word, []).append(f"{rel}:{index + 1}")
 
         if rel not in FUNNEL_FILES:
-            # Rule 2: every WireLogFatal / SessionFail call carries a family word in its string.
-            # window covers its continuation lines.
-            for index, line in enumerate(lines):
-                if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line) or
-                        SESSION_LATCH_CALL.search(line)):
-                    continue
-                window = "\n".join(lines[index:index + kMarkerWindow])
-                if not MARKER.search(window):
-                    unnamed_funnel_calls.append({"file": rel, "line": index + 1,
-                                                 "text": line.strip()})
+            # Rule 2: every WireLogFatal / SessionFail / SessionLatch call carries a family word
+            # in its string; the window covers its continuation lines.
+            for index in unnamed_funnel_call_lines(lines):
+                unnamed_funnel_calls.append({"file": rel, "line": index + 1,
+                                             "text": lines[index].strip()})
 
         for index, line in enumerate(lines):
             if not ABORT.search(line):
@@ -388,7 +422,17 @@ def main():
     parser.add_argument("--write-baseline", action="store_true",
                         help="Record today's numbers. Run it when a family is deliberately added.")
     parser.add_argument("--json", action="store_true", help="Print the census and exit 0.")
+    parser.add_argument("--self-test", action="store_true",
+                        help="Prove rule 2 still sees an unmarked SessionLatch / SessionFail / "
+                             "WireLogFatal call, and nothing else; exit 1 if it does not.")
     args = parser.parse_args()
+
+    if args.self_test:
+        failures = self_test()
+        for message in failures:
+            print(f"::error::{message}", file=sys.stderr)
+        print(f"fatal census self-test: {len(SELF_TEST_CASES)} cases, {len(failures)} failed")
+        return 1 if failures else 0
 
     result = census()
     if args.json:

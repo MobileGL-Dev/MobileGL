@@ -430,6 +430,8 @@ namespace MobileGL::MG_Remote::Server {
             // (and does not spin on a ring whose head is still ahead of a tail DrainRing will no
             // longer move). The exit path below tears the backend down as for a Stop; the
             // control connection's owner (ServerMain::RunSession) sees the latch and closes.
+            // Pinned by ServerLoopTest's latched-batch case: without this break the thread is
+            // still running, with no Stop(), three seconds after the latch.
             if (SessionLatched()) {
                 MGLOG_E("MG_Remote server: mgl-srv-apply leaves its loop - the session latched a "
                         "named fault and declines the rest of the ring (PH-1)");
@@ -593,6 +595,7 @@ namespace MobileGL::MG_Remote::Server {
         if (!m_controlPosted.load(std::memory_order_acquire)) return false;
 
         SurfaceControlFrame frame;
+        Bool declinedOnLatch = false;
         {
             const std::lock_guard<std::mutex> lock(m_controlMutex);
             if (!m_controlPending) {
@@ -609,6 +612,23 @@ namespace MobileGL::MG_Remote::Server {
             // that would act on the shadow is THIS one and it is busy running the frame; leaving
             // the shadow set would only make the post-work iteration spin instead of park.
             m_controlPosted.store(false, std::memory_order_release);
+            // PH-1 (3), ID-P7-1: A LATCHED SESSION RUNS NO FURTHER CONTROL OP. A frame can be
+            // posted before the latch and taken after it - RunSession passed SurfaceOpCodec's
+            // latch check a moment before a record latched on this thread, and this thread's
+            // exit path pumps once more - and a MakeCurrent, a surface create or a swap has no
+            // business running on a backend whose session has already been declared over. It
+            // is answered here, without a dispatch, with the code SurfaceOpCodec's own latched
+            // arm gives. ServerLoopTest's post-after-latch case goes red without it.
+            if (SessionLatched()) {
+                m_controlResult = MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                m_controlPending = false;
+                m_controlFinished = true;
+                declinedOnLatch = true;
+            }
+        }
+        if (declinedOnLatch) {
+            m_controlDone.notify_all();
+            return true;
         }
         // The dispatch runs OUTSIDE the lock, exactly as the old work(user) did, and fills the
         // frame's reply half; the reply is then published back into the slot under the lock so
@@ -637,17 +657,25 @@ namespace MobileGL::MG_Remote::Server {
         // allocation; `applied == 0` then skips the retire block below entirely. Keep it that
         // way: anything added here runs ~900 times a frame doing nothing.
         //
-        // PH-1 (3), ID-P7-1: THE LATCH CHECK, AT THE TOP AND BEFORE EVERY POP. Once a named fault
-        // has latched (an armed spawn / TCP session child only - unarmed this is one acquire load
-        // of a flag nobody sets), no further record is applied: the rest of the ring is declined
-        // unread, the apply thread leaves its loop, and RunSession closes the session by name.
+        // PH-1 (3), ID-P7-1: THE LATCH CHECK, TWICE, AND EACH ONE HAS A JOB THE OTHER CANNOT DO.
+        // Once a named fault has latched (an armed spawn / TCP session child only - unarmed this is
+        // one acquire load of a flag nobody sets), no further record is applied: the rest of the
+        // ring is declined unread, the apply thread leaves its loop, and RunSession closes the
+        // session by name.
+        //   * HERE, at the top: a drain ENTERED latched pops nothing. That is the apply thread's
+        //     exit-path drain after it left on the latch, and any drain after RunSession's thread
+        //     latched a control op. ServerLoopTest's latched-batch case goes red without it (the
+        //     exit-path drain applies the record behind the latched one).
+        //   * AFTER EACH RECORD, at the bottom of the loop: a record that latched is the last one
+        //     this drain pops, even when the peer published more behind it in the same batch
+        //     (PeerLatchTest's two-record case and ServerLoopTest's latched-batch case).
+        // A check at the loop's head instead would only repeat this one on the first iteration.
         if (SessionLatched()) return 0;
         ServerSession& session = *m_session;
         Transport::SessionConsumer& consumer = session.Consumer();
         PipeApplier& applier = session.Applier();
         Uint64 applied = 0;
         for (;;) {
-            if (SessionLatched()) break;
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
                 [this, &applier](const Transport::RingRecordView& record) {
@@ -684,6 +712,8 @@ namespace MobileGL::MG_Remote::Server {
             // session applies. Checked only AFTER a popped record, so the empty-ring answer above
             // still costs its two loads and nothing else.
             if (session.ReverseChannelForfeited()) break;
+            // PH-1 (3): the per-record latch check described at the top of this function.
+            if (SessionLatched()) break;
         }
         if (applied != 0) {
             // THE TWO TALLIES MUST AGREE, AND THAT IS WHAT MAKES R-9's BATCHING BAN CHECKABLE.

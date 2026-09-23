@@ -1576,6 +1576,21 @@ namespace MobileGL::MG_Remote::Wire {
         }
     } // namespace
 
+    Bool PipeWireDecoder::AdmitOrDecline(const Transport::RingRecordView& record) {
+        if ((record.flags & Transport::kRecPad) != 0 ||
+            record.kind == Transport::kRingPadRecordKind) {
+            return true; // DecodeAndApply's pad arm names it (R-9)
+        }
+        const Uint64 size = record.payloadSize + sizeof(MGPWireRecHeader);
+        if (AdmitsTheGeneratedGate(static_cast<MGPWireOp>(record.kind), size)) return true;
+        // Latched by name. The record is declined unread and counted, exactly as DecodeAndApply
+        // counts one it declines: the tally is +1 per record whatever became of it.
+        m_resolvedCount = 0;
+        m_lastAcceptanceKnown = false;
+        ++m_applySeq;
+        return false;
+    }
+
     Bool PipeWireDecoder::DecodeAndApply(const Transport::RingRecordView& record) {
         if (!Valid()) {
             WireProtocolFatal("PipeWireDecoder::DecodeAndApply", "no control page or segment table");

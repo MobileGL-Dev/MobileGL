@@ -23,6 +23,7 @@
 // ServerLoopTest's cases (AVoidForwarderCrossesAsOneDispatchedFrame and the whole
 // ServerLoopEglTest fixture, which now drives every forwarder through the frame channel).
 
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
@@ -401,6 +402,36 @@ TEST(SurfaceControlFrameTest, AnUnknownWireOpKindIsProtocolCorruptionByName) {
     const std::string log = ReadLog();
     EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"SurfaceOp\"}"), std::string::npos)
         << "the abort happened but not for this rule's reason; the log says: " << log;
+}
+
+// PH-1 (3), ID-P7-1: ServerApplyWireSurfaceOp's latched arm. Once the session has latched, a
+// WELL-FORMED op is answered PROTOCOL_MISMATCH without being decoded into a dispatch - the op
+// RunSession may already be holding when the apply thread latches. In a forked child, because
+// arming is one-way and process-wide. Red with the arm deleted: the op goes on to
+// RunSurfaceControlFrame, which (no apply thread in this process) answers NOT_INITIALIZED, exit 3.
+namespace {
+    [[noreturn]] void ALatchedSessionAnswersAWellFormedOpAndExit() {
+        MobileGL::MG_Remote::ArmSessionLatch();
+        (void)MobileGL::MG_Remote::SessionLatch(MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption,
+                                                "MGPipe: Fatal{ProtocolCorruption, \"unit.surface\"} - the "
+                                                "session latched before this op arrived");
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::SetSwapInterval;
+        frame.seq = 77;
+        frame.swapInterval = 1;
+        flatbuffers::FlatBufferBuilder builder(256);
+        const ::MobileGL::Wire::SurfaceOp* wireOp = EncodeAndParse(frame, &builder);
+        if (wireOp == nullptr) ::_exit(64);
+        SurfaceControlFrame reply;
+        const MobileGLResult rc = ServerApplyWireSurfaceOp(*wireOp, &reply);
+        ::_exit(rc == MOBILEGL_ERR_PROTOCOL_MISMATCH ? 0 : 3);
+    }
+} // namespace
+
+TEST(SurfaceControlFrameTest, ALatchedSessionAnswersAWellFormedSurfaceOpWithoutRunningIt) {
+    EXPECT_EXIT(ALatchedSessionAnswersAWellFormedOpAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "exit 3: a latched session dispatched a well-formed SurfaceOp instead of declining it; "
+           "exit 64: the op did not encode";
 }
 #endif
 

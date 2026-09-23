@@ -670,6 +670,17 @@ namespace MobileGL::MG_Remote::Wire {
         // here Fatals, because a pad that reached the decoder has already been counted.
         Bool DecodeAndApply(const Transport::RingRecordView& record);
 
+        // PH-1 (3): THE PRE-GATE ON ITS OWN, for a caller that reads the record before it hands
+        // it to DecodeAndApply. PipeApplier::ApplyOne stamps the verb boundary and computes
+        // MGPipeBarriered - which reads payload fields (MGPDrawInfo::Flags) - BEFORE the decode,
+        // so a record shorter than its own type, or with an opcode no row names, has to be refused
+        // ahead of that read, not only inside DecodeAndApply. True: the record may be read (and
+        // DecodeAndApply asks the same questions again, with the same answer). False: an armed
+        // session child latched it by name, and it is COUNTED here as a declined record so this
+        // decoder's tally stays level with appliedSeq (R-9). Unarmed it always answers true: the
+        // generated gate keeps its own death. A pad is let through for DecodeAndApply's own arm.
+        Bool AdmitOrDecline(const Transport::RingRecordView& record);
+
         // THE DECODER'S OWN TALLY, NOT THE SHARED WATERMARK. Advanced by exactly one per
         // applied non-pad record.
         //

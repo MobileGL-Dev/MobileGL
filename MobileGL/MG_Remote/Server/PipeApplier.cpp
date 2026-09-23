@@ -1305,6 +1305,15 @@ namespace MobileGL::MG_Remote::Server {
         // a short-circuit, which is ID-103's reason extended to the capability probe: they are
         // exercised on every record for the whole phase rather than first running on the day
         // they start deciding.
+        //
+        // PH-1 (3): BUT NOT BEFORE THE RECORD HAS BEEN ADMITTED. MGPipeBarriered reads payload
+        // fields (a DrawVbo's MGPDrawInfo::Flags) and the stamps index per-opcode tables, so a
+        // record whose ring header is shorter than its own type - or names no opcode - would be
+        // read past its end here, before DecodeAndApply's pre-gate could refuse it. In an armed
+        // session child the pre-gate therefore runs FIRST: a refused record latches by name and
+        // is declined with nothing stamped (ServerLoopTest's short-record case reads the stamp).
+        // Unarmed it admits everything and the generated gate keeps its death, as before.
+        if (!m_decoder.AdmitOrDecline(record)) return false;
         const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(
             static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
         MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(

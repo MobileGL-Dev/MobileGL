@@ -45,6 +45,7 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
 #include <MG_Remote/Server/PipeApplier.h>
@@ -2701,6 +2702,262 @@ TEST(P5fReverseChannel, CachedReverseCallbacksRejectAMissingSessionOwner) {
         const auto marker = String(names[callback]) + ".session-missing";
         EXPECT_NE(ReadLog().substr(logSize).find(marker), String::npos) << marker;
     }
+}
+#endif
+
+// =====================================================================================
+// PH-1 (3), ID-P7-1: THE LATCH'S DECLINE HALF, IN PROCESS
+// =====================================================================================
+//
+// The latch is ARMED only in a spawn / TCP session child (ServerMain::RunSession), and arming is
+// one-way and process-wide, so every case here arms it in a FORKED CHILD (EXPECT_EXIT) and reports
+// through the child's exit status: 0 is "the claim held", anything else is a bitmask naming each
+// part that did not (the failure message decodes it). This process's own latch is never armed, so
+// every other case in the binary keeps its deaths. PeerLatchTest holds the same checks across a
+// real process boundary; scripts/ci/ph_latch_sites.py's MECHANICS list maps each check to both.
+#if !defined(_WIN32)
+namespace {
+    namespace Remote = MobileGL::MG_Remote;
+
+    bool PollUntil(const std::function<bool()>& predicate, int timeoutMs) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return predicate();
+    }
+
+    // THREE RECORDS UNDER ONE PUBLISH, THE FIRST OF WHICH LATCHES: ObjectDeath with Kind 999, then
+    // ObjectDeath with a null handle (a latching fault of its own), then a legal MemoryBarrier.
+    enum : int {
+        kBatchThreadStayed = 1, // the apply thread was still running 3 s after the latch, no Stop()
+        kBatchDrainedMore = 2,  // a record behind the latched one reached the applier
+        kBatchLatchedMore = 4,  // a second named fault was latched (the null-handle record ran)
+        kBatchWrongFirst = 8,   // the latched line is not the Kind fault's
+        kBatchWatermark = 16,   // appliedSeq moved past the latched record
+    };
+
+    [[noreturn]] void RunALatchedBatchAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        MG_Pipe::MGPHandleOnly kind{};
+        kind.Handle = MG_Pipe::MGPipeHandle{5u, 1u};
+        kind.Kind = 999;
+        const MG_Pipe::MGPHandleOnly nullHandle{};
+        MG_Pipe::MGPMemoryBarrier barrier{};
+        barrier.Bits = 0x2000u;
+        (void)fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ObjectDeath, &kind, sizeof(kind));
+        (void)fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::ObjectDeath, &nullHandle, sizeof(nullHandle));
+        const Uint64 last =
+            fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+        if (last == Codec::kInvalidSeq) ::_exit(66);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        int failed = 0;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kBatchThreadStayed;
+        if (loop.DrainedRecords() != 1) failed |= kBatchDrainedMore;
+        if (Remote::SessionLatchCount() != 1) failed |= kBatchLatchedMore;
+        if (std::strstr(Remote::SessionLatchedLine(), "\"ObjectDeath.Kind\"") == nullptr) failed |= kBatchWrongFirst;
+        if (fixture.session->Consumer().AppliedSeq() != 1) failed |= kBatchWatermark;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // A CONTROL FRAME POSTED AFTER THE LATCH, before the apply thread has looked at it.
+    enum : int {
+        kPostRan = 1,        // the probe ran on the apply thread
+        kPostAnswered = 2,   // the poster was not answered PROTOCOL_MISMATCH
+        kPostDispatched = 4, // ControlFramesDispatched moved
+    };
+
+    [[noreturn]] void PostAfterALatchAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        const Uint64 dispatchedBefore = loop.ControlFramesDispatched();
+        // Latched OFF the apply thread - where RunSession's SurfaceOp arm latches for real - so
+        // the parked thread has not seen it: the latch is not in its park predicate, and the
+        // frame below is what wakes it.
+        (void)Remote::SessionLatch(Remote::MGFatalFamily::ProtocolCorruption,
+                                   "MGPipe: Fatal{ProtocolCorruption, \"unit.control\"} - latched off the "
+                                   "apply thread before the frame was taken");
+        std::atomic<int> ran{0};
+        const MobileGLResult rc = loop.RunProbeOnApplyThreadForTesting(
+            +[](void* user) -> MobileGLResult {
+                static_cast<std::atomic<int>*>(user)->fetch_add(1);
+                return MOBILEGL_OK;
+            },
+            &ran);
+        int failed = 0;
+        if (ran.load() != 0) failed |= kPostRan;
+        if (rc != MOBILEGL_ERR_PROTOCOL_MISMATCH) failed |= kPostAnswered;
+        if (loop.ControlFramesDispatched() != dispatchedBefore) failed |= kPostDispatched;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // TWO FAULTS, ONE LATCH: the funnel's own bookkeeping.
+    enum : int {
+        kSemReturned = 1,   // an armed SessionLatch returned true (or did not return)
+        kSemNotLatched = 2, // SessionLatched() is false after a fault
+        kSemNotFirst = 4,   // the latched family / line is not the FIRST fault's
+        kSemCount = 8,      // SessionLatchCount / SessionFaultCount did not count both
+        kSemFrames = 16,    // not exactly one SessionFault frame, naming the first fault
+    };
+
+    [[noreturn]] void LatchTwiceAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake()) ::_exit(64);
+        std::vector<Uint8> buffer(64 * 1024);
+        const auto pump = [&](int* fatalFrames, bool* namesFirst) {
+            for (;;) {
+                std::uint64_t size = 0;
+                const MobileGLResult rc =
+                    fixture.clientTransport->ReceiveFrame({buffer.data(), buffer.size()}, &size, 100);
+                if (rc == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
+                    buffer.resize(static_cast<SizeT>(size));
+                    continue;
+                }
+                if (rc != MOBILEGL_OK) return;
+                if (fatalFrames == nullptr) continue;
+                const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(buffer.data());
+                if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::Fatal) continue;
+                ++*fatalFrames;
+                const auto* fatal = envelope->msg_as_Fatal();
+                if (fatal != nullptr && fatal->message() != nullptr &&
+                    std::strstr(fatal->message()->c_str(), "unit.first") != nullptr) {
+                    *namesFirst = true;
+                }
+            }
+        };
+        pump(nullptr, nullptr); // what the handshake left for the client (Welcome, caps)
+        const Uint64 faultsBefore = Remote::SessionFaultCount();
+        const bool first = Remote::SessionLatch(Remote::MGFatalFamily::ProtocolCorruption,
+                                                "MGPipe: Fatal{ProtocolCorruption, \"unit.first\"} - the first "
+                                                "named fault (%d)",
+                                                1);
+        const bool second = Remote::SessionLatch(Remote::MGFatalFamily::UnmigratedVerb,
+                                                 "MGPipe: Fatal{UnmigratedVerb, \"unit.second\"} - a later one (%d)", 2);
+        int failed = 0;
+        if (first || second) failed |= kSemReturned;
+        if (!Remote::SessionLatched()) failed |= kSemNotLatched;
+        const char* line = Remote::SessionLatchedLine();
+        if (Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ProtocolCorruption ||
+            std::strstr(line, "unit.first") == nullptr || std::strstr(line, "unit.second") != nullptr) {
+            failed |= kSemNotFirst;
+        }
+        if (Remote::SessionLatchCount() != 2 || Remote::SessionFaultCount() - faultsBefore != 2) failed |= kSemCount;
+        int fatalFrames = 0;
+        bool namesFirst = false;
+        pump(&fatalFrames, &namesFirst);
+        if (fatalFrames != 1 || !namesFirst) failed |= kSemFrames;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // A RECORD SHORTER THAN ITS OWN TYPE, refused before the applier stamps or reads it.
+    enum : int {
+        kShortStamped = 1,    // the Clear verb was stamped from a record the pre-gate refuses
+        kShortWrongFault = 2, // the latched line is not record.Minimum
+        kShortDrained = 4,    // not exactly the setup draw and the short record reached the applier
+    };
+
+    [[noreturn]] void AShortRecordIsLatchedBeforeItIsStampedAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        // A legal draw first: it stamps DrawArrays, so the verb read below is this child's own
+        // doing whatever the parent had stamped before the fork.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        if (!fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range)))
+            ::_exit(65);
+        if (MG_Pipe::gPipeInputs.CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) ::_exit(66);
+        // A Clear encoded legally and then SHORTENED in the ring before it is published - the
+        // raw-record peer driver's move, in process: its header says 8 bytes, a header and no
+        // MGPClear at all.
+        const MG_Pipe::MGPClear clear = WholeFramebufferClear();
+        const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear));
+        if (seq == Codec::kInvalidSeq) ::_exit(67);
+        const Uint64 total = (sizeof(MG_Pipe::MGPWireRecHeader) + sizeof(clear) + 7u) & ~Uint64{7u};
+        auto* ring = static_cast<Uint8*>(fixture.clientSegments.CmdRingBase());
+        const Uint64 mask = fixture.clientSegments.CmdRingCapacity() - 1;
+        auto* header =
+            reinterpret_cast<Transport::RingRecordHeader*>(ring + ((fixture.cmd.LocalHead() - total) & mask));
+        if (header->size != total || header->kind != static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Clear))
+            ::_exit(68);
+        header->size = 8;
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        (void)PollUntil([&] { return !loop.Running(); }, 3000);
+        int failed = 0;
+        if (MG_Pipe::gPipeInputs.CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) failed |= kShortStamped;
+        if (!Remote::SessionLatched() || std::strstr(Remote::SessionLatchedLine(), "\"record.Minimum\"") == nullptr)
+            failed |= kShortWrongFault;
+        if (loop.DrainedRecords() != 2) failed |= kShortDrained;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// DrainRing's two latch checks and the apply thread's own exit, in process. Red with the top
+// check deleted (the exit-path drain applies the null-handle record: bits 2|4|16), with the
+// per-record check deleted (the same drain applies both records behind it: bits 2|4|16), and with
+// ApplyThreadMain's latched break deleted (bit 1: the thread spins on a ring it will not drain).
+TEST(ServerLoopLatchTest, ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop) {
+    EXPECT_EXIT(RunALatchedBatchAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the apply thread was still running 3 s after the latch; 2 = a record behind the "
+           "latched one reached the applier; 4 = a second fault was latched; 8 = the latched line is "
+           "not ObjectDeath.Kind; 16 = appliedSeq moved past the latched record (64+ = setup)";
+}
+
+// ServerLoop::PumpControlRequest's latched arm. A frame taken after the latch - posted before it
+// was seen, or pumped by the exit path - is answered PROTOCOL_MISMATCH and never dispatched. Red
+// with the arm deleted: the probe runs (bits 1|2|4).
+TEST(ServerLoopLatchTest, AControlFrameTakenAfterTheLatchIsAnsweredWithoutRunning) {
+    EXPECT_EXIT(PostAfterALatchAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the probe ran; 2 = the poster was not answered PROTOCOL_MISMATCH; 4 = the dispatch "
+           "counter moved (64+ = setup)";
+}
+
+// FatalFunnel's SessionLatch: armed, every fault returns false and is counted, the FIRST one is the
+// latched cause, and exactly one SessionFault frame - the first fault's - reaches the peer.
+TEST(ServerLoopLatchTest, AnArmedSessionLatchKeepsTheFirstFaultCountsEveryOneAndPublishesOnce) {
+    EXPECT_EXIT(LatchTwiceAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = an armed SessionLatch did not return false; 2 = not latched; 4 = the latched "
+           "family/line is not the first fault's; 8 = not both faults counted; 16 = not exactly one "
+           "SessionFault frame naming the first fault (64+ = setup)";
+}
+
+// And unarmed - inproc, the client, every unit case - it IS SessionFail: the same line, and a death.
+TEST(ServerLoopLatchTest, AnUnarmedSessionLatchDiesWithItsLineLikeSessionFail) {
+    EXPECT_EXIT((void)MobileGL::MG_Remote::SessionLatch(MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption,
+                                                        "MGPipe: Fatal{ProtocolCorruption, \"unit.unarmed\"} - "
+                                                        "no session child armed this process"),
+                ::testing::KilledBySignal(SIGABRT), "unit\\.unarmed");
+}
+
+// PipeApplier::ApplyOne admits the record BEFORE it stamps the verb boundary or computes
+// MGPipeBarriered (which reads payload fields). Red with the admission moved back behind the stamp:
+// the short Clear stamps the Clear verb before DecodeAndApply's pre-gate refuses it (bit 1).
+TEST(ServerLoopLatchTest, ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStampsIt) {
+    EXPECT_EXIT(AShortRecordIsLatchedBeforeItIsStampedAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the Clear verb was stamped from a record shorter than MGPClear; 2 = the latched "
+           "line is not record.Minimum; 4 = not exactly two records reached the applier (64+ = setup)";
 }
 #endif
 

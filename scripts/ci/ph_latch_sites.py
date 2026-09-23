@@ -21,6 +21,12 @@ behind popcount(Mask) == Count, so only the mismatch is reachable).
 
 `--table` prints the map as Markdown. `--self-test` proves the check can go red: it drops each
 covering row in turn and requires its group to turn up unmapped.
+
+THE DECLINE-AND-CLOSE HALF IS NOT A SITE, so it is not a row: MECHANICS below names each check
+that makes a latched session decline the rest of its work and close (DrainRing's two latch checks,
+the apply thread's own exit, the control pump's and SurfaceOpCodec's latched answers, RunSession's
+sliced wait, the pre-gate ahead of the applier's stamp, SessionLatch's own bookkeeping), the code
+that IS the check, and the cases that go red without it. The script requires both to exist.
 """
 import argparse
 import re
@@ -62,6 +68,63 @@ UNREACHABLE = [
     ("ServerLoop.cpp", '"SurfaceOp.kind"',
      "SurfaceOpCodec refuses an unknown wire kind (SurfaceOpUnknownKind) before the dispatch"),
 ]
+
+REMOTE = ROOT / "MobileGL" / "MG_Remote"
+WIRE_TESTS = ROOT / "MobileGL" / "MG_Test" / "Wire"
+
+# (source, what the check does, a regex that IS the check, [(test file, case name)]) - each case goes
+# red with the check deleted (the red-once is recorded in the package's NOTE).
+MECHANICS = [
+    (REMOTE / "Server" / "ServerLoop.cpp", "DrainRing: a drain ENTERED latched pops nothing (the exit-path drain)",
+     r"Uint64 ServerLoop::DrainRing\(\) \{.*?if \(SessionLatched\(\)\) return 0;",
+     [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop"),
+      ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies")]),
+    (REMOTE / "Server" / "ServerLoop.cpp", "DrainRing: a record that latched is the last one its batch applies",
+     r"\+\+applied;\s*if \(SessionLatched\(\)\) break;",
+     [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop"),
+      ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies")]),
+    (REMOTE / "Server" / "ServerLoop.cpp", "ApplyThreadMain: the apply thread leaves its loop on the latch, no Stop()",
+     r"if \(SessionLatched\(\)\) \{\s*MGLOG_E\(\"MG_Remote server: mgl-srv-apply leaves its loop",
+     [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop")]),
+    (REMOTE / "Server" / "ServerLoop.cpp", "PumpControlRequest: a frame taken after the latch is answered, not run",
+     r"if \(SessionLatched\(\)\) \{\s*m_controlResult = MOBILEGL_ERR_PROTOCOL_MISMATCH;",
+     [("ServerLoopTest.cpp", "AControlFrameTakenAfterTheLatchIsAnsweredWithoutRunning")]),
+    (REMOTE / "Protocol" / "SurfaceOpCodec.cpp", "ServerApplyWireSurfaceOp: a latched session declines a well-formed op",
+     r"if \(SessionLatched\(\)\) return MOBILEGL_ERR_PROTOCOL_MISMATCH;",
+     [("SurfaceControlFrameTest.cpp", "ALatchedSessionAnswersAWellFormedSurfaceOpWithoutRunningIt")]),
+    (REMOTE / "Server" / "ServerMain.cpp", "RunSession: the control wait is sliced, so a latch closes a silent peer's session",
+     r"ReceiveFrame\(\{buffer\.data\(\), buffer\.size\(\)\}, &size, kControlSliceMs\)",
+     [("PeerLatchTest.cpp", "ALatchOnTheApplyThreadClosesTheSessionWhileAUnixPeerHoldsItOpen"),
+      ("PeerLatchTest.cpp", "ALatchOnTheApplyThreadClosesTheSessionWhileATcpPeerHoldsItOpen")]),
+    (REMOTE / "Server" / "PipeApplier.cpp", "ApplyOne: the pre-gate runs before the verb stamp and the barrier read",
+     r"if \(!m_decoder\.AdmitOrDecline\(record\)\) return false;\s*const Bool wireSaysBarriered",
+     [("ServerLoopTest.cpp", "ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStampsIt")]),
+    (REMOTE / "FatalFunnel.cpp", "SessionLatch: first fault wins, every fault counted, one SessionFault; unarmed it dies",
+     r"if \(!g_latchArmed\.load\(std::memory_order_acquire\)\) \{\s*SessionFail\(",
+     [("ServerLoopTest.cpp", "AnArmedSessionLatchKeepsTheFirstFaultCountsEveryOneAndPublishesOnce"),
+      ("ServerLoopTest.cpp", "AnUnarmedSessionLatchDiesWithItsLineLikeSessionFail")]),
+]
+
+
+def mechanics_failures():
+    failures = []
+    for source, what, check, cases in MECHANICS:
+        if not re.search(check, source.read_text(encoding="utf-8"), re.DOTALL):
+            failures.append(f"MECHANICS: {source.name} no longer has the check for `{what}`")
+        for test_file, case in cases:
+            text = (WIRE_TESTS / test_file).read_text(encoding="utf-8")
+            if not re.search(r"\bTEST(?:_F|_P)?\(\s*\w+\s*,\s*" + case + r"\s*\)", text):
+                failures.append(f"MECHANICS: {test_file} has no case {case} (the control for `{what}`)")
+    return failures
+
+
+def print_mechanics():
+    print()
+    print("| decline / close check | source | negative control(s) |")
+    print("|---|---|---|")
+    for source, what, _check, cases in MECHANICS:
+        print(f"| {what} | {source.name} | " + ", ".join(f"`{f.split('.')[0]}.{c}`" for f, c in cases) + " |")
+
 
 LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])(SessionLatch|WireProtocolLatchAt|WireProtocolLatch)\s*\(")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
@@ -330,7 +393,8 @@ def main():
     mapping = build_map(sites, table)
     if args.table:
         print_table(mapping, table)
-    failures = []
+        print_mechanics()
+    failures = mechanics_failures()
     if args.self_test:
         failure = self_test(sites, table)
         if failure:
@@ -349,8 +413,9 @@ def main():
     argued = sum(1 for m in mapping if not m["rows"] and m["unreachable"])
     print(f"ph latch sites: {len(sites)} latch calls = {len(mapping)} distinct lines in {len(FILES)} files; "
           f"{covered} covered by PeerLatchTest rows ({len(table)} rows), {argued} argued unreachable, "
-          f"{len(unmapped(mapping))} unmapped" + ("; self-test red on every drop" if args.self_test and not
-                                                     any("self-test" in f for f in failures) else ""))
+          f"{len(unmapped(mapping))} unmapped; {len(MECHANICS)} decline/close checks, each with its case(s)" +
+          ("; self-test red on every drop" if args.self_test and not
+           any("self-test" in f for f in failures) else ""))
     for message in failures:
         print(f"::error::{message}", file=sys.stderr)
     return 1 if failures else 0
