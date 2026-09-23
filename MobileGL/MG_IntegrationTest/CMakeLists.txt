@@ -81,6 +81,9 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp
+    # P7 gate 5 (g5-readback): readbacks larger than one reply slot. Ordinary GL cases, so the
+    # monolith arms run them too - that is the parity half of the split registrations below.
+    Scenarios/BandedReadbackScenario.cpp
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClientVertexArrayScenario.cpp
@@ -2436,6 +2439,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # a transport every one of those pairs is also a create/destroy record round trip, so this is
     # the only entry in the readback block that says anything about the OBJECT lifetime half.
     mgl_itest_register_split_arms("FramebufferChurnScenario.*" "")
+    # P7 gate 5 (g5-readback): a glReadPixels larger than one SEG_REPLY slot is banded by the
+    # client instead of Fatal{ReplyTooLarge}. Exactly 2 MiB (the CTS renderbuffers_storage shape),
+    # 2 MiB + one row, more than the whole 16 MiB segment, a non-neutral pack state, a pack
+    # buffer, depth and packed depth/stencil, and glGetTexImage's windowed twin. The Magma arms of
+    # the same cases are the `Band.` block after the Fm lane below.
+    mgl_itest_register_split_arms("BandedReadbackScenario.*" "")
 
     # DepthStencilReadbackMatrixScenario GETS ITS OWN BLOCK, because it needs a variable the
     # registration macro cannot carry: MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1.
@@ -3371,6 +3380,39 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-copyinplace${mglItestArmLogTag}-${inPlaceCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
+# P7 gate 5 (g5-readback): BANDED READBACK ON MAGMA, all three arms, GATED. The flavour is the
+# one the device CTS window ran KHR-GL46 under (role-split state, strict errors, run-ahead), so the
+# host lane measures the configuration that aborted on the Redmi with
+# Fatal{ReplyTooLarge, "ReadPixels 256x512 0x1908/0x1406 2097152 > 2097136"}. One entry per case
+# for a private log each - two processes append to it on the spawn arm.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    set(MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1" "MOBILEGL_IPC_RUN_AHEAD=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})  # the ICD pin, see the Fm lane above
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaBandEnvironment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(bandCase RenderbufferReadOfExactlyTwoMiBIsBandedNotRefused
+                         TwoMiBPlusOneRowIsBanded
+                         AReadLargerThanTheWholeReplySegmentIsBanded
+                         BandedReadsHonourPackAlignmentRowLengthAndSkips
+                         BandedReadIntoAPixelPackBufferKeepsItsPadding
+                         BandedDepthAndDepthStencilReads
+                         GetTexImageLargerThanAReplySlotIsWindowed)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Band."
+                TEST_FILTER "BandedReadbackScenario.${bandCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/g5-band${mglItestArmLogTag}-${bandCase}.log")
         endforeach()
     endforeach()
 endif()
