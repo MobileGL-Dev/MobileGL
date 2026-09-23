@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """60-reduce.py <stamp> [--logroot DIR] [--tools TREE] [--json OUT]
+   60-reduce.py --check-block RUN_DIR REPORT_JSON
 
 Device window 2 verdicts, read from the window's own output directory (<logroot>/<stamp>).
 
@@ -18,22 +19,36 @@ GATE 3 (CONTRACT-P7 7.2), per case of gate3/cases.txt:
   * OpenRA: 1.000000 and mismatch 0 on every repeat of both split arms AND on monolith;
   * cross-arm picture identity (inproc vs spawn vs monolith) is REPORTED per case and a mismatch
     prints a WARN line - information, not a gate (ruling: integrator 2026-09-23);
-  * inproc-ra0 (RUN_AHEAD=0): recorded (ssim, sha, run-ahead=0 proof), never gating.
+  * inproc-ra0 (RUN_AHEAD=0): recorded (ssim, sha, run-ahead=0 proof), never gating;
+  * a reading that passes but is not the gate's - a denominator other than 36, or a session that
+    is not reboot-clean - is GATE3 PASS-SUBSET / PASS-NOT-REBOOT-CLEAN, never PASS.
 BSL STATS: per arm, maps-line / VmRSS / VmHWM peaks and the wbuf[] gauges (information).
 CTS AFTER (CONTRACT-P7 7.3), per block vs device-window-1/CTS-base/report-<block>.json, over the
   cases the AFTER run was asked to run (so a --limit subset is compared like for like):
   * all five blocks (shader-image ssbo dsa texture packed-pixels) are REQUIRED, each with a
-    finished run (cts/runs/<block>/.done) and a non-empty cts/report-<block>.json; a missing one
-    makes CTS INCOMPLETE. The UBO block (GTF-GL46 uniform_buffer_object) is recorded as
-    'unrun (not in this glcts)': the device glcts carries no GTF module (ID-P7-16);
+    finished run (cts/runs/<block>/.done), a non-empty cts/report-<block>.json with results, and
+    a readable, non-empty caselist (runs/<block>/caselist.txt, the copy 50-cts-after.sh keeps;
+    else the file caselist.path names); a missing one makes the block MISSING and CTS INCOMPLETE -
+    a block of 0 cases is never a reading. The UBO block (GTF-GL46 uniform_buffer_object) is
+    recorded as 'unrun (not in this glcts)': the device glcts carries no GTF module (ID-P7-16);
   * rate = Pass / (Pass + Fail), the contract formula: NotSupported, the warnings and the crashes
-    are NOT in the denominator; gate: delta >= -0.5 pp on this rate;
+    are NOT in the denominator; gate: delta >= -0.5 pp on this rate. Both rates are taken over the
+    cases that have a BASE and an AFTER result (a case BASE lacks prints a WARN, stays out of both
+    rates and still counts for new crashes). AFTER without a single Pass/Fail where BASE has some
+    is FAIL (the rate cannot be formed: every BASE Pass is gone); BASE without one is INCOMPLETE;
   * crashes (Crash/Timeout/InternalError/ResourceError/DeviceHang/Incomplete, plus hung.txt) are
     counted in their own column and are non-Pass; one that BASE does not already have is a NEW
     crash, a hard red of its own (a Fail that became a Crash is a new crash);
-  * information only, never gating: the pre-ruling rate Pass / (results - NotSupported), delta.
-Exit status: 0 only when GATE 3 and CTS are both PASS; 1 otherwise (a section that did not run,
-is INCOMPLETE / INVALID-SESSION, or FAILs); 2 on bad input.
+  * a block whose cases are not the tools tree's full p7-<block>-gl46.txt (a --limit run) makes an
+    all-PASS CTS reading 'PASS-SUBSET', never PASS;
+  * information only, never gating: the pre-ruling rate Pass / (results - NotSupported) of BASE
+    and AFTER and its delta, and a WARN when the NotSupported count moved.
+Exit status: 0 only when GATE 3 is PASS (36/36, reboot-clean, one session) and CTS is PASS (five
+full blocks); 1 otherwise (a section that did not run, a PASS-SUBSET / PASS-NOT-REBOOT-CLEAN
+reading, INCOMPLETE / INVALID-SESSION, or FAIL); 2 on bad input.
+--check-block RUN_DIR REPORT_JSON: the completeness test 50-cts-after.sh applies before it writes
+a block's .done (the same code the verdict uses): exit 0 when the report has a result for every
+non-skipped case of the run's caselist and unrun.txt is empty, 3 when not (the reason is printed).
 """
 import argparse
 import hashlib
@@ -45,6 +60,7 @@ from collections import Counter
 from pathlib import Path
 
 TOL = 0.0005
+GATE3_DENOMINATOR = 36
 CTS_TOL_PP = 0.5
 HARD = ("Crash", "Timeout", "InternalError", "ResourceError", "DeviceHang", "Incomplete")
 SPLIT_ARMS = ("inproc", "spawn")
@@ -276,16 +292,29 @@ def gate3(out, ca):
         entry["reasons"] = incomplete + reasons
         results.append(entry)
     verdicts = [e["verdict"] for e in results]
+    # A reading that is not the gate's own (CONTRACT-P7 7.2: the 36-case denominator, one
+    # reboot-clean session) may pass, but never as PASS: exit 0 is reserved for the gate verdict.
+    not_a_gate = []
+    if len(cases) != GATE3_DENOMINATOR:
+        not_a_gate.append("denominator is %d, not the gate's %d: a subset run is NOT a gate verdict"
+                          % (len(cases), GATE3_DENOMINATOR))
+    if not session["reboot_clean"].startswith("reboot-clean:"):
+        not_a_gate.append("session not reboot-clean: NOT a gate verdict")
     if not session["valid"]:
         overall = "INVALID-SESSION"
     elif verdicts and all(v == "PASS" for v in verdicts):
         overall = "PASS"
+        if len(cases) != GATE3_DENOMINATOR:
+            overall = "PASS-SUBSET"
+        elif not_a_gate:
+            overall = "PASS-NOT-REBOOT-CLEAN"
     elif "FAIL" in verdicts:
         overall = "FAIL"
     else:
         overall = "INCOMPLETE"
     return {"cases": results, "excluded": excluded, "repeat": repeat, "denominator": len(cases),
-            "overall": overall, "arms_present": arms_present, "session": session, "identity": identity}
+            "overall": overall, "not_a_gate": not_a_gate, "arms_present": arms_present,
+            "session": session, "identity": identity}
 
 
 def print_gate3(g3):
@@ -334,12 +363,7 @@ def print_gate3(g3):
     print("-- excluded (red on monolith, CONTRACT-P7 7.1): " + (", ".join(g3["excluded"]) or "none"))
     n = len(g3["cases"])
     npass = sum(e["verdict"] == "PASS" for e in g3["cases"])
-    notes = []
-    if n != 36:
-        notes.append("denominator is %d, not the gate's 36: a subset run is NOT a gate verdict" % n)
-    if not s["reboot_clean"].startswith("reboot-clean:"):
-        notes.append("session not reboot-clean: NOT a gate verdict")
-    print("GATE3 %s: %d/%d cases PASS%s" % (g3["overall"], npass, n, "".join("  (%s)" % x for x in notes)))
+    print("GATE3 %s: %d/%d cases PASS%s" % (g3["overall"], npass, n, "".join("  (%s)" % x for x in g3["not_a_gate"])))
 
 
 # ------------------------------------------------------------------------------------------------
@@ -411,7 +435,49 @@ def load_results(path):
     return results, None
 
 
-def cts_block(c, b, base_dir):
+def caselist_of(run):
+    """-> (cases, source, None) for the cases a block's AFTER run was asked to run, or (None,
+    source, why) when that cannot be read. 50-cts-after.sh keeps a copy (runs/<b>/caselist.txt)
+    beside the path it ran (caselist.path), so the window's output reduces on its own after the
+    build tree that path names is gone; a named list that is gone or empty is NOT replaced by
+    the report's own cases (that would make a block of 0 - or of only what ran - look complete)."""
+    copy = run / "caselist.txt"
+    if copy.is_file():
+        src = copy
+    elif (run / "caselist.path").is_file():
+        src = Path((run / "caselist.path").read_text(encoding="utf-8", errors="replace").strip() or "(empty caselist.path)")
+    else:
+        return None, None, ("no runs/%s/caselist.txt or caselist.path: which cases the run was asked "
+                            "to run is unknown" % run.name)
+    if not src.is_file():
+        return None, src, "the caselist the run used is gone (%s) and runs/%s/caselist.txt holds no copy" % (src, run.name)
+    cases = read_list(src)
+    if not cases:
+        return None, src, "the caselist the run used (%s) holds no case" % src
+    return cases, src, None
+
+
+def block_scope(run, after):
+    """The one completeness test of a finished block (the verdict below, and 50-cts-after.sh through
+    --check-block before it writes .done). -> (universe, source, missing, incomplete): universe =
+    the caselist minus run_cts's skipped.txt; `missing` says why there is no reading at all,
+    `incomplete` why the reading lacks cases."""
+    cases, src, why = caselist_of(run)
+    if why:
+        return [], src, [why], []
+    skipped = set(read_list(run / "skipped.txt"))
+    universe = [x for x in cases if x not in skipped]
+    if not universe:
+        return [], src, ["every case of %s is skipped: a block of 0 cases is no reading" % src], []
+    unrun = read_list(run / "unrun.txt")
+    without = [x for x in universe if x not in after]
+    incomplete = []
+    if unrun or without:
+        incomplete.append("%d case(s) without an AFTER result (unrun.txt %d)" % (len(without), len(unrun)))
+    return universe, src, [], incomplete
+
+
+def cts_block(c, b, base_dir, canon_dir):
     run = c / "runs" / b
     if not c.is_dir():
         return {"block": b, "verdict": "MISSING", "reasons": ["no cts/ directory: 50-cts-after.sh did not run"]}
@@ -420,18 +486,17 @@ def cts_block(c, b, base_dir):
     after, why = load_results(c / ("report-%s.json" % b))
     if why:
         return {"block": b, "verdict": "MISSING", "reasons": [why]}
+    universe, src, missing, incomplete = block_scope(run, after)
+    if missing:
+        return {"block": b, "verdict": "MISSING", "reasons": missing}
     base, why = load_results(base_dir / ("report-%s.json" % b))
     if why:
         return {"block": b, "verdict": "NO-BASE", "reasons": ["$BASE: " + why + " in " + str(base_dir)]}
-    caselist = Path((run / "caselist.path").read_text().strip()) if (run / "caselist.path").is_file() else None
-    universe = read_list(caselist) if caselist else sorted(after)
-    skipped = set(read_list(run / "skipped.txt"))
-    universe = [x for x in universe if x not in skipped]
     unrun = read_list(run / "unrun.txt")
     hung = read_list(run / "hung.txt")
-    a_st = [after[x] for x in universe if x in after]
-    b_st = [base[x] for x in universe if x in base]
-    ra, rb = rate(a_st), rate(b_st)
+    # Like for like: both rates over the cases that have a BASE and an AFTER result.
+    both = [x for x in universe if x in after and x in base]
+    ra, rb = rate([after[x] for x in both]), rate([base[x] for x in both])
     delta = None if ra["rate"] is None or rb["rate"] is None else (ra["rate"] - rb["rate"]) * 100.0
     delta_results = (None if ra["results_rate"] is None or rb["results_rate"] is None
                      else (ra["results_rate"] - rb["results_rate"]) * 100.0)
@@ -440,35 +505,47 @@ def cts_block(c, b, base_dir):
     regress = sorted(x for x in universe if base.get(x) == "Pass" and after.get(x) not in (None, "Pass"))
     fixed = sorted(x for x in universe if base.get(x) not in (None, "Pass") and after.get(x) == "Pass")
     missing_base = sorted(x for x in universe if x not in base)
-    reasons = []
-    verdict = "PASS"
-    if unrun or len(a_st) < len(universe):
-        verdict = "INCOMPLETE"
-        reasons.append("%d case(s) without an AFTER result (unrun.txt %d)" % (len(universe) - len(a_st), len(unrun)))
+    fail, notes, warnings = [], [], []
     if new_crash:
-        verdict = "FAIL"
-        reasons.append("%d NEW crash(es)" % len(new_crash))
+        fail.append("%d NEW crash(es)" % len(new_crash))
+    if rb["rate"] is None:
+        incomplete.append("$BASE has no Pass/Fail over this block's %d case(s): no contract rate to compare against"
+                          % len(both))
+    elif ra["rate"] is None:
+        fail.append("AFTER has no Pass/Fail result (NS %d, W %d, X %d of %d): the contract rate cannot be formed "
+                    "where $BASE's is %.3f%% - every $BASE Pass is lost" % (
+                        ra["ns"], ra["warn"], ra["crash"], ra["results"], 100 * rb["rate"]))
     if delta is not None and delta < -CTS_TOL_PP:
-        verdict = "FAIL"
-        reasons.append("delta %.3f pp < -%.1f pp (Pass/(Pass+Fail))" % (delta, CTS_TOL_PP))
+        fail.append("delta %.3f pp < -%.1f pp (Pass/(Pass+Fail))" % (delta, CTS_TOL_PP))
     if delta is not None and delta > CTS_TOL_PP:
-        reasons.append("note: AFTER is %.3f pp ABOVE BASE (not a regression; review the fixed list)" % delta)
-    return {"block": b, "cases": len(universe), "after": ra, "base": rb, "delta_pp": delta,
-            "delta_pp_results_info": delta_results, "new_crash": new_crash, "regressed": regress,
-            "fixed": fixed, "missing_in_base": missing_base, "unrun": len(unrun), "hung": hung,
-            "verdict": verdict, "reasons": reasons, "subset": bool(caselist and "first" in caselist.name)}
+        notes.append("note: AFTER is %.3f pp ABOVE BASE (not a regression; review the fixed list)" % delta)
+    if missing_base:
+        warnings.append("%d case(s) have no $BASE result (e.g. %s): left out of both rates; a crash among them "
+                        "still counts as NEW" % (len(missing_base), missing_base[0]))
+    if ra["ns"] != rb["ns"]:
+        warnings.append("NotSupported $BASE %d -> AFTER %d (not in the contract rate; a Pass that became NS is in "
+                        "the Pass->not list)" % (rb["ns"], ra["ns"]))
+    canonical = canon_dir / ("p7-%s-gl46.txt" % b)
+    subset = set(read_list(src)) != set(read_list(canonical))
+    verdict = "FAIL" if fail else ("INCOMPLETE" if incomplete else "PASS")
+    return {"block": b, "cases": len(universe), "compared": len(both), "caselist": str(src),
+            "after": ra, "base": rb, "delta_pp": delta, "delta_pp_results_info": delta_results,
+            "new_crash": new_crash, "regressed": regress, "fixed": fixed, "missing_in_base": missing_base,
+            "unrun": len(unrun), "hung": hung, "verdict": verdict, "reasons": incomplete + fail + notes,
+            "warnings": warnings, "subset": subset}
 
 
-def cts(out, base_dir):
+def cts(out, base_dir, canon_dir):
     c = out / "cts"
-    blocks = [cts_block(c, b, base_dir) for b in CTS_BLOCKS]
+    blocks = [cts_block(c, b, base_dir, canon_dir) for b in CTS_BLOCKS]
     extra = sorted(p.stem[len("report-"):] for p in c.glob("report-*.json")
                    if p.stem[len("report-"):] not in CTS_BLOCKS) if c.is_dir() else []
     verdicts = [b["verdict"] for b in blocks]
     if "FAIL" in verdicts:
         overall = "FAIL"
     elif all(v == "PASS" for v in verdicts):
-        overall = "PASS"
+        # Passing on a --limit subset (or on a list that is not the tools tree's) is not gate 5.
+        overall = "PASS-SUBSET" if any(b.get("subset") for b in blocks) else "PASS"
     else:
         overall = "INCOMPLETE"
     return {"blocks": blocks, "overall": overall, "ubo": dict(UBO_BLOCK), "ignored_reports": extra,
@@ -479,30 +556,34 @@ def print_cts(c):
     print("== CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==")
     print("gate (CONTRACT-P7 7.3): rate = Pass/(Pass+Fail) [NS, warnings W and crashes X are not in the denominator];")
     print("  per block delta >= -%.1f pp and 0 NEW crash; all five blocks required. 'info' = the pre-ruling" % CTS_TOL_PP)
-    print("  Pass/(results-NS) delta, printed for comparison only, never gating.")
+    print("  Pass/(results-NS) delta (its rates on each block's 'info' line), for comparison only, never gating.")
     print("%-14s %6s  %-20s %8s  %-20s %8s  %9s  %9s  %5s  %4s  %5s  %s" % (
         "block", "cases", "BASE P/F/NS/W/X", "rate", "AFTER P/F/NS/W/X", "rate", "delta pp", "(info)",
         "crash", "regr", "fixed", "verdict"))
+
+    def counts(r):
+        return "%d/%d/%d/%d/%d" % (r["pass"], r["fail"], r["ns"], r["warn"], r["crash"])
+
+    def pct(v):
+        return "%.3f%%" % (100 * v) if v is not None else "n/a"
+
+    def pp(v):
+        return "%+.3f" % v if v is not None else "n/a"
     for b in c["blocks"]:
         if "after" not in b:
             print("%-14s  %s: %s" % (b["block"], b["verdict"], "; ".join(b["reasons"])))
             continue
-
-        def counts(r):
-            return "%d/%d/%d/%d/%d" % (r["pass"], r["fail"], r["ns"], r["warn"], r["crash"])
-
-        def pct(v):
-            return "%.3f%%" % (100 * v) if v is not None else "n/a"
-
-        def pp(v):
-            return "%+.3f" % v if v is not None else "n/a"
         print("%-14s %6d  %-20s %8s  %-20s %8s  %9s  %9s  %5d  %4d  %5d  %s%s" % (
             b["block"], b["cases"], counts(b["base"]), pct(b["base"]["rate"]), counts(b["after"]),
             pct(b["after"]["rate"]), pp(b["delta_pp"]), "(%s)" % pp(b["delta_pp_results_info"]),
             len(b["new_crash"]), len(b["regressed"]), len(b["fixed"]), b["verdict"],
             " (SUBSET)" if b["subset"] else ""))
+        print("    info  pre-ruling Pass/(results-NS): BASE %s  AFTER %s  delta %s pp (not gating)" % (
+            pct(b["base"]["results_rate"]), pct(b["after"]["results_rate"]), pp(b["delta_pp_results_info"])))
         for reason in b["reasons"]:
             print("    ! " + reason)
+        for warning in b["warnings"]:
+            print("WARN %s: %s" % (b["block"], warning))
         for x in b["new_crash"]:
             print("    NEW CRASH  " + x)
         for x in b["regressed"][:40]:
@@ -520,7 +601,8 @@ def print_cts(c):
         tail += "  (INCOMPLETE: %s)" % ", ".join("%s %s" % (b["block"], b["verdict"]) for b in c["blocks"]
                                                   if b["block"] in c["incomplete_blocks"])
     if any(b.get("subset") for b in c["blocks"]):
-        tail += "  (SUBSET run: not a gate verdict)"
+        tail += "  (SUBSET run: %s not the tools tree's full caselist; not a gate verdict)" % ", ".join(
+            b["block"] for b in c["blocks"] if b.get("subset"))
     print("CTS %s%s" % (c["overall"], tail))
 
 
@@ -542,13 +624,34 @@ def print_timing(out):
             print("  gate3 %-11s %2d case invocations, mean %.0fs, total %ds" % (arm, len(v), sum(v) / len(v), sum(v)))
 
 
+def check_block(run, report):
+    """--check-block: 0 when the block is a complete AFTER reading, 3 when not (50-cts-after.sh)."""
+    after, why = load_results(report)
+    if why:
+        print("INCOMPLETE: " + why)
+        return 3
+    universe, src, missing, incomplete = block_scope(run, after)
+    if missing or incomplete:
+        print("INCOMPLETE: " + "; ".join(missing + incomplete))
+        return 3
+    print("complete: %d/%d case(s) of %s have a result" % (len(universe), len(universe), src))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("stamp")
+    ap.add_argument("stamp", nargs="?")
     ap.add_argument("--logroot", default=os.environ.get("W2_LOGROOT", str(Path.home() / "w7/logs/p7w7")))
     ap.add_argument("--tools", help="MobileGL tree holding compare_actuals.py and CTS-base (default: build.env)")
     ap.add_argument("--json", help="write every section as JSON here (default <out>/verdict.json)")
+    ap.add_argument("--check-block", nargs=2, metavar=("RUN_DIR", "REPORT_JSON"),
+                    help="only test one block's completeness (50-cts-after.sh, before it writes .done)")
     args = ap.parse_args()
+    if args.check_block:
+        return check_block(Path(args.check_block[0]), Path(args.check_block[1]))
+    if not args.stamp:
+        ap.print_usage(sys.stderr)
+        return 2
     out = Path(args.logroot) / args.stamp
     if not out.is_dir():
         print("no such window output: %s" % out, file=sys.stderr)
@@ -558,6 +661,7 @@ def main():
         print("no tools tree (--tools)", file=sys.stderr)
         return 2
     sys.path.insert(0, str(Path(tools) / "tools" / "trace_replay"))
+    sys.dont_write_bytecode = True  # the tools tree is only read (it may be the read-only integration tree)
     import compare_actuals as ca
     base_dir = Path(tools) / "docs/Disaggregated/notes/p7/device-window-1/CTS-base"
     report = {"stamp": args.stamp, "out": str(out)}
@@ -573,7 +677,7 @@ def main():
     if b:
         print_bsl(b); print()
         report["bsl"] = b
-    c = cts(out, base_dir)
+    c = cts(out, base_dir, Path(tools) / "tools/cts/caselists")
     print_cts(c); print()
     report["cts"] = c
     print_timing(out)

@@ -1,11 +1,15 @@
 # 60-reduce.py (contract formula, p7/devprep w2-reducer) on ~/w7/logs/devprep/w2/pre-14e1c8b9 - CTS AFTER dry run of
 # pipe head 14e1c8b9's arm64 lib; that run had no gate 3 (NOT-RUN below is expected). Pre-ruling reading: verdict.txt.
+== GATE 3 ==
+GATE3 NOT-RUN (no gate3/cases.txt)
+
 == CTS AFTER (inproc x DirectVulkan) vs BASE (monolith x DirectVulkan, p7w1) ==
 gate (CONTRACT-P7 7.3): rate = Pass/(Pass+Fail) [NS, warnings W and crashes X are not in the denominator];
   per block delta >= -0.5 pp and 0 NEW crash; all five blocks required. 'info' = the pre-ruling
-  Pass/(results-NS) delta, printed for comparison only, never gating.
+  Pass/(results-NS) delta (its rates on each block's 'info' line), for comparison only, never gating.
 block           cases  BASE P/F/NS/W/X          rate  AFTER P/F/NS/W/X         rate   delta pp     (info)  crash  regr  fixed  verdict
 shader-image      125  63/6/56/0/0           91.304%  65/3/56/0/1           95.588%     +4.284   (+2.899)      1     1      3  FAIL
+    info  pre-ruling Pass/(results-NS): BASE 91.304%  AFTER 94.203%  delta +2.899 pp (not gating)
     ! 1 NEW crash(es)
     ! note: AFTER is 4.284 pp ABOVE BASE (not a regression; review the fixed list)
     NEW CRASH  KHR-GL46.shader_image_load_store.incomplete_textures
@@ -14,12 +18,15 @@ shader-image      125  63/6/56/0/0           91.304%  65/3/56/0/1           95.5
     not->Pass  KHR-GL46.shader_image_load_store.advanced-sync-textureUpdate
     not->Pass  KHR-GL46.shader_image_load_store.non-layered_binding
 ssbo              124  124/0/0/0/0          100.000%  124/0/0/0/0          100.000%     +0.000   (+0.000)      0     0      0  PASS
+    info  pre-ruling Pass/(results-NS): BASE 100.000%  AFTER 100.000%  delta +0.000 pp (not gating)
 dsa               371  368/2/0/1/0           99.459%  366/3/0/1/1           99.187%     -0.272   (-0.539)      1     2      0  FAIL
+    info  pre-ruling Pass/(results-NS): BASE 99.191%  AFTER 98.652%  delta -0.539 pp (not gating)
     ! 1 NEW crash(es)
     NEW CRASH  KHR-GL46.direct_state_access.renderbuffers_storage
     Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage
     Pass->not  KHR-GL46.direct_state_access.renderbuffers_storage_multisample
 texture          1054  815/18/221/0/0        97.839%  823/10/221/0/0        98.800%     +0.960   (+0.960)      0     1      9  PASS
+    info  pre-ruling Pass/(results-NS): BASE 97.839%  AFTER 98.800%  delta +0.960 pp (not gating)
     ! note: AFTER is 0.960 pp ABOVE BASE (not a regression; review the fixed list)
     Pass->not  KHR-GL46.texture_border_clamp.Texture2DArrayCompressed
     not->Pass  KHR-GL46.texture_barrier.disjoint-texels
@@ -32,6 +39,7 @@ texture          1054  815/18/221/0/0        97.839%  823/10/221/0/0        98.8
     not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_7
     not->Pass  KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_8
 packed-pixels    4732  4732/0/0/0/0         100.000%  4732/0/0/0/0         100.000%     +0.000   (+0.000)      0     0      0  PASS
+    info  pre-ruling Pass/(results-NS): BASE 100.000%  AFTER 100.000%  delta +0.000 pp (not gating)
 ubo             unrun (not in this glcts): the device glcts has no GTF module (ID-P7-16); recorded, not gated  (GTF-GL46.gtf31.GL3Tests.uniform_buffer_object*)
 CTS FAIL
 
@@ -48,3 +56,4 @@ CTS FAIL
   restore                11s  2026-09-23T10:08:36 -> 2026-09-23T10:08:47  
 
 WINDOW2 GATE3 NOT-RUN | CTS FAIL -> exit 1
+reduce-rc=1
