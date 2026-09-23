@@ -75,6 +75,17 @@ namespace {
         return handle;
     }
 
+    // PH-4: resource_subdata lands only in a level a respecify DECLARED - the emitter's
+    // glTexImage*D always sends one before the bytes. The production cases below used to adopt
+    // into a level nothing had declared, which PH-4 refuses by name
+    // (Fatal{ProtocolCorruption, "StagedTextureStore.LevelExtent"}), so each now declares level 0
+    // of the Texture2D upload target at its 4x4x1 extent through the real applier entry point.
+    void DeclareTex2DLevel0(const MG_Pipe::MGPResourceDesc& desc, Uint32 width, Uint32 height) {
+        const MG_Pipe::MGPRespecifiedLevel level = MG_Pipe::MGPipeMakeRespecifiedLevel(
+            MG_Pipe::MGPipePackSubDataTarget(desc.Target, kTex2DTarget), 0, width, height, 1);
+        ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, &level));
+    }
+
 } // namespace
 
 // =====================================================================================
@@ -556,6 +567,54 @@ TEST(StagedTextureStoreTest, ALevelWithAPieceMissingIsRefusedAsAWholeLevelReadBy
 }
 #endif
 
+// F2 LANE REPAIR, R8: TextureInternalFormat::R8 is enumerator 0, and PH-4's first draft read
+// `InternalFormat == 0` as "never declared" - so an R8 level a respecify HAD declared refused its
+// own upload as `StagedTextureStore.LevelExtent`. Red-once: put the `== 0` test back and the run
+// below dies by that name.
+TEST(StagedTextureStoreTest, AnR8LevelIsDeclaredAndTakesItsUpload) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(15, 1));
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{4, 4, 1},
+                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                           static_cast<Uint32>(TextureInternalFormat::R8));
+    ASSERT_EQ(store.LevelDeclaredByteBound(key, kTex2DTarget, 0), 16u) << "4x4 texels of one byte";
+    Vector<Uint8> texels(16, 0x3C);
+    store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, texels.data(), texels.size());
+    EXPECT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
+    EXPECT_EQ(store.RequireLevelBytes(key, kTex2DTarget, 0, "unit_r8")[15], 0x3C);
+}
+
+// F2 LANE REPAIR, BYTELESS DECLARATIONS: a level whose format has no uncompressed size here
+// (TextureInternalFormat::Unknown - what the TextureView / TextureViewAlias / TextureUploadShape
+// split lanes declare) and an EMPTY level (glTexImage*D with a zero extent -
+// UnboundImageDescriptorScenario's incomplete default texture) are both legal DECLARATIONS: no
+// Fatal at the respecify, the level exists, and its byte bound is 0. A staged run into such a
+// level is then refused by its own name. Red-once: drop the LevelBound refusal and the same run
+// dies as `StagedTextureStore.CopyRunInto` instead (end 4 > bound 0), which the name check
+// below reads as red. ONE DEATH PER CASE, ServerLoopTest's ruling.
+#if !defined(_WIN32)
+TEST(StagedTextureStoreTest, ABytelessDeclaredLevelIsLegalAndRefusesARunByName) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(16, 1));
+    const auto tex2D = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{1, 1, 1}, tex2D,
+                           static_cast<Uint32>(TextureInternalFormat::Unknown));
+    store.NoteLevelDefined(key, kTex2DTarget, 1, IntVec3{0, 0, 1}, tex2D,
+                           static_cast<Uint32>(TextureInternalFormat::RGBA8));
+    ASSERT_TRUE(store.IsLevelDefined(key, kTex2DTarget, 0));
+    ASSERT_TRUE(store.IsLevelDefined(key, kTex2DTarget, 1));
+    EXPECT_EQ(store.LevelDeclaredByteBound(key, kTex2DTarget, 0), 0u);
+    EXPECT_EQ(store.LevelDeclaredByteBound(key, kTex2DTarget, 1), 0u);
+
+    Vector<Uint8> texel(4, 0x5A);
+    EXPECT_EXIT(store.AdoptRun(key, kTex2DTarget, 0, IntVec3{1, 1, 1}, 0, texel.data(), texel.size()),
+                ::testing::KilledBySignal(SIGABRT), ".*");
+    const std::string log = ReadLog();
+    EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.LevelBound\"}"), std::string::npos)
+        << "the run died, but not as the byteless-level refusal; the log says: " << log;
+}
+#endif
+
 // =====================================================================================
 // The production wiring - E-P5c gate #2 at unit scope
 // =====================================================================================
@@ -582,11 +641,15 @@ TEST(StagedTextureProductionTest, TextureSubDataThroughTheRealOpsTableCopiesAndS
     MG_Pipe::MGPResourceDesc desc{};
     desc.Resource = res;
     desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    // RGBA8: the 64 bytes below are 4x4 texels of four bytes, and PH-4 bounds the run by the
+    // declared level's w*h*d*bpp (a zero-initialised format is R8, one byte a texel).
+    desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
     desc.Width = 4;
     desc.Height = 4;
     desc.Depth = 1;
     desc.Levels = 1;
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+    DeclareTex2DLevel0(desc, 4, 4);
 
     Vector<Uint8> src(64, 0xAB); // 4x4 texels, 4 bytes each
     MG_Pipe::MGPSubData rec{};
@@ -649,6 +712,8 @@ TEST(StagedTextureProductionTest, HooklessTextureConsumerOwnsBytesAndScopedStora
     MG_Pipe::MGPResourceDesc desc{};
     desc.Resource = res;
     desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    // RGBA8 for the 64-byte 4x4 upload below (PH-4's w*h*d*bpp bound; zero would be R8).
+    desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
     desc.Width = 4;
     desc.Height = 4;
@@ -672,8 +737,13 @@ TEST(StagedTextureProductionTest, HooklessTextureConsumerOwnsBytesAndScopedStora
     std::fill(src.begin(), src.end(), Uint8{0xDD});
     EXPECT_EQ(store.RequireLevelBytes(key, kTex2DTarget, 0, "hookless_source_poison")[0], 0xAB);
 
-    // Defining another mip must retain bytes already accepted for the first mip.
+    // Defining another mip must retain bytes already accepted for the first mip. PH-4: the scope
+    // carries that mip's EXACT extent (TextureEmit.h reads it off the frontend's level), so level 1
+    // of a 4x4 base crosses as 2x2x1 rather than inheriting level 0's numbers.
     level.Level = 1;
+    level.Width = 2;
+    level.Height = 2;
+    level.Depth = 1;
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceRespecify(desc, nullptr, &level));
     EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 1), IntVec3(2, 2, 1));
     EXPECT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
@@ -722,11 +792,13 @@ TEST(StagedTextureProductionTest, StageChunkRunsThroughTheHooklessApplierLandWhe
     MG_Pipe::MGPResourceDesc desc{};
     desc.Resource = res;
     desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8); // PH-4 bound: 4x4x4
     desc.Width = 4;
     desc.Height = 4;
     desc.Depth = 1;
     desc.Levels = 1;
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+    DeclareTex2DLevel0(desc, 4, 4);
 
     // A 4x4 RGBA8 level: 64 bytes, four bytes per texel, a 16-byte row pitch. The two runs are its
     // upper and lower halves, 32 bytes each.
@@ -794,11 +866,13 @@ TEST(StagedTextureProductionTest, StageChunkRunsThroughTheRealTextureHookLandWhe
     MG_Pipe::MGPResourceDesc desc{};
     desc.Resource = res;
     desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+    desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8); // PH-4 bound: 4x4x4
     desc.Width = 4;
     desc.Height = 4;
     desc.Depth = 1;
     desc.Levels = 1;
     ASSERT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+    DeclareTex2DLevel0(desc, 4, 4);
 
     Vector<Uint8> upper(32, 0x77);
     Vector<Uint8> lower(32, 0x33);

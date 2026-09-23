@@ -385,6 +385,16 @@ namespace MobileGL::MG_Remote::Server {
         // a resource_subdata against it is RequireDeclaredLevel's refusal rather than a write
         // into storage that has no texels. Only a NEGATIVE component (a 32-bit carrier word past
         // INT_MAX) is malformed.
+        //
+        // SO IS A LEVEL WHOSE FORMAT HAS NO UNCOMPRESSED SIZE HERE (F2 lane repair). A declared
+        // TextureInternalFormat::Unknown level - the TextureView, TextureViewAlias and
+        // TextureUploadShape split lanes all declare one, a 1x1x1 level of an Unknown-format
+        // texture, before any upload - is legal and byteless in exactly the empty level's sense:
+        // declared with a zero byte bound, so any run into it is refused by name
+        // (StagedTextureStore.LevelBound) and the declaration itself is not a session Fatal. What
+        // stays a named refusal here is a declaration this server cannot bound: a negative
+        // component, or a known-format level past the server's own device limits (or whose byte
+        // count overflows).
         void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                               Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
                               Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
@@ -394,9 +404,10 @@ namespace MobileGL::MG_Remote::Server {
             const Bool supportsSubData = StagedTextureTargetSupportsSubData(resourceTarget);
             const Bool validExtent = extent.x() >= 0 && extent.y() >= 0 && extent.z() >= 0;
             const Bool emptyExtent = validExtent && (extent.x() == 0 || extent.y() == 0 || extent.z() == 0);
-            if (MG_Util::GetSizedInternalFormatSizeInBytes(
-                    static_cast<TextureInternalFormat>(internalFormat)) == 0 || !validExtent ||
-                (supportsSubData && !emptyExtent && !StagedTextureDeclaredLevelByteBound(
+            const Bool sizedFormat = MG_Util::GetSizedInternalFormatSizeInBytes(
+                                         static_cast<TextureInternalFormat>(internalFormat)) != 0;
+            if (!validExtent ||
+                (supportsSubData && sizedFormat && !emptyExtent && !StagedTextureDeclaredLevelByteBound(
                     resourceTarget, internalFormat, extent, m_deviceLimits, &byteBound))) {
                 SessionFail(MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.NoteLevelDefined\"} - "
@@ -589,21 +600,33 @@ namespace MobileGL::MG_Remote::Server {
         // coverage answer for such a level, not an error.
         void RequireDeclaredLevel(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget,
                                   Uint16 level, const IntVec3& extent) {
-            if (!shadow.Defined || shadow.InternalFormat == 0) {
+            // `Defined` alone, which only NoteLevelDefined sets. The first draft also refused
+            // `InternalFormat == 0`, but 0 is TextureInternalFormat::R8, so every R8 upload read
+            // as "arrived before the level was declared".
+            if (!shadow.Defined) {
                 SessionFail(MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
                             "resource_subdata arrived before the server declared texture level "
                             "(key=%llu, uploadTarget=%u, level=%u)",
                             static_cast<unsigned long long>(key), uploadTarget, level);
             }
-            if (!StagedTextureTargetSupportsSubData(shadow.ResourceTarget) ||
-                shadow.DeclaredByteBound == 0) {
+            if (!StagedTextureTargetSupportsSubData(shadow.ResourceTarget)) {
                 SessionFail(MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"} - "
                             "resource_subdata is not legal for the server-declared texture target "
-                            "or empty level (key=%llu, uploadTarget=%u, level=%u, target=%u)",
+                            "(key=%llu, uploadTarget=%u, level=%u, target=%u)",
                             static_cast<unsigned long long>(key), uploadTarget, level,
                             static_cast<Uint32>(shadow.ResourceTarget));
+            }
+            if (shadow.DeclaredByteBound == 0) {
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelBound\"} - "
+                            "resource_subdata into a byteless declared level: its extent is empty or "
+                            "its format has no uncompressed size on this server "
+                            "(key=%llu, uploadTarget=%u, level=%u, extent=%d,%d,%d, internalFormat=%u)",
+                            static_cast<unsigned long long>(key), uploadTarget, level,
+                            shadow.Extent.x(), shadow.Extent.y(), shadow.Extent.z(),
+                            shadow.InternalFormat);
             }
             if (shadow.Extent == extent) return;
             SessionFail(MGFatalFamily::ProtocolCorruption,

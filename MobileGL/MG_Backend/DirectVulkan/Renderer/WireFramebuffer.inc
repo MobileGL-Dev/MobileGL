@@ -1474,7 +1474,11 @@
             for (Uint32 level=base+1;level<base+count;++level) {
                 const IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(
                     record.Desc.Target, record.Desc.Width, record.Desc.Height, record.Desc.Depth, level);
-                store.NoteLevelDefined(key,static_cast<Uint16>(upload),static_cast<Uint16>(level),extent);
+                // PH-4: the record's own target and format, not NoteLevelDefined's Tex2D/RGBA8
+                // defaults - a 2D-array or 3D level has depth > 1, which the Tex2D device-limit rule
+                // refuses by name (TextureViewScenario.GenerateMipmapThroughAView on all Magma arms).
+                store.NoteLevelDefined(key,static_cast<Uint16>(upload),static_cast<Uint16>(level),extent,
+                                       record.Desc.Target,record.Desc.InternalFormat);
                 store.MarkLevelGpuDirty(key,static_cast<Uint16>(upload),static_cast<Uint16>(level),true);
             }
         }

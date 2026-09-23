@@ -1694,8 +1694,14 @@ void main() {
                 for (Uint32 level = baseMipLevel + 1; level < requiredMipLevelCount; ++level) {
                     // A level the shadow already tracks (an adopted base chain) keeps its bytes;
                     // the generation made the GPU newer than either, which the mark says.
+                    // PH-4: a twin-address key never receives a staged run (no Adopt names one),
+                    // so these generated levels are declared BYTELESS - an Unknown format gives a
+                    // zero byte bound and skips the Tex2D device-limit rule the defaults would
+                    // apply to a 2D-array or 3D level's depth.
                     store.NoteLevelDefined(key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level),
-                                           ComputeMipTexelSize(storageBaseTexelSize, level));
+                                           ComputeMipTexelSize(storageBaseTexelSize, level),
+                                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                                           static_cast<Uint32>(TextureInternalFormat::Unknown));
                     store.MarkLevelGpuDirty(key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level),
                                             true);
                 }

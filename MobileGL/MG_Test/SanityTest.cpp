@@ -47,6 +47,9 @@
 // a split-armed case has to arm that half too - registering an op table is the SERVER's arming.
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/CapsMirror.h>
+// PH-2 (F2): the handle-keyed tables' backstop refusals die through MG_Pipe's session-fail seam.
+#include <MG_Pipe/PipeSessionFail.h>
+#include <cstdio>
 #endif
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Types.h>
@@ -3519,6 +3522,19 @@ namespace {
     using FakeShaderCsoSlotTable = MobileGL::MG_Backend::DirectGLES::
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::ShaderCso>;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // PH-2 (F2, ID-P7-54): on a disaggregated build the handle overload's backward-generation and
+    // past-the-bound refusals are NAMED session faults through MG_Pipe's seam, not a quiet null
+    // twin - the handle arrived in a peer's payload. The seam's no-hook default writes the line to
+    // the log FILE only, so a death child installs this hook first to put the same line where the
+    // death matcher reads it; the seam then logs and aborts exactly as it would have.
+    void EchoPipeSessionFailToStderr(MobileGL::MG_Pipe::MGPipeFatalFamily, const char* line) {
+        std::fputs(line, stderr);
+        std::fputc('\n', stderr);
+        std::fflush(stderr);
+    }
+#endif
+
     // A log file path no other process and no other case can be writing to: the pid keeps two
     // SanityTest processes on one host apart, the counter keeps two cases in one process apart.
     std::filesystem::path UniqueScratchLogPath(const char* stem) {
@@ -4333,10 +4349,21 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
         // adoption the live twin at `second` is gone. The first is kept because a non-null there
         // would mean the table handed back the incumbent's own twin under the dead handle, which
         // is a third outcome and a worse one.
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // PH-2: the refusal is a named session fault here, so it is asserted in a death child;
+        // the live twin below is then the parent's, untouched by construction AND by assertion.
+        EXPECT_DEATH(
+            {
+                MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+                (void)table.GetOrCreate(first);
+            },
+            "BackendSlotTable.Generation");
+#else
         auto& stale = table.GetOrCreate(first);
         EXPECT_EQ(stale, nullptr)
             << "SamplerViewCso: a stale handle was answered with the LIVE twin at its slot (this "
                "assertion cannot tell a refusal from an adoption - the next one does)";
+#endif
         EXPECT_NE(table.FindByHandle(second), nullptr)
             << "SamplerViewCso: the live twin was destroyed by a handle from its slot's past - "
                "the backward generation was ADOPTED rather than refused";
@@ -5024,10 +5051,22 @@ TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted
     incumbent->marker = 0xC0FFEE;
     const FakeBackendObject* const raw = incumbent.get();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // PH-2 (F2): the backwards generation is a NAMED session fault on this build - the handle is a
+    // peer's payload - so the refusal is asserted in a death child and the incumbent below is the
+    // parent's, which the refused call never touched.
+    EXPECT_DEATH(
+        {
+            MobileGL::MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+            (void)table.GetOrCreate(stale);
+        },
+        "BackendSlotTable.Generation");
+#else
     auto& answer = table.GetOrCreate(stale);
     EXPECT_EQ(answer, nullptr)
         << "a backwards generation was handed a twin rather than refused; FindByHandle refuses "
            "the same input, so the two entry points disagreed";
+#endif
 
     auto* const still = table.FindByHandle(current);
     ASSERT_NE(still, nullptr) << "the live twin's entry was retired by a handle from its past";
@@ -5043,8 +5082,17 @@ TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted
     EXPECT_EQ(table.FindByHandle(current), nullptr) << "the predecessor's handle still resolves";
 
     // And a slot past the table's bound is refused rather than resized to.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    EXPECT_DEATH(
+        {
+            MobileGL::MG_Pipe::MGPipeInstallSessionFailHook(&EchoPipeSessionFailToStderr);
+            (void)table.GetOrCreate(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u});
+        },
+        "BackendSlotTable.HandleSlot");
+#else
     auto& absurd = table.GetOrCreate(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u});
     EXPECT_EQ(absurd, nullptr) << "an unbounded client slot decided a vector resize";
+#endif
     EXPECT_EQ(table.FindByHandle(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u}), nullptr);
 }
 

@@ -735,7 +735,9 @@ TEST(ServerLoopTest, TheAuditPoisonFillsExactlyTheStagedRunAfterTheApplierReturn
     create.Resource.Slot = 61;
     create.Resource.Gen = 1;
     create.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
-    create.InternalFormat = 1;
+    // RGBA8, because the 64 staged bytes below are 4x4 texels of four bytes: PH-4 bounds the run
+    // by the declared level's w*h*d*bpp, and the old `1` (R8Snorm, one byte) bounded it at 16.
+    create.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
     create.Width = 4;
     create.Height = 4;
     create.Depth = 1;
@@ -743,6 +745,16 @@ TEST(ServerLoopTest, TheAuditPoisonFillsExactlyTheStagedRunAfterTheApplierReturn
     create.Levels = 1;
     create.Samples = 1;
     ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::ResourceCreate, &create, sizeof(create)));
+    // PH-4: a level exists for resource_subdata only once a respecify declared it (the emitter's
+    // glTexImage*D always does). Declare level 0 at upload target 0 - the target the upload below
+    // packs - at the 4x4x1 extent the upload's descriptor-derived extent will name.
+    MG_Pipe::MGPResourceDesc respecify = create;
+    respecify.HasDefinedContent = 1;
+    MG_Pipe::MGPipeSetRespecifiedLevel(
+        respecify,
+        MG_Pipe::MGPipePackSubDataTarget(static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D), 0u),
+        0, 4, 4, 1);
+    ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify)));
 
     Vector<Uint8> texels(4 * 4 * 4, 0x5A);
     MG_Pipe::MGPSubData upload{};

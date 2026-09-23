@@ -429,9 +429,27 @@ namespace MobileGL::MG_Remote::Server {
         const Uint64 pixels = width * height;
         if (pixels > kUint64Max / bpp) return rejectReadback();
         const Uint64 tight = pixels * bpp;
-        if (tight != info.DstSize || tight > m_maxReplyBytes ||
+        // PH-3's bound is the SERVER's answer size: w*h*bpp against its own maxReplyBytes,
+        // checked before the scratch grows. It is not a rule about DstSize.
+        if (tight > m_maxReplyBytes ||
             tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
             return rejectReadback();
+        }
+        // ID-49: THE REPLY CROSSES TIGHT, WHATEVER DstSize THE CLIENT SENT. The server reads with
+        // neutral pack state into a w*h*bpp extent that IS the reply payload and the client
+        // scatters it per its own GL_PACK_* state, so a DstSize that disagrees with the tight
+        // extent (a client that sized its destination with pack padding) is logged and the tight
+        // extent this side owns is read and posted - never the client's number, so a wrong
+        // DstSize cannot make this a short read into uninitialised scratch. F2's first PH-3 draft
+        // refused the mismatch instead, which broke the ID-49 control
+        // (ServerLoopEglTest.AReadPixelsReplyIsTheTightExtentWhateverDstSizeTheClientSent); the
+        // bound above is what PH-3 needs and it does not depend on DstSize.
+        if (tight != info.DstSize) {
+            MGLOG_E_ONCE("MG_Remote server: read_pixels DstSize %llu != tight w*h*bpp %llu "
+                         "(%ux%u, bpp %llu); reading the tight extent (ID-49)",
+                         static_cast<unsigned long long>(info.DstSize),
+                         static_cast<unsigned long long>(tight), info.Box.W, info.Box.H,
+                         static_cast<unsigned long long>(bpp));
         }
 
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
