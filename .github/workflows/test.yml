@@ -1034,6 +1034,52 @@ jobs:
           fi
           echo "${#logs[@]} entries resolved inproc; ${armed} of them armed the comparator"
 
+      # NEGATIVE CONTROL A ON THE SPLIT ARM - integration-verify's step A, same knob, same shape
+      # (this step passes when ctest FAILS), aimed at the ambient VerifySplit. entries of BOTH
+      # backends. Measured at landing: 10 of 10 red, each with
+      # Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"|"@DrawArrays", ..., where=entry}.
+      - name: Negative control A (split) - a corrupted snapshot field must turn the lane red
+        working-directory: build-verify-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_PIPE_VERIFY_CORRUPT: GetRenderStateParameters
+        run: |
+          FILTER='(DirectGLES|DirectVulkan)\.VerifySplit\..*ClearThenReadPixels'
+          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 2 ]; then
+            echo "::error::split negative control A selected ${matched} tests; its filter no longer matches both backends"
+            exit 1
+          fi
+          if ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error; then
+            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left ${matched} verify-split entries GREEN. The comparator is not comparing on the split arm."
+            exit 1
+          fi
+          echo "the corrupted field turned ${matched} selected split entries red, as it must"
+
+      # NEGATIVE CONTROL B ON THE SPLIT ARM, WITH THE SPLIT ARM'S PAIR. The monolith pair
+      # (GenerateMipmap:GetActiveTextureUnit) is inert here - the split backend's generate_mipmap
+      # resolves its texture by the verb's handle and never reads the active unit - so this step
+      # withholds ReadPixels:GetPixelStoreParameters, which the server reads under its own stamp.
+      # Measured at landing: 2 of 2 red, each child dying with
+      # Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"} on mgl-srv-apply.
+      - name: Negative control B (split) - an omitted stamp must turn the lane red on that verb
+        working-directory: build-verify-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_PIPE_POISON_OMIT: ReadPixels:GetPixelStoreParameters
+        run: |
+          FILTER='(DirectGLES|DirectVulkan)\.VerifySplit\.PoisonOmissionScenario\.WithoutOmissionCompletes'
+          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 2 ]; then
+            echo "::error::split negative control B selected ${matched} tests; its filter no longer matches both backends"
+            exit 1
+          fi
+          if ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error; then
+            echo "::error::MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters left the verify-split lane GREEN. The server-side poison is not armed on the split arm."
+            exit 1
+          fi
+          echo "the omitted stamp turned the split lane red, as it must"
+
       - name: Upload verify-split lane logs
         if: always()
         uses: actions/upload-artifact@v7

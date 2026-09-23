@@ -81,11 +81,29 @@ extern char** environ;
 namespace MGITest {
     namespace {
 
-        // What the PoisonOmitted. ctest entry and the CI negative-control step name. The pair is
+        // What the PoisonOmitted. ctest entries and the CI negative-control steps name. Each pair is
         // spelled here so the assertion below is about the exact string the poison contracts to
         // print (ARCHITECTURE.md 9.2: Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}).
-        constexpr const char* kOmittedVerb = "GenerateMipmap";
-        constexpr const char* kOmittedField = "GetActiveTextureUnit";
+        //
+        // TWO PAIRS SINCE P7 WAVE 3, ONE PER ARM, because the first one is structurally inert on
+        // the split arm. GenerateMipmap:GetActiveTextureUnit is the monolith control: the monolith
+        // backend resolves the texture to mip through the active unit. Under a transport it does
+        // not - since P5c hd the server's generate_mipmap resolves the texture from the verb's own
+        // handle (MGPipeApplier().VerbMipRes) and never reads the active unit - so omitting that
+        // stamp is omitting a stamp nobody reads, and the child exits 0 (measured on
+        // integration-verify-split, both backends). ReadPixels:GetPixelStoreParameters is the
+        // split control: the server's read_pixels backend call DOES read the pack half through the
+        // accessor, under the server's own stamp, which honours the knob in a verify build
+        // (MG_Backend/MGPipe/PipeInputs.cpp's ServerPoisonOmission).
+        struct OmittedPair {
+            const char* Verb;
+            const char* Field;
+            const char* EarlierVerbs[2]; // verbs the sequence runs BEFORE this one, which must not trip
+        };
+        constexpr OmittedPair kOmittedPairs[] = {
+            {"GenerateMipmap", "GetActiveTextureUnit", {"@DrawArrays", "@DrawArrays"}},
+            {"ReadPixels", "GetPixelStoreParameters", {"@DrawArrays", "@GenerateMipmap"}},
+        };
         constexpr const char* kFatalPrefix = "Fatal{UnmigratedPipeInput";
 
         // Set only in the re-executed child, so the worker case below runs in that process and skips
@@ -117,10 +135,41 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 
         // Where the child is told to write ITS log. Empty when the lane configured no log path at
         // all, in which case the signal is the only evidence and the text assertions are skipped.
-        std::string ChildLogPath() {
-            const std::filesystem::path parent = LibraryLogPath();
-            if (parent.empty()) return {};
-            return (parent.string() + ".poison-child");
+        //
+        // P7 WAVE 3 (V1): THIS IS A BASE NAME AND NOT A RESOLVED ONE, and the difference only
+        // became visible when verify and split first shared a build. It used to be
+        // LibraryLogPath() + ".poison-child" - and LibraryLogPath() is this lane's CLIENT half,
+        // which in a monolith verify build IS the raw MOBILEGL_LOG_FILE_PATH (so nothing moves
+        // there) but in a DISAGGREGATED one is already `<base>.client.log`. Handing that to the
+        // child as its own MOBILEGL_LOG_FILE_PATH made the child's library apply the role rule a
+        // SECOND time, so the child wrote `<base>.client.client.log.poison-child` while this
+        // parent read `<base>.client.log.poison-child` and found nothing. The result was
+        // `the child aborted, but not with Fatal{UnmigratedPipeInput, "..."}. Child log:` followed
+        // by silence - in a run where the abort had happened exactly as designed. Measured on
+        // build-split with -DMOBILEGL_PIPE_VERIFY=ON, both backends, 2/1136 red in the monolith
+        // verify lane; there is no CI job today that configures both options at once.
+        std::string ChildLogBasePath() {
+            const char* base = std::getenv("MOBILEGL_LOG_FILE_PATH");
+            if (base == nullptr || *base == '\0') return {};
+            return std::string(base) + ".poison-child";
+        }
+
+        // The library's own role rule, applied to an arbitrary base. It is PipeStatsWindow.h's
+        // copy of Log.cpp's RoleLogPath, for the reason stated there (the helpers are hidden in
+        // the shipping .so and this module links that), differing only in taking the base as an
+        // argument rather than reading the environment. Keep all three in step.
+        std::string ChildRoleLogPath(const std::string& base, const char* roleSuffix) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            const std::string::size_type slash = base.find_last_of("/\\");
+            const std::string::size_type dot = base.find_last_of('.');
+            if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+                return base + "." + roleSuffix;
+            }
+            return base.substr(0, dot) + "." + roleSuffix + base.substr(dot);
+#else
+            (void)roleSuffix;
+            return base;
+#endif
         }
 
         std::string ReadWholeFile(const std::string& path) {
@@ -128,6 +177,20 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             std::ifstream file(path, std::ios::binary);
             if (!file.good()) return {};
             return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        }
+
+        // BOTH HALVES, because under a transport the poison can fire on either side of the seam:
+        // the fill is the client's and the read is the backend's, and in a split build the
+        // backend runs on the server role's thread. A reader that took the client half alone
+        // would report "the child aborted with no Fatal" for every server-side firing.
+        std::string ReadChildLog() {
+            const std::string base = ChildLogBasePath();
+            if (base.empty()) return {};
+            std::string all = ReadWholeFile(ChildRoleLogPath(base, "client"));
+#if MOBILEGL_BUILD_DISAGGREGATED
+            all += ReadWholeFile(ChildRoleLogPath(base, "server"));
+#endif
+            return all;
         }
 
         class PoisonOmissionScenario : public ScenarioTest {
@@ -183,6 +246,12 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 glFinish();
                 std::fprintf(stderr, "[itest] poison worker: glGenerateMipmap returned\n");
 
+                // The split arm's verb (kOmittedPairs[1]): a readback, which is a round trip, so
+                // the server has applied it - and read the pack state - before this returns.
+                unsigned char centre[4] = {};
+                glReadPixels(gl.Width() / 2, gl.Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, centre);
+                std::fprintf(stderr, "[itest] poison worker: glReadPixels returned\n");
+
                 // The sequence is the WHOLE datum this child reports, so a GL error in it must be
                 // part of the answer rather than something only a human reading stderr would see.
                 // WithoutOmissionCompletes reads the child's exit status, and the status is built
@@ -211,10 +280,14 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                     env.push_back(text);
                 }
                 env.push_back(std::string(kChildMarker) + "=1");
-                const std::string childLog = ChildLogPath();
+                const std::string childLog = ChildLogBasePath();
                 if (!childLog.empty()) {
+                    // BOTH halves, for TruncateRoleLogs' reason one file over: a previous run's
+                    // server log left standing would be concatenated into this run's read and a
+                    // stale Fatal would answer for a child that never logged one.
                     std::error_code ec;
-                    std::filesystem::remove(childLog, ec);
+                    std::filesystem::remove(ChildRoleLogPath(childLog, "client"), ec);
+                    std::filesystem::remove(ChildRoleLogPath(childLog, "server"), ec);
                     env.push_back("MOBILEGL_LOG_FILE_PATH=" + childLog);
                 }
 
@@ -309,19 +382,24 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                                 "is what the PoisonOmitted. ctest entries set";
             }
             const std::string knob = std::getenv("MOBILEGL_PIPE_POISON_OMIT");
-            const std::string expectedPair = std::string(kOmittedField) + "@" + kOmittedVerb;
-            if (knob != std::string(kOmittedVerb) + ":" + kOmittedField) {
-                GTEST_SKIP() << "MOBILEGL_PIPE_POISON_OMIT is " << knob << ", but this case only knows "
-                             << "how to provoke " << kOmittedVerb << ":" << kOmittedField;
+            const OmittedPair* pair = nullptr;
+            for (const OmittedPair& candidate : kOmittedPairs) {
+                if (knob == std::string(candidate.Verb) + ":" + candidate.Field) pair = &candidate;
             }
+            if (pair == nullptr) {
+                GTEST_SKIP() << "MOBILEGL_PIPE_POISON_OMIT is " << knob << ", but this case only knows "
+                             << "how to provoke " << kOmittedPairs[0].Verb << ":" << kOmittedPairs[0].Field
+                             << " and " << kOmittedPairs[1].Verb << ":" << kOmittedPairs[1].Field;
+            }
+            const std::string expectedPair = std::string(pair->Field) + "@" + pair->Verb;
 
             int status = 0;
             std::string reason;
             ASSERT_TRUE(RunSequenceInAChildProcess(status, reason)) << reason;
 
-            const std::string childLog = ReadWholeFile(ChildLogPath());
+            const std::string childLog = ReadChildLog();
             ASSERT_TRUE(WIFSIGNALED(status))
-                << "with the stamp of " << expectedPair << " omitted, the glGenerateMipmap in the child "
+                << "with the stamp of " << expectedPair << " omitted, the " << pair->Verb << " in the child "
                 << "had to read a field its verb never filled and abort. It " << DescribeStatus(status)
                 << " instead - the poison is not armed (a build without MOBILEGL_PIPE_POISON, a filler "
                    "that stamps what it was told to skip, or a backend that no longer reads the field "
@@ -333,7 +411,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "Child log:\n"
                 << childLog;
 
-            if (ChildLogPath().empty()) {
+            if (ChildLogBasePath().empty()) {
                 GTEST_SKIP() << "the abort happened, but the lane set no MOBILEGL_LOG_FILE_PATH, so the "
                                 "Fatal's text cannot be read back; the PoisonOmitted. ctest entries set it";
             }
@@ -342,11 +420,13 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 << "the child aborted, but not with Fatal{UnmigratedPipeInput, \"" << expectedPair
                 << "\"} - that message is the whole diagnostic value of the poison. Child log:\n"
                 << childLog;
-            EXPECT_EQ(childLog.find("@DrawArrays"), std::string::npos)
-                << "the draw that ran BEFORE the omitted verb also tripped the poison, so the omission "
-                   "is not scoped to its verb: the fill classes are wrong, or the stamps are global. "
-                   "Child log:\n"
-                << childLog;
+            for (const char* earlier : pair->EarlierVerbs) {
+                EXPECT_EQ(childLog.find(earlier), std::string::npos)
+                    << "a verb that ran BEFORE the omitted one (" << earlier << ") also tripped the "
+                       "poison, so the omission is not scoped to its verb: the fill classes are wrong, "
+                       "or the stamps are global. Child log:\n"
+                    << childLog;
+            }
         }
 
         // The sibling control, in the ambient Verify. lanes: the same sequence with the knob UNSET
@@ -370,7 +450,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             std::string reason;
             ASSERT_TRUE(RunSequenceInAChildProcess(status, reason)) << reason;
 
-            const std::string childLog = ReadWholeFile(ChildLogPath());
+            const std::string childLog = ReadChildLog();
             const std::string note =
                 omissionArmed
                     ? std::string(

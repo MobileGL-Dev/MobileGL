@@ -3933,7 +3933,74 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
                 ENVIRONMENT "${mglItestVerifyArmEnv}\;MGITEST_PIPE_ARMING_LANE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-arming-${mglItestVerifyBackend}.log"
                 RESOURCE_LOCK "pipe-verify-split-arming-${mglItestVerifyBackend}.log"
         )
+
+        # THE TWO NEGATIVE CONTROLS ON THIS ARM (CONTRACT-P7 §6), the monolith verify block's
+        # four entries with the split environment underneath and nothing else changed: each is
+        # green when its control REPORTS, so each goes red the day the comparator or the poison
+        # stops reaching the split arm. Their CI halves - the same knob exported against the
+        # ambient VerifySplit. entries, where ctest has to FAIL - live in test.yml's
+        # integration-verify-split job.
+        #
+        # A (G4): the corruption perturbs the snapshot arm at the CLIENT's entry compare, so the
+        # report lands in the client role's log, which is the half LibraryLog() reads.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitCorrupted."
+            TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-verify-split"
+                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
+                RESOURCE_LOCK "pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
+        )
+        # B (G5): the child brings up its own inproc session from the inherited environment, and
+        # PoisonOmissionScenario's ReadChildLog reads BOTH role halves of the child's log, because
+        # under a transport the poisoned read can fire on either side of the seam.
+        #
+        # A DIFFERENT PAIR FROM THE MONOLITH ENTRIES', and the monolith pair is not "also fine
+        # here": GenerateMipmap:GetActiveTextureUnit is inert on this arm - the split backend's
+        # generate_mipmap resolves its texture from the verb's handle and never reads the active
+        # unit, so the child exited 0 with that stamp withheld (measured, both backends).
+        # ReadPixels:GetPixelStoreParameters is read on the server under the server's stamp,
+        # which is the stamp the knob has to withhold on this arm (PipeInputs.cpp's
+        # ServerPoisonOmission). PoisonOmissionScenario.cpp's kOmittedPairs carries both.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitPoisonOmitted."
+            TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-verify-split"
+                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log"
+                RESOURCE_LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log"
+        )
+        # B's AMBIENT TARGET. The monolith verify lane's control-B step aims its knob at
+        # `Verify.PoisonOmissionScenario.WithoutOmissionCompletes`, the one integration entry that
+        # calls glGenerateMipmap at all - and the mechanism filter took that entry out of the
+        # ambient set above along with the rest of the scenario. Registered back by hand, with no
+        # knob, so the CI step has an entry on THIS arm to turn red.
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplit."
+            TEST_LIST "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}"
+            TEST_FILTER "PoisonOmissionScenario.WithoutOmissionCompletes"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-verify-split"
+                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+                ENVIRONMENT "${mglItestVerifyArmEnv}"
+        )
+        list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}")
     endforeach()
+
+    # NOT ON SPAWN, AND THIS IS A PROPERTY OF THE INSTRUMENT, NOT A GAP IN THE REGISTRATION. The
+    # comparator is a same-address-space oracle: its two arms are the applier-written gPipeInputs
+    # and the frontend GLContext, and only inproc puts them in one process. Measured on this build
+    # (VerifySplitArming's DirectGLES entry with MOBILEGL_TRANSPORT=spawn): the client's entry
+    # compare aborts at the first verb with Fatal{PipeVerifyDiffer, "GetClearColor@Clear", verb=1,
+    # where=entry}, because the fill leaves every record-supplied field to the applier and the
+    # applier now writes ANOTHER process's block; and the server process runs no compare at all,
+    # because MG_Impl is not in it and the read hook finds no live context. A spawn verify lane
+    # would be red at bring-up on the first half and blind on the second.
 
     message(STATUS "Integration tests: P7 wave 3 - the verify comparator on the split (inproc) arm, "
                    "both backends, under integration-verify-split")

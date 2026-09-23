@@ -54,6 +54,60 @@ namespace MobileGL::MG_Pipe {
     namespace {
         Uint64 g_residualPulls = 0;
 
+#if MOBILEGL_PIPE_VERIFY
+        // ---- P7 wave 3 (V1): negative control B's SERVER half ----------------------------
+        //
+        // MOBILEGL_PIPE_POISON_OMIT withholds the STAMP of one (verb, field) pair, and until a
+        // verify build first ran on the split arm it was only ever read by the client's filler
+        // (MG_Impl/Pipe/PipeFill.cpp's ParsePoisonOmissionKnob). On the split arm that is not
+        // where the stamp the backend reads comes from: the stamp below re-stamps every field
+        // the verb's class can answer out of applied records, so it restamped the very field
+        // the client had withheld and the control went GREEN - measured, both backends, the
+        // child's glGenerateMipmap returned and the process exited 0 with
+        // GenerateMipmap:GetActiveTextureUnit omitted. The knob means "this verb's stamp of this
+        // field was never written", and under a transport the stamp that answers the backend is
+        // this one, so this one honours it too.
+        //
+        // PARSED HERE, NOT SHARED WITH THE CLIENT'S PARSER, because this file is in the server
+        // library and MG_Impl is not. A malformed value is the client's Fatal{PipeVerifyBadKnob}
+        // (it parses first, at the first fill of the process); this side simply does not arm.
+        // VERIFY BUILDS ONLY: the knob belongs to the verify harness, and a push build's stamp
+        // stays the branch-free fill the P5d profile asked for.
+        struct ServerPoisonOmission {
+            Bool Parsed = false;
+            String Value;
+            Bool Armed = false;
+            MGPipeVerb Verb = MGPipeVerb::kVerbCount;
+            MGPipeInputField Field = MGPipeInputField::kFieldCount;
+        };
+        ServerPoisonOmission g_serverOmission;
+
+        const ServerPoisonOmission& ServerOmission() {
+            const String& knob = MG_Config::Features.PipePoisonOmit;
+            if (g_serverOmission.Parsed && knob.size() == g_serverOmission.Value.size() &&
+                (knob.empty() || knob == g_serverOmission.Value)) {
+                return g_serverOmission;
+            }
+            g_serverOmission = ServerPoisonOmission{};
+            g_serverOmission.Parsed = true;
+            g_serverOmission.Value = knob;
+            const auto colon = knob.find(':');
+            if (colon == String::npos || colon == 0 || colon + 1 >= knob.size()) return g_serverOmission;
+            const auto verb = MGPipeFindVerb(knob.substr(0, colon).c_str());
+            const auto field = MGPipeFindInputField(knob.substr(colon + 1).c_str());
+            if (!verb || !field) return g_serverOmission;
+            g_serverOmission.Armed = true;
+            g_serverOmission.Verb = *verb;
+            g_serverOmission.Field = *field;
+            return g_serverOmission;
+        }
+
+        Bool ServerOmitsStamp(MGPipeVerb verb, MGPipeInputField field) {
+            const ServerPoisonOmission& omission = ServerOmission();
+            return omission.Armed && omission.Verb == verb && omission.Field == field;
+        }
+#endif // MOBILEGL_PIPE_VERIFY
+
         // The strict arm of R-7.3. Same first line as the ordinary poison Fatal, so every
         // existing filter on Fatal{UnmigratedPipeInput still matches, plus the class and the
         // phase that retires it - a strict abort that did not say which phase owes the answer
@@ -415,6 +469,15 @@ namespace MobileGL::MG_Pipe {
             const Uint64 bit = (answerable.Words[i / 64] >> (i % 64)) & Uint64{1};
             filled.FilledGen[i] = serial & (Uint64{0} - bit);
         }
+#if MOBILEGL_PIPE_VERIFY
+        // Negative control B's server half (ServerPoisonOmission above): the one withheld pair.
+        {
+            const ServerPoisonOmission& omission = ServerOmission();
+            if (omission.Armed && omission.Verb == verb) {
+                filled.FilledGen[static_cast<SizeT>(omission.Field)] = 0;
+            }
+        }
+#endif
         MGPipeStampAccess::SetServerStamped(inputs, true);
         // P5f (f1): the server block's identity rides the stamp (CONTRACT-P5E §3.2's
         // "SetIdentity moves to ApplyOne" - the stamp is the per-verb half of ApplyOne, and
@@ -438,6 +501,12 @@ namespace MobileGL::MG_Pipe {
         // AND A READ OUTSIDE THE VERB'S OWN CLASS IS STILL FATAL even for a BARRIER-PULLED
         // field: the value it would be answered with was never copied for this verb, so
         // counting it would trade a loud staleness for a quiet one.
+#if MOBILEGL_PIPE_VERIFY
+        // An injected omission is reported as what it models - a stamp nobody wrote, the
+        // client filler's own Fatal{UnmigratedPipeInput, "<Field>@<Verb>"} - and never as the
+        // RoleViolation below, which would blame the wire for a withdrawal the control made.
+        if (serverStamped && ServerOmitsStamp(verb, field)) MGPipeInputPoisonFatalForVerb(field, verb);
+#endif
         if (!serverStamped ||
             kMGPipeFieldOwnership[static_cast<SizeT>(field)] != MGPipeFieldOwnership::kBarrierPulled ||
             !FieldIsInVerbClass(field, verb)) {
