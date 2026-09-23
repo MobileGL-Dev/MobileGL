@@ -5,6 +5,7 @@
 # device-window-1/00-session/README.md and HANDOFF-2026-09-22.md.
 
 W2_HERE=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+W2_ARGV=("$@")   # the sourcing script's own arguments: w2_shared_lock re-runs it with them
 W2_SERIAL=${W2_SERIAL:-2f7cbe2e}
 W2_PKG=${W2_PKG:-top.mobilegl.plugin.p7w1.trace}
 W2_TOKEN=${W2_TOKEN:-p7w1b-lan-token-20260922}          # >= 16 bytes (ServerMain token rule)
@@ -15,6 +16,11 @@ W2_CTS_BUNDLE=${W2_CTS_BUNDLE:-$HOME/w7/logs/cts-a64/deploy}   # glcts + mgprobe
 W2_CTS_DEV=${W2_CTS_DEV:-/data/local/tmp/mgcts}
 W2_IDLE_STATE=${W2_IDLE_STATE:-$HOME/.cache/mobilegl/tcp-server/${W2_SERIAL}-${W2_PKG}.json}
 W2_LOCK=${W2_LOCK:-$HOME/w7/logs/p7w7-device-${W2_SERIAL}.lock}
+# The device lock every agent of the wave holds while it touches the phone
+# ('flock -w 3600 /home/swung/w7/locks/2f7cbe2e.lock <cmd>'); empty = do not take it (host tests).
+W2_SHARED_LOCK=${W2_SHARED_LOCK-$HOME/w7/locks/${W2_SERIAL}.lock}
+W2_SHARED_LOCK_WAIT=${W2_SHARED_LOCK_WAIT:-3600}
+W2_SHARED_LOCK_RC=75   # a step's exit status when the shared lock never came free
 export MOBILEGL_FLATC_EXECUTABLE=${MOBILEGL_FLATC_EXECUTABLE:-/home/swung/w7/flatc-build/flatc}
 
 # The three gate-3 exclusions (CONTRACT-P7 7.1, E0-attribution/exclusions.md). They are red on
@@ -50,12 +56,32 @@ w2_load_build() {
 }
 
 w2_require_device() {
+    w2_shared_lock   # the first adb call of every device step already runs under the shared lock
     local state; state=$(timeout 20 adb -s "$W2_SERIAL" get-state 2>/dev/null | tr -d '\r')
     [ "$state" = device ] || die "adb does not see $W2_SERIAL (state '$state'). WSL's adb is a client of the WINDOWS adb server (mirrored networking); if it is gone, run 'adb start-server' on Windows - never start one from WSL"
 }
 
+# The wave's shared device lock ($W2_SHARED_LOCK): other agents run their device work under it, so
+# the window must hold it too or it does not exclude them. window.sh takes it once, after the build,
+# for every device step to the end (no other agent gets the phone between two steps); a step started
+# on its own takes it for itself. Taken as `flock -o` does: this script is RE-RUN (same arguments) as
+# the child of a flock process that keeps the lock, and the child does not carry the lock's fd - so
+# nothing a step leaves running (an adb server, a supervisor launcher) keeps the phone locked after
+# it. The re-run sees W2_SHARED_LOCK_HELD and goes on; everything before this call runs twice and
+# must stay idempotent. Waits up to $W2_SHARED_LOCK_WAIT s, else exits $W2_SHARED_LOCK_RC.
+w2_shared_lock() {
+    [ -n "$W2_SHARED_LOCK" ] || return 0
+    [ "${W2_SHARED_LOCK_HELD:-}" = "$W2_SHARED_LOCK" ] && return 0
+    mkdir -p "$(dirname "$W2_SHARED_LOCK")"
+    log "taking the shared device lock $W2_SHARED_LOCK (waits up to ${W2_SHARED_LOCK_WAIT}s while another agent holds $W2_SERIAL; exit $W2_SHARED_LOCK_RC if it never frees)"
+    export W2_SHARED_LOCK_HELD=$W2_SHARED_LOCK
+    exec flock -o -w "$W2_SHARED_LOCK_WAIT" -E "$W2_SHARED_LOCK_RC" "$W2_SHARED_LOCK" bash "$0" "${W2_ARGV[@]}"
+}
+
 # One device user at a time: the runner's result root and the device are both single-tenant.
+# The shared lock first (it re-runs the step), then this window's own step lock.
 w2_lock() {
+    w2_shared_lock
     mkdir -p "$(dirname "$W2_LOCK")"
     exec 9>"$W2_LOCK"
     flock -n 9 || die "another window-2 step holds $W2_LOCK"

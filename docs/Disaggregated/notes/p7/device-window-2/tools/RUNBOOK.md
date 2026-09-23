@@ -17,8 +17,12 @@ M2/M3 的 bsl-esc-menu 设备读数（`MOBILEGL_PIPE_STATS` 下的 `/proc/<pid>/
 2. Windows 侧 adb server 在跑并看得见 `2f7cbe2e`。WSL 的 `/usr/sbin/adb` 经 mirrored networking 连的就是它；
    server 没了在 **Windows** 上 `adb start-server`，不要在 WSL 里起（会抢 5037 而看不见 USB）。
 3. 手机 `/data/local/tmp/mgcts` 有 `glcts`、`gl_cts/`、`mgprobe`（窗口 1 部署，现仍在；缺则 `sh ~/w7/logs/cts-a64/deploy/deploy.sh 2f7cbe2e`）。
-4. 窗口期间没有别的 agent 用手机、主机不并行跑 gate（超时是墙钟）。手机若有锁屏密码，reboot 后要手动解锁一次
-   （preflight 等 `sys.user.0.ce_available=true` 最多 10 min）。
+4. 窗口期间没有别的 agent 用手机、主机不并行跑 gate（超时是墙钟）。「没有别的 agent」由锁保证：本波次所有 agent 都以
+   `flock -w 3600 /home/swung/w7/locks/2f7cbe2e.lock <cmd>` 用手机；`window.sh` 在 build 之后、preflight 之前拿**同一把锁**
+   （`lib.sh` 的 `W2_SHARED_LOCK`），一直持有到 restore 结束——两步之间别的 agent 插不进来；单独起的某一步自己拿、自己放。
+   拿锁是 `flock -o`：脚本以同样的参数在 flock 进程下重跑，锁 fd 不传给子进程（步骤留下的 adb server / supervisor 启动器不会把锁
+   带出窗口）。等锁最多 `W2_SHARED_LOCK_WAIT`（默认 3600 s），等不到退出 75、不碰手机。窗口自己的步骤锁 `W2_LOCK` 照旧。
+   手机若有锁屏密码，reboot 后要手动解锁一次（preflight 等 `sys.user.0.ce_available=true` 最多 10 min）。
 
 ## 1. 一条命令
 
@@ -27,11 +31,14 @@ bash ~/w7/notes/p7/window2/detach.sh ~/w7/logs/p7w7/window-<sha8>.log ~/w7/notes
 tail -f ~/w7/logs/p7w7/window-<sha8>.log        # 结束行 "=== WINDOW 2 DONE <stamp>"，其后打印 verdict
 ```
 
-`detach.sh` = `setsid nohup … < /dev/null &`，与终端 / 工具 10 min 上限脱钩。**中断后原命令重跑即续**：
+`detach.sh` = `setsid nohup … < /dev/null &`，与终端 / 工具 10 min 上限脱钩；它打印的 pid 是新会话的进程组长，
+要停整个窗口用 `kill -- -<pid>`（只杀 pid 本身会留下正在跑的那一步，且放掉共享锁）。**中断后原命令重跑即续**：
 每步完成写 `<out>/steps/<step>.done`；门 3 逐 (arm, case) 写 `gate3/state/<arm>/<case>.done`——**只在该对要求的每一遍都留下
 `result.json` 与 actual PNG 时才写**，否则日志记 `INCOMPLETE`、`gate3/progress.tsv` 第 6 列 `INCOMPLETE`、不写 `.done`，下次整对重跑
-（残档先删；遍数按首跑冻结在 `gate3/arms.txt` 的 `repeat=`）；CTS 逐块写 `cts/runs/<block>/.done`——**只在 `cts/report-<block>.json`
-存在且有结果时才写**。循环跑完仍有 INCOMPLETE 时 `30-gate3.sh` / `50-cts-after.sh` 退出 3：`window.sh` 不给该步写 `.done`、
+（残档先删；遍数按首跑冻结在 `gate3/arms.txt` 的 `repeat=`）；CTS 逐块写 `cts/runs/<block>/.done`——**只在该块是完整读数时才写**：
+`run_cts.py` 退出 0，且 `60-reduce.py --check-block`（与判读**同一段代码**）确认 `cts/report-<block>.json` 对 caselist 里每个未 skip 的用例
+都有结果、`unrun.txt` 为空；否则不写，原因进 `cts/runs/<block>/complete.txt`。每块另存所跑 caselist 的副本 `cts/runs/<block>/caselist.txt`
+（`caselist.path` 指向的构建树删掉之后，输出目录仍能单独判读）。循环跑完仍有 INCOMPLETE 时 `30-gate3.sh` / `50-cts-after.sh` 退出 3：`window.sh` 不给该步写 `.done`、
 照走后面各步（reduce 与 restore 每次都跑），结尾打 `WINDOW 2 INCOMPLETE … left open`；原命令再跑一次只补缺的——若上一遍已 restore，
 它先以 `21-preflight.sh <stamp>`（不重启）回到**同一** boot 会话（重新钉频、stay-on；boot_id 变了就停；`reboot-clean.txt` 不改写，
 `session/resumed.txt` 记一笔）。
@@ -61,8 +68,8 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
 | 3 | `20-install.sh <stamp>` | `adb install -r`；**设备上 `base.apk` 的 sha256 必须等于签名 APK**，versionName 带 `<sha7>`；等 dex2oat 空闲 | ~1 min |
 | 4 | `30-gate3.sh <stamp>` | 36 例（`--matrix` 的 DirectVulkan 集减 `create-indirect` / `1.21.11-main-menu` / `photon-v1.3b`，冻结在 `gate3/cases.txt`）× 四臂；iterationrp 带 `apk.yml:460-462` 三个 Magma 旋钮；每遍 result.json / actual PNG / 双角色日志 / transport-proof / logcat 归档；每臂前后 pin check；每对前后核 boot_id（§1「会话」），`.done` 只在每遍都有 result.json + actual PNG 时写，否则退出 3 留待续跑 | 55–65 min |
 | 5 | `40-bsl-stats.sh <stamp>` | bsl-esc-menu × {inproc, spawn} 各 1 遍，`MOBILEGL_PIPE_STATS=1 PERIOD=1`；先 force-stop 再起设备端 root 采样器（0.25 s：maps 行数、VmRSS、VmHWM；排除 argv 带 `tcp://` 的 supervisor server）；`wbuf[]` 从归档日志取 | ~1 min |
-| 6 | `50-cts-after.sh <stamp>` | APK 的 arm64 `libMobileGL.so` 推到 `mgcts` 并在设备上核 sha256；AFTER 环境 = `$BASE` 的 flag + `MOBILEGL_TRANSPORT=inproc` + `ROLE_SPLIT_STATE=1 STRICT_ERRORS=1 RUN_AHEAD=1`；臂证明（mgprobe PASS 且 logcat 有 inproc 解析句与 `Config: IPC … strict=1 role-split-state=1 run-ahead=1`、0 Fatal；再用一个 glcts 用例证一次）；五块依次跑（顺序同 `$BASE`），每块 `qpa_report --json`（块的 `.done` 只在 `report-<block>.json` 有结果时写，否则退出 3 留待续跑），最后 `cts_multi_report` 出与 `$BASE` 同形的 JSON；UBO（GTF）块不跑：本 glcts 无 GTF 模块（ID-P7-16） | 6–7 min（pipe 头 lib inproc 实测 358 s；`$BASE` monolith 372 s） |
-| 7 | `60-reduce.py <stamp>` | 写 `verdict.txt` / `verdict.json`（见 §3）；每遍都跑。自检：`python3 60-reduce-selftest.py`（主机，不占设备） | <10 s |
+| 6 | `50-cts-after.sh <stamp>` | APK 的 arm64 `libMobileGL.so` 推到 `mgcts` 并在设备上核 sha256；AFTER 环境 = `$BASE` 的 flag + `MOBILEGL_TRANSPORT=inproc` + `ROLE_SPLIT_STATE=1 STRICT_ERRORS=1 RUN_AHEAD=1`；臂证明（mgprobe PASS 且 logcat 有 inproc 解析句与 `Config: IPC … strict=1 role-split-state=1 run-ahead=1`、0 Fatal；再用一个 glcts 用例证一次，其 StatusCode 记进 `arm-proof.txt`，不是 Pass / Fail 时打 WARN）；五块依次跑（顺序同 `$BASE`），每块 `qpa_report --json`（块的 `.done` 只在 `run_cts` 退出 0 且 `60-reduce.py --check-block` 判完整时写，否则退出 3 留待续跑），最后 `cts_multi_report` 出与 `$BASE` 同形的 JSON；UBO（GTF）块不跑：本 glcts 无 GTF 模块（ID-P7-16） | 6–7 min（pipe 头 lib inproc 实测 358 s；`$BASE` monolith 372 s） |
+| 7 | `60-reduce.py <stamp>` | 写 `verdict.txt` / `verdict.json`（见 §3）；每遍都跑。自检：`python3 60-reduce-selftest.py`（主机，不占设备，~4 s） | <10 s |
 | 8 | `90-restore.sh <stamp>` | Home；`am force-stop` 包（回放后缓存的 app 进程与 spawn 回放留下的 `libMobileGLServer.so @mgl-…` 子进程会一直占着几百 MB）；**把 `$BASE` 库推回 `/data/local/tmp/mgcts`**（设备 sha256 ≠ `$BASE` = `IDENTITY.txt` 的 `7f58aa0b…` 时才推，推后在设备上核 sha，结果行进 `restored.txt`）；supervisor 若开窗时在跑则以 `tcp_device_server.py start --allow-idle`（同 listen / token / Doze 状态文件）在**新 APK**上重启并核实在听；解钉频（MIUI 启动 boost 会让 `check` 短暂读成 DRIFT，重读至多 20 s）；stay-on 复原；每遍都跑（幂等） | ~15 s |
 
 合计：构建 ~6 min + 设备 ~65–80 min ≈ **1.3–1.5 h**。外推依据见 §5。
@@ -71,7 +78,8 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
 
 - **门 3**，先看 `-- session` 行：`session/boot-id.txt` 与四臂的每条记录（`gate3/state/<arm>/<case>.done` 的 `boot_id` / `boot_id_before`、
   每遍 `repeat-NN/boot_id.txt`）必须是**同一个** boot_id；有第二个值、有记录不带 boot_id（含本规则之前的旧 `.done`）、或缺 `session/boot-id.txt`，
-  整门判 **`GATE3 INVALID-SESSION`**，与图无关。会话不是 reboot-clean（`session/reboot-clean.txt`）时末行注明「不是判据」。
+  整门判 **`GATE3 INVALID-SESSION`**，与图无关。全部通过但不是门本身的读数时不记 `PASS`：分母不是 36 记 **`PASS-SUBSET`**，
+  会话不是 reboot-clean（`session/reboot-clean.txt`）记 **`PASS-NOT-REBOOT-CLEAN`**，末行注明「不是判据」，退出码非 0。
   逐例 `PASS / FAIL / INCOMPLETE` + 原因：monolith 本身通过且**确是 monolith**（该遍 `mobilegl.log`（及 client / server 日志）没有
   `Config: IPC` 也没有 `MOBILEGL_TRANSPORT=` 行；没有日志即「未证」）；inproc 与 spawn 各 3 遍齐全、该对有 `.done`、每遍臂证明
   （`transport-proof.json` passed）通过、每遍 ssim ≥ 阈值、**同一臂内三遍 actual PNG SHA-256 相同**、每遍 `|ssim − monolith| ≤ 0.0005`；
@@ -84,25 +92,37 @@ boot_id，与它不同立即停；每对的 `.done` 与每遍归档的 `repeat-N
   不同的例各打一行 `WARN cross-arm <case>: monolith <sha> | inproc <sha> | spawn <sha>`；WARN 不改变该例与门 3 的判定
   （跨臂的门是每遍 `|ssim − monolith| ≤ 0.0005`）。
 - **BSL**：每臂每进程（app / server）的 maps 行数峰值、VmRSS / VmHWM 峰值、`wbuf[wbufs wlivepk wdefpk wdefsync]`。
-- **CTS**：五块（shader-image / ssbo / dsa / texture / packed-pixels）**缺一不可**：每块要有 `cts/runs/<block>/.done` 与非空、有结果的
-  `cts/report-<block>.json`，否则该块记 `MISSING`、整体 `CTS INCOMPLETE`、退出码 ≠ 0。UBO 块（`GTF-GL46.gtf31.GL3Tests.uniform_buffer_object*`，
+- **CTS**：五块（shader-image / ssbo / dsa / texture / packed-pixels）**缺一不可**：每块要有 `cts/runs/<block>/.done`、非空且有结果的
+  `cts/report-<block>.json`，以及读得到、非空的 caselist（先用输出目录里的副本 `runs/<block>/caselist.txt`，没有才用 `caselist.path`
+  所指的文件；指向的文件没了、是空的、或两者都没有，**不**拿报告自己的用例顶替），否则该块记 `MISSING`、整体 `CTS INCOMPLETE`、退出码 ≠ 0——
+  0 例的块永远不是读数。UBO 块（`GTF-GL46.gtf31.GL3Tests.uniform_buffer_object*`，
   `p7-ubo-gl46.txt` 90 例）显式记 `unrun (not in this glcts)`（设备 glcts 无 GTF 模块，ID-P7-16），不入判据。
   每块 BASE 与 AFTER 的 `P/F/NS/W/X`（W = CompatibilityWarning / QualityWarning 等，X = Crash / Timeout / InternalError / ResourceError / DeviceHang / Incomplete），
   **rate = Pass / (Pass + Fail)**（§7.3 原文：NS 不入分母；warning 与 crash 也不在分母里），delta pp；块判据 delta ≥ −0.5 pp、
   **新增 crash = 0 单独硬红**（AFTER 为 X 而 BASE 不是——Fail→Crash 也算——另加 hung.txt；X 也是非 Pass，进 Pass→非 Pass 名单）、`unrun.txt` 为空。
-  `(info)` 列是旧口径 Pass / (结果数 − NS) 的 delta，只供对照，**不判**。另列 Pass→非 Pass 与非 Pass→Pass 的逐例名单；AFTER 高出 0.5 pp 以上只标注不判红。
-- 末行 `WINDOW2 GATE3 <v> | CTS <v> -> exit <n>`：两门都 PASS 才是 0；门 3 没跑（无 `gate3/cases.txt`）记 `NOT-RUN`，同样非 0。
+  两边的 rate 只在**两边都有结果的用例**上算（同口径）；`$BASE` 没有的用例打 `WARN <block>: N case(s) have no $BASE result`，不进两边的 rate，
+  其中的 crash 仍算新增。AFTER 一个 Pass / Fail 都没有而 `$BASE` 有（例如全变 NotSupported：rate 无从算起，`$BASE` 的 Pass 全丢）→ 该块 **FAIL**；
+  `$BASE` 自己没有 Pass / Fail → 该块 INCOMPLETE——算不出 delta 的块永远不是 PASS。NotSupported 数与 `$BASE` 不同时打
+  `WARN <block>: NotSupported …`（只作信息：合同口径 NS 不入分母；变成 NS 的 Pass 在 Pass→非 Pass 名单里）。
+  `(info)` 列与每块的 `info` 行是旧口径 Pass / (结果数 − NS)：BASE、AFTER 两个 rate 与 delta，只供对照，**不判**。另列 Pass→非 Pass 与非 Pass→Pass 的逐例名单；
+  AFTER 高出 0.5 pp 以上只标注不判红。某块用的不是工具树里完整的 `p7-<block>-gl46.txt`（`--limit` 子集）时，全部通过也只记 **`CTS PASS-SUBSET`**。
+- 末行 `WINDOW2 GATE3 <v> | CTS <v> -> exit <n>`：门 3 为 `PASS`（36/36、reboot-clean、同一会话）且 CTS 为 `PASS`（五块完整）才是 0；
+  `PASS-SUBSET` / `PASS-NOT-REBOOT-CLEAN` 不是判据，退出 1；门 3 没跑（无 `gate3/cases.txt`）记 `NOT-RUN`，同样非 0。
   `reduce` 的退出码只作记录：红的门也要走完 restore。
-- 自检（主机，秒级）：`python3 60-reduce-selftest.py`——造目录验：缺块 → `CTS INCOMPLETE`；boot_id 变 / 旧 `.done` / 缺 `boot-id.txt` →
-  `GATE3 INVALID-SESSION`；monolith 日志带 `Config: IPC` → FAIL；跨臂不同 → WARN 仍 PASS；臂内不同 → FAIL；dry run 数据上的合同口径
+- 自检（主机，~4 s）：`python3 60-reduce-selftest.py`（门 3 按 36 例造）——造目录验：缺块 → `CTS INCOMPLETE`；boot_id 变 / 旧 `.done` / 缺 `boot-id.txt` →
+  `GATE3 INVALID-SESSION`；monolith 日志带 `Config: IPC` → FAIL；跨臂不同 → WARN 仍 PASS；臂内不同 → FAIL；**只由 rate 定**的块
+  （dsa 1 / 2 / 4 例 Pass→Fail：−0.270 pp PASS、−0.541 pp FAIL、364/6/0/1/0 −1.081 pp FAIL，无 crash）；caselist 没了 / 为空 / 全 NotSupported
+  → MISSING / FAIL 而非 PASS；2 例门 3、非 reboot-clean、`--limit` CTS → `PASS-SUBSET` / `PASS-NOT-REBOOT-CLEAN` 且退出非 0；
+  `$BASE` 缺的用例与 NS 变化 → WARN；`--check-block` 的 0 / 3；dry run 数据上的合同口径
   （`60-reduce-selftest-pre14e1c8b9.json` = pre-14e1c8b9 五块相对 `$BASE` 的差异）dsa −0.272 pp；`~/w7/logs/devprep/w2/pre-14e1c8b9` 在时再对原始输出验一遍。
+  `--reducer <py>` 可对别的 reducer 跑同一套检查（red-once）。
 
 ## 4. 入库清单 → `docs/Disaggregated/notes/p7/device-window-2/`
 
 `verdict.txt`、`verdict.json`、`timing.tsv`；`session/`（`found.env`、`reboot-clean.txt`、`boot-id*.txt`、`apk.sha256`、`apk-on-device.sha256`、
 `apk-install.txt`、`pin-*.txt`、`device.txt`、`restored.txt`）；`gate3/{cases.txt,excluded.txt,arms.txt,progress.tsv,pin-*.txt}`；
 `bsl/<arm>/{peaks.txt,wbuf.txt,wbuf-gauges.txt}`；`cts/{IDENTITY 即 deploy/IDENTITY.txt,arm-proof.txt,preflight.txt,report-*.txt,report-*.json,after-*.json,after-*.md,pin-*.txt}`、
-`cts/runs/*/{crashed,hung,unrun,skipped}.txt`。归档图像与日志（`gate3/archive/`、`bsl/*/archive/`、qpa）留在 `~/w7/logs/p7w7/<stamp>/`，
+`cts/runs/*/{crashed,hung,unrun,skipped,complete,caselist}.txt` 与 `caselist.path`。归档图像与日志（`gate3/archive/`、`bsl/*/archive/`、qpa）留在 `~/w7/logs/p7w7/<stamp>/`，
 在 README 里记绝对路径（>2 MiB 不入库）。主机制品 `<out>/host/` 与 `host.sha256` 供之后的 TCP 对照（`run_tcp_matrix.py --library/--runner`，同 stamp）。
 
 ## 5. Dry run（2026-09-23，已装 p7w6 APK `45759c30…`，只证管线，不是判据）

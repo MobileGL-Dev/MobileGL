@@ -10,6 +10,8 @@
 #   50-cts-after.sh  five KHR-GL46 blocks, inproc x DirectVulkan, AFTER lib deployed to mgcts
 #   60-reduce.py     gate-3 verdict per case, bsl peaks, CTS delta table + new-crash list
 #   90-restore.sh    Home, supervisor as found, unpin, stay-on as found, $BASE lib back in mgcts
+# From preflight to restore the window holds the wave's shared device lock ($W2_SHARED_LOCK, the
+# one other agents take with 'flock -w 3600 ... <cmd>'; it waits up to W2_SHARED_LOCK_WAIT s for it).
 # Each finished step leaves <out>/steps/<step>.done; a re-run skips it (gate3 / cts also resume
 # inside a step). A step that exits 3 (gate3 / cts: loop finished, some pairs / blocks INCOMPLETE)
 # is NOT marked done and the sequence carries on; a re-run of the same command retries only what
@@ -51,12 +53,17 @@ step() {  # <name> <command...>
         log "--- $name: INCOMPLETE after $(( $(date +%s) - t0 ))s - not marked done; the next run of this command retries what is missing"
         return 0
     fi
+    [ $rc -eq "$W2_SHARED_LOCK_RC" ] && die "--- $name: the shared device lock $W2_SHARED_LOCK was not free within ${W2_SHARED_LOCK_WAIT}s (another agent holds $W2_SERIAL); run the same command later"
     [ $rc -eq 0 ] || die "--- $name failed (rc=$rc); fix the cause and run the same command"
     date -Is > "$OUT/steps/$name.done"
     log "--- $name: OK in $(( $(date +%s) - t0 ))s"
 }
 
 step build     bash "$HERE/10-build.sh" "$SHA" "$STAMP"
+# From here to the end the window holds the wave's shared device lock (lib.sh w2_shared_lock: this
+# script is re-run under `flock -o`; the build above is done by then and skipped by the re-run), so no
+# other agent gets the phone between two steps; the steps see W2_SHARED_LOCK_HELD and do not re-take it.
+w2_shared_lock
 step preflight bash "$HERE/21-preflight.sh" "$STAMP" $REBOOT
 step install   bash "$HERE/20-install.sh" "$STAMP"
 # A previous pass restored the phone (unpinned, stay-on as found) with device steps still open:

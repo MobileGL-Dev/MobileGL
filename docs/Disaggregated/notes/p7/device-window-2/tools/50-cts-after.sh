@@ -13,11 +13,16 @@
 #
 # Arm proof before any block: mgprobe (the SKILL step-5 preflight) and one glcts case, each under
 # the AFTER environment, must log ConfigLoader's "Config: MOBILEGL_TRANSPORT=inproc - the MGPipe
-# record stream" and a "Config: IPC" line with strict=1 role-split-state=1 run-ahead=1.
-# RESUMABLE per block (<out>/cts/runs/<block>/.done), and a block's .done is written ONLY when its
-# report-<block>.json exists and holds results: a block without one is logged INCOMPLETE and redone
-# from scratch by the next run (exit 3 = the loop finished with such blocks; window.sh carries on
-# and leaves the step for the next run). 60-reduce.py requires all five blocks. The UBO block
+# record stream" and a "Config: IPC" line with strict=1 role-split-state=1 run-ahead=1; the proof
+# case's StatusCode is recorded in arm-proof.txt (a WARN when it is neither Pass nor Fail).
+# RESUMABLE per block (<out>/cts/runs/<block>/.done), and a block's .done is written ONLY when the
+# block is a complete reading: run_cts.py exited 0 and 60-reduce.py --check-block (the very test the
+# verdict applies) finds report-<block>.json with a result for every non-skipped case of the
+# caselist and unrun.txt empty. Otherwise the block is logged INCOMPLETE (runs/<block>/complete.txt
+# says why) and redone from scratch by the next run (exit 3 = the loop finished with such blocks;
+# window.sh carries on and leaves the step for the next run). Each block keeps a copy of the
+# caselist it ran (runs/<block>/caselist.txt) beside its path, so the window's output reduces on its
+# own after the build tree is gone. 60-reduce.py requires all five blocks. The UBO block
 # (GTF-GL46 uniform_buffer_object) is not run: this glcts has no GTF module (ID-P7-16).
 # --limit N runs the first N cases of each block (the dry run). --restore-base-lib re-pushes the
 # $BASE library at once; 90-restore.sh does it at the end of every window anyway.
@@ -93,6 +98,14 @@ if [ ! -f "$OUT/preflight.done" ]; then
     Ash "cd $W2_CTS_DEV && echo $first > p7w7-proof.txt && $DEV_ENV LD_LIBRARY_PATH=. ./glcts --deqp-caselist-file=p7w7-proof.txt --deqp-surface-type=fbo --deqp-surface-width=256 --deqp-surface-height=256 --deqp-gl-config-name=rgba8888d24s8 --deqp-terminate-on-device-lost=disable --deqp-log-images=disable --deqp-log-shader-sources=disable --deqp-log-filename=p7w7-proof.qpa > /dev/null 2>&1; echo RC=\$?; grep -o 'StatusCode=\"[A-Za-z]*\"' p7w7-proof.qpa; rm -f p7w7-proof.txt p7w7-proof.qpa" > "$OUT/proof-glcts.txt" 2>&1
     A logcat -d > "$OUT/proof-glcts-logcat.txt" 2>&1
     arm_proof "glcts $first" "$OUT/proof-glcts-logcat.txt" | tee -a "$OUT/arm-proof.txt" || die "glcts did not prove the inproc arm (see $OUT/proof-glcts-logcat.txt)"
+    # Information: a proof case that is NotSupported (or crashed) says the AFTER library may not
+    # reach a GL 4.6 core context at all; 60-reduce.py FAILs a block without a single Pass/Fail.
+    proof_status=$(sed -n 's/.*StatusCode="\([A-Za-z]*\)".*/\1/p' "$OUT/proof-glcts.txt" | sed -n 1p)
+    echo "glcts $first: StatusCode=${proof_status:-none}" | tee -a "$OUT/arm-proof.txt"
+    case "$proof_status" in
+        Pass|Fail) ;;
+        *) log "WARN: the proof case $first gave StatusCode=${proof_status:-none} under the AFTER environment (see $OUT/proof-glcts.txt)";;
+    esac
     touch "$OUT/preflight.done"
 fi
 
@@ -110,6 +123,7 @@ for b in $BLOCKS; do
         caselist="$OUT/caselists/p7-$b-gl46.first$LIMIT.txt"
     fi
     echo "$caselist" > "$run/caselist.path"
+    cp "$caselist" "$run/caselist.txt"
     pin=$(w2_pin_check "$W2_TOOLS" "$OUT/pin-before-$b.txt")
     w2_wake
     log "block $b start ($(grep -vc '^#' "$caselist") cases, pin $pin)"
@@ -127,13 +141,17 @@ for b in $BLOCKS; do
     for f in unrun hung crashed; do [ -s "$run/$f.txt" ] && log "  [$b] $f.txt: $(wc -l < "$run/$f.txt") lines"; done
     grep -E 'Pass|Fail|NotSupported|Crash|rate' "$OUT/report-$b.txt" | head -8 | sed "s/^/  [$b] /"
     w2_timing "$(w2_out "$STAMP")" "cts-$b" "$t0" "$t1" "limit=$LIMIT"
-    if [ -s "$OUT/report-$b.json" ] && python3 -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))["results"] else 1)' \
-            "$OUT/report-$b.json" 2> /dev/null; then
+    # The verdict's own completeness test (60-reduce.py block_scope), so a block the reducer would
+    # call INCOMPLETE is never frozen by a .done that a resume then skips.
+    complete=$(python3 "$W2_HERE/60-reduce.py" --check-block "$run" "$OUT/report-$b.json" 2>&1); crc=$?
+    [ $rc -eq 0 ] || { complete="run_cts.py rc=$rc; $complete"; crc=3; }
+    echo "$complete" > "$run/complete.txt"
+    if [ $crc -eq 0 ]; then
         printf 'rc=%s seconds=%s pin_after=%s finished=%s\n' "$rc" "$((t1 - t0))" "$pin" "$(date -Is)" > "$run/.done"
-        log "block $b rc=$rc $((t1 - t0))s"
+        log "block $b rc=$rc $((t1 - t0))s: $complete"
     else
         INCOMPLETE=$((INCOMPLETE + 1))
-        log "block $b rc=$rc $((t1 - t0))s INCOMPLETE: no report-$b.json with results (qpa_report rc=$qrc, see $OUT/report-$b.txt); no .done, the next run redoes the block"
+        log "block $b rc=$rc $((t1 - t0))s INCOMPLETE: $complete (qpa_report rc=$qrc, see $OUT/report-$b.txt); no .done, the next run redoes the block"
     fi
 done
 
@@ -154,7 +172,7 @@ if [ $RESTORE_BASE -eq 1 ]; then
 fi
 w2_timing "$(w2_out "$STAMP")" cts "$t_all" "$(date +%s)" "blocks=[$BLOCKS] limit=$LIMIT incomplete=$INCOMPLETE"
 if [ $INCOMPLETE -gt 0 ]; then
-    log "=== CTS AFTER INCOMPLETE $STAMP: $INCOMPLETE block(s) without a report; run the same command again to redo them ==="
+    log "=== CTS AFTER INCOMPLETE $STAMP: $INCOMPLETE block(s) not a complete reading (runs/<block>/complete.txt); run the same command again to redo them ==="
     exit 3
 fi
 log "=== CTS AFTER DONE $STAMP ==="
