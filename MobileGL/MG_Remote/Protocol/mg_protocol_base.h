@@ -56,6 +56,13 @@ extern "C" {
 // control message changed shape, so a peer built before a control-schema change agreed with one
 // built after it and the difference surfaced as whatever the first misread field did. Bump this
 // with every protocol.fbs change a peer must agree on.
+//
+// THE PIN. This is a hand-bumped integer, and the bump is the only thing that moves the
+// fingerprint - so a protocol.fbs edit that forgot it would put old and new peers back in
+// silent agreement. scripts/ci/protocol_revision_pin.py holds {revision -> sha256(protocol.fbs)}
+// (protocol_revision_pins.json) and refuses a schema whose digest is not the current revision's;
+// it runs as ProtocolSchema.RevisionPinsDigest (label unit) and in CI's flatc-check job. After a
+// bump: `python3 scripts/ci/protocol_revision_pin.py --write` records the new row.
 //   1  P7 wave 2-F, PH-7 (4): Welcome.dataNonce and the DataBind message.
 #define MOBILEGL_PROTOCOL_CONTROL_REVISION 1
 

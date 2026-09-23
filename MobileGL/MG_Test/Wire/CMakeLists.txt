@@ -146,6 +146,19 @@ foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest 
     gtest_discover_tests(${wiretest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach ()
 
+# P7 wave 2-F, F fix round (PH-7 (4) review). MOBILEGL_PROTOCOL_CONTROL_REVISION is a hand-bumped
+# integer mixed into wireFingerprint, and nothing tied it to protocol.fbs's content: a schema edit
+# that forgot the bump would leave old and new peers agreeing on the fingerprint and surface as a
+# silently absent field. This entry runs the pin ({revision -> sha256(protocol.fbs)},
+# scripts/ci/protocol_revision_pin.py) with its self-test, so that edit is red in the unit lane.
+# No compilation, no GL; label unit, the way MobileGLPurity.IncludeClosure is registered.
+find_package(Python3 COMPONENTS Interpreter)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME ProtocolSchema.RevisionPinsDigest
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/ci/protocol_revision_pin.py --self-test)
+    set_tests_properties(ProtocolSchema.RevisionPinsDigest PROPERTIES LABELS unit)
+endif ()
+
 # P6.5 manual fault-injection probe: requires an explicit live peer and is never
 # registered with ctest, so a device-less unit run cannot silently skip this gate.
 if (NOT WIN32)

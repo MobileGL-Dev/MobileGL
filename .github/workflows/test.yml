@@ -2217,6 +2217,16 @@ jobs:
       - name: Fail if the committed header is stale
         run: git diff --exit-code -- MobileGL/MG_Remote/Protocol/generated/protocol_generated.h
 
+      # P7 wave 2-F, F fix round (PH-7 (4) review). MOBILEGL_PROTOCOL_CONTROL_REVISION is mixed
+      # into wireFingerprint so a control-schema change refuses an old peer by name - but it is a
+      # hand-bumped integer, and nothing tied it to protocol.fbs's content. This step pins
+      # sha256(protocol.fbs) to the revision (scripts/ci/protocol_revision_pins.json): a schema
+      # edit that forgot the bump is red HERE, in the job that regenerates the header on every
+      # such edit, and not a silently absent field between an old server and a new client. Its
+      # self-test proves the check goes red on both perturbations before it says green.
+      - name: Fail if protocol.fbs changed without a MOBILEGL_PROTOCOL_CONTROL_REVISION bump
+        run: python3 scripts/ci/protocol_revision_pin.py --self-test
+
   # P0.5 interface-purity gate A (ARCHITECTURE.md:501): the two extracted headers' include closure,
   # asserted on `-H` output because `nm --undefined-only` is blind to "included but not called" -
   # a header whose types are never named leaves no symbol behind, and "included at all" is exactly
