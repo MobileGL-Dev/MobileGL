@@ -681,6 +681,14 @@ if (ANDROID)
         MobileGL/MG_Util/SelfTest/DriverPostJni.cpp
         MobileGL/MG_Util/SelfTest/DriverBenchJni.cpp
     )
+    if (MOBILEGL_BUILD_DISAGGREGATED)
+        # P12 (on-screen server window): the trace APK's MobileGLDisplayActivity - the in-process
+        # display server's thread, its SurfaceView's ANativeWindow in and out of ServerDisplay, and
+        # the geometry up-call. Split build only: nothing else has an in-process server to drive.
+        list(APPEND SOURCE_FILES
+            MobileGL/MG_Remote/Server/DisplayServerJni.cpp
+        )
+    endif()
 endif()
 
 if (WIN32)
