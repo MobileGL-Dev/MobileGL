@@ -1,0 +1,42 @@
+=== START Thu Sep 24 12:31:49 UTC 2026 head=3c342c97 dirty=0 ===
+ninja: no work to do.
+=== split build rc=0 ===
+(pull build and G1 run separately)
+fatal census: 79 abort sites over 20 files of the split server image, 45 distinct family words, 3 refusal words, 0 unmarked
+link-ratchet: ratchet: unchanged at 171 symbol(s)
+parity errors: 1
+protocol revision pin: revision 3 holds (sha256 da09f0acb48cf245..., 3 revision(s) pinned)
+wire-declines: 53 rows, 53 with sites, 53 site(s) total, 0 unlogged, 0 unknown
+=== HYGIENE ===
+hygiene gen_pipe OK
+hygiene gen_pipe_self OK
+hygiene link_seam OK
+hygiene memo_purity OK
+hygiene symbol_report OK
+hygiene stdio OK
+hygiene dirty_surface OK
+hygiene field_ownership OK
+hygiene r16 OK
+hygiene g5_p3a OK
+hygiene g5_p4a OK
+hygiene doc_citations OK
+lane unit                         100% tests passed out of 2605
+lane integration-split            88% tests passed, 1 tests failed out of 8
+    FAILED: 7464:SplitLogPaths.PrivateAndDistinct
+lane integration-spawn            100% tests passed out of 1
+lane integration-tcp              100% tests passed out of 3
+lane integration-magma-split      100% tests passed out of 125
+lane integration-magma-spawn      100% tests passed out of 104
+lane integration-magma-tcp        100% tests passed out of 89
+lane integration-magma-full-split 99% tests passed, 1 tests failed out of 558
+    FAILED: 5979:DirectVulkan.Split.Full.IterationRPProgram203Scenario.FixedCompleteInputProducesFixedCompleteGoldenOutput
+lane integration-gpu[monolith]    99% tests passed, 4 tests failed out of 2188
+    FAILED: 4024:DirectGLES.Split.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares
+    FAILED: 4027:DirectGLES.Spawn.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares
+    FAILED: 4030:DirectGLES.Tcp.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares
+    FAILED: 4728:DirectGLES.Split.SmallRing.PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares
+lane integration-gpu[inproc]      99% tests passed, 3 tests failed out of 2188
+    FAILED: 3783:DirectGLES.F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow
+    FAILED: 3784:DirectGLES.F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer
+    FAILED: 3785:DirectGLES.F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer
+=== DONE Thu Sep 24 12:46:07 UTC 2026 ===
