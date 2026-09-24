@@ -5495,8 +5495,53 @@ TEST(EsprytServerSession, TheServerBackendsDestructionDropsEveryTwinTheSessionBu
     GL::BufferImpl::g_backendBufferResources = {};
     MG_Config::Transport = previousTransport;
 }
+
+// P12 review fix (major): THE UNIT SHADOWS GO WITH THE TWINS THEY POINT AT. A texture / sampler twin
+// scrubs itself out of g_boundTexturesCache / g_boundSamplersCache in its destructor, except under
+// InProcessTeardown() - which answers true for every twin the session end drops. The shadows then
+// held raw pointers to freed twins, and the next session's twin allocated at a recycled address read
+// "already bound" and skipped its glBindTexture / glBindSampler on the new context: its uploads went
+// to texture 0 and it rendered black. The shadow entries here stand for the ended session's binds (the
+// addresses are never dereferenced), and the active-unit shadow for its last glActiveTexture. Red with
+// the three resets in DropEveryTwinForEndedServerSession deleted: every expectation below fails.
+TEST(EsprytServerSession, TheServerBackendsDestructionEmptiesTheTextureAndSamplerUnitShadows) {
+    using namespace MobileGL;
+    namespace GL = MG_Backend::DirectGLES;
+    const auto previousTransport = MG_Config::Transport;
+    const auto previousTextures = GL::TextureImpl::g_boundTexturesCache;
+    const auto previousSamplers = GL::SamplerImpl::g_boundSamplersCache;
+    const auto previousUnit = GL::TextureImpl::g_activeTextureUnit;
+    alignas(64) static unsigned char endedTexture[64];
+    alignas(64) static unsigned char endedSampler[64];
+    const auto texture2DSlot = static_cast<SizeT>(TextureTarget::Texture2D);
+
+    MG_Config::Transport = MG_Config::TransportMode::Spawn;
+    GL::TextureImpl::g_boundTexturesCache[0][texture2DSlot] =
+        reinterpret_cast<GL::TextureImpl::BackendTextureObject*>(endedTexture);
+    GL::TextureImpl::g_boundTexturesCache[3][texture2DSlot] =
+        reinterpret_cast<GL::TextureImpl::BackendTextureObject*>(endedTexture);
+    GL::SamplerImpl::g_boundSamplersCache[3] = reinterpret_cast<GL::SamplerImpl::BackendSamplerObject*>(endedSampler);
+    GL::TextureImpl::g_activeTextureUnit = 3;
+    { GL::BackendObject_DirectGLES serverBackend; }
+    EXPECT_EQ(GL::TextureImpl::g_boundTexturesCache[0][texture2DSlot], nullptr)
+        << "unit 0's texture shadow still names the ended session's twin: a twin recycled at that address "
+           "skips its glBindTexture and the next session's upload lands on texture 0";
+    EXPECT_EQ(GL::TextureImpl::g_boundTexturesCache[3][texture2DSlot], nullptr);
+    EXPECT_EQ(GL::SamplerImpl::g_boundSamplersCache[3], nullptr)
+        << "unit 3's sampler shadow still names the ended session's sampler twin";
+    EXPECT_EQ(GL::TextureImpl::g_activeTextureUnit, 0u)
+        << "the new context's active unit is GL_TEXTURE0, and a shadow saying 3 skips glActiveTexture(3)";
+
+    GL::TextureImpl::g_boundTexturesCache = previousTextures;
+    GL::SamplerImpl::g_boundSamplersCache = previousSamplers;
+    GL::TextureImpl::g_activeTextureUnit = previousUnit;
+    MG_Config::Transport = previousTransport;
+}
 #else
 TEST(EsprytServerSession, TheServerBackendsDestructionDropsEveryTwinTheSessionBuilt) {
+    GTEST_SKIP() << "a server backend exists only in the split build (MOBILEGL_BUILD_DISAGGREGATED)";
+}
+TEST(EsprytServerSession, TheServerBackendsDestructionEmptiesTheTextureAndSamplerUnitShadows) {
     GTEST_SKIP() << "a server backend exists only in the split build (MOBILEGL_BUILD_DISAGGREGATED)";
 }
 #endif

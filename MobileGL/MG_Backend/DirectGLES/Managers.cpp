@@ -421,6 +421,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::g_backendTextureObjects = {};
         RenderbufferImpl::g_backendRenderbufferObjects = {};
         BufferImpl::g_backendBufferResources = {};
+        // P12 review fix (major): AND THE UNIT SHADOWS THAT POINT AT THEM. A texture or sampler twin
+        // scrubs itself out of g_boundTexturesCache / g_boundSamplersCache in its destructor - but
+        // not under InProcessTeardown(), which answered true for every twin just dropped. Left
+        // behind, those raw pointers name freed twins; the next session's twin allocated at the same
+        // address then reads "already bound" and skips its glBindTexture / glBindSampler on a
+        // context where nothing is bound, so its uploads land on texture 0 and it samples black.
+        // The new context's active unit is GL_TEXTURE0, so the active-unit shadow goes back to 0 too.
+        TextureImpl::g_boundTexturesCache = {};
+        TextureImpl::g_activeTextureUnit = 0;
+        SamplerImpl::g_boundSamplersCache = {};
         g_serverSessionTwinTeardown = false;
         MGLOG_I("DirectGLES: the ended server session's twins are dropped (every kind, no driver call); the next "
                 "session in this process starts from empty twin tables");
