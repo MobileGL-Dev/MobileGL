@@ -13,6 +13,21 @@
             android:exported="true"
             android:foregroundServiceType="dataSync"
             android:process=":mglsrv" />
+        <!-- P12 (on-screen server window): the ON-SCREEN display server. Its own process (:mglwin)
+             runs the TCP server on a thread and renders a headless client's window surface
+             (MOBILEGL_IPC_SURFACE=server) onto its SurfaceView. One server at a time: starting it
+             stops MobileGLServerService, starting the service kills :mglwin. Software window
+             rendering keeps HWUI off EGL here (Espryt's teardown terminates the default display);
+             configChanges keeps the Surface through rotation and overlay changes. -->
+        <activity
+            android:name=".MobileGLDisplayActivity"
+            android:configChanges="@integer/trace_replay_config_changes"
+            android:exported="true"
+            android:hardwareAccelerated="false"
+            android:launchMode="singleTop"
+            android:process=":mglwin"
+            android:taskAffinity="${applicationId}.mglwin"
+            android:theme="@style/Theme.MobileGLPlugin" />
         <activity
             android:name=".PluginActivity"
             tools:node="remove" />

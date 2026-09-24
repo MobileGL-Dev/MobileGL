@@ -1,23 +1,29 @@
 package top.mobilegl.plugin;
 
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
+import java.util.List;
 import java.util.Map;
 
 /** Trace-only entry point for a TCP supervisor; EGL belongs to its session children. */
 public final class MobileGLServerService extends Service {
     private static final String TAG = "MobileGLServer";
     private static final String CHANNEL = "mobilegl-server";
+    // P12 (D8): the on-screen display server's process. Only one server is active on the device.
+    private static final long DISPLAY_SERVER_EXIT_WAIT_MS = 5000;
     private volatile Process supervisor;
     private PowerManager.WakeLock wakeLock;
 
@@ -38,14 +44,53 @@ public final class MobileGLServerService extends Service {
         wakeLock.acquire();
     }
 
-    // Keep the replay runner's KEY=VALUE;KEY grammar, including unset and empty values.
-    static void applyEnvironment(Map<String, String> env, String overrides) {
-        if (overrides == null) return;
-        for (String entry : overrides.split(";", -1)) {
-            int separator = entry.indexOf('=');
-            if (entry.isEmpty() || separator == 0) continue;
-            if (separator < 0) env.remove(entry);
-            else env.put(entry.substring(0, separator), entry.substring(separator + 1));
+    // P12 (D8): ONLY ONE SERVER IS ACTIVE ON THE DEVICE. The on-screen display server runs in the
+    // display Activity's process (:mglwin) and listens on the same port; before the offscreen
+    // supervisor is exec'd, that Activity's task is removed (so it is not restarted from recents)
+    // and its process is killed - same uid, so Process.killProcess may - and waited out, bounded,
+    // so its listener is gone before the supervisor binds.
+    private void stopDisplayServer() {
+        ActivityManager activities = getSystemService(ActivityManager.class);
+        ComponentName display = new ComponentName(this, MobileGLDisplayActivity.class);
+        try {
+            for (ActivityManager.AppTask task : activities.getAppTasks()) {
+                ActivityManager.RecentTaskInfo info = task.getTaskInfo();
+                if (info != null && display.equals(info.baseIntent.getComponent())) {
+                    Log.i(TAG, "removing the on-screen display server's task (P12 D8: one server at a time)");
+                    task.finishAndRemoveTask();
+                }
+            }
+        } catch (RuntimeException error) {
+            Log.w(TAG, "could not inspect the display server's task", error);
+        }
+        String processName = getPackageName() + ":mglwin";
+        long deadline = SystemClock.uptimeMillis() + DISPLAY_SERVER_EXIT_WAIT_MS;
+        int killed = -1;
+        for (;;) {
+            int pid = -1;
+            List<ActivityManager.RunningAppProcessInfo> processes = activities.getRunningAppProcesses();
+            if (processes != null) {
+                for (ActivityManager.RunningAppProcessInfo process : processes) {
+                    if (processName.equals(process.processName)) pid = process.pid;
+                }
+            }
+            // AMS forgets a dead process a moment after it is gone; /proc is the ground truth.
+            if (pid < 0 || !new File("/proc/" + pid).exists()) {
+                if (killed > 0) Log.i(TAG, "on-screen display server " + processName + " pid=" + killed + " is gone");
+                return;
+            }
+            if (pid != killed) {
+                Log.i(TAG, "stopping the on-screen display server " + processName + " pid=" + pid
+                        + " (P12 D8: one server at a time)");
+                android.os.Process.killProcess(pid);
+                killed = pid;
+            }
+            if (SystemClock.uptimeMillis() >= deadline) {
+                Log.e(TAG, "on-screen display server " + processName + " pid=" + pid + " still exists after "
+                        + DISPLAY_SERVER_EXIT_WAIT_MS + " ms; starting the supervisor anyway");
+                return;
+            }
+            SystemClock.sleep(50);
         }
     }
 
@@ -54,6 +99,7 @@ public final class MobileGLServerService extends Service {
             Log.w(TAG, "supervisor already running; stop the service before reconfiguring");
             return START_NOT_STICKY;
         }
+        stopDisplayServer();
         String endpoint = intent == null ? null : intent.getStringExtra("listen");
         if (endpoint == null) endpoint = "tcp://127.0.0.1:40613";
         try {
@@ -61,17 +107,13 @@ public final class MobileGLServerService extends Service {
             ProcessBuilder builder = new ProcessBuilder(executable.getAbsolutePath(), endpoint, "--serve");
             builder.directory(getFilesDir()).redirectErrorStream(true);
             Map<String, String> env = builder.environment();
-            applyEnvironment(env, intent == null ? null : intent.getStringExtra("env"));
-            env.put("MOBILEGL_IPC_ROLE", "server");
-            env.put("MOBILEGL_IPC_DIAL", "no");
-            env.put("MOBILEGL_IPC_LOG_FORWARD", "1");
-            for (String name : new String[]{"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_ENDPOINT",
-                    "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB"}) {
-                env.remove(name);
-            }
-            env.put("MOBILEGL_IPC_TOKEN", intent == null || intent.getStringExtra("token") == null
-                    ? "" : intent.getStringExtra("token"));
-            env.putIfAbsent("MOBILEGL_LOG_FILE_PATH", new File(getFilesDir(), "mgl.log").getAbsolutePath());
+            // The replay runner's KEY=VALUE;KEY grammar (unset and empty values included) and the
+            // server role's forced keys, shared with MobileGLDisplayActivity (P12 D7).
+            ServerEnvironment.applyServerRole(env,
+                    intent == null ? null : intent.getStringExtra("env"),
+                    intent == null ? null : intent.getStringExtra("token"),
+                    /*backend=*/null,
+                    new File(getFilesDir(), "mgl.log").getAbsolutePath());
             env.put("LD_LIBRARY_PATH", getApplicationInfo().nativeLibraryDir);
             supervisor = builder.start();
             final Process child = supervisor;
