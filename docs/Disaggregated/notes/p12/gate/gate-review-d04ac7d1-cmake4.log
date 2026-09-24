@@ -1,0 +1,50 @@
+=== START Thu Sep 24 13:06:27 UTC 2026 head=d04ac7d1 dirty=0 ===
+ninja: no work to do.
+=== split build rc=0 ===
+(pull build and G1 run separately)
+fatal census: 79 abort sites over 20 files of the split server image, 45 distinct family words, 3 refusal words, 0 unmarked
+link-ratchet: ratchet: unchanged at 171 symbol(s)
+parity errors: 1
+protocol revision pin: revision 3 holds (sha256 da09f0acb48cf245..., 3 revision(s) pinned)
+wire-declines: 53 rows, 53 with sites, 53 site(s) total, 0 unlogged, 0 unknown
+=== HYGIENE ===
+hygiene gen_pipe OK
+hygiene gen_pipe_self OK
+hygiene link_seam OK
+hygiene memo_purity OK
+hygiene symbol_report OK
+hygiene stdio OK
+hygiene dirty_surface OK
+hygiene field_ownership OK
+hygiene r16 OK
+hygiene g5_p3a OK
+hygiene g5_p4a OK
+hygiene doc_citations OK
+lane unit                         100% tests passed out of 2605
+lane integration-split            86% tests passed, 1 tests failed out of 7
+    FAILED: 7464:SplitLogPaths.PrivateAndDistinct
+lane integration-spawn            100% tests passed out of 1
+lane integration-tcp              100% tests passed out of 3
+lane integration-magma-split      100% tests passed out of 75
+lane integration-magma-spawn      100% tests passed out of 75
+lane integration-magma-tcp        100% tests passed out of 65
+lane integration-magma-full-split 100% tests passed out of 558
+lane integration-gpu[monolith]    6% tests passed, 2052 tests failed out of 2188
+    FAILED: 2604:DirectGLES.OrientationScenario.OffscreenPassRendersUpright
+    FAILED: 2605:DirectGLES.OrientationScenario.DefaultFramebufferPassRendersUpright
+    FAILED: 2606:DirectGLES.OrientationScenario.DefaultFramebufferSurvivesAnOffscreenPass
+    FAILED: 2607:DirectGLES.OrientationScenario.DefaultFramebufferAfterOffscreenIsNotFlipped
+    FAILED: 2608:DirectGLES.OrientationScenario.OrientationIsStableAcrossFrames
+    FAILED: 2609:DirectGLES.OrientationScenario.QuadrantSignatureSeparatesEverySquareSymmetry
+    FAILED: 2610:DirectGLES.OrientationScenario.SubViewportDrawLandsWhereGLPutsIt
+    FAILED: 2611:DirectGLES.OrientationScenario.SubRectReadbackReturnsTheRequestedBandUpright
+lane integration-gpu[inproc]      6% tests passed, 2052 tests failed out of 2188
+    FAILED: 2604:DirectGLES.OrientationScenario.OffscreenPassRendersUpright
+    FAILED: 2605:DirectGLES.OrientationScenario.DefaultFramebufferPassRendersUpright
+    FAILED: 2606:DirectGLES.OrientationScenario.DefaultFramebufferSurvivesAnOffscreenPass
+    FAILED: 2607:DirectGLES.OrientationScenario.DefaultFramebufferAfterOffscreenIsNotFlipped
+    FAILED: 2608:DirectGLES.OrientationScenario.OrientationIsStableAcrossFrames
+    FAILED: 2609:DirectGLES.OrientationScenario.QuadrantSignatureSeparatesEverySquareSymmetry
+    FAILED: 2610:DirectGLES.OrientationScenario.SubViewportDrawLandsWhereGLPutsIt
+    FAILED: 2611:DirectGLES.OrientationScenario.SubRectReadbackReturnsTheRequestedBandUpright
+=== DONE Thu Sep 24 13:11:45 UTC 2026 ===
