@@ -463,6 +463,29 @@ private:
             }
             return;
         }
+#else
+        if (shouldCreateWindowSurface()) {
+            // P12 (on-screen server window), D9. A LINUX REPLAY HAS NO WINDOW OF ITS OWN: the window
+            // surface is the MobileGL SERVER's (MOBILEGL_IPC_SURFACE=server, WindowKind::ServerOwned),
+            // so the native window is none and the size the trace wants rides EGL_WIDTH/EGL_HEIGHT.
+            // Without that knob MobileGL refuses a null window (EGL_BAD_NATIVE_WINDOW) and this says
+            // why. resize() re-creates the surface at the new size, as it does the pbuffer.
+            const EGLint windowAttribs[] = {
+                    EGL_WIDTH, surfaceWidth,
+                    EGL_HEIGHT, surfaceHeight,
+                    EGL_NONE,
+            };
+            surface = gEgl.createWindowSurface(gDisplay, static_cast<const EglVisual *>(visual)->config,
+                                               EGLNativeWindowType{}, windowAttribs);
+            if (surface == EGL_NO_SURFACE) {
+                std::cerr << "error: EGL window surface creation failed: 0x" << std::hex << gEgl.getError()
+                          << std::dec
+                          << " - a Linux replay has no window of its own; --window-surface renders on the "
+                             "MobileGL server's window and needs MOBILEGL_IPC_SURFACE=server against a server "
+                             "that owns a display\n";
+            }
+            return;
+        }
 #endif
         const EGLint attribs[] = {
                 EGL_WIDTH, surfaceWidth,
