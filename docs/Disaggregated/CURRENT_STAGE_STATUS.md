@@ -4,7 +4,7 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移——✅ 已收官（2026-09-23，ID-P7-63）**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-24（P12 子集）** · 计划与交接 [notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md)。**P12「server 自有屏幕窗口」子集已实现、未收官、这条线只存在于 `p12/onscreen`**（15 提交，自 `9f669e52` 起）：Android 上的 server 自建 `ANativeWindow`（自己的 SurfaceView）把渲染流**上屏**，离屏路径保留，同一时刻只一条活跃；client 以新的 `WindowKind::ServerOwned` **完全无头**接入（控制修订 3）。主机门除一条既有环境敏感项外全绿，G1（pull 构建 `.text` `0xa52203`、符号 0/0）已独立复核；真机 Redmi `2f7cbe2e` 上七项编号检查过了双后端上屏、串行/Busy、失窗 device-lost、离屏不回归、无显示具名拒绝、一台设备一个 server。**两个出口门都还没打**：跨机 TCP（门 b）完全未做，FCL + 杀 server 的 device-lost（门 a）未做——本轮的真机是 trace_replay 经 `adb forward` 环路驱动的。上一阶段 **P7 已收官（2026-09-23，ID-P7-63）**：§8 九项全绿——终局窗口 3（`p7w8-78e71f2b`）门 3 PASS 36/36、门 5 PASS；门 4 以 `# P13` 读法关闭。
+**更新：2026-09-24（P12 子集）** · 计划与交接 [notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md)。**P12「server 自有屏幕窗口」子集已实现、未收官，已并入 `feat/disaggregated`**（15 提交自 `9f669e52` 起，加审查轮 10 个问题的修复——两个大项：批内失窗、会话间 Espryt 单元影子悬空；裁定 [notes/p12/INTEGRATOR-DECISIONS-P12.md](notes/p12/INTEGRATOR-DECISIONS-P12.md) ID-P12-5–15，主机门与 G1 见 ID-P12-14/15，**审查轮之后未上真机复测**，ID-P12-13）：Android 上的 server 自建 `ANativeWindow`（自己的 SurfaceView）把渲染流**上屏**，离屏路径保留，同一时刻只一条活跃；client 以新的 `WindowKind::ServerOwned` **完全无头**接入（控制修订 3）。主机门除一条既有环境敏感项外全绿，G1（pull 构建 `.text` `0xa52203`、符号 0/0）已独立复核；真机 Redmi `2f7cbe2e` 上七项编号检查过了双后端上屏、串行/Busy、失窗 device-lost、离屏不回归、无显示具名拒绝、一台设备一个 server。**两个出口门都还没打**：跨机 TCP（门 b）完全未做，FCL + 杀 server 的 device-lost（门 a）未做——本轮的真机是 trace_replay 经 `adb forward` 环路驱动的。上一阶段 **P7 已收官（2026-09-23，ID-P7-63）**：§8 九项全绿——终局窗口 3（`p7w8-78e71f2b`）门 3 PASS 36/36、门 5 PASS；门 4 以 `# P13` 读法关闭。
 
 **更新：2026-09-23（ID-P7-49–63）** · 交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。**P7 收官**：§8 九项全绿。CI 七根因修、F2、门 5 三缺陷、codex 收官审查修复、spawn 冷启动心跳（协议修订 2）均已落地推送。下一阶段按 ROADMAP：P8 / P9 / P12 余项。
 
@@ -73,7 +73,7 @@
 
 ## 5. 下一步
 
-1. **P12 未收官，先还两个出口门**（[notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md) §3）：(b) 另一台机器的 client 经 TCP 入世界并记 P6.5 必测数；(a) FCL 同机 spawn + 杀 server 的干净 device-lost。之后补 `MG_Remote/CONTRACT-P12.md`、清 `ARCHITECTURE.md` 里那条被删掉的旧窗口路径、按惯例做一次收官审查。
+1. **P12 审查轮的真机复测**（ID-P12-13）：重建 APK，重跑七项编号检查，外加「推流中按 HOME：回调返回前 surface 已释放，并记录耗时」；并在与原门同版本的 CMake/CTest 上复跑一次主机门（ID-P12-14）。然后 **P12 未收官，先还两个出口门**（[notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md) §3）：(b) 另一台机器的 client 经 TCP 入世界并记 P6.5 必测数；(a) FCL 同机 spawn + 杀 server 的干净 device-lost。之后补 `MG_Remote/CONTRACT-P12.md`、清 `ARCHITECTURE.md` 里那条被删掉的旧窗口路径、按惯例做一次收官审查。
 2. `p12/onscreen` 的余项：in-process server 的 `unix:` 监听、DirectGLES `g_*` 去全局、freezer、多 context、FCL env / 开关表接线、D8 白名单（拒 X11 / Win32Hwnd / None）。交接时已在树上核对，全部未做。
 3. 其余按 [`ROADMAP.md`](ROADMAP.md)：monolith 跑道 P8（emulation 下放 + 索引宿主镜像）；IPC 跑道 P9（反向通道异步 reply）→ P10 → P11；P3b/P4b 余项并行。
 4. CONTRACT-P7 §12 的记录债按阶段认领。
