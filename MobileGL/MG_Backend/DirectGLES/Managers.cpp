@@ -188,9 +188,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         namespace {
         Bool g_processTeardown = false;
         std::once_flag g_teardownSentinelOnce;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12: raised only while DropEveryTwinForEndedServerSession empties the twin tables, on the
+        // apply thread that is the only reader of the twins (Managers.h).
+        Bool g_serverSessionTwinTeardown = false;
+#endif
     } // namespace
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool InProcessTeardown() { return g_processTeardown || g_serverSessionTwinTeardown; }
+#else
     Bool InProcessTeardown() { return g_processTeardown; }
+#endif
     void EnsureProcessTeardownSentinel() {
         std::call_once(g_teardownSentinelOnce,
                        [] { std::atexit(+[] { g_processTeardown = true; }); });
@@ -395,6 +404,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // switch's default arm rules; every other kind has no twin table here.
             return false;
         }
+    }
+
+    // P12: see Managers.h. Every table is replaced by an empty one, holders first (views before
+    // the textures they view, framebuffers before their attachments, VAOs before the buffers they
+    // fetch from), so the last reference to each twin goes here and its destructor - answered
+    // InProcessTeardown() - touches neither the driver nor another TU's statics.
+    void DropEveryTwinForEndedServerSession() {
+        if (g_processTeardown) return;
+        g_serverSessionTwinTeardown = true;
+        SamplerViewImpl::g_backendSamplerViews = {};
+        FramebufferImpl::g_backendFramebufferObjects = {};
+        VertexArrayImpl::g_backendVertexArrayObjects = {};
+        PrgramImpl::g_backendProgramObjects = {};
+        SamplerImpl::g_backendSamplerObjects = {};
+        TextureImpl::g_backendTextureObjects = {};
+        RenderbufferImpl::g_backendRenderbufferObjects = {};
+        BufferImpl::g_backendBufferResources = {};
+        g_serverSessionTwinTeardown = false;
+        MGLOG_I("DirectGLES: the ended server session's twins are dropped (every kind, no driver call); the next "
+                "session in this process starts from empty twin tables");
     }
 #endif
 

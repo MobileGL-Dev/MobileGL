@@ -3608,5 +3608,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // delete opcode may already have released (the idempotent-second-path shape the notice
     // arms document).
     Bool ReleaseTwinsForWireObjectDeath(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeKind kind);
+
+    // P12 (on-screen server window): A SERVER SESSION ENDS IN A PROCESS THAT OUTLIVES IT.
+    //
+    // The twin tables above are process globals, and until P12 every server process served ONE
+    // session: the exec'd supervisor forks a child per session and the child exits with it, so the
+    // twins a session built died with its process (InProcessTeardown's deliberate leak). The
+    // in-process display server (mobilegl_server_serve_inprocess, the display Activity's process)
+    // runs sessions ONE AFTER ANOTHER IN ONE PROCESS, and the next session's client mints its
+    // handles from the same {slot, gen} space again. A twin the previous session left behind then
+    // answers for the new session's object: a program twin names a program of the DESTROYED
+    // context, so the link fails with an empty log and every draw no-ops (Espryt on Adreno and on
+    // llvmpipe alike), a stale VAO/buffer twin feeds the driver a dead name (a SIGSEGV inside
+    // Adreno's glDrawElements), and a stale live generation ahead of the new client's refuses its
+    // handle as ProtocolCorruption.
+    //
+    // So the server backend's destruction - the end of a session under a transport, on the apply
+    // thread, after DestroyEGLContext destroyed the context those ids belonged to - drops EVERY
+    // twin of every kind, with InProcessTeardown() answering true for the duration so no twin
+    // destructor calls into the driver (there is no current context, and the ids name nothing).
+    // A no-op once exit() has begun (the statics may already be gone). Monolith never calls it.
+    void DropEveryTwinForEndedServerSession();
 #endif
 } // namespace MobileGL::MG_Backend::DirectGLES

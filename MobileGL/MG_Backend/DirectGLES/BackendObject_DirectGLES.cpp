@@ -893,6 +893,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DestroyEGLContext();
 #if MOBILEGL_BUILD_DISAGGREGATED
         NoteNativeContextGone();
+        // P12: under a transport this object is the SERVER's backend and its destruction is the
+        // end of a session (ServerLoop's apply thread, after the final drain). The in-process
+        // display server runs the next session in this same process, so the twins this one built
+        // - naming ids of the context just destroyed - must not answer for the next client's
+        // handles (Managers.h, DropEveryTwinForEndedServerSession). Monolith keeps its twins.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) DropEveryTwinForEndedServerSession();
 #endif
     }
 
