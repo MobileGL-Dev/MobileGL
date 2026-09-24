@@ -1,0 +1,3689 @@
+{
+ "stamp": "p7w8-78e71f2b",
+ "out": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b",
+ "gate3": {
+  "cases": [
+   {
+    "case": "OpenRA",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0
+      ],
+      "sha": [
+       "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+      ],
+      "mismatch": [
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       1.0,
+       1.0,
+       1.0
+      ],
+      "sha": [
+       "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       1.0,
+       1.0,
+       1.0
+      ],
+      "sha": [
+       "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 1.0,
+      "sha": "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+     ],
+     "inproc": [
+      "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+     ],
+     "spawn": [
+      "ace2af04557bb2e930def0bc8038723fbe57b0f4cfcace9115b93a7636c77d92"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-startup",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999999511,
+       0.999999511,
+       0.999999511,
+       0.999999511,
+       0.999999511
+      ],
+      "sha": [
+       "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+      ],
+      "mismatch": [
+       520,
+       520,
+       520,
+       520,
+       520
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999999511,
+       0.999999511,
+       0.999999511
+      ],
+      "sha": [
+       "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999999511,
+       0.999999511,
+       0.999999511
+      ],
+      "sha": [
+       "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999999511,
+      "sha": "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+     ],
+     "inproc": [
+      "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+     ],
+     "spawn": [
+      "0b547c10a5baeb9baac64d0df58dd16b8404c2e289640a8b7b021e3894488f43"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-main-menu",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999696483,
+       0.999696483,
+       0.999696483,
+       0.999696483,
+       0.999696483
+      ],
+      "sha": [
+       "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+      ],
+      "mismatch": [
+       1197,
+       1197,
+       1197,
+       1197,
+       1197
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999696483,
+       0.999696483,
+       0.999696483
+      ],
+      "sha": [
+       "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999696483,
+       0.999696483,
+       0.999696483
+      ],
+      "sha": [
+       "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999696483,
+      "sha": "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+     ],
+     "inproc": [
+      "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+     ],
+     "spawn": [
+      "23294edb0ba6edcbba317ad76a5a81fc8289c05b97b1175f605cc7f1da6bddde"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.17-main-menu-854",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999990914,
+       0.999990914,
+       0.999990914,
+       0.999990914,
+       0.999990914
+      ],
+      "sha": [
+       "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+      ],
+      "mismatch": [
+       329,
+       329,
+       329,
+       329,
+       329
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999990914,
+       0.999990914,
+       0.999990914
+      ],
+      "sha": [
+       "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999990914,
+       0.999990914,
+       0.999990914
+      ],
+      "sha": [
+       "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999990914,
+      "sha": "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+     ],
+     "inproc": [
+      "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+     ],
+     "spawn": [
+      "9f696c820f5e81356e83fdd371195f4386c76ea8205f3ea01f1244432a4cc04f"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999995585,
+       0.999995585,
+       0.999995585,
+       0.999995585,
+       0.999995585
+      ],
+      "sha": [
+       "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+      ],
+      "mismatch": [
+       27574,
+       27574,
+       27574,
+       27574,
+       27574
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999995585,
+       0.999995585,
+       0.999995585
+      ],
+      "sha": [
+       "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999995585,
+       0.999995585,
+       0.999995585
+      ],
+      "sha": [
+       "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999995585,
+      "sha": "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+     ],
+     "inproc": [
+      "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+     ],
+     "spawn": [
+      "0d4c315c7d3555a1256cc8654c6faaa3abaf202d67382677be5c1ae6d2d140fc"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-sodium-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999993791,
+       0.999993791,
+       0.999993791,
+       0.999993791,
+       0.999993791
+      ],
+      "sha": [
+       "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+      ],
+      "mismatch": [
+       29858,
+       29858,
+       29858,
+       29858,
+       29858
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999993791,
+       0.999993791,
+       0.999993791
+      ],
+      "sha": [
+       "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999993791,
+       0.999993791,
+       0.999993791
+      ],
+      "sha": [
+       "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999993791,
+      "sha": "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+     ],
+     "inproc": [
+      "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+     ],
+     "spawn": [
+      "5898599b747a7e834eee31f9da55838ee081bb5fce512543848d614c82e3877e"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-common-mods-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999869631,
+       0.999869631,
+       0.999869631,
+       0.999869631,
+       0.999869631
+      ],
+      "sha": [
+       "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+      ],
+      "mismatch": [
+       79678,
+       79678,
+       79678,
+       79678,
+       79678
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999869631,
+       0.999869631,
+       0.999869631
+      ],
+      "sha": [
+       "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999869631,
+       0.999869631,
+       0.999869631
+      ],
+      "sha": [
+       "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999869631,
+      "sha": "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+     ],
+     "inproc": [
+      "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+     ],
+     "spawn": [
+      "3b0c70f34b87341876ee3af172cadd4133a3f3cdad2f9b874d98552f45801bc1"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-common-mods-inventory",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999994284,
+       0.999994284,
+       0.999994284,
+       0.999994284,
+       0.999994284
+      ],
+      "sha": [
+       "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+      ],
+      "mismatch": [
+       24846,
+       24846,
+       24846,
+       24846,
+       24846
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999994284,
+       0.999994284,
+       0.999994284
+      ],
+      "sha": [
+       "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999994284,
+       0.999994284,
+       0.999994284
+      ],
+      "sha": [
+       "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999994284,
+      "sha": "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+     ],
+     "inproc": [
+      "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+     ],
+     "spawn": [
+      "c9da6e66febbd0f27b85e6c111bae3f21559d36ebdbce06a8b26d7458d4ec1ab"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-rei-inventory",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999997568,
+       0.999997568,
+       0.999997568,
+       0.999997568,
+       0.999997568
+      ],
+      "sha": [
+       "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+      ],
+      "mismatch": [
+       19107,
+       19107,
+       19107,
+       19107,
+       19107
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999997568,
+       0.999997568,
+       0.999997568
+      ],
+      "sha": [
+       "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999997568,
+       0.999997568,
+       0.999997568
+      ],
+      "sha": [
+       "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999997568,
+      "sha": "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+     ],
+     "inproc": [
+      "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+     ],
+     "spawn": [
+      "7fac4a78b2e65c3cce9e31a8f295e41cedfd065c25166207a61ce04a9c6c16bd"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-xaero-minimap-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999999407,
+       0.999999407,
+       0.999999407,
+       0.999999407,
+       0.999999407
+      ],
+      "sha": [
+       "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+      ],
+      "mismatch": [
+       170,
+       170,
+       170,
+       170,
+       170
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999999407,
+       0.999999407,
+       0.999999407
+      ],
+      "sha": [
+       "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999999407,
+       0.999999407,
+       0.999999407
+      ],
+      "sha": [
+       "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999999407,
+      "sha": "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+     ],
+     "inproc": [
+      "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+     ],
+     "spawn": [
+      "55152fae788994b125f969a02cd74fd701fc66f843cd6591c4b2482c242c135b"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-xaero-world-map-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999999866,
+       0.999999866,
+       0.999999866,
+       0.999999866,
+       0.999999866
+      ],
+      "sha": [
+       "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+      ],
+      "mismatch": [
+       181,
+       181,
+       181,
+       181,
+       181
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999999866,
+       0.999999866,
+       0.999999866
+      ],
+      "sha": [
+       "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999999866,
+       0.999999866,
+       0.999999866
+      ],
+      "sha": [
+       "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999999866,
+      "sha": "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+     ],
+     "inproc": [
+      "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+     ],
+     "spawn": [
+      "011d0eca5bb9ecbbde22fbda85f0162d874ddda3b635f6109360da2233173912"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-journeymap-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999991304,
+       0.999991304,
+       0.999991304,
+       0.999991304,
+       0.999991304
+      ],
+      "sha": [
+       "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+      ],
+      "mismatch": [
+       51248,
+       51248,
+       51248,
+       51248,
+       51248
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999991304,
+       0.999991304,
+       0.999991304
+      ],
+      "sha": [
+       "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999991304,
+       0.999991304,
+       0.999991304
+      ],
+      "sha": [
+       "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999991304,
+      "sha": "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+     ],
+     "inproc": [
+      "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+     ],
+     "spawn": [
+      "f1f2c418f74eece15826c129593ee3305446fdf25d65823218e116e5370435a0"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-modernui-inventory",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999996451,
+       0.999996451,
+       0.999996451,
+       0.999996451,
+       0.999996451
+      ],
+      "sha": [
+       "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+      ],
+      "mismatch": [
+       22950,
+       22950,
+       22950,
+       22950,
+       22950
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999996451,
+       0.999996451,
+       0.999996451
+      ],
+      "sha": [
+       "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999996451,
+       0.999996451,
+       0.999996451
+      ],
+      "sha": [
+       "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999996451,
+      "sha": "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+     ],
+     "inproc": [
+      "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+     ],
+     "spawn": [
+      "d47080b35f85a0994ab00cf9e1a1634df34d4fe69f79e6bc4099067b2bc2bf2a"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-rei-inventory-normal-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.9999988,
+       0.9999988,
+       0.9999988,
+       0.9999988,
+       0.9999988
+      ],
+      "sha": [
+       "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+      ],
+      "mismatch": [
+       12178,
+       12178,
+       12178,
+       12178,
+       12178
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.9999988,
+       0.9999988,
+       0.9999988
+      ],
+      "sha": [
+       "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.9999988,
+       0.9999988,
+       0.9999988
+      ],
+      "sha": [
+       "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.9999988,
+      "sha": "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+     ],
+     "inproc": [
+      "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+     ],
+     "spawn": [
+      "0597414527c841c573b798f2cfca967628f77927a8eaf86bf2903eb229ee0617"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.99999241,
+       0.99999241,
+       0.99999241,
+       0.99999241,
+       0.99999241
+      ],
+      "sha": [
+       "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+      ],
+      "mismatch": [
+       6415,
+       6415,
+       6415,
+       6415,
+       6415
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.99999241,
+       0.99999241,
+       0.99999241
+      ],
+      "sha": [
+       "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.99999241,
+       0.99999241,
+       0.99999241
+      ],
+      "sha": [
+       "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.99999241,
+      "sha": "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+     ],
+     "inproc": [
+      "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+     ],
+     "spawn": [
+      "39c1903ce1ff0097c08cb3e103274dc74eb2e06b68b2898a753cd5f819272117"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.99999378,
+       0.99999378,
+       0.99999378,
+       0.99999378,
+       0.99999378
+      ],
+      "sha": [
+       "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+      ],
+      "mismatch": [
+       60510,
+       60510,
+       60510,
+       60510,
+       60510
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.99999378,
+       0.99999378,
+       0.99999378
+      ],
+      "sha": [
+       "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.99999378,
+       0.99999378,
+       0.99999378
+      ],
+      "sha": [
+       "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.99999378,
+      "sha": "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+     ],
+     "inproc": [
+      "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+     ],
+     "spawn": [
+      "c67f67e6694c3411d8c2d933a3ea28670390e9816b2f9b97415fec047a6cd851"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-journeymap-in-world-normal-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999988398,
+       0.999988398,
+       0.999988398,
+       0.999988398,
+       0.999988398
+      ],
+      "sha": [
+       "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+      ],
+      "mismatch": [
+       40227,
+       40227,
+       40227,
+       40227,
+       40227
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999988398,
+       0.999988398,
+       0.999988398
+      ],
+      "sha": [
+       "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999988398,
+       0.999988398,
+       0.999988398
+      ],
+      "sha": [
+       "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999988398,
+      "sha": "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+     ],
+     "inproc": [
+      "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+     ],
+     "spawn": [
+      "4dd74fb6e02881ade0a77d7a24102ded7a92ae123937a6f8333facc4f86d01a4"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-modernui-inventory-normal-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999997628,
+       0.999997628,
+       0.999997628,
+       0.999997628,
+       0.999997628
+      ],
+      "sha": [
+       "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+      ],
+      "mismatch": [
+       14879,
+       14879,
+       14879,
+       14879,
+       14879
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999997628,
+       0.999997628,
+       0.999997628
+      ],
+      "sha": [
+       "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999997628,
+       0.999997628,
+       0.999997628
+      ],
+      "sha": [
+       "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999997628,
+      "sha": "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+     ],
+     "inproc": [
+      "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+     ],
+     "spawn": [
+      "13a8a7f13df513e52460545e3422f5b6d30510c202077fc7b4f0aa88ad41c4b4"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-bsl-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.997009631,
+       0.997009631,
+       0.997009631,
+       0.997009631,
+       0.997009631
+      ],
+      "sha": [
+       "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+      ],
+      "mismatch": [
+       393627,
+       393627,
+       393627,
+       393627,
+       393627
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.997009631,
+       0.997009631,
+       0.997009631
+      ],
+      "sha": [
+       "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.997009631,
+       0.997009631,
+       0.997009631
+      ],
+      "sha": [
+       "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.997009631,
+      "sha": "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+     ],
+     "inproc": [
+      "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+     ],
+     "spawn": [
+      "061675247d1e9fbf1d85dc2cd84c5cf5b417e9a8e2af6b921ee62d025d3b79b4"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.996630735,
+       0.996630735,
+       0.996630735,
+       0.996630735,
+       0.996630735
+      ],
+      "sha": [
+       "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+      ],
+      "mismatch": [
+       373628,
+       373628,
+       373628,
+       373628,
+       373628
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.996630735,
+       0.996630735,
+       0.996630735
+      ],
+      "sha": [
+       "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.996630735,
+       0.996630735,
+       0.996630735
+      ],
+      "sha": [
+       "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.996630735,
+      "sha": "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+     ],
+     "inproc": [
+      "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+     ],
+     "spawn": [
+      "9d1b13b94c92a8bc9a74689dfa164f99a91015fa6e84599c71b13ce71dc74e64"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999454686,
+       0.999454686,
+       0.999454686,
+       0.999454686,
+       0.999454686
+      ],
+      "sha": [
+       "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+      ],
+      "mismatch": [
+       359364,
+       359364,
+       359364,
+       359364,
+       359364
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999454686,
+       0.999454686,
+       0.999454686
+      ],
+      "sha": [
+       "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999454686,
+       0.999454686,
+       0.999454686
+      ],
+      "sha": [
+       "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999454686,
+      "sha": "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+     ],
+     "inproc": [
+      "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+     ],
+     "spawn": [
+      "406deb3cbf5db48e5efa6462581fee42e678700c2120535911bf213f1e1da610"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.996178019,
+       0.996178101,
+       0.996177341,
+       0.996177468,
+       0.996177487
+      ],
+      "sha": [
+       "3c73cf47c1b135618a9650d2ff187428d8f9a0dcebee8ed01a8a6d30d60287d9",
+       "4f0d9abf36fcc6c8fa5d78f1f10904c59cc51479e76e426c82b86803ca8eb43c",
+       "74f397a1d0b7837764bd1f2984d1913c9ab1b8c17ab3825638d2937a3833710d",
+       "e7afd5cfa97f3adea1336cf442ebd2e580166f71e385f368d0d101ab227e13c1",
+       "ff6c256e51b2a99ea17d67299ac476659797c10bf2555d38cef8429766279347"
+      ],
+      "mismatch": [
+       402678,
+       402671,
+       402684,
+       402635,
+       402659
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.996179349,
+       0.996176143,
+       0.996177165
+      ],
+      "sha": [
+       "30b5e4483530312d9909a228ec3625d8f242c367e269690fc9bd324e8bdc7da9",
+       "614cac90da3707215d675b857b015cb1aa38eadacf573c4e8a032ce36e7545b8",
+       "d1581319c5e8dbe6469c0017d0b36d417d21bd1604e77100d0d2940fd57d1360"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.996176909,
+       0.996177882,
+       0.996178749
+      ],
+      "sha": [
+       "88d7ad6859020dbdbb935106dcf6726396da02a64c5783fa54993b5f8ee0611c",
+       "96d20368a548f191f90a1464bd0505110f93cec1d421b2ce925fd266aa871b4f",
+       "dfdc1cbbc13d0dbb705398bc500df6f7f9899dfae2dc7552514ad0f45ba12a5f"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.996177225,
+      "sha": "9e13e47b92716199ddb2930702d64829c5e3ee9aed3e2c5264c843f03e271196",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 5,
+     "rule": "distributional",
+     "max_dssim": 2.0080000000533005e-06,
+     "decoder": "numpy+PIL",
+     "mono_nearest": [
+      {
+       "pass": "monolith rep1",
+       "nearest": "monolith rep2",
+       "px": 3810,
+       "delta": 29
+      },
+      {
+       "pass": "monolith rep2",
+       "nearest": "monolith rep5",
+       "px": 3533,
+       "delta": 29
+      },
+      {
+       "pass": "monolith rep3",
+       "nearest": "monolith rep5",
+       "px": 3269,
+       "delta": 21
+      },
+      {
+       "pass": "monolith rep4",
+       "nearest": "monolith rep3",
+       "px": 3636,
+       "delta": 34
+      },
+      {
+       "pass": "monolith rep5",
+       "nearest": "monolith rep3",
+       "px": 3269,
+       "delta": 21
+      }
+     ],
+     "mono_nearest_px_max": 3810,
+     "mono_nearest_delta_max": 34,
+     "split_nearest": [
+      {
+       "pass": "inproc rep1",
+       "nearest": "monolith rep3",
+       "px": 3249,
+       "delta": 19,
+       "within": true
+      },
+      {
+       "pass": "inproc rep2",
+       "nearest": "monolith rep3",
+       "px": 3595,
+       "delta": 21,
+       "within": true
+      },
+      {
+       "pass": "inproc rep3",
+       "nearest": "monolith rep3",
+       "px": 3255,
+       "delta": 19,
+       "within": true
+      },
+      {
+       "pass": "spawn rep1",
+       "nearest": "monolith rep5",
+       "px": 3928,
+       "delta": 24,
+       "within": true
+      },
+      {
+       "pass": "spawn rep2",
+       "nearest": "monolith rep5",
+       "px": 3427,
+       "delta": 21,
+       "within": true
+      },
+      {
+       "pass": "spawn rep3",
+       "nearest": "monolith rep3",
+       "px": 3292,
+       "delta": 20,
+       "within": true
+      }
+     ],
+     "split_nearest_px_max": 3928,
+     "split_nearest_delta_max": 24,
+     "px_bound": 4794.5,
+     "delta_bound": 59.0,
+     "within": true
+    },
+    "inproc_eq_spawn": false,
+    "split_eq_monolith": false,
+    "cross_arm": {
+     "monolith": [
+      "3c73cf47c1b135618a9650d2ff187428d8f9a0dcebee8ed01a8a6d30d60287d9",
+      "4f0d9abf36fcc6c8fa5d78f1f10904c59cc51479e76e426c82b86803ca8eb43c",
+      "74f397a1d0b7837764bd1f2984d1913c9ab1b8c17ab3825638d2937a3833710d",
+      "e7afd5cfa97f3adea1336cf442ebd2e580166f71e385f368d0d101ab227e13c1",
+      "ff6c256e51b2a99ea17d67299ac476659797c10bf2555d38cef8429766279347"
+     ],
+     "inproc": [
+      "30b5e4483530312d9909a228ec3625d8f242c367e269690fc9bd324e8bdc7da9",
+      "614cac90da3707215d675b857b015cb1aa38eadacf573c4e8a032ce36e7545b8",
+      "d1581319c5e8dbe6469c0017d0b36d417d21bd1604e77100d0d2940fd57d1360"
+     ],
+     "spawn": [
+      "88d7ad6859020dbdbb935106dcf6726396da02a64c5783fa54993b5f8ee0611c",
+      "96d20368a548f191f90a1464bd0505110f93cec1d421b2ce925fd266aa871b4f",
+      "dfdc1cbbc13d0dbb705398bc500df6f7f9899dfae2dc7552514ad0f45ba12a5f"
+     ],
+     "identical": false,
+     "distributional": true
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999510556,
+       0.999510556,
+       0.999510556,
+       0.999510556,
+       0.999510556
+      ],
+      "sha": [
+       "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+      ],
+      "mismatch": [
+       384125,
+       384125,
+       384125,
+       384125,
+       384125
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999510556,
+       0.999510556,
+       0.999510556
+      ],
+      "sha": [
+       "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999510556,
+       0.999510556,
+       0.999510556
+      ],
+      "sha": [
+       "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999510556,
+      "sha": "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+     ],
+     "inproc": [
+      "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+     ],
+     "spawn": [
+      "f5d8055f293353992bdfd89af191ea31e7c67365d83f051d13a642e85f3a5722"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999476169,
+       0.999476169,
+       0.999476169,
+       0.999476169,
+       0.999476169
+      ],
+      "sha": [
+       "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+      ],
+      "mismatch": [
+       385300,
+       385300,
+       385300,
+       385300,
+       385300
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999476169,
+       0.999476169,
+       0.999476169
+      ],
+      "sha": [
+       "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999476169,
+       0.999476169,
+       0.999476169
+      ],
+      "sha": [
+       "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999476169,
+      "sha": "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+     ],
+     "inproc": [
+      "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+     ],
+     "spawn": [
+      "5a07992bd058a8a597bf98329811803cf530efedf0b394f1a18cb3dadfdf5032"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-mellow-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999372032,
+       0.999372032,
+       0.999372032,
+       0.999372032,
+       0.999372032
+      ],
+      "sha": [
+       "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+      ],
+      "mismatch": [
+       363637,
+       363637,
+       363637,
+       363637,
+       363637
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999372032,
+       0.999372032,
+       0.999372032
+      ],
+      "sha": [
+       "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999372032,
+       0.999372032,
+       0.999372032
+      ],
+      "sha": [
+       "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999372032,
+      "sha": "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+     ],
+     "inproc": [
+      "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+     ],
+     "spawn": [
+      "b65b4896fbed26658045606f0d8ed2cdf2b47ea36255a5bc0c5590044513b3d9"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-nostalgia-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999396223,
+       0.999396223,
+       0.999396223,
+       0.999396223,
+       0.999396223
+      ],
+      "sha": [
+       "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+      ],
+      "mismatch": [
+       293937,
+       293937,
+       293937,
+       293937,
+       293937
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999396223,
+       0.999396223,
+       0.999396223
+      ],
+      "sha": [
+       "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999396223,
+       0.999396223,
+       0.999396223
+      ],
+      "sha": [
+       "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999396223,
+      "sha": "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+     ],
+     "inproc": [
+      "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+     ],
+     "spawn": [
+      "eaf69803771c77050f29e0d108864115560a416ad4236827772b146f411bd911"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-bliss-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999092742,
+       0.999092741,
+       0.999092743,
+       0.999092741,
+       0.999092742
+      ],
+      "sha": [
+       "1b6beecd5822fefcdc28424e57a5ede8485647c34f2111d12bb3043ba8e9a5d4",
+       "7ce2c387d153ab0ab45a6e67ddc35a6daa9870a48ef8b5b8e0a3dfb8645f97d4",
+       "deb24dc56df5a69bfe5d922129666332345d49cf221a1281ae6fec258f87d531"
+      ],
+      "mismatch": [
+       386131,
+       386131,
+       386131,
+       386131,
+       386131
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999092746,
+       0.999092739,
+       0.999092739
+      ],
+      "sha": [
+       "23bb3c1c44831a9c7e4d0a5bf79f3eacdaab766c996816cda72aae8fea4f87da",
+       "528e29dd701a30cacbd161f9b201f8a71c53f4f8d570a174af41f5c7ab477791",
+       "eec0a5325d5f2404f5695ed05012f7695c2482a488d18885cec218eed669fa79"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999092744,
+       0.999092748,
+       0.999092749
+      ],
+      "sha": [
+       "3c4290677de1078fc56971c57d19ea7d9778a5e11b018540bf3b6371586bfdcc",
+       "69bfb601350fa388fe6e5eeec0717efe6dd1057c656c6563945c3a34c1fa0fab",
+       "6bae6ad33bed7e314336249cd47bae68b03983bebc6d0f85be0eb3e5a36b2549"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999092741,
+      "sha": "deb24dc56df5a69bfe5d922129666332345d49cf221a1281ae6fec258f87d531",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 3,
+     "rule": "distributional",
+     "max_dssim": 7.999999995789153e-09,
+     "decoder": "numpy+PIL",
+     "mono_nearest": [
+      {
+       "pass": "monolith rep1",
+       "nearest": "monolith rep5",
+       "px": 0,
+       "delta": 0
+      },
+      {
+       "pass": "monolith rep2",
+       "nearest": "monolith rep4",
+       "px": 0,
+       "delta": 0
+      },
+      {
+       "pass": "monolith rep3",
+       "nearest": "monolith rep2",
+       "px": 3,
+       "delta": 3
+      },
+      {
+       "pass": "monolith rep4",
+       "nearest": "monolith rep2",
+       "px": 0,
+       "delta": 0
+      },
+      {
+       "pass": "monolith rep5",
+       "nearest": "monolith rep1",
+       "px": 0,
+       "delta": 0
+      }
+     ],
+     "mono_nearest_px_max": 3,
+     "mono_nearest_delta_max": 3,
+     "split_nearest": [
+      {
+       "pass": "inproc rep1",
+       "nearest": "monolith rep2",
+       "px": 8,
+       "delta": 2,
+       "within": true
+      },
+      {
+       "pass": "inproc rep2",
+       "nearest": "monolith rep1",
+       "px": 9,
+       "delta": 3,
+       "within": true
+      },
+      {
+       "pass": "inproc rep3",
+       "nearest": "monolith rep2",
+       "px": 4,
+       "delta": 1,
+       "within": true
+      },
+      {
+       "pass": "spawn rep1",
+       "nearest": "monolith rep1",
+       "px": 3,
+       "delta": 3,
+       "within": true
+      },
+      {
+       "pass": "spawn rep2",
+       "nearest": "monolith rep2",
+       "px": 3,
+       "delta": 2,
+       "within": true
+      },
+      {
+       "pass": "spawn rep3",
+       "nearest": "monolith rep1",
+       "px": 7,
+       "delta": 2,
+       "within": true
+      }
+     ],
+     "split_nearest_px_max": 9,
+     "split_nearest_delta_max": 3,
+     "px_bound": 35.75,
+     "delta_bound": 12.5,
+     "within": true
+    },
+    "inproc_eq_spawn": false,
+    "split_eq_monolith": false,
+    "cross_arm": {
+     "monolith": [
+      "1b6beecd5822fefcdc28424e57a5ede8485647c34f2111d12bb3043ba8e9a5d4",
+      "7ce2c387d153ab0ab45a6e67ddc35a6daa9870a48ef8b5b8e0a3dfb8645f97d4",
+      "deb24dc56df5a69bfe5d922129666332345d49cf221a1281ae6fec258f87d531"
+     ],
+     "inproc": [
+      "23bb3c1c44831a9c7e4d0a5bf79f3eacdaab766c996816cda72aae8fea4f87da",
+      "528e29dd701a30cacbd161f9b201f8a71c53f4f8d570a174af41f5c7ab477791",
+      "eec0a5325d5f2404f5695ed05012f7695c2482a488d18885cec218eed669fa79"
+     ],
+     "spawn": [
+      "3c4290677de1078fc56971c57d19ea7d9778a5e11b018540bf3b6371586bfdcc",
+      "69bfb601350fa388fe6e5eeec0717efe6dd1057c656c6563945c3a34c1fa0fab",
+      "6bae6ad33bed7e314336249cd47bae68b03983bebc6d0f85be0eb3e5a36b2549"
+     ],
+     "identical": false,
+     "distributional": true
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.997491927,
+       0.997491927,
+       0.997491927,
+       0.997491927,
+       0.997491927
+      ],
+      "sha": [
+       "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+      ],
+      "mismatch": [
+       173054,
+       173054,
+       173054,
+       173054,
+       173054
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.997491927,
+       0.997491927,
+       0.997491927
+      ],
+      "sha": [
+       "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.997491927,
+       0.997491927,
+       0.997491927
+      ],
+      "sha": [
+       "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.997491927,
+      "sha": "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+     ],
+     "inproc": [
+      "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+     ],
+     "spawn": [
+      "95170d29041b0fd14b3f75c3f99cc19da3b610c68860876f8b646455e6243877"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-iterationt-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999419883,
+       0.999419883,
+       0.999419883,
+       0.999419883,
+       0.999419883
+      ],
+      "sha": [
+       "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+      ],
+      "mismatch": [
+       354383,
+       354383,
+       354383,
+       354383,
+       354383
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999419883,
+       0.999419883,
+       0.999419883
+      ],
+      "sha": [
+       "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999419883,
+       0.999419883,
+       0.999419883
+      ],
+      "sha": [
+       "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999419883,
+      "sha": "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+     ],
+     "inproc": [
+      "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+     ],
+     "spawn": [
+      "3cf81398b80490753f1444ae855639ed5b0ae2c0411835000b010f69de5fbcee"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.998933123,
+       0.998933123,
+       0.998933123,
+       0.998933123,
+       0.998933123
+      ],
+      "sha": [
+       "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+      ],
+      "mismatch": [
+       402662,
+       402662,
+       402662,
+       402662,
+       402662
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.998933123,
+       0.998933123,
+       0.998933123
+      ],
+      "sha": [
+       "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.998933123,
+       0.998933123,
+       0.998933123
+      ],
+      "sha": [
+       "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.998933123,
+      "sha": "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+     ],
+     "inproc": [
+      "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+     ],
+     "spawn": [
+      "c02baa90971060096797a815d2b0c80a77e3ab7f79be7259573a4e9f920a1b3d"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999026329,
+       0.999026329,
+       0.999026329,
+       0.999026329,
+       0.999026329
+      ],
+      "sha": [
+       "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+      ],
+      "mismatch": [
+       391258,
+       391258,
+       391258,
+       391258,
+       391258
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999026329,
+       0.999026329,
+       0.999026329
+      ],
+      "sha": [
+       "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999026329,
+       0.999026329,
+       0.999026329
+      ],
+      "sha": [
+       "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999026329,
+      "sha": "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+     ],
+     "inproc": [
+      "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+     ],
+     "spawn": [
+      "273ce2ff1e15dbff9be669e917e982e0a14a8f8cfb263c2f3a28670ed5e13d59"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.996790596,
+       0.996789665,
+       0.99679102,
+       0.996792955,
+       0.996793582
+      ],
+      "sha": [
+       "06395400ae72507d269cbc0f52e0e3f04b66c0523576eb4af56c7589210a6dfb",
+       "284c179e5bce8b25d68d7373f308676987cc0d1e2deed1ad791c4358b0917b20",
+       "930ed817e17492fd18f78890603db78c8a9f9754c39eb8eab4dbd368d42feaa2",
+       "b7d1750c38280605a8f57df48182b1e83bb65bd0f03e59f46595fbd78fc4334f",
+       "e79c9110303463845efb7b1d36b751b3e5c579ed1699d63e28aef9f6fffc06bd"
+      ],
+      "mismatch": [
+       397116,
+       397120,
+       397112,
+       397122,
+       397107
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.9967909,
+       0.996792287,
+       0.996791613
+      ],
+      "sha": [
+       "06a1e4117960208a3679e10f04cb030fa4b0b1e2f7f7429887cc1662a378f3e7",
+       "4bf691b81e8d8fa60943ab0a4681318e188e2cba9ecdaf43c54c25b342467eae",
+       "c162ab753b11355be07f6bdbe3862c63a6f216a6708a75906060b22861ac6d73"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.99679033,
+       0.996791509,
+       0.996792797
+      ],
+      "sha": [
+       "6938006afd41e05b45e941fdcfc9ff5c7ec3e7469ce91cebc44923ba2b351a3d",
+       "760534d478f728278eb9aa352d3fd4c7446180cac72df5a293b123308e70aa12",
+       "76821478dd0e30954fff5bcc313b9ac3f380c8b288a66438b6f8f7902d361836"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.996791552,
+      "sha": "264b96d4551fa5ed1c153edf0bb56da05cafa8b65fe1a18d2532ab939393aa27",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 5,
+     "rule": "distributional",
+     "max_dssim": 3.2520000000646476e-06,
+     "decoder": "numpy+PIL",
+     "mono_nearest": [
+      {
+       "pass": "monolith rep1",
+       "nearest": "monolith rep3",
+       "px": 8610,
+       "delta": 39
+      },
+      {
+       "pass": "monolith rep2",
+       "nearest": "monolith rep5",
+       "px": 8652,
+       "delta": 50
+      },
+      {
+       "pass": "monolith rep3",
+       "nearest": "monolith rep1",
+       "px": 8610,
+       "delta": 39
+      },
+      {
+       "pass": "monolith rep4",
+       "nearest": "monolith rep2",
+       "px": 8687,
+       "delta": 27
+      },
+      {
+       "pass": "monolith rep5",
+       "nearest": "monolith rep1",
+       "px": 8647,
+       "delta": 38
+      }
+     ],
+     "mono_nearest_px_max": 8687,
+     "mono_nearest_delta_max": 50,
+     "split_nearest": [
+      {
+       "pass": "inproc rep1",
+       "nearest": "monolith rep1",
+       "px": 8722,
+       "delta": 38,
+       "within": true
+      },
+      {
+       "pass": "inproc rep2",
+       "nearest": "monolith rep3",
+       "px": 8727,
+       "delta": 49,
+       "within": true
+      },
+      {
+       "pass": "inproc rep3",
+       "nearest": "monolith rep4",
+       "px": 8658,
+       "delta": 32,
+       "within": true
+      },
+      {
+       "pass": "spawn rep1",
+       "nearest": "monolith rep4",
+       "px": 8638,
+       "delta": 39,
+       "within": true
+      },
+      {
+       "pass": "spawn rep2",
+       "nearest": "monolith rep5",
+       "px": 8768,
+       "delta": 41,
+       "within": true
+      },
+      {
+       "pass": "spawn rep3",
+       "nearest": "monolith rep2",
+       "px": 8585,
+       "delta": 27,
+       "within": true
+      }
+     ],
+     "split_nearest_px_max": 8768,
+     "split_nearest_delta_max": 49,
+     "px_bound": 10890.75,
+     "delta_bound": 83.0,
+     "within": true
+    },
+    "inproc_eq_spawn": false,
+    "split_eq_monolith": false,
+    "cross_arm": {
+     "monolith": [
+      "06395400ae72507d269cbc0f52e0e3f04b66c0523576eb4af56c7589210a6dfb",
+      "284c179e5bce8b25d68d7373f308676987cc0d1e2deed1ad791c4358b0917b20",
+      "930ed817e17492fd18f78890603db78c8a9f9754c39eb8eab4dbd368d42feaa2",
+      "b7d1750c38280605a8f57df48182b1e83bb65bd0f03e59f46595fbd78fc4334f",
+      "e79c9110303463845efb7b1d36b751b3e5c579ed1699d63e28aef9f6fffc06bd"
+     ],
+     "inproc": [
+      "06a1e4117960208a3679e10f04cb030fa4b0b1e2f7f7429887cc1662a378f3e7",
+      "4bf691b81e8d8fa60943ab0a4681318e188e2cba9ecdaf43c54c25b342467eae",
+      "c162ab753b11355be07f6bdbe3862c63a6f216a6708a75906060b22861ac6d73"
+     ],
+     "spawn": [
+      "6938006afd41e05b45e941fdcfc9ff5c7ec3e7469ce91cebc44923ba2b351a3d",
+      "760534d478f728278eb9aa352d3fd4c7446180cac72df5a293b123308e70aa12",
+      "76821478dd0e30954fff5bcc313b9ac3f380c8b288a66438b6f8f7902d361836"
+     ],
+     "identical": false,
+     "distributional": true
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.1-neoforge-create-instancing-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999983725,
+       0.999983725,
+       0.999983725,
+       0.999983725,
+       0.999983725
+      ],
+      "sha": [
+       "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+      ],
+      "mismatch": [
+       48428,
+       48428,
+       48428,
+       48428,
+       48428
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999983725,
+       0.999983725,
+       0.999983725
+      ],
+      "sha": [
+       "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999983725,
+       0.999983725,
+       0.999983725
+      ],
+      "sha": [
+       "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999983725,
+      "sha": "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+     ],
+     "inproc": [
+      "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+     ],
+     "spawn": [
+      "185d5eece9fe50d4f5ad9a68a8b87b440d02caf235a7d3d44fb0fd60c5814d99"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "improved-transparency-minecraft-26.3",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999600026,
+       0.999600026,
+       0.999600026,
+       0.999600026,
+       0.999600026
+      ],
+      "sha": [
+       "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+      ],
+      "mismatch": [
+       73242,
+       73242,
+       73242,
+       73242,
+       73242
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999600026,
+       0.999600026,
+       0.999600026
+      ],
+      "sha": [
+       "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999600026,
+       0.999600026,
+       0.999600026
+      ],
+      "sha": [
+       "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999600026,
+      "sha": "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+     ],
+     "inproc": [
+      "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+     ],
+     "spawn": [
+      "d38ca425c34d4edc07b207343c0890a760f70090e062a23b0e1ba073fd2fcd6e"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-iterationrp-in-world",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999257641,
+       0.999257641,
+       0.999257641,
+       0.999257641,
+       0.999257641
+      ],
+      "sha": [
+       "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+      ],
+      "mismatch": [
+       246544,
+       246544,
+       246544,
+       246544,
+       246544
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999257641,
+       0.999257641,
+       0.999257641
+      ],
+      "sha": [
+       "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999257641,
+       0.999257641,
+       0.999257641
+      ],
+      "sha": [
+       "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999257641,
+      "sha": "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+     ],
+     "inproc": [
+      "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+     ],
+     "spawn": [
+      "fe2a51d9ac0bfe839bd4bed7904a767ea2528a63f433990f0ff0fc77d080a571"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   },
+   {
+    "case": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854",
+    "arms": {
+     "monolith": {
+      "repeats": 5,
+      "extra": 0,
+      "ssim": [
+       0.999791667,
+       0.999791667,
+       0.999791667,
+       0.999791667,
+       0.999791667
+      ],
+      "sha": [
+       "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+      ],
+      "mismatch": [
+       292913,
+       292913,
+       292913,
+       292913,
+       292913
+      ],
+      "passed": true,
+      "identity": "monolith"
+     },
+     "inproc": {
+      "repeats": 3,
+      "ssim": [
+       0.999791667,
+       0.999791667,
+       0.999791667
+      ],
+      "sha": [
+       "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+      ],
+      "proofs_passed": 3
+     },
+     "spawn": {
+      "repeats": 3,
+      "ssim": [
+       0.999791667,
+       0.999791667,
+       0.999791667
+      ],
+      "sha": [
+       "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+      ],
+      "proofs_passed": 3
+     },
+     "inproc-ra0": {
+      "ssim": 0.999791667,
+      "sha": "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0",
+      "passed": true,
+      "proof": "run-ahead=0",
+      "error": null
+     }
+    },
+    "monolith_determinism": {
+     "passes": 5,
+     "distinct": 1,
+     "rule": "strict"
+    },
+    "inproc_eq_spawn": true,
+    "split_eq_monolith": true,
+    "cross_arm": {
+     "monolith": [
+      "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+     ],
+     "inproc": [
+      "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+     ],
+     "spawn": [
+      "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0"
+     ],
+     "identical": true,
+     "distributional": false
+    },
+    "verdict": "PASS",
+    "reasons": []
+   }
+  ],
+  "excluded": [
+   "minecraft-1.21.1-neoforge-create-indirect-in-world",
+   "minecraft-1.21.11-main-menu",
+   "minecraft-1.21.4-fabric-iris-photon-v1.3b-in-world"
+  ],
+  "repeat": 3,
+  "monolith_repeat": 5,
+  "rule_62": {
+   "min_passes": 3,
+   "expected_passes": 5,
+   "spread_factor": 1.25,
+   "px_headroom": 32,
+   "delta_factor": 1.5,
+   "delta_headroom": 8
+  },
+  "determinism": {
+   "distributional": [
+    "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
+    "minecraft-1.21.4-fabric-iris-bliss-in-world",
+    "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world"
+   ],
+   "strict": [
+    "OpenRA",
+    "minecraft-1.21.4-startup",
+    "minecraft-1.21.4-main-menu",
+    "minecraft-1.17-main-menu-854",
+    "minecraft-1.21.4-in-world",
+    "minecraft-1.21.4-fabric-sodium-in-world",
+    "minecraft-1.21.4-fabric-common-mods-in-world",
+    "minecraft-1.21.4-fabric-common-mods-inventory",
+    "minecraft-1.21.4-fabric-rei-inventory",
+    "minecraft-1.21.4-fabric-xaero-minimap-in-world",
+    "minecraft-1.21.4-fabric-xaero-world-map-in-world",
+    "minecraft-1.21.4-fabric-journeymap-in-world",
+    "minecraft-1.21.4-fabric-modernui-inventory",
+    "minecraft-1.21.4-fabric-rei-inventory-normal-world",
+    "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world",
+    "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world",
+    "minecraft-1.21.4-fabric-journeymap-in-world-normal-world",
+    "minecraft-1.21.4-fabric-modernui-inventory-normal-world",
+    "minecraft-1.21.4-fabric-iris-bsl-in-world",
+    "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world",
+    "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world",
+    "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",
+    "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world",
+    "minecraft-1.21.4-fabric-iris-mellow-in-world",
+    "minecraft-1.21.4-fabric-iris-nostalgia-in-world",
+    "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world",
+    "minecraft-1.21.4-fabric-iris-iterationt-in-world",
+    "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world",
+    "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
+    "minecraft-1.21.1-neoforge-create-instancing-in-world",
+    "improved-transparency-minecraft-26.3",
+    "minecraft-1.21.4-fabric-iris-iterationrp-in-world",
+    "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854"
+   ],
+   "strict_under_3_passes": []
+  },
+  "extra_monolith": [],
+  "denominator": 36,
+  "overall": "PASS",
+  "not_a_gate": [],
+  "arms_present": [
+   "monolith",
+   "inproc",
+   "spawn",
+   "inproc-ra0"
+  ],
+  "arms_planned": [
+   "monolith",
+   "inproc",
+   "spawn",
+   "inproc-ra0"
+  ],
+  "contract": {
+   "repeats": [],
+   "arms": [],
+   "cases": []
+  },
+  "canonical": [
+   "OpenRA",
+   "minecraft-1.21.4-startup",
+   "minecraft-1.21.4-main-menu",
+   "minecraft-1.17-main-menu-854",
+   "minecraft-1.21.4-in-world",
+   "minecraft-1.21.4-fabric-sodium-in-world",
+   "minecraft-1.21.4-fabric-common-mods-in-world",
+   "minecraft-1.21.4-fabric-common-mods-inventory",
+   "minecraft-1.21.4-fabric-rei-inventory",
+   "minecraft-1.21.4-fabric-xaero-minimap-in-world",
+   "minecraft-1.21.4-fabric-xaero-world-map-in-world",
+   "minecraft-1.21.4-fabric-journeymap-in-world",
+   "minecraft-1.21.4-fabric-modernui-inventory",
+   "minecraft-1.21.4-fabric-rei-inventory-normal-world",
+   "minecraft-1.21.4-fabric-xaero-minimap-in-world-normal-world",
+   "minecraft-1.21.4-fabric-xaero-world-map-in-world-normal-world",
+   "minecraft-1.21.4-fabric-journeymap-in-world-normal-world",
+   "minecraft-1.21.4-fabric-modernui-inventory-normal-world",
+   "minecraft-1.21.4-fabric-iris-bsl-in-world",
+   "minecraft-1.21.4-fabric-iris-makeup-ultrafast-in-world",
+   "minecraft-1.21.4-fabric-iris-super-duper-vanilla-in-world",
+   "minecraft-1.21.4-fabric-iris-sundial-lite-in-world",
+   "minecraft-1.21.4-fabric-iris-complementary-reimagined-in-world",
+   "minecraft-1.21.4-fabric-iris-complementary-unbound-in-world",
+   "minecraft-1.21.4-fabric-iris-mellow-in-world",
+   "minecraft-1.21.4-fabric-iris-nostalgia-in-world",
+   "minecraft-1.21.4-fabric-iris-bliss-in-world",
+   "minecraft-1.21.4-fabric-iris-chocapic-v6-lite-in-world",
+   "minecraft-1.21.4-fabric-iris-iterationt-in-world",
+   "minecraft-1.21.4-fabric-iris-iterationt-nodsa-in-world",
+   "minecraft-1.21.4-fabric-iris-photon-v1.1-in-world",
+   "minecraft-1.21.4-fabric-iris-derivative-main-d24.4.14-in-world",
+   "minecraft-1.21.1-neoforge-create-instancing-in-world",
+   "improved-transparency-minecraft-26.3",
+   "minecraft-1.21.4-fabric-iris-iterationrp-in-world",
+   "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854"
+  ],
+  "canonical_problems": [],
+  "cross_arm_mismatched": [],
+  "cross_arm_unadjudicated": [],
+  "adjudication": {
+   "file": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/gate3/adjudication.tsv",
+   "cases": {},
+   "problems": [],
+   "stale": []
+  },
+  "session": {
+   "session_boot_id": "7e78ccf2-c298-481f-98ce-2017a58ffa9e",
+   "boot_ids": [
+    "7e78ccf2-c298-481f-98ce-2017a58ffa9e"
+   ],
+   "records": 1152,
+   "unstamped": 0,
+   "problems": [],
+   "valid": true,
+   "reboot_clean": "reboot-clean: 8e396037-0f88-4bda-88a9-22c8d326cc50 -> 7e78ccf2-c298-481f-98ce-2017a58ffa9e"
+  },
+  "identity": {
+   "monolith_repeats": 180,
+   "monolith_proven": 180,
+   "monolith_extra": 0,
+   "split_repeats": 216,
+   "split_proofs_passed": 216
+  }
+ },
+ "bsl": {
+  "inproc": {
+   "done": {
+    "rc": "0 seconds=14 finished=2026-09-23T20:40:36-04:00"
+   },
+   "peaks": "pid      comm               role   samples  maps_peak VmRSS_peak_kB     VmHWM_kB   span_s\n18486    ugin.p7w1.trace    app         40      10393       822088       829204     14.8\n",
+   "wbuf": "      3 wbuf[wbufs=28 wlivepk=1052 wdefpk=3308944 wdefsync=22]\n",
+   "replay": [
+    {
+     "passed": true,
+     "ssim_vs_golden": 0.999791667,
+     "actual_sha256": "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0",
+     "error": null
+    }
+   ]
+  },
+  "spawn": {
+   "done": {
+    "rc": "0 seconds=14 finished=2026-09-23T20:40:55-04:00"
+   },
+   "peaks": "pid      comm               role   samples  maps_peak VmRSS_peak_kB     VmHWM_kB   span_s\n20296    libMobileGLServ    server      35      10330       360008       360008     14.3\n18806    ugin.p7w1.trace    app         36       4587       559252       561916     14.7\n",
+   "wbuf": "      3 wbuf[wbufs=28 wlivepk=1052 wdefpk=3308944 wdefsync=22]\n",
+   "replay": [
+    {
+     "passed": true,
+     "ssim_vs_golden": 0.999791667,
+     "actual_sha256": "155dcdd13a24e0ee89535fbb26199b8cd331c288087c0fa80ddb3364b76eb4f0",
+     "error": null
+    }
+   ]
+  }
+ },
+ "cts": {
+  "blocks": [
+   {
+    "block": "shader-image",
+    "cases": 125,
+    "compared": 125,
+    "caselist": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/runs/shader-image/caselist.txt",
+    "after": {
+     "pass": 66,
+     "fail": 3,
+     "ns": 56,
+     "crash": 0,
+     "warn": 0,
+     "results": 125,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.9565217391304348,
+     "literal_rate": 0.9565217391304348,
+     "results_rate": 0.9565217391304348
+    },
+    "base": {
+     "pass": 63,
+     "fail": 6,
+     "ns": 56,
+     "crash": 0,
+     "warn": 0,
+     "results": 125,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.9130434782608695,
+     "literal_rate": 0.9130434782608695,
+     "results_rate": 0.9130434782608695
+    },
+    "delta_pp": 4.34782608695653,
+    "delta_pp_literal_info": 4.34782608695653,
+    "delta_pp_results_info": 4.34782608695653,
+    "new_crash": [],
+    "regressed": [
+     "KHR-GL46.shader_image_load_store.advanced-sync-vertexArray"
+    ],
+    "fixed": [
+     "KHR-GL46.shader_image_load_store.advanced-sync-drawIndirect",
+     "KHR-GL46.shader_image_load_store.advanced-sync-textureUpdate",
+     "KHR-GL46.shader_image_load_store.incomplete_textures",
+     "KHR-GL46.shader_image_load_store.non-layered_binding"
+    ],
+    "missing_in_base": [],
+    "lost": [],
+    "lost_unadjudicated": [],
+    "lost_adjudicated": [],
+    "unrun": 0,
+    "hung": [],
+    "verdict": "PASS",
+    "reasons": [
+     "note: AFTER is 4.348 pp ABOVE BASE (not a regression; review the fixed list)"
+    ],
+    "warnings": [],
+    "subset": false
+   },
+   {
+    "block": "ssbo",
+    "cases": 124,
+    "compared": 124,
+    "caselist": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/runs/ssbo/caselist.txt",
+    "after": {
+     "pass": 124,
+     "fail": 0,
+     "ns": 0,
+     "crash": 0,
+     "warn": 0,
+     "results": 124,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 1.0,
+     "literal_rate": 1.0,
+     "results_rate": 1.0
+    },
+    "base": {
+     "pass": 124,
+     "fail": 0,
+     "ns": 0,
+     "crash": 0,
+     "warn": 0,
+     "results": 124,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 1.0,
+     "literal_rate": 1.0,
+     "results_rate": 1.0
+    },
+    "delta_pp": 0.0,
+    "delta_pp_literal_info": 0.0,
+    "delta_pp_results_info": 0.0,
+    "new_crash": [],
+    "regressed": [],
+    "fixed": [],
+    "missing_in_base": [],
+    "lost": [],
+    "lost_unadjudicated": [],
+    "lost_adjudicated": [],
+    "unrun": 0,
+    "hung": [],
+    "verdict": "PASS",
+    "reasons": [],
+    "warnings": [],
+    "subset": false
+   },
+   {
+    "block": "dsa",
+    "cases": 371,
+    "compared": 371,
+    "caselist": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/runs/dsa/caselist.txt",
+    "after": {
+     "pass": 368,
+     "fail": 2,
+     "ns": 0,
+     "crash": 0,
+     "warn": 1,
+     "results": 371,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.9945945945945946,
+     "literal_rate": 0.9945945945945946,
+     "results_rate": 0.9919137466307277
+    },
+    "base": {
+     "pass": 368,
+     "fail": 2,
+     "ns": 0,
+     "crash": 0,
+     "warn": 1,
+     "results": 371,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.9945945945945946,
+     "literal_rate": 0.9945945945945946,
+     "results_rate": 0.9919137466307277
+    },
+    "delta_pp": 0.0,
+    "delta_pp_literal_info": 0.0,
+    "delta_pp_results_info": 0.0,
+    "new_crash": [],
+    "regressed": [],
+    "fixed": [],
+    "missing_in_base": [],
+    "lost": [],
+    "lost_unadjudicated": [],
+    "lost_adjudicated": [],
+    "unrun": 0,
+    "hung": [],
+    "verdict": "PASS",
+    "reasons": [],
+    "warnings": [],
+    "subset": false
+   },
+   {
+    "block": "texture",
+    "cases": 1054,
+    "compared": 1054,
+    "caselist": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/runs/texture/caselist.txt",
+    "after": {
+     "pass": 823,
+     "fail": 10,
+     "ns": 221,
+     "crash": 0,
+     "warn": 0,
+     "results": 1054,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.9879951980792316,
+     "literal_rate": 0.9879951980792316,
+     "results_rate": 0.9879951980792316
+    },
+    "base": {
+     "pass": 815,
+     "fail": 18,
+     "ns": 221,
+     "crash": 0,
+     "warn": 0,
+     "results": 1054,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 0.978391356542617,
+     "literal_rate": 0.978391356542617,
+     "results_rate": 0.978391356542617
+    },
+    "delta_pp": 0.9603841536614643,
+    "delta_pp_literal_info": 0.9603841536614643,
+    "delta_pp_results_info": 0.9603841536614643,
+    "new_crash": [],
+    "regressed": [
+     "KHR-GL46.texture_border_clamp.Texture2DArrayCompressed"
+    ],
+    "fixed": [
+     "KHR-GL46.texture_barrier.disjoint-texels",
+     "KHR-GL46.texture_barrier.overlapping-texels",
+     "KHR-GL46.texture_barrier.same-texel-rw",
+     "KHR-GL46.texture_barrier.same-texel-rw-multipass",
+     "KHR-GL46.texture_size_promotion.functional",
+     "KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_7",
+     "KHR-GL46.texture_swizzle.functional_format_idx_19_target_idx_8",
+     "KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_7",
+     "KHR-GL46.texture_swizzle.functional_format_idx_8_target_idx_8"
+    ],
+    "missing_in_base": [],
+    "lost": [],
+    "lost_unadjudicated": [],
+    "lost_adjudicated": [],
+    "unrun": 0,
+    "hung": [],
+    "verdict": "PASS",
+    "reasons": [
+     "note: AFTER is 0.960 pp ABOVE BASE (not a regression; review the fixed list)"
+    ],
+    "warnings": [],
+    "subset": false
+   },
+   {
+    "block": "packed-pixels",
+    "cases": 4732,
+    "compared": 4732,
+    "caselist": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/runs/packed-pixels/caselist.txt",
+    "after": {
+     "pass": 4732,
+     "fail": 0,
+     "ns": 0,
+     "crash": 0,
+     "warn": 0,
+     "results": 4732,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 1.0,
+     "literal_rate": 1.0,
+     "results_rate": 1.0
+    },
+    "base": {
+     "pass": 4732,
+     "fail": 0,
+     "ns": 0,
+     "crash": 0,
+     "warn": 0,
+     "results": 4732,
+     "lost": 0,
+     "adjudicated": 0,
+     "rate": 1.0,
+     "literal_rate": 1.0,
+     "results_rate": 1.0
+    },
+    "delta_pp": 0.0,
+    "delta_pp_literal_info": 0.0,
+    "delta_pp_results_info": 0.0,
+    "new_crash": [],
+    "regressed": [],
+    "fixed": [],
+    "missing_in_base": [],
+    "lost": [],
+    "lost_unadjudicated": [],
+    "lost_adjudicated": [],
+    "unrun": 0,
+    "hung": [],
+    "verdict": "PASS",
+    "reasons": [],
+    "warnings": [],
+    "subset": false
+   }
+  ],
+  "overall": "PASS",
+  "ubo": {
+   "block": "ubo",
+   "caselist": "tools/cts/caselists/p7-ubo-gl46.txt",
+   "cases": "GTF-GL46.gtf31.GL3Tests.uniform_buffer_object*",
+   "verdict": "UNRUN",
+   "reasons": [
+    "unrun (not in this glcts): the device glcts has no GTF module (ID-P7-16); recorded, not gated"
+   ]
+  },
+  "ignored_reports": [],
+  "incomplete_blocks": [],
+  "adjudication": {
+   "file": "/home/swung/w7/logs/p7w7/p7w8-78e71f2b/cts/adjudication.tsv",
+   "cases": {},
+   "problems": [],
+   "stale": []
+  }
+ },
+ "window": {
+  "gate3": "PASS",
+  "cts": "PASS",
+  "exit": 0
+ }
+}
