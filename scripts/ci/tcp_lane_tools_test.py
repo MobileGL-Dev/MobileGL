@@ -227,6 +227,41 @@ class DeviceIdleExemption(unittest.TestCase):
                 self.assertFalse(state.exists())
 
 
+class DeviceServerSurface(unittest.TestCase):
+    """P12 D9: tcp_device_server.py starts one of the two device servers - the offscreen
+    supervisor service (the default, unchanged) or the on-screen display Activity."""
+
+    def started(self, *argv):
+        spec = importlib.util.spec_from_file_location('tcp_device_server', ROOT / 'tools/trace_replay/tcp_device_server.py')
+        device = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(device)
+        commands = []
+        with patch.object(device, 'shell', side_effect=lambda _adb, command: commands.append(command) or ''), \
+                patch('builtins.print'):
+            device.main(['start', '--package', 'pkg', '--listen', 'tcp://127.0.0.1:40613',
+                         '--token', 'a-token-of-sixteen-bytes', '--env', 'A=1', *argv])
+        return commands
+
+    def test_the_default_is_still_the_offscreen_supervisor_service(self):
+        self.assertEqual(self.started(), [[
+            'am', 'start-foreground-service', '-n', 'pkg/top.mobilegl.plugin.MobileGLServerService',
+            '--es', 'listen', 'tcp://127.0.0.1:40613', '--es', 'token', 'a-token-of-sixteen-bytes',
+            '--es', 'env', 'A=1']])
+        self.assertEqual(self.started('--surface', 'pbuffer'), self.started())
+        # A pinned backend reaches the supervisor through its environment.
+        self.assertEqual(self.started('--backend', 'DirectVulkan')[0][-1], 'A=1;MOBILEGL_BACKEND_TYPE=DirectVulkan')
+
+    def test_window_starts_the_display_activity_with_the_same_extras_on_a_lit_screen(self):
+        commands = self.started('--surface', 'window', '--backend', 'DirectVulkan')
+        self.assertEqual(commands, [
+            ['input', 'keyevent', 'KEYCODE_WAKEUP'],
+            ['am', 'start', '-n', 'pkg/top.mobilegl.plugin.MobileGLDisplayActivity',
+             '--es', 'listen', 'tcp://127.0.0.1:40613', '--es', 'token', 'a-token-of-sixteen-bytes',
+             '--es', 'env', 'A=1', '--es', 'backend', 'DirectVulkan']])
+        # Without --backend the Activity gets no pin extra (the first session's backend is pinned).
+        self.assertNotIn('backend', self.started('--surface', 'window')[1])
+
+
 @unittest.skipUnless(sys.platform.startswith('linux'), 'supervisor fixture uses Linux /proc')
 class Supervisor(unittest.TestCase):
     def test_readiness_does_not_consume_a_connection_and_stop_owns_only_its_pid(self):
