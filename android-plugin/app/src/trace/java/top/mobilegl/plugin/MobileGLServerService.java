@@ -122,6 +122,10 @@ public final class MobileGLServerService extends Service {
                     String line;
                     while ((line = output.readLine()) != null) Log.i(TAG, line);
                     Log.i(TAG, "supervisor exited " + child.waitFor());
+                } catch (java.io.InterruptedIOException stopped) {
+                    // onDestroy's Process.destroy() closes this stream under the read: the service
+                    // is being stopped (P12 D8: the display Activity stops it), not failing.
+                    Log.i(TAG, "supervisor output closed: the service is stopping");
                 } catch (Exception error) {
                     Log.e(TAG, "supervisor output failed", error);
                 } finally {
