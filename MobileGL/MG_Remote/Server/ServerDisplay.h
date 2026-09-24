@@ -145,6 +145,8 @@ namespace MobileGL::MG_Remote::Server {
 
     private:
         void ReleaseOutsideLock(const ServerDisplayHooks& hooks, void* window) const;
+        // m_mutex held: an Attach reported `width`x`height` (see m_extentReports).
+        void NoteExtentReportLocked(Uint32 width, Uint32 height);
 
         mutable std::mutex m_mutex;
         std::condition_variable m_cv;
@@ -155,6 +157,16 @@ namespace MobileGL::MG_Remote::Server {
         Uint32 m_height = 0;
         Uint64 m_generation = 0;
         Uint64 m_interrupts = 0;
+        // P12 review fix (stale size). The geometry the last AcquireFor asked the platform for (0/0 =
+        // the layout's), the extent the window last reported while the layout owned its size (0/0 =
+        // not seen yet), and a count of every extent report. A 0/0 request that FOLLOWS a fixed one
+        // is a change of size too - setSizeFromLayout answers asynchronously, like setFixedSize - so
+        // it waits for the layout's extent instead of leasing the previous session's fixed one.
+        Uint32 m_requestedWidth = 0;
+        Uint32 m_requestedHeight = 0;
+        Uint32 m_layoutWidth = 0;
+        Uint32 m_layoutHeight = 0;
+        Uint64 m_extentReports = 0;
         void* m_leaseHolder = nullptr;
         ServerWindowLostHook m_onLost = nullptr;
         Bool m_lostRequested = false;

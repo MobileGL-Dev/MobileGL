@@ -56,6 +56,15 @@ namespace MobileGL::MG_Remote::Server {
         if (window != nullptr && hooks.release != nullptr) hooks.release(hooks.user, window);
     }
 
+    void ServerDisplay::NoteExtentReportLocked(Uint32 width, Uint32 height) {
+        ++m_extentReports;
+        // Only a report made while the layout owns the size says what the layout's size is.
+        if (m_requestedWidth == 0 && m_requestedHeight == 0) {
+            m_layoutWidth = width;
+            m_layoutHeight = height;
+        }
+    }
+
     void ServerDisplay::Install(const ServerDisplayHooks& hooks) {
         {
             const std::lock_guard<std::mutex> lock(m_mutex);
@@ -93,6 +102,7 @@ namespace MobileGL::MG_Remote::Server {
             // is answered, so a waiting AcquireFor is woken.
             m_width = width;
             m_height = height;
+            NoteExtentReportLocked(width, height);
             lock.unlock();
             m_cv.notify_all();
             MGLOG_I("MG_Remote server: server window %p is now %ux%u", window, width, height);
@@ -112,6 +122,7 @@ namespace MobileGL::MG_Remote::Server {
         m_window = window;
         m_width = width;
         m_height = height;
+        NoteExtentReportLocked(width, height);
         ++m_generation;
         const Uint64 generation = m_generation;
         lock.unlock();
@@ -166,17 +177,39 @@ namespace MobileGL::MG_Remote::Server {
                                                   void* cancelUser, ServerWindowLease* out) {
         ServerDisplayHooks hooks{};
         Uint64 interrupts = 0;
+        const Bool sizeRequested = width != 0 && height != 0;
+        // P12 review fix (stale size): a 0/0 request after a fixed one hands the size BACK to the
+        // layout, and until the platform has done so the window still reports the fixed size.
+        Bool backToLayout = false;
+        Uint32 previousWidth = 0;
+        Uint32 previousHeight = 0;
+        Uint64 reportsAtRequest = 0;
         {
             const std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_installed) return ServerWindowAcquire::NoDisplay;
             if (m_leaseHolder != nullptr && m_leaseHolder != holder) return ServerWindowAcquire::LeasedElsewhere;
             hooks = m_hooks;
             interrupts = m_interrupts;
+            previousWidth = m_requestedWidth;
+            previousHeight = m_requestedHeight;
+            backToLayout = !sizeRequested && (previousWidth != 0 || previousHeight != 0);
+            m_requestedWidth = sizeRequested ? width : 0u;
+            m_requestedHeight = sizeRequested ? height : 0u;
+            reportsAtRequest = m_extentReports;
         }
         // The geometry request is an up-call into the platform (Java), made without the lock: its
         // answer comes back as an Attach() of the same window, which needs the lock.
         if (hooks.requestGeometry != nullptr) hooks.requestGeometry(hooks.user, width, height);
-        const Bool sizeRequested = width != 0 && height != 0;
+        // What "the size asked for" means on each path. A fixed size: the window reports it. The
+        // layout's, after a fixed one: the window reports the layout's extent it reported before, or
+        // - the layout moved meanwhile (a rotation), or was never seen - reports anything but the old
+        // fixed size after this request. The layout's, with no fixed size in effect: whatever it is.
+        const auto sizeReached = [&] {
+            if (sizeRequested) return m_width == width && m_height == height;
+            if (!backToLayout) return true;
+            if (m_layoutWidth != 0 && m_width == m_layoutWidth && m_height == m_layoutHeight) return true;
+            return m_extentReports != reportsAtRequest && (m_width != previousWidth || m_height != previousHeight);
+        };
 
         std::unique_lock<std::mutex> lock(m_mutex);
         const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -193,7 +226,7 @@ namespace MobileGL::MG_Remote::Server {
                     attachedSeen = true;
                     geometryDeadline = std::min(deadline, now + std::chrono::milliseconds(kGeometryGraceMs));
                 }
-                const Bool sizeOk = !sizeRequested || (m_width == width && m_height == height);
+                const Bool sizeOk = sizeReached();
                 if (sizeOk || now >= geometryDeadline) {
                     m_leaseHolder = holder;
                     m_onLost = onLost;
@@ -205,11 +238,16 @@ namespace MobileGL::MG_Remote::Server {
                         out->generation = m_generation;
                         out->sizeAsRequested = sizeOk;
                     }
-                    if (!sizeOk) {
+                    if (!sizeOk && sizeRequested) {
                         MGLOG_W("MG_Remote server: the server window is %ux%u, not the %ux%u requested, after "
                                 "%u ms of geometry grace; the surface is created at the window's size and the "
                                 "client is told so",
                                 m_width, m_height, width, height, kGeometryGraceMs);
+                    } else if (!sizeOk) {
+                        MGLOG_W("MG_Remote server: the server window still reports %ux%u - the previous fixed "
+                                "size - %u ms after its size was handed back to the layout; the surface is created "
+                                "at that size and the client is told so",
+                                m_width, m_height, kGeometryGraceMs);
                     }
                     return ServerWindowAcquire::Acquired;
                 }

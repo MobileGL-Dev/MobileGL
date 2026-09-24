@@ -201,6 +201,48 @@ TEST(ServerDisplayTest, ARequestedSizeIsWaitedForUntilTheWindowReportsIt) {
     display.EndLease(this);
 }
 
+// P12 review fix (stale size). A session that asks for the window's OWN size after a session that fixed
+// it must get the layout's size back, not the fixed one the window still reports until setSizeFromLayout
+// lands. Red with AcquireFor granting 0/0 at once (the first version): the lease is 640x480 and comes
+// back before the layout's surfaceChanged.
+TEST(ServerDisplayTest, TheWindowsOwnSizeAfterAFixedSizeIsTheLayoutsNotTheStaleFixedOne) {
+    FakePlatform platform;
+    ServerDisplay display;
+    display.Install(HooksFor(platform));
+    display.Attach(FakeWindow(0), 1080, 2400); // surfaceCreated at the layout's size
+    // Session 1 fixes 640x480 (setFixedSize answers with surfaceChanged) and ends.
+    std::thread fixer([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        display.Attach(FakeWindow(0), 640, 480);
+    });
+    ServerWindowLease lease;
+    ASSERT_EQ(display.AcquireFor(640, 480, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    fixer.join();
+    display.EndLease(this);
+    // Session 2 asks for the window's own size: setSizeFromLayout answers later, at the layout's size.
+    std::thread layout([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        display.Attach(FakeWindow(0), 1080, 2400);
+    });
+    const auto started = std::chrono::steady_clock::now();
+    ASSERT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    const auto waited = std::chrono::steady_clock::now() - started;
+    layout.join();
+    EXPECT_EQ(platform.lastWidth, 0u) << "0/0 is the setSizeFromLayout request";
+    EXPECT_EQ(lease.width, 1080u) << "the lease took the previous session's fixed size";
+    EXPECT_EQ(lease.height, 2400u);
+    EXPECT_TRUE(lease.sizeAsRequested);
+    EXPECT_GE(waited, std::chrono::milliseconds(100)) << "granted before the layout's size came back";
+    EXPECT_LT(waited, std::chrono::milliseconds(ServerDisplay::kGeometryGraceMs)) << "waited out the whole grace";
+    display.EndLease(this);
+    // And a 0/0 request with the layout already owning the size is granted at once, as before.
+    const auto again = std::chrono::steady_clock::now();
+    ASSERT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    EXPECT_LT(std::chrono::steady_clock::now() - again, std::chrono::milliseconds(100));
+    EXPECT_EQ(lease.width, 1080u);
+    display.EndLease(this);
+}
+
 // D6, THE CONTRACT: Detach of a window a session holds asks the holder to let go, WAITS until it did,
 // and only then releases the window's reference. Red with Detach's wait deleted: the release is
 // recorded before the session released its surface (and Detach answers Released, not
