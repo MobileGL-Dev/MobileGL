@@ -21,15 +21,42 @@ namespace MobileGL {
         static FILE* s_serverLogFile = nullptr;
         static LogForwarder s_forwarder = nullptr;
         static void* s_forwarderUser = nullptr;
+        // P12 review fix (SetSessionLogForwarder). Written under BOTH mutexes, so either one is
+        // enough to read them; the lock order is LogMutex, then ForwardMutex.
+        static bool s_forwardSessionThreadsOnly = false;
+        static thread_local bool t_forwardsToPeer = false;
+        static thread_local bool t_forwarding = false; // a line logged by the send itself is not re-sent
+        static std::mutex& ForwardMutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
 
         void SetLogForwarder(LogForwarder forwarder, void* user) {
             std::lock_guard<std::mutex> lock(LogMutex());
+            std::lock_guard<std::mutex> forwardLock(ForwardMutex());
             s_forwarder = forwarder;
             s_forwarderUser = user;
+            s_forwardSessionThreadsOnly = false;
         }
+
+        void SetSessionLogForwarder(LogForwarder forwarder, void* user) {
+            {
+                std::lock_guard<std::mutex> lock(LogMutex());
+                std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+                s_forwarder = forwarder;
+                s_forwarderUser = user;
+                s_forwardSessionThreadsOnly = forwarder != nullptr;
+            }
+            t_forwardsToPeer = forwarder != nullptr;
+        }
+
+        void SetThreadForwardsLogToPeer(bool forwards) { t_forwardsToPeer = forwards; }
 
         void WithLogBarrier(void (*action)(void*), void* user) {
             std::lock_guard<std::mutex> lock(LogMutex());
+            // A session-scoped line is sent under ForwardMutex after the log mutex was released; the
+            // barrier's action comes after every such send that has begun.
+            std::lock_guard<std::mutex> forwardLock(ForwardMutex());
             action(user);
         }
 
@@ -244,7 +271,12 @@ namespace MobileGL {
         }
 
         void Log(const char* levelTag, android_LogPriority androidLogLevel, const char* fmt, ...) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Unlocked early for a session-scoped forward (SetSessionLogForwarder).
+            std::unique_lock<std::mutex> lock(LogMutex());
+#else
             std::lock_guard<std::mutex> lock(LogMutex());
+#endif
 
 #if MOBILEGL_LOG_ENABLE_STACKTRACE
             auto trace = std::stacktrace::current();
@@ -283,10 +315,27 @@ namespace MobileGL {
 
             WriteToFile(out.c_str());
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (s_forwarder && ThreadIsServerRole()) s_forwarder(s_forwarderUser, out.c_str());
+            bool forwardOutsideLock = false;
+            if (s_forwarder && ThreadIsServerRole() && !t_forwarding) {
+                if (!s_forwardSessionThreadsOnly) s_forwarder(s_forwarderUser, out.c_str());
+                else forwardOutsideLock = t_forwardsToPeer;
+            }
 #endif
 
             va_end(args);
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (forwardOutsideLock) {
+                // SetSessionLogForwarder: this thread belongs to the live session. The line goes out
+                // after the log mutex is released, so a stalled client holds only the forward mutex.
+                lock.unlock();
+                std::lock_guard<std::mutex> forwardLock(ForwardMutex());
+                if (s_forwarder != nullptr && s_forwardSessionThreadsOnly) {
+                    t_forwarding = true;
+                    s_forwarder(s_forwarderUser, out.c_str());
+                    t_forwarding = false;
+                }
+            }
+#endif
         }
 
         void Close() {

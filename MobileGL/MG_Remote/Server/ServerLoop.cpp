@@ -362,6 +362,9 @@ namespace MobileGL::MG_Remote::Server {
         // own log. Under spawn the process role already answers this; under INPROC it is the
         // only thing that can, because the client role is another thread of this same process.
         MG_Util::Debug::SetThreadLogRole(MG_Util::Debug::LogRole::Server);
+        // P12 review fix: and it is one of the session's own threads, whose lines a session-scoped
+        // forwarder (the in-process display server's) sends to the client. Inert otherwise.
+        MG_Util::Debug::SetThreadForwardsLogToPeer(true);
 
         Bool recognised = true;
         const char* raw = AffinityStringFromConfig();

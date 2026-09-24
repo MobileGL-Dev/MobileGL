@@ -574,8 +574,13 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     }
 
     const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
-    if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0))
-        MobileGL::MG_Util::Debug::SetLogForwarder(&ForwardLog, control.get());
+    if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0)) {
+        // P12 review fix: in-process, only THIS session's threads (this one and its apply thread)
+        // forward, and outside the log mutex - the UI thread, the listener and the next session's
+        // refusals share this process and must neither reach this client nor wait on it.
+        if (inProcess) MobileGL::MG_Util::Debug::SetSessionLogForwarder(&ForwardLog, control.get());
+        else MobileGL::MG_Util::Debug::SetLogForwarder(&ForwardLog, control.get());
+    }
     // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
     // below) and is the one that says "still running" while the apply thread runs it. Cleared
     // after the loop, on this same thread, so no post can be in flight when it goes.

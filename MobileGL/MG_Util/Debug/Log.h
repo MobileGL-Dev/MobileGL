@@ -138,6 +138,19 @@ namespace MobileGL {
 #if MOBILEGL_BUILD_DISAGGREGATED
             using LogForwarder = void (*)(void*, const char*);
             void SetLogForwarder(LogForwarder forwarder, void* user);
+            // P12 review fix (log forwarding). THE IN-PROCESS DISPLAY SERVER'S FORWARDER, scoped to
+            // the live session's own threads. SetLogForwarder forwards every server-role thread's
+            // line, which is right for a session child (the process IS the session) and wrong for the
+            // display Activity's process, where the UI thread, the listener (naming other peers'
+            // addresses) and a previous session share the process: their lines went into the live
+            // client's socket. This one forwards only from the calling thread and from threads that
+            // opt in (SetThreadForwardsLogToPeer - the session's apply thread), and it sends OUTSIDE
+            // the log mutex, under a forward mutex of its own, so a client that stops reading stalls
+            // the session's threads and not every thread that logs (the UI thread's surface
+            // callbacks). SetLogForwarder(nullptr, nullptr) clears either kind and waits for a send in
+            // flight.
+            void SetSessionLogForwarder(LogForwarder forwarder, void* user);
+            void SetThreadForwardsLogToPeer(bool forwards);
             void WritePeerLog(const char* message);
             void WithLogBarrier(void (*action)(void*), void* user);
             // P6: ONE LOG PER ROLE, and the role is a per-THREAD fact because under inproc both
