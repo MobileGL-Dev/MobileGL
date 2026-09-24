@@ -8,7 +8,7 @@
 |---|---|---|---|---|---|
 | Redmi M332BF `2f7cbe2e` | SM8750 / Adreno 830v2 | policy6 → 1958400（stock 1017600–3072000） | policy0 → 1555200（stock 556800–2745600） | kgsl `min/max_pwrlevel = 0`；2026-09-11 实测 1050 MHz（厂商 `thermal_pwrlevel` 锁 1），2026-09-16 起实测 1100 MHz | 主动风扇 `/sys/class/xm_power/hw_monitor/pwm_fan` 恒 level 2，用例间降温 <1 min；温度门 `cpuss-0-0` |
 
-与小米 `35d0befa` 同 SoC、同 OPP 表，两台的钉频数值可比；跨钉频口径（1050 vs 1100 MHz）的活动不可比钟频，只有同场配对可比。Redmi 的行目前只在 `~/w7/notes/p2/devices/pin_device.sh`（树外，`~/w7/notes/tools/p5b_codex_redmi.sh` 引用它）；树内 `tools/device_bench/pin_device.sh` 只含下面两台，把 Redmi 行并回树内是待办。
+与小米 `35d0befa` 同 SoC、同 OPP 表，两台的钉频数值可比；跨钉频口径（1050 vs 1100 MHz）的活动不可比钟频，只有同场配对可比。Redmi 的行已于 P6 收尾（2026-09-22）并入树内 `tools/device_bench/pin_device.sh`（`2f7cbe2e` 条目；stock 范围与小米不同，GPU 实测钳在 1050 MHz：`thermal_pwrlevel` 写 0 读回 1，见 [`../notes/p6/README.md`](../notes/p6/README.md) §12.7）；此前它只在树外的 `~/w7/notes/p2/devices/pin_device.sh`。
 
 ## 2026-09-07 核验：小米 `35d0befa` 与 Oppo `3B159D009VZ00000`（P2 / P3a 使用）
 

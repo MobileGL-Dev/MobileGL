@@ -63,7 +63,7 @@
 
 ## 3. 还没做（P12 未收官）
 
-按 [`../ROADMAP.md`](../ROADMAP.md) P12 行的两个出口门，以及本包任务书列出的改小后的条目：
+按 [`../ROADMAP.md`](../../ROADMAP.md) P12 行的两个出口门，以及本包任务书列出的改小后的条目：
 
 1. **出口门 (a) 未达成。** 要求 FCL 同机 spawn、双后端**入世界**、杀 server 产生干净 device-lost latch。
    今天验证到的是：trace_replay（**不是 FCL**）经 `--window-surface` + `MOBILEGL_IPC_SURFACE=server` 在屏上重放 OpenRA，

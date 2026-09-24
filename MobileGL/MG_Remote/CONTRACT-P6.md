@@ -14,10 +14,10 @@ integrator; the packages compile against the rows below from day one.
 **What this file is written from.** [`a6-audit-v1.md`](../../docs/Disaggregated/notes/p6/a6-audit-v1.md)
 (198 rows, seven items, each adversarially re-resolved) and
 [`a6-link-experiment.md`](../../docs/Disaggregated/notes/p6/a6-link-experiment.md) (the 184 symbols).
-It supersedes [`P6-CONTRACT-DRAFT.md`](../../docs/Disaggregated/P6-CONTRACT-DRAFT.md), which was
+It supersedes [`P6-CONTRACT-DRAFT.md`](../../docs/Disaggregated/notes/p6/P6-CONTRACT-DRAFT.md), which was
 written before its own audit and is **wrong in four places** (§10.1). The re-scoping against the
 eventual client-in-a-VM end state is
-[`P6-ENDSTATE-REVIEW.md`](../../docs/Disaggregated/P6-ENDSTATE-REVIEW.md); this file takes from it
+[`P6-ENDSTATE-REVIEW.md`](../../docs/Disaggregated/notes/p6/P6-ENDSTATE-REVIEW.md); this file takes from it
 only what P6 must not preclude, and §11 says what P6 explicitly does not take on.
 
 ---
@@ -631,7 +631,7 @@ Negative controls, each run red once:
 ### 10.3 Amendments of 2026-09-22 — the end state re-ruled
 
 1. **The end state is TCP across machines, OSes and architectures**, not an AVF pVM over
-   `AF_VSOCK`. `docs/Disaggregated/P6-ENDSTATE-REVIEW.md` carries the retraction at its head; its
+   `AF_VSOCK`. `docs/Disaggregated/notes/p6/P6-ENDSTATE-REVIEW.md` carries the retraction at its head; its
    §3 gains form **D**. Same-machine `spawn` (AF_UNIX + shared segments) stays as the local form.
 2. **The transport stack has two independent axes.** The control plane (`ITransport`: `fork`
    inherited fds / `unix:<path>` / `tcp://host:port`) and the data plane (`ILink`: `ShmLink` /

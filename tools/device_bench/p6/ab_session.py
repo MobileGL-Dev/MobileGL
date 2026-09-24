@@ -17,8 +17,8 @@ WHAT IT DELIBERATELY DOES NOT DO.
 
 - It does not decide anything about correctness. Benchmark mode takes no snapshot and compares no
   golden (--benchmark replays the whole trace for timing), so an SSIM column here would be a
-  fabrication. Correctness on this device is P6 section 3 of CURRENT_STAGE_PROGRESS.md and the
-  retrace lanes.
+  fabrication. Correctness on this device is section 3 of the P6 closing snapshot
+  (docs/Disaggregated/notes/p6/README.md) and the retrace lanes.
 - It does not read `MOBILEGL_TRANSPORT` out of `--transport` on the runner. That flag is applied by
   run_android_retrace_local.py's run_case() path only; run_benchmark_case() passes `args.env`
   alone, so `--transport spawn` alongside `--benchmark` is silently ignored and the arm runs
