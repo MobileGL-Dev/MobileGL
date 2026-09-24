@@ -91,4 +91,4 @@ interfaces for `/proc/gpufreqv2/`)**. For those two devices run `bench.sh --no-p
 `tools/device_bench/pin_device.sh <serial> pin|unpin|check` (pure adb + su; exit 0 PINNED, 1 DRIFT,
 2 UNPINNED, so `check && measure` cannot measure unpinned). The profiles under `devices/` carry
 `PROFILE_VERIFIED=1` for the nodes and pins named in the file, not for `bench.sh`'s ability to drive
-them; the verification evidence is `docs/Disaggregated/devices/pin-verification-2026-09-07.md`.
+them; the verification evidence is `docs/Disaggregated/guide/pin-verification-2026-09-07.md`.

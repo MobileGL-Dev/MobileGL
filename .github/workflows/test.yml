@@ -3702,7 +3702,7 @@ jobs:
       - name: Documentation citation lint
         run: |
           shopt -s nullglob
-          documents=(docs/Disaggregated/*.md)
+          documents=(docs/Disaggregated/*.md docs/Disaggregated/design/*.md docs/Disaggregated/guide/*.md)
           if [ ${#documents[@]} -eq 0 ]; then
             echo "no disaggregation documents to check"
             exit 0
