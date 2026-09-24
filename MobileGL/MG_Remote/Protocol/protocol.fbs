@@ -247,6 +247,22 @@ enum WindowKind : ubyte {
   // the two enums may only meet through the explicit mapping table in Protocol/SurfaceOpCodec.cpp
   // - Surfaceless/Pbuffer are surface SHAPES, not window backends, and answer "no backend" there.
   MetalLayer = 6,
+  // P12 (on-screen server window), appended. THE WINDOW IS THE SERVER'S OWN: the client asks the
+  // server to create the surface on the window the server process owns (the display Activity's
+  // SurfaceView) and has none of its own to name, so `nativeToken` is always 0 and no pointer
+  // crosses (Rule G/H). Legal on CreateWindowSurface only; SetWindowHandle may not name it.
+  ServerOwned = 7,
+}
+
+// P12, appended: WHY A SURFACE OP WAS DECLINED, so the client can name the refusal in its own log
+// instead of reading a bare `ok = false`. None of these latches the session: each is a
+// configuration or ordering answer, not a peer's corrupt bytes.
+enum SurfaceRefusal : ubyte {
+  None = 0,
+  NoServerDisplay = 1,              // ServerOwned asked of a server that owns no display
+  NoServerWindow = 2,               // the server owns a display, but no window came within its wait
+  SurfaceModeMismatch = 3,          // the session's surface mode (on-screen / offscreen) is the other one
+  ServerOwnedOnSetWindowHandle = 4, // SetWindowHandle named the server's own window
 }
 
 table SurfaceOp {
@@ -255,7 +271,7 @@ table SurfaceOp {
   display: ulong;
   surface: ulong;
   windowKind: WindowKind;
-  nativeToken: ulong;   // X11 XID / HWND; Android transfers the window out of band
+  nativeToken: ulong;   // X11 XID / HWND; 0 for ServerOwned (the server substitutes its own window)
   width: int;
   height: int;
   swapInterval: int;
@@ -275,6 +291,14 @@ table SurfaceReply {
   defaultFb: DefaultFramebufferInfo;
   // P6.5: all preceding data-plane events must arrive before this reply is observed.
   eventHead: ulong;
+  // P12, appended. The surface's REAL extent as the server has it - for a ServerOwned
+  // CreateWindowSurface, the server window's size - so a headless client knows its surface
+  // geometry when eglCreateWindowSurface returns, before any backend has published a
+  // surface-changed event (Magma creates its swapchain only at the first MakeCurrent). 0/0 for
+  // every other op.
+  width: int;
+  height: int;
+  refusal: SurfaceRefusal;
 }
 
 // ---------------------------------------------------------------------------

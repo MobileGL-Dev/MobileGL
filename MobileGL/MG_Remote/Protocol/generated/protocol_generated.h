@@ -337,11 +337,12 @@ enum class WindowKind : uint8_t {
   Surfaceless = 4,
   Pbuffer = 5,
   MetalLayer = 6,
+  ServerOwned = 7,
   MIN = None,
-  MAX = MetalLayer
+  MAX = ServerOwned
 };
 
-inline const WindowKind (&EnumValuesWindowKind())[7] {
+inline const WindowKind (&EnumValuesWindowKind())[8] {
   static const WindowKind values[] = {
     WindowKind::None,
     WindowKind::AndroidNativeWindow,
@@ -349,13 +350,14 @@ inline const WindowKind (&EnumValuesWindowKind())[7] {
     WindowKind::Win32Hwnd,
     WindowKind::Surfaceless,
     WindowKind::Pbuffer,
-    WindowKind::MetalLayer
+    WindowKind::MetalLayer,
+    WindowKind::ServerOwned
   };
   return values;
 }
 
 inline const char * const *EnumNamesWindowKind() {
-  static const char * const names[8] = {
+  static const char * const names[9] = {
     "None",
     "AndroidNativeWindow",
     "X11",
@@ -363,15 +365,55 @@ inline const char * const *EnumNamesWindowKind() {
     "Surfaceless",
     "Pbuffer",
     "MetalLayer",
+    "ServerOwned",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameWindowKind(WindowKind e) {
-  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::MetalLayer)) return "";
+  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::ServerOwned)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesWindowKind()[index];
+}
+
+enum class SurfaceRefusal : uint8_t {
+  None = 0,
+  NoServerDisplay = 1,
+  NoServerWindow = 2,
+  SurfaceModeMismatch = 3,
+  ServerOwnedOnSetWindowHandle = 4,
+  MIN = None,
+  MAX = ServerOwnedOnSetWindowHandle
+};
+
+inline const SurfaceRefusal (&EnumValuesSurfaceRefusal())[5] {
+  static const SurfaceRefusal values[] = {
+    SurfaceRefusal::None,
+    SurfaceRefusal::NoServerDisplay,
+    SurfaceRefusal::NoServerWindow,
+    SurfaceRefusal::SurfaceModeMismatch,
+    SurfaceRefusal::ServerOwnedOnSetWindowHandle
+  };
+  return values;
+}
+
+inline const char * const *EnumNamesSurfaceRefusal() {
+  static const char * const names[6] = {
+    "None",
+    "NoServerDisplay",
+    "NoServerWindow",
+    "SurfaceModeMismatch",
+    "ServerOwnedOnSetWindowHandle",
+    nullptr
+  };
+  return names;
+}
+
+inline const char *EnumNameSurfaceRefusal(SurfaceRefusal e) {
+  if (::flatbuffers::IsOutRange(e, SurfaceRefusal::None, SurfaceRefusal::ServerOwnedOnSetWindowHandle)) return "";
+  const size_t index = static_cast<size_t>(e);
+  return EnumNamesSurfaceRefusal()[index];
 }
 
 enum class AuxRequestKind : uint8_t {
@@ -1820,7 +1862,10 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_EGLMAJOR = 8,
     VT_EGLMINOR = 10,
     VT_DEFAULTFB = 12,
-    VT_EVENTHEAD = 14
+    VT_EVENTHEAD = 14,
+    VT_WIDTH = 16,
+    VT_HEIGHT = 18,
+    VT_REFUSAL = 20
   };
   uint64_t seq() const {
     return GetField<uint64_t>(VT_SEQ, 0);
@@ -1840,6 +1885,15 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t eventHead() const {
     return GetField<uint64_t>(VT_EVENTHEAD, 0);
   }
+  int32_t width() const {
+    return GetField<int32_t>(VT_WIDTH, 0);
+  }
+  int32_t height() const {
+    return GetField<int32_t>(VT_HEIGHT, 0);
+  }
+  MobileGL::Wire::SurfaceRefusal refusal() const {
+    return static_cast<MobileGL::Wire::SurfaceRefusal>(GetField<uint8_t>(VT_REFUSAL, 0));
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1850,6 +1904,9 @@ struct SurfaceReply FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyOffset(verifier, VT_DEFAULTFB) &&
            verifier.VerifyTable(defaultFb()) &&
            VerifyField<uint64_t>(verifier, VT_EVENTHEAD, 8) &&
+           VerifyField<int32_t>(verifier, VT_WIDTH, 4) &&
+           VerifyField<int32_t>(verifier, VT_HEIGHT, 4) &&
+           VerifyField<uint8_t>(verifier, VT_REFUSAL, 1) &&
            verifier.EndTable();
   }
 };
@@ -1876,6 +1933,15 @@ struct SurfaceReplyBuilder {
   void add_eventHead(uint64_t eventHead) {
     fbb_.AddElement<uint64_t>(SurfaceReply::VT_EVENTHEAD, eventHead, 0);
   }
+  void add_width(int32_t width) {
+    fbb_.AddElement<int32_t>(SurfaceReply::VT_WIDTH, width, 0);
+  }
+  void add_height(int32_t height) {
+    fbb_.AddElement<int32_t>(SurfaceReply::VT_HEIGHT, height, 0);
+  }
+  void add_refusal(MobileGL::Wire::SurfaceRefusal refusal) {
+    fbb_.AddElement<uint8_t>(SurfaceReply::VT_REFUSAL, static_cast<uint8_t>(refusal), 0);
+  }
   explicit SurfaceReplyBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1894,13 +1960,19 @@ inline ::flatbuffers::Offset<SurfaceReply> CreateSurfaceReply(
     int32_t eglMajor = 0,
     int32_t eglMinor = 0,
     ::flatbuffers::Offset<MobileGL::Wire::DefaultFramebufferInfo> defaultFb = 0,
-    uint64_t eventHead = 0) {
+    uint64_t eventHead = 0,
+    int32_t width = 0,
+    int32_t height = 0,
+    MobileGL::Wire::SurfaceRefusal refusal = MobileGL::Wire::SurfaceRefusal::None) {
   SurfaceReplyBuilder builder_(_fbb);
   builder_.add_eventHead(eventHead);
   builder_.add_seq(seq);
+  builder_.add_height(height);
+  builder_.add_width(width);
   builder_.add_defaultFb(defaultFb);
   builder_.add_eglMinor(eglMinor);
   builder_.add_eglMajor(eglMajor);
+  builder_.add_refusal(refusal);
   builder_.add_ok(ok);
   return builder_.Finish();
 }

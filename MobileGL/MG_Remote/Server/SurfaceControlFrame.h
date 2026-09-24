@@ -30,7 +30,9 @@
 //
 // PROCESS-LOCAL WINDOW OBJECTS ARE REFUSED BY NAME on the wire: ANativeWindow* and
 // CAMetalLayer* mean nothing in the server process. SurfaceOpCodec names their refusals
-// AndroidNativeWindow@P12 and MetalLayer@P12; real window arrival is P12.
+// AndroidNativeWindow@P12 and MetalLayer@P12, and they stay (Rule H): P12 does not carry a
+// client's window across, it gives the SERVER a window of its own (kServerOwnedWindowBackend
+// below, WindowKind::ServerOwned on the wire).
 
 #pragma once
 #include <Includes.h>
@@ -72,6 +74,33 @@ namespace MobileGL::MG_Remote::Server {
         ProbeForTesting = 14,            // MG_Test's arbitrary-work seam through the same channel
     };
 
+    // P12 (on-screen server window), D2. THE SERVER-OWNED WINDOW, AS A FRAME-LOCAL TAG.
+    //
+    // A client that sets MOBILEGL_IPC_SURFACE=server has no window the server could use (it may
+    // have none at all), so its CreateWindowSurface names the SERVER's window instead: the wire's
+    // WindowKind::ServerOwned with nativeToken 0. Inside a process the request travels in the
+    // frame's `windowBackend` slot as this value - deliberately NOT a MG_Backend::WindowBackend
+    // enumerator (BackendObject.h is in the pull build, gate G1), and deliberately outside every
+    // range a WindowBackend could grow to, so a frame carrying it that ever reached
+    // UnpackWindowHandle would be refused by WindowBackendFromFrameValue's range check rather than
+    // cast. The server's ServerOwned arm (ServerLoop.cpp) consumes it before that point and
+    // substitutes its own window there; no pointer crosses the wire (Rule G/H).
+    inline constexpr Int kServerOwnedWindowBackend = 0x10000;
+
+    // P12. Why the server declined a surface op, carried back in the reply half (`refusal`). The
+    // values ARE the wire's SurfaceRefusal (protocol.fbs); SurfaceOpCodec pins the agreement with
+    // static_asserts, the way it pins SurfaceControlOp against SurfaceOpKind. None of them latches
+    // the session.
+    enum class SurfaceRefusalCode : Uint8 {
+        None = 0,
+        NoServerDisplay = 1,              // ServerOwned asked of a server that owns no display
+        NoServerWindow = 2,               // a display, but no window within the wait
+        SurfaceModeMismatch = 3,          // D4: the session's surface mode is the other one
+        ServerOwnedOnSetWindowHandle = 4, // SetWindowHandle named the server's own window
+    };
+
+    const char* SurfaceRefusalCodeName(SurfaceRefusalCode code);
+
     struct SurfaceControlFrame {
         SurfaceControlOp kind = SurfaceControlOp::None;
         // Minted by the poster (RunSurfaceControlFrame), echoed back with the reply. 0 means
@@ -97,6 +126,10 @@ namespace MobileGL::MG_Remote::Server {
         Int eglMajor = 0;
         Int eglMinor = 0;
         Uint64 eventHead = 0; // data-plane delivery fence carried by SurfaceReply
+        // P12: a SurfaceRefusalCode (0 = none). `width`/`height` above double as the reply's
+        // surface geometry: a ServerOwned CreateWindowSurface answers with the server window's
+        // real extent there (SurfaceReply.width/height).
+        Uint8 refusal = 0;
     };
 
     namespace Detail {
@@ -111,7 +144,8 @@ namespace MobileGL::MG_Remote::Server {
             // Exhaustive by the language's aggregate decomposition rule: adding ANY member
             // without extending this binding is a compile error, so new fields cannot evade it.
             const auto& [kind, seq, display, surface, readSurface, context, windowBackend,
-                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor, eventHead] = frame;
+                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor, eventHead,
+                         refusal] = frame;
             return IsSurfaceControlValue<decltype(kind)> && IsSurfaceControlValue<decltype(seq)> &&
                    IsSurfaceControlValue<decltype(display)> && IsSurfaceControlValue<decltype(surface)> &&
                    IsSurfaceControlValue<decltype(readSurface)> && IsSurfaceControlValue<decltype(context)> &&
@@ -119,7 +153,7 @@ namespace MobileGL::MG_Remote::Server {
                    IsSurfaceControlValue<decltype(width)> && IsSurfaceControlValue<decltype(height)> &&
                    IsSurfaceControlValue<decltype(swapInterval)> && IsSurfaceControlValue<decltype(ok)> &&
                    IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)> &&
-                   IsSurfaceControlValue<decltype(eventHead)>;
+                   IsSurfaceControlValue<decltype(eventHead)> && IsSurfaceControlValue<decltype(refusal)>;
         }
     } // namespace Detail
 

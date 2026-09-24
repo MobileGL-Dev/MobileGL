@@ -65,7 +65,9 @@ extern "C" {
 // bump: `python3 scripts/ci/protocol_revision_pin.py --write` records the new row.
 //   1  P7 wave 2-F, PH-7 (4): Welcome.dataNonce and the DataBind message.
 //   2  P7 (p7/spawnhang): the SurfaceProgress message.
-#define MOBILEGL_PROTOCOL_CONTROL_REVISION 2
+//   3  P12 (on-screen server window): WindowKind.ServerOwned, the SurfaceRefusal enum and
+//      SurfaceReply.width/height/refusal.
+#define MOBILEGL_PROTOCOL_CONTROL_REVISION 3
 
 #define MOBILEGL_ABI_VERSION(major, minor) (((uint32_t)(major) << 16) | (uint32_t)(minor))
 #define MOBILEGL_ABI_MAJOR_OF(version) ((uint32_t)(version) >> 16)

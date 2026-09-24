@@ -53,4 +53,15 @@ namespace MobileGL::MG_Remote::Server {
         }
     }
 
+    const char* SurfaceRefusalCodeName(SurfaceRefusalCode code) {
+        switch (code) {
+        case SurfaceRefusalCode::None: return "None";
+        case SurfaceRefusalCode::NoServerDisplay: return "NoServerDisplay";
+        case SurfaceRefusalCode::NoServerWindow: return "NoServerWindow";
+        case SurfaceRefusalCode::SurfaceModeMismatch: return "SurfaceModeMismatch";
+        case SurfaceRefusalCode::ServerOwnedOnSetWindowHandle: return "ServerOwnedOnSetWindowHandle";
+        }
+        return "<unknown SurfaceRefusalCode>";
+    }
+
 } // namespace MobileGL::MG_Remote::Server

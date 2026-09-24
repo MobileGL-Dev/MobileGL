@@ -1262,6 +1262,14 @@ namespace {
         {"SurfaceOpUnknownKind", "SurfaceOpCodec.cpp", "SurfaceOp", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op failed validation: UnknownOpKind", false,
          [](Client::ClientSession& c, PeerReport& r) { return SendSurfaceOp(c, r, 200, 0); }},
+        // P12 (D2): WindowKind::ServerOwned names the SERVER's window, so its token is 0 by
+        // definition; SendSurfaceOp's 0x1234 is a client value trying to cross (Rule G).
+        {"SurfaceOpServerOwnedNonZeroToken", "SurfaceOpCodec.cpp", "SurfaceOp.nativeToken", Outcome::Latched,
+         "Fatal{ProtocolCorruption, \"SurfaceOp.nativeToken\"}", false,
+         [](Client::ClientSession& c, PeerReport& r) {
+             return SendSurfaceOp(c, r, kCreateWindowSurface,
+                                  static_cast<Uint8>(::MobileGL::Wire::WindowKind::ServerOwned));
+         }},
         // ===== the D11 / PH bounds F2 landed (driver's rows, now with a next session)
         {"D11CreateRenderStateCsoSlot", "PipeApply.cpp", "CreateRenderState.Cso.Slot", Outcome::Fatal,
          "Fatal{ProtocolCorruption, \"CreateRenderState.Cso.Slot\"}", false,
