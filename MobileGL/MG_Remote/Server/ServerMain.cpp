@@ -462,9 +462,12 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
         int pin = g_inProcessBackendPin.load(std::memory_order_acquire);
         if (pin < 0 && g_inProcessBackendPin.compare_exchange_strong(pin, static_cast<int>(backend),
                                                                      std::memory_order_acq_rel)) {
+            // Which pin it is, said as it is: the environment's (the display Activity's `backend`
+            // extra, already enforced by the refusal above) or the first session's.
             WireLogError("MG_Remote server: pid=%d in-process display server pinned backend type %u for the "
-                         "process lifetime (the first session's; MOBILEGL_BACKEND_TYPE unset)",
-                         selfPid, static_cast<unsigned>(backend));
+                         "process lifetime (%s)",
+                         selfPid, static_cast<unsigned>(backend),
+                         pinned && *pinned ? "MOBILEGL_BACKEND_TYPE" : "the first session's; MOBILEGL_BACKEND_TYPE unset");
             pin = static_cast<int>(backend);
         }
         if (pin != static_cast<int>(backend)) {
