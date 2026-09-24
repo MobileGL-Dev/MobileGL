@@ -537,6 +537,30 @@ in CI beside the other executable negative controls (`test.yml`, the R-16 step):
 python3 tools/trace_replay/test_run_tcp_matrix.py
 ```
 
+## Device servers: offscreen or on the phone's screen
+
+`tcp_device_server.py` starts one of the trace APK's two TCP servers; only one is active
+at a time (whichever starts last stops the other). `stop` force-stops the package.
+
+```bash
+# Offscreen (default): MobileGLServerService exec's the supervisor, one child per session.
+python3 tools/trace_replay/tcp_device_server.py start --serial 2f7cbe2e \
+  --listen tcp://127.0.0.1:40613 --token devtoken-of-16-bytes --forward
+# On-screen: MobileGLDisplayActivity (process :mglwin) serves in its own process and a
+# client's window surface renders on its SurfaceView. The screen must be on and unlocked.
+python3 tools/trace_replay/tcp_device_server.py start --surface window [--backend DirectVulkan] \
+  --serial 2f7cbe2e --listen tcp://127.0.0.1:40613 --token devtoken-of-16-bytes --forward
+```
+
+A headless client replays onto the phone's screen with `--window-surface` and
+`MOBILEGL_IPC_SURFACE=server` (plus the usual `MOBILEGL_TRANSPORT=spawn`,
+`MOBILEGL_IPC_CONTROL=tcp://127.0.0.1:40613`, `MOBILEGL_IPC_DATA=stream`,
+`MOBILEGL_IPC_TOKEN`). The server sizes its window to the trace's EGL_WIDTH/EGL_HEIGHT
+(letterboxed on screen) and the client's `eglQuerySurface` answers that size. Without
+`--backend` the on-screen server pins the first session's backend for its process; restart
+it (`stop`, then `start`) to switch. The same knob against the offscreen service is refused
+by name (`NoServerDisplay`) and that service goes on serving.
+
 ## TCP credit and Stage measurements
 
 `benchmark_tcp_credits.py` runs the complete OpenRA and rd12 traces at credits
