@@ -898,7 +898,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // display server runs the next session in this same process, so the twins this one built
         // - naming ids of the context just destroyed - must not answer for the next client's
         // handles (Managers.h, DropEveryTwinForEndedServerSession). Monolith keeps its twins.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) DropEveryTwinForEndedServerSession();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            DropEveryTwinForEndedServerSession();
+            // Review fix: and the swap interval it asked for (DirectGLES.h).
+            ForgetRequestedSwapInterval();
+        }
 #endif
     }
 

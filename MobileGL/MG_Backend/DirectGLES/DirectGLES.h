@@ -188,6 +188,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Applies (or defers until the window surface exists) the app-requested
     // eglSwapInterval on the native EGL surface.
     void SetSwapInterval(Int interval);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P12 review fix: the swap interval an ended server session asked for is not the next one's.
+    // The request outlives the context on purpose (a surface re-created mid-session re-applies it),
+    // so the in-process display server's session end forgets it: the next session starts at the
+    // driver's default until it asks (BackendObject_DirectGLES's destructor under a transport).
+    void ForgetRequestedSwapInterval();
+#endif
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);
     void SetGLESCapabilities(const MG_External::GLESCapabilities& capabilities);

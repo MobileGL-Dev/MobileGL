@@ -16246,6 +16246,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ApplyRequestedSwapInterval();
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void ForgetRequestedSwapInterval() { g_requestedSwapInterval = -1; }
+#endif
+
     Bool InitWindowSurface(NativeWindowType window) {
         if (!window) return false;
 
