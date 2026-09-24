@@ -77,6 +77,15 @@ namespace MobileGL::MG_Remote {
     // SessionFail calls: the string must carry its `Fatal{Word` and the word must have a .def row.
     void ArmSessionLatch();
     bool SessionLatchArmed();
+    // P12 (D5): THE IN-PROCESS DISPLAY SERVER RUNS SESSIONS ONE AFTER ANOTHER IN ONE PROCESS, so
+    // the latch that a session child took to its _exit has to be put back for the next session:
+    // disarmed, unlatched, the count and the first fault's line cleared. Called between sessions
+    // (the in-process supervisor, after it has joined the session thread) and by nothing else; the
+    // next RunSession arms it again. SessionFaultCount() is the process's telemetry and is kept.
+    // Between sessions the latch is unarmed, so a fault there is a SessionFail - which in the
+    // in-process shape takes the display Activity's process down with it: the crash isolation a
+    // forked session child gave is what running in-process gives up (documented, D5).
+    void ResetSessionLatch();
     // True once the first fault has latched. One acquire load: DrainRing asks it before every pop.
     bool SessionLatched();
     // The first latched fault - its family and its line, verbatim. Meaningful only once

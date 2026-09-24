@@ -106,6 +106,15 @@ namespace MobileGL::MG_Remote {
 
     void ArmSessionLatch() { g_latchArmed.store(true, std::memory_order_release); }
 
+    void ResetSessionLatch() {
+        const std::lock_guard<std::mutex> lock(g_latchMutex);
+        g_latchArmed.store(false, std::memory_order_release);
+        g_latchCount.store(0, std::memory_order_relaxed);
+        g_latchedFamily = MGFatalFamily::ProtocolCorruption;
+        g_latchedLine[0] = '\0';
+        g_latched.store(false, std::memory_order_release);
+    }
+
     bool SessionLatchArmed() { return g_latchArmed.load(std::memory_order_acquire); }
 
     bool SessionLatched() { return g_latched.load(std::memory_order_acquire); }

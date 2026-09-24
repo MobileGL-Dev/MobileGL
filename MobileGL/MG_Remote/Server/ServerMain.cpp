@@ -7,7 +7,9 @@
 #include "../Protocol/SurfaceOpCodec.h"
 #include "../Handshake.h"
 #include "../FatalFunnel.h"
+#include "InProcessServer.h"
 #include "PreAuthGate.h"
+#include "ServerDisplay.h"
 #include "ServerLoop.h"
 #include "ServerSession.h"
 #include "SurfaceControlFrame.h"
@@ -25,14 +27,19 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <atomic>
 #include <chrono>
 #include <cerrno>
+#include <csignal>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h> // PR_SET_PDEATHSIG (P12 D8); Android defines __linux__ as well
+#endif
 
 namespace {
 using namespace MobileGL::MG_Remote;
@@ -232,11 +239,49 @@ void CloseHandoffRefusingQueued(int handoff) {
 // exit drops queued descriptors exactly as a close does: those peers saw their connections end
 // with no frame. On any other source (the single-session listener, the unix endpoint's none) there
 // is nothing queued to refuse, and this is the `fflush` + `_exit` it replaces.
-[[noreturn]] void ExitBeforeAccept(int sourceFd, DataSource sourceKind, int code) {
+//
+// P12 (D5): RunSession RETURNS its exit code now instead of `_exit`ing, so the in-process display
+// server can run one session after another on a thread. This is the part of the old
+// ExitBeforeAccept that belongs to the session; the `fflush` + `_exit` belong to the process and
+// moved to the fork sites, which are `ExitSessionProcess(RunSession(...))` - the forked shapes end
+// exactly as before.
+int LeaveBeforeAccept(int sourceFd, DataSource sourceKind, int code) {
     if (sourceFd >= 0 && sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
+    return code;
+}
+
+// P12 (D5). A forked session child (and the single-session shapes, whose process IS the session)
+// ends here, with RunSession's code, exactly as RunSession's own `_exit`s used to end it.
+[[noreturn]] void ExitSessionProcess(int code) {
     std::fflush(nullptr);
     ::_exit(code);
 }
+
+// P12 (D8). A FORKED SESSION CHILD DIES WITH ITS SUPERVISOR. The child used to outlive a supervisor
+// that was killed (MobileGLServerService.onDestroy destroys only the supervisor), holding its client
+// and its GPU context until that client went away (notes/p65/code-review-findings.md:9). With the
+// parent-death signal the kernel SIGKILLs it the moment the supervisor goes - and the getppid()
+// check closes the race of a supervisor that died between fork() and the prctl. Linux (and Android)
+// only; the signal fires when the THREAD that forked exits, and both fork sites run on the
+// supervisor's main thread, which is the process.
+void DieWithSupervisor(pid_t supervisor) {
+#if defined(__linux__)
+    (void)::prctl(PR_SET_PDEATHSIG, SIGKILL);
+    if (::getppid() != supervisor) ::_exit(0);
+#else
+    (void)supervisor;
+#endif
+}
+
+// P12 (D5): THE IN-PROCESS DISPLAY SERVER'S PROCESS-WIDE STATE. One server per process, sessions
+// one at a time (TcpSupervisor's thread hand-off). `g_inProcessStop` is raised by
+// mobilegl_server_stop_inprocess and read by the supervisor's loop and by a live session's control
+// loop; `g_inProcessBackendPin` is the backend the first session chose when no MOBILEGL_BACKEND_TYPE
+// pins one - Espryt and Magma never share a process (BenchService.java's rule), so a later session
+// asking for the other is refused like a pinned-backend mismatch.
+std::atomic<bool> g_inProcessServing{false};
+std::atomic<bool> g_inProcessStop{false};
+std::atomic<int> g_inProcessBackendPin{-1};
 
 // A TEST-ONLY lever (f2-auth fix round, ID-P7-44): MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS holds a
 // session child for that many milliseconds before it looks at its Hello, so a control can queue
@@ -265,9 +310,18 @@ void DelaySessionHandshakeForTest() {
 // `helloFrame` is the first frame when somebody has already read and authenticated it - the TCP
 // supervisor always has (PH-7 (5)) - and empty when this function reads it itself, within
 // `helloWaitMs`.
-[[noreturn]] void RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
-                             Server::ServerSession::DataConnectionSource dataSource, int sourceFd,
-                             DataSource sourceKind, std::uint32_t helloWaitMs) {
+//
+// P12 (D5): IT RETURNS THE SESSION'S EXIT CODE, and never exits. A forked child and a
+// single-session process pass the code straight to ExitSessionProcess - so every one of those shapes
+// ends with the `_exit` code it always had - while `inProcess` (the in-process display server's
+// session thread) returns it to the supervisor thread and the process lives on. What a process exit
+// used to clean up for free, `inProcess` cleans up by hand on every way out: the backend (the loop's
+// Stop drops one no thread owns), the session singleton, the stats window, the log forwarder and the
+// progress sink, both of which point at `control`. The latch is reset by the supervisor between
+// sessions (ResetSessionLatch).
+int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
+               Server::ServerSession::DataConnectionSource dataSource, int sourceFd, DataSource sourceKind,
+               std::uint32_t helloWaitMs, bool inProcess = false) {
     const int selfPid = static_cast<int>(::getpid());
     const bool tcp = control->IsTcp();
     if (helloFrame.empty()) {
@@ -278,13 +332,13 @@ void DelaySessionHandshakeForTest() {
         const auto received = control->ReceiveFrame({nullptr, 0}, &bytes, helloWaitMs);
         if (received == MOBILEGL_ERR_TIMEOUT) {
             Refuse(*control, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
-            ExitBeforeAccept(sourceFd, sourceKind, 0);
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_PROTOCOL_MISMATCH ||
             (received == MOBILEGL_ERR_BUFFER_TOO_SMALL && bytes > Server::kPreAuthFirstFrameMaxBytes)) {
             DrainUnread(control->StreamFd());
             Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameNotAFrame);
-            ExitBeforeAccept(sourceFd, sourceKind, 0);
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
             // Fix round: this used to be a bare `_exit(0)` whatever had arrived. A close INSIDE
@@ -295,7 +349,7 @@ void DelaySessionHandshakeForTest() {
                 Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
             else
                 WireLogError("MG_Remote server: pid=%d control peer closed before sending a first frame", selfPid);
-            ExitBeforeAccept(sourceFd, sourceKind, 0);
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
         if (received == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
             // The reassembler holds the whole frame already; this second call copies it out.
@@ -303,12 +357,12 @@ void DelaySessionHandshakeForTest() {
             if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) {
                 WireLogError("MG_Remote server: pid=%d first frame of %llu bytes could not be copied out", selfPid,
                              static_cast<unsigned long long>(helloFrame.size()));
-                ExitBeforeAccept(sourceFd, sourceKind, 0);
+                return LeaveBeforeAccept(sourceFd, sourceKind, 0);
             }
         } else if (received != MOBILEGL_OK) {
             WireLogError("MG_Remote server: pid=%d first frame could not be read (rc=%d)", selfPid,
                          static_cast<int>(received));
-            ExitBeforeAccept(sourceFd, sourceKind, 0);
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
         // MOBILEGL_OK with nothing copied is a ZERO-LENGTH frame. It was the one complete frame
         // this read exited on without a word (fix round); `helloFrame` stays empty and the
@@ -327,11 +381,11 @@ void DelaySessionHandshakeForTest() {
     // arm is the single-session shape's.)
     if (shape == Server::FirstFrameShape::DataBind) {
         Refuse(*control, Protocol::RefuseCode::Authentication, "data connection names no live session");
-        ExitBeforeAccept(sourceFd, sourceKind, 0);
+        return LeaveBeforeAccept(sourceFd, sourceKind, 0);
     }
     if (shape != Server::FirstFrameShape::Hello) {
         Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
-        ExitBeforeAccept(sourceFd, sourceKind, 0);
+        return LeaveBeforeAccept(sourceFd, sourceKind, 0);
     }
     const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
     // PH-7 (1). The SAME policy ServerSession::Accept applies, from Handshake.h, so the
@@ -348,11 +402,11 @@ void DelaySessionHandshakeForTest() {
     // this build's stamp. An unauthenticated peer now learns only Refuse{Authentication}. On TCP
     // --serve the supervisor has already asked (the answer is the same; it is asked again so this
     // function holds the rule on its own for the unix and single-session shapes).
-    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) ExitBeforeAccept(sourceFd, sourceKind, 0);
+    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) return LeaveBeforeAccept(sourceFd, sourceKind, 0);
     // Reject incompatible wire before backend bring-up can obscure the cause.
     if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
             hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
-            hello->dialMode()) != MOBILEGL_OK) ExitBeforeAccept(sourceFd, sourceKind, 0);
+            hello->dialMode()) != MOBILEGL_OK) return LeaveBeforeAccept(sourceFd, sourceKind, 0);
     MobileGL::MG_ConfigLoader::Init();
     MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
     MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
@@ -360,32 +414,79 @@ void DelaySessionHandshakeForTest() {
     // it cleanly instead of aborting it (FatalFunnel.h's latch block). Armed here and nowhere
     // else: inproc keeps every Fatal (client and server share that process), and the supervisor
     // that forked this child never applies a record.
+    //
+    // P12 (D5): and the in-process display server arms it for EVERY session, here, the same way;
+    // its supervisor resets it between sessions (ResetSessionLatch), so a session that latched does
+    // not decline the next one.
     ArmSessionLatch();
     // The child bypasses MobileGL::Initialize: arm its own role counters.
     MobileGL::MG_Util::PipeStats::Init();
+    auto& session = Server::ServerSessionInstance();
+    auto& loop = Server::ServerLoopInstance();
+    // P12 (D5): WHAT A PROCESS EXIT CLEANED UP FOR FREE, THE IN-PROCESS SHAPE CLEANS UP BY HAND,
+    // on every way out from here - so the next session in this process starts where a fresh
+    // session child would. A no-op for every forked / single-session shape: those `_exit` with the
+    // code, exactly as before.
+    bool backendBuilt = false;
+    bool acceptTried = false;
+    const auto endSession = [&](int code) -> int {
+        if (!inProcess) return code;
+        // Both point at `control`, which dies with this frame.
+        loop.SetControlProgressSink(nullptr, nullptr);
+        MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
+        if (backendBuilt) {
+            // Stop() joins a running apply thread (it destroys the backend on it), or - never
+            // started - drops the backend here; either way the display lease goes with it.
+            loop.Stop();
+            session.SetBackend(nullptr);
+        }
+        if (acceptTried) session.Close();
+        MobileGL::MG_Util::PipeStats::Shutdown();
+        return code;
+    };
     const auto backend = static_cast<MobileGL::BackendType>(hello->backendType());
     if (backend != MobileGL::BackendType::DirectGLES && backend != MobileGL::BackendType::DirectVulkan) {
         Refuse(*control, Protocol::RefuseCode::Backend, "unsupported Hello.backendType");
-        ExitBeforeAccept(sourceFd, sourceKind, 0);
+        return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
     }
     const char* pinned = std::getenv("MOBILEGL_BACKEND_TYPE");
     if (pinned && *pinned && backend != MobileGL::MG_Config::ActiveBackendType) {
         Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
-        ExitBeforeAccept(sourceFd, sourceKind, 0);
+        return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
+    }
+    if (inProcess) {
+        // P12 (D5): THE BACKEND IS PINNED FOR THE PROCESS'S LIFETIME. With no MOBILEGL_BACKEND_TYPE
+        // the first session's backend becomes the pin: Espryt and Magma must never share a process
+        // (BenchService.java:12-17), and here every session shares this one. The refusal is the
+        // pinned-backend refusal above, word for word.
+        int pin = g_inProcessBackendPin.load(std::memory_order_acquire);
+        if (pin < 0 && g_inProcessBackendPin.compare_exchange_strong(pin, static_cast<int>(backend),
+                                                                     std::memory_order_acq_rel)) {
+            WireLogError("MG_Remote server: pid=%d in-process display server pinned backend type %u for the "
+                         "process lifetime (the first session's; MOBILEGL_BACKEND_TYPE unset)",
+                         selfPid, static_cast<unsigned>(backend));
+            pin = static_cast<int>(backend);
+        }
+        if (pin != static_cast<int>(backend)) {
+            Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
+            return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
+        }
     }
     MobileGL::MG_Config::ActiveBackendType = backend;
-    if (!MobileGL::MG_Backend::InitServerRoleForSpawn()) ExitBeforeAccept(sourceFd, sourceKind, 66);
-    auto& session = Server::ServerSessionInstance();
+    backendBuilt = true; // InitServerRoleForSpawn may build it and then fail: Stop() drops either way
+    if (!MobileGL::MG_Backend::InitServerRoleForSpawn()) return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 66));
     int serverBell[2] = {-1, -1}, clientBell[2] = {-1, -1};
     std::unique_ptr<SocketDoorbell> selfBell, peerBell;
     if (!tcp) {
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, serverBell) != 0 ||
-            ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0) ExitBeforeAccept(sourceFd, sourceKind, 74);
+            ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0)
+            return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 74));
         selfBell = std::make_unique<SocketDoorbell>(serverBell[0], serverBell[1], 1, true);
         peerBell = std::make_unique<SocketDoorbell>(-1, clientBell[1], 1, true);
         session.SetExternalDoorbells(selfBell.get(), peerBell.get());
     }
     if (tcp) session.SetDataConnectionSource(std::move(dataSource));
+    acceptTried = true;
     const auto accepted = session.Accept(*control, &helloFrame);
     // THE SOURCE IS DONE WHEN ACCEPT IS, whichever way Accept went (F fix round). Under --serve
     // this is the child's end of the hand-off pair: closing it turns every later DataBind the
@@ -406,10 +507,10 @@ void DelaySessionHandshakeForTest() {
     }
     if (accepted != MOBILEGL_OK) {
         WireLogError("MG_Remote server: pid=%d Accept failed (rc=%d)", selfPid, static_cast<int>(accepted));
-        std::fflush(nullptr);
         // A refusal and a peer that went away before its data connection bound (PH-7 (4): the
         // client closed after Welcome) are outcomes, not faults; the supervisor counts only 67.
-        ::_exit(accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH || accepted == MOBILEGL_ERR_TRANSPORT_CLOSED ? 0 : 67);
+        return endSession(accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH || accepted == MOBILEGL_ERR_TRANSPORT_CLOSED ? 0
+                                                                                                             : 67);
     }
     if (!tcp)
     {
@@ -425,16 +526,14 @@ void DelaySessionHandshakeForTest() {
             if (fd < 0) {
                 std::fprintf(stderr, "MG_Remote server: pid=%d segment %u has no descriptor\n",
                              selfPid, tag);
-                std::fflush(nullptr);
-                ::_exit(68);
+                return endSession(68);
             }
             Sideband sideband{tag, session.Shm().AnnouncedSize(slot)};
             if (control->ShareFd(fd, MobileGLByteSpan{&sideband, sizeof(sideband)}) !=
                 MOBILEGL_OK) {
                 std::fprintf(stderr, "MG_Remote server: pid=%d could not share segment %u\n",
                              selfPid, tag);
-                std::fflush(nullptr);
-                ::_exit(69);
+                return endSession(69);
             }
         }
         // SLOTS 4, 5 AND 6 ARE THE BELLS - three, not two, and the third is the
@@ -451,8 +550,7 @@ void DelaySessionHandshakeForTest() {
                 MOBILEGL_OK) {
                 std::fprintf(stderr, "MG_Remote server: pid=%d could not share bell %u\n", selfPid,
                              index);
-                std::fflush(nullptr);
-                ::_exit(69);
+                return endSession(69);
             }
         }
         // clientBell[0] is the CLIENT's park end and no bell here owns it; the
@@ -474,12 +572,11 @@ void DelaySessionHandshakeForTest() {
     const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
     if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0))
         MobileGL::MG_Util::Debug::SetLogForwarder(&ForwardLog, control.get());
-    auto& loop = Server::ServerLoopInstance();
     // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
     // below) and is the one that says "still running" while the apply thread runs it. Cleared
     // after the loop, on this same thread, so no post can be in flight when it goes.
     loop.SetControlProgressSink(&SendSurfaceProgress, control.get());
-    if (loop.Start(session) != MOBILEGL_OK) ::_exit(70);
+    if (loop.Start(session) != MOBILEGL_OK) return endSession(70);
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
                  selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
     std::vector<std::uint8_t> buffer(64 * 1024);
@@ -510,6 +607,13 @@ void DelaySessionHandshakeForTest() {
     constexpr std::uint32_t kControlSliceMs = 100;
     for (;;) {
         if (SessionLatched()) break;
+        // P12 (D5): the in-process display server is stopping (mobilegl_server_stop_inprocess).
+        // The session ends by the same orderly path as a peer's EOF, within one slice.
+        if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) {
+            WireLogError("MG_Remote server: pid=%d the in-process display server is stopping; ending the session",
+                         selfPid);
+            break;
+        }
         if (!loop.Running()) {
             WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
                          "ending the session",
@@ -632,9 +736,11 @@ void DelaySessionHandshakeForTest() {
     }
     session.Close();
     MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
-    // _exit closes control after cleanup/flush; peer EOF is the client's fence.
-    std::fflush(nullptr);
-    ::_exit(latched ? kSessionLatchedExitCode : 0);
+    // P12 (D5): the backend loop.Stop() destroyed is not this session's to point at any more.
+    if (inProcess) session.SetBackend(nullptr);
+    // The caller's exit (a forked child's ExitSessionProcess) closes control after cleanup/flush -
+    // or, in-process, `control` is destroyed on the way out; peer EOF is the client's fence.
+    return latched ? kSessionLatchedExitCode : 0;
 }
 
 // P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR OBSERVES AND NAMES A SESSION'S DEATH.
@@ -724,16 +830,37 @@ class TcpSupervisor {
 public:
     using Clock = std::chrono::steady_clock;
 
-    TcpSupervisor(int listener, const Server::PreAuthKnobs& knobs, unsigned long& sessionsFaulted)
-        : m_listener(listener), m_knobs(knobs), m_backoff(knobs), m_sessionsFaulted(sessionsFaulted) {}
+    // P12 (D5): HOW AN AUTHENTICATED SESSION IS HANDED OFF. `Fork` is the exec'd supervisor's shape
+    // (a session child per session, crash isolation, D9's eglTerminate isolation). `Thread` is the
+    // in-process display server's: the session runs on a thread of THIS process, because the window
+    // it renders into lives here and nowhere else (an ANativeWindow does not survive fork or exec).
+    // Everything before the hand-off - pre-auth, the backoff, Busy for an authenticated second
+    // Hello, DataBind routing over the socketpair - is the same code for both. What differs is what
+    // a separate fd table used to do for free: the thread shape closes neither the listener nor the
+    // other pending peers (they are the supervisor's, and still in use), keeps the session's end of
+    // the hand-off (the session closes it), and "reaps" by joining the thread.
+    enum class Handoff { Fork, Thread };
 
-    // Returns only on a failure of the listener itself (73, as the old loop did).
+    TcpSupervisor(int listener, const Server::PreAuthKnobs& knobs, unsigned long& sessionsFaulted,
+                  Handoff handoff = Handoff::Fork, const std::atomic<bool>* stop = nullptr)
+        : m_listener(listener), m_knobs(knobs), m_backoff(knobs), m_sessionsFaulted(sessionsFaulted),
+          m_handoffShape(handoff), m_stop(stop) {}
+
+    ~TcpSupervisor() {
+        // A session thread is never left running behind its supervisor: Run() only returns after
+        // StopServing joined it, but a listener failure (73) returns from the loop directly.
+        if (m_sessionThread.joinable()) m_sessionThread.join();
+    }
+
+    // Returns only on a failure of the listener itself (73, as the old loop did) - or, with a stop
+    // flag (the in-process display server), 0 once the flag is raised and the live session ended.
     int Run() {
         WireLogError("MG_Remote server: pre-auth deadline=%u ms, at most %u pending, backoff after %u failures "
                      "from %u ms (0 = off)",
                      m_knobs.deadlineMs, m_knobs.maxPending, m_knobs.backoffAfter, m_knobs.backoffBaseMs);
         std::vector<pollfd> fds;
         for (;;) {
+            if (m_stop != nullptr && m_stop->load(std::memory_order_acquire)) return StopServing();
             Reap();
             auto now = Clock::now();
             // While accepting is paused (out of descriptors, AcceptNew) the listener sits out the
@@ -819,9 +946,43 @@ private:
     };
 
     bool Reap() {
-        const bool reaped = ReapActiveSession(m_active, m_sessionsFaulted);
+        const bool reaped = m_handoffShape == Handoff::Thread ? ReapSessionThread()
+                                                               : ReapActiveSession(m_active, m_sessionsFaulted);
         if (m_active <= 0 && m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
         return reaped;
+    }
+
+    // P12 (D5): the thread shape's reap - the same line a forked child's reap prints, and the same
+    // count, then the latch put back for the next session (ResetSessionLatch: the thread took no
+    // process with it, so the latch it armed and maybe latched is still this process's).
+    bool ReapSessionThread() {
+        if (m_active <= 0 || !m_sessionDone.load(std::memory_order_acquire)) return false;
+        if (m_sessionThread.joinable()) m_sessionThread.join();
+        const int code = m_sessionExit.load(std::memory_order_acquire);
+        m_active = -1;
+        if (code != 0) ++m_sessionsFaulted;
+        ResetSessionLatch();
+        WireLogError("MG_Remote server: in-process session #%lu pid=%d reaped exit=%d%s sessionsFaulted=%lu",
+                     m_sessionOrdinal, static_cast<int>(::getpid()), code,
+                     code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted);
+        return true;
+    }
+
+    // P12 (D5): the in-process server is stopping. Nobody new is served (every pending peer is told
+    // so by name), the live session - which reads the same flag each control slice - is waited out
+    // and reaped, and the supervisor returns 0.
+    int StopServing() {
+        for (auto& peer : m_pending) {
+            if (peer.fd >= 0) RefuseAndClose(peer.fd, Protocol::RefuseCode::Busy, "the server is stopping");
+            peer.fd = -1;
+        }
+        m_pending.clear();
+        while (m_active > 0) {
+            if (!Reap()) ::usleep(10000);
+        }
+        if (m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
+        WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
+        return 0;
     }
 
     // exit_group closes files just before waitpid can observe the exit. Allow that small
@@ -981,9 +1142,16 @@ private:
             Refuse(*connection, Protocol::RefuseCode::Busy, "could not create the data-connection hand-off");
             return;
         }
+        if (m_handoffShape == Handoff::Thread) {
+            StartSessionThread(std::move(connection), hello, pair);
+            return;
+        }
         std::fflush(nullptr);
+        const pid_t supervisor = ::getpid();
         const pid_t child = ::fork();
         if (child == 0) {
+            // P12 (D8): the child dies with this supervisor, not after its client has gone.
+            DieWithSupervisor(supervisor);
             // The child owns this one connection and its end of the hand-off. Every OTHER pending
             // peer's descriptor is closed here, or the supervisor's refusal of that peer would not
             // end its connection while this session lives.
@@ -994,8 +1162,8 @@ private:
             for (const auto& other : m_ready)
                 if (other.fd >= 0) ::close(other.fd);
             const int controlFd = connection->StreamFd();
-            RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1], DataSource::Handoff,
-                       0);
+            ExitSessionProcess(RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1],
+                                          DataSource::Handoff, 0));
         }
         if (child < 0) {
             ::close(pair[0]);
@@ -1009,10 +1177,50 @@ private:
         connection->CloseLocalCopy();
     }
 
+    // P12 (D5): THE THREAD HAND-OFF. The session thread owns the connection (moved in) and the
+    // hand-off's session end (pair[1]; RunSession cuts and closes it when Accept returns); this
+    // thread keeps pair[0] to route DataBinds, exactly as the fork shape's parent does. There is no
+    // CloseLocalCopy: nothing was duplicated. `m_active` is this process's pid while the session
+    // lives - "a session is live" is all the rest of the supervisor asks of it.
+    void StartSessionThread(std::unique_ptr<SocketTransport> connection, const std::vector<std::uint8_t>& hello,
+                            const int (&pair)[2]) {
+        if (m_sessionThread.joinable()) m_sessionThread.join(); // reaped already; never live here
+        const int controlFd = connection->StreamFd();
+        const int sessionEnd = pair[1];
+        m_sessionDone.store(false, std::memory_order_release);
+        m_sessionExit.store(0, std::memory_order_release);
+        ++m_sessionOrdinal;
+        try {
+            m_sessionThread = std::thread(
+                [this, controlFd, sessionEnd, hello, conn = std::move(connection)]() mutable {
+                    const int code = RunSession(std::move(conn), hello, HandoffSource(sessionEnd, controlFd), sessionEnd,
+                                                DataSource::Handoff, 0, /*inProcess=*/true);
+                    m_sessionExit.store(code, std::memory_order_release);
+                    m_sessionDone.store(true, std::memory_order_release);
+                });
+        } catch (...) {
+            ::close(pair[0]);
+            ::close(pair[1]);
+            WireLogError("MG_Remote server: could not start the in-process session thread; the connection is "
+                         "closed (it cannot be refused: it moved into the failed thread)");
+            return;
+        }
+        m_active = ::getpid();
+        m_handoff = pair[0];
+        WireLogError("MG_Remote server: in-process session #%lu started on a thread (pid=%d)", m_sessionOrdinal,
+                     static_cast<int>(::getpid()));
+    }
+
     int m_listener;
     Server::PreAuthKnobs m_knobs;
     Server::AuthBackoff m_backoff;
     unsigned long& m_sessionsFaulted;
+    Handoff m_handoffShape = Handoff::Fork;
+    const std::atomic<bool>* m_stop = nullptr;
+    std::thread m_sessionThread;
+    std::atomic<bool> m_sessionDone{false};
+    std::atomic<int> m_sessionExit{0};
+    unsigned long m_sessionOrdinal = 0;
     pid_t m_active = -1;
     // The supervisor's end of the live child's data-connection hand-off (PH-7 (4)); -1 while no
     // session is live. It goes with the child: a reaped session can be handed nothing.
@@ -1023,9 +1231,10 @@ private:
     static constexpr std::uint32_t kAcceptPauseMs = 100;
     Clock::time_point m_acceptResumeAt{};
 };
-}
 
-extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int argc, char** argv) {
+// The server's environment preconditions, shared by the exec'd supervisor and the in-process
+// display server (P12 D5: "same env preconditions as mobilegl_server_main"). 0 when they hold.
+int CheckServerEnvironment() {
     // The supervisor and every forked session child log under the server role.
     // Set it here rather than trusting the launcher to have done so: log role is
     // resolved from this env at first use, and a launcher that omits it would
@@ -1047,6 +1256,12 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             return 65;
         }
     }
+    return 0;
+}
+}
+
+extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int argc, char** argv) {
+    if (const int refused = CheckServerEnvironment(); refused != 0) return refused;
     std::string endpoint;
     bool serve = false;
     for (int i = 1; i < argc; ++i) {
@@ -1100,12 +1315,12 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                 // so there is no fork to spare; the Hello is still read within the pre-auth
                 // deadline and the token is still asked first.
                 const int controlFd = control->StreamFd();
-                RunSession(std::move(control), {}, ListenerSource(listener, controlFd), listener,
-                           DataSource::Listener, knobs.deadlineMs);
+                ExitSessionProcess(RunSession(std::move(control), {}, ListenerSource(listener, controlFd), listener,
+                                              DataSource::Listener, knobs.deadlineMs));
             }
             ::close(listener);
             if (endpoint[0] != '@') ::unlink(endpoint.c_str());
-            RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000);
+            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000));
         }
         reap();
         // exit_group closes files just before waitpid can observe the exit.
@@ -1120,10 +1335,13 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             continue;
         }
         std::fflush(nullptr);
+        const pid_t supervisor = ::getpid();
         const pid_t child = ::fork();
         if (child == 0) {
+            // P12 (D8): the unix `--serve` child dies with its supervisor too.
+            DieWithSupervisor(supervisor);
             ::close(listener);
-            RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000);
+            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000));
         }
         if (child < 0) {
             RefuseBusy(*control, "could not create session child");
@@ -1136,4 +1354,63 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     ::close(listener);
     if (endpoint[0] != '@' && endpoint.compare(0, 6, "tcp://") != 0) ::unlink(endpoint.c_str());
     return 0;
+}
+
+// P12 (on-screen server window), D5. See InProcessServer.h for the contract.
+extern "C" __attribute__((visibility("default"))) int mobilegl_server_serve_inprocess(const char* endpoint) {
+    if (const int refused = CheckServerEnvironment(); refused != 0) return refused;
+    if (endpoint == nullptr || std::strncmp(endpoint, "tcp://", 6) != 0) {
+        WireLogError("MG_Remote server: the in-process display server serves tcp:// only; '%s' is not one",
+                     endpoint == nullptr ? "(null)" : endpoint);
+        return 71;
+    }
+    bool idle = false;
+    if (!g_inProcessServing.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
+        WireLogError("MG_Remote server: an in-process display server is already serving in this process; "
+                     "refusing a second one on %s", endpoint);
+        return 74;
+    }
+    // The stop flag is NOT cleared here: a stop asked for before this thread got going still
+    // stops it. It is cleared when serve returns, for the next call.
+    // D8: THE LISTEN RETRIES FOR UP TO ~5 s. The previous server on this port - the exec'd supervisor
+    // the Activity just stopped, or this process's own previous run - may still be dying, and its
+    // listener with it. Only a failed bind/listen is retried; a refusal of the configuration (a short
+    // token, a non-loopback listen without one) is not going to get better.
+    int listener = -1;
+    const auto listenDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5000);
+    for (;;) {
+        const MobileGLResult listened = SocketTransport::Listen(endpoint, &listener);
+        if (listened == MOBILEGL_OK) break;
+        if (listened != MOBILEGL_ERR_UNSUPPORTED || g_inProcessStop.load(std::memory_order_acquire) ||
+            std::chrono::steady_clock::now() >= listenDeadline) {
+            WireLogError("MG_Remote server: the in-process display server could not listen on %s (rc=%d)", endpoint,
+                         static_cast<int>(listened));
+            g_inProcessStop.store(false, std::memory_order_release);
+            g_inProcessServing.store(false, std::memory_order_release);
+            return 72;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    // THE READINESS LINE, the supervisor's own words plus which shape this is.
+    WireLogError("MG_Remote server: pid=%d listening on %s (in-process display server, display %s)",
+                 static_cast<int>(::getpid()), endpoint,
+                 Server::ServerDisplayInstance().HasDisplay() ? "installed" : "NOT installed - offscreen only");
+    unsigned long sessionsFaulted = 0;
+    int result = 0;
+    {
+        TcpSupervisor supervisor(listener, Server::PreAuthKnobs::FromEnvironment(), sessionsFaulted,
+                                 TcpSupervisor::Handoff::Thread, &g_inProcessStop);
+        result = supervisor.Run();
+    }
+    LogSupervisorSummary(sessionsFaulted);
+    ::close(listener);
+    g_inProcessStop.store(false, std::memory_order_release);
+    g_inProcessServing.store(false, std::memory_order_release);
+    return result;
+}
+
+extern "C" __attribute__((visibility("default"))) void mobilegl_server_stop_inprocess(void) {
+    g_inProcessStop.store(true, std::memory_order_release);
+    // A session thread waiting for the display's window (a ServerOwned creation) stops waiting.
+    Server::ServerDisplayInstance().Interrupt();
 }
