@@ -70,6 +70,7 @@
 #pragma once
 #include <Includes.h>
 
+#include "ServerDisplay.h"
 #include "ServerSession.h"
 #include "SurfaceControlFrame.h"
 
@@ -186,6 +187,22 @@ namespace MobileGL::MG_Remote::Server {
 #endif
         }
     } // namespace Detail
+
+    // ---------------------------------------------------------------------------------
+    // P12 (on-screen server window), D4: ONE SURFACE MODE PER SESSION
+    // ---------------------------------------------------------------------------------
+    //
+    // "Only one of the two rendering paths is active at a time, decided at context creation": a
+    // session's mode latches at its FIRST successful surface creation - a ServerOwned window makes
+    // it on-screen, a pbuffer makes it offscreen - and a later surface of the OTHER kind in the same
+    // session is refused by name (SurfaceRefusal::SurfaceModeMismatch: reply ok=false, logged, the
+    // session NOT latched). Windows the client names itself (the X11/Win32/None tokens CONTRACT-P6
+    // D8 has yet to close) are neither kind and neither latch nor are refused: nothing about them
+    // changes here. Reset by ServerLoop::Start, i.e. per session.
+    enum class SessionSurfaceMode : Uint8 { None, OnScreen, Offscreen };
+    const char* SessionSurfaceModeName(SessionSurfaceMode mode);
+    // The decision, pure, so a unit case can drive all six pairs without a backend.
+    Bool SessionSurfaceModeAdmits(SessionSurfaceMode current, Bool serverOwnedWindow);
 
     class ServerLoop {
     public:
@@ -407,9 +424,49 @@ namespace MobileGL::MG_Remote::Server {
         // construction cannot be inside that window.
         Bool ControlIsPending() const;
 
+        // ---- P12 (on-screen server window), D3/D6 -------------------------------------------
+        //
+        // How long a ServerOwned creation waits for the display server's window (D3: ~10 s). The
+        // control pump's SurfaceProgress heartbeat keeps the client's reply budget alive meanwhile.
+        static constexpr Uint32 kServerWindowWaitMs = ServerDisplay::kDefaultAcquireTimeoutMs;
+
+        // APPLY THREAD ONLY. Leases the process display's window for this session (ServerDisplay::
+        // AcquireFor with this loop as the holder), refusing by name when there is no display
+        // (NoServerDisplay, NOT a latch - a configuration answer) or no window within `timeoutMs`
+        // (NoServerWindow). The ServerOwned arm of the dispatch is its production caller; a test
+        // reaches it through RunProbeOnApplyThreadForTesting. The lease is held until the backend
+        // has let go of the window: ServerDisplay::Detach's lost hook (D6) or the session's end.
+        MobileGLResult AcquireServerWindow(Uint32 width, Uint32 height, Uint32 timeoutMs,
+                                           ServerWindowLease* out, SurfaceRefusalCode* refusal);
+        // APPLY THREAD ONLY: this session's surface mode (D4).
+        SessionSurfaceMode SurfaceMode() const { return m_surfaceMode; }
+        // How many times this loop released a lost server window and latched ServerWindowLost (D6).
+        Uint64 ServerWindowsLost() const { return m_serverWindowsLost.load(std::memory_order_acquire); }
+
     private:
         RemoteControlSink m_remoteSink = nullptr;
         void* m_remoteSinkUser = nullptr;
+
+        // P12. The ServerOwned arm of the CreateWindowSurface dispatch (D3, D4).
+        MobileGLResult ApplyServerOwnedWindowSurface(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
+        // P12 (D6), apply thread: the lost window's backend surface goes, the lease ends, and the
+        // session latches ServerWindowLost. Runs from PumpControlRequest when Detach asked.
+        void ReleaseLostServerWindow();
+        // Ends this loop's display lease if it holds one (after the backend let go of the window).
+        void EndServerWindowLease();
+        // ServerDisplay's lost hook: called under the display's lock from Detach's thread. Sets the
+        // request and rings the apply thread's bell; never blocks.
+        static void ServerWindowLostThunk(void* self);
+        // AcquireFor's cancel predicate: the loop is stopping, or the session latched.
+        static Bool ServerWindowWaitCancelled(void* self);
+        // D4: latched at the session's first successful surface creation; reset by Start().
+        SessionSurfaceMode m_surfaceMode = SessionSurfaceMode::None;
+        // Apply thread only: this loop holds the display's lease.
+        Bool m_holdsWindowLease = false;
+        // Set by ServerWindowLostThunk (any thread), taken by the apply thread. Part of the park
+        // predicate, so a parked apply thread wakes for it.
+        std::atomic<Bool> m_windowLostRequested{false};
+        std::atomic<Uint64> m_serverWindowsLost{0};
 
         void ApplyThreadMain();
         // Runs a posted control frame, if there is one. Returns true if it ran one.
@@ -558,7 +615,22 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
     Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
     Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
-    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
+    // P12: `refusal`, when given, receives the server's named refusal (SurfaceModeMismatch for a
+    // pbuffer in an on-screen session), None otherwise.
+    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height,
+                                       SurfaceRefusalCode* refusal = nullptr);
+    // P12 (on-screen server window), D1/D2. CreateWindowSurface on the SERVER's window: one frame,
+    // WindowKind::ServerOwned with nativeToken 0 on the wire, no SetWindowHandle. `width`/`height`
+    // is the size the client asked for (0/0 = the server window's own size); the reply carries the
+    // window's REAL extent, and the server's named refusal when it declined.
+    struct ServerOwnedWindowReply {
+        Bool ok = false;
+        MobileGLResult transport = MOBILEGL_OK; // the frame channel's own answer
+        SurfaceRefusalCode refusal = SurfaceRefusalCode::None;
+        Uint32 width = 0;
+        Uint32 height = 0;
+    };
+    ServerOwnedWindowReply ServerCreateServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
     // Also RE-PUBLISHES THE CAPS SNAPSHOT on success (R-12). BackendObject::MakeEGLCurrent runs
     // InitCapabilities() on the first make-current per surface (BackendObject.cpp:341-347), so
     // this is the moment the server's answers stop being the empty ones Accept() published -

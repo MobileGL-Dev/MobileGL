@@ -67,6 +67,12 @@ UNREACHABLE = [
      "rows) before a frame reaches the dispatch"),
     ("ServerLoop.cpp", '"SurfaceOp.kind"',
      "SurfaceOpCodec refuses an unknown wire kind (SurfaceOpUnknownKind) before the dispatch"),
+    # P12 (D6): not a peer's byte at all - the server's OWN display window was destroyed
+    # (ServerDisplay::Detach from the display Activity's surfaceDestroyed). Its control is
+    # ServerLoopTest's ALostServerWindowIsReleasedOnTheApplyThreadBeforeDetachReturnsAndLatchesByName.
+    ("ServerLoop.cpp", '"surfaceDestroyed"',
+     "raised by the server's own display (surfaceDestroyed -> ServerDisplay::Detach), never by the "
+     "peer's bytes; ServerLoopTest's lost-window case is its negative control"),
 ]
 
 REMOTE = ROOT / "MobileGL" / "MG_Remote"

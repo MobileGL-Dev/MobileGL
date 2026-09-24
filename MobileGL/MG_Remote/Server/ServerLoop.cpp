@@ -226,6 +226,12 @@ namespace MobileGL::MG_Remote::Server {
         m_controlSeq.store(0, std::memory_order_release);
         m_controlFramesDispatched.store(0, std::memory_order_release);
         m_haveCurrentTuple = false;
+        // P12 (D4, D6): a new session decides its own surface mode, holds no window lease yet and
+        // has no window-lost request pending. The apply thread that reads these is not started yet.
+        m_surfaceMode = SessionSurfaceMode::None;
+        m_holdsWindowLease = false;
+        m_windowLostRequested.store(false, std::memory_order_release);
+        m_serverWindowsLost.store(0, std::memory_order_release);
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
             m_exited = false;
@@ -415,8 +421,11 @@ namespace MobileGL::MG_Remote::Server {
         const auto stopOrForfeit = [this, &session] {
             return m_stopRequested.load(std::memory_order_acquire) || session.ReverseChannelForfeited();
         };
+        // P12 (D6) ADDS ONE MORE WAKE, BESIDE CONTROL: a window-lost request from ServerDisplay::
+        // Detach (the UI thread's surfaceDestroyed, which is blocked until this thread answers).
         const auto ready = [this, signals, &ring, &stopOrForfeit] {
-            if (stopOrForfeit() || ControlIsPending()) return true;
+            if (stopOrForfeit() || ControlIsPending() || m_windowLostRequested.load(std::memory_order_acquire))
+                return true;
             if (signals.EventRingFull->load(std::memory_order_acquire) != 0) return false;
             return signals.CmdHead->load(std::memory_order_acquire) != ring.LocalTail();
         };
@@ -520,6 +529,11 @@ namespace MobileGL::MG_Remote::Server {
                     "which is the context owner");
             m_backend.reset();
         }
+        // P12 (D6): the backend - and with it every surface on the server's window - is gone, so the
+        // session's lease on that window ends here, AFTER the reset. A Detach waiting on it returns
+        // now; one that arrives later finds no lease and releases the window at once.
+        m_windowLostRequested.store(false, std::memory_order_release);
+        EndServerWindowLease();
         MG_Pipe::MGPipeServerSetContextLive(false);
         // N-3: the context died with the backend; a tuple that outlives it would make the next
         // session's first make-current onto the same (recycled) handle values a RepeatNoOp.
@@ -588,6 +602,10 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     Bool ServerLoop::PumpControlRequest() {
+        // P12 (D6): A LOST SERVER WINDOW IS ANSWERED FIRST, before any frame this pump would run -
+        // a frame taken now might render into the window the UI thread is waiting to destroy. One
+        // relaxed-cost load on the idle poll, beside the shadow's.
+        if (m_windowLostRequested.load(std::memory_order_acquire)) ReleaseLostServerWindow();
         // THE IDLE POLL'S FAST NEGATIVE. The loop calls this once per iteration whether or not
         // anything was posted, and the common answer is "nothing". Taking m_controlMutex to
         // learn that was the other half of package T's finding; the shadow answers it with a
@@ -924,6 +942,8 @@ namespace MobileGL::MG_Remote::Server {
             // thread called Stop. No context was ever made current from another thread in that
             // case, which is exactly the condition that makes this safe.
             if (m_backend != nullptr) m_backend.reset();
+            // P12 (D6): as on the apply thread's own exit - no thread runs, so nothing else ends it.
+            EndServerWindowLease();
             MG_Pipe::MGPipeServerSetContextLive(false);
             // N-3, same reason as ApplyThreadMain's exit: no thread runs, so the apply-thread-only
             // rule on the tuple has no other writer to race.
@@ -1124,6 +1144,9 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_OK;
         }
         case SurfaceControlOp::CreateWindowSurface: {
+            // P12 (D3): the SERVER's window, asked for by a headless client. Before the unpack,
+            // which would refuse the frame-local tag as a WindowBackend out of range.
+            if (frame.windowBackend == kServerOwnedWindowBackend) return ApplyServerOwnedWindowSurface(backend, frame);
             MG_Backend::WindowHandle window;
             if (!UnpackWindowHandle(frame, &window)) {
                 frame.ok = false;
@@ -1142,12 +1165,29 @@ namespace MobileGL::MG_Remote::Server {
                                                        static_cast<Uint32>(frame.height));
             return MOBILEGL_OK;
         case SurfaceControlOp::CreatePbufferSurface:
+            // P12 (D4): a pbuffer in a session that went on-screen is the other mode, refused by
+            // name and not latched - the session and its window surface carry on.
+            if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/false)) {
+                frame.ok = false;
+                frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
+                MGLOG_E("MG_Remote server: SurfaceModeMismatch - CreatePbufferSurface (seq %llu, %dx%d) in a "
+                        "session whose surface mode is %s: its first surface was a server-owned window, and "
+                        "only one rendering path is active per session. Refused, the session is not latched",
+                        static_cast<unsigned long long>(frame.seq), frame.width, frame.height,
+                        SessionSurfaceModeName(m_surfaceMode));
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
             frame.ok = backend->CreateEGLPbufferSurface(HandleFromToken<EGLSurface>(frame.surface),
                                                         frame.width, frame.height);
             // N-3: as for the window surface - a (re)creation may have destroyed the context the
             // held tuple named. The surface's own creation binds natively, so the client's
             // make-current that follows is forwarded and deduped one layer down (ID-54).
-            if (frame.ok) ForgetCurrentTuple();
+            if (frame.ok) {
+                ForgetCurrentTuple();
+                if (m_surfaceMode == SessionSurfaceMode::None) m_surfaceMode = SessionSurfaceMode::Offscreen;
+                // P12: THE ARM PROOF (ID-124), once per surface: which of the two paths ran.
+                MGLOG_I("MG_Remote server: surface=pbuffer %dx%d", frame.width, frame.height);
+            }
             return MOBILEGL_OK;
         case SurfaceControlOp::MakeCurrent: {
             // C7 / ID-54: the apply thread binds the native context ONCE per context lifetime
@@ -1283,6 +1323,160 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     // ---------------------------------------------------------------------------------
+    // P12 (on-screen server window): the ServerOwned arm, the surface mode, the lost window
+    // ---------------------------------------------------------------------------------
+
+    const char* SessionSurfaceModeName(SessionSurfaceMode mode) {
+        switch (mode) {
+        case SessionSurfaceMode::None: return "undecided";
+        case SessionSurfaceMode::OnScreen: return "on-screen";
+        case SessionSurfaceMode::Offscreen: return "offscreen";
+        }
+        return "<unknown SessionSurfaceMode>";
+    }
+
+    Bool SessionSurfaceModeAdmits(SessionSurfaceMode current, Bool serverOwnedWindow) {
+        switch (current) {
+        case SessionSurfaceMode::None: return true;
+        case SessionSurfaceMode::OnScreen: return serverOwnedWindow;
+        case SessionSurfaceMode::Offscreen: return !serverOwnedWindow;
+        }
+        return false;
+    }
+
+    void ServerLoop::ServerWindowLostThunk(void* self) {
+        auto* loop = static_cast<ServerLoop*>(self);
+        // Publish, then ring (the park predicate reads the flag; Doorbell.h's order). Called under
+        // the display's lock while this loop holds its lease - and the lease ends before the apply
+        // thread exits and before Stop() lets go of m_session - so the session is still here.
+        loop->m_windowLostRequested.store(true, std::memory_order_release);
+        if (loop->m_session != nullptr && loop->m_session->DataLink() != nullptr) {
+            loop->m_session->DataLink()->ConsumerBell().Notify();
+        }
+    }
+
+    Bool ServerLoop::ServerWindowWaitCancelled(void* self) {
+        const auto* loop = static_cast<const ServerLoop*>(self);
+        // A window-lost request also ends the wait: this thread holds a lease on a window that is
+        // being destroyed, and the UI thread is blocked until it answers (PumpControlRequest).
+        return loop->m_stopRequested.load(std::memory_order_acquire) || SessionLatched() ||
+               loop->m_windowLostRequested.load(std::memory_order_acquire);
+    }
+
+    MobileGLResult ServerLoop::AcquireServerWindow(Uint32 width, Uint32 height, Uint32 timeoutMs,
+                                                   ServerWindowLease* out, SurfaceRefusalCode* refusal) {
+        ServerDisplay& display = ServerDisplayInstance();
+        const ServerWindowAcquire acquired = display.AcquireFor(width, height, timeoutMs, this, &ServerWindowLostThunk,
+                                                                &ServerWindowWaitCancelled, this, out);
+        switch (acquired) {
+        case ServerWindowAcquire::Acquired:
+            m_holdsWindowLease = true;
+            return MOBILEGL_OK;
+        case ServerWindowAcquire::NoDisplay:
+            // A CONFIGURATION ANSWER, NOT A LATCH: the client asked an offscreen server (the exec'd
+            // supervisor's session child, or any host server) for a window it does not have.
+            if (refusal != nullptr) *refusal = SurfaceRefusalCode::NoServerDisplay;
+            MGLOG_E("MG_Remote server: Refuse ServerOwned: this server owns no display - a client "
+                    "(MOBILEGL_IPC_SURFACE=server) asked for a %ux%u window surface on the server's own window, "
+                    "and this process is an offscreen server. Start the on-screen display server, or run the "
+                    "client offscreen. Refused (NoServerDisplay); the session is not latched",
+                    width, height);
+            return MOBILEGL_ERR_UNSUPPORTED;
+        case ServerWindowAcquire::NoWindow:
+        case ServerWindowAcquire::Cancelled:
+        case ServerWindowAcquire::Interrupted:
+        case ServerWindowAcquire::LeasedElsewhere:
+            break;
+        }
+        if (refusal != nullptr) *refusal = SurfaceRefusalCode::NoServerWindow;
+        MGLOG_E("MG_Remote server: Refuse ServerOwned: this server owns a display but no window for a %ux%u surface "
+                "(%s after at most %u ms) - the display's surface is not up. Refused (NoServerWindow); the "
+                "session is not latched",
+                width, height, ServerWindowAcquireName(acquired), timeoutMs);
+        return MOBILEGL_ERR_TIMEOUT;
+    }
+
+    MobileGLResult ServerLoop::ApplyServerOwnedWindowSurface(MG_Backend::BackendObject* backend,
+                                                            SurfaceControlFrame& frame) {
+        frame.ok = false;
+        frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::None);
+        const Uint32 wantWidth = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        const Uint32 wantHeight = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        // D4 FIRST: an offscreen session may not go on-screen, display or no display.
+        if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/true)) {
+            frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
+            MGLOG_E("MG_Remote server: SurfaceModeMismatch - a ServerOwned CreateWindowSurface (seq %llu, %ux%u) in a "
+                    "session whose surface mode is %s: its first surface was a pbuffer, and only one rendering "
+                    "path is active per session. Refused, the session is not latched",
+                    static_cast<unsigned long long>(frame.seq), wantWidth, wantHeight,
+                    SessionSurfaceModeName(m_surfaceMode));
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        ServerWindowLease lease;
+        SurfaceRefusalCode refusal = SurfaceRefusalCode::None;
+        const MobileGLResult acquired = AcquireServerWindow(wantWidth, wantHeight, kServerWindowWaitMs, &lease, &refusal);
+        if (acquired != MOBILEGL_OK) {
+            frame.refusal = static_cast<Uint8>(refusal);
+            return acquired;
+        }
+        // THE SUBSTITUTION. The client named no window; the server's own goes into the SAME backend
+        // call monolith Android makes (Register -> Activate -> SetWindowHandle -> InitWindowSurface),
+        // so nothing below this line knows the window was not the client's. Android is the only
+        // platform that installs a display (the host never does), hence the backend tag.
+        MG_Backend::WindowHandle window;
+        window.Backend = MG_Backend::WindowBackend::Android;
+        window.Handle = lease.window;
+        window.Width = lease.width;
+        window.Height = lease.height;
+        frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), window);
+        if (!frame.ok) {
+            MGLOG_E("MG_Remote server: the backend could not create a window surface on the server window %p "
+                    "(%ux%u) for ServerOwned seq %llu",
+                    lease.window, lease.width, lease.height, static_cast<unsigned long long>(frame.seq));
+            // A session that never got a surface on the window has nothing to release: the lease goes.
+            if (m_surfaceMode != SessionSurfaceMode::OnScreen) EndServerWindowLease();
+            return MOBILEGL_OK;
+        }
+        // N-3: as for any window surface - a (re)creation may have destroyed the held context.
+        ForgetCurrentTuple();
+        m_surfaceMode = SessionSurfaceMode::OnScreen;
+        // The reply's geometry (SurfaceReply.width/height): the window's real extent, which is what
+        // the headless client's eglQuerySurface answers from here on.
+        frame.width = static_cast<Int>(lease.width);
+        frame.height = static_cast<Int>(lease.height);
+        // THE ARM PROOF (ID-124), once per surface: which of the two paths ran, and at what size.
+        MGLOG_I("MG_Remote server: surface=window %ux%u owner=server (ServerOwned seq %llu, window %p generation %llu%s)",
+                lease.width, lease.height, static_cast<unsigned long long>(frame.seq), lease.window,
+                static_cast<unsigned long long>(lease.generation),
+                lease.sizeAsRequested ? "" : ", NOT the size the client asked for");
+        return MOBILEGL_OK;
+    }
+
+    void ServerLoop::EndServerWindowLease() {
+        if (!m_holdsWindowLease) return;
+        m_holdsWindowLease = false;
+        ServerDisplayInstance().EndLease(this);
+    }
+
+    void ServerLoop::ReleaseLostServerWindow() {
+        if (!m_windowLostRequested.exchange(false, std::memory_order_acq_rel)) return;
+        if (!m_holdsWindowLease) return; // raced with the session's own end; nothing is held
+        // THE ORDER IS THE CONTRACT (D6): the backend lets go of the window first - Espryt destroys
+        // its EGL surface and context, Magma its swapchain and VkSurface - then the session latches
+        // by name, and only then does the lease end, which is what lets surfaceDestroyed return.
+        if (m_backend != nullptr) m_backend->ReleaseEGLResources();
+        MG_Pipe::MGPipeServerSetContextLive(false);
+        ForgetCurrentTuple();
+        m_serverWindowsLost.fetch_add(1, std::memory_order_acq_rel);
+        (void)SessionLatch(MGFatalFamily::ServerWindowLost,
+                           "MGPipe: Fatal{ServerWindowLost, \"surfaceDestroyed\"} - the server's own display "
+                           "window was destroyed under this on-screen session; its surface was released on "
+                           "mgl-srv-apply before the window went, and the session ends so the client reads a "
+                           "clean device loss. The display server keeps listening");
+        EndServerWindowLease();
+    }
+
+    // ---------------------------------------------------------------------------------
     // The twelve forwarders: pack the frame, post it, unpack the reply
     // ---------------------------------------------------------------------------------
 
@@ -1320,14 +1514,36 @@ namespace MobileGL::MG_Remote::Server {
         return rc == MOBILEGL_OK && frame.ok;
     }
 
-    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height, SurfaceRefusalCode* refusal) {
         SurfaceControlFrame frame;
         frame.kind = SurfaceControlOp::CreatePbufferSurface;
         frame.surface = TokenFromHandle(surface);
         frame.width = width;
         frame.height = height;
         const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        if (refusal != nullptr) *refusal = static_cast<SurfaceRefusalCode>(frame.refusal);
         return rc == MOBILEGL_OK && frame.ok;
+    }
+
+    ServerOwnedWindowReply ServerCreateServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        // P12 (D1/D2): ONE frame, and no SetWindowHandle in front of it - the window is the
+        // server's, so there is nothing of the client's to name. The frame-local tag is what the
+        // codec turns into WindowKind::ServerOwned with token 0.
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::CreateWindowSurface;
+        frame.surface = TokenFromHandle(surface);
+        frame.windowBackend = kServerOwnedWindowBackend;
+        frame.nativeToken = 0;
+        frame.width = static_cast<Int>(width);
+        frame.height = static_cast<Int>(height);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        ServerOwnedWindowReply reply;
+        reply.transport = rc;
+        reply.ok = rc == MOBILEGL_OK && frame.ok;
+        reply.refusal = static_cast<SurfaceRefusalCode>(frame.refusal);
+        reply.width = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        reply.height = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        return reply;
     }
 
     Bool ServerMakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {

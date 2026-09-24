@@ -14,6 +14,9 @@ set(MOBILEGL_WIRE_TESTS
         SessionTest
         # P6 dl: the Fatal-family table and its total projection onto the wire FatalCode.
         FatalFamilyTest
+        # P12 (on-screen server window): the server's own window holder, driven with a fake
+        # window handle (no GL, no process, no platform window).
+        ServerDisplayTest
 )
 
 if (NOT WIN32)

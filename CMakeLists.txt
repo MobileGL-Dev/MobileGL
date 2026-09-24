@@ -655,6 +655,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).
         MobileGL/MG_Remote/Server/SurfaceControlFrame.cpp
         MobileGL/MG_Remote/Protocol/SurfaceOpCodec.cpp
+        # P12 (on-screen server window): the process-wide holder of the server's own window
+        # (the display Activity's SurfaceView on Android; nobody installs one on the host, so a
+        # ServerOwned request is refused by name there).
+        MobileGL/MG_Remote/Server/ServerDisplay.cpp
         # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
         # arms and the probe that measures the first against the second, shared by the
         # renderer's bring-up and the Vulkan POST. Wire-only - the monolith records neither arm -

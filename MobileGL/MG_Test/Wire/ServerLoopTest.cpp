@@ -3211,6 +3211,135 @@ TEST(ServerLoopLatchTest, ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPo
            "appliedSeq moved past the first record; 16 = the between-records hook did not run exactly "
            "once (64+ = setup)";
 }
+
+// =====================================================================================
+// P12 (on-screen server window): the surface mode (D4), the display-less refusal (D3) and the lost
+// window (D6), on a real apply thread with no GL context
+// =====================================================================================
+
+namespace {
+    // The apply-thread side of AcquireServerWindow, through the probe seam.
+    struct ServerWindowProbe {
+        Uint32 width = 0;
+        Uint32 height = 0;
+        Uint32 timeoutMs = 1000;
+        Server::ServerWindowLease lease;
+        Server::SurfaceRefusalCode refusal = Server::SurfaceRefusalCode::None;
+        MobileGLResult rc = MOBILEGL_ERR_INVALID_ARGUMENT;
+        Bool onApplyThread = false;
+    };
+
+    MobileGLResult AcquireServerWindowOnTheApplyThread(void* user) {
+        auto& probe = *static_cast<ServerWindowProbe*>(user);
+        probe.onApplyThread = Server::ServerLoop::OnApplyThread();
+        probe.rc = Server::ServerLoopInstance().AcquireServerWindow(probe.width, probe.height, probe.timeoutMs,
+                                                                    &probe.lease, &probe.refusal);
+        return MOBILEGL_OK;
+    }
+
+    struct CountingWindowHooks {
+        static inline std::atomic<int> acquires{0};
+        static inline std::atomic<int> releases{0};
+        static void Acquire(void*, void*) { ++acquires; }
+        static void Release(void*, void*) { ++releases; }
+        static Server::ServerDisplayHooks Hooks() {
+            Server::ServerDisplayHooks hooks;
+            hooks.acquire = &Acquire;
+            hooks.release = &Release;
+            return hooks;
+        }
+    };
+
+    int g_fakeServerWindow = 0;
+
+    // D6 ON THE REAL APPLY THREAD. The session holds the display's window (a lease taken on the apply
+    // thread, as the ServerOwned arm takes it); the UI thread's surfaceDestroyed (Detach) must get the
+    // apply thread to release it, see the session latch ServerWindowLost, and only then release the
+    // window's reference - all while the apply thread was PARKED when the request came.
+    enum : int {
+        kLostNotLeased = 1,     // the probe could not take the lease
+        kLostDetach = 2,        // Detach did not answer ReleasedBySession
+        kLostReleases = 4,      // the window's reference was not released exactly once
+        kLostNotLatched = 8,    // the session did not latch ServerWindowLost
+        kLostCounter = 16,      // ServerWindowsLost() != 1
+        kLostThreadStayed = 32, // the apply thread was still running 3 s after the latch
+    };
+
+    [[noreturn]] void LoseTheServerWindowAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK) ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow || !probe.onApplyThread)
+            failed |= kLostNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+        const Server::ServerWindowDetach detached = display.Detach(3000);
+        if (detached != Server::ServerWindowDetach::ReleasedBySession) failed |= kLostDetach;
+        if (CountingWindowHooks::releases.load() != 1) failed |= kLostReleases;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kLostNotLatched;
+        if (loop.ServerWindowsLost() != 1) failed |= kLostCounter;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kLostThreadStayed;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// D6. Red with PumpControlRequest's lost-window arm deleted: nobody answers the request, Detach waits
+// out its bound and says TimedOut, the reference is kept and no latch is raised (bits 2|4|8|16|32);
+// red with the park predicate's lost-window wake deleted: the apply thread sleeps through it the same
+// way.
+TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedOnTheApplyThreadBeforeDetachReturnsAndLatchesByName) {
+    EXPECT_EXIT(LoseTheServerWindowAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken on the apply thread; 2 = Detach did not answer "
+           "ReleasedBySession; 4 = the reference was not released exactly once; 8 = no ServerWindowLost "
+           "latch; 16 = ServerWindowsLost() != 1; 32 = the apply thread stayed (64+ = setup)";
+}
+
+// D3. A server that owns no display - the host, the exec'd supervisor's children - refuses a request
+// for its window BY NAME and does NOT latch: it is the client's configuration, not corrupt bytes. Red
+// with the refusal turned into a latch: this unarmed process aborts.
+TEST(ServerLoopTest, AServerWindowRequestOnAServerWithNoDisplayIsRefusedByNameWithoutALatch) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    ASSERT_FALSE(Server::ServerDisplayInstance().HasDisplay());
+    ServerWindowProbe probe;
+    probe.width = 640;
+    probe.height = 480;
+    ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe),
+              MOBILEGL_OK);
+    EXPECT_EQ(probe.rc, MOBILEGL_ERR_UNSUPPORTED);
+    EXPECT_EQ(probe.refusal, Server::SurfaceRefusalCode::NoServerDisplay);
+    EXPECT_FALSE(MobileGL::MG_Remote::SessionLatched());
+    EXPECT_TRUE(Server::ServerLoopInstance().Running()) << "a refusal must not stop the session";
+    fixture.Stop();
+    EXPECT_NE(ReadLog().find("Refuse ServerOwned: this server owns no display"), std::string::npos) << ReadLog();
+}
+
+// D4. The decision the dispatch asks, pure: the first surface decides, and the OTHER kind is refused
+// afterwards. Red with SessionSurfaceModeAdmits answering true for everything (the check deleted).
+TEST(ServerLoopTest, SessionSurfaceModeAdmitsOnlyTheModeTheFirstSurfaceChose) {
+    using Server::SessionSurfaceMode;
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::None, /*serverOwnedWindow=*/true));
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::None, false));
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::OnScreen, true))
+        << "an on-screen session may re-create its window surface (a resize)";
+    EXPECT_FALSE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::OnScreen, false))
+        << "a pbuffer in an on-screen session is SurfaceModeMismatch";
+    EXPECT_TRUE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::Offscreen, false));
+    EXPECT_FALSE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::Offscreen, true))
+        << "a ServerOwned window in an offscreen session is SurfaceModeMismatch";
+}
 #endif
 
 int main(int argc, char** argv) {

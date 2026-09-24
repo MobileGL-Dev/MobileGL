@@ -51,6 +51,12 @@
 // could not obtain a resource" value and adding one would move `wireFingerprint`, which is a
 // protocol change no wave-0 instrument is entitled to make (recorded for the integrator).
 //
+// P12 (on-screen server window) ADDED ONE ROW, ServerWindowLost: the display server's window was
+// destroyed (surfaceDestroyed) under a live on-screen session. The session latches by name after
+// its surface is released, and the WAITING client is told what ServerCrashed already says - the
+// server-side resource its session had to have is gone - so it reads a clean device loss. Not
+// DeviceLost: that code is the latch's own, never a family's projection (see its bucket above).
+//
 // Two words were NOT given rows, they were collapsed instead: `InitialBytesNotCarried`
 // (MG_Impl/Pipe/PipeFill.cpp) said the same thing as `UncarriedInitialBytes` (Client/
 // WireTables.cpp) about the same record - a respecify that crossed with no initial bytes - and
@@ -106,6 +112,7 @@
     X(RetirementWaitFailed,          ServerCrashed,      "a wait for the server to retire staging did not complete") \
     X(ApplyThreadJoinTimeout,        ServerCrashed,      "the apply thread did not join within its bound at teardown") \
     X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running") \
-    X(ResourceUnavailable,           ServerCrashed,      "the server could not obtain a native GL/Vulkan resource it had to have")
+    X(ResourceUnavailable,           ServerCrashed,      "the server could not obtain a native GL/Vulkan resource it had to have") \
+    X(ServerWindowLost,              ServerCrashed,      "the server's own display window was destroyed under a live on-screen session (P12)")
 
 // clang-format on

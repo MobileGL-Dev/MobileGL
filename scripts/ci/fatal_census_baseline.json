@@ -54,6 +54,7 @@
     "RetirementWaitFailed",
     "RingOverrun",
     "RoleViolation",
+    "ServerWindowLost",
     "StageSnapshotTooNarrow",
     "UncarriedInitialBytes",
     "UnexpectedMapAccept",
