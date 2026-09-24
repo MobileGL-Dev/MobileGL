@@ -479,6 +479,12 @@ namespace MobileGL::MG_Config {
     // the full planned inventory (PRESENT_CREDIT, POLL_ESCALATE, SHADOW_SHM,
     // INLINE_PAYLOADS, TRACE, ATTACH, RESPAWN, IDLE_EXIT_S), and every one of those belongs
     // to P6 or later.
+    //
+    // P12 (on-screen server window): MOBILEGL_IPC_SURFACE's two values. See IpcTable::Surface.
+    enum class IpcSurface : Uint8 {
+        Offscreen = 0, // a window surface is the client's own window, as before (the default)
+        Server = 1,    // a window surface is the SERVER's window: WindowKind::ServerOwned
+    };
     struct IpcTable {
         // MOBILEGL_IPC_SERVER_PATH: where to find libMobileGLServer. P6 consumes it; P5
         // lands the parse because t1's ctest ENVIRONMENT blocks and add_trace_replay_test's
@@ -618,8 +624,24 @@ namespace MobileGL::MG_Config {
         // because the resolved mask is logged by whoever starts the apply thread, and the
         // string is what an operator typed.
         String ServerAffinity = "auto";
+        // MOBILEGL_IPC_SURFACE (P12, on-screen server window) = offscreen | server. `server` makes
+        // the client a HEADLESS one: eglCreateWindowSurface / eglCreatePlatformWindowSurface accept
+        // any native window including NULL, send ONE CreateWindowSurface naming
+        // WindowKind::ServerOwned (token 0, the size from EGL_WIDTH/EGL_HEIGHT, 0/0 = the server's
+        // own) and no SetWindowHandle, and take the surface's real geometry back from the server.
+        // Meaningful only when this client talks to a remote server (MOBILEGL_TRANSPORT=spawn, the
+        // fork or tcp:// control); under monolith / inproc it is parsed, logged as ignored, and
+        // changes nothing. `offscreen` (the default) is today's behaviour byte for byte.
+        // Pbuffers stay pbuffers in both modes (D4: one mode per session, decided by the first).
+        IpcSurface Surface = IpcSurface::Offscreen;
     };
     extern IpcTable Ipc;
+
+    // P12: the one predicate every client-side consumer of MOBILEGL_IPC_SURFACE asks - a window
+    // surface is the server's when the knob says so AND there is a remote server to own it.
+    inline Bool ServerOwnedWindowSurfaces() {
+        return Transport == TransportMode::Spawn && Ipc.Surface == IpcSurface::Server;
+    }
 #else
     // The whole point: in a build without MG_Remote this folds at compile time, so
     // `if (MG_Config::Transport != MG_Config::TransportMode::Monolith)` in Init.cpp is a

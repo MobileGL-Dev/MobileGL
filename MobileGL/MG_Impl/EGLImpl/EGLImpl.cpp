@@ -11,6 +11,11 @@
 #include <Init.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/EGLState/Core.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// MG_Config::ServerOwnedWindowSurfaces (P12, MOBILEGL_IPC_SURFACE). Split-only: the pull build's
+// translation unit is unchanged (G1).
+#include <Config.h>
+#endif
 #include <mutex>
 #include <sstream>
 #include <type_traits>
@@ -127,7 +132,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_CONFIG);
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (on-screen server window), D1. With MOBILEGL_IPC_SURFACE=server and a remote server,
+        // the window is the SERVER's: a headless client passes none, so NULL is not
+        // EGL_BAD_NATIVE_WINDOW here. Whatever the client passed never reaches the wire - the
+        // remote backend sends WindowKind::ServerOwned with token 0 (BackendObject_Remote).
+        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
+        if (IsNullNativeHandle(window) && !serverOwnedWindow) {
+#else
         if (IsNullNativeHandle(window)) {
+#endif
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
@@ -139,7 +153,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
             .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
         };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EGLSurface surface = serverOwnedWindow
+                                 ? state->CreateServerOwnedWindowSurface(
+                                       dpy, config, windowHandle.Handle, static_cast<EGLint>(windowHandle.Width),
+                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/false)
+                                 : state->CreateWindowSurface(dpy, config, window, attrib_list);
+#else
         EGLSurface surface = state->CreateWindowSurface(dpy, config, window, attrib_list);
+#endif
         if (surface == EGL_NO_SURFACE) {
             return EGL_NO_SURFACE;
         }
@@ -676,7 +698,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (on-screen server window), D1: as CreateWindowSurface - with MOBILEGL_IPC_SURFACE=server
+        // the window is the server's, and a headless client's NULL is accepted.
+        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
+        if (native_window == nullptr && !serverOwnedWindow) {
+#else
         if (native_window == nullptr) {
+#endif
             state->SetError(EGL_BAD_NATIVE_WINDOW);
             return EGL_NO_SURFACE;
         }
@@ -696,7 +725,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
             .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValueAttrib(attrib_list, EGL_HEIGHT, 0), 0)),
         };
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EGLSurface surface = serverOwnedWindow
+                                 ? state->CreateServerOwnedWindowSurface(
+                                       dpy, config, native_window, static_cast<EGLint>(windowHandle.Width),
+                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/true)
+                                 : state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+#else
         EGLSurface surface = state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+#endif
         if (surface == EGL_NO_SURFACE) {
             return EGL_NO_SURFACE;
         }

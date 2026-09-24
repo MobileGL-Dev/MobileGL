@@ -23,8 +23,13 @@
 // ServerLoopTest's cases (AVoidForwarderCrossesAsOneDispatchedFrame and the whole
 // ServerLoopEglTest fixture, which now drives every forwarder through the frame channel).
 
+#include <Config.h>
+#include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
+#include <MG_Remote/Client/BackendObject_Remote.h>
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
+#include <MG_State/EGLState/Core.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Server/ServerLoop.h>
@@ -33,10 +38,12 @@
 #include <gtest/gtest.h>
 
 #include <csignal>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 #if defined(_WIN32)
 #include <process.h>
@@ -434,6 +441,329 @@ TEST(SurfaceControlFrameTest, ALatchedSessionAnswersAWellFormedSurfaceOpWithoutR
            "exit 64: the op did not encode";
 }
 #endif
+
+// =====================================================================================
+// P12 (on-screen server window): WindowKind::ServerOwned on the wire, the reply's geometry and
+// refusal, and MOBILEGL_IPC_SURFACE=server's one-frame create through the real client EGL layer
+// =====================================================================================
+
+namespace {
+    using MobileGL::MG_Remote::SessionLatched;
+
+    const ::MobileGL::Wire::SurfaceOp* BuildWireSurfaceOp(flatbuffers::FlatBufferBuilder& builder,
+                                                          ::MobileGL::Wire::SurfaceOpKind kind,
+                                                          ::MobileGL::Wire::WindowKind windowKind, Uint64 token) {
+        const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, /*seq=*/31, kind, /*display=*/1, /*surface=*/2,
+                                                          windowKind, token, 640, 480, 0, 0, 0);
+        const auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
+        return ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
+    }
+} // namespace
+
+// D2. The frame-local tag encodes as WindowKind::ServerOwned with token 0 WHATEVER the frame carried
+// (the client's own window value never reaches the wire, Rule G/H), and decodes back to the tag. Red
+// with the encoder's ServerOwned arm deleted: the tag names no WindowBackend and the encode fails
+// UnknownWindowKind; red with the decoder's arm deleted: the kind decodes as out of range.
+TEST(SurfaceControlFrameTest, AServerOwnedCreateEncodesAsItsOwnWindowKindAndNeverCarriesAToken) {
+    EXPECT_EQ(static_cast<unsigned>(::MobileGL::Wire::WindowKind::ServerOwned), 7u) << "wire ABI: append-only";
+    SurfaceControlFrame frame;
+    frame.kind = SurfaceControlOp::CreateWindowSurface;
+    frame.seq = 5;
+    frame.surface = 9;
+    frame.windowBackend = Server::kServerOwnedWindowBackend;
+    frame.nativeToken = 0xDEADBEEFull;
+    frame.width = 1280;
+    frame.height = 720;
+    flatbuffers::FlatBufferBuilder builder(256);
+    const ::MobileGL::Wire::SurfaceOp* wireOp = EncodeAndParse(frame, &builder);
+    ASSERT_NE(wireOp, nullptr) << "the ServerOwned create did not encode";
+    EXPECT_EQ(wireOp->windowKind(), ::MobileGL::Wire::WindowKind::ServerOwned);
+    EXPECT_EQ(wireOp->nativeToken(), 0u) << "a client value crossed the wire in a ServerOwned op";
+    EXPECT_EQ(wireOp->width(), 1280);
+    EXPECT_EQ(wireOp->height(), 720);
+
+    SurfaceControlFrame back;
+    ASSERT_EQ(DecodeWireSurfaceOp(*wireOp, &back), SurfaceWireError::None);
+    EXPECT_EQ(back.windowBackend, Server::kServerOwnedWindowBackend);
+    EXPECT_EQ(back.nativeToken, 0u);
+    EXPECT_EQ(back.width, 1280);
+    EXPECT_EQ(back.height, 720);
+
+    // ServerOwned is not a window backend: the mapping table has no row for it.
+    MG_Backend::WindowBackend backend;
+    EXPECT_FALSE(WindowBackendForWireWindowKind(::MobileGL::Wire::WindowKind::ServerOwned, &backend));
+    // And the decode bound moved exactly one: the value after it is still unknown.
+    flatbuffers::FlatBufferBuilder past(256);
+    const auto* pastOp = BuildWireSurfaceOp(past, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface,
+                                            static_cast<::MobileGL::Wire::WindowKind>(8), 0);
+    ASSERT_NE(pastOp, nullptr);
+    EXPECT_EQ(DecodeWireSurfaceOp(*pastOp, &back), SurfaceWireError::UnknownWindowKind);
+}
+
+// D2. SetWindowHandle may not name the server's window: the encoder refuses it before the wire.
+TEST(SurfaceControlFrameTest, AServerOwnedSetWindowHandleRefusesToEncode) {
+    SurfaceControlFrame frame;
+    frame.kind = SurfaceControlOp::SetWindowHandle;
+    frame.windowBackend = Server::kServerOwnedWindowBackend;
+    flatbuffers::FlatBufferBuilder builder(256);
+    EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::ServerOwnedOnSetWindowHandle);
+}
+
+// D2. ... and one arriving from a peer is a NAMED REFUSAL answered in-band - not a latch and, in this
+// unarmed process, not a death either. Red with the refusal arm deleted: the decode error falls into
+// the latch-or-die path and this process aborts.
+TEST(SurfaceControlFrameTest, AServerOwnedSetWindowHandleOnTheWireIsANamedRefusalNotALatch) {
+    flatbuffers::FlatBufferBuilder builder(256);
+    const auto* wireOp = BuildWireSurfaceOp(builder, ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle,
+                                            ::MobileGL::Wire::WindowKind::ServerOwned, 0);
+    ASSERT_NE(wireOp, nullptr);
+    SurfaceControlFrame frame;
+    EXPECT_EQ(DecodeWireSurfaceOp(*wireOp, &frame), SurfaceWireError::ServerOwnedOnSetWindowHandle);
+    SurfaceControlFrame reply;
+    EXPECT_EQ(ServerApplyWireSurfaceOp(*wireOp, &reply), MOBILEGL_ERR_UNSUPPORTED);
+    EXPECT_FALSE(reply.ok);
+    EXPECT_EQ(reply.seq, 31u) << "the refusal must still name its op";
+    EXPECT_EQ(reply.refusal, static_cast<Uint8>(Server::SurfaceRefusalCode::ServerOwnedOnSetWindowHandle));
+    EXPECT_FALSE(SessionLatched());
+    EXPECT_NE(ReadLog().find("Refuse ServerOwned on SetWindowHandle"), std::string::npos) << ReadLog();
+}
+
+#if !defined(_WIN32)
+// D2. A ServerOwned create with a non-zero token is the peer's corrupt bytes: unarmed it dies by name.
+TEST(SurfaceControlFrameTest, AServerOwnedCreateWithANonZeroTokenIsProtocolCorruptionByName) {
+    flatbuffers::FlatBufferBuilder builder(256);
+    const auto* wireOp = BuildWireSurfaceOp(builder, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface,
+                                            ::MobileGL::Wire::WindowKind::ServerOwned, 0x1234);
+    ASSERT_NE(wireOp, nullptr);
+    SurfaceControlFrame frame;
+    EXPECT_EQ(DecodeWireSurfaceOp(*wireOp, &frame), SurfaceWireError::ServerOwnedTokenNotZero);
+    EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
+    EXPECT_NE(ReadLog().find("Fatal{ProtocolCorruption, \"SurfaceOp.nativeToken\"}"), std::string::npos)
+        << "the abort happened but not for this rule's reason; the log says: " << ReadLog();
+}
+
+namespace {
+    // ... and armed (a session child), the same bytes LATCH: answered PROTOCOL_MISMATCH, not run,
+    // the first fault named SurfaceOp.nativeToken.
+    [[noreturn]] void ANonZeroServerOwnedTokenLatchesAndExit() {
+        MobileGL::MG_Remote::ArmSessionLatch();
+        flatbuffers::FlatBufferBuilder builder(256);
+        const auto* wireOp = BuildWireSurfaceOp(builder, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface,
+                                                ::MobileGL::Wire::WindowKind::ServerOwned, 0x1234);
+        if (wireOp == nullptr) ::_exit(64);
+        SurfaceControlFrame reply;
+        reply.ok = true;
+        const MobileGLResult rc = ServerApplyWireSurfaceOp(*wireOp, &reply);
+        int failed = 0;
+        if (rc != MOBILEGL_ERR_PROTOCOL_MISMATCH) failed |= 1;
+        if (!SessionLatched()) failed |= 2;
+        if (MobileGL::MG_Remote::SessionLatchedFamily() != MobileGL::MG_Remote::MGFatalFamily::ProtocolCorruption ||
+            std::strstr(MobileGL::MG_Remote::SessionLatchedLine(), "\"SurfaceOp.nativeToken\"") == nullptr)
+            failed |= 4;
+        if (reply.ok) failed |= 8;
+        ::_exit(failed);
+    }
+} // namespace
+
+TEST(SurfaceControlFrameTest, AServerOwnedCreateWithANonZeroTokenLatchesAnArmedSession) {
+    EXPECT_EXIT(ANonZeroServerOwnedTokenLatchesAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = not answered PROTOCOL_MISMATCH; 2 = not latched; 4 = the latched fault is not "
+           "SurfaceOp.nativeToken; 8 = the reply said ok (64 = setup)";
+}
+#endif
+
+// D1/D3. The reply half carries the surface's REAL geometry and the server's named refusal
+// (SurfaceReply.width/height/refusal, revision 3), overwriting what the request carried.
+TEST(SurfaceControlFrameTest, TheReplyCarriesTheSurfaceGeometryAndTheNamedRefusal) {
+    SurfaceControlFrame answered;
+    answered.kind = SurfaceControlOp::CreateWindowSurface;
+    answered.seq = 77;
+    answered.ok = false;
+    answered.width = 1920;
+    answered.height = 1080;
+    answered.refusal = static_cast<Uint8>(Server::SurfaceRefusalCode::NoServerDisplay);
+    flatbuffers::FlatBufferBuilder builder(256);
+    EncodeSurfaceReplyFrame(answered, &builder);
+    const auto* reply = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceReply();
+    ASSERT_NE(reply, nullptr);
+    EXPECT_EQ(reply->refusal(), ::MobileGL::Wire::SurfaceRefusal::NoServerDisplay);
+    SurfaceControlFrame asked;
+    asked.width = 64;
+    asked.height = 48;
+    DecodeWireSurfaceReply(*reply, &asked);
+    EXPECT_EQ(asked.seq, 77u);
+    EXPECT_FALSE(asked.ok);
+    EXPECT_EQ(asked.width, 1920) << "the reply's geometry is the server's, not the request's";
+    EXPECT_EQ(asked.height, 1080);
+    EXPECT_EQ(asked.refusal, static_cast<Uint8>(Server::SurfaceRefusalCode::NoServerDisplay));
+}
+
+// ---- D1: the client's half, through the REAL client EGL layer and BackendObject_Remote ----------
+//
+// The server is replaced by a capturing remote control sink (the seam ClientSession installs under
+// spawn/tcp), so what is measured is exactly what the client would put on the wire, and the reply
+// the sink gives back is what the client does with the server's answer.
+namespace {
+    struct CapturedControl {
+        std::vector<SurfaceControlFrame> frames;
+        Bool answerOk = true;
+        Uint8 refusal = 0;
+        Int windowWidth = 1920; // the "server window's" real extent in a ServerOwned reply
+        Int windowHeight = 1080;
+    };
+    CapturedControl g_captured;
+
+    MobileGLResult CaptureAndAnswer(void*, SurfaceControlFrame& frame) {
+        g_captured.frames.push_back(frame);
+        frame.ok = g_captured.answerOk;
+        frame.refusal = g_captured.answerOk ? 0 : g_captured.refusal;
+        if (frame.kind == SurfaceControlOp::InitializeDisplay) {
+            frame.ok = true;
+            frame.eglMajor = 1;
+            frame.eglMinor = 5;
+        }
+        if (frame.ok && frame.kind == SurfaceControlOp::CreateWindowSurface &&
+            frame.windowBackend == Server::kServerOwnedWindowBackend) {
+            frame.width = g_captured.windowWidth;
+            frame.height = g_captured.windowHeight;
+        }
+        return MOBILEGL_OK;
+    }
+
+    // A client EGL layer with an initialized display and a window-capable config, whose backend is
+    // the real BackendObject_Remote talking to the capturing sink.
+    struct RemoteEglClient {
+        EGLDisplay dpy = EGL_NO_DISPLAY;
+        EGLConfig config = nullptr;
+
+        RemoteEglClient(MG_Config::TransportMode transport, MG_Config::IpcSurface surface) {
+            MG_Config::Transport = transport;
+            MG_Config::Ipc.Surface = surface;
+            g_captured = CapturedControl{};
+            Server::ServerLoopInstance().SetRemoteControlSink(&CaptureAndAnswer, nullptr);
+            MG_State::pEGLContext = MakeUnique<MG_State::EGLState::EGLContext>();
+            MG_Backend::pActiveBackendObject = MakeUnique<MG_Remote::Client::BackendObject_Remote>();
+            dpy = MG_State::pEGLContext->GetDisplay(EGL_DEFAULT_DISPLAY);
+            EGLint major = 0;
+            EGLint minor = 0;
+            (void)MG_State::pEGLContext->InitializeDisplay(dpy, &major, &minor);
+            (void)MG_Backend::pActiveBackendObject->InitializeEGLDisplay(dpy, &major, &minor);
+            const EGLint attribs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_NONE};
+            EGLint count = 0;
+            (void)MG_State::pEGLContext->ChooseConfig(dpy, attribs, &config, 1, &count);
+            g_captured.frames.clear();
+        }
+        ~RemoteEglClient() {
+            MG_Backend::pActiveBackendObject.reset();
+            MG_State::pEGLContext.reset();
+            Server::ServerLoopInstance().SetRemoteControlSink(nullptr, nullptr);
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            MG_Config::Ipc.Surface = MG_Config::IpcSurface::Offscreen;
+        }
+    };
+
+    NativeWindowType FakeClientWindow() { return (NativeWindowType)(std::uintptr_t)0x1234; }
+} // namespace
+
+// THE HEADLINE OF D1: a headless client (NULL window) with MOBILEGL_IPC_SURFACE=server gets a window
+// surface, sends ONE CreateWindowSurface naming the server's window (token 0, the EGL_WIDTH/HEIGHT it
+// asked for) and no SetWindowHandle, and eglQuerySurface answers the SERVER's size the moment the
+// create returns. Red three ways: with EGLImpl's null check restored the create fails
+// EGL_BAD_NATIVE_WINDOW; with BackendObject_Remote's arm deleted two frames go (SetWindowHandle first)
+// and the null handle is refused; with the reply's geometry not adopted the query answers 640x480.
+TEST(SurfaceControlFrameTest, WithTheServerKnobAHeadlessWindowSurfaceIsOneServerOwnedFrameAndTakesTheServersSize) {
+    RemoteEglClient client(MG_Config::TransportMode::Spawn, MG_Config::IpcSurface::Server);
+    ASSERT_NE(client.config, nullptr);
+    const EGLint attribs[] = {EGL_WIDTH, 640, EGL_HEIGHT, 480, EGL_NONE};
+    const EGLSurface surface =
+        MG_Impl::EGLImpl::CreateWindowSurface(client.dpy, client.config, NativeWindowType{}, attribs);
+    ASSERT_NE(surface, EGL_NO_SURFACE) << "a headless client's NULL window was refused under "
+                                          "MOBILEGL_IPC_SURFACE=server; eglGetError=0x"
+                                       << std::hex << MG_Impl::EGLImpl::GetError();
+    ASSERT_EQ(g_captured.frames.size(), 1u) << "exactly ONE control frame - no SetWindowHandle in front";
+    const SurfaceControlFrame& sent = g_captured.frames.front();
+    EXPECT_EQ(sent.kind, SurfaceControlOp::CreateWindowSurface);
+    EXPECT_EQ(sent.windowBackend, Server::kServerOwnedWindowBackend);
+    EXPECT_EQ(sent.nativeToken, 0u);
+    EXPECT_EQ(sent.width, 640);
+    EXPECT_EQ(sent.height, 480);
+    // What the wire carries for it.
+    flatbuffers::FlatBufferBuilder builder(256);
+    const ::MobileGL::Wire::SurfaceOp* wireOp = EncodeAndParse(sent, &builder);
+    ASSERT_NE(wireOp, nullptr);
+    EXPECT_EQ(wireOp->windowKind(), ::MobileGL::Wire::WindowKind::ServerOwned);
+    EXPECT_EQ(wireOp->nativeToken(), 0u);
+    // The geometry flowed back before the create returned.
+    EGLint width = 0;
+    EGLint height = 0;
+    ASSERT_EQ(MG_Impl::EGLImpl::QuerySurface(client.dpy, surface, EGL_WIDTH, &width), EGL_TRUE);
+    ASSERT_EQ(MG_Impl::EGLImpl::QuerySurface(client.dpy, surface, EGL_HEIGHT, &height), EGL_TRUE);
+    EXPECT_EQ(width, 1920) << "eglQuerySurface does not answer the server window's size";
+    EXPECT_EQ(height, 1080);
+    EXPECT_NE(ReadLog().find("surface=window 1920x1080 owner=server"), std::string::npos) << ReadLog();
+}
+
+// D1: "NULL accepted only in server mode". Offscreen (the default), a NULL window is
+// EGL_BAD_NATIVE_WINDOW in the client and nothing reaches the server.
+TEST(SurfaceControlFrameTest, WithoutTheServerKnobANullWindowIsRefusedBeforeAnythingIsSent) {
+    RemoteEglClient client(MG_Config::TransportMode::Spawn, MG_Config::IpcSurface::Offscreen);
+    const EGLSurface surface =
+        MG_Impl::EGLImpl::CreateWindowSurface(client.dpy, client.config, NativeWindowType{}, nullptr);
+    EXPECT_EQ(surface, EGL_NO_SURFACE);
+    EXPECT_EQ(MG_Impl::EGLImpl::GetError(), EGL_BAD_NATIVE_WINDOW);
+    EXPECT_TRUE(g_captured.frames.empty()) << "a refused NULL window reached the server";
+}
+
+// D1: the knob means nothing without a remote server - under inproc it is ignored and a NULL window
+// is refused exactly as before.
+TEST(SurfaceControlFrameTest, TheServerKnobIsIgnoredWithoutARemoteServer) {
+    RemoteEglClient client(MG_Config::TransportMode::InProcess, MG_Config::IpcSurface::Server);
+    EXPECT_FALSE(MG_Config::ServerOwnedWindowSurfaces());
+    const EGLSurface surface =
+        MG_Impl::EGLImpl::CreateWindowSurface(client.dpy, client.config, NativeWindowType{}, nullptr);
+    EXPECT_EQ(surface, EGL_NO_SURFACE);
+    EXPECT_EQ(MG_Impl::EGLImpl::GetError(), EGL_BAD_NATIVE_WINDOW);
+    EXPECT_TRUE(g_captured.frames.empty());
+}
+
+// D1: "with offscreen nothing changes, byte for byte" - a client window is still named by
+// SetWindowHandle first and then created with its own window kind.
+TEST(SurfaceControlFrameTest, WithoutTheServerKnobAClientWindowStillSendsSetWindowHandleFirst) {
+    RemoteEglClient client(MG_Config::TransportMode::Spawn, MG_Config::IpcSurface::Offscreen);
+    const EGLSurface surface =
+        MG_Impl::EGLImpl::CreateWindowSurface(client.dpy, client.config, FakeClientWindow(), nullptr);
+    EXPECT_NE(surface, EGL_NO_SURFACE);
+    ASSERT_EQ(g_captured.frames.size(), 2u);
+    EXPECT_EQ(g_captured.frames[0].kind, SurfaceControlOp::SetWindowHandle);
+    EXPECT_EQ(g_captured.frames[1].kind, SurfaceControlOp::CreateWindowSurface);
+    EXPECT_NE(g_captured.frames[1].windowBackend, Server::kServerOwnedWindowBackend);
+    EXPECT_EQ(g_captured.frames[1].nativeToken, 0x1234u);
+}
+
+// D1/D3: a server refusal FAILS BY NAME ON THE CLIENT TOO - the reply's refusal code is what lets the
+// client's own log say why, instead of "ok=false".
+TEST(SurfaceControlFrameTest, AServerOwnedRefusalIsNamedInTheClientsLog) {
+    RemoteEglClient client(MG_Config::TransportMode::Spawn, MG_Config::IpcSurface::Server);
+    g_captured.answerOk = false;
+    g_captured.refusal = static_cast<Uint8>(Server::SurfaceRefusalCode::NoServerDisplay);
+    const EGLSurface surface =
+        MG_Impl::EGLImpl::CreateWindowSurface(client.dpy, client.config, NativeWindowType{}, nullptr);
+    EXPECT_EQ(surface, EGL_NO_SURFACE);
+    EXPECT_EQ(MG_Impl::EGLImpl::GetError(), EGL_BAD_NATIVE_WINDOW);
+    EXPECT_NE(ReadLog().find("Refuse ServerOwned (NoServerDisplay)"), std::string::npos) << ReadLog();
+}
+
+// D4, the client's half: a pbuffer the server refused as SurfaceModeMismatch is named here as well.
+TEST(SurfaceControlFrameTest, APbufferRefusedAsSurfaceModeMismatchIsNamedInTheClientsLog) {
+    RemoteEglClient client(MG_Config::TransportMode::Spawn, MG_Config::IpcSurface::Server);
+    g_captured.answerOk = false;
+    g_captured.refusal = static_cast<Uint8>(Server::SurfaceRefusalCode::SurfaceModeMismatch);
+    const EGLint attribs[] = {EGL_WIDTH, 8, EGL_HEIGHT, 8, EGL_NONE};
+    EXPECT_EQ(MG_Impl::EGLImpl::CreatePbufferSurface(client.dpy, client.config, attribs), EGL_NO_SURFACE);
+    EXPECT_NE(ReadLog().find("SurfaceModeMismatch - eglCreatePbufferSurface"), std::string::npos) << ReadLog();
+}
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

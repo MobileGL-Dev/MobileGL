@@ -28,6 +28,7 @@
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
@@ -346,6 +347,24 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
+        // P12 (on-screen server window), D1: the session's server-owned window surface - the
+        // client's EGL handle for it - or EGL_NO_SURFACE. Written on the GL thread by the surface
+        // RPCs (NoteServerOwnedWindowSurface / ForgetServerOwnedWindowSurface) and read by the
+        // drain, which runs on the same thread; atomic only because nothing else pins that.
+        std::atomic<EGLSurface> g_serverOwnedSurface{EGL_NO_SURFACE};
+
+        // An event's extent is the SERVER's surface size. For the server-owned window that is the
+        // size the client renders at, so the EGL state's record of the surface follows it:
+        // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) is what a headless client sizes its viewport from.
+        // A format-only event (Width/Height 0) says nothing about the size and changes nothing.
+        void ApplyServerOwnedSurfaceExtent(Uint32 width, Uint32 height) {
+            if (width == 0 || height == 0) return;
+            const EGLSurface surface = g_serverOwnedSurface.load(std::memory_order_acquire);
+            if (surface == EGL_NO_SURFACE || !MG_State::pEGLContext) return;
+            (void)MG_State::pEGLContext->SetSurfaceExtent(surface, static_cast<EGLint>(width),
+                                                          static_cast<EGLint>(height));
+        }
+
         Uint32 DrainEventRing(Transport::EventRingConsumer& events) {
             if (!events.Valid()) return 0;
             Uint32 delivered = 0;
@@ -416,6 +435,9 @@ namespace MobileGL::MG_Remote::Client {
                     info.Layers = head->Layers;
                     info.IsDefault = head->IsDefault;
                     ApplySurfaceChangedToClient(info);
+                    // P12 (D1): and the server-owned window's EGL-state size, beside the
+                    // default framebuffer's reallocation above.
+                    ApplyServerOwnedSurfaceExtent(info.Width, info.Height);
                     ++delivered;
                     break;
                 }
@@ -2443,6 +2465,16 @@ namespace MobileGL::MG_Remote::Client {
         // Start() has its ring-consumer twin here, and DrainEventRing's Valid() check is
         // the whole guard either case needs.
         return DrainEventRing(*m_events);
+    }
+
+    void ClientSession::NoteServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        g_serverOwnedSurface.store(surface, std::memory_order_release);
+        ApplyServerOwnedSurfaceExtent(width, height);
+    }
+
+    void ClientSession::ForgetServerOwnedWindowSurface(EGLSurface surface) {
+        EGLSurface expected = surface;
+        (void)g_serverOwnedSurface.compare_exchange_strong(expected, EGL_NO_SURFACE, std::memory_order_acq_rel);
     }
 
     Uint64 ClientSession::EventRingCapacityBytes() const { return m_link->Memory().EventRingCapacity(); }

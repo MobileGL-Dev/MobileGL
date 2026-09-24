@@ -88,6 +88,11 @@ namespace MobileGL::MG_Remote::Client {
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
 
     private:
+        // P12 (on-screen server window), D1: MOBILEGL_IPC_SURFACE=server's arm of
+        // CreateEGLWindowSurface - ONE ServerOwned frame, no SetWindowHandle, the server's real
+        // geometry adopted before it returns, and every refusal named in this process's log.
+        Bool CreateServerOwnedWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
+
         // The generation of the snapshot m_formatCapabilities was filled from. Exposed only
         // through the log line on a refresh: a cache that silently stopped tracking the mirror
         // is exactly the shape trap 2 exists to prevent.

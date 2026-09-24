@@ -401,6 +401,17 @@ namespace MobileGL::MG_Remote::Client {
         // blit-incompatible with the real thing.
         Uint32 DrainPublishedEvents();
 
+        // P12 (on-screen server window), D1: THE GEOMETRY FLOWS BACK. `surface` (the client's EGL
+        // handle) is this session's server-owned window surface, `width`x`height` the server
+        // window's real extent from the CreateWindowSurface reply (0 = not known yet). The extent
+        // goes into the EGL state at once - eglQuerySurface answers it before eglCreateWindowSurface
+        // returns - and every later surface-changed event that carries an extent (the server window
+        // resized or rotated) is applied to the same surface, beside the default-framebuffer
+        // reallocation the drain already does. One surface at a time: the newest wins, and
+        // ForgetServerOwnedWindowSurface drops it when the client releases it.
+        void NoteServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
+        void ForgetServerOwnedWindowSurface(EGLSurface surface);
+
         // SEG_EVENT's ring capacity, exposed so the readback path can slice a writeback
         // request into records that always fit (RingProducer::MaxRecordBytes ==
         // capacity/2, Ring.h:288).

@@ -87,6 +87,22 @@ namespace MobileGL {
                 Bool ValidateSurface(EGLSurfaceHandle surface) const;
                 Bool ValidateSurfaceOnDisplay(EGLDisplayHandle display, EGLSurfaceHandle surface) const;
                 Bool SwapInterval(EGLDisplayHandle display, EGLint interval);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P12 (on-screen server window), MOBILEGL_IPC_SURFACE=server. A window surface whose
+                // window is the SERVER's: the client's native window may be NULL (a headless client
+                // has none), and the extent it asked for (EGL_WIDTH/EGL_HEIGHT; 0/0 = the server
+                // window's own) stands until the server's real one arrives through SetSurfaceExtent.
+                // `platformWindow` keeps eglCreatePlatformWindowSurface's surface type. Split builds
+                // only: the pull build's state class is unchanged (G1).
+                EGLSurfaceHandle CreateServerOwnedWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
+                                                                const void* nativeWindow, EGLint width,
+                                                                EGLint height, Bool platformWindow);
+                // P12: the server's REAL extent of a surface - a server-owned window's geometry, from
+                // the CreateWindowSurface reply and from every surface-changed event after it - so
+                // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) answers what the server renders at. Unlike
+                // ResizeSurface it needs no display (the event carries none) and keeps a 0 as 0.
+                Bool SetSurfaceExtent(EGLSurfaceHandle surface, EGLint width, EGLint height);
+#endif
 
                 // Current
                 Bool MakeCurrent(EGLDisplayHandle display, EGLSurfaceHandle draw, EGLSurfaceHandle read,

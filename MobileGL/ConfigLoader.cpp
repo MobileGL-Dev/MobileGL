@@ -16,6 +16,11 @@
 
 #include <cerrno>
 #include <cstdlib>
+#if MOBILEGL_BUILD_DISAGGREGATED
+// std::strcmp, for InitIpc's server-role check (P12). Split-only, so the pull build's TU is
+// unchanged (G1).
+#include <cstring>
+#endif
 
 #ifndef _WIN32
 extern char** environ;
@@ -470,18 +475,49 @@ namespace MobileGL::MG_ConfigLoader {
             }
         }
 
+        // P12 (on-screen server window): MOBILEGL_IPC_SURFACE = offscreen | server (Config.h has
+        // the semantics). An unknown value is named and read as the default, like every knob here.
+        {
+            String surface;
+            QueryEnvVariable("MOBILEGL_IPC_SURFACE", surface, "offscreen");
+            std::transform(surface.begin(), surface.end(), surface.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (surface.empty() || surface == "offscreen") {
+                ipc.Surface = MG_Config::IpcSurface::Offscreen;
+            } else if (surface == "server") {
+                ipc.Surface = MG_Config::IpcSurface::Server;
+            } else {
+                MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_IPC_SURFACE='%s'; expected "
+                        "offscreen|server, using offscreen",
+                        surface.c_str());
+                ipc.Surface = MG_Config::IpcSurface::Offscreen;
+            }
+            // (Not said by a server process: a spawned server inherits the client's environment,
+            // parses this before RunSession sets its own transport, and has no client half anyway.)
+            const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+            const Bool serverProcess = role != nullptr && std::strcmp(role, "server") == 0;
+            if (ipc.Surface == MG_Config::IpcSurface::Server && !serverProcess &&
+                MG_Config::Transport != MG_Config::TransportMode::Spawn) {
+                // Said, not silently honoured: there is no remote server here to own a window.
+                MGLOG_W("Config: MOBILEGL_IPC_SURFACE=server is IGNORED - it asks a remote server "
+                        "(MOBILEGL_TRANSPORT=spawn, a fork or tcp:// control) to own the window surface, "
+                        "and this run has none. Window surfaces stay the client's own");
+            }
+        }
+
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
                 "persistent-block=%uKiB "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
-                "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s'",
+                "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
                 ipc.PersistentBlockKb, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
-                static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str());
+                static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),
+                MG_Config::ServerOwnedWindowSurfaces() ? "server" : "offscreen");
         if (ipc.VerbBarrier == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "
                     "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "

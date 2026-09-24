@@ -1056,6 +1056,53 @@ namespace MobileGL {
                 return true;
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P12 (on-screen server window). See Core.h. Split builds only (G1).
+            EGLContext::EGLSurfaceHandle EGLContext::CreateServerOwnedWindowSurface(EGLDisplayHandle display,
+                                                                                    EGLConfigHandle config,
+                                                                                    const void* nativeWindow,
+                                                                                    EGLint width, EGLint height,
+                                                                                    Bool platformWindow) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_SURFACE;
+                }
+                if (!ValidateConfigOnDisplay(display, config)) {
+                    SetError(EGL_BAD_CONFIG);
+                    return EGL_NO_SURFACE;
+                }
+                if (width < 0 || height < 0) {
+                    SetError(EGL_BAD_ATTRIBUTE);
+                    return EGL_NO_SURFACE;
+                }
+                // No EGL_BAD_NATIVE_WINDOW for a null window: the window is the server's.
+                const auto surface = EncodeHandle<EGLSurfaceHandle>(m_nextSurfaceHandle++);
+                m_surfaces[surface] = SurfaceObject{
+                    .Display = display,
+                    .Config = config,
+                    .Type = platformWindow ? SurfaceType::PlatformWindow : SurfaceType::Window,
+                    .NativeHandleKey = ToNativeKey(nativeWindow),
+                    .ClientBuffer = nullptr,
+                    .BufferType = EGL_NONE,
+                    .Width = width,
+                    .Height = height,
+                };
+                return surface;
+            }
+
+            Bool EGLContext::SetSurfaceExtent(EGLSurfaceHandle surface, EGLint width, EGLint height) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto surfaceIt = m_surfaces.find(surface);
+                if (surfaceIt == m_surfaces.end() || width < 0 || height < 0) {
+                    return false;
+                }
+                surfaceIt->second.Width = width;
+                surfaceIt->second.Height = height;
+                return true;
+            }
+#endif
+
             Bool EGLContext::QuerySurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint attribute,
                                           EGLint* value) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
