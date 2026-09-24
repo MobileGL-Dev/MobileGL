@@ -45,6 +45,7 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
+#include <pthread.h>
 
 #include <mutex>
 
@@ -81,7 +82,12 @@ namespace {
         Bool attached = false;
         const jint got = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
         if (got == JNI_EDETACHED) {
-            JavaVMAttachArgs args{JNI_VERSION_1_6, "mgl-srv-geometry", nullptr};
+            // ART RENAMES the thread it attaches (and a detach does not rename it back), so the
+            // apply thread is attached under its OWN name - otherwise every later log line of the
+            // session would be tagged with the up-call's name instead of mgl-srv-apply.
+            char threadName[16] = "mgl-srv-apply";
+            (void)pthread_getname_np(pthread_self(), threadName, sizeof(threadName));
+            JavaVMAttachArgs args{JNI_VERSION_1_6, threadName, nullptr};
             if (vm->AttachCurrentThread(&env, &args) != JNI_OK || env == nullptr) {
                 MGLOG_E("MG_Remote server: could not attach the apply thread to the JVM to request display "
                         "geometry %ux%u; the window keeps its own size",
