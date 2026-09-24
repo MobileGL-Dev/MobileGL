@@ -81,6 +81,7 @@
 #include <mutex>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 namespace MobileGL::MG_Remote::Server {
 
@@ -463,6 +464,13 @@ namespace MobileGL::MG_Remote::Server {
         void ReleaseLostServerWindow();
         // Ends this loop's display lease if it holds one (after the backend let go of the window).
         void EndServerWindowLease();
+        // Review fix: the ResizeWindowSurface arm for a server-owned surface - a geometry request to
+        // the display, the backend surface at the window's real extent, that extent in the reply.
+        MobileGLResult ApplyServerOwnedWindowResize(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
+        Bool IsServerOwnedSurface(EGLSurface surface) const;
+        void ForgetServerOwnedSurface(EGLSurface surface);
+        // Apply thread only: this session's surfaces created on the server's window; reset by Start().
+        std::vector<EGLSurface> m_serverOwnedSurfaces;
         // ServerDisplay's lost hook: called under the display's lock from Detach's thread. Sets the
         // request and rings the apply thread's bell; never blocks.
         static void ServerWindowLostThunk(void* self);
@@ -642,6 +650,9 @@ namespace MobileGL::MG_Remote::Server {
         Uint32 height = 0;
     };
     ServerOwnedWindowReply ServerCreateServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
+    // P12 review fix: ResizeWindowSurface for a surface created on the server's window. The server
+    // resizes its WINDOW (a geometry request) and replies with the window's real extent.
+    ServerOwnedWindowReply ServerResizeServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
     // Also RE-PUBLISHES THE CAPS SNAPSHOT on success (R-12). BackendObject::MakeEGLCurrent runs
     // InitCapabilities() on the first make-current per surface (BackendObject.cpp:341-347), so
     // this is the moment the server's answers stop being the empty ones Accept() published -

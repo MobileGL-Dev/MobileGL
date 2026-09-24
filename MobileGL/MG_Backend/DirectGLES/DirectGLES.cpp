@@ -16258,8 +16258,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ApplyRequestedSwapInterval();
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P12 (D3): this publish may carry the window's extent (see the push arm of the publish).
-        g_publishWindowExtent = true;
+        // P12 (D3): this publish may carry the window's extent (see the push arm of the publish) -
+        // review fix: only when the window is the SERVER's own (a headless client's ServerOwned
+        // surface). A window the client named keeps the format-only publish without the knob.
+        g_publishWindowExtent = MG_Pipe::MGPipeServerOwnedWindow() != nullptr &&
+                                reinterpret_cast<const void*>(window) == MG_Pipe::MGPipeServerOwnedWindow();
         PublishDefaultFramebufferDepthStencilFormat();
         g_publishWindowExtent = false;
 #else

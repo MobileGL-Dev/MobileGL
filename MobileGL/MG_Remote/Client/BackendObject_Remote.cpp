@@ -230,6 +230,36 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         WaitForApplyBeforeEglForwarder("ResizeEGLWindowSurface");
+        // P12 review fix: a surface on the SERVER's window is resized by resizing that window. The
+        // server asks its display for the size and answers with the extent the window really took,
+        // and that - not the size asked for, which EGLImpl already wrote into the EGL state - is what
+        // eglQuerySurface answers from here on.
+        if (ClientSession::IsServerOwnedWindowSurface(surface)) {
+            const Server::ServerOwnedWindowReply reply =
+                Server::ServerResizeServerOwnedWindowSurface(surface, width, height);
+            if (!reply.ok) {
+                MGLOG_E("MG_Remote client: the server could not resize the server-owned window surface to %ux%u "
+                        "(channel rc=%d, refusal %s)",
+                        width, height, static_cast<int>(reply.transport), Server::SurfaceRefusalCodeName(reply.refusal));
+                return false;
+            }
+            const Uint32 realWidth = reply.width != 0 ? reply.width : width;
+            const Uint32 realHeight = reply.height != 0 ? reply.height : height;
+            if (MG_State::pEGLContext) {
+                (void)MG_State::pEGLContext->SetSurfaceExtent(surface, static_cast<EGLint>(realWidth),
+                                                              static_cast<EGLint>(realHeight));
+            }
+            if (ClientSession* session = ClientSession::Active()) {
+                session->NoteServerOwnedWindowSurface(surface, realWidth, realHeight);
+                session->DrainPublishedEvents();
+            }
+            if (realWidth != width || realHeight != height) {
+                MGLOG_W("MG_Remote client: the server window took %ux%u, not the %ux%u asked for; the surface "
+                        "reports the window's size",
+                        realWidth, realHeight, width, height);
+            }
+            return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, realWidth, realHeight);
+        }
         if (!Server::ServerResizeEGLWindowSurface(surface, width, height)) return false;
         // A resize re-creates the server's swapchain, which re-posts the surface-changed
         // event - same drain, same reason as CreateEGLWindowSurface.

@@ -938,6 +938,13 @@ namespace MobileGL::MG_Pipe {
     // GLContext or resurrected by stamping a verb after teardown.
     void MGPipeServerSetContextLive(Bool live);
     Bool MGPipeServerContextIsLive();
+    // P12 review fix (size reports without the knob). The SERVER's own display window while this
+    // session holds its lease (ServerLoop's ServerOwned arm sets it, the lease's end clears it), else
+    // null. A backend whose window surface does not otherwise publish its extent (Espryt) publishes
+    // it only for this window: a window the client named itself keeps the format-only publish every
+    // earlier session relied on. Apply thread only.
+    void MGPipeServerSetOwnedWindow(const void* window);
+    const void* MGPipeServerOwnedWindow();
 #else
     // The push-without-transport build has one role and one block, so the fill side's spelling
     // folds onto gPipeInputs and PipeFill.cpp reads identically in both build flavours. An

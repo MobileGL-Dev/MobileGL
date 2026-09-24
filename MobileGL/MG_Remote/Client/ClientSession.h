@@ -407,10 +407,13 @@ namespace MobileGL::MG_Remote::Client {
         // goes into the EGL state at once - eglQuerySurface answers it before eglCreateWindowSurface
         // returns - and every later surface-changed event that carries an extent (the server window
         // resized or rotated) is applied to the same surface, beside the default-framebuffer
-        // reallocation the drain already does. One surface at a time: the newest wins, and
-        // ForgetServerOwnedWindowSurface drops it when the client releases it.
+        // reallocation the drain already does. Every server-owned surface is tracked (they are all
+        // on the server's one window, so each extent applies to all of them), and
+        // ForgetServerOwnedWindowSurface drops one when the client releases it.
         void NoteServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
         void ForgetServerOwnedWindowSurface(EGLSurface surface);
+        // Whether `surface` is one of them (the resize path asks: it resizes the server's window).
+        static Bool IsServerOwnedWindowSurface(EGLSurface surface);
 
         // SEG_EVENT's ring capacity, exposed so the readback path can slice a writeback
         // request into records that always fit (RingProducer::MaxRecordBytes ==

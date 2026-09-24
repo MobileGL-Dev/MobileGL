@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -347,22 +348,27 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
-        // P12 (on-screen server window), D1: the session's server-owned window surface - the
-        // client's EGL handle for it - or EGL_NO_SURFACE. Written on the GL thread by the surface
-        // RPCs (NoteServerOwnedWindowSurface / ForgetServerOwnedWindowSurface) and read by the
-        // drain, which runs on the same thread; atomic only because nothing else pins that.
-        std::atomic<EGLSurface> g_serverOwnedSurface{EGL_NO_SURFACE};
+        // P12 (on-screen server window), D1: the session's server-owned window surfaces - the
+        // client's EGL handles for them. Written by the surface RPCs (NoteServerOwnedWindowSurface /
+        // ForgetServerOwnedWindowSurface) and read by the drain; a mutex because an app may create
+        // and release surfaces from more than one thread. REVIEW FIX: a SET, not one slot - with one
+        // slot a second surface took the geometry updates from the first, and releasing the second
+        // left the first with none. Every one of them is on the server's one window, so an extent
+        // applies to all of them.
+        std::mutex g_serverOwnedSurfacesMutex;
+        std::vector<EGLSurface> g_serverOwnedSurfaces;
 
         // An event's extent is the SERVER's surface size. For the server-owned window that is the
         // size the client renders at, so the EGL state's record of the surface follows it:
         // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) is what a headless client sizes its viewport from.
         // A format-only event (Width/Height 0) says nothing about the size and changes nothing.
         void ApplyServerOwnedSurfaceExtent(Uint32 width, Uint32 height) {
-            if (width == 0 || height == 0) return;
-            const EGLSurface surface = g_serverOwnedSurface.load(std::memory_order_acquire);
-            if (surface == EGL_NO_SURFACE || !MG_State::pEGLContext) return;
-            (void)MG_State::pEGLContext->SetSurfaceExtent(surface, static_cast<EGLint>(width),
-                                                          static_cast<EGLint>(height));
+            if (width == 0 || height == 0 || !MG_State::pEGLContext) return;
+            const std::lock_guard<std::mutex> lock(g_serverOwnedSurfacesMutex);
+            for (const EGLSurface surface : g_serverOwnedSurfaces) {
+                (void)MG_State::pEGLContext->SetSurfaceExtent(surface, static_cast<EGLint>(width),
+                                                              static_cast<EGLint>(height));
+            }
         }
 
         Uint32 DrainEventRing(Transport::EventRingConsumer& events) {
@@ -2468,13 +2474,25 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void ClientSession::NoteServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        g_serverOwnedSurface.store(surface, std::memory_order_release);
+        {
+            const std::lock_guard<std::mutex> lock(g_serverOwnedSurfacesMutex);
+            if (std::find(g_serverOwnedSurfaces.begin(), g_serverOwnedSurfaces.end(), surface) ==
+                g_serverOwnedSurfaces.end())
+                g_serverOwnedSurfaces.push_back(surface);
+        }
         ApplyServerOwnedSurfaceExtent(width, height);
     }
 
     void ClientSession::ForgetServerOwnedWindowSurface(EGLSurface surface) {
-        EGLSurface expected = surface;
-        (void)g_serverOwnedSurface.compare_exchange_strong(expected, EGL_NO_SURFACE, std::memory_order_acq_rel);
+        const std::lock_guard<std::mutex> lock(g_serverOwnedSurfacesMutex);
+        g_serverOwnedSurfaces.erase(std::remove(g_serverOwnedSurfaces.begin(), g_serverOwnedSurfaces.end(), surface),
+                                    g_serverOwnedSurfaces.end());
+    }
+
+    Bool ClientSession::IsServerOwnedWindowSurface(EGLSurface surface) {
+        const std::lock_guard<std::mutex> lock(g_serverOwnedSurfacesMutex);
+        return std::find(g_serverOwnedSurfaces.begin(), g_serverOwnedSurfaces.end(), surface) !=
+               g_serverOwnedSurfaces.end();
     }
 
     Uint64 ClientSession::EventRingCapacityBytes() const { return m_link->Memory().EventRingCapacity(); }

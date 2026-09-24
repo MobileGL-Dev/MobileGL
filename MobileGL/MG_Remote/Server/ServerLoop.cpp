@@ -17,6 +17,7 @@
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -231,6 +232,7 @@ namespace MobileGL::MG_Remote::Server {
         // has no window-lost request pending. The apply thread that reads these is not started yet.
         m_surfaceMode = SessionSurfaceMode::None;
         m_holdsWindowLease = false;
+        m_serverOwnedSurfaces.clear();
         m_windowLostRequested.store(false, std::memory_order_release);
         m_serverWindowsLost.store(0, std::memory_order_release);
         {
@@ -1188,6 +1190,9 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_OK;
         }
         case SurfaceControlOp::ResizeWindowSurface:
+            // P12 review fix: a server-owned surface is resized by resizing the SERVER's window.
+            if (IsServerOwnedSurface(HandleFromToken<EGLSurface>(frame.surface)))
+                return ApplyServerOwnedWindowResize(backend, frame);
             frame.ok = backend->ResizeEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface),
                                                        static_cast<Uint32>(frame.width),
                                                        static_cast<Uint32>(frame.height));
@@ -1273,6 +1278,7 @@ namespace MobileGL::MG_Remote::Server {
         case SurfaceControlOp::ReleaseSurface: {
             const EGLSurface surface = HandleFromToken<EGLSurface>(frame.surface);
             backend->ReleaseEGLSurface(surface);
+            ForgetServerOwnedSurface(surface);
             // N-3: a released surface the held tuple names may have taken the context with it
             // (BackendObject::ReleaseEGLSurface -> OnEGLSurfaceReleased -> DestroyEGLContext once
             // nothing holds it current). Forgetting when the base class only DEFERRED the destroy
@@ -1456,6 +1462,9 @@ namespace MobileGL::MG_Remote::Server {
         window.Handle = lease.window;
         window.Width = lease.width;
         window.Height = lease.height;
+        // Review fix: the backend is told which window is the server's own, so its surface init
+        // reports the extent for this window and for no window a client named (MGPipeServerOwnedWindow).
+        MG_Pipe::MGPipeServerSetOwnedWindow(lease.window);
         frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), window);
         if (!frame.ok) {
             MGLOG_E("MG_Remote server: the backend could not create a window surface on the server window %p "
@@ -1468,6 +1477,8 @@ namespace MobileGL::MG_Remote::Server {
         // N-3: as for any window surface - a (re)creation may have destroyed the held context.
         ForgetCurrentTuple();
         m_surfaceMode = SessionSurfaceMode::OnScreen;
+        if (!IsServerOwnedSurface(HandleFromToken<EGLSurface>(frame.surface)))
+            m_serverOwnedSurfaces.push_back(HandleFromToken<EGLSurface>(frame.surface));
         // The reply's geometry (SurfaceReply.width/height): the window's real extent, which is what
         // the headless client's eglQuerySurface answers from here on.
         frame.width = static_cast<Int>(lease.width);
@@ -1480,9 +1491,48 @@ namespace MobileGL::MG_Remote::Server {
         return MOBILEGL_OK;
     }
 
+    Bool ServerLoop::IsServerOwnedSurface(EGLSurface surface) const {
+        return std::find(m_serverOwnedSurfaces.begin(), m_serverOwnedSurfaces.end(), surface) !=
+               m_serverOwnedSurfaces.end();
+    }
+
+    void ServerLoop::ForgetServerOwnedSurface(EGLSurface surface) {
+        m_serverOwnedSurfaces.erase(std::remove(m_serverOwnedSurfaces.begin(), m_serverOwnedSurfaces.end(), surface),
+                                    m_serverOwnedSurfaces.end());
+    }
+
+    // P12 review fix (client resize). eglResize on a headless client's server-owned surface used to
+    // resize only the backend's record of the window - the phone's SurfaceView kept its size - and
+    // the client's EGL state answered the size it ASKED for. The window is the server's, so the
+    // resize is a geometry request like the creation's: the display is asked for the size and waited
+    // for (the same lease, re-taken by its holder), the backend surface follows the window's REAL
+    // extent, and that extent is the reply's width/height - which the client adopts.
+    MobileGLResult ServerLoop::ApplyServerOwnedWindowResize(MG_Backend::BackendObject* backend,
+                                                           SurfaceControlFrame& frame) {
+        frame.ok = false;
+        frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::None);
+        const Uint32 wantWidth = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        const Uint32 wantHeight = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        ServerWindowLease lease;
+        SurfaceRefusalCode refusal = SurfaceRefusalCode::None;
+        const MobileGLResult acquired = AcquireServerWindow(wantWidth, wantHeight, kServerWindowWaitMs, &lease, &refusal);
+        if (acquired != MOBILEGL_OK) {
+            frame.refusal = static_cast<Uint8>(refusal);
+            return acquired;
+        }
+        frame.ok = backend->ResizeEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), lease.width, lease.height);
+        frame.width = static_cast<Int>(lease.width);
+        frame.height = static_cast<Int>(lease.height);
+        MGLOG_I("MG_Remote server: surface=window %ux%u owner=server resized (ServerOwned seq %llu, %ux%u requested%s)",
+                lease.width, lease.height, static_cast<unsigned long long>(frame.seq), wantWidth, wantHeight,
+                lease.sizeAsRequested ? "" : ", NOT reached");
+        return MOBILEGL_OK;
+    }
+
     void ServerLoop::EndServerWindowLease() {
         if (!m_holdsWindowLease) return;
         m_holdsWindowLease = false;
+        MG_Pipe::MGPipeServerSetOwnedWindow(nullptr);
         ServerDisplayInstance().EndLease(this);
     }
 
@@ -1562,6 +1612,23 @@ namespace MobileGL::MG_Remote::Server {
         frame.surface = TokenFromHandle(surface);
         frame.windowBackend = kServerOwnedWindowBackend;
         frame.nativeToken = 0;
+        frame.width = static_cast<Int>(width);
+        frame.height = static_cast<Int>(height);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        ServerOwnedWindowReply reply;
+        reply.transport = rc;
+        reply.ok = rc == MOBILEGL_OK && frame.ok;
+        reply.refusal = static_cast<SurfaceRefusalCode>(frame.refusal);
+        reply.width = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        reply.height = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        return reply;
+    }
+
+    ServerOwnedWindowReply ServerResizeServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        // The ordinary resize frame: the server knows the surface is on its own window.
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::ResizeWindowSurface;
+        frame.surface = TokenFromHandle(surface);
         frame.width = static_cast<Int>(width);
         frame.height = static_cast<Int>(height);
         const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);

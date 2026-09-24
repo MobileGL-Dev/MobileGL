@@ -406,6 +406,14 @@ namespace MobileGL::MG_Pipe {
 
     Bool MGPipeServerContextIsLive() { return g_serverContextLive; }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    namespace { const void* g_serverOwnedWindow = nullptr; }
+
+    void MGPipeServerSetOwnedWindow(const void* window) { g_serverOwnedWindow = window; }
+
+    const void* MGPipeServerOwnedWindow() { return g_serverOwnedWindow; }
+#endif
+
     void MGPipeServerBlockNoteIdentity() {
         // D10: THE WIDER PREDICATE, and the narrow one was a latent crash rather than a missing
         // optimisation. Gated on the REHEARSAL, this early-returned for the whole life of a
