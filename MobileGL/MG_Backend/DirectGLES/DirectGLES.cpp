@@ -15816,6 +15816,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static EGLSurface g_Surface = EGL_NO_SURFACE;
     static EGLConfig g_Config = nullptr;
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P12 (on-screen server window), D3: true only while InitWindowSurface publishes the default
+    // framebuffer's shape, so that publish - and no pbuffer's - may carry the surface's extent.
+    // Split builds only: the pull build's publish is unchanged (G1).
+    static Bool g_publishWindowExtent = false;
+#endif
+
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight) {
         outWidth = 0;
         outHeight = 0;
@@ -15947,6 +15954,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_Pipe::MGPSurfaceInfo info{};
             info.InternalFormat = static_cast<Uint32>(depthFormat);
             info.IsDefault = 1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P12 (on-screen server window), D3: A WINDOW SURFACE OF A REMOTE SESSION ALSO SAYS HOW
+            // BIG IT IS. Under spawn / tcp (this server process set Transport=Spawn in RunSession)
+            // the only window surface is the server's own - a headless client's ServerOwned one -
+            // and that client learns its extent here and from the reply, as Magma's swapchain
+            // already tells it. An extent switches the client's consumer to the reallocating arm
+            // (ClientSession.cpp ApplySurfaceChangedToClient), so it is deliberately NOT published
+            // for a pbuffer, nor under inproc / monolith: those keep the format-only shape above.
+            if (g_publishWindowExtent && MG_Config::Transport == MG_Config::TransportMode::Spawn) {
+                Int extentWidth = 0;
+                Int extentHeight = 0;
+                if (QueryCurrentSurfaceSize(extentWidth, extentHeight)) {
+                    info.Width = static_cast<Uint32>(extentWidth);
+                    info.Height = static_cast<Uint32>(extentHeight);
+                }
+            }
+#endif
             MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
         } else
 #endif
@@ -16233,7 +16257,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!MakeCurrent()) return false;
 
         ApplyRequestedSwapInterval();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (D3): this publish may carry the window's extent (see the push arm of the publish).
+        g_publishWindowExtent = true;
         PublishDefaultFramebufferDepthStencilFormat();
+        g_publishWindowExtent = false;
+#else
+        PublishDefaultFramebufferDepthStencilFormat();
+#endif
 
         MGLOG_D("EGL context created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display, g_Surface,
                 g_Context, window);
