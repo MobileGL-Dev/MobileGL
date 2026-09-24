@@ -1,0 +1,37 @@
+=== START Thu Sep 24 12:55:07 AM -04 2026 head=29b7b284 dirty=0 ===
+[119/120] Linking CXX executable MobileGL/MG_IntegrationTest/MobileGLIntegrationTest
+=== split build rc=0 ===
+[82/82] Linking CXX executable MobileGL/MG_Test/Texture/TextureTest
+=== linux build rc=0 ===
+G1 text size (hex): a52203 (base a52203)
+G1 syms added=30570 removed=30570
+fatal census: 79 abort sites over 20 files of the split server image, 45 distinct family words, 3 refusal words, 0 unmarked
+link-ratchet: ratchet: unchanged at 171 symbol(s)
+parity errors: 0
+protocol revision pin: revision 3 holds (sha256 da09f0acb48cf245..., 3 revision(s) pinned)
+wire-declines: 53 rows, 53 with sites, 53 site(s) total, 0 unlogged, 0 unknown
+=== HYGIENE ===
+hygiene gen_pipe OK
+hygiene gen_pipe_self OK
+hygiene link_seam OK
+hygiene memo_purity OK
+hygiene symbol_report OK
+hygiene stdio OK
+hygiene dirty_surface OK
+hygiene field_ownership OK
+hygiene r16 OK
+hygiene g5_p3a OK
+hygiene g5_p4a OK
+hygiene doc_citations OK
+lane unit                         100% tests passed, 0 tests failed out of 2601
+lane integration-split            100% tests passed, 0 tests failed out of 322
+lane integration-spawn            100% tests passed, 0 tests failed out of 239
+lane integration-tcp              100% tests passed, 0 tests failed out of 243
+lane integration-magma-split      100% tests passed, 0 tests failed out of 125
+lane integration-magma-spawn      100% tests passed, 0 tests failed out of 104
+lane integration-magma-tcp        100% tests passed, 0 tests failed out of 89
+lane integration-magma-full-split 99% tests passed, 1 tests failed out of 558
+    FAILED: 5975:DirectVulkan.Split.Full.IterationRPProgram203Scenario.FixedCompleteInputProducesFixedCompleteGoldenOutput
+lane integration-gpu[monolith]    100% tests passed, 0 tests failed out of 2188
+lane integration-gpu[inproc]      100% tests passed, 0 tests failed out of 2188
+=== DONE Thu Sep 24 01:04:00 AM -04 2026 ===

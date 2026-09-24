@@ -1,0 +1,42 @@
+[00:27:22] :mglwin pid now=19108 (check 1's session ran in pid=19108)
+[00:27:22] === session 2 in the same process: OpenRA on-screen
+[00:27:34] second session rc=6
+rc=6
+result.json: {'passed': False, 'statusCode': 6, 'ssim': 3.6422e-05, 'message': 'retrace completed; ssim=0.000036, ssimThreshold=0.990000, mismatchPixels=295296, matchedGoldenPath=/home/swung/w7/p7w7-tree-984db455/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-984db455/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:27:22] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:27:25] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac38060 generation 1)
+      1 [12:27:25] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac38060 generation 1)
+      1 [00:27:22] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19108 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+10 t=+ 10.67s..+ 11.02s during=True nonblack=0.000 mean=0.0
+BEST during-replay screencap: 01.png at +1.33s nonblack=0.000 mean=0.0 -> /home/swung/w7/logs/p12/device/3-sequential-and-busy/second/evidence-during-replay.png
+[00:27:34] Welcome server pids seen by the two clients (check 1, this one):
+      2 control=tcp data=stream server=127.0.0.1:40613 pid=19108
+[00:27:34] === Busy: a long on-screen session (minecraft-1.21.4-startup), then a second authenticated client
+[00:27:35] long session is on screen
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 3958019 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:27:37] WARNING: the long session already ended
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 3958047 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:27:37] concurrent client rc=134
+[00:27:37] long session rc=134
+rc=134
+result.json: missing
+      1 [12:27:38] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 6, window 0xb40000789ac38060 generation 1)
+      1 [12:27:38] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac38060 generation 1)
+      1 [00:27:35] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 854x480 owner=server (MOBILEGL_IPC_SURFACE=server, 854x480 requested)
+      1 [00:27:34] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 854x480 owner=server (MOBILEGL_IPC_SURFACE=server, 854x480 requested)
+      1 [00:27:34] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19108 dial=connect
+[00:27:37] :mglwin pid after: 
+09-24 12:27:25.562 19108 14698 E MobileGL: [12:27:25] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #2 started on a thread (pid=19108)
+09-24 12:27:25.721 19108 19108 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:27:25.724 19108 14970 I MobileGL: [12:27:25] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac38060 generation 1)
+09-24 12:27:25.791 19108 19108 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:27:25.797 19108 14970 I MobileGL: [12:27:25] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac38060 generation 1)
+09-24 12:27:37.094 19108 14698 E MobileGL: [12:27:37] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #2 pid=19108 reaped exit=0 sessionsFaulted=0
+09-24 12:27:37.844 19108 14698 E MobileGL: [12:27:37] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #3 started on a thread (pid=19108)
+09-24 12:27:37.980 19108 19108 I MobileGLDisplay: geometry request 854x480 (setFixedSize, aspect-fit)
+09-24 12:27:37.991 19108 19108 I MobileGLDisplay: surfaceChanged: server window 854x480 attached
+09-24 12:27:38.003 19108 15040 I MobileGL: [12:27:38] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac38060 generation 1)
+09-24 12:27:38.068 19108 19108 I MobileGLDisplay: geometry request 854x480 (setFixedSize, aspect-fit)
+09-24 12:27:38.076 19108 15040 I MobileGL: [12:27:38] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 6, window 0xb40000789ac38060 generation 1)
+[00:27:37] done 3

@@ -1,0 +1,4 @@
+40613
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)

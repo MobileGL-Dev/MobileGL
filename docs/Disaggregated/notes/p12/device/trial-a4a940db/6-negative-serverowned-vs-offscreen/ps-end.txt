@@ -1,0 +1,2 @@
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+17770 17726 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve

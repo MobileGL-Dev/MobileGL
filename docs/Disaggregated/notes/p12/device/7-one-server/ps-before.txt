@@ -1,0 +1,3 @@
+19605  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+19649 19605 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+19773 19649 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve

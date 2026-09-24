@@ -1,0 +1,9 @@
+Device 2f7cbe2e as found by the P12 android stage (2026-09-24 ~00:10, before any change):
+- installed top.mobilegl.plugin.p7w1.trace (window-2 build), its :mglsrv service running the supervisor
+  `libMobileGLServer.so tcp://0.0.0.0:40613 --serve` (window-2's 90-restore.sh left it up)
+- doze whitelist: user,top.mobilegl.plugin.p7w1.trace,10318 (window-2 state file
+  ~/.cache/mobilegl/tcp-server/2f7cbe2e-top.mobilegl.plugin.p7w1.trace.json, originally_whitelisted=false)
+- settings global stay_on_while_plugged_in = 15
+- adb forward --list: empty
+- screen: mWakefulness=Awake, isKeyguardShowing=false
+The APK install (20-install.sh, 00:25) replaced the package and ended that supervisor.

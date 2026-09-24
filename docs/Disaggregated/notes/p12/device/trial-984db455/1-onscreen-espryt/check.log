@@ -1,0 +1,115 @@
+[00:25:58] check DESKTOP-OP19A6G: stamp p12w1-984db455 backend DirectGLES case OpenRA
+[00:25:58] found: 
+40613
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)
+[00:26:00] READY
+[00:26:00] :mglwin pid=19108
+  mCurrentFocus=Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+  mFocusedApp=ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+[00:26:00] replay OpenRA DirectGLES --window-surface MOBILEGL_IPC_SURFACE=server
+[00:26:13] replay rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-984db455/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-984db455/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:26:01] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:26:04] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac38060 generation 1)
+      1 [12:26:04] [Android mgl-srv-geometr/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac38060 generation 1)
+      1 [00:26:01] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19108 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+replay ran 11.39s; 12 screencaps
+0 t=+ -0.07s..+  0.19s during=False nonblack=0.018 mean=1.4
+1 t=+  0.90s..+  1.21s during=True nonblack=0.000 mean=0.0
+2 t=+  1.91s..+  2.25s during=True nonblack=0.090 mean=5.4
+3 t=+  2.95s..+  3.27s during=True nonblack=0.090 mean=5.4
+4 t=+  3.97s..+  4.30s during=True nonblack=0.090 mean=5.4
+5 t=+  5.00s..+  5.35s during=True nonblack=0.090 mean=5.4
+6 t=+  6.05s..+  6.38s during=True nonblack=0.090 mean=5.4
+7 t=+  7.09s..+  7.41s during=True nonblack=0.090 mean=5.4
+8 t=+  8.11s..+  8.40s during=True nonblack=0.090 mean=5.4
+9 t=+  9.11s..+  9.44s during=True nonblack=0.090 mean=5.4
+10 t=+ 10.14s..+ 10.43s during=True nonblack=0.090 mean=5.4
+11 t=+ 11.13s..+ 11.80s during=False nonblack=0.340 mean=32.4
+BEST during-replay screencap: 02.png at +1.91s nonblack=0.090 mean=5.4 -> /home/swung/w7/logs/p12/device/DESKTOP-OP19A6G/replay/evidence-during-replay.png
+[00:26:14] :mglwin pid after: 19108
+09-24 12:26:03.573  2903  2903 I adbd    : in ShellService: am start -n top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity --es listen tcp://127.0.0.1:40613 --es token p7w1b-lan-token-20260922 --es env ''
+09-24 12:26:03.614  3149  4298 I CamOpt_Service: notifyActivityStart: intent = Intent { flg=0x10000000 xflg=0x4 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+09-24 12:26:03.619  3149  6759 D WindowManager: Collecting in transition 875: ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t-1} init visibleRequested:false dc:null
+09-24 12:26:03.624  3149  6759 D As.MonitorAppForegroundStateHelper: onTaskMovedToFront: mTopActivityPackageName: top.mobilegl.plugin.p7w1.trace mTopActivityClassName: top.mobilegl.plugin.MobileGLDisplayActivity mPreTopActivityPackageName: com.miui.home mPreTo
+09-24 12:26:03.624  3149  6759 D As.ActivityMmReduceLoadHelper: onTaskMovedToFront: mTopActivityPackageName: top.mobilegl.plugin.p7w1.trace mTopActivityClassName: top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.625  3149  6759 I WindowManager: Try to add startingWindow type = STARTING_WINDOW_TYPE_SPLASH_SCREEN this = ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} mOccludesParent = true preAl
+09-24 12:26:03.626  3149  6759 D WindowManager: Collecting in transition 875: ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} init visibleRequested:false dc:Display{#0 state=ON size=1280x2772 ROTATIO
+09-24 12:26:03.627  3149  6759 I ActivityTaskManager: START u0 {flg=0x10000000 xflg=0x4 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras)} with LAUNCH_SINGLE_TOP from uid 2000 from pid 14658 callingPackage com.android.
+09-24 12:26:03.627  3149  6759 I AppStartScenario: notifyScenarioChanged: active=true param=Bundle[{uid=10318, name=top.mobilegl.plugin.MobileGLDisplayActivity, type=2, preStartProc=false, state=1, processName=top.mobilegl.plugin.p7w1.trace, packageName=top.mo
+09-24 12:26:03.628  5038  5293 I SoScStageCoordinator: Transition requested:TransitionRequestInfo { type = OPEN, triggerTask = TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin
+09-24 12:26:03.628  3149  5465 D WindowManager:    ChangeInfo{e72dc38 container=ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} flags=0x0}
+09-24 12:26:03.631  5038  5038 D KeyguardEditorHelper: onTopActivityMayChanged, topActivity=ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}; mState=IDEL
+09-24 12:26:03.632  3149  5465 D WindowManager: Collecting in transition 875: ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} init visibleRequested:false dc:Display{#0 state=ON size=1280x2772 ROTATIO
+09-24 12:26:03.632  3149  5465 D WindowManager:    ChangeInfo{e72dc38 container=ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} flags=0x0}
+09-24 12:26:03.633  3149  5465 D WindowManager: isSyncFinished true. ar: ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.634  3149  5465 D WindowManager: isSyncFinished true. ar: ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.634  3149  5465 D WindowManager:    ChangeInfo{e72dc38 container=ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} flags=0x0}
+09-24 12:26:03.635  3149  3396 I AppStartScenario: notifyScenarioChanged: active=true param=Bundle[{hostingRecordName={top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}, hostingRecordType=next-top-activity, uid=10318, type=1, state=2,
+09-24 12:26:03.636  5038  5293 D MiuiDecorationController: relayout::taskId=655, visible=true, bounds=Rect(0, 0 - 1280, 2772), focused=false, oldImmersive=false, newImmersive=false, windowMode=1, activityType=1, displayId=0, baseActivity=ComponentInfo{top.mobi
+09-24 12:26:03.638  4384  5363 D WindowTransitionCompat:  printLeash::taskInfo = TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDispla
+09-24 12:26:03.638  4384  5956 W RecentsModel: getRunningTask   taskInfo=TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivit
+09-24 12:26:03.638  4384  5363 D TransitionUtil: get key :ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}#655
+09-24 12:26:03.639  3149  3421 I AppStartScenario: notifyScenarioChanged: active=true param=Bundle[{hostingRecordName={top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}, hostingRecordType=next-top-activity, pid=19108, uid=10318, type=
+09-24 12:26:03.639  4384  5956 E ActivityManagerWrapper:  mainTaskId=655   userId=0   windowMode=1   isExcludedFromRecents=false   baseIntent=Intent { act=null flag=268435456 cmp=ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayA
+09-24 12:26:03.640  3149  3421 I ActivityManager: Start proc 19108:top.mobilegl.plugin.p7w1.trace:mglwin/u0a318 for next-top-activity {top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity} caller=com.android.shell
+09-24 12:26:03.641  4384  5956 W RecentsModel: getRunningTask   taskInfo=TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivit
+09-24 12:26:03.642  4384  5956 E ActivityManagerWrapper:  mainTaskId=655   userId=0   windowMode=1   isExcludedFromRecents=false   baseIntent=Intent { act=null flag=268435456 cmp=ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayA
+09-24 12:26:03.642  1816  1891 I ANDR-PWR-OPT: GAMEPOWEROPT: sendEvents() 231: Start hint for app top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity/26091169, hintID : 4099, hintID hex : 1003 value: -1
+09-24 12:26:03.642  4384  5956 D RecentsTaskLoader: reloadTasksData [TaskKey{id=655, stackId=0, baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity }, userId=0, lastActiveTime=17217161, windowingMod
+09-24 12:26:03.642  1816  1891 I ANDR-PWR-OPT: GAMEPOWEROPT: sendEvents() 231: Start hint for app top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity/26091169, hintID : 4099, hintID hex : 1003 value: -1
+09-24 12:26:03.644  4384  5956 D RecentsTaskLoader: reloadTasksData [TaskKey{id=655, stackId=0, baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity }, userId=0, lastActiveTime=17217161, windowingMod
+09-24 12:26:03.654  3149  5757 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.656  3149 12140 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.681  5038  5038 D DynamicIslandController: onTopActivityChanged: ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.682  5038  5038 D DynamicIslandWindowViewController: onTopActivityChange: topActivity ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}, inSmallWindow false, isSupportPip false, isFocus false fullScreenPkg
+09-24 12:26:03.688  3149 12140 I AppStartScenario: notifyScenarioChanged: active=true param=Bundle[{applicationThread=android.os.BinderProxy@287c674, hostingRecordName={top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}, hostingRecordT
+09-24 12:26:03.692 26308 26355 D VA_ActivityUtils: getTopActivity packageName:ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.692 26308 26355 D VA_AppStateWatcher: currentPkgName:top.mobilegl.plugin.p7w1.trace, className:top.mobilegl.plugin.MobileGLDisplayActivity, lastPkgName:com.miui.home
+09-24 12:26:03.720  7308  7976 D MyLog   : -->log(0): [Tid:308] GamePopupListeneronForegroundAppEnter: pkg=top.mobilegl.plugin.p7w1.trace cls=top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.720  7308  7976 D MyLog   : -->log(0): [Tid:308] GamePopupJudgefindMatchedPlans: matched 0 plans for pkg=top.mobilegl.plugin.p7w1.trace, cls=top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.720  7308  7976 D MyLog   : -->log(0): [Tid:308] GamePopupListeneronForegroundAppEnter: no matching plans found, pkg=top.mobilegl.plugin.p7w1.trace, cls=top.mobilegl.plugin.MobileGLDisplayActivity, totalPlans=0
+09-24 12:26:03.726  3149  5435 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.726  3149  5435 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.727  5038  5293 D MiuiDecorationController: relayout::taskId=655, visible=true, bounds=Rect(0, 0 - 1280, 2772), focused=false, oldImmersive=false, newImmersive=false, windowMode=1, activityType=1, displayId=0, baseActivity=ComponentInfo{top.mobi
+09-24 12:26:03.730  3149  4297 I CameraActivitySceneMode: decideSceneMode: ActivityStateChange activityName = top.mobilegl.plugin.MobileGLDisplayActivity, displayId = 0, state = 2
+09-24 12:26:03.733  4945  5545 D NetworkMetricsController: processUidChangeEvent :activity is:ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.735  4384  5956 W RecentsModel: getRunningTask   taskInfo=TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivit
+09-24 12:26:03.736  4384  5956 E ActivityManagerWrapper:  mainTaskId=655   userId=0   windowMode=1   isExcludedFromRecents=false   baseIntent=Intent { act=null flag=268435456 cmp=ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayA
+09-24 12:26:03.737  4384  5956 D RecentsTaskLoader: reloadTasksData [TaskKey{id=655, stackId=0, baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity }, userId=0, lastActiveTime=17217262, windowingMod
+09-24 12:26:03.751 19108 19108 I MobileGL: [12:26:03] [Android w1.trace:mglwin/INFO]: MG_Remote server: this process owns a display (ServerDisplay installed); a ServerOwned window surface is served on its window
+09-24 12:26:03.751 19108 19108 I MobileGLDisplay: starting the in-process display server on tcp://127.0.0.1:40613 (pid=19108, backend pinned by the first session)
+09-24 12:26:03.751 19108 14698 E MobileGL: [12:26:03] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19108 listening on tcp://127.0.0.1:40613 (in-process display server, display installed)
+09-24 12:26:03.751 19108 14698 E MobileGL: [12:26:03] [Android mgl-display-ser/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+09-24 12:26:03.752 19108 19108 D Activity: Activity = ActivityInfo{68651d2 top.mobilegl.plugin.MobileGLDisplayActivity}, Resume onConfigurationChanged = {1.0 ?mcc0mnc [zh_CN] ldltr sw394dp w394dp h790dp 520dpi nrml long hdr widecg port finger -keyb/v/h -nav/h 
+09-24 12:26:03.755 19108 14696 I ContentCatcher: SettingTrigger : register screen QA status observer top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.756 19108 14696 I ContentCatcher: SettingTrigger : register global collect status observer top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.757 19108 14696 I ContentCatcher: SettingTrigger : registerUIAgentListener top.mobilegl.plugin.MobileGLDisplayActivity, uid:10318
+09-24 12:26:03.761 19108 19108 I ViewRootImpl: top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity use first frame acceleration
+09-24 12:26:03.762 19108 19108 D InsetsController: top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity hide: statusBars navigationBars captionBar android.view.InsetsController@f698c64 android.view.InsetsController.applyAnimation:2241 and
+09-24 12:26:03.766  4384  4384 D RecentsImpl: mActivityStateObserver top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.766  7264  7339 I ActivityObserverUtil: activityResumed ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.766  4384  4384 W RecentsImpl: updateGestureWindowVisibleImpl, className=top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.766 26308 14168 I VA_ActivityStateHelper: activityResumed componentName ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.766  7264  7339 I TopActivityMonitor: send TopActivityChangeEvent=TopActivityChangeEvent(prev=ComponentInfo{com.miui.home/com.miui.home.launcher.Launcher}, current=ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayA
+09-24 12:26:03.766  7264 19875 I travelService_ActivityObserverUtils: activityResumed ComponentInfo{top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.766 19108 19108 D DecorViewImmersiveImpl: getWindowType: 1 title:top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity
+09-24 12:26:03.767  3149  6759 D CoreBackPreview: Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}: Setting back callback OnBackInvokedCallbackInfo{mCallback=android.window.IOnBackInvokedCallback$Stub$Proxy@67e5504,
+09-24 12:26:03.769  3149  5757 I AppCompatLetterboxPolicy: updateLetterboxSurfaceIfNeeded applySurfaceChanges Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.769  3149  5757 I Letterbox: applySurfaceChanges Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity} remove letterbox  com.android.server.wm.Letterbox@7b933b3
+09-24 12:26:03.769  3149  5757 I LetterboxSurface: applySurfaceChanges created ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} top Surface(name=Letterbox - top#17195)/@0x70dbd70 false com.android.ser
+09-24 12:26:03.769  3149  5757 D BarFollowAnimation: current status bar control target is : Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.770  3149  5757 D WindowManager: updateSystemBarAttributes displayId: 0 Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity} winAppearance=
+09-24 12:26:03.770  3149  5757 D WindowManager: wms.Input focus has changed to Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity} display=0 updateInputWindows = true
+09-24 12:26:03.770  5038  5293 D MiuiDecorationController: relayout::taskId=655, visible=true, bounds=Rect(0, 0 - 1280, 2772), focused=true, oldImmersive=false, newImmersive=true, windowMode=1, activityType=1, displayId=0, baseActivity=ComponentInfo{top.mobile
+09-24 12:26:03.770  3149  5757 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+09-24 12:26:03.770  5038  5293 D MiuiFreeformModeController: onFocusTaskChanged taskInfo: TaskInfo{userId=0 taskId=655 effectiveUid=10318 displayId=0 isRunning=true baseIntent=Intent { flg=0x10000000 cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.Mobil
+09-24 12:26:03.774  3149 12140 I AppCompatLetterboxPolicy: updateLetterboxSurfaceIfNeeded applySurfaceChanges Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+09-24 12:26:03.774  3149 12140 I Letterbox: applySurfaceChanges Window{d31f83b u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity} remove letterbox  com.android.server.wm.Letterbox@7b933b3
+09-24 12:26:03.774  3149 12140 I LetterboxSurface: applySurfaceChanges created ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655} top Surface(name=Letterbox - top#17195)/@0x70dbd70 false com.android.ser
+09-24 12:26:03.774  3149 12140 I WindowManager: Allow fixed rotation for not collecting:ActivityRecord{208930475 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t655}
+[00:26:14] done DESKTOP-OP19A6G

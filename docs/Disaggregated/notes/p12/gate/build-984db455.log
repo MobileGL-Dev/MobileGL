@@ -1,0 +1,21 @@
+Preparing worktree (detached HEAD 984db455)
+Updating files:  96% (1946/2010)Updating files:  97% (1950/2010)Updating files:  98% (1970/2010)Updating files:  99% (1990/2010)Updating files: 100% (2010/2010)Updating files: 100% (2010/2010), done.
+HEAD is now at 984db455 [tools, scripts] (P12): tcp_device_server.py --surface window|pbuffer (default pbuffer, unchanged) starts the on-screen display Activity on a lit screen, and --backend pins either server
+submodule 3rdparty/DiligentCore copied from the package tree (f36e63880566649d9d8b2336a7c5aa9c8ddb174b)
+submodule 3rdparty/SPIRV-Cross copied from the package tree (072444287f4e139c178d6d8fe32e04a0d2c34e8b)
+submodule 3rdparty/SPIRV-Reflect copied from the package tree (10b4f09a24d7ac1603071e767c089551dc6a3949)
+submodule 3rdparty/Vulkan-Headers copied from the package tree (ad9ce1235e88dc09287e19171dfac384db8ec32c)
+submodule 3rdparty/Vulkan-Utility-Libraries copied from the package tree (738ec97a3f659dd6469bff3c4078ef981b0a343f)
+submodule 3rdparty/VulkanMemoryAllocator copied from the package tree (e722e57c891a8fbe3cc73ca56c19dd76be242759)
+submodule 3rdparty/apitrace copied from the package tree (c8036190fcb79ce0d64cf44ab419c54c3307cd71)
+submodule 3rdparty/asio copied from the package tree (8806a6803cde7054c3049d3666d3ec36786568c5)
+submodule 3rdparty/flatbuffers copied from the package tree (7e163021e59cca4f8e1e35a7c828b5c6b7915953)
+submodule 3rdparty/glslang copied from the package tree (d89cf443bcd220e9205defa0cc4c4b8d8f75dfa2)
+submodule 3rdparty/tracy copied from the package tree (e6b9ea460993a6f093283055ef3c98025b19f909)
+submodule 3rdparty/xxHash copied from the package tree (1d7b2a9d21bf9a740ead540aa93f4bc4caf11ae0)
+submodule include/ska copied from the package tree (21c1cec95abee1beef827e4a7c95f692875d9594)
+tree ready: /home/swung/w7/p7w7-tree-984db455 @ 984db455, stamp p12w1-984db455
+[00:22:01] build sha=984db45576a413bd83b867230d834995ddf67547 stamp=p12w1-984db455 tree=/home/swung/w7/p7w7-tree-984db455 out=/home/swung/w7/logs/p7w7/p12w1-984db455 mode=all
+[00:23:30] APK 9159517 bytes sha256 ddd8f29737e1b673, stamp strings in lib: 1
+[00:25:44] host artefacts in /home/swung/w7/logs/p7w7/p12w1-984db455/host (stamp strings: 1)
+[00:25:44] === BUILD DONE p12w1-984db455 ===

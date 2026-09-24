@@ -1,0 +1,38 @@
+[00:57:09] === 7a: a live offscreen session, then the display Activity
+[00:57:10] offscreen session live
+19605  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+19649 19605 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+19773 19649 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+[00:57:11] supervisor pid=19649 session child pid=19773
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 4060364 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:57:12] display server READY
+[00:57:13] supervisor 19649 alive? no  child 19773 alive? no
+18033  1666 top.mobilegl.plugin.p7w1.trace:mglwin top.mobilegl.plugin.p7w1.trace:mglwin
+19605  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+[00:57:13] the offscreen session's client rc=134 (its server went away)
+      1 [00:57:12] [Linux mobilegl_trace_/ERROR]: MGPipe: DEVICE LOST - the barrier woke on a peer that had hung up. The server process is gone; every verb from here is DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is
+09-24 12:57:14.098 19773 19782 I MobileGL: [12:57:14] [Android mgl-srv-apply/INFO]: [driver-bug] layered blit destination probe: a blit asking for destination layer 1 landed on layer 0 - THE DESTINATION LAYER IS IGNORED
+09-24 12:57:15.200 18033 18033 I MobileGLDisplay: stopped MobileGLServerService (the offscreen supervisor): one server at a time (P12 D8)
+09-24 12:57:15.204 18033 18033 I MobileGL: [12:57:15] [Android w1.trace:mglwin/INFO]: MG_Remote server: this process owns a display (ServerDisplay installed); a ServerOwned window surface is served on its window
+09-24 12:57:15.204 18033 18033 I MobileGLDisplay: starting the in-process display server on tcp://127.0.0.1:40613 (pid=18033, backend pinned by the first session)
+09-24 12:57:15.209 19605 19651 I MobileGLServer: supervisor output closed: the service is stopping
+09-24 12:57:15.230 18033 18033 I MobileGL: [12:57:15] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 attached at 1280x2620 (generation 1)
+09-24 12:57:15.230 18033 18033 I MobileGLDisplay: surfaceCreated: server window 1280x2620 attached
+09-24 12:57:15.230 18033 18033 I MobileGL: [12:57:15] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 is now 1280x2620
+09-24 12:57:15.230 18033 18033 I MobileGLDisplay: surfaceChanged: server window 1280x2620 attached
+09-24 12:57:15.454 18033 19848 E MobileGL: [12:57:15] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=18033 listening on tcp://127.0.0.1:40613 (in-process display server, display installed)
+[00:57:14] === 7b: the service again - :mglwin must go
+[00:57:14] :mglwin pid=18033
+[00:57:15] supervisor READY
+[00:57:16] :mglwin pid now= (was 18033); /proc/18033 exists? no
+19605  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+19914 19605 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+09-24 12:57:17.407 19605 19605 I MobileGLServer: removing the on-screen display server's task (P12 D8: one server at a time)
+09-24 12:57:17.411 19605 19605 I MobileGLServer: stopping the on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=18033 (P12 D8: one server at a time)
+09-24 12:57:17.463 19605 19605 I MobileGLServer: on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=18033 is gone
+09-24 12:57:17.534 19914 19914 E MobileGL: [12:57:17] [Android libMobileGLServ/ERROR]: MG_Remote server: pid=19914 listening on tcp://127.0.0.1:40613
+09-24 12:57:17.534 19914 19914 E MobileGL: [12:57:17] [Android libMobileGLServ/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+[00:57:16] done 7

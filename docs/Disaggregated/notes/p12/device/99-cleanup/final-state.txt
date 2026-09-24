@@ -1,0 +1,6 @@
+processes : 
+forwards  : ;
+doze wl   : user,top.mobilegl.plugin.p7w1.trace,10318 
+stay_on   : 15
+focus     :  mCurrentFocus=Window{48ecc69 u0 com.miui.home/com.miui.home.launcher.Launcher}
+installed :  versionName=26.09.29b7b28-trace  lastUpdateTime=2026-09-24 12:55:19 

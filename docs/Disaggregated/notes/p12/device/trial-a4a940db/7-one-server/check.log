@@ -1,0 +1,52 @@
+[00:50:05] === 7a: a live offscreen session, then the display Activity
+[00:50:06] offscreen session live
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+17770 17726 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+17893 17770 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+[00:50:08] supervisor pid=17770 session child pid=17893
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 3971364 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:50:09] display server READY
+[00:50:10] supervisor 17770 alive? no  child 17893 alive? no
+14838  1666 top.mobilegl.plugin.p7w1.trace:mglwin top.mobilegl.plugin.p7w1.trace:mglwin
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+[00:50:10] the offscreen session's client rc=134 (its server went away)
+      1 [00:50:08] [Linux mobilegl_trace_/ERROR]: MGPipe: DEVICE LOST - the barrier woke on a peer that had hung up. The server process is gone; every verb from here is DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is
+09-24 12:50:11.562 14838 14838 I MobileGLDisplay: stopped MobileGLServerService (the offscreen supervisor): one server at a time (P12 D8)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: supervisor output failed
+09-24 12:50:11.564 17726 17773 E MobileGLServer: java.io.InterruptedIOException: read interrupted by close() on another thread
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.Linux.readBytes(Native Method)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.Linux.read(Linux.java:229)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.ForwardingOs.read(ForwardingOs.java:618)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.BlockGuardOs.read(BlockGuardOs.java:325)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.ForwardingOs.read(ForwardingOs.java:618)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at libcore.io.IoBridge.read(IoBridge.java:604)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.FileInputStream.read(FileInputStream.java:353)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.BufferedInputStream.read1(BufferedInputStream.java:277)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.BufferedInputStream.read(BufferedInputStream.java:338)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at sun.nio.cs.StreamDecoder.readBytes(StreamDecoder.java:291)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at sun.nio.cs.StreamDecoder.implRead(StreamDecoder.java:355)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at sun.nio.cs.StreamDecoder.read(StreamDecoder.java:181)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.InputStreamReader.read(InputStreamReader.java:177)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.BufferedReader.fill(BufferedReader.java:172)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.BufferedReader.readLine(BufferedReader.java:337)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.io.BufferedReader.readLine(BufferedReader.java:403)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at top.mobilegl.plugin.MobileGLServerService.lambda$onStartCommand$0$top-mobilegl-plugin-MobileGLServerService(MobileGLServerService.java:123)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at top.mobilegl.plugin.MobileGLServerService$$ExternalSyntheticLambda0.run(D8$$SyntheticClass:0)
+09-24 12:50:11.564 17726 17773 E MobileGLServer: 	at java.lang.Thread.run(Thread.java:1119)
+09-24 12:50:11.566 14838 14838 I MobileGL: [12:50:11] [Android w1.trace:mglwin/INFO]: MG_Remote server: this process owns a display (ServerDisplay installed); a ServerOwned window surface is served on its window
+09-24 12:50:11.566 14838 14838 I MobileGLDisplay: starting the in-process display server on tcp://127.0.0.1:40613 (pid=14838, backend pinned by the first session)
+[00:50:10] === 7b: the service again - :mglwin must go
+[00:50:10] :mglwin pid=14838
+[00:50:11] supervisor READY
+[00:50:12] :mglwin pid now= (was 14838); /proc/14838 exists? no
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+18028 17726 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+09-24 12:50:13.835 17726 17726 I MobileGLServer: removing the on-screen display server's task (P12 D8: one server at a time)
+09-24 12:50:13.840 17726 17726 I MobileGLServer: stopping the on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=14838 (P12 D8: one server at a time)
+09-24 12:50:13.892 17726 17726 I MobileGLServer: on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=14838 is gone
+09-24 12:50:13.964 18028 18028 E MobileGL: [12:50:13] [Android libMobileGLServ/ERROR]: MG_Remote server: pid=18028 listening on tcp://127.0.0.1:40613
+09-24 12:50:13.964 18028 18028 E MobileGL: [12:50:13] [Android libMobileGLServ/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+[00:50:13] done 7

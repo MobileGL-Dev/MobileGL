@@ -1,0 +1,24 @@
+[00:49:42] === 6: MOBILEGL_IPC_SURFACE=server --window-surface against the offscreen service
+[00:49:42] refused client rc=5
+rc=5
+result.json: {'passed': False, 'statusCode': 5, 'ssim': -1.0, 'message': 'retrace failed with status 1', 'matchedGoldenPath': ''}
+      1 [12:49:45] [Android mgl-srv-apply/ERROR]: MG_Remote server: Refuse ServerOwned: this server owns no display - a client (MOBILEGL_IPC_SURFACE=server) asked for a 640x480 window surface on the server's own window, and this process is an offscreen server. Start the on-screen display server, or run the 
+      1 [00:49:42] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=17833 dial=connect
+      1 [00:49:42] [Linux mobilegl_trace_/ERROR]: MG_Remote client: Refuse ServerOwned (NoServerDisplay) - MOBILEGL_IPC_SURFACE=server asked the server to create this 640x480 window surface on its own window, and the server owns no display: it is an offscreen server. eglCreateWindowSurface fails with EGL_BA
+      1 [00:49:42] [Linux mobilegl_trace_/ERROR]: MG_Remote client: Refuse ServerOwned (NoServerDisplay) - MOBILEGL_IPC_SURFACE=server asked the server to create this 640x480 window surface on its own window, and the server owns no display: it is an offscreen server. eglCreateWindowSurface fails with EGL_BA
+      1 [12:49:45] [Android mgl-srv-apply/ERROR]: MG_Remote server: Refuse ServerOwned: this server owns no display - a client (MOBILEGL_IPC_SURFACE=server) asked for a 640x480 window surface on the server's own window, and this process is an offscreen server. Start the on-screen display server, or run the 
+[00:49:42] === 6: the next offscreen session on the same service
+[00:49:55] next offscreen rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [12:49:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=pbuffer 640x480
+      1 [00:49:43] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=17836 dial=connect
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+17770 17726 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+09-24 12:49:45.570 17770 17770 E MobileGL: [12:49:45] [Android libMobileGLServ/ERROR]: MG_Remote server: session pid=17806 reaped exit=0 sessionsFaulted=0
+09-24 12:49:45.919 17833 17835 E MobileGL: [12:49:45] [Android mgl-srv-apply/ERROR]: MG_Remote server: Refuse ServerOwned: this server owns no display - a client (MOBILEGL_IPC_SURFACE=server) asked for a 640x480 window surface on the server's own window, and this process is an offscreen server. Star
+09-24 12:49:46.027 17770 17770 E MobileGL: [12:49:46] [Android libMobileGLServ/ERROR]: MG_Remote server: session pid=17833 reaped exit=0 sessionsFaulted=0
+09-24 12:49:46.358 17836 17838 I MobileGL: [12:49:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=pbuffer 640x480
+09-24 12:49:46.425 17836 17838 I MobileGL: [12:49:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=pbuffer 640x480
+09-24 12:49:58.441 17770 17770 E MobileGL: [12:49:58] [Android libMobileGLServ/ERROR]: MG_Remote server: session pid=17836 reaped exit=0 sessionsFaulted=0
+[00:49:55] done 6

@@ -1,0 +1,62 @@
+[00:45:33] :mglwin pid before=19603
+[00:45:34] session is on screen
+[00:45:37] session live - pressing HOME
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 3968995 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:45:39] client rc=134 after HOME (0.84 s after the key)
+rc=134
+result.json: missing
+      1 [12:45:41] [Android mgl-srv-apply/FATAL]: MGPipe: Fatal{ServerWindowLost, "surfaceDestroyed"} - the server's own display window was destroyed under this on-screen session; its surface was released on mgl-srv-apply before the window went, and the session ends so the client reads a clean device loss. 
+      1 [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: SessionLatch{ServerWindowLost} - the first named fault of this session is latched; every further record and control op is declined and the session closes (exit 75) for the supervisor to serve the next connection (PH-1, ID-P7-1)
+      1 [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 session closed on a latched fault (ServerWindowLost; 1 named fault(s) latched or declined); exiting 75 for the supervisor to reap - PH-1
+      1 [12:45:37] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:45:34] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 854x480 owner=server (MOBILEGL_IPC_SURFACE=server, 854x480 requested)
+      1 [00:45:33] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19603 dial=connect
+      1 [00:45:38] [Linux mobilegl_trace_/ERROR]: MGPipe: DEVICE LOST - the barrier woke on a peer that had hung up. The server process is gone; every verb from here is DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is latched from the pe
+      1 [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 session closed on a latched fault (ServerWindowLost; 1 named fault(s) latched or declined); exiting 75 for the supervisor to reap - PH-1
+      1 [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: mgl-srv-apply leaves its loop - the session latched a named fault and declines the rest of the ring (PH-1)
+      1 [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: SessionLatch{ServerWindowLost} - the first named fault of this session is latched; every further record and control op is declined and the session closes (exit 75) for the supervisor to serve the next
+      1 [12:45:41] [Android mgl-srv-apply/FATAL]: MGPipe: Fatal{ServerWindowLost, "surfaceDestroyed"} - the server's own display window was destroyed under this on-screen session; its surface was released on mgl-srv-apply before the window went, and the session ends s
+[00:45:42] :mglwin pid after HOME=19603 (before=19603): SURVIVED
+09-24 12:45:36.970 19603 16847 E MobileGL: [12:45:36] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #4 started on a thread (pid=19603)
+09-24 12:45:41.448 19603 17131 F MobileGL: [12:45:41] [Android mgl-srv-apply/FATAL]: MGPipe: Fatal{ServerWindowLost, "surfaceDestroyed"} - the server's own display window was destroyed under this on-screen session; its surface was released on mgl-srv-apply before the window went, and the session end
+09-24 12:45:41.448 19603 17131 E MobileGL: [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: SessionLatch{ServerWindowLost} - the first named fault of this session is latched; every further record and control op is declined and the session closes (exit 75) for the supervisor to serve the n
+09-24 12:45:41.448 19603 17131 E MobileGL: [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: mgl-srv-apply leaves its loop - the session latched a named fault and declines the rest of the ring (PH-1)
+09-24 12:45:41.448 19603 19603 I MobileGL: [12:45:41] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 detached (ReleasedBySession)
+09-24 12:45:41.448 19603 19603 I MobileGLDisplay: surfaceDestroyed: server window detached (ReleasedBySession) in 10 ms
+09-24 12:45:41.475 19603 17124 E MobileGL: [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 session closed on a latched fault (ServerWindowLost; 1 named fault(s) latched or declined); exiting 75 for the supervisor to reap - PH-1
+09-24 12:45:41.535 19603 16847 E MobileGL: [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #4 pid=19603 reaped exit=75 (latched fault) sessionsFaulted=1
+[00:45:42] === bring the Activity back, then a new on-screen session
+[00:45:42] window re-attached
+  mCurrentFocus=Window{5e9116f u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+  mFocusedApp=ActivityRecord{218119468 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t657}
+[00:45:55] after-return session rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:45:43] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:45:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac34ce0 generation 3)
+      1 [12:45:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac34ce0 generation 3)
+      1 [00:45:42] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19603 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+11 t=+ 11.23s..+ 11.93s during=False nonblack=0.340 mean=32.4
+BEST during-replay screencap: 02.png at +1.96s nonblack=0.090 mean=5.4 -> /home/swung/w7/logs/p12/device/4-window-lost/after/evidence-during-replay.png
+[00:45:56] :mglwin pid at the end=19603
+09-24 12:45:36.970 19603 16847 E MobileGL: [12:45:36] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #4 started on a thread (pid=19603)
+09-24 12:45:37.201 19603 19603 I MobileGLDisplay: geometry request 854x480 (setFixedSize, aspect-fit)
+09-24 12:45:37.204 19603 17131 I MobileGL: [12:45:37] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+09-24 12:45:41.448 19603 17131 F MobileGL: [12:45:41] [Android mgl-srv-apply/FATAL]: MGPipe: Fatal{ServerWindowLost, "surfaceDestroyed"} - the server's own display window was destroyed under this on-screen session; its surface was released on mgl-srv-apply before the window went, and the session end
+09-24 12:45:41.448 19603 17131 E MobileGL: [12:45:41] [Android mgl-srv-apply/ERROR]: MG_Remote server: SessionLatch{ServerWindowLost} - the first named fault of this session is latched; every further record and control op is declined and the session closes (exit 75) for the supervisor to serve the n
+09-24 12:45:41.448 19603 19603 I MobileGL: [12:45:41] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 detached (ReleasedBySession)
+09-24 12:45:41.448 19603 19603 I MobileGLDisplay: surfaceDestroyed: server window detached (ReleasedBySession) in 10 ms
+09-24 12:45:41.475 19603 17124 E MobileGL: [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 session closed on a latched fault (ServerWindowLost; 1 named fault(s) latched or declined); exiting 75 for the supervisor to reap - PH-1
+09-24 12:45:41.535 19603 16847 E MobileGL: [12:45:41] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #4 pid=19603 reaped exit=75 (latched fault) sessionsFaulted=1
+09-24 12:45:45.689 19603 19603 I MobileGL: [12:45:45] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac34ce0 attached at 854x480 (generation 3)
+09-24 12:45:45.689 19603 19603 I MobileGLDisplay: surfaceCreated: server window 854x480 attached
+09-24 12:45:45.689 19603 19603 I MobileGLDisplay: surfaceChanged: server window 854x480 attached
+09-24 12:45:45.935 19603 16847 E MobileGL: [12:45:45] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #5 started on a thread (pid=19603)
+09-24 12:45:46.135 19603 19603 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:45:46.139 19603 19603 I MobileGLDisplay: surfaceChanged: server window 640x480 attached
+09-24 12:45:46.143 19603 17251 I MobileGL: [12:45:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac34ce0 generation 3)
+09-24 12:45:46.215 19603 19603 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:45:46.222 19603 17251 I MobileGL: [12:45:46] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac34ce0 generation 3)
+09-24 12:45:57.710 19603 16847 E MobileGL: [12:45:57] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #5 pid=19603 reaped exit=0 sessionsFaulted=1
+[00:45:56] done 4

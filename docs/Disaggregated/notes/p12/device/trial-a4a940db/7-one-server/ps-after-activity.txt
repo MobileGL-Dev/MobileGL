@@ -1,0 +1,2 @@
+14838  1666 top.mobilegl.plugin.p7w1.trace:mglwin top.mobilegl.plugin.p7w1.trace:mglwin
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv

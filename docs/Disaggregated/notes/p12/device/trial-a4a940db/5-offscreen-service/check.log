@@ -1,0 +1,21 @@
+[00:49:27] before: :mglwin pid=20413
+20413  1666 top.mobilegl.plugin.p7w1.trace:mglwin top.mobilegl.plugin.p7w1.trace:mglwin
+Starting service: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLServerService (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGLServer
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613
+[00:49:28] supervisor READY
+[00:49:29] after: :mglwin pid= (was 20413)
+17726  1666 top.mobilegl.plugin.p7w1.trace:mglsrv top.mobilegl.plugin.p7w1.trace:mglsrv
+17770 17726 libMobileGLServer.so        libMobileGLServer.so tcp://127.0.0.1:40613 --serve
+09-24 12:49:31.147 17726 17726 I MobileGLServer: removing the on-screen display server's task (P12 D8: one server at a time)
+09-24 12:49:31.153 17726 17726 I MobileGLServer: stopping the on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=20413 (P12 D8: one server at a time)
+09-24 12:49:31.204 17726 17726 I MobileGLServer: on-screen display server top.mobilegl.plugin.p7w1.trace:mglwin pid=20413 is gone
+09-24 12:49:31.281 17770 17770 E MobileGL: [12:49:31] [Android libMobileGLServ/ERROR]: MG_Remote server: pid=17770 listening on tcp://127.0.0.1:40613
+09-24 12:49:31.281 17770 17770 E MobileGL: [12:49:31] [Android libMobileGLServ/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+[00:49:30] === 5: offscreen replay, no knob
+[00:49:42] offscreen rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [12:49:33] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=pbuffer 640x480
+      1 [00:49:30] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=17806 dial=connect
+[00:49:42] done 5

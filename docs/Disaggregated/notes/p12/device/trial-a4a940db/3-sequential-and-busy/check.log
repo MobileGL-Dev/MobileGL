@@ -1,0 +1,43 @@
+[00:45:04] :mglwin pid now=19603 (check 1's session ran in pid=19603)
+[00:45:04] === session 2 in the same process: OpenRA on-screen
+[00:45:16] second session rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:45:04] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:45:07] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+      1 [12:45:07] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:45:04] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19603 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+9 t=+ 10.74s..+ 11.42s during=True nonblack=0.167 mean=14.0
+BEST during-replay screencap: 01.png at +1.29s nonblack=0.340 mean=32.4 -> /home/swung/w7/logs/p12/device/3-sequential-and-busy/second/evidence-during-replay.png
+[00:45:17] Welcome server pids seen by the two clients (check 1, this one):
+      2 control=tcp data=stream server=127.0.0.1:40613 pid=19603
+[00:45:17] === Busy: a long on-screen session (minecraft-1.21.4-startup), then a second authenticated client
+[00:45:17] long session is on screen
+[00:45:19] long session still live - starting the second client
+/home/swung/w7/notes/p12/android/dev.sh: line 60: 3968856 Aborted                    env -u DISPLAY -u WAYLAND_DISPLAY -u MOBILEGL_IPC_SURFACE MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_CONTROL="$ENDPOINT" MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_TOKEN="$TOKEN" MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_LOG_FORWARD=1 MOBILEGL_LOG_FILE_PATH="$dir/output/mobilegl.log" "$@" timeout 900 "$HOST/mobilegl_trace_replay" --trace "$dir/input/$trace" --golden "$FIX/$golden" --diff "$dir/output/$case-diff.png" --output "$dir/output" --backend "$backend" --mobilegl-library "$HOST/libMobileGL.so" --target-call "$target" --width "$w" --height "$h" --ssim-threshold "$ssim" --crop-x "$cx" --crop-y "$cy" --crop-width "$cw" --crop-height "$ch" "$flag" > "$dir/replay.log" 2>&1
+[00:45:20] concurrent client rc=134
+      1 [00:45:19] [Linux mobilegl_trace_/ERROR]: MGPipe: peer Refuse{Busy} one session is already active expected=0 actual=0
+[00:45:25] long session rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 0.999999511, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=520, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png'}
+      2 [00:45:17] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 854x480 owner=server (MOBILEGL_IPC_SURFACE=server, 854x480 requested)
+      1 [12:45:20] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+      1 [12:45:20] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:45:17] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19603 dial=connect
+[00:45:25] :mglwin pid after: 19603
+09-24 12:45:07.513 19603 16847 E MobileGL: [12:45:07] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #2 started on a thread (pid=19603)
+09-24 12:45:07.676 19603 19603 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:45:07.679 19603 16987 I MobileGL: [12:45:07] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+09-24 12:45:07.746 19603 19603 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:45:07.751 19603 16987 I MobileGL: [12:45:07] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+09-24 12:45:19.303 19603 16847 E MobileGL: [12:45:19] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #2 pid=19603 reaped exit=0 sessionsFaulted=0
+09-24 12:45:20.281 19603 16847 E MobileGL: [12:45:20] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #3 started on a thread (pid=19603)
+09-24 12:45:20.472 19603 19603 I MobileGLDisplay: geometry request 854x480 (setFixedSize, aspect-fit)
+09-24 12:45:20.493 19603 19603 I MobileGLDisplay: surfaceChanged: server window 854x480 attached
+09-24 12:45:20.507 19603 17056 I MobileGL: [12:45:20] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+09-24 12:45:20.569 19603 19603 I MobileGLDisplay: geometry request 854x480 (setFixedSize, aspect-fit)
+09-24 12:45:20.579 19603 17056 I MobileGL: [12:45:20] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+09-24 12:45:23.062 19603 16847 E MobileGL: [12:45:23] [Android mgl-display-ser/ERROR]: MG_Remote server: Refuse{Busy} one session is already active
+09-24 12:45:28.565 19603 16847 E MobileGL: [12:45:28] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #3 pid=19603 reaped exit=0 sessionsFaulted=0
+[00:45:25] done 3

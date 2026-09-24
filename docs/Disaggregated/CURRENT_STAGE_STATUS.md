@@ -4,7 +4,9 @@
 
 **阶段：P7 DirectVulkan（Magma）全量迁移——✅ 已收官（2026-09-23，ID-P7-63）**，并行流 **P3b/P4b 深化（Espryt，wave 2-D）** 与 **Ph 小件（簇 F）**。计划 [`notes/p7/PLAN-PH-P34B-P7.md`](notes/p7/PLAN-PH-P34B-P7.md)（五波）。
 
-**更新：2026-09-23（ID-P7-49–63）** · 交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。**P7 收官**：§8 九项全绿——终局窗口 3（`p7w8-78e71f2b`）门 3 PASS 36/36、门 5 PASS；门 4 以 `# P13` 读法关闭。CI 七根因修、F2、门 5 三缺陷、codex 收官审查修复、spawn 冷启动心跳（协议修订 2）均已落地推送。下一阶段按 ROADMAP：P8 / P9。
+**更新：2026-09-24（P12 子集）** · 计划与交接 [notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md)。**P12「server 自有屏幕窗口」子集已实现、未收官、这条线只存在于 `p12/onscreen`**（15 提交，自 `9f669e52` 起）：Android 上的 server 自建 `ANativeWindow`（自己的 SurfaceView）把渲染流**上屏**，离屏路径保留，同一时刻只一条活跃；client 以新的 `WindowKind::ServerOwned` **完全无头**接入（控制修订 3）。主机门除一条既有环境敏感项外全绿，G1（pull 构建 `.text` `0xa52203`、符号 0/0）已独立复核；真机 Redmi `2f7cbe2e` 上七项编号检查过了双后端上屏、串行/Busy、失窗 device-lost、离屏不回归、无显示具名拒绝、一台设备一个 server。**两个出口门都还没打**：跨机 TCP（门 b）完全未做，FCL + 杀 server 的 device-lost（门 a）未做——本轮的真机是 trace_replay 经 `adb forward` 环路驱动的。上一阶段 **P7 已收官（2026-09-23，ID-P7-63）**：§8 九项全绿——终局窗口 3（`p7w8-78e71f2b`）门 3 PASS 36/36、门 5 PASS；门 4 以 `# P13` 读法关闭。
+
+**更新：2026-09-23（ID-P7-49–63）** · 交接 [notes/p7/HANDOFF-2026-09-23.md](notes/p7/HANDOFF-2026-09-23.md)。**P7 收官**：§8 九项全绿。CI 七根因修、F2、门 5 三缺陷、codex 收官审查修复、spawn 冷启动心跳（协议修订 2）均已落地推送。下一阶段按 ROADMAP：P8 / P9 / P12 余项。
 
 ## 1. 出口门总览（CONTRACT-P7 §8 的 9 项分母）
 
@@ -63,6 +65,7 @@
 
 - 当前 APK：**p7w8**（`26.09.78e71f2-trace`，控制协议修订 2），supervisor `0.0.0.0:40613`，`/data/local/tmp/mgcts` 为 `$BASE` 库。
 - 终局窗口 3 证据 `notes/p7/device-window-2/final-p7w8/`，窗口 2 `notes/p7/device-window-2/window2-p7w7/`，三例 Iris 不确定性追查在 ID-P7-62。
+- **P12 子集**：APK `26.09.29b7b28-trace`（**控制协议修订 3**，与 p7w8 的 server 不兼容），证据 `notes/p12/device/`（九格拼图 `evidence-strip.png`）。七个编号检查在三个 head 上跑过，`trial-*/` 是按 head 归档的旧轮次。
 
 ## 4. 在跑
 
@@ -70,10 +73,13 @@
 
 ## 5. 下一步
 
-1. 下一阶段按 [`ROADMAP.md`](ROADMAP.md)：monolith 跑道 P8（emulation 下放 + 索引宿主镜像）；IPC 跑道 P9（反向通道异步 reply）→ P10 → P11 → P12；P3b/P4b 余项并行。
-2. CONTRACT-P7 §12 的记录债按阶段认领。
+1. **P12 未收官，先还两个出口门**（[notes/p12/PLAN-P12.md](notes/p12/PLAN-P12.md) §3）：(b) 另一台机器的 client 经 TCP 入世界并记 P6.5 必测数；(a) FCL 同机 spawn + 杀 server 的干净 device-lost。之后补 `MG_Remote/CONTRACT-P12.md`、清 `ARCHITECTURE.md` 里那条被删掉的旧窗口路径、按惯例做一次收官审查。
+2. `p12/onscreen` 的余项：in-process server 的 `unix:` 监听、DirectGLES `g_*` 去全局、freezer、多 context、FCL env / 开关表接线、D8 白名单（拒 X11 / Win32Hwnd / None）。交接时已在树上核对，全部未做。
+3. 其余按 [`ROADMAP.md`](ROADMAP.md)：monolith 跑道 P8（emulation 下放 + 索引宿主镜像）；IPC 跑道 P9（反向通道异步 reply）→ P10 → P11；P3b/P4b 余项并行。
+4. CONTRACT-P7 §12 的记录债按阶段认领。
 
 ## 6. 阻塞 / 需要人
 
 - p7w6 TCP 矩阵和设备 monolith 对照已结束；后续门 3/CTS 仍不可同时 force-stop 同包 Service。当前没有需要用户决策的阻塞。
 - X2 已关闭 `InitialCapsStartup` 的测试夹具乱序 flake；不再列为待修。
+- **待裁定（一条，不阻塞）**：`IterationRPProgram203Scenario` 在 `integration-magma-full-split` 上偶尔红。ID-P7-22 已把它改判为**环境敏感**（钉 lavapipe ICD 即绿），`p12-onscreen` 两个 build 目录都已钉 ICD、交接时直跑 3/3 绿、整条车道重跑两遍 558/558 绿。建议给门脚本一个明确读法（钉 ICD 即绿 / 记为已知偶发），别再口头带过。另：`~/w7/notes/p12/gate.sh` 的 G1 符号比较与基准不同源，会打出 `added=N removed=N` 的误导行，P12 收尾时一并修（见 PLAN-P12 §4）。

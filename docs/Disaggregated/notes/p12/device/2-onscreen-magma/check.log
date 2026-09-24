@@ -1,0 +1,106 @@
+[00:56:15] check 2-onscreen-magma: stamp p12w1-29b7b284 backend DirectVulkan case OpenRA
+[00:56:16] found: 16893  1666 top.mobilegl.plugin.p7w1.trace:mglwin top.mobilegl.plugin.p7w1.trace:mglwin;
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)
+[00:56:17] READY
+[00:56:17] :mglwin pid=17622
+  mCurrentFocus=Window{1e71822 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+  mFocusedApp=ActivityRecord{113535615 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t662}
+[00:56:17] replay OpenRA DirectVulkan --window-surface MOBILEGL_IPC_SURFACE=server
+[00:56:30] replay rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-29b7b284/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-29b7b284/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:56:18] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:56:21] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+      1 [12:56:21] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:56:18] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=17622 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+replay ran 11.53s; 12 screencaps
+0 t=+ -0.07s..+  0.20s during=False nonblack=0.019 mean=1.7
+1 t=+  0.90s..+  1.19s during=True nonblack=0.000 mean=0.0
+2 t=+  1.89s..+  2.19s during=True nonblack=0.090 mean=5.4
+3 t=+  2.89s..+  3.18s during=True nonblack=0.090 mean=5.4
+4 t=+  3.89s..+  4.18s during=True nonblack=0.090 mean=5.4
+5 t=+  4.88s..+  5.21s during=True nonblack=0.090 mean=5.4
+6 t=+  5.92s..+  6.24s during=True nonblack=0.090 mean=5.4
+7 t=+  6.95s..+  7.29s during=True nonblack=0.090 mean=5.4
+8 t=+  7.99s..+  8.31s during=True nonblack=0.090 mean=5.4
+9 t=+  9.01s..+  9.34s during=True nonblack=0.090 mean=5.4
+10 t=+ 10.04s..+ 10.37s during=True nonblack=0.090 mean=5.4
+11 t=+ 11.08s..+ 11.74s during=False nonblack=0.340 mean=32.4
+BEST during-replay screencap: 02.png at +1.89s nonblack=0.090 mean=5.4 -> /home/swung/w7/logs/p12/device/2-onscreen-magma/replay/evidence-during-replay.png
+[00:56:31] :mglwin pid after: 17622
+[00:56:31] a second DirectVulkan session in the same process: minecraft-1.21.4-startup on-screen
+[00:56:40] second session rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 0.999999511, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=520, matchedGoldenPath=/home/swung/w7/p7w7-tree-29b7b284/tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-29b7b284/tools/trace_replay/fixtures/minecraft-1.21.4-startup.0000092195.png'}
+      2 [00:56:31] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 854x480 owner=server (MOBILEGL_IPC_SURFACE=server, 854x480 requested)
+      1 [12:56:34] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+      1 [12:56:34] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 854x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:56:31] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=17622 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+8 t=+  8.56s..+  8.88s during=False nonblack=0.261 mean=31.8
+BEST during-replay screencap: 01.png at +1.30s nonblack=0.261 mean=31.7 -> /home/swung/w7/logs/p12/device/2-onscreen-magma/second/evidence-during-replay.png
+[00:56:41] :mglwin pid after the second session: 17622
+09-24 12:56:20.787 17622 17622 I MobileGL: [12:56:20] [Android w1.trace:mglwin/INFO]: MG_Remote server: this process owns a display (ServerDisplay installed); a ServerOwned window surface is served on its window
+09-24 12:56:20.787 17622 17622 I MobileGLDisplay: starting the in-process display server on tcp://127.0.0.1:40613 (pid=17622, backend DirectVulkan)
+09-24 12:56:20.787 17622 19362 E MobileGL: [12:56:20] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=17622 listening on tcp://127.0.0.1:40613 (in-process display server, display installed)
+09-24 12:56:20.787 17622 19362 E MobileGL: [12:56:20] [Android mgl-display-ser/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+09-24 12:56:20.814 17622 17622 I MobileGL: [12:56:20] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 attached at 1280x2620 (generation 1)
+09-24 12:56:20.814 17622 17622 I MobileGLDisplay: surfaceCreated: server window 1280x2620 attached
+09-24 12:56:20.814 17622 17622 I MobileGL: [12:56:20] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 is now 1280x2620
+09-24 12:56:20.814 17622 17622 I MobileGLDisplay: surfaceChanged: server window 1280x2620 attached
+09-24 12:56:21.071 17622 19362 E MobileGL: [12:56:21] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #1 started on a thread (pid=17622)
+09-24 12:56:21.071 17622 19385 I MobileGL: [12:56:21] [Android mgl-display-ser/INFO]: Config: Active backend type set to DirectVulkan
+09-24 12:56:21.071 17622 19385 E MobileGL: [12:56:21] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=17622 in-process display server pinned backend type 1 for the process lifetime (MOBILEGL_BACKEND_TYPE)
+09-24 12:56:21.084 17622 19385 I MobileGL: [12:56:21] [Android mgl-display-ser/INFO]: MG_Remote memory[accept/server]: peakRss=246738944 currentRss=246738944 roleMapped=58990592 allRolesMapped=58990592 (peakRss is the PROCESS's; under inproc both roles share it)
+09-24 12:56:21.084 17622 19385 E MobileGL: [12:56:21] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=17622 transport=spawn role=server ready control=tcp data=stream
+09-24 12:56:21.087 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: MG_Remote server: mgl-srv-apply started. MOBILEGL_IPC_SERVER_AFFINITY='auto' requested mask 0xc0, RESOLVED mask 0xc0 (0 = no affinity applied), spin 50 us
+09-24 12:56:21.218 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: MG_Remote server: display geometry 640x480 requested (SurfaceHolder.setFixedSize)
+09-24 12:56:21.218 17622 17622 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:56:21.225 17622 17622 I MobileGL: [12:56:21] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 is now 640x480
+09-24 12:56:21.225 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+09-24 12:56:21.225 17622 17622 I MobileGLDisplay: surfaceChanged: server window 640x480 attached
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Got 14 Vulkan instance extensions: 
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_surface (r.25)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_surface_protected_capabilities (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_android_surface (r.6)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_swapchain_colorspace (r.5)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_get_surface_capabilities2 (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_GOOGLE_surfaceless_query (r.2)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_surface_maintenance1 (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_debug_report (r.10)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_get_physical_device_properties2 (r.2)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_external_semaphore_capabilities (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_external_memory_capabilities (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_device_group_creation (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_debug_utils (r.2)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_external_fence_capabilities (r.1)
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Validation layers not available.
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Validation layers not requested.
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Enabling 2 Vulkan instance extensions:
+09-24 12:56:21.270 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_surface
+09-24 12:56:21.271 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_android_surface
+09-24 12:56:21.277 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Found 1 physical device(s).
+09-24 12:56:21.277 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     Adreno (TM) 830 (Vulkan 1.3.284, INTEGRATED_GPU)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]: Got 165 Vulkan device extensions: 
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_incremental_present (r.2)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_hdr_metadata (r.3)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_shared_presentable_image (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_GOOGLE_display_timing (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_image_compression_control (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_image_compression_control_swapchain (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_swapchain_maintenance1 (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_swapchain_mutable_format (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_depth_range_unrestricted (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_subgroup_size_control (r.2)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_ray_tracing_maintenance1 (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_external_memory (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_pipeline_creation_feedback (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_shader_float16_int8 (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_EXT_multisampled_render_to_single_sampled (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_get_memory_requirements2 (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_copy_commands2 (r.1)
+09-24 12:56:21.278 17622 19387 I MobileGL: [12:56:21] [Android mgl-srv-apply/INFO]:     VK_KHR_deferred_host_operations (r.4)
+[00:56:41] done 2-onscreen-magma

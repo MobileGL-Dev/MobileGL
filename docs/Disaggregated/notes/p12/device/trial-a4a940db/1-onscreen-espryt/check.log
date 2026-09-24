@@ -1,0 +1,94 @@
+[00:44:44] check 1-onscreen-espryt: stamp p12w1-a4a940db backend DirectGLES case OpenRA
+[00:44:44] found: 
+Starting: Intent { cmp=top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity (has extras) }
+Read readiness: adb -s 2f7cbe2e logcat -s MobileGL MobileGLDisplay (MG_Remote server: ... listening on ... in-process display server, display installed)
+Client: MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=stream MOBILEGL_IPC_SURFACE=server MOBILEGL_IPC_REQUIRE_SAME_BUILD=1 MOBILEGL_IPC_CONTROL=tcp://<device-address>:40613 (trace_replay --window-surface)
+[00:44:46] READY
+[00:44:46] :mglwin pid=19603
+  mCurrentFocus=Window{5e9116f u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity}
+  mFocusedApp=ActivityRecord{218119468 u0 top.mobilegl.plugin.p7w1.trace/top.mobilegl.plugin.MobileGLDisplayActivity t657}
+[00:44:46] replay OpenRA DirectGLES --window-surface MOBILEGL_IPC_SURFACE=server
+[00:44:59] replay rc=0
+rc=0
+result.json: {'passed': True, 'statusCode': 0, 'ssim': 1.0, 'message': 'retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0, matchedGoldenPath=/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png', 'matchedGoldenPath': '/home/swung/w7/p7w7-tree-a4a940db/tools/trace_replay/fixtures/openra.0000031249.png'}
+      2 [00:44:47] [Linux mobilegl_trace_/INFO]: MG_Remote client: surface=window 640x480 owner=server (MOBILEGL_IPC_SURFACE=server, 640x480 requested)
+      1 [12:44:50] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 6, window 0xb40000789ac37380 generation 1)
+      1 [12:44:50] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+      1 [00:44:46] [Linux mobilegl_trace_/INFO]: MG_Remote client: control=tcp data=stream server=127.0.0.1:40613 pid=19603 dial=connect
+<stdin>:15: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+replay ran 11.63s; 12 screencaps
+0 t=+ -0.07s..+  0.20s during=False nonblack=0.019 mean=1.7
+1 t=+  0.90s..+  1.18s during=True nonblack=0.000 mean=0.0
+2 t=+  1.88s..+  2.23s during=True nonblack=0.090 mean=5.4
+3 t=+  2.93s..+  3.24s during=True nonblack=0.090 mean=5.4
+4 t=+  3.94s..+  4.30s during=True nonblack=0.090 mean=5.4
+5 t=+  5.01s..+  5.32s during=True nonblack=0.090 mean=5.4
+6 t=+  6.02s..+  6.39s during=True nonblack=0.090 mean=5.4
+7 t=+  7.09s..+  7.42s during=True nonblack=0.090 mean=5.4
+8 t=+  8.13s..+  8.45s during=True nonblack=0.090 mean=5.4
+9 t=+  9.16s..+  9.53s during=True nonblack=0.090 mean=5.4
+10 t=+ 10.23s..+ 10.59s during=True nonblack=0.090 mean=5.4
+11 t=+ 11.29s..+ 11.99s during=False nonblack=0.340 mean=32.4
+BEST during-replay screencap: 02.png at +1.88s nonblack=0.090 mean=5.4 -> /home/swung/w7/logs/p12/device/1-onscreen-espryt/replay/evidence-during-replay.png
+[00:44:59] :mglwin pid after: 19603
+09-24 12:44:49.490 19603 19603 I MobileGL: [12:44:49] [Android w1.trace:mglwin/INFO]: MG_Remote server: this process owns a display (ServerDisplay installed); a ServerOwned window surface is served on its window
+09-24 12:44:49.491 19603 19603 I MobileGLDisplay: starting the in-process display server on tcp://127.0.0.1:40613 (pid=19603, backend pinned by the first session)
+09-24 12:44:49.491 19603 16847 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 listening on tcp://127.0.0.1:40613 (in-process display server, display installed)
+09-24 12:44:49.491 19603 16847 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: MG_Remote server: pre-auth deadline=2000 ms, at most 8 pending, backoff after 5 failures from 1000 ms (0 = off)
+09-24 12:44:49.519 19603 19603 I MobileGL: [12:44:49] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 attached at 1280x2620 (generation 1)
+09-24 12:44:49.519 19603 19603 I MobileGLDisplay: surfaceCreated: server window 1280x2620 attached
+09-24 12:44:49.519 19603 19603 I MobileGL: [12:44:49] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 is now 1280x2620
+09-24 12:44:49.519 19603 19603 I MobileGLDisplay: surfaceChanged: server window 1280x2620 attached
+09-24 12:44:49.749 19603 16847 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: MG_Remote server: in-process session #1 started on a thread (pid=19603)
+09-24 12:44:49.750 19603 16867 I MobileGL: [12:44:49] [Android mgl-display-ser/INFO]: Config: Active backend type set to DirectGLES
+09-24 12:44:49.750 19603 16867 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 in-process display server pinned backend type 0 for the process lifetime (the first session's; MOBILEGL_BACKEND_TYPE unset)
+09-24 12:44:49.751 19603 16867 I MobileGL: [12:44:49] [Android mgl-display-ser/INFO]: Loaded GL backend library: libEGL.so
+09-24 12:44:49.751 19603 16867 F MobileGL: [12:44:49] [Android mgl-display-ser/FATAL]: Failed to load EGL function: eglSwapBuffersWithDamageEXT
+09-24 12:44:49.757 19603 16867 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: Failed to load GLES function: glShaderStorageBlockBinding
+09-24 12:44:49.773 19603 16867 I MobileGL: [12:44:49] [Android mgl-display-ser/INFO]: MG_Remote memory[accept/server]: peakRss=249241600 currentRss=249241600 roleMapped=58990592 allRolesMapped=58990592 (peakRss is the PROCESS's; under inproc both roles share it)
+09-24 12:44:49.774 19603 16867 E MobileGL: [12:44:49] [Android mgl-display-ser/ERROR]: MG_Remote server: pid=19603 transport=spawn role=server ready control=tcp data=stream
+09-24 12:44:49.776 19603 16870 I MobileGL: [12:44:49] [Android mgl-srv-apply/INFO]: MG_Remote server: mgl-srv-apply started. MOBILEGL_IPC_SERVER_AFFINITY='auto' requested mask 0xc0, RESOLVED mask 0xc0 (0 = no affinity applied), spin 50 us
+09-24 12:44:50.094 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]: MG_Remote server: display geometry 640x480 requested (SurfaceHolder.setFixedSize)
+09-24 12:44:50.094 19603 19603 I MobileGLDisplay: geometry request 640x480 (setFixedSize, aspect-fit)
+09-24 12:44:50.096 19603 19603 I MobileGL: [12:44:50] [Android w1.trace:mglwin/INFO]: MG_Remote server: server window 0xb40000789ac37380 is now 640x480
+09-24 12:44:50.096 19603 19603 I MobileGLDisplay: surfaceChanged: server window 640x480 attached
+09-24 12:44:50.111 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]: MG_Remote server: surface=window 640x480 owner=server (ServerOwned seq 2, window 0xb40000789ac37380 generation 1)
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]: GL_VENDOR: Qualcomm
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]: GL_RENDERER: Adreno (TM) 830
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]: Detected 125 OpenGL ES extensions:
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_EGL_image
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_EGL_image_external
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_EGL_sync
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_vertex_half_float
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_framebuffer_object
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_rgb8_rgba8
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_compressed_ETC1_RGB8_texture
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_AMD_compressed_ATC_texture
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_sliced_3d
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_ldr
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_KHR_texture_compression_astc_hdr
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_compression_astc
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_s3tc
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_s3tc_srgb
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_rgtc
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_compression_bptc
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_npot
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_filter_anisotropic
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_format_BGRA8888
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_read_format_bgra
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_3D
+09-24 12:44:50.140 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_color_buffer_float
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_color_buffer_half_float
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_float_blend
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_QCOM_alpha_test
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_depth24
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_packed_depth_stencil
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_depth_texture
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_depth_texture_cube_map
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_sRGB
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_float
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_float_linear
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_half_float
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_OES_texture_half_float_linear
+09-24 12:44:50.141 19603 16870 I MobileGL: [12:44:50] [Android mgl-srv-apply/INFO]:     GL_EXT_texture_type_2_10_10_10_REV
+[00:45:00] done 1-onscreen-espryt

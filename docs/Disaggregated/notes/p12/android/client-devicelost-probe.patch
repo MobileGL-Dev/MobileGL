@@ -1,0 +1,37 @@
+diff --git a/MobileGL/MG_Impl/Pipe/PipeFill.cpp b/MobileGL/MG_Impl/Pipe/PipeFill.cpp
+index 3fb7278c..ea80cba2 100644
+--- a/MobileGL/MG_Impl/Pipe/PipeFill.cpp
++++ b/MobileGL/MG_Impl/Pipe/PipeFill.cpp
+@@ -1112,7 +1112,14 @@ namespace MobileGL::MG_Pipe {
+             // below and this aborts by name on the first glBufferData that carries data.
+             const Uint64 before = MG_Remote::Client::ClientWireRecordsEmitted();
+             MGPipeEmitResourceSubData(buffer, 0, static_cast<SizeT>(buffer.GetSize()));
+-            if (MG_Remote::Client::ClientWireRecordsEmitted() == before) {
++            // EXCEPT ON A LOST DEVICE (P12). Once the session latched device-lost every verb is
++            // DECLINED by design (CONTRACT-P6 5.3) - the resource_subdata above included - so "it
++            // emitted nothing" is the latch working, not bytes this client forgot to carry: there
++            // is no server left for them to exist on. Aborting here turned every clean device loss
++            // (a killed server; the on-screen server's window destroyed under the session) into a
++            // client SIGABRT at its next glBufferData with data.
++            if (MG_Remote::Client::ClientWireRecordsEmitted() == before &&
++                !MG_Remote::Client::ClientSession::DeviceLost()) {
+                 // UncarriedInitialBytes, not a second word for the same family: WireTables.cpp:418
+                 // already dies of exactly this - a respecify that crossed with no initial bytes -
+                 // under that name, and two words for one family is the vocabulary drift a6
+diff --git a/MobileGL/MG_Remote/Client/EmitTables.cpp b/MobileGL/MG_Remote/Client/EmitTables.cpp
+index fc14e81a..6472e1d6 100644
+--- a/MobileGL/MG_Remote/Client/EmitTables.cpp
++++ b/MobileGL/MG_Remote/Client/EmitTables.cpp
+@@ -1577,6 +1577,12 @@ namespace MobileGL::MG_Remote::Client {
+             Uint64 replyBytes = 0;
+             session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result),
+                                 &status, &replyBytes);
++            // A LOST DEVICE ANSWERS AS A RESET CONTEXT DOES (P12). After the latch every verb is
++            // DECLINED (CONTRACT-P6 5.3), so there is no reply to read - and GL's reset rule is
++            // that sync waits then return at once as signaled (ClientWaitSync ALREADY_SIGNALED,
++            // the status SIGNALED), not that the client dies of a "malformed" reply.
++            if (status != Wire::ReplySink::kStatusOk && ClientSession::DeviceLost())
++                return op == MG_Pipe::MGPWireOp::FenceWait ? static_cast<Uint32>(GL_ALREADY_SIGNALED) : 1u;
+             if (status != Wire::ReplySink::kStatusOk || replyBytes != sizeof(result))
+                 Wire::WireProtocolFatal("Fence.reply", "missing or malformed sync result");
+             return result;
