@@ -437,6 +437,7 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
         if (backendBuilt) {
             // Stop() joins a running apply thread (it destroys the backend on it), or - never
             // started - drops the backend here; either way the display lease goes with it.
+            if (g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
             loop.Stop();
             session.SetBackend(nullptr);
         }
@@ -723,6 +724,11 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
         }
     }
     loop.SetControlProgressSink(nullptr, nullptr);
+    // P12 review fix: A STOPPING SERVER DOES NOT DRAIN A STREAMING CLIENT. The session ends because
+    // the display server is going away, not because its client finished - and a client still
+    // streaming would keep the apply thread's final drain going past Stop()'s bounded join, whose
+    // Fatal{ApplyThreadJoinTimeout} aborts this (the display Activity's) process.
+    if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
     loop.Stop();
     // Publish the final server window while log forwarding is still attached.
     MobileGL::MG_Util::PipeStats::Shutdown();

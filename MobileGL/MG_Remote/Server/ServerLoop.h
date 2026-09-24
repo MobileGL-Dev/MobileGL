@@ -216,6 +216,15 @@ namespace MobileGL::MG_Remote::Server {
         // Kill the doorbell, join the thread (bounded), then destroy the private backend object
         // ON THAT THREAD before it exits. Blocking by contract - see the header note.
         void Stop();
+        // P12 review fix: THE NEXT Stop() LEAVES THE QUEUE UNAPPLIED. A Stop() normally lets the
+        // apply thread finish its batch and drain what is still queued - the client's own drain
+        // bounds that. A SERVER that is stopping (the in-process display server's
+        // mobilegl_server_stop_inprocess) has a client that may still be streaming, and a batch plus
+        // a final drain of a ring that client keeps refilling can outlast the bounded join
+        // (Fatal{ApplyThreadJoinTimeout} aborts the display Activity's process). Called before Stop():
+        // the drain stops after the record in hand and the exit path declines the rest, as a
+        // ReverseChannelForfeit does. Reset by Start().
+        void AbandonQueuedRecords();
 
         Bool Running() const;
 
@@ -486,6 +495,8 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession* m_session = nullptr;
         std::atomic<Bool> m_running{false};
         std::atomic<Bool> m_stopRequested{false};
+        // P12 review fix: AbandonQueuedRecords() - read after every popped record and at the exit.
+        std::atomic<Bool> m_abandonQueue{false};
         std::thread m_thread;
         // The apply thread's identity used to live here as an atomic<std::thread::id>. It is
         // Detail::g_applyThreadKey now - see the block at the top of this header for why the

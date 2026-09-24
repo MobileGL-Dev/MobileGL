@@ -210,6 +210,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_session = &session;
         m_stopRequested.store(false, std::memory_order_release);
+        m_abandonQueue.store(false, std::memory_order_release);
         // PH-6 fix round: the session's copy of the request, for ReserveEventOrBlock's wait. Lowered
         // with the loop's own, so a loop restarted on the same session does not forfeit at once.
         session.ClearApplyStopRequest();
@@ -506,12 +507,21 @@ namespace MobileGL::MG_Remote::Server {
         // a peer that keeps publishing could keep this final drain going as long as it liked,
         // which is exactly the unbounded hold the forfeit exists to end. The queue is left
         // unapplied; the rings die with the session.
+        //
+        // AND AFTER AbandonQueuedRecords (P12 review fix), for the forfeit's reason: the server is
+        // stopping under a client that may still be streaming, and draining what it keeps queuing
+        // is the unbounded hold Stop()'s bounded join turns into an abort.
         const Bool forfeited = session.ReverseChannelForfeited();
+        const Bool abandoned = m_abandonQueue.load(std::memory_order_acquire);
         PumpControlRequest();
         if (forfeited) {
             MGLOG_E("MG_Remote server: mgl-srv-apply stops on ReverseChannelForfeit - %llu reverse-channel "
                     "event(s) dropped, applied seq %llu; the records still queued are not applied",
                     static_cast<unsigned long long>(session.ForfeitDrops()),
+                    static_cast<unsigned long long>(session.Consumer().AppliedSeq()));
+        } else if (abandoned) {
+            MGLOG_W("MG_Remote server: mgl-srv-apply stops because the server is stopping - applied seq %llu; "
+                    "the records still queued are not applied",
                     static_cast<unsigned long long>(session.Consumer().AppliedSeq()));
         } else {
             DrainRing();
@@ -712,12 +722,25 @@ namespace MobileGL::MG_Remote::Server {
         //
         // The idle poll's cost is unchanged: this load replaces the function-top check the first
         // version made, and the empty-ring answer is still it plus Pop's cmdHead load.
+        //
+        // P12 (D6) REVIEW FIX: A LOST SERVER WINDOW IS ANSWERED BEFORE EVERY POP TOO, not only by
+        // PumpControlRequest between batches. A batch ends when the ring is empty, and a client
+        // streaming frames keeps it from emptying for seconds: surfaceDestroyed (ServerDisplay::
+        // Detach) waited that long on the UI thread - past its 3 s bound, so it gave up and the
+        // session went on presenting into the destroyed window. Checked AFTER the latch check (the
+        // MECHANICS row in ph_latch_sites.py pins that one as the loop's first statement); the
+        // release latches ServerWindowLost, so `continue` takes the latch check's way out. One more
+        // acquire load per pop; the empty-ring answer pays it once.
         ServerSession& session = *m_session;
         Transport::SessionConsumer& consumer = session.Consumer();
         PipeApplier& applier = session.Applier();
         Uint64 applied = 0;
         for (;;) {
             if (SessionLatched()) break;
+            if (m_windowLostRequested.load(std::memory_order_acquire)) {
+                ReleaseLostServerWindow();
+                continue;
+            }
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
                 [this, &applier](const Transport::RingRecordView& record) {
@@ -756,6 +779,9 @@ namespace MobileGL::MG_Remote::Server {
             // loop-head check on the next iteration - ph_latch_sites.py's MECHANICS row pins that
             // check as the first statement of this loop.)
             if (session.ReverseChannelForfeited()) break;
+            // P12 review fix: and the record in hand is the last one when the server is stopping
+            // (AbandonQueuedRecords); same placement, same free empty-ring answer.
+            if (m_abandonQueue.load(std::memory_order_acquire)) break;
             // TEST-ONLY scheduling point BETWEEN two records: after this record's own checks and
             // before the next pop's latch check. A control-thread latch stored here is seen by that
             // check (the first version let it through); one stored after the check and before the
@@ -934,6 +960,8 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_exitCv.notify_all();
     }
+
+    void ServerLoop::AbandonQueuedRecords() { m_abandonQueue.store(true, std::memory_order_release); }
 
     void ServerLoop::Stop() {
         if (!m_thread.joinable()) {

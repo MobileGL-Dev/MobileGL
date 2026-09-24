@@ -3305,6 +3305,174 @@ TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedOnTheApplyThreadBeforeDetac
            "latch; 16 = ServerWindowsLost() != 1; 32 = the apply thread stayed (64+ = setup)";
 }
 
+namespace {
+    // P12 review fix (major): THE LOST WINDOW IS ANSWERED IN THE MIDDLE OF A BATCH. A client streaming
+    // frames keeps the command ring from emptying, and the first version answered a window-lost request
+    // only between batches (PumpControlRequest). The between-records hook is that stream here: after
+    // the first record it runs the UI thread's surfaceDestroyed (Detach, on a thread of its own) and
+    // waits until the lost hook has been called; after every record it takes kStreamRecordMs, so the
+    // 200-record batch is a 4 s stream - longer than Detach's 3 s bound.
+    constexpr int kStreamRecords = 200;
+    constexpr int kStreamRecordMs = 20;
+    enum : int {
+        kStreamNotLeased = 1,       // the probe could not take the lease
+        kStreamDetach = 2,          // Detach did not answer ReleasedBySession
+        kStreamDetachSlow = 4,      // Detach took 1 s or more (the batch ran on under it)
+        kStreamDrainedOn = 8,       // more than two records were applied (the stream was not cut)
+        kStreamNotLatched = 16,     // the session did not latch ServerWindowLost
+        kStreamThreadStayed = 32,   // the apply thread was still running 3 s after the latch
+    };
+
+    std::atomic<int> g_streamRecords{0};
+    std::thread g_streamDetachThread;
+    std::atomic<int> g_streamDetachResult{-1};
+    std::atomic<long long> g_streamDetachMs{-1};
+
+    void StreamOneRecordAndLoseTheWindowAfterTheFirst() {
+        if (g_streamRecords.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            g_streamDetachThread = std::thread([] {
+                const auto started = std::chrono::steady_clock::now();
+                const Server::ServerWindowDetach detached = Server::ServerDisplayInstance().Detach(3000);
+                g_streamDetachMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now() - started)
+                                           .count(),
+                                       std::memory_order_release);
+                g_streamDetachResult.store(static_cast<int>(detached), std::memory_order_release);
+            });
+            // Detach clears the window and calls the lost hook under one lock hold, so once the window
+            // reads detached the request is published.
+            (void)PollUntil([] { return !Server::ServerDisplayInstance().Attached(); }, 1000);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kStreamRecordMs));
+    }
+
+    [[noreturn]] void LoseTheServerWindowMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK) ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow) failed |= kStreamNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+        loop.SetBetweenRecordsHookForTesting(&StreamOneRecordAndLoseTheWindowAfterTheFirst);
+        // LEGAL draws under ONE publish (ALatchFromAnotherThread...'s records), so only the lost window
+        // can cut the batch short.
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < kStreamRecords; ++i) {
+            last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                                sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(68);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+
+        if (!PollUntil([] { return g_streamDetachResult.load(std::memory_order_acquire) >= 0; }, 8000)) ::_exit(69);
+        if (g_streamDetachThread.joinable()) g_streamDetachThread.join();
+        if (g_streamDetachResult.load() != static_cast<int>(Server::ServerWindowDetach::ReleasedBySession))
+            failed |= kStreamDetach;
+        if (g_streamDetachMs.load() >= 1000) failed |= kStreamDetachSlow;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kStreamThreadStayed;
+        if (loop.DrainedRecords() > 2) failed |= kStreamDrainedOn;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kStreamNotLatched;
+        std::fprintf(stderr, "[stream] Detach answered %s in %lld ms after %llu of %d streamed records\n",
+                     Server::ServerWindowDetachName(
+                         static_cast<Server::ServerWindowDetach>(g_streamDetachResult.load())),
+                     g_streamDetachMs.load(), static_cast<unsigned long long>(loop.DrainedRecords()),
+                     kStreamRecords);
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// P12 review fix (major). Red with DrainRing's pre-pop lost-window check deleted: the whole 4 s batch
+// runs under the UI thread's Detach, which gives up at its 3 s bound and answers TimedOut (bits 2|4|8).
+TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedMidBatchWhileTheClientStreams) {
+    EXPECT_EXIT(LoseTheServerWindowMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken; 2 = Detach did not answer ReleasedBySession; 4 = Detach took "
+           "1 s or more; 8 = more than two records applied after the window went; 16 = no ServerWindowLost "
+           "latch; 32 = the apply thread stayed (64+ = setup)";
+}
+
+namespace {
+    // P12 review fix: A STOPPING SERVER UNDER A STREAMING CLIENT. 200 records at 40 ms each is an 8 s
+    // stream, longer than Stop()'s 5 s bounded join. The display server's stop marks the queue
+    // abandoned first; the join must then come back within a record or two.
+    std::atomic<int> g_stopStreamRecords{0};
+    void StreamSlowly() {
+        g_stopStreamRecords.fetch_add(1, std::memory_order_acq_rel);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+
+    enum : int {
+        kStopSlow = 1,      // Stop() took 1 s or more
+        kStopDrainedOn = 2, // more than three records were applied
+    };
+
+    [[noreturn]] void StopTheServerMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StreamSlowly);
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < 200; ++i) {
+            last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                                sizeof(range));
+            if (last == Codec::kInvalidSeq) ::_exit(66);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        if (!PollUntil([] { return g_stopStreamRecords.load(std::memory_order_acquire) >= 1; }, 3000)) ::_exit(67);
+        // RunSession's order when mobilegl_server_stop_inprocess raised the stop.
+        const auto started = std::chrono::steady_clock::now();
+        loop.AbandonQueuedRecords();
+        loop.Stop();
+        const auto stopMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        int failed = 0;
+        if (stopMs >= 1000) failed |= kStopSlow;
+        if (loop.DrainedRecords() > 3) failed |= kStopDrainedOn;
+        std::fprintf(stderr, "[stop] Stop() returned in %lld ms after %llu of 200 streamed records\n",
+                     static_cast<long long>(stopMs), static_cast<unsigned long long>(loop.DrainedRecords()));
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// P12 review fix. Red with AbandonQueuedRecords a no-op: the batch and the exit-path drain apply the
+// whole stream, Stop()'s join gives up at 5 s and Fatal{ApplyThreadJoinTimeout} aborts the process.
+TEST(ServerLoopTest, StoppingTheServerUnderAStreamingClientLeavesTheQueueAndJoinsPromptly) {
+    EXPECT_EXIT(StopTheServerMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Stop() took 1 s or more; 2 = more than three records applied after the stop "
+           "(64+ = setup; SIGABRT = Fatal{ApplyThreadJoinTimeout})";
+}
+
 // D3. A server that owns no display - the host, the exec'd supervisor's children - refuses a request
 // for its window BY NAME and does NOT latch: it is the client's configuration, not corrupt bytes. Red
 // with the refusal turned into a latch: this unarmed process aborts.
