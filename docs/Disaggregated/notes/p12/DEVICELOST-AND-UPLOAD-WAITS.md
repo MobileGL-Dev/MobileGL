@@ -116,6 +116,11 @@ handoff §5.4 说「55,428 次等待里各 op 各占多少」未量化，§4.3 �
    - `PublishCreate`（`:1303-1319`，D-I1/c0b）不能在「被拒绝的 create」上落发布闩，否则死亡路径会为一个不存在的记录发 `resource_destroy`。
 
    所以这三条按 per-resource / per-call 结算，不是 per-chunk：**删掉等待就是删掉信号**。这条裁定已写进 `CONTRACT-P5E.md` §2.5。
+
+**真机那一轮会直接在日志里看到这张表**：`LinkMetricsEnd` 现在把按 op 的拆分单独打一行
+`P65LinkMetrics kind=per-op wait_replies=N by_op=2=…,3=…,47=…`（id 是 `MGPWireOp`：2 create / 3 respecify / 47 params / 48 sub-data）。
+handoff §5.4 说过这条数字拿不到——spawn 下 client 不推进帧窗口、逐帧行不打，SIGKILL 又带不走退出时的 dump——而这一行正是从「正常收尾的客户端一定会走到」的那个位置打出来的。
+
 ## 3. 本轮**没有**做的（下一轮的直接入口）
 
 1. **真机端到端**：A 需要「进世界不再崩」、B 需要「那一帧墙钟 249 s → 约 20 s」的真机数字。需要重出 APK（`assembleTraceRelease` + 签名）、手机 `90cee93` 起 server、跨机 TCP 起 MC 26.2。
