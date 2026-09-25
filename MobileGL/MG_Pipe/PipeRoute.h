@@ -88,6 +88,8 @@
 
 #include "MGPipe.h"
 #include "PipeApply.h"
+// P12: MGPipeHandleIsPublished, the latch the respecify predicate below reads.
+#include "PipeMutation.h"
 
 namespace MobileGL::MG_Pipe {
 
@@ -270,6 +272,38 @@ namespace MobileGL::MG_Pipe {
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceCreate(&desc, &reply);
         return MGPipeTakeReplyBool(reply, "resource_create");
+    }
+    // P12: WHICH RESPECIFIES STILL WAIT - one predicate, read by the wire emitter, so the two
+    // halves of this row cannot disagree about whether an answer is owed.
+    //
+    // THE BUFFER HALF NEVER DOES. Both call sites discard its Bool outright
+    // (PipeFill.cpp:1105 and :1142: `MGPipeRouteResourceRespecify(desc, nullptr);`), so the wait
+    // bought a value that was thrown away - on the device run this row was the second largest
+    // source of round trips in one frame, at ~5 ms each.
+    //
+    // THE TEXTURE HALF WAITS EXACTLY UNTIL THE OBJECT IS CONFIRMED, and "confirmed" is
+    // MGPipeHandleIsPublished: the latch is set only when the object's create was ACCEPTED, and
+    // the applier keeps texture records across a make-current (PipeFill.cpp:3756-3759), so for a
+    // published object the acceptance this row asks for is a fact the client already holds. The
+    // confirmation itself is paid once, at first use: EmitResourceRespecify sends a create when
+    // the latch is clear (TextureEmit.h:869-879), and that create is blocking.
+    //
+    // AND WHEN THE LATCH IS CLEAR THIS RETURNS TRUE, which is the whole fallback. It also covers
+    // the one place the two ends' consumer gates are worded differently - the client asks
+    // "any bit of the family" (PipeFill.cpp:1577-1595) while the applier asks "bit 10"
+    // (PipeApply.cpp:1408-1419) - because a create refused by the narrower server gate leaves the
+    // latch clear, so every later row for that object keeps taking the real answer. The cost of
+    // that case is throughput, never silence.
+    inline Bool MGPipeResourceRespecifyWantsItsReply(const MGPResourceDesc& desc) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (MGPipeInstalledArm() != MGPipeRouteArm::kClientWire) return true;
+        if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer)
+            return false;
+        return !MGPipeHandleIsPublished(MGPipeKind::Texture, desc.Resource);
+#else
+        (void)desc;
+        return true;
+#endif
     }
     inline Bool MGPipeRouteResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                              const MGPRespecifiedLevel* level = nullptr) {

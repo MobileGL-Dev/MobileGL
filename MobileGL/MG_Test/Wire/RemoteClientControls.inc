@@ -894,24 +894,32 @@ TEST(RemoteClientControls, TextureUploadsStopOwningAReplyOnTheWireArm) {
         MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
         Uint8 pixels[4 * 4 * 4];
         std::memset(pixels, 0x21, sizeof(pixels));
+        // THE CONTROL ROW, NAMED RATHER THAN TOTALLED, AND MEASURED ACROSS THE WHOLE SETUP. The
+        // object's create is the one record an object always pays for (kWaitReply in
+        // PipeCalls.def), so ITS counter is the live control - and the baseline goes in before
+        // GenTextures, because which call publishes the twin (generate, bind or the storage
+        // definition) is the emitter's business and not this case's. The previous version of this
+        // control read the session TOTAL and only moved because a respecify was still waiting;
+        // that row is fire-and-forget for a confirmed object now, which is what made the stale
+        // control visible instead of silently wrong.
+        const Uint32 uploadOp = static_cast<Uint32>(MGPWireOp::ResourceSubData);
+        const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
+        const Uint64 createWaitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
         GLuint texture = 0;
         MG_Impl::GLImpl::GenTextures(1, &texture);
         MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
-        // THE CONTROL ROW. resource_create is kWaitReply (PipeCalls.def), so it owns a reply
-        // slot and this counter MUST move on it.
-        const auto beforeCreate = Transport::LinkMetricsReplyWaits();
         MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 4, 4, 0, 0x1908, 0x1401, pixels);
         MGP_FILL(DrawArrays);
-        if (Transport::LinkMetricsReplyWaits() <= beforeCreate) ::_exit(140);
+        if (Transport::LinkMetricsReplyWaitsFor(createOp) <= createWaitsBefore) ::_exit(140);
         // THE ROW UNDER TEST. A second write into the same level is a pure resource_subdata: the
         // resource is created, so no create crosses, and the level is dirty again - the only
         // record it can produce is the one item B is about.
-        const auto beforeRecords = ClientWireRecordsEmitted();
-        const auto beforeWaits = Transport::LinkMetricsReplyWaits();
+        const Uint64 uploadRecordsBefore = Transport::LinkMetricsRecordsFor(uploadOp);
+        const Uint64 uploadWaitsBefore = Transport::LinkMetricsReplyWaitsFor(uploadOp);
         MG_Impl::GLImpl::TexSubImage2D(0x0DE1, 0, 0, 0, 2, 2, 0x1908, 0x1401, pixels);
         MGP_FILL(DrawArrays);
-        if (ClientWireRecordsEmitted() <= beforeRecords) ::_exit(141);
-        if (Transport::LinkMetricsReplyWaits() != beforeWaits) ::_exit(142);
+        if (Transport::LinkMetricsRecordsFor(uploadOp) <= uploadRecordsBefore) ::_exit(141);
+        if (Transport::LinkMetricsReplyWaitsFor(uploadOp) != uploadWaitsBefore) ::_exit(142);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
@@ -1038,7 +1046,11 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
             ::_exit(148);
         if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceCreate)) == 0)
             ::_exit(144);
-        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceRespecify)) == 0)
+        // AND ResourceRespecify FOLLOWS SetTextureParams OFF THAT LIST FOR THE SAME REASON (P12/R3):
+        // for a confirmed object it is fire-and-forget too. What must still hold is that its RECORDS
+        // go out - a zero on both lines would mean the emitter stopped sending, which is a different
+        // and much worse change than this one.
+        if (Transport::LinkMetricsRecordsFor(static_cast<Uint32>(MGPWireOp::ResourceRespecify)) == 0)
             ::_exit(145);
         // AND SetTextureParams IS DELIBERATELY NOT ON THAT LIST ANY MORE (P12). It was the control
         // that proved this counter was live; the first-use confirmation moved the row to
@@ -1138,7 +1150,21 @@ TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes
         MGP_FILL(DrawArrays);
         if (Transport::LinkMetricsRecordsFor(respecifyOp) <= recordsBefore) ::_exit(154);
         if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) != waitsBefore) ::_exit(155);
-        // ---- the TEXTURE half: the deliberate exception ----
+        // ---- the TEXTURE half, part 1: the PREDICATE both halves read (P12/R3) ----
+        // An unpublished texture still owes its answer - that is the first-use confirmation - and a
+        // buffer never does. Asserted directly rather than through a record, because the only way to
+        // produce an unpublished texture on the wire is to make the server REFUSE its create, and a
+        // malformed descriptor would trip the applier's wire report instead of testing this.
+        if (MG_Pipe::MGPipeInstalledArm() != MG_Pipe::MGPipeRouteArm::kClientWire) ::_exit(157);
+        MGPResourceDesc unpublished{};
+        unpublished.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+        if (!MG_Pipe::MGPipeResourceRespecifyWantsItsReply(unpublished)) ::_exit(158);
+        MGPResourceDesc bufferDesc{};
+        if (MG_Pipe::MGPipeResourceRespecifyWantsItsReply(bufferDesc)) ::_exit(159);
+        // ---- the TEXTURE half, part 2: CONFIRMED, end to end ----
+        // GenTextures + a storage definition publishes the object (its create is accepted, and the
+        // create is blocking). A SECOND storage definition on that same object is a real change, so
+        // the record must go out - and must not take a reply.
         Uint8 pixels[8 * 8 * 4];
         std::memset(pixels, 0x21, sizeof(pixels));
         GLuint texture = 0;
@@ -1146,7 +1172,12 @@ TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes
         MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
         MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 8, 8, 0, 0x1908, 0x1401, pixels);
         MGP_FILL(DrawArrays);
-        if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) == waitsBefore) ::_exit(156);
+        const Uint64 confirmedRecords = Transport::LinkMetricsRecordsFor(respecifyOp);
+        const Uint64 confirmedWaits = Transport::LinkMetricsReplyWaitsFor(respecifyOp);
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 16, 16, 0, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        if (Transport::LinkMetricsRecordsFor(respecifyOp) <= confirmedRecords) ::_exit(160);
+        if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) != confirmedWaits) ::_exit(161);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);

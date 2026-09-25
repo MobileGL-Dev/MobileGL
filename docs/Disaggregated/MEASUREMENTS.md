@@ -14,7 +14,9 @@
   单条纯上传占用的回包等待 **1 → 0**（`wait_replies`，正是 §3.2 里"一帧 55,428"的那个计数器）。
   按形状实测（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`，主机 inproc，按 op 计数）：**图集拼接**（一张 level 上 64 次 `glTexSubImage2D`）**64 → 0** 次回包等待；
   **每 sprite 一张纹理**（64 张纹理 + 256 次 `glTexParameteri`）**384 → 320**，剩下的全是 per-resource / per-call 的三条 row（create 76 / respecify 130 / params 130）——
-  它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号，删掉等待就是删掉信号，裁定见 `CONTRACT-P5E.md` §2.5。
+  **这两条后来被"首次使用确认"取代了**（见下面那条）：对象的存在性由它自己的 create 确认为事实之后，
+  params 与 texture respecify 都不再逐条买答案，而是只在**首次使用**时付一次阻塞的 create。
+  同一帧的累计实测：**43,232 waits / 221.5 s → 4,543 waits / 31.3 s（7.1×）**，staged 字节与发出的记录数（103,094）都不变。
   真机（TrebleDroid GSI，MC 26.2 经 TCP 入世界）那一帧的构成为 `ResourceRespecify` 20,633 + `SetTextureParams` 18,056 + `ResourceCreate` 4,536 条**各等一次**，
   而 `ResourceSubData` 12,671 条**零等待**（B 的实机证据）；这些记录都是真实状态变化，客户端没有可去重的（同一值的 `glTexParameteri` 本来就不产生记录）。
 - **单次往返那 ~5 ms 是设备侧的深度空闲退出，不是链路也不是客户端**（P12，本轮实测）：同一帧、同一批记录，

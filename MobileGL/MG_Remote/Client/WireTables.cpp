@@ -470,25 +470,25 @@ namespace MobileGL::MG_Remote::Client {
             } else {
                 MG_Pipe::MGPipeClearRespecifiedLevel(record);
             }
-            // P12: THE BUFFER HALF'S ANSWER IS READ BY NOBODY. Both call sites discard this
-            // record's Bool outright (PipeFill.cpp:1105 and :1142: `MGPipeRouteResourceRespecify(
-            // desc, nullptr);`), so for a buffer the wait buys a value that is thrown away - pure
-            // cost, and on the device run this row was the second largest source of round trips in
-            // the frame. It goes fire-and-forget, with the same provisional-accept shape
-            // resource_subdata has had since item B.
+            // P12: WHETHER THIS RECORD OWES AN ANSWER IS ONE PREDICATE, and it lives beside the
+            // route (PipeRoute.h, MGPipeResourceRespecifyWantsItsReply) so the emitter and the wire
+            // cannot disagree about it. The two halves are argued there; the short version is that the
+            // buffer half's Bool is discarded at both call sites, and the texture half's is owed
+            // until the object's create has been accepted - the confirmation it pays at first use.
             //
-            // THE TEXTURE HALF KEEPS ITS ANSWER, and that is deliberate rather than left over:
-            // there the Bool is the self-heal trigger AND the gate on the acceptance mirror, and
-            // advancing that mirror on an answer nobody waited for is exactly ID-18 M3
-            // (TextureEmit.h:885-888: "a refused respecify must leave LastDesc naming the
-            // descriptor that actually landed, or the next identical call is suppressed against a
-            // record that was never stored"). A texture respecify still waits until that mirror
-            // can be advanced on something better than a provisional accept.
-            const Bool bufferHalf =
-                static_cast<MG_Pipe::MGPipeResourceTarget>(record.Target) ==
-                MG_Pipe::MGPipeResourceTarget::Buffer;
+            // WHAT A PROVISIONAL ACCEPT DOES TO THE TEXTURE HALF, stated here because it is a
+            // deliberate trade rather than an oversight: the emitter's acceptance mirror
+            // (entry.LastDesc) now advances on an answer nobody waited for. ID-18 M3
+            // (TextureEmit.h:885-888) forbids exactly that for a record whose verdict is UNKNOWN -
+            // "the next identical call is suppressed against a record that was never stored" - and
+            // what makes it safe here is that the object is PUBLISHED: the client is not guessing,
+            // it is reading a latch the server set by accepting this handle's create. The residue
+            // is the one case where the server loses a record it had, which today has no production
+            // path (PipeApply.cpp:1593's only callers are tests), and whose guard is the
+            // invalidation notice the route's notes call ①.
+            const Bool wantsReply = MG_Pipe::MGPipeResourceRespecifyWantsItsReply(record);
             Int32 status = Wire::ReplySink::kStatusError;
-            if (bufferHalf) {
+            if (!wantsReply) {
                 const Uint64 seq = session.EmitAndWaitTails(
                     MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr, 0,
                     &status, nullptr, /*wantReply=*/false);
