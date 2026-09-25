@@ -896,8 +896,14 @@ namespace MobileGL::MG_Remote::Server {
             builder.CreateVector(dynamicBytes, static_cast<::flatbuffers::uoffset_t>(sizeof(dynamic)));
         auto rendererVector = builder.CreateVector(renderer.data(), renderer.size());
         auto formatsVector = builder.CreateVector(formats.data(), formats.size());
-        const RendererInfo& info = m_backend->GetRendererInfo();
-        auto apiVersion = builder.CreateString(info.RendererGLInfo.TargetGLVersion.toString());
+        // The client reads this back through BackendObject_Remote::GetBackendAPIVersionString()
+        // and prints it in the parentheses of GL_RENDERER, so it has to be the BACKEND's own API
+        // version string - the same one a monolith build puts in those parentheses - and not the
+        // target GL version this build aims for. Filling it with TargetGLVersion.toString() is
+        // what made a split client answer "Espryt (MobileGL Core) (4.6.0)" where monolith
+        // answered "Espryt (MobileGL Core) (<real GLES renderer>, OpenGL ES <major>.<minor>)",
+        // i.e. it dropped the only place the real device was named.
+        auto apiVersion = builder.CreateString(m_backend->GetBackendAPIVersionString());
         auto snapshot = ::MobileGL::Wire::CreateCapsSnapshot(
             builder, dynamicVector, rendererVector, formatsVector, /*extensions=*/0, apiVersion,
             callMask, static_cast<Uint32>(m_backend->GetBackendType()));
