@@ -218,7 +218,7 @@ create 被拒 → 闩不置位 → 下一条参数记录照样阻塞取真答案
 
 **下一个 20,633**：`ResourceRespecify` 仍逐条等（在 frame 25 里占 20,633/25,176 = 82%）。它与 params 同形（答案只用于 `NoteRespecified` 与自愈），
 "对象已确认"这个前提同样成立——按同一条规则处理，估算落在 **~4.5k waits ≈ 24 s** 量级（create 那 4,536 是确认本身，应当保留）。
-
+### 2.12 `ResourceRespecify` 的两半根本不同：buffer 是白送的，texture 才是那 20,611按"已确认对象不再等"处理这一行时，代码里两半的差别是决定性的：- **buffer 半**：`PipeFill.cpp:1105` 与 `:1142` **两处都把返回值丢掉**（`MGPipeRouteResourceRespecify(desc, nullptr);`），  所以那条等待买到的值当场被扔——改 fire-and-forget 是**纯收益、语义零变化**。- **texture 半**：返回值既是自愈触发器，又是**验收镜像 `LastDesc` 的闸**，  `TextureEmit.h:885-888` 明写不许在未确认的答案上前进（ID-18 M3：否则下一次相同调用会被去重掉，而服务端从没存过）。于是本轮只落 buffer 半（提交见下），并用它把两半的占比量了出来——**同一帧的 `by_op`**：| | waits | `by_op` ||---|---|---|| 只做了 params（frame 25） | 25,176 | `2=4536, `**`3=20633`**`, 5=6, 9=1` || 再放开 buffer 半（frame 10） | **25,154** | `2=4536, `**`3=20611`**`, 5=6, 9=1` |**buffer 半只值 22 次等待（0.1%）——20,633 里几乎全是 texture respecify**，也就是带 ID-18 M3 约束的那一半。墙钟 134.4 s → 130.9 s（同一帧、同样 101,421,396 B staged）。**texture 半的正解（下一步，尚未实现）**：让镜像**只在真答案上前进**——fire-and-forget 之后 `NoteRespecified` 收 `accepted && !provisional`，于是最坏情况退化成"多补发一条相同 respecify"（安全方向），而绝不会变成"该重发的被去重掉"。这需要在 MG_Pipe 的回复信箱上把"临时接受"和"真接受"分开（信箱本来就有"最后一次调用"的纪律，`MGPipeTakeReplyBool` 就是这么读的），改动落在 route/mailbox + `EmitResourceRespecify` 一处判断。按同一模型估算：**25,154 → ~4.5k waits ≈ 24 s 量级**（create 那 4,536 是确认本身）。
 ## 3. 剩余（下一轮的直接入口）
 
 1. **把记录数压下来（新的头号项）**。§2.5 的真机数字说：那一帧剩下的 43,232 次等待全在「必须等」的三条 row 上，

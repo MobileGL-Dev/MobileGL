@@ -470,11 +470,34 @@ namespace MobileGL::MG_Remote::Client {
             } else {
                 MG_Pipe::MGPipeClearRespecifiedLevel(record);
             }
-            Int32 status = 0;
-            const Uint64 seq =
-                session.EmitAndWait(MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr,
-                                    0, nullptr, 0, &status);
-            (void)seq;
+            // P12: THE BUFFER HALF'S ANSWER IS READ BY NOBODY. Both call sites discard this
+            // record's Bool outright (PipeFill.cpp:1105 and :1142: `MGPipeRouteResourceRespecify(
+            // desc, nullptr);`), so for a buffer the wait buys a value that is thrown away - pure
+            // cost, and on the device run this row was the second largest source of round trips in
+            // the frame. It goes fire-and-forget, with the same provisional-accept shape
+            // resource_subdata has had since item B.
+            //
+            // THE TEXTURE HALF KEEPS ITS ANSWER, and that is deliberate rather than left over:
+            // there the Bool is the self-heal trigger AND the gate on the acceptance mirror, and
+            // advancing that mirror on an answer nobody waited for is exactly ID-18 M3
+            // (TextureEmit.h:885-888: "a refused respecify must leave LastDesc naming the
+            // descriptor that actually landed, or the next identical call is suppressed against a
+            // record that was never stored"). A texture respecify still waits until that mirror
+            // can be advanced on something better than a provisional accept.
+            const Bool bufferHalf =
+                static_cast<MG_Pipe::MGPipeResourceTarget>(record.Target) ==
+                MG_Pipe::MGPipeResourceTarget::Buffer;
+            Int32 status = Wire::ReplySink::kStatusError;
+            if (bufferHalf) {
+                const Uint64 seq = session.EmitAndWaitTails(
+                    MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                    &status, nullptr, /*wantReply=*/false);
+                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
+                                                  : Wire::ReplySink::kStatusOk;
+            } else {
+                (void)session.EmitAndWait(MGPWireOp::ResourceRespecify, &record, sizeof(record),
+                                          nullptr, 0, nullptr, 0, &status);
+            }
             ++g_emitted;
             // ERROR IS NOT A DECLINE (M4 / codex 5 / R-5). status is 0 OK / 1 DECLINED / 2 ERROR;
             // an escape may not fold 2 into `false`, which is what a bare `return status == 0`

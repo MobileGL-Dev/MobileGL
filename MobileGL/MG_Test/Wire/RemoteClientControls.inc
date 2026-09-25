@@ -296,11 +296,18 @@ TEST(RemoteClientControls, LongFenceWaitBudgetStillWakesOnShutdown) {
 }
 
 TEST(RemoteClientControls, ResourceRespecifyErrorIsNotADecline) {
+    // THE TEXTURE HALF, WHICH IS THE HALF THAT STILL READS ITS ANSWER (P12). This case used a
+    // zeroed descriptor, which is a BUFFER target - and the buffer half is now fire-and-forget
+    // because both of its call sites discard the Bool (PipeFill.cpp:1105, :1142). A row that reads
+    // no answer cannot fold ERROR into a decision, so the rule this case exists for moved to the
+    // half that does read one: the transport fault is caught here, at the next row that waits,
+    // instead of at a record whose verdict nobody ever looked at.
     const auto child = RunInChild([] {
         StartControlSession();
         ErrorPeer peer;
         peer.Install();
         MGPResourceDesc desc{};
+        desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
         (void)MGPipeRouteResourceRespecify(desc, nullptr);
     });
     ExpectNamedAbort(child, "Fatal{ReplyError, \"resource_respecify\"}");
@@ -1090,6 +1097,56 @@ TEST(RemoteClientControls, AParameterChangeForAConfirmedObjectTakesNoReply) {
         }
         if (Transport::LinkMetricsRecordsFor(paramsOp) != recordsBefore + 8) ::_exit(152);
         if (Transport::LinkMetricsReplyWaitsFor(paramsOp) != waitsBefore) ::_exit(153);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+// =====================================================================================
+// P12: a BUFFER respecify takes no reply; a TEXTURE one still does (deliberately)
+// =====================================================================================
+//
+// The two halves of resource_respecify are not the same row. The buffer half's Bool is discarded
+// at BOTH call sites (PipeFill.cpp:1105, :1142), so its wait bought a value that was thrown away -
+// fire-and-forget costs nothing and saves a round trip per glBufferData, which is the shape a
+// chunk uploader produces thousands of times per frame. The texture half's Bool is load-bearing:
+// it triggers the self-heal AND gates the acceptance mirror, and advancing that mirror on a
+// provisional accept is ID-18 M3 (TextureEmit.h:885-888). So this case asserts BOTH directions -
+// the asymmetry is the design, not an oversight.
+//
+// THE RED, RUN ONCE: take the bufferHalf branch out of Wire_Escape_ResourceRespecify and exit 155
+// fires (the buffer respecify starts waiting again).
+TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        const Uint32 respecifyOp = static_cast<Uint32>(MGPWireOp::ResourceRespecify);
+        Uint8 seed[64];
+        std::memset(seed, 0x5a, sizeof(seed));
+        // ---- the BUFFER half: records out, replies not taken ----
+        GLuint buffer = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &buffer);
+        MG_Impl::GLImpl::BindBuffer(0x8892, buffer);
+        MG_Impl::GLImpl::BufferData(0x8892, sizeof(seed), seed, 0x88E4);
+        MGP_FILL(DrawArrays);
+        const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(respecifyOp);
+        const Uint64 waitsBefore = Transport::LinkMetricsReplyWaitsFor(respecifyOp);
+        MG_Impl::GLImpl::BufferData(0x8892, sizeof(seed) * 2, seed, 0x88E4);
+        MGP_FILL(DrawArrays);
+        if (Transport::LinkMetricsRecordsFor(respecifyOp) <= recordsBefore) ::_exit(154);
+        if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) != waitsBefore) ::_exit(155);
+        // ---- the TEXTURE half: the deliberate exception ----
+        Uint8 pixels[8 * 8 * 4];
+        std::memset(pixels, 0x21, sizeof(pixels));
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 8, 8, 0, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) == waitsBefore) ::_exit(156);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
