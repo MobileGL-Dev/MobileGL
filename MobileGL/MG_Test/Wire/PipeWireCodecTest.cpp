@@ -949,6 +949,84 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
     EXPECT_EQ(std::memcmp(staged, texels.data(), texels.size()), 0);
 }
 
+// =====================================================================================
+// P12: THE NO-REPLY BIT - THE ANSWER IS SKIPPED, THE ACCEPTANCE RECORD IS NOT
+// =====================================================================================
+//
+// MOBILEGL_IPC_CREATE_WINDOW's deferral cannot be collected while 8 reply slots stand in front of
+// 55,903 replies in one load frame, so a producer can now say that a record's answer will never
+// be read (Transport::kRecNoReply, and ClientSession's `willReadReply`, which is NOT `wantReply`:
+// the window's records are emitted without waiting and their answers ARE read, by the drain).
+//
+// TWO THINGS HAVE TO HOLD AND THEY PULL IN OPPOSITE DIRECTIONS: the reply must NOT be written, and
+// the acceptance record must be written ANYWAY - "nobody reads the answer" is not "nothing
+// happened", and the decoder's tally is what MG_Test asserts the acceptance semantics on.
+//
+// ExpectRepliesAgreeWithTheAcceptanceTally is deliberately NOT called here: its invariant (the
+// slots and the tally agree) is about records that ASK for answers, and this case exists to show
+// that the bit is the one thing that separates them.
+TEST_F(PipeWireCodecTest, TheNoReplyBitSkipsTheAnswerAndKeepsTheAcceptanceRecord) {
+    Wire2 wire;
+    MGPResourceDesc create{};
+    create.Resource = MakeHandle(62);
+    create.Target = static_cast<Uint8>(MGPipeResourceTarget::Tex2D);
+    create.InternalFormat = 1;
+    create.Width = 4;
+    create.Height = 4;
+    create.Depth = 1;
+    create.ArrayLayers = 1;
+    create.Levels = 1;
+    create.Samples = 1;
+
+    // ---- THE NEGATIVE CONTROL FIRST: WITHOUT THE BIT NOTHING CHANGES ----
+    // The bit is OPT-IN. A case that only checked the skip would pass against a server that
+    // stopped answering everything, which is a different and much worse change.
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    ASSERT_EQ(wire.Answers().All.size(), 1u)
+        << "a reply-owning record that did not ask to be skipped was not answered";
+    EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
+
+    // ---- AND WITH IT: NO ANSWER, AND THE SAME ACCEPTANCE RECORD ----
+    // THE SAME OPCODE, deliberately: the client decides this per CALL (set_texture_params waits
+    // for an unconfirmed object and does not for a confirmed one), so a reader that recovered
+    // "skip" from the opcode alone would get the first record right and this one wrong.
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create),
+                                          nullptr, 0, /*noReply=*/true),
+              kInvalidSeq);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_EQ(wire.Answers().All.size(), 1u)
+        << "the bit was set and an answer was written anyway - the 55,903-reply budget the bit "
+           "exists to cut did not move";
+    // THE HALF THAT MUST NOT BE SKIPPED WITH IT. Two records were applied and both were decided:
+    // the belt that declines them (no P4a consumer in this process) ran for the second one too,
+    // and LastAcceptance is the value the applier's own monolith-side assertions read.
+    EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 2u)
+        << "the acceptance record was skipped along with the answer";
+    EXPECT_TRUE(wire.Decoder().LastAcceptanceKnown())
+        << "a skipped answer left the acceptance unknown, so the record was not decided at all";
+    EXPECT_FALSE(wire.Decoder().LastAcceptance());
+    // AND THE SERVER'S OWN SPLIT, which is the pair a deferral's viability is read off: only the
+    // ANSWERED records compete for the reply pool. A client that cannot see this number can tell
+    // that its drain failed but not whether the server was ever told it could stop answering -
+    // which is the question a device run of the window turned out to need an answer to.
+    EXPECT_EQ(wire.Decoder().AnsweredRecords(), 1u);
+    EXPECT_EQ(wire.Decoder().SkippedAnswers(), 1u);
+
+    // ---- AND THE BIT IS IN THE RING'S FIELD, NOT THE CALL'S ----
+    // The record crossed the ring with the flag the producer stamped; RingTest owns the flag
+    // spaces themselves (all six call bits now alias a ring bit), so what is pinned HERE is that
+    // this row's encoded flags carry it rather than a call flag that would be recovered on the
+    // far side as something else entirely.
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceCreate) &
+                  static_cast<Uint32>(MG_Pipe::kOptional),
+              0u)
+        << "ResourceCreate grew kOptional, whose ring alias is kRecNoReply: a stamped call flag "
+           "would now read as 'do not answer me'";
+}
+
 TEST_F(PipeWireCodecTest, SetGlobalConstantsCarriesTheDefaultUniformBlock) {
     Wire2 wire;
     std::vector<std::uint8_t> block(256, 0x11);

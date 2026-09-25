@@ -1801,7 +1801,7 @@ namespace MobileGL::MG_Remote::Client {
                                            Uint64 payloadBytes, const Wire::WireTail* tails,
                                            Uint32 tailCount, void* replyOut, Uint64 replyBytes,
                                            Int32* statusOut, Uint64* replySizeOut,
-                                           Bool wantReply) {
+                                           Bool wantReply, Bool willReadReply) {
         Uint64 varTailBytes = 0;
         for (Uint32 i = 0; i < tailCount; ++i) varTailBytes += tails[i].Size;
         if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusError;
@@ -1838,7 +1838,24 @@ namespace MobileGL::MG_Remote::Client {
         const Bool rowCarriesReplySlot =
             (MG_Pipe::MGPipeCallFlagsFor(op) & static_cast<Uint32>(MG_Pipe::kReplySlot)) != 0;
         const Bool ownsReplySlot = rowCarriesReplySlot && wantReply;
-        Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount);
+        // P12: THE SKIP THE SERVER MAY TAKE, and the two ways a caller may not ask for it. See
+        // the declaration in ClientSession.h - the create window is why wantReply is not the
+        // question, and a Fatal rather than an assert because both mistakes are silent: one
+        // blocks on an answer nobody will send, the other discards an answer that never existed.
+        if (wantReply && !willReadReply) {
+            SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"%s\"} - the caller asked to"
+                    " block on this record's answer AND declared that nobody will read it; the server"
+                    " would skip the answer this call is about to wait for",
+                    Wire::WireOpName(op));
+        }
+        if (!willReadReply && !rowCarriesReplySlot) {
+            SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"%s\"} - the caller declared this"
+                    " record's answer unread, but the row carries no reply slot: there was no answer to"
+                    " skip, so the declaration is a mistake about which row this is",
+                    Wire::WireOpName(op));
+        }
+        const Bool skipAnswer = rowCarriesReplySlot && !willReadReply;
+        Uint64 seq = m_encoder.EncodeRecord(op, payload, payloadBytes, tails, tailCount, skipAnswer);
         if (seq == Wire::kInvalidSeq) {
             if (DeviceLost() || m_encoder.Cancelled()) return declineCancelled();
             // EncodeRecord already refused individually oversized records. This one fits,

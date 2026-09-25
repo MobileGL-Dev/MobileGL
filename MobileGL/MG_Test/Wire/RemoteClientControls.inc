@@ -1279,6 +1279,25 @@ TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) 
                     static_cast<unsigned>(highWater));
         std::fflush(nullptr);
         if (records < 12) ::_exit(164);
+        // ---- AND THE ANSWERS CAME BACK, WHICH IS THE ASSERTION THAT CANNOT BE FAKED ----
+        // A deferral that is never collected looks EXACTLY like a working one from every other
+        // reading in this case: Pending sits at the ceiling, the fallback keeps the frame moving,
+        // and the record count is right. It is also what the device measured for a whole session
+        // (pending pinned at 4, readfail 8,951) and what a no-reply bit keyed on `wantReply` would
+        // produce ON PURPOSE - the window's emits are wantReply=false, so a server that skipped
+        // them would leave this at zero while `records`, `waits` and `pending` all stayed green.
+        const Uint64 taken = ClientCreateWindowTaken();
+        std::printf("create window ON:  answers_taken=%llu outstanding=%u fallbacks=%llu\n",
+                    static_cast<unsigned long long>(taken),
+                    static_cast<unsigned>(ClientCreateWindowPending()),
+                    static_cast<unsigned long long>(records > taken + ClientCreateWindowPending()
+                                                        ? records - taken - ClientCreateWindowPending()
+                                                        : 0u));
+        std::fflush(nullptr);
+        if (taken == 0) ::_exit(174);
+        // NOTHING IS INVENTED AND NOTHING IS LOST: every answered create is either back in hand
+        // or still outstanding, and the remainder took the blocking fallback.
+        if (taken + ClientCreateWindowPending() > records) ::_exit(175);
         // THE DEFERRAL ITSELF, and the honest size of the claim: the first `window` records pay
         // nothing, so twelve records cannot pay twelve waits once anything was deferred. A ratio
         // would be a promise about how fast the server answers, which is not this suite's to make.
@@ -1305,6 +1324,10 @@ TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) 
         // counters are equal whatever else the row does - which is the assertion that cannot be
         // satisfied by a window that is still deferring sometimes.
         if (offWaits != offRecords) ::_exit(167);
+        // AND THE WINDOW TOOK NOTHING WHILE IT WAS OFF, which is the control the ON half's
+        // `taken` needs: without it, a `taken` that grew for some unrelated reason would read as
+        // a working deferral.
+        if (ClientCreateWindowTaken() != taken) ::_exit(176);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);

@@ -87,6 +87,10 @@ namespace MobileGL::MG_Remote::Client {
     // clamped to the array), the array's own size, and the two tallies - objects whose create came
     // back DECLINED and are therefore out of the window, and how many refusals there have been.
     Uint32 ClientCreateWindowPending();
+    // How many deferred answers the window has read back. THE NUMBER THAT SAYS IT WORKED: a
+    // drain that never collects leaves Pending at the ceiling and every other reading unchanged,
+    // which is exactly what the device measured before the stream link learned to answer by seq.
+    Uint64 ClientCreateWindowTaken();
     Uint32 ClientCreateWindowEffective();
     Uint32 ClientCreateWindowArraySize();
     Uint32 ClientCreateWindowSuspects();

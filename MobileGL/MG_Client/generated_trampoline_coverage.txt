@@ -1,0 +1,1355 @@
+# MobileGL client trampoline coverage (generated)
+# supported 879
+glActiveProgramEXT
+glActiveShaderProgram
+glActiveTexture
+glAttachShader
+glBeginConditionalRender
+glBeginConditionalRenderNV
+glBeginPerfMonitorAMD
+glBeginPerfQueryINTEL
+glBeginQuery
+glBeginQueryIndexed
+glBeginTransformFeedback
+glBindAttribLocation
+glBindBuffer
+glBindBufferBase
+glBindBufferRange
+glBindBuffersBase
+glBindFragDataLocation
+glBindFragDataLocationIndexed
+glBindFramebuffer
+glBindImageTexture
+glBindImageTextures
+glBindMultiTextureEXT
+glBindProgramPipeline
+glBindRenderbuffer
+glBindSampler
+glBindSamplers
+glBindShadingRateImageNV
+glBindTexture
+glBindTextureUnit
+glBindTextures
+glBindTransformFeedback
+glBindVertexArray
+glBindVertexBuffer
+glBlendColor
+glBlendEquation
+glBlendEquationSeparate
+glBlendEquationSeparatei
+glBlendEquationSeparateiARB
+glBlendEquationi
+glBlendEquationiARB
+glBlendFunc
+glBlendFuncSeparate
+glBlendFuncSeparatei
+glBlendFuncSeparateiARB
+glBlendFunci
+glBlendFunciARB
+glBlendParameteriNV
+glBlitFramebuffer
+glBlitNamedFramebuffer
+glBufferAddressRangeNV
+glBufferAttachMemoryNV
+glBufferData
+glBufferPageCommitmentARB
+glBufferPageCommitmentMemNV
+glBufferStorage
+glBufferSubData
+glCallCommandListNV
+glCheckFramebufferStatus
+glCheckNamedFramebufferStatus
+glCheckNamedFramebufferStatusEXT
+glClampColor
+glClear
+glClearBufferSubData
+glClearBufferfi
+glClearColor
+glClearDepth
+glClearDepthdNV
+glClearDepthf
+glClearNamedBufferSubData
+glClearNamedBufferSubDataEXT
+glClearNamedFramebufferfi
+glClearStencil
+glClientAttribDefaultEXT
+glClientWaitSync
+glClipControl
+glColorFormatNV
+glColorMask
+glColorMaski
+glCommandListSegmentsNV
+glCompileCommandListNV
+glCompileShader
+glConservativeRasterParameterfNV
+glConservativeRasterParameteriNV
+glCopyBufferSubData
+glCopyImageSubData
+glCopyMultiTexImage1DEXT
+glCopyMultiTexImage2DEXT
+glCopyMultiTexSubImage1DEXT
+glCopyMultiTexSubImage2DEXT
+glCopyMultiTexSubImage3DEXT
+glCopyNamedBufferSubData
+glCopyPathNV
+glCopyTexImage1D
+glCopyTexImage2D
+glCopyTexSubImage1D
+glCopyTexSubImage2D
+glCopyTexSubImage3D
+glCopyTextureImage1DEXT
+glCopyTextureImage2DEXT
+glCopyTextureSubImage1D
+glCopyTextureSubImage1DEXT
+glCopyTextureSubImage2D
+glCopyTextureSubImage2DEXT
+glCopyTextureSubImage3D
+glCopyTextureSubImage3DEXT
+glCoverFillPathNV
+glCoverStrokePathNV
+glCoverageModulationNV
+glCoverageModulationTableNV
+glCreateBuffers
+glCreateCommandListsNV
+glCreateFramebuffers
+glCreateProgramPipelines
+glCreateQueries
+glCreateRenderbuffers
+glCreateSamplers
+glCreateShader
+glCreateShaderProgramEXT
+glCreateStatesNV
+glCreateTextures
+glCreateTransformFeedbacks
+glCreateVertexArrays
+glCullFace
+glDebugMessageControl
+glDebugMessageInsert
+glDeleteBuffers
+glDeleteCommandListsNV
+glDeleteFramebuffers
+glDeleteNamedStringARB
+glDeletePathsNV
+glDeletePerfMonitorsAMD
+glDeletePerfQueryINTEL
+glDeleteProgram
+glDeleteProgramPipelines
+glDeleteQueries
+glDeleteRenderbuffers
+glDeleteSamplers
+glDeleteShader
+glDeleteStatesNV
+glDeleteSync
+glDeleteTextures
+glDeleteTransformFeedbacks
+glDeleteVertexArrays
+glDepthBoundsdNV
+glDepthFunc
+glDepthMask
+glDepthRange
+glDepthRangeArraydvNV
+glDepthRangeArrayv
+glDepthRangeIndexed
+glDepthRangeIndexeddNV
+glDepthRangedNV
+glDepthRangef
+glDetachShader
+glDisable
+glDisableClientStateIndexedEXT
+glDisableClientStateiEXT
+glDisableIndexedEXT
+glDisableVertexArrayAttrib
+glDisableVertexArrayAttribEXT
+glDisableVertexArrayEXT
+glDisableVertexAttribArray
+glDisablei
+glDispatchCompute
+glDispatchComputeGroupSizeARB
+glDispatchComputeIndirect
+glDrawArrays
+glDrawArraysInstanced
+glDrawArraysInstancedBaseInstance
+glDrawBuffer
+glDrawBuffers
+glDrawCommandsAddressNV
+glDrawCommandsStatesAddressNV
+glDrawElements
+glDrawElementsBaseVertex
+glDrawElementsInstanced
+glDrawElementsInstancedBaseInstance
+glDrawElementsInstancedBaseVertex
+glDrawElementsInstancedBaseVertexBaseInstance
+glDrawMeshTasksIndirectNV
+glDrawMeshTasksNV
+glDrawRangeElements
+glDrawRangeElementsBaseVertex
+glDrawTransformFeedback
+glDrawTransformFeedbackInstanced
+glDrawTransformFeedbackStream
+glDrawTransformFeedbackStreamInstanced
+glDrawVkImageNV
+glEdgeFlagFormatNV
+glEnable
+glEnableClientStateIndexedEXT
+glEnableClientStateiEXT
+glEnableIndexedEXT
+glEnableVertexArrayAttrib
+glEnableVertexArrayAttribEXT
+glEnableVertexArrayEXT
+glEnableVertexAttribArray
+glEnablei
+glEndPerfMonitorAMD
+glEndPerfQueryINTEL
+glEndQuery
+glEndQueryIndexed
+glFlushMappedBufferRange
+glFlushMappedNamedBufferRange
+glFlushMappedNamedBufferRangeEXT
+glFogCoordFormatNV
+glFragmentCoverageColorNV
+glFramebufferDrawBufferEXT
+glFramebufferDrawBuffersEXT
+glFramebufferParameteri
+glFramebufferParameteriMESA
+glFramebufferReadBufferEXT
+glFramebufferRenderbuffer
+glFramebufferSampleLocationsfvARB
+glFramebufferSampleLocationsfvNV
+glFramebufferTexture
+glFramebufferTexture1D
+glFramebufferTexture1DEXT
+glFramebufferTexture2D
+glFramebufferTexture3D
+glFramebufferTexture3DEXT
+glFramebufferTextureFaceARB
+glFramebufferTextureLayer
+glFramebufferTextureMultiviewOVR
+glFrontFace
+glGenBuffers
+glGenFramebuffers
+glGenPathsNV
+glGenPerfMonitorsAMD
+glGenProgramPipelines
+glGenQueries
+glGenRenderbuffers
+glGenSamplers
+glGenTextures
+glGenTransformFeedbacks
+glGenVertexArrays
+glGenerateMipmap
+glGenerateMultiTexMipmapEXT
+glGenerateTextureMipmap
+glGenerateTextureMipmapEXT
+glGetActiveAtomicCounterBufferiv
+glGetActiveSubroutineUniformiv
+glGetActiveUniformBlockiv
+glGetAttribLocation
+glGetBooleanv
+glGetBufferParameteri64v
+glGetBufferParameteriv
+glGetBufferParameterui64vNV
+glGetBufferSubData
+glGetCommandHeaderNV
+glGetDebugMessageLog
+glGetDoublei_vEXT
+glGetDoublev
+glGetFloati_vEXT
+glGetFloatv
+glGetFragDataIndex
+glGetFragDataLocation
+glGetFramebufferAttachmentParameteriv
+glGetFramebufferParameteriv
+glGetFramebufferParameterivMESA
+glGetImageHandleARB
+glGetImageHandleNV
+glGetInteger64v
+glGetIntegerv
+glGetInternalformatSampleivNV
+glGetInternalformati64v
+glGetInternalformativ
+glGetMemoryObjectDetachedResourcesuivNV
+glGetMultiTexEnvfvEXT
+glGetMultiTexEnvivEXT
+glGetMultiTexGendvEXT
+glGetMultiTexGenfvEXT
+glGetMultiTexGenivEXT
+glGetMultiTexLevelParameterfvEXT
+glGetMultiTexLevelParameterivEXT
+glGetMultiTexParameterIivEXT
+glGetMultiTexParameterIuivEXT
+glGetMultiTexParameterfvEXT
+glGetMultiTexParameterivEXT
+glGetMultisamplefv
+glGetNamedBufferParameteri64v
+glGetNamedBufferParameteriv
+glGetNamedBufferParameterivEXT
+glGetNamedBufferParameterui64vNV
+glGetNamedBufferSubData
+glGetNamedBufferSubDataEXT
+glGetNamedFramebufferAttachmentParameteriv
+glGetNamedFramebufferAttachmentParameterivEXT
+glGetNamedFramebufferParameteriv
+glGetNamedFramebufferParameterivEXT
+glGetNamedProgramivEXT
+glGetNamedRenderbufferParameteriv
+glGetNamedRenderbufferParameterivEXT
+glGetNamedStringivARB
+glGetPathLengthNV
+glGetPathParameterfvNV
+glGetPathParameterivNV
+glGetPerfMonitorCounterDataAMD
+glGetProgramInterfaceiv
+glGetProgramPipelineiv
+glGetProgramResourceIndex
+glGetProgramResourceLocation
+glGetProgramResourceLocationIndex
+glGetProgramResourcefvNV
+glGetProgramStageiv
+glGetProgramiv
+glGetQueryBufferObjecti64v
+glGetQueryBufferObjectiv
+glGetQueryBufferObjectui64v
+glGetQueryBufferObjectuiv
+glGetQueryIndexediv
+glGetQueryObjecti64v
+glGetQueryObjectiv
+glGetQueryObjectui64v
+glGetQueryObjectuiv
+glGetQueryiv
+glGetRenderbufferParameteriv
+glGetSamplerParameterIiv
+glGetSamplerParameterIuiv
+glGetSamplerParameterfv
+glGetSamplerParameteriv
+glGetShaderiv
+glGetStageIndexNV
+glGetString
+glGetStringi
+glGetSubroutineIndex
+glGetSubroutineUniformLocation
+glGetSynciv
+glGetTexLevelParameterfv
+glGetTexLevelParameteriv
+glGetTexParameterIiv
+glGetTexParameterIuiv
+glGetTexParameterfv
+glGetTexParameteriv
+glGetTextureHandleARB
+glGetTextureHandleNV
+glGetTextureLevelParameterfv
+glGetTextureLevelParameterfvEXT
+glGetTextureLevelParameteriv
+glGetTextureLevelParameterivEXT
+glGetTextureParameterIiv
+glGetTextureParameterIivEXT
+glGetTextureParameterIuiv
+glGetTextureParameterIuivEXT
+glGetTextureParameterfv
+glGetTextureParameterfvEXT
+glGetTextureParameteriv
+glGetTextureParameterivEXT
+glGetTextureSamplerHandleARB
+glGetTextureSamplerHandleNV
+glGetTransformFeedbacki64_v
+glGetTransformFeedbacki_v
+glGetTransformFeedbackiv
+glGetUniformBlockIndex
+glGetUniformLocation
+glGetVertexArrayIndexed64iv
+glGetVertexArrayIndexediv
+glGetVertexArrayIntegeri_vEXT
+glGetVertexArrayIntegervEXT
+glGetVertexArrayiv
+glGetVertexAttribIiv
+glGetVertexAttribIuiv
+glGetVertexAttribLdv
+glGetVertexAttribLi64vNV
+glGetVertexAttribLui64vARB
+glGetVertexAttribLui64vNV
+glGetVertexAttribdv
+glGetVertexAttribfv
+glGetVertexAttribiv
+glHint
+glIndexFormatNV
+glInsertEventMarkerEXT
+glInterpolatePathsNV
+glInvalidateBufferData
+glInvalidateBufferSubData
+glInvalidateTexImage
+glInvalidateTexSubImage
+glIsBuffer
+glIsBufferResidentNV
+glIsCommandListNV
+glIsEnabled
+glIsEnabledIndexedEXT
+glIsEnabledi
+glIsFramebuffer
+glIsImageHandleResidentARB
+glIsImageHandleResidentNV
+glIsNamedBufferResidentNV
+glIsNamedStringARB
+glIsPathNV
+glIsPointInFillPathNV
+glIsPointInStrokePathNV
+glIsProgram
+glIsProgramPipeline
+glIsQuery
+glIsRenderbuffer
+glIsSampler
+glIsShader
+glIsStateNV
+glIsSync
+glIsTexture
+glIsTextureHandleResidentARB
+glIsTextureHandleResidentNV
+glIsTransformFeedback
+glIsVertexArray
+glLabelObjectEXT
+glLineWidth
+glLinkProgram
+glLogicOp
+glMakeBufferNonResidentNV
+glMakeBufferResidentNV
+glMakeImageHandleNonResidentARB
+glMakeImageHandleNonResidentNV
+glMakeImageHandleResidentARB
+glMakeImageHandleResidentNV
+glMakeNamedBufferNonResidentNV
+glMakeNamedBufferResidentNV
+glMakeTextureHandleNonResidentARB
+glMakeTextureHandleNonResidentNV
+glMakeTextureHandleResidentARB
+glMakeTextureHandleResidentNV
+glMapBuffer
+glMapBufferRange
+glMatrixFrustumEXT
+glMatrixLoadIdentityEXT
+glMatrixOrthoEXT
+glMatrixPopEXT
+glMatrixPushEXT
+glMatrixRotatedEXT
+glMatrixRotatefEXT
+glMatrixScaledEXT
+glMatrixScalefEXT
+glMatrixTranslatedEXT
+glMatrixTranslatefEXT
+glMaxShaderCompilerThreadsARB
+glMaxShaderCompilerThreadsKHR
+glMemoryBarrier
+glMemoryBarrierByRegion
+glMinSampleShading
+glMultiDrawMeshTasksIndirectCountNV
+glMultiDrawMeshTasksIndirectNV
+glMultiTexBufferEXT
+glMultiTexCoordPointerEXT
+glMultiTexEnvfEXT
+glMultiTexEnviEXT
+glMultiTexGendEXT
+glMultiTexGenfEXT
+glMultiTexGeniEXT
+glMultiTexParameterfEXT
+glMultiTexParameteriEXT
+glMultiTexRenderbufferEXT
+glNamedBufferAttachMemoryNV
+glNamedBufferData
+glNamedBufferDataEXT
+glNamedBufferPageCommitmentARB
+glNamedBufferPageCommitmentEXT
+glNamedBufferPageCommitmentMemNV
+glNamedBufferStorage
+glNamedBufferStorageEXT
+glNamedBufferSubData
+glNamedBufferSubDataEXT
+glNamedCopyBufferSubDataEXT
+glNamedFramebufferDrawBuffer
+glNamedFramebufferDrawBuffers
+glNamedFramebufferParameteri
+glNamedFramebufferParameteriEXT
+glNamedFramebufferReadBuffer
+glNamedFramebufferRenderbuffer
+glNamedFramebufferRenderbufferEXT
+glNamedFramebufferSampleLocationsfvARB
+glNamedFramebufferSampleLocationsfvNV
+glNamedFramebufferTexture
+glNamedFramebufferTexture1DEXT
+glNamedFramebufferTexture2DEXT
+glNamedFramebufferTexture3DEXT
+glNamedFramebufferTextureEXT
+glNamedFramebufferTextureFaceEXT
+glNamedFramebufferTextureLayer
+glNamedFramebufferTextureLayerEXT
+glNamedProgramLocalParameter4dEXT
+glNamedProgramLocalParameter4fEXT
+glNamedProgramLocalParameterI4iEXT
+glNamedProgramLocalParameterI4uiEXT
+glNamedProgramLocalParameters4fvEXT
+glNamedProgramLocalParametersI4ivEXT
+glNamedProgramLocalParametersI4uivEXT
+glNamedRenderbufferStorage
+glNamedRenderbufferStorageEXT
+glNamedRenderbufferStorageMultisample
+glNamedRenderbufferStorageMultisampleAdvancedAMD
+glNamedRenderbufferStorageMultisampleCoverageEXT
+glNamedRenderbufferStorageMultisampleEXT
+glNamedStringARB
+glNormalFormatNV
+glObjectLabel
+glObjectPtrLabel
+glPatchParameteri
+glPathCoverDepthFuncNV
+glPathParameterfNV
+glPathParameteriNV
+glPathStencilDepthOffsetNV
+glPathStencilFuncNV
+glPathStringNV
+glPixelStoref
+glPixelStorei
+glPointParameterf
+glPointParameteri
+glPointSize
+glPolygonMode
+glPolygonOffset
+glPolygonOffsetClamp
+glPolygonOffsetClampEXT
+glPrimitiveBoundingBoxARB
+glPrimitiveRestartIndex
+glProgramBinary
+glProgramParameteri
+glProgramUniform1d
+glProgramUniform1dEXT
+glProgramUniform1dv
+glProgramUniform1dvEXT
+glProgramUniform1f
+glProgramUniform1fv
+glProgramUniform1i
+glProgramUniform1i64ARB
+glProgramUniform1i64NV
+glProgramUniform1i64vARB
+glProgramUniform1i64vNV
+glProgramUniform1iv
+glProgramUniform1ui
+glProgramUniform1ui64ARB
+glProgramUniform1ui64NV
+glProgramUniform1ui64vARB
+glProgramUniform1ui64vNV
+glProgramUniform1uiv
+glProgramUniform2d
+glProgramUniform2dEXT
+glProgramUniform2dv
+glProgramUniform2dvEXT
+glProgramUniform2f
+glProgramUniform2fv
+glProgramUniform2i
+glProgramUniform2i64ARB
+glProgramUniform2i64NV
+glProgramUniform2i64vARB
+glProgramUniform2i64vNV
+glProgramUniform2iv
+glProgramUniform2ui
+glProgramUniform2ui64ARB
+glProgramUniform2ui64NV
+glProgramUniform2ui64vARB
+glProgramUniform2ui64vNV
+glProgramUniform2uiv
+glProgramUniform3d
+glProgramUniform3dEXT
+glProgramUniform3dv
+glProgramUniform3dvEXT
+glProgramUniform3f
+glProgramUniform3fv
+glProgramUniform3i
+glProgramUniform3i64ARB
+glProgramUniform3i64NV
+glProgramUniform3i64vARB
+glProgramUniform3i64vNV
+glProgramUniform3iv
+glProgramUniform3ui
+glProgramUniform3ui64ARB
+glProgramUniform3ui64NV
+glProgramUniform3ui64vARB
+glProgramUniform3ui64vNV
+glProgramUniform3uiv
+glProgramUniform4d
+glProgramUniform4dEXT
+glProgramUniform4dv
+glProgramUniform4dvEXT
+glProgramUniform4f
+glProgramUniform4fv
+glProgramUniform4i
+glProgramUniform4i64ARB
+glProgramUniform4i64NV
+glProgramUniform4i64vARB
+glProgramUniform4i64vNV
+glProgramUniform4iv
+glProgramUniform4ui
+glProgramUniform4ui64ARB
+glProgramUniform4ui64NV
+glProgramUniform4ui64vARB
+glProgramUniform4ui64vNV
+glProgramUniform4uiv
+glProgramUniformHandleui64ARB
+glProgramUniformHandleui64NV
+glProgramUniformHandleui64vARB
+glProgramUniformHandleui64vNV
+glProgramUniformMatrix2dv
+glProgramUniformMatrix2dvEXT
+glProgramUniformMatrix2fv
+glProgramUniformMatrix2x3dv
+glProgramUniformMatrix2x3dvEXT
+glProgramUniformMatrix2x3fv
+glProgramUniformMatrix2x4dv
+glProgramUniformMatrix2x4dvEXT
+glProgramUniformMatrix2x4fv
+glProgramUniformMatrix3dv
+glProgramUniformMatrix3dvEXT
+glProgramUniformMatrix3fv
+glProgramUniformMatrix3x2dv
+glProgramUniformMatrix3x2dvEXT
+glProgramUniformMatrix3x2fv
+glProgramUniformMatrix3x4dv
+glProgramUniformMatrix3x4dvEXT
+glProgramUniformMatrix3x4fv
+glProgramUniformMatrix4dv
+glProgramUniformMatrix4dvEXT
+glProgramUniformMatrix4fv
+glProgramUniformMatrix4x2dv
+glProgramUniformMatrix4x2dvEXT
+glProgramUniformMatrix4x2fv
+glProgramUniformMatrix4x3dv
+glProgramUniformMatrix4x3dvEXT
+glProgramUniformMatrix4x3fv
+glProgramUniformui64NV
+glProgramUniformui64vNV
+glProvokingVertex
+glPushClientAttribDefaultEXT
+glPushDebugGroup
+glPushGroupMarkerEXT
+glQueryCounter
+glRasterSamplesEXT
+glReadBuffer
+glRenderbufferStorage
+glRenderbufferStorageMultisample
+glRenderbufferStorageMultisampleAdvancedAMD
+glRenderbufferStorageMultisampleCoverageNV
+glResetMemoryObjectParameterNV
+glSampleCoverage
+glSampleMaski
+glSamplerParameterf
+glSamplerParameteri
+glScissor
+glScissorArrayv
+glScissorExclusiveArrayvNV
+glScissorExclusiveNV
+glScissorIndexed
+glSecondaryColorFormatNV
+glShaderBinary
+glShaderStorageBlockBinding
+glShadingRateImageBarrierNV
+glShadingRateImagePaletteNV
+glShadingRateSampleOrderNV
+glSignalVkFenceNV
+glSignalVkSemaphoreNV
+glStateCaptureNV
+glStencilFillPathNV
+glStencilFunc
+glStencilFuncSeparate
+glStencilMask
+glStencilMaskSeparate
+glStencilOp
+glStencilOpSeparate
+glStencilStrokePathNV
+glStencilThenCoverFillPathNV
+glStencilThenCoverStrokePathNV
+glSubpixelPrecisionBiasNV
+glTexAttachMemoryNV
+glTexBuffer
+glTexBufferRange
+glTexCoordFormatNV
+glTexImage2DMultisample
+glTexImage3DMultisample
+glTexPageCommitmentARB
+glTexPageCommitmentMemNV
+glTexParameterf
+glTexParameteri
+glTexStorage1DEXT
+glTexStorage2D
+glTexStorage2DMultisample
+glTexStorage3D
+glTexStorage3DMultisample
+glTextureAttachMemoryNV
+glTextureBuffer
+glTextureBufferEXT
+glTextureBufferRange
+glTextureBufferRangeEXT
+glTexturePageCommitmentEXT
+glTexturePageCommitmentMemNV
+glTextureParameterf
+glTextureParameterfEXT
+glTextureParameteri
+glTextureParameteriEXT
+glTextureRenderbufferEXT
+glTextureStorage1D
+glTextureStorage1DEXT
+glTextureStorage2D
+glTextureStorage2DEXT
+glTextureStorage2DMultisample
+glTextureStorage2DMultisampleEXT
+glTextureStorage3D
+glTextureStorage3DEXT
+glTextureStorage3DMultisample
+glTextureStorage3DMultisampleEXT
+glTextureView
+glTransformFeedbackBufferBase
+glTransformFeedbackBufferRange
+glUniform1d
+glUniform1dv
+glUniform1f
+glUniform1fv
+glUniform1i
+glUniform1i64ARB
+glUniform1i64NV
+glUniform1i64vARB
+glUniform1i64vNV
+glUniform1iv
+glUniform1ui
+glUniform1ui64ARB
+glUniform1ui64NV
+glUniform1ui64vARB
+glUniform1ui64vNV
+glUniform1uiv
+glUniform2d
+glUniform2dv
+glUniform2f
+glUniform2fv
+glUniform2i
+glUniform2i64ARB
+glUniform2i64NV
+glUniform2i64vARB
+glUniform2i64vNV
+glUniform2iv
+glUniform2ui
+glUniform2ui64ARB
+glUniform2ui64NV
+glUniform2ui64vARB
+glUniform2ui64vNV
+glUniform2uiv
+glUniform3d
+glUniform3dv
+glUniform3f
+glUniform3fv
+glUniform3i
+glUniform3i64ARB
+glUniform3i64NV
+glUniform3i64vARB
+glUniform3i64vNV
+glUniform3iv
+glUniform3ui
+glUniform3ui64ARB
+glUniform3ui64NV
+glUniform3ui64vARB
+glUniform3ui64vNV
+glUniform3uiv
+glUniform4d
+glUniform4dv
+glUniform4f
+glUniform4fv
+glUniform4i
+glUniform4i64ARB
+glUniform4i64NV
+glUniform4i64vARB
+glUniform4i64vNV
+glUniform4iv
+glUniform4ui
+glUniform4ui64ARB
+glUniform4ui64NV
+glUniform4ui64vARB
+glUniform4ui64vNV
+glUniform4uiv
+glUniformBlockBinding
+glUniformHandleui64ARB
+glUniformHandleui64NV
+glUniformMatrix2dv
+glUniformMatrix2fv
+glUniformMatrix2x3dv
+glUniformMatrix2x3fv
+glUniformMatrix2x4dv
+glUniformMatrix2x4fv
+glUniformMatrix3dv
+glUniformMatrix3fv
+glUniformMatrix3x2dv
+glUniformMatrix3x2fv
+glUniformMatrix3x4dv
+glUniformMatrix3x4fv
+glUniformMatrix4dv
+glUniformMatrix4fv
+glUniformMatrix4x2dv
+glUniformMatrix4x2fv
+glUniformMatrix4x3dv
+glUniformMatrix4x3fv
+glUniformui64NV
+glUnmapBuffer
+glUnmapNamedBuffer
+glUnmapNamedBufferEXT
+glUseProgram
+glUseProgramStages
+glUseShaderProgramEXT
+glValidateProgram
+glValidateProgramPipeline
+glVertexArrayAttribBinding
+glVertexArrayAttribFormat
+glVertexArrayAttribIFormat
+glVertexArrayAttribLFormat
+glVertexArrayBindVertexBufferEXT
+glVertexArrayBindingDivisor
+glVertexArrayColorOffsetEXT
+glVertexArrayEdgeFlagOffsetEXT
+glVertexArrayElementBuffer
+glVertexArrayFogCoordOffsetEXT
+glVertexArrayIndexOffsetEXT
+glVertexArrayMultiTexCoordOffsetEXT
+glVertexArrayNormalOffsetEXT
+glVertexArraySecondaryColorOffsetEXT
+glVertexArrayTexCoordOffsetEXT
+glVertexArrayVertexAttribBindingEXT
+glVertexArrayVertexAttribDivisorEXT
+glVertexArrayVertexAttribFormatEXT
+glVertexArrayVertexAttribIFormatEXT
+glVertexArrayVertexAttribIOffsetEXT
+glVertexArrayVertexAttribLFormatEXT
+glVertexArrayVertexAttribLOffsetEXT
+glVertexArrayVertexAttribOffsetEXT
+glVertexArrayVertexBindingDivisorEXT
+glVertexArrayVertexBuffer
+glVertexArrayVertexOffsetEXT
+glVertexAttrib1d
+glVertexAttrib1f
+glVertexAttrib1s
+glVertexAttrib2d
+glVertexAttrib2f
+glVertexAttrib2s
+glVertexAttrib3d
+glVertexAttrib3f
+glVertexAttrib3s
+glVertexAttrib4Nub
+glVertexAttrib4d
+glVertexAttrib4f
+glVertexAttrib4s
+glVertexAttribBinding
+glVertexAttribDivisor
+glVertexAttribFormat
+glVertexAttribFormatNV
+glVertexAttribI1i
+glVertexAttribI1ui
+glVertexAttribI2i
+glVertexAttribI2ui
+glVertexAttribI3i
+glVertexAttribI3ui
+glVertexAttribI4i
+glVertexAttribI4ui
+glVertexAttribIFormat
+glVertexAttribIFormatNV
+glVertexAttribIPointer
+glVertexAttribL1d
+glVertexAttribL1i64NV
+glVertexAttribL1ui64ARB
+glVertexAttribL1ui64NV
+glVertexAttribL2d
+glVertexAttribL2i64NV
+glVertexAttribL2ui64NV
+glVertexAttribL3d
+glVertexAttribL3i64NV
+glVertexAttribL3ui64NV
+glVertexAttribL4d
+glVertexAttribL4i64NV
+glVertexAttribL4ui64NV
+glVertexAttribLFormat
+glVertexAttribLFormatNV
+glVertexAttribLPointer
+glVertexAttribP1ui
+glVertexAttribP2ui
+glVertexAttribP3ui
+glVertexAttribP4ui
+glVertexAttribPointer
+glVertexBindingDivisor
+glVertexFormatNV
+glViewport
+glViewportArrayv
+glViewportIndexedf
+glViewportPositionWScaleNV
+glViewportSwizzleNV
+glWaitSync
+glWaitVkSemaphoreNV
+
+# skipped 472
+glApplyFramebufferAttachmentCMAAINTEL	field missing
+glBindBuffersRange	field missing
+glBindFramebufferEXT	no signature in Definitions.cpp
+glBindRenderbufferEXT	no signature in Definitions.cpp
+glBindVertexBuffers	field missing
+glBlendBarrierKHR	field missing
+glBlendBarrierNV	field missing
+glCheckFramebufferStatusEXT	no signature in Definitions.cpp
+glClearBufferData	shm payload without size field
+glClearBufferfv	input vector or out-vector without count/pname
+glClearBufferiv	input vector or out-vector without count/pname
+glClearBufferuiv	input vector or out-vector without count/pname
+glClearNamedBufferData	shm payload without size field
+glClearNamedBufferDataEXT	shm payload without size field
+glClearNamedFramebufferfv	input vector or out-vector without count/pname
+glClearNamedFramebufferiv	input vector or out-vector without count/pname
+glClearNamedFramebufferuiv	input vector or out-vector without count/pname
+glClearTexImage	shm payload without size field
+glClearTexSubImage	shm payload without size field
+glCompileShaderIncludeARB	multi-level pointer
+glCompressedMultiTexImage1DEXT	shm payload without size field
+glCompressedMultiTexImage2DEXT	shm payload without size field
+glCompressedMultiTexImage3DEXT	shm payload without size field
+glCompressedMultiTexSubImage1DEXT	shm payload without size field
+glCompressedMultiTexSubImage2DEXT	shm payload without size field
+glCompressedMultiTexSubImage3DEXT	shm payload without size field
+glCompressedTexImage1D	shm payload without size field
+glCompressedTexImage2D	shm payload without size field
+glCompressedTexImage3D	shm payload without size field
+glCompressedTexSubImage1D	shm payload without size field
+glCompressedTexSubImage2D	shm payload without size field
+glCompressedTexSubImage3D	shm payload without size field
+glCompressedTextureImage1DEXT	shm payload without size field
+glCompressedTextureImage2DEXT	shm payload without size field
+glCompressedTextureImage3DEXT	shm payload without size field
+glCompressedTextureSubImage1D	shm payload without size field
+glCompressedTextureSubImage1DEXT	shm payload without size field
+glCompressedTextureSubImage2D	shm payload without size field
+glCompressedTextureSubImage2DEXT	shm payload without size field
+glCompressedTextureSubImage3D	shm payload without size field
+glCompressedTextureSubImage3DEXT	shm payload without size field
+glCoverFillPathInstancedNV	shm payload without size field
+glCoverStrokePathInstancedNV	shm payload without size field
+glCreatePerfQueryINTEL	input vector or out-vector without count/pname
+glCreateProgram	no signature in Definitions.cpp
+glCreateShaderProgramv	multi-level pointer
+glCreateSyncFromCLeventARB	field missing
+glDebugMessageCallback	field missing
+glDebugMessageCallbackARB	no signature in Definitions.cpp
+glDebugMessageControlARB	no signature in Definitions.cpp
+glDebugMessageInsertARB	no signature in Definitions.cpp
+glDeleteFramebuffersEXT	no signature in Definitions.cpp
+glDeleteRenderbuffersEXT	no signature in Definitions.cpp
+glDrawArraysIndirect	shm payload without size field
+glDrawArraysInstancedARB	no signature in Definitions.cpp
+glDrawArraysInstancedEXT	no signature in Definitions.cpp
+glDrawCommandsNV	field missing
+glDrawCommandsStatesNV	field missing
+glDrawElementsIndirect	shm payload without size field
+glDrawElementsInstancedARB	no signature in Definitions.cpp
+glDrawElementsInstancedEXT	no signature in Definitions.cpp
+glDrawMeshTasksEXT	no signature in Definitions.cpp
+glDrawMeshTasksIndirectEXT	no signature in Definitions.cpp
+glEGLImageTargetTexStorageEXT	field missing
+glEGLImageTargetTextureStorageEXT	field missing
+glEndConditionalRender	no signature in Definitions.cpp
+glEndConditionalRenderNV	field missing
+glEndTransformFeedback	no signature in Definitions.cpp
+glEvaluateDepthValuesARB	field missing
+glFenceSync	pointer return not supported
+glFinish	no signature in Definitions.cpp
+glFlush	no signature in Definitions.cpp
+glFramebufferFetchBarrierEXT	field missing
+glFramebufferRenderbufferEXT	no signature in Definitions.cpp
+glFramebufferShadingRateEXT	no signature in Definitions.cpp
+glFramebufferTexture2DEXT	no signature in Definitions.cpp
+glFramebufferTextureARB	no signature in Definitions.cpp
+glFramebufferTextureLayerARB	no signature in Definitions.cpp
+glGenFramebuffersEXT	no signature in Definitions.cpp
+glGenRenderbuffersEXT	no signature in Definitions.cpp
+glGenerateMipmapEXT	no signature in Definitions.cpp
+glGetActiveAttrib	input vector or out-vector without count/pname
+glGetActiveSubroutineName	input vector or out-vector without count/pname
+glGetActiveSubroutineUniformName	input vector or out-vector without count/pname
+glGetActiveUniform	input vector or out-vector without count/pname
+glGetActiveUniformBlockName	input vector or out-vector without count/pname
+glGetActiveUniformName	input vector or out-vector without count/pname
+glGetActiveUniformsiv	input vector or out-vector without count/pname
+glGetAttachedShaders	input vector or out-vector without count/pname
+glGetBooleanIndexedvEXT	input vector or out-vector without count/pname
+glGetBooleani_v	input vector or out-vector without count/pname
+glGetBufferPointerv	multi-level pointer
+glGetCompressedMultiTexImageEXT	shm payload without size field
+glGetCompressedTexImage	shm payload without size field
+glGetCompressedTextureImage	shm payload without size field
+glGetCompressedTextureImageEXT	shm payload without size field
+glGetCompressedTextureSubImage	shm payload without size field
+glGetCoverageModulationTableNV	input vector or out-vector without count/pname
+glGetDebugMessageLogARB	no signature in Definitions.cpp
+glGetDoubleIndexedvEXT	input vector or out-vector without count/pname
+glGetDoublei_v	input vector or out-vector without count/pname
+glGetError	no signature in Definitions.cpp
+glGetFirstPerfQueryIdINTEL	input vector or out-vector without count/pname
+glGetFloatIndexedvEXT	input vector or out-vector without count/pname
+glGetFloati_v	input vector or out-vector without count/pname
+glGetFragmentShadingRatesEXT	no signature in Definitions.cpp
+glGetFramebufferAttachmentParameterivEXT	no signature in Definitions.cpp
+glGetFramebufferParameterivEXT	no signature in Definitions.cpp
+glGetGraphicsResetStatus	no signature in Definitions.cpp
+glGetGraphicsResetStatusARB	no signature in Definitions.cpp
+glGetInteger64i_v	input vector or out-vector without count/pname
+glGetIntegerIndexedvEXT	input vector or out-vector without count/pname
+glGetIntegeri_v	input vector or out-vector without count/pname
+glGetIntegerui64i_vNV	input vector or out-vector without count/pname
+glGetIntegerui64vNV	input vector or out-vector without count/pname
+glGetMultiTexImageEXT	shm payload without size field
+glGetNamedBufferPointerv	multi-level pointer
+glGetNamedBufferPointervEXT	multi-level pointer
+glGetNamedProgramLocalParameterIivEXT	input vector or out-vector without count/pname
+glGetNamedProgramLocalParameterIuivEXT	input vector or out-vector without count/pname
+glGetNamedProgramLocalParameterdvEXT	input vector or out-vector without count/pname
+glGetNamedProgramLocalParameterfvEXT	input vector or out-vector without count/pname
+glGetNamedProgramStringEXT	shm payload without size field
+glGetNamedStringARB	input vector or out-vector without count/pname
+glGetNextPerfQueryIdINTEL	input vector or out-vector without count/pname
+glGetObjectLabel	input vector or out-vector without count/pname
+glGetObjectLabelEXT	no signature in Definitions.cpp
+glGetObjectPtrLabel	shm payload without size field
+glGetPathCommandsNV	input vector or out-vector without count/pname
+glGetPathCoordsNV	input vector or out-vector without count/pname
+glGetPathDashArrayNV	input vector or out-vector without count/pname
+glGetPathMetricRangeNV	input vector or out-vector without count/pname
+glGetPathMetricsNV	shm payload without size field
+glGetPathSpacingNV	shm payload without size field
+glGetPerfCounterInfoINTEL	input vector or out-vector without count/pname
+glGetPerfMonitorCounterInfoAMD	shm payload without size field
+glGetPerfMonitorCounterStringAMD	input vector or out-vector without count/pname
+glGetPerfMonitorCountersAMD	input vector or out-vector without count/pname
+glGetPerfMonitorGroupStringAMD	input vector or out-vector without count/pname
+glGetPerfMonitorGroupsAMD	input vector or out-vector without count/pname
+glGetPerfQueryDataINTEL	input vector or out-vector without count/pname
+glGetPerfQueryIdByNameINTEL	input vector or out-vector without count/pname
+glGetPerfQueryInfoINTEL	input vector or out-vector without count/pname
+glGetPointerIndexedvEXT	multi-level pointer
+glGetPointeri_vEXT	multi-level pointer
+glGetPointerv	multi-level pointer
+glGetProgramBinary	input vector or out-vector without count/pname
+glGetProgramInfoLog	input vector or out-vector without count/pname
+glGetProgramPipelineInfoLog	input vector or out-vector without count/pname
+glGetProgramResourceName	input vector or out-vector without count/pname
+glGetProgramResourceiv	input vector or out-vector without count/pname
+glGetRenderbufferParameterivEXT	no signature in Definitions.cpp
+glGetShaderInfoLog	input vector or out-vector without count/pname
+glGetShaderPrecisionFormat	input vector or out-vector without count/pname
+glGetShaderSource	input vector or out-vector without count/pname
+glGetShadingRateImagePaletteNV	input vector or out-vector without count/pname
+glGetShadingRateSampleLocationivNV	input vector or out-vector without count/pname
+glGetTexImage	shm payload without size field
+glGetTextureImage	shm payload without size field
+glGetTextureImageEXT	shm payload without size field
+glGetTextureSubImage	shm payload without size field
+glGetTransformFeedbackVarying	input vector or out-vector without count/pname
+glGetUniformIndices	multi-level pointer
+glGetUniformSubroutineuiv	input vector or out-vector without count/pname
+glGetUniformdv	input vector or out-vector without count/pname
+glGetUniformfv	input vector or out-vector without count/pname
+glGetUniformi64vARB	input vector or out-vector without count/pname
+glGetUniformi64vNV	input vector or out-vector without count/pname
+glGetUniformiv	input vector or out-vector without count/pname
+glGetUniformui64vARB	input vector or out-vector without count/pname
+glGetUniformui64vNV	input vector or out-vector without count/pname
+glGetUniformuiv	input vector or out-vector without count/pname
+glGetVertexArrayPointeri_vEXT	multi-level pointer
+glGetVertexArrayPointervEXT	multi-level pointer
+glGetVertexAttribPointerv	multi-level pointer
+glGetVkProcAddrNV	pointer return not supported
+glGetnCompressedTexImage	shm payload without size field
+glGetnCompressedTexImageARB	shm payload without size field
+glGetnTexImage	shm payload without size field
+glGetnTexImageARB	shm payload without size field
+glGetnUniformdv	input vector or out-vector without count/pname
+glGetnUniformdvARB	input vector or out-vector without count/pname
+glGetnUniformfv	input vector or out-vector without count/pname
+glGetnUniformfvARB	no signature in Definitions.cpp
+glGetnUniformi64vARB	input vector or out-vector without count/pname
+glGetnUniformiv	input vector or out-vector without count/pname
+glGetnUniformivARB	no signature in Definitions.cpp
+glGetnUniformui64vARB	input vector or out-vector without count/pname
+glGetnUniformuiv	input vector or out-vector without count/pname
+glGetnUniformuivARB	no signature in Definitions.cpp
+glInvalidateFramebuffer	input vector or out-vector without count/pname
+glInvalidateNamedFramebufferData	input vector or out-vector without count/pname
+glInvalidateNamedFramebufferSubData	input vector or out-vector without count/pname
+glInvalidateSubFramebuffer	input vector or out-vector without count/pname
+glIsFramebufferEXT	no signature in Definitions.cpp
+glIsRenderbufferEXT	no signature in Definitions.cpp
+glIsTransformFeedbackNV	no signature in Definitions.cpp
+glListDrawCommandsStatesClientNV	multi-level pointer
+glMapNamedBuffer	no signature in Definitions.cpp
+glMapNamedBufferEXT	no signature in Definitions.cpp
+glMapNamedBufferRange	no signature in Definitions.cpp
+glMapNamedBufferRangeEXT	no signature in Definitions.cpp
+glMatrixLoad3x2fNV	input vector or out-vector without count/pname
+glMatrixLoad3x3fNV	input vector or out-vector without count/pname
+glMatrixLoadTranspose3x3fNV	input vector or out-vector without count/pname
+glMatrixLoadTransposedEXT	input vector or out-vector without count/pname
+glMatrixLoadTransposefEXT	input vector or out-vector without count/pname
+glMatrixLoaddEXT	input vector or out-vector without count/pname
+glMatrixLoadfEXT	input vector or out-vector without count/pname
+glMatrixMult3x2fNV	input vector or out-vector without count/pname
+glMatrixMult3x3fNV	input vector or out-vector without count/pname
+glMatrixMultTranspose3x3fNV	input vector or out-vector without count/pname
+glMatrixMultTransposedEXT	input vector or out-vector without count/pname
+glMatrixMultTransposefEXT	input vector or out-vector without count/pname
+glMatrixMultdEXT	input vector or out-vector without count/pname
+glMatrixMultfEXT	input vector or out-vector without count/pname
+glMinSampleShadingARB	no signature in Definitions.cpp
+glMultiDrawArrays	input vector or out-vector without count/pname
+glMultiDrawArraysIndirect	shm payload without size field
+glMultiDrawArraysIndirectBindlessCountNV	shm payload without size field
+glMultiDrawArraysIndirectBindlessNV	shm payload without size field
+glMultiDrawArraysIndirectCount	shm payload without size field
+glMultiDrawArraysIndirectCountARB	shm payload without size field
+glMultiDrawElements	input vector or out-vector without count/pname
+glMultiDrawElementsBaseVertex	input vector or out-vector without count/pname
+glMultiDrawElementsIndirect	shm payload without size field
+glMultiDrawElementsIndirectBindlessCountNV	shm payload without size field
+glMultiDrawElementsIndirectBindlessNV	shm payload without size field
+glMultiDrawElementsIndirectCount	shm payload without size field
+glMultiDrawElementsIndirectCountARB	shm payload without size field
+glMultiDrawMeshTasksIndirectCountEXT	no signature in Definitions.cpp
+glMultiDrawMeshTasksIndirectEXT	no signature in Definitions.cpp
+glMultiTexEnvfvEXT	input vector or out-vector without count/pname
+glMultiTexEnvivEXT	input vector or out-vector without count/pname
+glMultiTexGendvEXT	input vector or out-vector without count/pname
+glMultiTexGenfvEXT	input vector or out-vector without count/pname
+glMultiTexGenivEXT	input vector or out-vector without count/pname
+glMultiTexImage1DEXT	shm payload without size field
+glMultiTexImage2DEXT	shm payload without size field
+glMultiTexImage3DEXT	shm payload without size field
+glMultiTexParameterIivEXT	input vector or out-vector without count/pname
+glMultiTexParameterIuivEXT	input vector or out-vector without count/pname
+glMultiTexParameterfvEXT	input vector or out-vector without count/pname
+glMultiTexParameterivEXT	input vector or out-vector without count/pname
+glMultiTexSubImage1DEXT	shm payload without size field
+glMultiTexSubImage2DEXT	shm payload without size field
+glMultiTexSubImage3DEXT	shm payload without size field
+glNamedFramebufferTextureMultiviewOVR	no signature in Definitions.cpp
+glNamedProgramLocalParameter4dvEXT	input vector or out-vector without count/pname
+glNamedProgramLocalParameter4fvEXT	input vector or out-vector without count/pname
+glNamedProgramLocalParameterI4ivEXT	input vector or out-vector without count/pname
+glNamedProgramLocalParameterI4uivEXT	input vector or out-vector without count/pname
+glNamedProgramStringEXT	shm payload without size field
+glPatchParameterfv	input vector or out-vector without count/pname
+glPathCommandsNV	input vector or out-vector without count/pname
+glPathCoordsNV	shm payload without size field
+glPathDashArrayNV	input vector or out-vector without count/pname
+glPathGlyphIndexArrayNV	shm payload without size field
+glPathGlyphIndexRangeNV	shm payload without size field
+glPathGlyphRangeNV	shm payload without size field
+glPathGlyphsNV	shm payload without size field
+glPathMemoryGlyphIndexArrayNV	shm payload without size field
+glPathParameterfvNV	input vector or out-vector without count/pname
+glPathParameterivNV	input vector or out-vector without count/pname
+glPathSubCommandsNV	input vector or out-vector without count/pname
+glPathSubCoordsNV	shm payload without size field
+glPauseTransformFeedback	no signature in Definitions.cpp
+glPointAlongPathNV	input vector or out-vector without count/pname
+glPointParameterfv	input vector or out-vector without count/pname
+glPointParameteriv	input vector or out-vector without count/pname
+glPopDebugGroup	no signature in Definitions.cpp
+glPopGroupMarkerEXT	field missing
+glProgramParameteriARB	no signature in Definitions.cpp
+glProgramPathFragmentInputGenNV	input vector or out-vector without count/pname
+glProgramUniform1fEXT	no signature in Definitions.cpp
+glProgramUniform1fvEXT	no signature in Definitions.cpp
+glProgramUniform1iEXT	no signature in Definitions.cpp
+glProgramUniform1ivEXT	no signature in Definitions.cpp
+glProgramUniform1uiEXT	no signature in Definitions.cpp
+glProgramUniform1uivEXT	no signature in Definitions.cpp
+glProgramUniform2fEXT	no signature in Definitions.cpp
+glProgramUniform2fvEXT	no signature in Definitions.cpp
+glProgramUniform2iEXT	no signature in Definitions.cpp
+glProgramUniform2ivEXT	no signature in Definitions.cpp
+glProgramUniform2uiEXT	no signature in Definitions.cpp
+glProgramUniform2uivEXT	no signature in Definitions.cpp
+glProgramUniform3fEXT	no signature in Definitions.cpp
+glProgramUniform3fvEXT	no signature in Definitions.cpp
+glProgramUniform3iEXT	no signature in Definitions.cpp
+glProgramUniform3ivEXT	no signature in Definitions.cpp
+glProgramUniform3uiEXT	no signature in Definitions.cpp
+glProgramUniform3uivEXT	no signature in Definitions.cpp
+glProgramUniform4fEXT	no signature in Definitions.cpp
+glProgramUniform4fvEXT	no signature in Definitions.cpp
+glProgramUniform4iEXT	no signature in Definitions.cpp
+glProgramUniform4ivEXT	no signature in Definitions.cpp
+glProgramUniform4uiEXT	no signature in Definitions.cpp
+glProgramUniform4uivEXT	no signature in Definitions.cpp
+glProgramUniformMatrix2fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix2x3fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix2x4fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix3fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix3x2fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix3x4fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix4fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix4x2fvEXT	no signature in Definitions.cpp
+glProgramUniformMatrix4x3fvEXT	no signature in Definitions.cpp
+glReadPixels	shm payload without size field
+glReadnPixels	shm payload without size field
+glReadnPixelsARB	no signature in Definitions.cpp
+glReleaseShaderCompiler	no signature in Definitions.cpp
+glRenderbufferStorageEXT	no signature in Definitions.cpp
+glResolveDepthValuesNV	field missing
+glResumeTransformFeedback	no signature in Definitions.cpp
+glSamplerParameterIiv	input vector or out-vector without count/pname
+glSamplerParameterIuiv	input vector or out-vector without count/pname
+glSamplerParameterfv	input vector or out-vector without count/pname
+glSamplerParameteriv	input vector or out-vector without count/pname
+glScissorIndexedv	input vector or out-vector without count/pname
+glSelectPerfMonitorCountersAMD	input vector or out-vector without count/pname
+glShaderSource	multi-level pointer
+glShadingRateCombinerOpsEXT	no signature in Definitions.cpp
+glShadingRateEXT	no signature in Definitions.cpp
+glShadingRateSampleOrderCustomNV	input vector or out-vector without count/pname
+glSpecializeShader	input vector or out-vector without count/pname
+glSpecializeShaderARB	input vector or out-vector without count/pname
+glStencilFillPathInstancedNV	shm payload without size field
+glStencilStrokePathInstancedNV	shm payload without size field
+glStencilThenCoverFillPathInstancedNV	shm payload without size field
+glStencilThenCoverStrokePathInstancedNV	shm payload without size field
+glTexBufferARB	no signature in Definitions.cpp
+glTexImage1D	shm payload without size field
+glTexImage2D	shm payload without size field
+glTexImage3D	shm payload without size field
+glTexParameterIiv	input vector or out-vector without count/pname
+glTexParameterIuiv	input vector or out-vector without count/pname
+glTexParameterfv	input vector or out-vector without count/pname
+glTexParameteriv	input vector or out-vector without count/pname
+glTexStorage1D	no signature in Definitions.cpp
+glTexStorage2DEXT	no signature in Definitions.cpp
+glTexStorage3DEXT	no signature in Definitions.cpp
+glTexSubImage1D	shm payload without size field
+glTexSubImage2D	shm payload without size field
+glTexSubImage3D	shm payload without size field
+glTextureBarrier	field missing
+glTextureBarrierNV	field missing
+glTextureImage1DEXT	shm payload without size field
+glTextureImage2DEXT	shm payload without size field
+glTextureImage3DEXT	shm payload without size field
+glTextureParameterIiv	input vector or out-vector without count/pname
+glTextureParameterIivEXT	input vector or out-vector without count/pname
+glTextureParameterIuiv	input vector or out-vector without count/pname
+glTextureParameterIuivEXT	input vector or out-vector without count/pname
+glTextureParameterfv	input vector or out-vector without count/pname
+glTextureParameterfvEXT	input vector or out-vector without count/pname
+glTextureParameteriv	input vector or out-vector without count/pname
+glTextureParameterivEXT	input vector or out-vector without count/pname
+glTextureSubImage1D	shm payload without size field
+glTextureSubImage1DEXT	shm payload without size field
+glTextureSubImage2D	shm payload without size field
+glTextureSubImage2DEXT	shm payload without size field
+glTextureSubImage3D	shm payload without size field
+glTextureSubImage3DEXT	shm payload without size field
+glTransformFeedbackVaryings	multi-level pointer
+glTransformPathNV	input vector or out-vector without count/pname
+glUniformHandleui64vARB	uniform vector without element count
+glUniformHandleui64vNV	uniform vector without element count
+glUniformSubroutinesuiv	uniform vector without element count
+glUniformui64vNV	uniform vector without element count
+glVertexArrayVertexBuffers	field missing
+glVertexAttrib1dv	input vector or out-vector without count/pname
+glVertexAttrib1fv	input vector or out-vector without count/pname
+glVertexAttrib1sv	input vector or out-vector without count/pname
+glVertexAttrib2dv	input vector or out-vector without count/pname
+glVertexAttrib2fv	input vector or out-vector without count/pname
+glVertexAttrib2sv	input vector or out-vector without count/pname
+glVertexAttrib3dv	input vector or out-vector without count/pname
+glVertexAttrib3fv	input vector or out-vector without count/pname
+glVertexAttrib3sv	input vector or out-vector without count/pname
+glVertexAttrib4Nbv	input vector or out-vector without count/pname
+glVertexAttrib4Niv	input vector or out-vector without count/pname
+glVertexAttrib4Nsv	input vector or out-vector without count/pname
+glVertexAttrib4Nubv	input vector or out-vector without count/pname
+glVertexAttrib4Nuiv	input vector or out-vector without count/pname
+glVertexAttrib4Nusv	input vector or out-vector without count/pname
+glVertexAttrib4bv	input vector or out-vector without count/pname
+glVertexAttrib4dv	input vector or out-vector without count/pname
+glVertexAttrib4fv	input vector or out-vector without count/pname
+glVertexAttrib4iv	input vector or out-vector without count/pname
+glVertexAttrib4sv	input vector or out-vector without count/pname
+glVertexAttrib4ubv	input vector or out-vector without count/pname
+glVertexAttrib4uiv	input vector or out-vector without count/pname
+glVertexAttrib4usv	input vector or out-vector without count/pname
+glVertexAttribDivisorARB	no signature in Definitions.cpp
+glVertexAttribI1iv	input vector or out-vector without count/pname
+glVertexAttribI1uiv	input vector or out-vector without count/pname
+glVertexAttribI2iv	input vector or out-vector without count/pname
+glVertexAttribI2uiv	input vector or out-vector without count/pname
+glVertexAttribI3iv	input vector or out-vector without count/pname
+glVertexAttribI3uiv	input vector or out-vector without count/pname
+glVertexAttribI4bv	input vector or out-vector without count/pname
+glVertexAttribI4iv	input vector or out-vector without count/pname
+glVertexAttribI4sv	input vector or out-vector without count/pname
+glVertexAttribI4ubv	input vector or out-vector without count/pname
+glVertexAttribI4uiv	input vector or out-vector without count/pname
+glVertexAttribI4usv	input vector or out-vector without count/pname
+glVertexAttribL1dv	input vector or out-vector without count/pname
+glVertexAttribL1i64vNV	input vector or out-vector without count/pname
+glVertexAttribL1ui64vARB	input vector or out-vector without count/pname
+glVertexAttribL1ui64vNV	input vector or out-vector without count/pname
+glVertexAttribL2dv	input vector or out-vector without count/pname
+glVertexAttribL2i64vNV	input vector or out-vector without count/pname
+glVertexAttribL2ui64vNV	input vector or out-vector without count/pname
+glVertexAttribL3dv	input vector or out-vector without count/pname
+glVertexAttribL3i64vNV	input vector or out-vector without count/pname
+glVertexAttribL3ui64vNV	input vector or out-vector without count/pname
+glVertexAttribL4dv	input vector or out-vector without count/pname
+glVertexAttribL4i64vNV	input vector or out-vector without count/pname
+glVertexAttribL4ui64vNV	input vector or out-vector without count/pname
+glVertexAttribP1uiv	input vector or out-vector without count/pname
+glVertexAttribP2uiv	input vector or out-vector without count/pname
+glVertexAttribP3uiv	input vector or out-vector without count/pname
+glVertexAttribP4uiv	input vector or out-vector without count/pname
+glViewportIndexedfv	input vector or out-vector without count/pname
+glWeightPathsNV	input vector or out-vector without count/pname
+glWindowRectanglesEXT	no signature in Definitions.cpp
+glXChooseFBConfig	no signature in Definitions.cpp
+glXChooseVisual	no signature in Definitions.cpp
+glXCopyContext	no signature in Definitions.cpp
+glXCreateContext	no signature in Definitions.cpp
+glXCreateContextAttribsARB	no signature in Definitions.cpp
+glXCreateGLXPixmap	no signature in Definitions.cpp
+glXCreateNewContext	no signature in Definitions.cpp
+glXCreatePbuffer	no signature in Definitions.cpp
+glXCreatePixmap	no signature in Definitions.cpp
+glXCreateWindow	no signature in Definitions.cpp
+glXDestroyContext	no signature in Definitions.cpp
+glXDestroyGLXPixmap	no signature in Definitions.cpp
+glXDestroyPbuffer	no signature in Definitions.cpp
+glXDestroyPixmap	no signature in Definitions.cpp
+glXDestroyWindow	no signature in Definitions.cpp
+glXGetClientString	no signature in Definitions.cpp
+glXGetConfig	no signature in Definitions.cpp
+glXGetCurrentContext	no signature in Definitions.cpp
+glXGetCurrentDisplay	no signature in Definitions.cpp
+glXGetCurrentDrawable	no signature in Definitions.cpp
+glXGetCurrentReadDrawable	no signature in Definitions.cpp
+glXGetFBConfigAttrib	no signature in Definitions.cpp
+glXGetFBConfigs	no signature in Definitions.cpp
+glXGetProcAddress	no signature in Definitions.cpp
+glXGetProcAddressARB	no signature in Definitions.cpp
+glXGetSelectedEvent	no signature in Definitions.cpp
+glXGetSwapIntervalMESA	no signature in Definitions.cpp
+glXGetVisualFromFBConfig	no signature in Definitions.cpp
+glXIsDirect	no signature in Definitions.cpp
+glXMakeContextCurrent	no signature in Definitions.cpp
+glXMakeCurrent	no signature in Definitions.cpp
+glXQueryContext	no signature in Definitions.cpp
+glXQueryDrawable	no signature in Definitions.cpp
+glXQueryExtension	no signature in Definitions.cpp
+glXQueryExtensionsString	no signature in Definitions.cpp
+glXQueryServerString	no signature in Definitions.cpp
+glXQueryVersion	no signature in Definitions.cpp
+glXSelectEvent	no signature in Definitions.cpp
+glXSwapBuffers	no signature in Definitions.cpp
+glXSwapIntervalEXT	no signature in Definitions.cpp
+glXSwapIntervalMESA	no signature in Definitions.cpp
+glXSwapIntervalSGI	no signature in Definitions.cpp
+glXUseXFont	no signature in Definitions.cpp
+glXWaitGL	no signature in Definitions.cpp
+glXWaitX	no signature in Definitions.cpp
+glx	no signature in Definitions.cpp

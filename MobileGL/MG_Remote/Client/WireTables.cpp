@@ -54,6 +54,8 @@
 // P12: kDefaultReplySlotCount, because the create window's ceiling is derived from the pool it
 // shares rather than from a number written twice (see kCreateWindowMax below).
 #include <MG_Remote/Transport/ReplySlot.h>
+// P12: LinkMetricsBeginReply/ReplyApplied, so the window's blocking take is visible in by_op 2.
+#include <MG_Remote/Transport/LinkMetrics.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -343,6 +345,20 @@ namespace MobileGL::MG_Remote::Client {
         // readfail=8,951, pending pinned at 4. The drain READ the window's answers back and failed
         // every time.
         //
+        // ---- AND THE DIAGNOSIS BELOW WAS HALF WRONG; READ THIS FIRST ----------------------
+        //
+        // The arithmetic that follows is real and the no-reply bit it motivated WORKS (measured:
+        // the server skipped 50,001 answers and wrote 4,521, cutting a frame's replies by 92%).
+        // IT DID NOT FIX THE WINDOW: the drain still read back nothing (readfail 8,951 -> 8,872,
+        // -0.9%). The binding constraint is not how fast the bounded buffer is overwritten but
+        // that the drain is STRICTLY FIFO AND HAS NO WAY OUT OF A FAILED READ: it retries the
+        // same head for ever. Measured on the device (P12miss): `want=310` on every miss while
+        // `replySeq` climbed from 1,504 to 102,915 - one answer lost to a bounded buffer wedges
+        // the window permanently, and with 4,536 deferred answers that is a certainty rather
+        // than a risk. notes/p12/CREATE-WINDOW-MEASURED.md section 8 has the numbers and the
+        // shape of the fix (abandon the head: un-latch the object, add it to the suspect list,
+        // and pop - the DECLINE path reused for "unknown").
+        //
         // WHY, IN THE PROTOCOL'S OWN ARITHMETIC. An answer is readable only until its reply-pool
         // slot is reused, and the pool is kDefaultReplySlotCount = 8 slots deep. The frame posts a
         // reply for EVERY reply-owning record - not only for the rows that wait, because the server
@@ -405,6 +421,13 @@ namespace MobileGL::MG_Remote::Client {
         Uint32 g_createWindowHead = 0;
         Uint32 g_createWindowCount = 0;
         Uint64 g_createRefusals = 0;
+        // How many deferred answers the window has actually TAKEN BACK, which is the one number
+        // that says the deferral worked rather than merely happened. It is not inferable from the
+        // others: `pending` staying at the ceiling is consistent BOTH with a drain that collects
+        // one per create and with a drain that collects nothing while a server-skip keeps the
+        // answers from existing at all - the second is what a no-reply bit keyed on wantReply
+        // would produce, and it would leave every other reading green.
+        Uint64 g_createWindowTaken = 0;
 
         // A HANDLE WHOSE CREATE CAME BACK DECLINED IS NEVER WINDOWED AGAIN. Without this the window
         // would UNDO the repair it exists to keep: every later use of the object sends another create,
@@ -459,8 +482,19 @@ namespace MobileGL::MG_Remote::Client {
             Bool blocking = blockForOldest;
             while (g_createWindowCount != 0) {
                 const PendingCreate head = g_createWindow[g_createWindowHead];
+                // THE WAIT THIS ROW PAYS IS PAID HERE (P12), so the metric has to see it HERE.
+                // Without this, by_op 2 counts only the fallback emissions and a WORKING window
+                // reads as "create stopped waiting" when the row had merely moved the waiting
+                // into this loop - the false green the design review named. Counted for the
+                // blocking take only: the poll is not a round trip, and it is the blocking take
+                // that is the thing MOBILEGL_IPC_CREATE_WINDOW divides (4,536 -> creates/window).
+                const Uint64 metricStart =
+                    blocking ? Transport::LinkMetricsBeginReply(
+                                   true, static_cast<std::uint32_t>(MGPWireOp::ResourceCreate))
+                             : 0;
                 const Transport::SessionWait wait =
                     session.WaitForApplied(head.Seq, blocking ? 120000u : 0u);
+                if (blocking) Transport::LinkMetricsReplyApplied(metricStart);
                 if (wait != Transport::SessionWait::Reached) return;
                 Int32 status = Wire::ReplySink::kStatusError;
                 Uint64 size = 0;
@@ -486,6 +520,7 @@ namespace MobileGL::MG_Remote::Client {
                 }
                 g_createWindowHead = (g_createWindowHead + 1) % kCreateWindowMax;
                 --g_createWindowCount;
+                ++g_createWindowTaken;
                 blocking = false;
             }
         }
@@ -546,9 +581,13 @@ namespace MobileGL::MG_Remote::Client {
                 }
             }
             Int32 status = Wire::ReplySink::kStatusError;
-            const Uint64 seq =
-                session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr,
-                                         0, nullptr, 0, &status, nullptr, /*wantReply=*/false);
+            // willReadReply IS TRUE AND THAT IS THE WHOLE POINT OF THE WINDOW: this record does
+            // not wait for its answer, and the drain above reads it later. A P12 no-reply bit
+            // keyed on wantReply would tell the server to skip the very answer this row comes
+            // back for (docs/.../p12/CREATE-WINDOW-MEASURED.md section 7).
+            const Uint64 seq = session.EmitAndWaitTails(
+                MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
+                &status, nullptr, /*wantReply=*/false, /*willReadReply=*/true);
             if (seq == Wire::kInvalidSeq) {
                 // Cancelled: there is no ordinal to read an answer from, and the caller must NOT
                 // latch an object the record never described.
@@ -596,7 +635,7 @@ namespace MobileGL::MG_Remote::Client {
             if (confirmed) {
                 seq = session.EmitAndWaitTails(MGPWireOp::SetTextureParams, payload, sizeof(*payload),
                                                nullptr, 0, nullptr, 0, &status, nullptr,
-                                               /*wantReply=*/false);
+                                               /*wantReply=*/false, /*willReadReply=*/false);
                 status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
                                                   : Wire::ReplySink::kStatusOk;
             } else {
@@ -642,7 +681,13 @@ namespace MobileGL::MG_Remote::Client {
             const Uint64 seq = session.EmitAndWaitTails(
                 MGPWireOp::ResourceSubData, &record, sizeof(record),
                 varTail != nullptr ? &tail : nullptr, varTail != nullptr ? 1u : 0u, nullptr, 0,
-                &status, nullptr, wantReply);
+                &status, nullptr, wantReply,
+                // ONE ANSWER TO BOTH QUESTIONS, and on this row that is not a shortcut: the
+                // wire arm's MGPipeSubDataWantsItsReply is false for the whole texture half
+                // (PipeRoute.h), the caller discards the Bool either way, and the record's own
+                // comment above already says "nothing reads it". A buffer-half caller that DID
+                // read it would pass wantReply=true and get its answer.
+                wantReply);
             // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
             const Int32 postedStatus = (seq == Wire::kInvalidSeq || status == Wire::ReplySink::kStatusDeclined)
@@ -726,7 +771,7 @@ namespace MobileGL::MG_Remote::Client {
             if (!wantsReply) {
                 const Uint64 seq = session.EmitAndWaitTails(
                     MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr, 0,
-                    &status, nullptr, /*wantReply=*/false);
+                    &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
                 status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
                                                   : Wire::ReplySink::kStatusOk;
             } else {
@@ -1167,6 +1212,10 @@ namespace MobileGL::MG_Remote::Client {
     // against the effective ceiling and the array size, which are the two numbers the guard itself
     // is written in terms of, and not against a literal repeated in the test.
     Uint32 ClientCreateWindowPending() { return g_createWindowCount; }
+    // Taken + Pending is every create the window ever accepted: the answers it has read back and
+    // the ones still outstanding. A create the window accepted and then LOST would break that
+    // sum, which is the failure a provisional accept makes possible and a count cannot show.
+    Uint64 ClientCreateWindowTaken() { return g_createWindowTaken; }
     Uint32 ClientCreateWindowEffective() { return CreateWindowEffective(); }
     Uint32 ClientCreateWindowArraySize() { return kCreateWindowMax; }
     // Objects whose create came back DECLINED: out of the window, next create blocking, and back

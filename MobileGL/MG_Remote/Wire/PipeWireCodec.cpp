@@ -88,7 +88,8 @@ namespace MobileGL::MG_Remote::Wire {
                                     static_cast<Uint16>(Transport::kRecHasBlob) |
                                     static_cast<Uint16>(Transport::kRecPad) |
                                     static_cast<Uint16>(Transport::kRecBorrowSlot) |
-                                    static_cast<Uint16>(Transport::kRecVarTail);
+                                    static_cast<Uint16>(Transport::kRecVarTail) |
+                                    static_cast<Uint16>(Transport::kRecNoReply);
         // The three call flags the encoder TRANSLATES, and the three it deliberately drops
         // because MGPipeCallFlagsFor(op) recovers them from the opcode.
         constexpr Uint16 kTranslated = static_cast<Uint16>(MG_Pipe::kNeedsAck) |
@@ -103,7 +104,7 @@ namespace MobileGL::MG_Remote::Wire {
                   "MGPipeCallFlags gained or lost an enumerator; re-derive the translation in "
                   "EncodeRecord and extend the overlap assertions below before assuming the "
                   "new bit is safe to drop");
-    static_assert(FlagSpace::kRingAll == 0x1Fu,
+    static_assert(FlagSpace::kRingAll == 0x3Fu,
                   "RingRecordFlags gained or lost an enumerator; the two spaces share one "
                   "16-bit field, so a new ring bit may now alias a call flag");
     static_assert((FlagSpace::kTranslated | FlagSpace::kDropped) == FlagSpace::kCallAll &&
@@ -111,8 +112,13 @@ namespace MobileGL::MG_Remote::Wire {
                   "every MGPipeCallFlags bit must be either translated or deliberately "
                   "dropped; a seventh enumerator that needs a ring bit would otherwise be "
                   "dropped in silence");
-    // FIVE OF THE SIX CALL-FLAG BITS ALIAS A RING BIT. Only kOptional (1<<5) is free, and it
-    // is free by luck rather than by design - RingRecordFlags simply has not reached 1<<5 yet.
+    // ALL SIX CALL-FLAG BITS NOW ALIAS A RING BIT. The sixth, kOptional, was free "by luck
+    // rather than by design" (RingRecordFlags had not reached 1<<5) until P12 gave bit 5 a
+    // meaning of its own, kRecNoReply. The alias is harmless for the usual reason - kOptional is
+    // in kDropped, so it is never stamped into this field, and kRecNoReply is only ever set by
+    // the encoder's translation - and the named assert below is where that is stated rather than
+    // assumed. What it costs is the WARNING this comment used to carry: there is no spare bit
+    // left, so the next call flag or ring flag needs a wider field, not another enumerator.
     static_assert((FlagSpace::kCallAll & FlagSpace::kRingAll) == FlagSpace::kRingAll,
                   "the overlap between the two flag spaces moved");
     // Named individually so a failure says WHICH pair, and so the three that actually bite are
@@ -140,9 +146,14 @@ namespace MobileGL::MG_Remote::Wire {
                   "stamps kRecVarTail on nine opcodes, and a reader who believes "
                   "PipeWire.inc's 'MGPipeCallFlags of the call' comment reads those nine as "
                   "kReplySlot");
-    static_assert((static_cast<Uint16>(MG_Pipe::kOptional) & FlagSpace::kRingAll) == 0,
-                  "kOptional is the one call flag with no ring alias, and only because "
-                  "RingRecordFlags has not reached 1<<5");
+    static_assert(static_cast<Uint16>(MG_Pipe::kOptional) ==
+                      static_cast<Uint16>(Transport::kRecNoReply),
+                  "kOptional == kRecNoReply - the alias P12 created. Harmless because kOptional "
+                  "is in kDropped (never stamped) and kRecNoReply is only ever set by the "
+                  "encoder: a reader that saw a stamped kOptional would read \"do not answer\" off "
+                  "a flag that means \"this call may be absent from the backend table\". If this "
+                  "pair ever stops being true, keep translating anyway - the hazard is two flag "
+                  "spaces in one field, not this particular overlap");
 
     // ---- and the two headers really are one layout -----------------------------------
     //
@@ -1059,7 +1070,7 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     Uint64 PipeWireEncoder::EncodeRecord(MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                                         const WireTail* tails, Uint32 tailCount) {
+                                         const WireTail* tails, Uint32 tailCount, Bool noReply) {
         if (Cancelled()) return kInvalidSeq;
         if (!Valid()) {
             WireProtocolFatal("PipeWireEncoder::EncodeRecord", "no SEG_CMD producer installed");
@@ -1127,6 +1138,10 @@ namespace MobileGL::MG_Remote::Wire {
         if ((callFlags & static_cast<Uint32>(kNeedsAck)) != 0) ringFlags |= Transport::kRecNeedsAck;
         if ((callFlags & static_cast<Uint32>(kHasBlob)) != 0) ringFlags |= Transport::kRecHasBlob;
         if ((callFlags & static_cast<Uint32>(kVarTail)) != 0) ringFlags |= Transport::kRecVarTail;
+        // P12: THE ONE BIT THAT IS NOT A TRANSLATION OF THE OPCODE, because it is not a property
+        // of the row - set_texture_params waits for an unconfirmed object and does not for a
+        // confirmed one, so the same opcode answers both ways and only the client knows which.
+        if (noReply) ringFlags |= Transport::kRecNoReply;
 
         // BOTH WRAP READINGS ARE TAKEN FROM THE PRODUCER'S OWN CURSOR, not from a flag Reserve
         // does not return. The cursor is a monotonic byte count and the ring is indexed
@@ -1452,6 +1467,8 @@ namespace MobileGL::MG_Remote::Wire {
     Uint64 PipeWireDecoder::AcceptedRecords() const { return m_accepted; }
 
     Uint64 PipeWireDecoder::DeclinedRecords() const { return m_declined; }
+    Uint64 PipeWireDecoder::AnsweredRecords() const { return m_answered; }
+    Uint64 PipeWireDecoder::SkippedAnswers() const { return m_skipped; }
 
     void PipeWireDecoder::PostReply(MGPWireOp op, Uint64 seq, Int32 status, const void* bytes,
                                     Uint64 size) {
@@ -1723,6 +1740,14 @@ namespace MobileGL::MG_Remote::Wire {
         // four lines inside one lambda, made under R-17 by c1 because it is the server half of
         // the routing R-17 assigns, and it is called out in c1-v2.md so the integrator can
         // move it if the call belongs elsewhere.
+        // P12: MAY THIS RECORD'S ANSWER BE SKIPPED? Read from the RING FRAMING field, not from
+        // MGPipeCallFlagsFor(op): the client decides per CALL, and the opcode cannot answer for
+        // it (set_texture_params waits for an unconfirmed object and does not for a confirmed
+        // one). MGPWireRecHeader and RingRecordHeader are the same eight bytes, so `record` -
+        // which is the header, with the payload behind it - is where the producer's bit is.
+        const Bool answerSkipped =
+            (static_cast<const MGPWireRecHeader*>(record)->Flags &
+             static_cast<Uint16>(Transport::kRecNoReply)) != 0;
         const auto noteAcceptance = [&](Bool accepted) {
             m_lastAcceptanceKnown = true;
             m_lastAcceptance = accepted;
@@ -1731,6 +1756,16 @@ namespace MobileGL::MG_Remote::Wire {
             } else {
                 ++m_declined;
             }
+            // THE BOOKKEEPING ABOVE IS NOT CONDITIONAL, and the skip is placed BELOW it rather
+            // than around it on purpose: m_accepted / m_declined / LastAcceptance are the
+            // acceptance record (MG_Test asserts on them), while the PostReply below is the WIRE
+            // cost this bit exists to remove. A row whose answer is skipped still has to say what
+            // it decided - "nobody reads the answer" is not "nothing happened".
+            if (answerSkipped) {
+                ++m_skipped;
+                return;
+            }
+            ++m_answered;
             // DECLINED is a real answer and carries no payload (ReplySlot.h): the four Bool
             // rows say `false` with it, exactly as MapPersistent says nullptr with it.
             PostReply(op, seq, accepted ? ReplySink::kStatusOk : ReplySink::kStatusDeclined,

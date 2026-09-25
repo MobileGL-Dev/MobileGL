@@ -727,17 +727,27 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     static_assert(Call(kHostSpan) == Rec(kRecBorrowSlot), "the kHostSpan/kRecBorrowSlot collision moved");
     static_assert(Call(kReplySlot) == Rec(kRecVarTail), "the kReplySlot/kRecVarTail collision moved");
 
-    // kOptional has no ring counterpart at all: bit 5 is unused over there today. If a sixth
-    // ring flag is ever added it lands on this bit, so this is where that is noticed.
+    // kOptional HAD no ring counterpart and now has one, which is exactly what this block said
+    // would happen: "bit 5 is unused over there today; if a sixth ring flag is ever added it
+    // lands on this bit, so this is where that is noticed". P12 added it - kRecNoReply, "the
+    // server may skip this record's answer" - so ALL SIX call-flag bits now alias a ring bit and
+    // there is no spare bit left in either space.
     static_assert(Call(kOptional) == (1u << 5), "kOptional moved");
+    static_assert(Call(kOptional) == Rec(kRecNoReply),
+                  "the kOptional/kRecNoReply collision moved - the sixth and last alias");
 
     // Exhaustiveness, from both ends. The generator pins kMGPipeCallFlagsAllBits from
     // MGPipe.h; this pins the ring's own set against it, so ADDING a flag to either enum is a
     // build break here rather than a wrong decode in the field.
+    //
+    // THE RING SIDE OF THAT IS HAND-WRITTEN, so it is only as exhaustive as this list: a new
+    // enumerator that is not added below leaves the assert green. It has been extended for
+    // kRecNoReply; extend it again rather than reusing the count.
     static_assert(kMGPipeCallFlagsAllBits == 0x3Fu, "MGPipeCallFlags grew or shrank");
     constexpr std::uint32_t kAllRingFlags =
-        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) | Rec(kRecVarTail);
-    static_assert(kAllRingFlags == 0x1Fu, "RingRecordFlags grew or shrank");
+        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) |
+        Rec(kRecVarTail) | Rec(kRecNoReply);
+    static_assert(kAllRingFlags == 0x3Fu, "RingRecordFlags grew or shrank");
 
     // ---- the runtime half, and it is NOT the story the collision table alone suggests ----
     //

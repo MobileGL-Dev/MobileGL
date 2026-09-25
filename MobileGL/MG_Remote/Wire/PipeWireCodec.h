@@ -274,7 +274,16 @@ namespace MobileGL::MG_Remote::Wire {
         // can only report a corrupt stream. That is the same arithmetic the decoder runs, so
         // the check is real rather than a restatement of the caller's own belief.
         Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                            const WireTail* tails, Uint32 tailCount);
+                            const WireTail* tails, Uint32 tailCount, Bool noReply = false);
+
+        // `noReply` (P12) stamps Transport::kRecNoReply, which tells the server it may SKIP the
+        // answer for this record. IT IS NOT "the caller is not waiting" - that is `wantReply` on
+        // ClientSession::EmitAndWaitTails, and the two are deliberately different questions: the
+        // create window emits without waiting and READS the answer later, so its records must not
+        // carry this. Only a record whose answer nobody will ever read may set it, and the client
+        // is where that is known - the server cannot recover it from the opcode, because the same
+        // row answers both ways (set_texture_params waits for an unconfirmed object and does not
+        // for a confirmed one).
 
         // Releases every SEG_STAGE run named by a record the apply side has RETIRED
         // (RingControl::retiredSeq, R-9, which this class only ever READS). Called from
@@ -739,6 +748,14 @@ namespace MobileGL::MG_Remote::Wire {
         Bool LastAcceptance() const;
         Uint64 AcceptedRecords() const;
         Uint64 DeclinedRecords() const;
+        // P12: HOW MANY ANSWERS WERE WRITTEN AND HOW MANY WERE SKIPPED, counted where the
+        // decision is made. This is the pair a deferral's viability is read off: only the
+        // ANSWERED records compete for the reply pool, so `AnsweredRecords() / creates` is how
+        // many replies stand between two deferred answers. Without it the client can see that
+        // its drain failed but not whether the server was ever told it could stop answering -
+        // and a wire change whose effect is invisible is a wire change nobody can debug.
+        Uint64 AnsweredRecords() const;
+        Uint64 SkippedAnswers() const;
 
         // Points MG_Pipe::gMGPipeWireRecordApply at this layer's thunk. Called once from the
         // constructor and modelled on SegmentTable::InstallProcessResolver, which is the same
@@ -772,6 +789,8 @@ namespace MobileGL::MG_Remote::Wire {
         Bool m_lastAcceptance = false;
         Uint64 m_accepted = 0;
         Uint64 m_declined = 0;
+        Uint64 m_answered = 0;
+        Uint64 m_skipped = 0;
         // The SEG_STAGE runs the record being applied resolved, for the 0xDD fill. Eight deep
         // so CreateShaderState's seven blob members plus a tail would fit if a later phase
         // declares them; today at most one run is ever noted (see PoisonedStageBytes).

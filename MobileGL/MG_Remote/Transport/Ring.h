@@ -283,6 +283,17 @@ namespace MobileGL::MG_Remote::Transport {
         kRecPad = 1u << 2,       // filler to the wrap boundary, no payload meaning
         kRecBorrowSlot = 1u << 3, // slot is borrowed into the GPU timeline; retires late
         kRecVarTail = 1u << 4,
+        // P12: THE PEER NEED NOT ANSWER THIS RECORD. Set by the producer for a record whose
+        // answer NOBODY WILL EVER READ - not "whose caller is not waiting". The distinction is
+        // the whole point: the create window's records are emitted without a wait and their
+        // answers are read later by the drain, so they must NOT carry this bit.
+        //
+        // IT ALIASES kOptional (1<<5) IN THE CALL-FLAG SPACE, and that is harmless for the same
+        // reason the other five aliases are: the two spaces share one 16-bit field and are kept
+        // apart by the ENCODER'S TRANSLATION, never by stamping (PipeWireCodec.cpp's FlagSpace
+        // block names each pair and asserts them). kOptional is in kDropped - it never reaches
+        // this field - so nothing can set this bit by accident.
+        kRecNoReply = 1u << 5,
     };
 
     // Reserved kind for the wrap filler. The catalogue starts at 1.

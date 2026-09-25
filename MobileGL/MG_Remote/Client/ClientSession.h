@@ -211,7 +211,26 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                 const Wire::WireTail* tails, Uint32 tailCount, void* replyOut,
                                 Uint64 replyBytes, Int32* statusOut,
-                                Uint64* replySizeOut = nullptr, Bool wantReply = true);
+                                Uint64* replySizeOut = nullptr, Bool wantReply = true,
+                                Bool willReadReply = true);
+
+        // `willReadReply` (P12) and `wantReply` ARE TWO QUESTIONS AND MUST STAY TWO.
+        //
+        //   wantReply      does THIS CALL read the answer (it blocks on the barrier and takes the
+        //                  reply slot before returning);
+        //   willReadReply  will the answer be read AT ALL - now, or later by somebody else.
+        //
+        // The create window is the case that makes the difference load-bearing: it emits with
+        // wantReply=false and its answers are read afterwards by the window's drain, so a record
+        // it emits must still be ANSWERED. Only willReadReply=false tells the server it may skip
+        // the answer (Transport::kRecNoReply), and only three sites may say it: the parameter row
+        // for a confirmed object, the respecify row's fire-and-forget half, and the sub-data row
+        // - each of which answers its own caller locally and reads nothing from the wire.
+        //
+        // THE TWO ILLEGAL COMBINATIONS ARE FATAL BY NAME rather than ignored, because both would
+        // fail silently in opposite directions: wantReply && !willReadReply is a caller blocking
+        // on an answer it has just told the server not to send, and !willReadReply on a row with
+        // no reply slot is a caller discarding an answer that never existed.
 
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.
