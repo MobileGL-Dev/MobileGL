@@ -15,7 +15,13 @@
   按形状实测（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`，主机 inproc，按 op 计数）：**图集拼接**（一张 level 上 64 次 `glTexSubImage2D`）**64 → 0** 次回包等待；
   **每 sprite 一张纹理**（64 张纹理 + 256 次 `glTexParameteri`）**384 → 320**，剩下的全是 per-resource / per-call 的三条 row（create 76 / respecify 130 / params 130）——
   它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号，删掉等待就是删掉信号，裁定见 `CONTRACT-P5E.md` §2.5。
-  **真机端到端墙钟仍待复测**，见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md)。
+  真机（TrebleDroid GSI，MC 26.2 经 TCP 入世界）那一帧的构成为 `ResourceRespecify` 20,633 + `SetTextureParams` 18,056 + `ResourceCreate` 4,536 条**各等一次**，
+  而 `ResourceSubData` 12,671 条**零等待**（B 的实机证据）；这些记录都是真实状态变化，客户端没有可去重的（同一值的 `glTexParameteri` 本来就不产生记录）。
+- **单次往返那 ~5 ms 是设备侧的深度空闲退出，不是链路也不是客户端**（P12，本轮实测）：同一帧、同一批记录，
+  客户端自旋 40× 只快 ~10%；换 `adb forward`（USB）快 ~25–30%；而把设备 8 核钉 `performance` 并关掉 `cpuoff_l`/`clusteroff_l`/`mcusysoff`/`s2idle` 后，
+  单次等待 **5,040 → 3,715 µs**、那一帧墙钟 **221.5 s → 166.5 s（−25%）**——记录数与字节数都不变。
+  这解释了 handoff §3.6「换快 3.4 倍的链路墙钟不变」：钱花在设备每次唤醒上；handoff §3.2 那 249 s 是在**未定频**的机器上取的，含这份空闲税。
+  见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md) §2.6–2.10。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
 
 ## 按阶段
