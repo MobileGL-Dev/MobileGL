@@ -231,9 +231,9 @@ handle", and it is what `MGPipeResourceRespecifyWantsItsReply` (`PipeRoute.h`) a
   does not hold. It was given a WINDOW instead of a rule - `MOBILEGL_IPC_CREATE_WINDOW`, answers
   deferred and collected in order, a late DECLINE un-latching the object - and **the window is OFF
   BY DEFAULT because the deferral was measured and cannot be collected**: the reply pool is
-  `kDefaultReplySlotCount` = 8 slots deep and one load frame posts 59,673 replies (the server
+  `kDefaultReplySlotCount` = 8 slots deep and one load frame posts 55,903 replies (the server
   answers every reply-owning record whether or not the client wants the answer), so an answer is
-  overwritten after 8 replies - 0.61 of a create. On the device all 4,536 creates took the blocking
+  overwritten after 8 replies - 0.65 of a create. On the device all 4,536 creates took the blocking
   path at window 4 and at window 1 alike (28.64 s both ways, against the handoff's 31.3 s
   pre-window baseline on the same device). `WireTables.cpp`'s section comment carries the counters
   and the arithmetic. The client-visible consequence is worth stating here: with the window ON, the

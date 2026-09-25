@@ -9,8 +9,8 @@
 - **窗口开了等于没开**：同一台设备、同一帧、同一 101,421,396 B staged，`MOBILEGL_IPC_CREATE_WINDOW=4`
   与 `=1` 的 create 行都是 **4,536 次等待**，墙钟都是 **28.64 s**（handoff 的 pre-window 基线是 31.3 s）。
   临时计数器给出的形态是：`pushed=24 blocked=4,476 took=20 readfail=8,951 pending=4`——**drain 读不回来**。
-- **不是调参问题**：回复池 8 槽，而这一帧发出 **59,673 条带回复的记录**（服务端对每条 kReplySlot 记录都回，
-  不管客户端要不要），所以一条答案在 **8 条回复**之后就被覆盖，等于 **0.61 个 create**。任何深度的窗口都读不回来。
+- **不是调参问题**：回复池 8 槽，而这一帧发出 **55,903 条带回复的记录**（服务端对每条 kReplySlot 记录都回，
+  不管客户端要不要），所以一条答案在 **8 条回复**之后就被覆盖，等于 **0.65 个 create**。任何深度的窗口都读不回来。
 - **顺带修掉一个真 bug**：`StreamLink::ReadReply` 只认「最新一条」（单槽），违背 `ILink::ReadReply(seq)`
   的按 seq 读取语义。已改成一个 8 槽环 + 用例。
 - **默认关掉**：`MOBILEGL_IPC_CREATE_WINDOW` 默认 1。窗口开着不只是白费，它会让**被拒绝的 create 留在「已发布」状态**
@@ -41,25 +41,27 @@ P12diag create=4501 cfg=4 eff=4 suspects=0 refusals=0 pending=4 pushed=24 blocke
 `pending` 从第 500 条起**一直钉在 4**，`refusals=0`（一条答案都没读到过），`readfail` 约每条 create 涨 2
 （非阻塞 poll + 阻塞 drain 各失败一次）。
 
-## 2. 根因：回复池 8 槽 vs 一帧 59,673 条回复
+## 2. 根因：回复池 8 槽 vs 一帧 55,903 条回复
 
 答案只在**它的槽没被复用**之前可读（`ReplySlotPool`，`kDefaultReplySlotCount = 8`，
-`Transport/ReplySlot.h:111`）。而这一帧发回复的记录数是：
+`Transport/ReplySlot.h:111`）。而这一帧发回复的记录数是（**只数带 `kReplySlot` 的行**——
+`MG_Pipe/generated/PipeWire.inc:177-179` 的 flags 列，op 4 `ResourceDestroy` 是 `kNone`，
+`PostReply` 对它直接 Fatal，从来不回；本文第一版把它的 3,770 条算了进来，审查纠正为下表）：
 
 | 行 | 条数 | 为什么回 |
 |---|---|---|
 | 2 `ResourceCreate` | 4,536 | 等 |
 | 3 `ResourceRespecify` | 20,633 | **不等也给**（首用确认后 fire-and-forget） |
 | 47 `SetTextureParams` | 18,056 | **不等也给** |
-| 48 `ResourceSubData` + 4 | 16,441 | **不等也给** |
+| 48 `ResourceSubData` | 12,671 | **不等也给** |
 | 5 / 9 等 | 7 | 等 |
-| **合计** | **59,673** | |
+| **合计** | **55,903** | |
 
 服务端**无法知道**客户端要不要这条答案——`ClientSession.cpp:1897-1900` 原文：「The server posts either way,
-so the wire is unchanged and the row keeps its flag」。于是池子一帧churn **7,459 次**，两条 create 之间平均夹
-**13.2 条回复**，而一条答案只活得下 **8 条**：
+so the wire is unchanged and the row keeps its flag」。于是池子一帧 churn **6,988 次**，两条 create 之间平均夹
+**12.3 条回复**，而一条答案只活得下 **8 条**：
 
-    8 / 13.2 = 0.61 个 create
+    8 / 12.3 = 0.65 个 create
 
 **所以窗口的失败不是「慢」，是「读不到」。** 1 深度的窗口就是阻塞路径本身。
 
@@ -115,10 +117,36 @@ if (x.replySeq != seq) return ... MOBILEGL_ERR_PROTOCOL_MISMATCH;   // 等的是
 要让延后的答案活下来，只有两条路，**都是协议面而不是调参**：
 
 1. **加深回复池**：`ReplySlotCount` 在 Hello 里协商（`ClientSession.cpp:957` / `ServerSession.cpp:745`），
-   两端一致即可改。需要的深度 \>= 两条 create 之间的回复数（本帧 13.2）乘以窗口深度，即 4 深度要 ~53 槽；
-   而 `ReplyBytes` 固定 16 MiB 时槽会变小，`ReadPixels` 的 `ReplyCanHold` 会先撞墙，所以要一起抬 `ReplyBytes`。
-2. **让客户端能说「这条别回」**：四个 Bool 行（create/respecify/params/sub-data）目前服务端一律回；
-   一个 record flag 就能把 59,673 砍到 ~4,543，那时 8 槽够用。这是 wire 改动，两端都要动。
+   两端一致即可改。需要的深度 \>= 两条 create 之间的回复数（本帧 12.3）乘以窗口深度，即 4 深度要 ~49 槽；
+   而 `ReplyBytes` 固定 16 MiB 时槽会变小（16 MiB / 64 ≈ 256 KiB），`ReadPixels` 的 `ReplyCanHold`
+   会先撞墙，所以要一起抬 `ReplyBytes`（W=4 保 2 MiB 上限约需 128 MiB）。**注意这是 8× 常驻内存**，
+   而且评审指出服务端 SEG_REPLY 的实际分配路径**没人读过**——走这条之前先读它。
+2. **让服务端别回那些没人会读的答案**：四个 Bool 行（create/respecify/params/sub-data）目前一律回，
+   其中约 51,000 条的答案是**没有人会读**的。砍到 ~4,543 之后两条 create 之间只剩 ~1 条回复，8 槽够用。
+
+   **判据必须是「这条的答案永远不会被读」，不是「fire-and-forget」。** 这两者今天在 4 个站点里 3 个重合，
+   **在最重要的那一个上正好相反**：window 延后的那些 create **正是** `wantReply=false`，而 §1 的 drain
+   读的就是它们。按字面实现会让窗口从「读不回来」变成「根本没得读」，而且连 `readfail` 这个唯一能诊断它的
+   计数器一起消失——不会崩，只会静默退化。（这条是独立评审抓到的；本页 §7 的第一版写法就是那个错判据。）
+
+   三件已经核过的事：
+
+   - **位有空位**：`MGPWireRecHeader::Flags` 是链路 framing 空间 `RingRecordFlags`（**不是** `MGPipeCallFlags`），
+     `Ring.h:281-285` 用掉 bit 0-4，**bit 5 空**（`PipeWire.inc:35-65` 的对照表自己写着「bit 5 kOptional vs（无）」）。
+   - **wire fingerprint 不动**：`WireFingerprint()` 混的是 payload 布局 digest + PipeCalls.def 的 catalogue
+     digest + 渲染状态 + OpCount，加一个 ring 位三个都不动 ⇒ **不必 bump `MOBILEGL_PROTOCOL_CONTROL_REVISION`**。
+     但 `PipeWireCodec.cpp:106` / `:142-145` 与 `RingTest.cpp:740` 三条 `static_assert` **会红**——那是故意的
+     绊线（新 ring 位正好别名 `kOptional`）。
+   - **两个方向都退化成今天的行为**（旧端忽略 bit 5 照旧回包；旧客户端从不设位）⇒ 它**不是** handoff-2 §3.2
+     那种「不升级就会坏」的协议面，而是**「不两端都升就不会生效」**的协议面——便宜一档，客户端可以先落。
+
+   还有一处**必须同改**：`LinkMetricsBeginReply` 计的是 `ownsReplySlot`（`ClientSession.cpp:1883`），window
+   生效后 **`by_op 2` 会掉到 ~0**，而 §1 正是教人用 `by_op 2` 判断窗口有没有生效——它会变成**假绿**。
+   验证这个提案要另加「服务端为这条 op 回了多少次」的计数。
+
+   （本节的两条路都经过一次独立评审。评审指出一处**未实测**：`StreamLink::PostReply` 把 `SendProgress()`
+   搭在回包上（`StreamLink.cpp:577`），跳过回包会把进度粒度从「每条一次」降到「>= 64 条或 >= 1 ms 一次」
+   （`:564-571`）——水位仍独立推进，但 barrier 的平均多等量没人算过。）
 
 ## 8. 复算
 

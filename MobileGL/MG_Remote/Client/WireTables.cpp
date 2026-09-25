@@ -347,13 +347,14 @@ namespace MobileGL::MG_Remote::Client {
         // slot is reused, and the pool is kDefaultReplySlotCount = 8 slots deep. The frame posts a
         // reply for EVERY reply-owning record - not only for the rows that wait, because the server
         // cannot know which those are (ClientSession.cpp:1897-1900: "The server posts either way")
-        // - and that is 59,673 replies in this one frame:
+        // - and that is 55,903 replies in this one frame (op 4 ResourceDestroy is NOT counted: its
+        // catalogue flags are kNone, so PostReply would Fatal on it and it never answers):
         //
         //     create 4,536 + respecify 20,633 + params 18,056 + sub-data 12,671 + 3,770 + 6 + 1
         //
-        // 8 slots against 59,673 replies is a pool that churns 7,459 times per frame, i.e. 13.2
+        // 8 slots against 55,903 replies is a pool that churns 6,988 times per frame, i.e. 12.3
         // replies between two creates: an answer posted at create N is overwritten after EIGHT
-        // replies, which is 0.61 of a create. There is no window depth for which the deferred
+        // replies, which is 0.65 of a create. There is no window depth for which the deferred
         // answer still exists when the client comes back for it - the deferral is not slow, it is
         // UNREADABLE. (A 1-deep "window" is the blocking path, which is what the row does.)
         //
@@ -364,8 +365,13 @@ namespace MobileGL::MG_Remote::Client {
         // prevent. So the default is 1: the row is the pre-window shape unless someone sets
         // MOBILEGL_IPC_CREATE_WINDOW explicitly, and the machinery below is kept as the record of
         // what was tried and what it cost (a fix would have to make a deferred answer outlive
-        // 59,673 intervening replies, which means a deeper pool or a way for the client to tell
-        // the server "do not answer this one" - both are wire changes, not tuning).
+        // 12.3 intervening replies, which means a deeper pool, or NOT sending the ~51,000 answers
+        // nobody will read - and that second one needs its predicate stated exactly, because
+        // "fire-and-forget" is the WRONG one: the window's own creates are fire-and-forget and
+        // the drain above reads them, so a bit keyed on wantReply disables the mechanism it is
+        // meant to enable. The bit has to mean "this answer will never be read" - which is true
+        // of respecify/params/sub-data and false of a windowed create. See
+        // docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md section 7, reviewed).
         //
         // The gates that pin it are in MG_Test/Wire/RemoteClientControls.inc, and they still hold:
         // the window is a coherent mechanism, it is simply unusable on a frame with this much

@@ -551,16 +551,19 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_IPC_CREATE_WINDOW: how many RESOURCE_CREATE answers may be outstanding before the
         // client waits for one. 1 = every create waits, which is the shape R-5 shipped with AND THE
         // DEFAULT, because the deferral was measured on the device and does not work: the reply pool
-        // is 8 slots and one load frame posts 59,673 replies (create 4,536 + respecify 20,633 +
-        // params 18,056 + sub-data 12,671 + the rest), so an answer is overwritten after 8 replies -
-        // 0.61 of a create - and the window's drain can never read one back. All 4,536 creates took
+        // is 8 slots and one load frame posts 55,903 replies (create 4,536 + respecify 20,633 +
+        // params 18,056 + sub-data 12,671 + 7), so an answer is overwritten after 8 replies -
+        // 0.65 of a create - and the window's drain can never read one back. All 4,536 creates took
         // the blocking path at 4 and at 1 alike (28.64 s both ways). Worse than inert: the
         // provisional accept latches an object the applier may have refused, and the un-latch that
         // corrects it lives in that same unreadable drain. WireTables.cpp's section comment has the
         // counters and the arithmetic, and the gates in RemoteClientControls.inc still pin the
         // mechanism, which is sound and simply unusable against this much other reply traffic.
-        // N > 1 is reachable for the experiment that would make it usable (a deeper pool, or a way
-        // to tell the server not to answer a fire-and-forget row).
+        // N > 1 is reachable for the experiment that would make it usable (a deeper pool, or a
+        // per-record "this answer will never be read" bit). NOTE THE PREDICATE: NOT
+        // "fire-and-forget" - the window's own creates ARE fire-and-forget and the drain reads
+        // them, so a flag keyed on wantReply would kill the very thing it is meant to enable
+        // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md section 7).
         Uint32 CreateWindow = 1;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
