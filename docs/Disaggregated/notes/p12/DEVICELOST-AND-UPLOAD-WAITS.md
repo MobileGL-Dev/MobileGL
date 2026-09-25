@@ -246,6 +246,28 @@ handoff §3.6 留过一个没解释的现象：把链路从 Wi-Fi 换到 USB（�
 **这同时解释了 handoff 的两处观察**：§3.6「换快 3.4 倍的链路墙钟不变」（因为钱花在设备的唤醒上），以及 §3.3 服务端 profile 里那 65% 的 socket syscall / 15% 门铃自旋（等待与唤醒的形状）。
 **也要说清楚**：handoff §3.2 那 249 s 是在**没有**做设备定频/关空闲的机器上取的（项目自己的纪律 `guide/pin-verification-2026-09-07.md` 就是为这件事写的），所以它的绝对值里含这份空闲税。
 
+### 2.9b 同一个诊断的可移植修法：**服务端的自旋预算**（已实测，不需要 root、不需要改代码）
+
+§2.9 的机理直接指向一个已经接好线的旋钮：服务端 apply 线程在记录之间 park 得越早，SoC 越容易掉进深度空闲。
+本轮把它调大再测（同一台设备、同一帧、43,232 条记录、101.4 MB staged）：
+
+| 变体 | 最大帧 `rtt_mean` | 墙钟 | 代价 / 前提 |
+|---|---|---|---|
+| 基线（服务端 spin 50 µs，出厂省电） | 5,040 µs | **221.5 s** | — |
+| **服务端 `MOBILEGL_IPC_SPIN_US=2000`** | 4,145 µs | **182.8 s（−17%）** | 设备侧多烧一点自旋 CPU；**不需要 root**、**不需要改代码** |
+| 设备定频 + 关深度空闲 | 3,715 µs | **166.5 s（−25%）** | 需要 root/系统权限 |
+
+`MOBILEGL_IPC_SPIN_US` 通过 Activity 现成的 `env` extra 传进去即可（`ServerEnvironment.apply` 的语法是 `KEY=VALUE;KEY=VALUE`，且它不在 `SCRUBBED` 名单里）：
+
+~~~sh
+adb shell am start -n top.mobilegl.plugin.trace/top.mobilegl.plugin.MobileGLDisplayActivity \
+  --es listen tcp://0.0.0.0:40613 --es token <token> --es backend DirectGLES \
+  --es env "MOBILEGL_IPC_SPIN_US=2000"
+~~~
+
+服务端日志自己会证明它生效了：`mgl-srv-apply started … spin 2000 us`。**这条已经是可用的缓解手段**；要不要把它做成 Android 上的默认值（一行 env 或一个默认常量）是产品决定：
+它拿设备 CPU 换墙钟，而这一帧本来就 94% 在等。
+
 ### 2.10 于是「2–3 分钟停滞」的修法清单（按预期收益排序）
 
 1. **把等待批起来**（K ≤ 8，回复槽池可证明）：同样多的记录、少得多的唤醒。与第 2 条互补，且**纯客户端**，不需要设备权限。

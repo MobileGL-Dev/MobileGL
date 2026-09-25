@@ -21,6 +21,8 @@
   客户端自旋 40× 只快 ~10%；换 `adb forward`（USB）快 ~25–30%；而把设备 8 核钉 `performance` 并关掉 `cpuoff_l`/`clusteroff_l`/`mcusysoff`/`s2idle` 后，
   单次等待 **5,040 → 3,715 µs**、那一帧墙钟 **221.5 s → 166.5 s（−25%）**——记录数与字节数都不变。
   这解释了 handoff §3.6「换快 3.4 倍的链路墙钟不变」：钱花在设备每次唤醒上；handoff §3.2 那 249 s 是在**未定频**的机器上取的，含这份空闲税。
+  **同一个诊断给出一条可移植修法**：把服务端的自旋预算调大（Activity 的 `env` extra → `MOBILEGL_IPC_SPIN_US=2000`，不需要 root、不需要改代码），
+  那一帧 **221.5 s → 182.8 s（−17%）**；设备定频+关深度空闲则是 **166.5 s（−25%）**。服务端日志会打印 `spin 2000 us` 自证。
   见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md) §2.6–2.10。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
 
