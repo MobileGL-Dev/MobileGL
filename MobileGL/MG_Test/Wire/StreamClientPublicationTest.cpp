@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <atomic>
 #include <MG_Pipe/PipeRoute.h>
+// P12: the create row's observables and the wire tables it is installed as.
+#include <MG_Remote/Client/WireTables.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <chrono>
 #include <thread>
@@ -192,6 +194,146 @@ namespace {
                                                 static_cast<const void*>(nullptr), Uint64{0}),
                   MG_Remote::Wire::kInvalidSeq);
         EXPECT_TRUE(StageIs(0x33));
+    }
+
+    // =====================================================================================
+    // P12: THE CREATE WINDOW, ON THE ARM IT SHIPS ON
+    // =====================================================================================
+    //
+    // WHY THIS CASE EXISTS AT ALL, and it is not symmetry. The window's own gates run in
+    // RemoteClientControls, whose session is `TransportMode::InProcess` - ShmLink - where the window
+    // is now OFF BY DESIGN, because a shared pool's slot is `seq % slotCount` and is reused, so a
+    // deferred answer may be gone with no way to recover it. That means EVERY window-level gate in
+    // the tree runs on the arm the feature does not ship on: three rounds of this feature were
+    // green in the lanes while being inert on the device for exactly that reason. This case runs on
+    // a real StreamLink with a real ClientSession and a peer that answers, which is the arm the
+    // device runs, and it asserts the one property the device measured as broken: every deferred
+    // answer comes BACK.
+    //
+    // THE PEER IS A SERVO, not a server: it pops each record, answers its seq, and publishes the
+    // watermark, which is all the row needs (nothing here applies a record, and the row does not
+    // care). What it must NOT do is answer late or out of order - the reply must precede the
+    // progress frame that publishes its seq, because the drain's `WaitForApplied` oracle and the
+    // store's invariant both rest on that ordering (StreamLink::PostReply sends Reply then
+    // SendProgress under one lock).
+    class StreamClientWindow : public StreamClientPublication {
+    protected:
+        std::atomic<bool> servoStop{false};
+        std::thread servo;
+        std::atomic<std::uint64_t> answered{0};
+        void SetUp() override {
+            StreamClientPublication::SetUp();
+            // `Start()` does this on the real path (ClientSession.cpp:1615); this harness enters
+            // through FinishStartup, so the routed rows have to be installed by hand or
+            // MGPipeRouteResourceCreate would reach the monolith screen.
+            Client::InstallClientWireTables();
+        }
+        void TearDown() override {
+            servoStop.store(true);
+            if (servo.joinable()) servo.join();
+            Client::UninstallClientWireTables();
+            StreamClientPublication::TearDown();
+        }
+        void StartServo() {
+            servo = std::thread([this] {
+                std::uint64_t applied = 0;
+                while (!servoStop.load(std::memory_order_acquire)) {
+                    Transport::RingRecordView view{};
+                    if (!peer->CommandsIn().Pop(view)) {
+                        std::this_thread::yield();
+                        continue;
+                    }
+                    ++applied;
+                    const auto posted = peer->PostReply(applied, 0, nullptr, 0);
+                    Transport::Watermark::AdvanceApplied(*peer->Memory().CmdControl(), applied);
+                    const auto flushed = peer->FlushProgress();
+                    if (posted != MOBILEGL_OK || flushed != MOBILEGL_OK) {
+                        std::printf("servo stopped: record=%llu post=%d flush=%d\n",
+                                    static_cast<unsigned long long>(applied),
+                                    static_cast<int>(posted), static_cast<int>(flushed));
+                        std::fflush(nullptr);
+                        return;
+                    }
+                    answered.store(applied, std::memory_order_release);
+                }
+            });
+        }
+    };
+
+    TEST_F(StreamClientWindow, EveryDeferredCreateAnswerComesBackOnTheShippingArm) {
+        const Uint32 savedWindow = MG_Config::Ipc.CreateWindow;
+        MG_Config::Ipc.CreateWindow = 4;
+        StartServo();
+        const std::uint64_t takenBefore = Client::ClientCreateWindowTaken();
+        constexpr Int32 kCreates = 24;
+        const auto create = [](Int32 i) {
+            MG_Pipe::MGPResourceDesc desc{};
+            desc.Resource = MG_Pipe::MGPipeHandle{static_cast<Uint32>(i + 1), 1};
+            desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+            desc.InternalFormat = 1;
+            desc.Width = 4;
+            desc.Height = 4;
+            desc.Depth = 1;
+            desc.ArrayLayers = 1;
+            desc.Levels = 1;
+            desc.Samples = 1;
+            (void)MG_Pipe::MGPipeRouteResourceCreate(desc);
+        };
+        create(0);
+        // ---- AND THEN THE TRAFFIC THAT USED TO CROWD THE ANSWER OUT ----
+        // THIS IS THE CASE THE GATE IS FOR, and without it the case passes against a store that
+        // keeps only the last 8 answers (measured: it did). What killed the device was not the
+        // creates themselves but the OTHER answers arriving between a create being deferred and
+        // the drain coming back for it - the server is behind, and its late answers to the earlier
+        // records fill a bounded buffer first. So twelve more records whose answers are WANTED are
+        // emitted here, all of them declared and therefore all of them retained: a store bounded by
+        // the last N answers loses the create's here, and the store under test does not.
+        for (Int32 i = 0; i < 12; ++i) {
+            MG_Pipe::MGPTextureParams params{};
+            params.Res = MG_Pipe::MGPipeHandle{static_cast<Uint32>(100 + i), 1};
+            Int32 status = 0;
+            (void)client.EmitAndWaitTails(MG_Pipe::MGPWireOp::SetTextureParams, &params,
+                                          sizeof params, nullptr, 0, nullptr, 0, &status, nullptr,
+                                          /*wantReply=*/false, /*willReadReply=*/true);
+        }
+        // DELIVER THEM. A published record reaches the peer on a flush, not on PublishAndNotify -
+        // the case above this one is built on exactly that (`glFlush` is what exports the batch),
+        // and without this the servo sees nothing and the crowding never happens.
+        ::glFlush();
+        // WAIT UNTIL THOSE ANSWERS HAVE ACTUALLY ARRIVED, or the crowding is a race the store can
+        // win by luck: the case would pass against the ring whenever the reader thread happened to
+        // be behind. The servo posts them synchronously, and the reader is a thread on a socketpair,
+        // so the settlement is a wait on the servo's own count plus one scheduling slice.
+        const auto settled = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (answered.load(std::memory_order_acquire) < 13 &&
+               std::chrono::steady_clock::now() < settled)
+            std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        ASSERT_GE(answered.load(), 13u) << "the peer did not answer the crowding records";
+        for (Int32 i = 1; i < kCreates; ++i) create(i);
+        const std::uint64_t taken = Client::ClientCreateWindowTaken() - takenBefore;
+        const Uint32 pending = Client::ClientCreateWindowPending();
+        // THE PROPERTY THE DEVICE MEASURED AS BROKEN: `Taken` counts the answers the drain has
+        // read OUT OF THE LINK'S STORE, so it can only move if retention works end to end - the
+        // wire declared each seq before publishing it, the peer answered it, the store kept it
+        // across however much traffic followed, and the drain found it again. On the device this
+        // number was FROZEN AT 63 for a whole load frame while the ring was 8 deep (`taken=63
+        // pushed=65 readfail=8,872`), which is exactly what a bounded buffer of the last N does.
+        //
+        // AND THE TAIL IS THE WINDOW'S OWN DEPTH, not a loss: nothing drains the window when no
+        // further create arrives, so the last `pending` answers stay held - which is what
+        // `pending` is. The conservation law is the assertion; `taken == kCreates` would be
+        // asserting that the row drains on a path it does not have.
+        EXPECT_GE(taken, static_cast<std::uint64_t>(kCreates) - Client::ClientCreateWindowEffective())
+            << "the window collected " << taken << " of " << kCreates << " answers";
+        EXPECT_EQ(taken + pending, static_cast<std::uint64_t>(kCreates))
+            << "answers were lost or invented: taken " << taken << " + pending " << pending;
+        EXPECT_LE(pending, Client::ClientCreateWindowEffective());
+        // AND THE ROW REALLY IS DEFERRING HERE, so the case cannot pass by taking the blocking
+        // path on every create (which is what a link the window refuses to run on looks like).
+        EXPECT_EQ(Client::ClientCreateWindowEffective(), 4u);
+        EXPECT_TRUE(client.LinkRetainsReplies());
+        MG_Config::Ipc.CreateWindow = savedWindow;
     }
 
     class StreamClientStagingProcess : public StreamClientPublication {
