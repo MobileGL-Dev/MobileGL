@@ -187,8 +187,27 @@ one present credit later than the call after it; P5C §4.2 already assigns order
 names the window. **`resource_subdata`:** the BUFFER half passes `wantReply = false` through
 `MGPipeRouteResourceSubData` (the Bool is discarded today, `PipeFill.cpp:839`; the server still
 posts, the slot is never read — legal, `ReplySlot.h:16, 105`), which is what makes the persistent-map
-push (`PersistentMapTracker.cpp:735, 850`) fire-and-forget; the TEXTURE half keeps its wait because
-`DrainTextureSubData` clears the level's dirty flag on the accepted reply (D-D5; trailing).
+push (`PersistentMapTracker.cpp:735, 850`) fire-and-forget.
+**THE TEXTURE HALF'S WAIT IS PAID OFF (P12 — the "trailing" this paragraph used to carry), and the
+argument is that its answer is DERIVABLE on the wire arm, not that nobody reads it.**
+`DrainTextureSubData` still clears the level's dirty flag on an accepted answer (D-D5); what it no
+longer buys is a round trip for it, because (a) the emission is already gated on
+`CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemTextureResources)` (`PipeFill.cpp:1719-1740`) —
+the same published fact the applier's own acceptance belt reads (`PipeApply.cpp:1408-1419`), so the
+one refusal this acceptance exists to carry ("no consumer") cannot be the answer to a record this
+client emitted; (b) what remains is a loud bug class (`MGP_TRIP_WIRE_REPORT` for a malformed texture
+record, `ResolveResourceIn`'s counted miss for a handle the applier does not hold); and (c) a record
+the CLIENT cancelled still answers "not accepted", so the level stays dirty and is retried. **The
+wait moves to `SEG_STAGE`**: a run that does not fit reclaims retired bytes and parks on the stage
+doorbell, which is proportional to the window rather than to the call count. `MGPipeSubDataWantsItsReply`
+(`PipeRoute.h`) stays the ONE place that decides, now with the arm test inside
+`MOBILEGL_BUILD_DISAGGREGATED` and the original expression as its fall-through; monolith and every
+non-wire arm keep the old answer, which is what G1 measures. Gate:
+`RemoteClientControls.TextureUploadsStopOwningAReplyOnTheWireArm` reads back the same `wait_replies`
+the P65LinkMetrics line prints (`LinkMetricsReplyWaits`), asserting a pure upload moves it by ZERO
+while a `resource_create` row still moves it; red-once with the arm test removed is exit 142.
+`ResourceCreate` and `SetTextureParams` stay `kWaitReply` — same question, asked per resource and
+per call, analyzed separately rather than swept in here.
 
 ### 2.6 Event-ring flow control (ARCHITECTURE §11.7 made real)
 

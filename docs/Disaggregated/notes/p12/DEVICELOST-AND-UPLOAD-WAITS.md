@@ -92,15 +92,19 @@ DECLINED 有三条**完全不含损坏**的产生路径，两条在服务端、�
 
 谓词里新增的那一支**在 `#if MOBILEGL_BUILD_DISAGGREGATED` 内**，fall-through 是原来那一行表达式；
 其余改动全部落在 split-only 的翻译单元（`MG_Remote/**`）或 `PipeFill.cpp` 的 `#if MOBILEGL_BUILD_DISAGGREGATED` 块内。
-因此 pull 臂预处理后与改动前**逐字符相同**；G1 的符号/`.text` 断言仍按惯例由 CI 的 pull 车道给出（本机未复核，见 §3）。
+因此 pull 臂预处理后与改动前**逐字符相同**。**本机已按 G1 跑过 A/B**：pull 配置（Release、`/usr/bin/c++`、`MOBILEGL_BUILD_DISAGGREGATED=OFF`、`--target MobileGL`）在 `c984d952`（基线）与 `3b9f536d`（本轮）各建一次，结果 `.text` **13872002 = 13872002** 字节、符号 **31746 / 31746**、**0 增 0 删**，逐符号 `comm` 无任何差异（两棵树留在 `build-g1-base/`、`build-g1-head/`，符号表在各自的 `syms.txt`）。
 
 ## 3. 本轮**没有**做的（下一轮的直接入口）
 
 1. **真机端到端**：A 需要「进世界不再崩」、B 需要「那一帧墙钟 249 s → 约 20 s」的真机数字。需要重出 APK（`assembleTraceRelease` + 签名）、手机 `90cee93` 起 server、跨机 TCP 起 MC 26.2。
-   注意 handoff §1.3：**GL 别名软链（`/tmp/mgl` 五个）是必需的**，且本会话的 shell 沙箱给 `/tmp` 挂的是**每次命令全新的 tmpfs**，所以要在同一条命令里建链再跑。
-2. **G1 本机复核**：pull 配置完整构建两次（带/不带本轮改动）比 `.text` 与符号集。CI 已断言，本机未跑。
-3. **同类第二条**：`ResourceCreate` 与 `SetTextureParams` 也是逐条 kWaitReply（handoff §4.3 末条）。B 只处理了上传那半；这两条要单独分析（创建是按资源一次，参数设置是每次调用——收益与风险不同）。
-4. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
+   注意 handoff §1.3：**GL 别名软链（五个）是必需的**，且本会话的 shell 沙箱给 `/tmp` 挂的是**每次命令全新的 tmpfs**，
+   所以要在同一条命令里建链再跑。本轮已把这条路径的工具做成持久版本放在仓库外的 `mgl-device/`：
+   `launch-mc.py`（按版本 JSON 重建启动命令，已干跑校验：95 条 classpath 条目全部存在、Java 25 由 `javaVersion.majorVersion` 选出）、
+   `gl-aliases.sh`（把五个别名建在 `mgl-device/gl-aliases/`，**不放 build 目录**：那里的 `libEGL.so` 会让 server dlopen 自己）、
+   `start-phone-server.sh`（装包 + 起 Activity + handoff 那两个就绪判据）。
+2. **同类第二条**：`ResourceCreate` 与 `SetTextureParams` 也是逐条 kWaitReply（handoff §4.3 末条）。B 只处理了上传那半，
+   这两条要单独分析（创建是按资源一次，参数设置是每次调用——收益与风险不同）；`CONTRACT-P5E.md` §2.5 已把这一条写成 "analyzed separately"。
+3. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
 
 ## 4. 证据位置
 
