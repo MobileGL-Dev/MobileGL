@@ -1898,6 +1898,10 @@ namespace MobileGL::MG_Remote::Client {
         // creates or parameter sets, and those three have different fixes.
         const auto replyMetricStart =
             Transport::LinkMetricsBeginReply(ownsReplySlot, static_cast<std::uint32_t>(op));
+        // P12: the residency budget's clock. Placed HERE, where the record is certainly
+        // published, rather than beside rowCarriesReplySlot: a call that declined before
+        // encoding emits nothing and must not advance it.
+        if (rowCarriesReplySlot) ++m_replyPostings;
         m_producer.PublishAndNotify(seq);
         if (op == MG_Pipe::MGPWireOp::Present) {
             // A credit is permission to run ahead, not permission to retain the
@@ -2457,6 +2461,8 @@ namespace MobileGL::MG_Remote::Client {
     Transport::SessionWait ClientSession::WaitForApplied(Uint64 seq, Uint32 timeoutMs) {
         return m_producer.WaitForApplied(seq, timeoutMs);
     }
+
+    Uint64 ClientSession::ReplyPostings() const { return m_replyPostings; }
 
     Bool ClientSession::ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
                                   Uint64* outSize) {

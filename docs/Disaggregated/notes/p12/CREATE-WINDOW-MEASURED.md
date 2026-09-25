@@ -190,7 +190,43 @@ if (x.replySeq != seq) return ... MOBILEGL_ERR_PROTOCOL_MISMATCH;   // 等的是
 2. **两端必须都升才生效**：客户端先落、服务端不升时，行为与改前逐字节相同（旧端忽略 bit 5 照旧回包）——
    这正是 B6 说的那一档，本轮在真机上先撞到了一次。
 
-## 9. 复算
+## 9. 第 1、2 步落地与实测：预算也不够，缺的是「保留」
+
+按 §8 的次序做了两步并上真机。
+
+**第 1 步（让回包失败可归因）**：`ReplyPool` 现在有 `PostedReplies()`/`FailedReplies()`，非 OK 的返回不再被吞
+（原来只检查 `BUFFER_TOO_SMALL`，`TRANSPORT_CLOSED` 静默消失）。实测：
+
+    服务端 P12post posted=4501 failed=0
+
+**⇒「答案没送到」被排除**：服务端 `answered` 与客户端 `seen` 的那 20 条差额是两端采样时刻不同，不是丢包。
+
+**第 2 步（residency budget）**：客户端数「自最老窗口条目 push 以来发出了多少条带 `kReplySlot` 的记录」
+（`ClientSession::ReplyPostings()`），逼近 8 就强制阻塞取回。实测：
+
+    P12win call=4501 cfg=2 eff=2 pending=2 taken=63 pushed=65 blocked=4435 budget=4451 readfail=8872 posts=54377
+    kind=frame-op frame=14 wait_replies=9078 by_op=2=9071   墙钟 27.87 s
+
+`budget=4451`——预算在**几乎每一条 create** 上都判超支，于是窗口几乎不再延后（`pushed=65`），而 drain 依然
+读不回来（`taken=63`、`readfail=8872`）。**预算无效，且原因是结构性的：**
+
+1. **窗口只在 create 到达时才有机会动作。** 两条 create 之间客户端可以发出上千条记录——实测第一次读失败时
+   回复环已经是 `[1175..1504]`，而队头是 **seq 310**；中间那段没有任何人看窗口。
+2. **挤掉延后答案的不是客户端发了什么，是服务端回了什么。** 服务端是落后的一侧（每次唤醒 ~5 ms 回一条，
+   客户端一路跑到前面），所以那段时间到达的回复是它**对更早那批 create 的迟到答案**，它们先把 8 个槽占满。
+3. **所以这个判据在构造上就太晚**：它在下一条 create 才被问到，而那时答案早就没了。收紧常数只会让延后彻底消失
+   （`pushed=65` 就是那个样子），不会有别的结果。
+
+**结论（本轮最终认识）：延后要成立，客户端必须「保留」它延后的答案。** 回复缓冲按**条数**有界（8），而客户端
+**无法**约束服务端在它两条 create 之间会回多少条答案——所以「指望缓冲里还有」不是策略，是一场客户端必输的竞争。
+能工作的形状是**保留**：读线程把「还没被取走」的那几个 seq 的答案留着（同时只有个位数），取走即丢，
+读不到就**报一次丢失**而不是无限重试。那是传输层改动（`StreamLink` 的环 → 带上限与丢失计数的保留表），
+也是下一步该做的。
+
+**两步都留在树里**：第 1 步是净收益；第 2 步是安全方向（只会让窗口退化成不延后＝pre-window 形状），
+而且它用的时钟 `ReplyPostings()` 正是保留方案要用的。
+
+## 10. 复算
 
 ~~~sh
 # 两臂的帧读数（handoff-2 §1 的读法）
@@ -199,6 +235,10 @@ grep -a "kind=frame-op frame=" mgl-device/logs/mcx-fix4.client | tail -1
 grep -a "kind=frame-sent frame=" mgl-device/logs/mcx-fix4.client | tail -1
 # 一轮设备 run（自带 force-stop、就绪判据、负载帧检测、截屏、SIGTERM 收尾）
 cd mgl-device && python3 run-once.py <tag> [MOBILEGL_IPC_CREATE_WINDOW=4]
+# 窗口自己的读数（临时探针）：taken / pushed / budget / readfail / posts
+grep -a "P12win" mgl-device/logs/<tag>.client | tail -1
+# 回包送达（服务端）：posted / failed
+grep -a "P12post" mgl-device/logs/<tag>.server | tail -1
 # 门
 build-split/MobileGL/MG_Test/Wire/RemoteClientTest --gtest_filter='*CreateWindow*:*RefusedCreate*'
 build-split/MobileGL/MG_Test/Wire/StreamLinkTest --gtest_filter='*OlderReply*'

@@ -97,12 +97,25 @@ namespace MobileGL::MG_Remote::Server {
         // chosen from that and an overflow means the two sides disagree about the frame.
         Uint32 SlotBytes() const;
 
+        // P12: DID THE ANSWER ACTUALLY GO OUT? PostedReplies counts the ones the link took,
+        // FailedReplies the ones it refused. THE PAIR EXISTS BECAUSE THE DECODER'S TALLY CANNOT
+        // ANSWER IT: m_answered is incremented BEFORE PostReply, so it counts ATTEMPTS. Without
+        // these two, a client that cannot read an answer has no way to tell "the server never
+        // sent it" from "it was sent and the bounded buffer dropped it" - and those two need
+        // opposite fixes, one in the transport and one in the deferral. (Found the hard way: a
+        // device run had the server report 4,521 answers and the client receive 4,501, and
+        // nothing in the tree could say which twenty were which.)
+        Uint64 PostedReplies() const { return m_posted; }
+        Uint64 FailedReplies() const { return m_failed; }
+
     private:
         Transport::ILink* m_link = nullptr;
         Uint8* m_base = nullptr;
         Uint64 m_size = 0;
         Uint32 m_slots = 0;
         Uint32 m_slotBytes = 0;
+        Uint64 m_posted = 0;
+        Uint64 m_failed = 0;
     };
 
     // ---- MGPClear's two discriminants ---------------------------------------------------

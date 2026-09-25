@@ -380,6 +380,18 @@ namespace MobileGL::MG_Remote::Client {
         // only way a client blocked in the barrier survives a server that went away.
         Transport::SessionWait WaitForApplied(Uint64 seq, Uint32 timeoutMs);
 
+        // P12: HOW MANY REPLY-OWNING RECORDS THIS CLIENT HAS EMITTED, the clock a deferred
+        // answer's RESIDENCY is measured against. An answer is readable only until the bounded
+        // reply buffer reuses its slot, so a caller that defers an answer (the create window)
+        // has to know how many other answers have gone by since it was posted.
+        //
+        // EVERY reply-slot row is counted, not only the rows this client waits for, and that is
+        // the conservative direction on purpose: a server that ignores the no-reply bit answers
+        // records the client does not read, and those answers displace a deferred one just the
+        // same. A budget that counted only "answers I will read" would be wrong in exactly the
+        // deployment where it matters most.
+        Uint64 ReplyPostings() const;
+
         // The reply slot for `seq`, addressed seq % slots with the seq stamped back into the
         // header for self-check (R-3). `outStatus` is 0 OK / 1 DECLINED / 2 ERROR, and
         // DECLINED IS A REAL ANSWER - MapPersistent's nullptr and the four Bool acceptances.
@@ -513,6 +525,7 @@ namespace MobileGL::MG_Remote::Client {
         Transport::EventRingConsumer* m_events = nullptr;
         Transport::ITransport* m_transport = nullptr;
         Bool m_started = false;
+        Uint64 m_replyPostings = 0; // P12: the residency budget's clock (ReplyPostings())
         // Written by whichever thread first notices the hangup - the GL thread in the barrier,
         // or the event pump - and read by glGetGraphicsResetStatus on the GL thread.
         std::atomic<bool> m_deviceLost{false};

@@ -66,14 +66,30 @@ namespace MobileGL::MG_Remote::Server {
     void ReplyPool::PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) {
         if (m_link) {
             const auto result = m_link->PostReply(seq, status, bytes, size);
+            if (result == MOBILEGL_OK) {
+                ++m_posted;
+
+                return;
+            }
+            ++m_failed;
             if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL)
                 SessionFail(MGFatalFamily::ReplyTooLarge, "MGPipe: Fatal{ReplyTooLarge, stream reply}");
+            // EVERY OTHER FAILURE IS NAMED AND COUNTED RATHER THAN SWALLOWED (P12). This used to
+            // `return` on anything that was not BUFFER_TOO_SMALL, so a TRANSPORT_CLOSED reply
+            // vanished with no line, no counter and no Fatal - and the client's only symptom is a
+            // deferred answer that never arrives, which is indistinguishable from a buffer that
+            // overwrote it. Once per call site rather than once per reply: a broken link fails
+            // every time, and a log per answer would drown the run it is there to explain.
+            MGLOG_E_ONCE("MGPipe: reply seq %llu was NOT delivered (%d); the client will not read"
+                         " this answer. FailedReplies() counts them",
+                         static_cast<unsigned long long>(seq), static_cast<int>(result));
             return;
         }
         Transport::ReplySlotPool pool(m_base, m_size, m_slots);
         // Fatal inside Post when the answer does not fit a slot: P5 does not chunk replies,
         // and the client knows an answer's size before it emits the record.
         pool.Post(seq, status, bytes, size);
+        ++m_posted;
     }
 
     Uint32 ReplyPool::SlotBytes() const { return m_slotBytes; }

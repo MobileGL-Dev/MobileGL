@@ -91,6 +91,11 @@ namespace MobileGL::MG_Remote::Client {
     // drain that never collects leaves Pending at the ceiling and every other reading unchanged,
     // which is exactly what the device measured before the stream link learned to answer by seq.
     Uint64 ClientCreateWindowTaken();
+    // How many times the RESIDENCY BUDGET - not a full window - forced the blocking take: the
+    // oldest answer was about to outlive its reply slot. Non-zero is the budget doing its job;
+    // a value near the record count says the budget is too tight for this workload and the
+    // window is deferring almost nothing, which is the honest way to read that.
+    Uint64 ClientCreateWindowBudgetStops();
     Uint32 ClientCreateWindowEffective();
     Uint32 ClientCreateWindowArraySize();
     Uint32 ClientCreateWindowSuspects();
