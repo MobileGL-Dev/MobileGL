@@ -6,6 +6,7 @@
 #include "ReplySlot.h"
 #include "Framing.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -91,9 +92,33 @@ namespace MobileGL::MG_Remote::Transport {
         std::mutex writeMutex, replyMutex;
         std::condition_variable replyReady;
         std::vector<LinkSpan> stage;
-        std::vector<std::uint8_t> reply, readReply;
+        std::vector<std::uint8_t> readReply;
         std::uint64_t replySeq = 0, sentCmd = 0, receivedCmd = 0, sentEvent = 0, receivedEvent = 0;
-        std::int32_t replyStatus = 0;
+        // ---- THE RECENT-REPLY RING (P12) -------------------------------------------------
+        //
+        // ILink::ReadReply takes a SEQ, and until P12 that was decoration: every caller read the
+        // answer it had just waited for, which is always the newest one, so a single slot answered
+        // every question and `replySeq != seq` could stand in for "no such answer". The create
+        // window is the first caller that reads an OLDER seq - it defers up to four answers and
+        // takes them in order - and against a single slot every one of those reads fails
+        // PROTOCOL_MISMATCH for ever. What that looked like on the device, measured: the window
+        // filled to 4 and STAYED there, `refusals=0` because no answer was ever read, every one of
+        // the frame's 4,536 creates fell through to the blocking path, and the wall clock did not
+        // move (29.0 s against the 30.1 s of the same binary with the window off). The deferral
+        // was pure overhead: four answers held unread, plus one failed drain attempt per record.
+        //
+        // BOUNDED AT kDefaultReplySlotCount, which is the pool ShmLink stands in for: an answer a
+        // reader has not taken by the time eight newer ones have arrived is one the shm arm has
+        // already overwritten too, so the two transports now lose the same answers and no more.
+        // The byte vectors are sized per reply, so an idle link pays eight empty ones.
+        static constexpr std::size_t kReplyRing = 8;
+        struct StoredReply {
+            std::uint64_t seq = 0;
+            std::int32_t status = 0;
+            std::vector<std::uint8_t> bytes;
+        };
+        std::array<StoredReply, kReplyRing> replies{};
+        std::size_t replyNext = 0;
         std::uint64_t lastProgressSeq = 0;
         std::chrono::steady_clock::time_point lastProgress = std::chrono::steady_clock::now();
         LinkArena records{}, events{};
@@ -309,8 +334,15 @@ namespace MobileGL::MG_Remote::Transport {
                         std::lock_guard<std::mutex> lock(replyMutex);
                         if (a <= replySeq) Corrupt("reply sequence moved backwards");
                         replySeq = a;
-                        replyStatus = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
-                        reply.assign(payload, payload + size);
+                        // RING, NOT REPLACE. replySeq stays the newest and stays monotone -
+                        // the wait predicate below is written in terms of it - while the
+                        // answers themselves are kept for the readers that come back for an
+                        // older one (the window's drain, StreamLink.cpp's own note).
+                        StoredReply& slot = replies[replyNext];
+                        replyNext = (replyNext + 1) % kReplyRing;
+                        slot.seq = a;
+                        slot.status = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
+                        slot.bytes.assign(payload, payload + size);
                     }
                     replyReady.notify_all();
                     producer.Notify();
@@ -557,12 +589,20 @@ namespace MobileGL::MG_Remote::Transport {
             return x.closed.load(std::memory_order_acquire) || x.replySeq >= seq ||
                    x.C().Progress.appliedSeq.load(std::memory_order_acquire) >= seq;
         });
-        if (x.replySeq != seq) return x.closed.load() ? MOBILEGL_ERR_TRANSPORT_CLOSED : MOBILEGL_ERR_PROTOCOL_MISMATCH;
-        x.readReply = x.reply;
-        *status = x.replyStatus;
-        *size = x.readReply.size();
-        *p = x.readReply.data();
-        return MOBILEGL_OK;
+        // BY SEQ, WHICH IS WHAT THE PARAMETER HAS ALWAYS SAID (P12). The equality this replaces
+        // was true only while every caller read the newest answer; it is what made a deferred
+        // answer unreadable and the create window inert on this transport.
+        for (const auto& slot : x.replies) {
+            if (slot.seq != seq) continue;
+            // Copied into the shared scratch so the pointer outlives the lock, exactly as the
+            // single-slot version did: the caller memcpys under its own frame.
+            x.readReply = slot.bytes;
+            *status = slot.status;
+            *size = x.readReply.size();
+            *p = x.readReply.data();
+            return MOBILEGL_OK;
+        }
+        return x.closed.load() ? MOBILEGL_ERR_TRANSPORT_CLOSED : MOBILEGL_ERR_PROTOCOL_MISMATCH;
     }
     std::uint64_t StreamLink::EventPublishedHead() const {
         return m_impl->memory ? m_impl->E().cmdHead.load(std::memory_order_acquire) : 0;

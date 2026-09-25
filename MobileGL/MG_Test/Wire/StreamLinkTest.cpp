@@ -137,6 +137,44 @@ namespace {
         EXPECT_EQ(value, 22u);
     }
 
+    // ---- P12: AND THE REPLY A READER COMES BACK FOR IS READABLE BY ITS SEQ ----
+    //
+    // The case above reads the NEWEST answer, which is the only one a single-slot link could ever
+    // hand back. The create window defers up to four answers and takes them in order, so the OLDEST
+    // of them has to still be readable after newer ones have arrived - and against a
+    // replace-on-arrival slot it was not: every drain read failed PROTOCOL_MISMATCH for ever, the
+    // window stayed full, and every create fell back to the blocking path. Measured on the device
+    // before this: 4,536 creates, 4,536 of them blocking, `pending` pinned at 4, refusals 0, wall
+    // clock 29.0 s against 30.1 s with the window off. This is the transport half of that fix.
+    TEST_F(StreamPair, AnOlderReplyIsStillReadableByItsSeq) {
+        Queue(1, 1);
+        Queue(2, 2);
+        Queue(3, 3);
+        ASSERT_EQ(client.Flush(), MOBILEGL_OK);
+        ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
+        for (std::uint64_t seq = 1; seq <= 3; ++seq) {
+            ASSERT_TRUE(apply.ApplyOne([&](const RingRecordView&) {
+                const std::uint64_t value = seq * 11;
+                EXPECT_EQ(server.PostReply(seq, 0, &value, sizeof value), MOBILEGL_OK);
+            }));
+        }
+        apply.RetireThrough(3);
+        ASSERT_EQ(server.FlushProgress(), MOBILEGL_OK);
+        ASSERT_EQ(publish.WaitForApplied(3, 2000), SessionWait::Reached);
+        // OLDEST FIRST, which is the order the window's drain takes them in.
+        for (std::uint64_t seq = 1; seq <= 3; ++seq) {
+            std::int32_t status = -1;
+            const void* p = nullptr;
+            std::uint64_t size = 0;
+            ASSERT_EQ(client.ReadReply(seq, &status, &p, &size), MOBILEGL_OK) << "seq " << seq;
+            ASSERT_EQ(size, sizeof(std::uint64_t)) << "seq " << seq;
+            std::uint64_t value = 0;
+            std::memcpy(&value, p, sizeof value);
+            EXPECT_EQ(value, seq * 11) << "seq " << seq;
+            EXPECT_EQ(status, 0) << "seq " << seq;
+        }
+    }
+
     TEST_F(StreamPair, EventDrainReturnsCreditAndClearsRemoteFullLatch) {
         EventRingProducer events(serverMemory.EventControl(), serverMemory.CmdControl(), serverMemory.EventRingBase(),
                                  1024);
