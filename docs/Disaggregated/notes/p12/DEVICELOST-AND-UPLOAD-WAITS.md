@@ -163,14 +163,47 @@ handoff §5.4 说过这条数字拿不到——spawn 下 client 不推进帧窗�
 **handoff §4.2 的「55,428 → 约 3」不成立**：那一帧剩下的 43,232 次等待正是 §2.4 裁定「必须等」的三条 row（create / respecify / params），
 按 96.7 MiB ÷ 每 sprite 一次上传估算，约每 sprite 3.5 次非上传等待。**B 是必要的，但不是那 2–3 分钟停滞的充分解**——
 要动那一段，方向不是「把等待去掉」（那会删掉信号），而是**把记录数压下来**（同样的参数不必每条都发、同一 level 的 respecify 可去重）。这一条留给下一轮。
+
+### 2.6 那一帧到底由什么构成（真机，`kind=frame-op` + `kind=frame-sent`）
+
+第四次运行抓到了同一形状的那一帧（`wait_replies=43,232`、`stage_bytes=101,421,396`），两条行合起来第一次把「付了什么」和「发了什么」对齐：
+
+| op | 发的记录 | 付的等待 | 说明 |
+|---|---|---|---|
+| `ResourceRespecify` (3) | 20,633 | **20,633** | 每条一等 |
+| `SetTextureParams` (47) | 18,056 | **18,056** | 每条一等 |
+| `ResourceCreate` (2) | 4,536 | **4,536** | 每条一等 |
+| `ResourceSubData` (48) | 12,671 | **0** | ⭐ B：记录照发，回包一个不等 |
+| `DrawVbo` (59) / `SetShaderBuffers` (38) / `SetSamplerViews` (35) | 9,121 / 9,120 / 9,122 | 0 | 这些 row 的等待是 barrier 类，不在本计数里 |
+| `ObjectDeath` (78) / `ResourceDestroy` (4) | 7,515 / 3,770 | 0 | 死亡路径不发问 |
+
+**每条等待正好对应一条记录**（三个 row 都是 1:1），所以 43,232 不是"等重了"，而是"真的发了 43,232 条会问问题的记录"。
+
+### 2.7 「把记录数压下来」这条路的结论：客户端没有可去重的记录
+
+§3 上一轮把「少发记录」列为头号方向。本轮先做了一个**冗余探针**（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad` 里那段 `params probe`），
+再去读设备上的实际计数，结论是否定的：
+
+~~~
+params probe: first=1 same-again=1 changed=2 (deltas 1/0)
+~~~
+
+- **同一个值再设一次不产生记录**（delta 0）——前端 setter 的冗余过滤 + emitter 的版本闩已经把它挡掉了；
+- 换一个值才产生一条。
+
+所以设备上那 18,056 条 `SetTextureParams` 是**真实的状态变化**，不是重复；`ResourceRespecify`/`ResourceCreate` 同理（respecify 的 `unchanged` memcmp 去重早就在了，`TextureEmit.h:838/858/865`）。
+**结论：客户端侧没有"少发记录"的空间**——剩下的唯一杠杆是「同样多的记录，更少的往返」，也就是把等待批起来（同一条 row 每 K 条等一次）或把单次往返的成本降下来（数据面 stream 的 syscall/wake 路径），
+不是继续找冗余。顺带确认：`TCP_NODELAY` 已经在 `SocketTransport.cpp:100` 设了，5 ms 不是 Nagle 造成的。
 ## 3. 剩余（下一轮的直接入口）
 
 1. **把记录数压下来（新的头号项）**。§2.5 的真机数字说：那一帧剩下的 43,232 次等待全在「必须等」的三条 row 上，
-   约每 sprite 3.5 次非上传记录。等待不能删（§2.4），但**记录可以少发**：
-   - `SetTextureParams` 只在参数真的变了才发（现在的版本闩是不是漏了？）；
-   - `ResourceRespecify` 同一 level 的重复定义可去重（tracker 已有 `LastDesc`）；
-   - `ResourceCreate` 每 sprite 一次是否必要（纹理其实是同一张图集）。
-   方向是「先看清楚那 43,232 条各是什么」，所以下一轮第一件事是**用逐帧 `frame-op` 行 + `ResourceSubData` 之外的计数器跑一次未缓存的冷启动**（本轮第二次运行图集走了缓存，只有启动两帧有量）。
+   约每 sprite 3.5 次非上传记录。**这条已经被本轮证否（§2.6/§2.7）**：记录是真实的，客户端没有可去重的空间。
+   于是唯一剩下的杠杆是「同样多的记录、更少的往返」，两个候选：
+   - **把等待批起来**：同一条 row 每 K 条等一次（回复槽池是 8 个，所以 K ≤ 8 是可证明安全的），
+     代价是消费点的答案要能延后兑现——`ResourceCreate`/`ResourceRespecify`/`SetTextureParams` 的答案只用来「落闩 + 自愈」，两者都可以延后到下一个同步点；
+   - **降低单次往返的 5 ms**：`TCP_NODELAY` 已设（`SocketTransport.cpp:100`），所以不是 Nagle；
+     数据面是 `stream`（socket），服务端 profile 曾经 65% 在 socket syscall —— 下一轮该重新采一次两侧的栈（handoff §3.3 的 `perf` + `simpleperf` 跑法仍然有效），
+     把「5 ms 里有多少是网络、多少是两侧 wake/调度」分开。
 2. **受控真机 A/B**：本轮两台设备不同（GSI vs handoff 的 90cee93），55,428 vs 43,232 只能算旁证。要给出可比的数字，需要在**同一台设备**上跑一次带 B、一次不带 B（工作树里已有 `build-split/fix-b2.patch` 的往返做法）。
 3. ~~真机端到端~~ **已完成（§2.5）**：A 的崩溃路径在真机上走过两次都没崩；B 在真机上按设计生效（op 48 零等待）。工具在仓库外的 `mgl-device/`：
    `launch-mc.py`（按版本 JSON 重建启动命令，支持 `MC_QUICKPLAY` / `MC_GAMEDIR`）、`gl-aliases.sh`、`start-phone-server.sh`、`mkeystore`+签名步骤写在 README 里。

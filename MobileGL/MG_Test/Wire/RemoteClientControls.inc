@@ -970,6 +970,31 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
             MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2800, 0x2601); // MAG_FILTER = LINEAR
             MGP_FILL(DrawArrays); // the drain point
         }
+        // A PROBE FOR REDUNDANCY, before anyone tries to remove it: does a repeated set of the
+        // SAME value produce another record? If it does not, then the device run's 18,056
+        // set_texture_params records in one window are genuine changes and there is nothing to
+        // dedup - and any "fix" would be a fix for a problem that does not exist.
+        {
+            const Uint32 paramsOp = static_cast<Uint32>(MGPWireOp::SetTextureParams);
+            const Uint64 beforeSame = Transport::LinkMetricsRecordsFor(paramsOp);
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2600); // MIN_FILTER = NEAREST
+            MGP_FILL(DrawArrays);
+            const Uint64 afterFirst = Transport::LinkMetricsRecordsFor(paramsOp);
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2600); // the SAME value again
+            MGP_FILL(DrawArrays);
+            const Uint64 afterSame = Transport::LinkMetricsRecordsFor(paramsOp);
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2601); // a DIFFERENT value
+            MGP_FILL(DrawArrays);
+            const Uint64 afterChange = Transport::LinkMetricsRecordsFor(paramsOp);
+            std::printf("params probe: first=%llu same-again=%llu changed=%llu (deltas %llu/%llu)\n",
+                        static_cast<unsigned long long>(afterFirst - beforeSame),
+                        static_cast<unsigned long long>(afterSame - beforeSame),
+                        static_cast<unsigned long long>(afterChange - beforeSame),
+                        static_cast<unsigned long long>(afterFirst - beforeSame),
+                        static_cast<unsigned long long>(afterSame - afterFirst));
+            std::fflush(nullptr);
+        }
+
         // PRINT FIRST, ASSERT SECOND: the table is the point of the case, and a gate that fired
         // before it would hide the numbers on exactly the run that needs them - the red one.
         //
