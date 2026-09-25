@@ -416,10 +416,7 @@ namespace MobileGL::MG_Remote::Client {
             Uint64 Seq = 0;
             MG_Pipe::MGPipeKind Kind = MG_Pipe::MGPipeKind::None;
             MG_Pipe::MGPipeHandle Handle{};
-            // P12: ClientSession::ReplyPostings() at the moment this entry was pushed. The
-            // difference between it and the live count is how many answers could have displaced
-            // this one - see the residency budget below.
-            Uint64 ReplyStamp = 0;
+
         };
         PendingCreate g_createWindow[kCreateWindowMax];
         Uint32 g_createWindowHead = 0;
@@ -432,7 +429,6 @@ namespace MobileGL::MG_Remote::Client {
         // answers from existing at all - the second is what a no-reply bit keyed on wantReply
         // would produce, and it would leave every other reading green.
         Uint64 g_createWindowTaken = 0;
-        Uint64 g_createWindowBudgetStops = 0;
 
         // A HANDLE WHOSE CREATE CAME BACK DECLINED IS NEVER WINDOWED AGAIN. Without this the window
         // would UNDO the repair it exists to keep: every later use of the object sends another create,
@@ -507,7 +503,21 @@ namespace MobileGL::MG_Remote::Client {
                 // match yet (or when the answer does not fit the scratch), and treating that as
                 // ERROR would invent a transport fault out of a reader that arrived early. The
                 // entry stays in the window and is taken at the next drain.
-                if (!session.ReadReply(head.Seq, nullptr, 0, &status, &size)) return;
+                if (!session.ReadReply(head.Seq, nullptr, 0, &status, &size)) {
+                    // REACHED BUT UNREADABLE IS AN INVARIANT, NOT A RETRY (P12). The link declared
+                    // it retains this answer, and on the stream arm the reply frame strictly
+                    // precedes the progress frame that published appliedSeq - so by the time the
+                    // wait above returns, the answer is in hand or something is broken. Retrying
+                    // (what this used to do) wedges the window for the rest of the process and
+                    // leaves every deferred object latched on a provisional accept; recovering by
+                    // re-latching would lose texels. So it names itself instead.
+                    SessionFail(MGFatalFamily::ReplyMissing,
+                                "MGPipe: Fatal{ReplyMissing, \"create window\"} - seq %llu was "
+                                "declared and APPLIED, and its answer is no longer in the link's "
+                                "store; the window cannot advance past it and nothing recovers a "
+                                "lost answer",
+                                static_cast<unsigned long long>(head.Seq));
+                }
                 // ERROR IS NOT A DECLINE (M4 / R-5), and a deferred answer does not change that:
                 // the same named Fatal the blocking take raises.
                 if (status == Wire::ReplySink::kStatusError) {
@@ -553,61 +563,40 @@ namespace MobileGL::MG_Remote::Client {
             if (status == 1) ++g_declined;
             if (status == 0) ClearCreateSuspect(payload->Resource);
         }
-        // ---- P12: THE RESIDENCY BUDGET --------------------------------------------------------
+        // ---- P12: WHY THERE IS NO RESIDENCY BUDGET HERE ANY MORE -------------------------------
         //
-        // A deferred answer is readable only while the reply buffer has not reused its slot, and
-        // that buffer is bounded by construction: kDefaultReplySlotCount slots in the shared pool,
-        // and the stream link's ring is that same depth (StreamLink.cpp's kReplyRing, whose
-        // comment says why). So the window may defer only an answer it can still read back, and
-        // what it measures that against is HOW MANY REPLY-OWNING RECORDS IT HAS EMITTED since the
-        // oldest entry was pushed - an upper bound on the answers that could have displaced it.
+        // There was one, and it was measured: it counted the reply-owning records this client had
+        // emitted since the oldest window entry was pushed and took that entry back when the count
+        // approached the reply buffer's depth. On the device it fired on essentially EVERY create
+        // (budget=4,451 of 4,501 calls) and the drain still read nothing back (taken=63,
+        // readfail=8,872, by_op 2 = 9,071, wall 27.9 s). The clock was wrong, structurally:
         //
-        // ONE LESS THAN THE BUFFER, because the eighth newer answer is the one that displaces it.
+        //   * the window only gets control WHEN A CREATE ARRIVES, and between two creates this
+        //     client emits on the order of a thousand records - at the FIRST failed read the reply
+        //     ring already spanned [1175..1504] while the head was seq 310;
+        //   * what displaces a deferred answer is not what this client emits, it is WHAT THE
+        //     SERVER ANSWERS, and the server is behind: its late answers to the earlier creates
+        //     are what fills a bounded buffer first;
+        //   * so the check fired too late by construction. Tightening it only removed the
+        //     deferral entirely, which is what pushed=65 was.
         //
-        // THIS IS PREVENTION, NOT REPAIR, AND THAT IS THE WHOLE POINT. The alternative - read the
-        // head, and when the read fails call the object unknown - UN-LATCHES a create that very
-        // probably SUCCEEDED, and the server's create starts that object's record over
-        // (PipeApply.cpp:2033: `*record = MGPipeResourceRecord{}`), PendingUploads included
-        // (PipeApply.h:332); the client cleared its dirty flags at EMISSION (PipeApply.h:298-304),
-        // so nothing re-sends those texels. Silent content loss for a healthy object. An answer
-        // read inside its residency never has to be given up on at all.
-        // ---- MEASURED: NECESSARY BUT NOT SUFFICIENT, AND THE CLOCK IS WHY ---------------------
-        //
-        // On the device this fires on essentially every create (budget=4,451 of 4,501 calls) and
-        // the drain still reads nothing back (taken=63, readfail=8,872, by_op 2 = 9,071, wall
-        // 27.9 s). The clock is wrong, and the reason is structural rather than a bad constant:
-        //
-        //   * THE WINDOW ONLY GETS CONTROL WHEN A CREATE ARRIVES. Between two creates this client
-        //     emits on the order of a thousand records (measured: at the FIRST failed read the
-        //     reply ring already spanned [1175..1504] while the head was seq 310), and nothing
-        //     looks at the window during that gap.
-        //   * WHAT DISPLACES A DEFERRED ANSWER IS NOT WHAT THIS CLIENT EMITS, IT IS WHAT THE
-        //     SERVER ANSWERS. The server is behind - one answer per ~5 ms wakeup while the client
-        //     runs ahead - so the replies arriving during the gap are its LATE ANSWERS TO THE
-        //     EARLIER CREATES, and they fill the 8-slot buffer before the client comes back.
-        //   * SO THIS CHECK FIRES TOO LATE BY CONSTRUCTION: it is consulted at the next create,
-        //     and by then the answer is already gone. Tightening the constant does not fix that;
-        //     it only removes the deferral entirely, which is what `pushed=65` is.
-        //
-        // A DEFERRAL IS THEREFORE READABLE ONLY IF THE CLIENT KEEPS THE ANSWERS IT DEFERRED. The
-        // reply buffer is bounded by COUNT (8) and the client cannot bound how many answers the
-        // server will post between two of its creates, so hoping the buffer still holds one is not
-        // a policy - it is a race the client loses. The shape that can work is RETENTION: the
-        // reader keeps the answers for the seqs still outstanding (a handful), drops them when
-        // they are read, and reports a LOSS when a read asks for one it no longer has. That is a
-        // transport change (StreamLink's ring becomes a retention map with a cap and a lost
-        // counter). Kept as-is because it is the safe direction - it degrades to the pre-window
-        // shape - and because the clock it needs is the one ReplyPostings() already provides.
-        constexpr Uint64 kCreateReplyResidency = Transport::kDefaultReplySlotCount - 1;
-        Bool CreateWindowBudgetSpent(ClientSession& session) {
-            if (g_createWindowCount == 0) return false;
-            return session.ReplyPostings() - g_createWindow[g_createWindowHead].ReplyStamp >=
-                   kCreateReplyResidency;
-        }
+        // Retention replaced it, and retention is where the bound now lives: a link that declares
+        // RetainsReplies keeps an answer until its reader takes it (StreamLink's declared-answer
+        // store, whose capacity is tied to the window's own depth), and the window does not defer
+        // at all on a link that does not. That removes the only thing the budget was for.
+        // ReplyPostings() stays as a measurement.
         void Wire_ResourceCreate(const MG_Pipe::MGPResourceDesc* payload, MG_Pipe::MGPReplySlot* reply) {
             if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply); return; }
             ClientSession& session = RequireSession("ResourceCreate");
-            const Uint32 window = CreateWindowEffective();
+            // THE WINDOW MAY ONLY DEFER WHERE THE LINK RETAINS ANSWERS (P12). On one that does
+            // not - the shared pool, whose slot is seq % slotCount and is reused - the answer the
+            // drain comes back for may already be gone, and there is NO recovery: retrying wedges
+            // the row for the rest of the process, and re-latching the object by sending another
+            // create wipes the server's record along with its PendingUploads (PipeApply.cpp:2033,
+            // PipeApply.h:332) while the client cleared its dirty flags at emission
+            // (PipeApply.h:298-304), so nobody re-sends those texels. So it takes the blocking
+            // path instead, which is the pre-window shape exactly.
+            const Uint32 window = session.LinkRetainsReplies() ? CreateWindowEffective() : 1u;
             // THE WINDOW OFF RESTORES THE OLD SHAPE EXACTLY, and is the negative control for it.
             // THE WINDOW OFF, THE SUSPECT LIST FULL, OR AN OBJECT THAT HAS ALREADY BEEN REFUSED:
             // all four take the blocking branch, which is the pre-window shape - and on the device
@@ -615,6 +604,13 @@ namespace MobileGL::MG_Remote::Client {
             // collected. See the section comment for the measurement and the arithmetic.
             if (window <= 1 || g_createSuspects.size() >= kCreateSuspectMax ||
                 CreateIsSuspect(payload->Resource)) {
+                // THE WINDOW RETIRES HERE, AND IT MAY BE HOLDING ANSWERS (P12). This branch is
+                // taken when the window is off, when the suspect list is full, or for a refused
+                // object - and in the last two cases entries already emitted are still in flight.
+                // Without this drain they arrive, are retained, and are never read, WHILE their
+                // objects stay latched on a provisional accept: the silent divergence the
+                // suspect list exists to prevent. One blocking pass settles them.
+                if (g_createWindowCount != 0) DrainCreateWindow(session, /*blockForOldest=*/true);
                 EmitCreateBlocking(session, payload, reply);
                 return;
             }
@@ -622,11 +618,7 @@ namespace MobileGL::MG_Remote::Client {
             // The poll is not politeness: it is what keeps a burst shorter than the window from
             // leaving its answers unread until the next burst.
             DrainCreateWindow(session, /*blockForOldest=*/false);
-            // A SPENT BUDGET IS TREATED EXACTLY LIKE A FULL WINDOW: take the oldest answer back
-            // NOW, while it still exists, instead of deferring another one past its residency.
-            const Bool budgetSpent = CreateWindowBudgetSpent(session);
-            if (g_createWindowCount >= window || budgetSpent) {
-                if (budgetSpent) ++g_createWindowBudgetStops;
+            if (g_createWindowCount >= window) {
                 DrainCreateWindow(session, /*blockForOldest=*/true);
                 // IF IT IS STILL FULL the oldest answer is not readable yet, and the window is a
                 // fixed array: pushing would silently OVERWRITE a confirmation. This record takes
@@ -657,8 +649,7 @@ namespace MobileGL::MG_Remote::Client {
                 return;
             }
             g_createWindow[(g_createWindowHead + g_createWindowCount) % kCreateWindowMax] =
-                PendingCreate{seq, CreateRecordKind(*payload), payload->Resource,
-                              session.ReplyPostings()};
+                PendingCreate{seq, CreateRecordKind(*payload), payload->Resource};
             ++g_createWindowCount;
             reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, Wire::ReplySink::kStatusOk, 1u);
@@ -1277,11 +1268,10 @@ namespace MobileGL::MG_Remote::Client {
     // the ones still outstanding. A create the window accepted and then LOST would break that
     // sum, which is the failure a provisional accept makes possible and a count cannot show.
     Uint64 ClientCreateWindowTaken() { return g_createWindowTaken; }
-    // How many times the residency budget, and not a full window, forced the blocking read. A
-    // non-zero value is the budget DOING its job (an answer was about to outlive its slot); a
-    // value near the record count means the window is deferring almost nothing, which is the
-    // honest way to say "the budget is too tight for this workload".
-    Uint64 ClientCreateWindowBudgetStops() { return g_createWindowBudgetStops; }
+    // P12: RetainedOutstanding / SkippedUnwanted / UnansweredWanted live on the LINK, where the
+    // store is (StreamLink::RetainedOutstanding and friends). They are what says whether the
+    // declared-answer store is bounded by the CLIENT (SkippedUnwanted grows, outstanding does
+    // not) rather than by the server's answer rate - which is the property the capacity rests on.
     Uint32 ClientCreateWindowEffective() { return CreateWindowEffective(); }
     Uint32 ClientCreateWindowArraySize() { return kCreateWindowMax; }
     // Objects whose create came back DECLINED: out of the window, next create blocking, and back

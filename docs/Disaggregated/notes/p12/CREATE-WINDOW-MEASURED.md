@@ -287,7 +287,41 @@ if (x.replySeq != seq) return ... MOBILEGL_ERR_PROTOCOL_MISMATCH;   // 等的是
 ——答案走 Reply 帧、`StreamLink::ReadReply` 读客户端自己的 store，池只用来给 `MaxReplyBytes()` 定尺寸。
 所以「加深池子 + 抬 `ReplyBytes`」根本没有针对实测那条臂，别为它付 8× 常驻内存。
 
-## 12. 复算
+## 12. 落地：保留表上线，默认翻到 2，真机 28.66 s → 16.52 s
+
+按审计的形状实现（`ILink::DeclareReplyRead` + `LinkCapabilities::RetainsReplies`；`StreamLink` 的环 →
+**按声明的保留表**：单调白名单 + 游标、取走即删、触顶具名 Fatal、Detach 清空；删掉 residency budget；
+`CreateWindowEffective()` 在不保留答案的链路上强制为 1；窗口退休分支补一次 drain）。
+
+**真机（两个二进制都重出，负载帧，`frame-sent 2=` 全程 4,536 不变）：**
+
+| 臂 | waits | `by_op 2` | 墙钟 |
+|---|---|---|---|
+| 窗口 1（R-5 的形状） | 4,543 | 4,536 | 28.66 s |
+| 窗口 2（显式） | 2,507 | 2,500 | 17.27 s |
+| **窗口 2（出厂默认，无覆盖）** | 2,570 | 2,563 | **16.52 s** |
+| 窗口 4 | 1,651 | 1,644 | 11.02 s |
+| **窗口 2 + 旧服务端（不认 no-reply 位）** | 2,670 | 2,663 | **16.38 s** |
+
+**版本偏斜那一轮是审计点名的必测项，它过了**：旧服务端照回 ~55,903 条/帧，客户端的白名单把这些
+**没人声明**的答案在到达时丢弃（`SkippedUnwanted` 增长而不是保留表增长），延后的答案照旧读得回来，
+整轮**零 Fatal**。这正是「按声明保留」相对「全保留 + 淘汰」的那个差别。
+
+**门**（172 + 15 全绿）：
+- `StreamLinkTest.ADeclaredAnswerSurvivesFarMoreInterveningAnswersThanAnyFixedBuffer` —— **已证明能红**：
+  把存储退回「按到达保留、只留 8 条」的环语义，它立刻以「the declared answer did not survive 64
+  intervening ones」失败。这就是把环=1024 那个替身换成有界机制的那条界线。
+- `StreamLinkTest.AnAnswerNobodyDeclaredIsNotKeptAtAll` —— 没声明的答案不进保留表（红法：全保留）。
+- `RemoteClientControls.TheWindowRefusesToDeferOnALinkThatCannotRetainAnswers` —— 在不能保留的链路
+  （in-process/ShmLink）上，把旋钮开到 4 也必须每条 create 都走阻塞、`taken == 0`（红法：去掉能力位）。
+- `ARefusedCreate...` 改成读这条臂上真正的修复链：拒绝 → 闩保持清零 → 下一次定义阻塞且再被拒 → 恢复消费者后闩回来；
+  并断言窗口的账本（`refusals`/`suspects`/`pending`）在这条臂上**全为空**。
+
+**还没做的一件**（审计 E10(d)，下一轮）：窗口级门目前只有真机这一层，**没有跑在 stream 臂上的单元门**。
+三轮「门全绿而功能在设备上是死的」都源于同一件事——门跑在 in-process/ShmLink 上。传输层的保留门已经补上，
+窗口那一层建议建在 `StreamClientPublicationTest` 的真 stream 会话上（`AttachStreamLink` + 可控 peer）。
+
+## 13. 复算
 
 ~~~sh
 # 两臂的帧读数（handoff-2 §1 的读法）

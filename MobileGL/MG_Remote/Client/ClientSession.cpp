@@ -1898,10 +1898,17 @@ namespace MobileGL::MG_Remote::Client {
         // creates or parameter sets, and those three have different fixes.
         const auto replyMetricStart =
             Transport::LinkMetricsBeginReply(ownsReplySlot, static_cast<std::uint32_t>(op));
-        // P12: the residency budget's clock. Placed HERE, where the record is certainly
-        // published, rather than beside rowCarriesReplySlot: a call that declined before
-        // encoding emits nothing and must not advance it.
+        // P12: the residency clock AND the declaration, both placed HERE - after EncodeRecord has
+        // an ordinal and BEFORE the publish, which is the only window in which the declaration is
+        // guaranteed to precede its own answer. A call that declined before encoding emits nothing
+        // and must not advance either.
         if (rowCarriesReplySlot) ++m_replyPostings;
+        // THE DECLARATION THAT LETS A LINK RETAIN THIS ANSWER (P12). willReadReply, not wantReply:
+        // the create window emits without waiting and reads afterwards, so its records must be
+        // declared even though this call does not read them. Links that cannot retain ignore it,
+        // and the window does not defer on them (see ClientSession::LinkRetainsReplies).
+        if (rowCarriesReplySlot && willReadReply && m_link != nullptr)
+            m_link->DeclareReplyRead(seq);
         m_producer.PublishAndNotify(seq);
         if (op == MG_Pipe::MGPWireOp::Present) {
             // A credit is permission to run ahead, not permission to retain the
@@ -2463,6 +2470,10 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Uint64 ClientSession::ReplyPostings() const { return m_replyPostings; }
+
+    Bool ClientSession::LinkRetainsReplies() const {
+        return m_link != nullptr && m_link->Capabilities().RetainsReplies;
+    }
 
     Bool ClientSession::ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
                                   Uint64* outSize) {

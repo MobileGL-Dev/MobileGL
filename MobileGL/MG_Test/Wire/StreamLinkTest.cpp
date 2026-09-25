@@ -116,6 +116,11 @@ namespace {
         Queue(2, 2);
         ASSERT_EQ(client.Flush(), MOBILEGL_OK);
         ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
+        // P12: AN ANSWER IS KEPT ONLY IF SOMEBODY DECLARED IT WILL BE READ. Seq 1 is deliberately
+        // NOT declared - this case is about an unwanted reply not disturbing a later one - and
+        // seq 2 is, because the case reads it. Both records cross either way: the declaration
+        // changes whether the LINK keeps the answer, never whether the server sends it.
+        client.DeclareReplyRead(2);
         ASSERT_TRUE(apply.ApplyOne([&](const RingRecordView&) {
             const std::uint64_t value = 11;
             EXPECT_EQ(server.PostReply(1, 0, &value, sizeof value), MOBILEGL_OK);
@@ -152,6 +157,7 @@ namespace {
         Queue(3, 3);
         ASSERT_EQ(client.Flush(), MOBILEGL_OK);
         ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
+        for (std::uint64_t seq = 1; seq <= 3; ++seq) client.DeclareReplyRead(seq);
         for (std::uint64_t seq = 1; seq <= 3; ++seq) {
             ASSERT_TRUE(apply.ApplyOne([&](const RingRecordView&) {
                 const std::uint64_t value = seq * 11;
@@ -173,6 +179,55 @@ namespace {
             EXPECT_EQ(value, seq * 11) << "seq " << seq;
             EXPECT_EQ(status, 0) << "seq " << seq;
         }
+    }
+
+    // =====================================================================================
+    // P12: THE DECLARED-ANSWER STORE - WHAT A BOUNDED BUFFER OF "THE LAST N" COULD NOT DO
+    // =====================================================================================
+    //
+    // The create window defers an answer across an unbounded amount of other traffic (measured on
+    // the device: ~1,000 records between two creates) and a buffer of the last N answers has always
+    // moved on by the time the reader comes back - `want=310` on every miss while the ring spanned
+    // [1175..1504]. Ring 8 -> 1024 as an experiment made every deferred answer come back, and these
+    // two cases are what replaces that stand-in: an answer is kept because somebody DECLARED it
+    // will be read, so the retained set is bounded by the client's own deferral depth.
+    TEST_F(StreamPair, ADeclaredAnswerSurvivesFarMoreInterveningAnswersThanAnyFixedBuffer) {
+        constexpr std::uint64_t kIntervening = 64;
+        client.DeclareReplyRead(1);
+        const std::uint64_t wanted = 0x5EED;
+        ASSERT_EQ(server.PostReply(1, 0, &wanted, sizeof wanted), MOBILEGL_OK);
+        // SIXTY-FOUR answers nobody declared. Under "keep the last N" - any N this link has ever
+        // had - seq 1 is gone by the end of this loop; under a declaration it is untouched, which
+        // is the whole difference between a bound and a probability.
+        for (std::uint64_t seq = 2; seq <= kIntervening + 1; ++seq) {
+            const std::uint64_t junk = seq;
+            ASSERT_EQ(server.PostReply(seq, 0, &junk, sizeof junk), MOBILEGL_OK);
+        }
+        EXPECT_TRUE(Eventually([&] { return client.SkippedUnwanted() >= kIntervening; }))
+            << "the undeclared answers were not dropped: " << client.SkippedUnwanted();
+        std::int32_t status = -1;
+        const void* p = nullptr;
+        std::uint64_t size = 0;
+        ASSERT_EQ(client.ReadReply(1, &status, &p, &size), MOBILEGL_OK)
+            << "the declared answer did not survive " << kIntervening << " intervening ones";
+        ASSERT_EQ(size, sizeof(std::uint64_t));
+        std::uint64_t value = 0;
+        std::memcpy(&value, p, sizeof value);
+        EXPECT_EQ(value, wanted);
+        EXPECT_EQ(status, 0);
+        // AND TAKING IT RELEASED IT: the store holds only what is still outstanding, which is why
+        // its capacity can be tied to the window's depth rather than to the server's answer rate.
+        EXPECT_EQ(client.RetainedOutstanding(), 0u);
+        EXPECT_EQ(client.RetainedTotal(), 1u);
+    }
+
+    TEST_F(StreamPair, AnAnswerNobodyDeclaredIsNotKeptAtAll) {
+        const std::uint64_t value = 7;
+        ASSERT_EQ(server.PostReply(1, 0, &value, sizeof value), MOBILEGL_OK);
+        EXPECT_TRUE(Eventually([&] { return client.SkippedUnwanted() >= 1; }));
+        EXPECT_EQ(client.RetainedOutstanding(), 0u)
+            << "an undeclared answer was retained: the store would grow with the SERVER's answer"
+               " rate, which is what makes any capacity a matter of luck";
     }
 
     TEST_F(StreamPair, EventDrainReturnsCreditAndClearsRemoteFullLatch) {

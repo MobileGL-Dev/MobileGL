@@ -36,6 +36,17 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult ResolveSpan(LinkSegment, LinkSpan, const void**) override;
         MobileGLResult PostReply(std::uint64_t, std::int32_t, const void*, std::uint64_t) override;
         MobileGLResult ReadReply(std::uint64_t, std::int32_t*, const void**, std::uint64_t*) override;
+        void DeclareReplyRead(std::uint64_t) override;
+
+        // P12 diagnostics for the declared-answer store. RetainedOutstanding is what the capacity
+        // is about (it must stay near the window's depth, not grow with the server's answers);
+        // RetainedTotal counts the answers kept for their readers; SkippedUnwanted counts the ones
+        // nobody declared, which is the number that proves the store is bounded by the CLIENT and
+        // not by the server; UnansweredWanted counts declared seqs the server never answered.
+        std::uint64_t RetainedOutstanding() const;
+        std::uint64_t RetainedTotal() const;
+        std::uint64_t SkippedUnwanted() const;
+        std::uint64_t UnansweredWanted() const;
         LinkArena* EventArena() override;
         LinkCursor* EventCursor() override;
         std::uint64_t EventPublishedHead() const override;

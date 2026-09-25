@@ -107,18 +107,52 @@ namespace MobileGL::MG_Remote::Transport {
         // move (29.0 s against the 30.1 s of the same binary with the window off). The deferral
         // was pure overhead: four answers held unread, plus one failed drain attempt per record.
         //
-        // BOUNDED AT kDefaultReplySlotCount, which is the pool ShmLink stands in for: an answer a
-        // reader has not taken by the time eight newer ones have arrived is one the shm arm has
-        // already overwritten too, so the two transports now lose the same answers and no more.
-        // The byte vectors are sized per reply, so an idle link pays eight empty ones.
-        static constexpr std::size_t kReplyRing = 8;
+        // ---- AND THE RING WAS NOT ENOUGH, SO THE STORE IS KEYED ON A DECLARATION (P12) -------
+        //
+        // THE MEASUREMENT THAT SETTLED IT. With the ring at 8 the drain read back NOTHING:
+        // `taken=63 pushed=65 readfail=8,872` on a load frame, and the miss probe showed why -
+        // `want=310` on every miss while the ring had moved on to [1175..1504]. Between two
+        // creates this client emits on the order of a thousand records and looks at the window
+        // not once, so a deferral has to survive an unbounded amount of other traffic, and WHAT
+        // DISPLACES IT IS NOT WHAT THE CLIENT EMITS BUT WHAT THE SERVER ANSWERS - it is behind,
+        // and its late answers to the EARLIER creates fill a bounded buffer first.
+        //
+        // Ring 8 -> 1024 as a one-line experiment, and every deferred answer came back:
+        // `taken=4,499/4,500 readfail=0`, wall 27.9 s -> 23.0 s, and with the residency budget
+        // out of the way 28.66 s -> 16.80 s at window 2 and 11.45 s at window 4. So the property
+        // needed is "the answer is still there when the reader comes back", and 1024 is a
+        // STAND-IN for it, not the design: 1024 retained answers is ~2 GiB worst case, and "deep
+        // enough" is a probability rather than a bound.
+        //
+        // THE BOUND COMES FROM THE CLIENT. A seq is retained only if the wire DECLARED it will be
+        // read (ILink::DeclareReplyRead), so the outstanding set is the window's depth plus the
+        // one blocking row in flight plus whatever a retired window strands - it does not depend
+        // on how many answers the server chooses to send. Retaining on ARRIVAL instead would grow
+        // ~11.3 entries per create against a server that ignores the no-reply bit (55,903 answers
+        // a frame where this client reads 4,501), and any cap would then be reached and would
+        // evict precisely the oldest WANTED answer - the same wedge, a few hundred creates later.
+        //
+        // OVERFLOW IS FATAL AND NEVER AN EVICTION. An evicted wanted answer is unrecoverable:
+        // sending another create to re-latch the object wipes the server's record for it
+        // (PipeApply.cpp:2033) along with its PendingUploads (PipeApply.h:332), and the client
+        // cleared its dirty flags at EMISSION (PipeApply.h:298-304), so nobody re-sends those
+        // texels. The capacity is sized so that cannot be reached, and reaching it is a bug that
+        // says its own name.
+        static constexpr std::size_t kRetainedCap = 24;
         struct StoredReply {
             std::uint64_t seq = 0;
             std::int32_t status = 0;
             std::vector<std::uint8_t> bytes;
         };
-        std::array<StoredReply, kReplyRing> replies{};
-        std::size_t replyNext = 0;
+        // MONOTONE ON BOTH SIDES, so a cursor beats a hash map: the wire declares in emission
+        // order, the server answers in apply order. It also makes a declared-but-never-answered
+        // seq visible for free - the cursor walks past it on the way to a later answer - which is
+        // counted rather than ignored, because the read that follows will fail and should fail
+        // with a number beside it.
+        std::vector<std::uint64_t> wanted;
+        std::size_t wantCursor = 0;
+        std::vector<StoredReply> retained;
+        std::uint64_t skippedUnwanted = 0, unansweredWanted = 0, retainedTotal = 0;
         std::uint64_t lastProgressSeq = 0;
         std::chrono::steady_clock::time_point lastProgress = std::chrono::steady_clock::now();
         LinkArena records{}, events{};
@@ -334,15 +368,34 @@ namespace MobileGL::MG_Remote::Transport {
                         std::lock_guard<std::mutex> lock(replyMutex);
                         if (a <= replySeq) Corrupt("reply sequence moved backwards");
                         replySeq = a;
-                        // RING, NOT REPLACE. replySeq stays the newest and stays monotone -
-                        // the wait predicate below is written in terms of it - while the
-                        // answers themselves are kept for the readers that come back for an
-                        // older one (the window's drain, StreamLink.cpp's own note).
-                        StoredReply& slot = replies[replyNext];
-                        replyNext = (replyNext + 1) % kReplyRing;
-                        slot.seq = a;
-                        slot.status = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
-                        slot.bytes.assign(payload, payload + size);
+                        // DECLARED? The cursor walks past any DECLARED seq this answer has
+                        // overtaken: the server answers in apply order, so an answer with a
+                        // higher seq means those will never come. That is a broken invariant
+                        // rather than a race, and it is counted - the read that follows fails
+                        // and should fail with this number beside it.
+                        while (wantCursor < wanted.size() && wanted[wantCursor] < a) {
+                            ++wantCursor;
+                            ++unansweredWanted;
+                        }
+                        if (wantCursor < wanted.size() && wanted[wantCursor] == a) {
+                            ++wantCursor;
+                            // OVERFLOW IS NAMED, NOT ABSORBED. See the capacity note above:
+                            // an eviction here would throw away an answer somebody is waiting
+                            // for, and there is no path that recovers one.
+                            if (retained.size() >= kRetainedCap) {
+                                Corrupt("the declared-answer store overflowed; a declared answer"
+                                        " would have to be evicted and none is recoverable");
+                            }
+                            StoredReply& slot = retained.emplace_back();
+                            slot.seq = a;
+                            slot.status = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
+                            slot.bytes.assign(payload, payload + size);
+                            ++retainedTotal;
+                        } else {
+                            // NOBODY DECLARED IT: drop it. This is what keeps the store bounded
+                            // against a server that answers records this client never reads.
+                            ++skippedUnwanted;
+                        }
                     }
                     replyReady.notify_all();
                     producer.Notify();
@@ -464,7 +517,8 @@ namespace MobileGL::MG_Remote::Transport {
     }
     LinkCapabilities StreamLink::Capabilities() const {
         if (!m_impl->memory) return {};
-        return {false, false, false, m_impl->memory->CmdRingCapacity() / 2, m_impl->MaxReply()};
+        return {false, false, false, m_impl->memory->CmdRingCapacity() / 2, m_impl->MaxReply(),
+                /*RetainsReplies=*/true};
     }
     LinkProgress* StreamLink::Progress() {
         return m_impl->memory ? &m_impl->C().Progress : nullptr;
@@ -589,17 +643,22 @@ namespace MobileGL::MG_Remote::Transport {
             return x.closed.load(std::memory_order_acquire) || x.replySeq >= seq ||
                    x.C().Progress.appliedSeq.load(std::memory_order_acquire) >= seq;
         });
-        // BY SEQ, WHICH IS WHAT THE PARAMETER HAS ALWAYS SAID (P12). The equality this replaces
+        // BY SEQ, WHICH IS WHAT THE PARAMETER HAS ALWAYS SAID (P12). The equality this replaced
         // was true only while every caller read the newest answer; it is what made a deferred
         // answer unreadable and the create window inert on this transport.
-        for (const auto& slot : x.replies) {
-            if (slot.seq != seq) continue;
-            // Copied into the shared scratch so the pointer outlives the lock, exactly as the
-            // single-slot version did: the caller memcpys under its own frame.
-            x.readReply = slot.bytes;
-            *status = slot.status;
+        for (auto it = x.retained.begin(); it != x.retained.end(); ++it) {
+            if (it->seq != seq) continue;
+            // TAKE-AND-DELETE IS ONE STEP UNDER THE LOCK. The bytes are SWAPPED into the shared
+            // scratch before the entry goes, so whoever is handed the answer is whoever consumed
+            // it - no copy of a large answer, and no window in which a second reader could see
+            // the same seq. (The pointer outlives the lock, as it always has here; this link has
+            // ONE reply reader, and the store's erase is what keeps that an invariant rather
+            // than a hope.)
+            x.readReply.swap(it->bytes);
+            *status = it->status;
             *size = x.readReply.size();
             *p = x.readReply.data();
+            x.retained.erase(it);
             return MOBILEGL_OK;
         }
         return x.closed.load() ? MOBILEGL_ERR_TRANSPORT_CLOSED : MOBILEGL_ERR_PROTOCOL_MISMATCH;
@@ -624,12 +683,48 @@ namespace MobileGL::MG_Remote::Transport {
     TransportRoleTag StreamLink::Role() const {
         return m_impl->role;
     }
+    void StreamLink::DeclareReplyRead(std::uint64_t seq) {
+        auto& x = *m_impl;
+        if (!x.Client() || !x.memory) return;
+        std::lock_guard<std::mutex> lock(x.replyMutex);
+        // MONOTONE, IN EMISSION ORDER (the wire declares before it publishes, and seqs only ever
+        // grow). An out-of-order or repeated declaration is dropped rather than stored: the first
+        // would break the cursor, and the second is a retry that must not grow the list.
+        if (!x.wanted.empty() && seq <= x.wanted.back()) return;
+        x.wanted.push_back(seq);
+        // AND THE CONSUMED PREFIX IS RELEASED, or the list would grow by one entry per declared
+        // record for the life of the session (4,536 a frame). The cursor's entries can never be
+        // needed again: a seq is answered once.
+        if (x.wantCursor >= 64) {
+            x.wanted.erase(x.wanted.begin(),
+                           x.wanted.begin() + static_cast<std::ptrdiff_t>(x.wantCursor));
+            x.wantCursor = 0;
+        }
+    }
+
+    std::uint64_t StreamLink::RetainedOutstanding() const {
+        auto& x = *m_impl;
+        std::lock_guard<std::mutex> lock(x.replyMutex);
+        return static_cast<std::uint64_t>(x.retained.size());
+    }
+    std::uint64_t StreamLink::RetainedTotal() const { return m_impl->retainedTotal; }
+    std::uint64_t StreamLink::SkippedUnwanted() const { return m_impl->skippedUnwanted; }
+    std::uint64_t StreamLink::UnansweredWanted() const { return m_impl->unansweredWanted; }
+
     void StreamLink::Detach() {
         auto& x = *m_impl;
         if (!x.memory) return;
         x.stopping.store(true, std::memory_order_release);
         x.Die(false);
         if (x.reader.joinable()) x.reader.join();
+        // P12: the declared-answer store does not outlive the link. Without this a detached
+        // session leaves up to a frame's worth of answers (and their seqs) resident.
+        {
+            std::lock_guard<std::mutex> lock(x.replyMutex);
+            x.wanted.clear();
+            x.wantCursor = 0;
+            x.retained.clear();
+        }
 #if !defined(_WIN32)
         if (x.fd >= 0) ::close(x.fd);
 #endif

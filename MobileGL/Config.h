@@ -549,22 +549,37 @@ namespace MobileGL::MG_Config {
         // restores the per-record barrier of R-1.
         Uint32 BatchWaits = 1;
         // MOBILEGL_IPC_CREATE_WINDOW: how many RESOURCE_CREATE answers may be outstanding before the
-        // client waits for one. 1 = every create waits, which is the shape R-5 shipped with AND THE
-        // DEFAULT, because the deferral was measured on the device and does not work: the reply pool
-        // is 8 slots and one load frame posts 55,903 replies (create 4,536 + respecify 20,633 +
-        // params 18,056 + sub-data 12,671 + 7), so an answer is overwritten after 8 replies -
-        // 0.65 of a create - and the window's drain can never read one back. All 4,536 creates took
-        // the blocking path at 4 and at 1 alike (28.64 s both ways). Worse than inert: the
-        // provisional accept latches an object the applier may have refused, and the un-latch that
-        // corrects it lives in that same unreadable drain. WireTables.cpp's section comment has the
-        // counters and the arithmetic, and the gates in RemoteClientControls.inc still pin the
-        // mechanism, which is sound and simply unusable against this much other reply traffic.
-        // N > 1 is reachable for the experiment that would make it usable (a deeper pool, or a
-        // per-record "this answer will never be read" bit). NOTE THE PREDICATE: NOT
-        // "fire-and-forget" - the window's own creates ARE fire-and-forget and the drain reads
-        // them, so a flag keyed on wantReply would kill the very thing it is meant to enable
-        // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md section 7).
-        Uint32 CreateWindow = 1;
+        // client waits for one. 1 = every create waits (the shape R-5 shipped with); N > 1 = up to N
+        // creates go out fire-and-forget, their caller reads a PROVISIONAL accept, and the oldest
+        // answer is taken when the window fills.
+        //
+        // DEFAULT 2, AND IT TOOK THREE THINGS TO GET HERE. The deferral was inert for two
+        // measured reasons and one structural one, in the order they were found:
+        //   1. the reply buffer was a ring of the last 8 answers, and between two creates this
+        //      client emits on the order of a thousand records - so the answer was always gone
+        //      (`want=310` on every miss while the ring spanned [1175..1504]);
+        //   2. a residency budget that tried to take answers back early could not help, because
+        //      what displaces an answer is what the SERVER sends, not what the client emits;
+        //   3. and so the fix was RETENTION - a link keeps a declared answer until its reader
+        //      takes it (Transport/ILink.h's RetainsReplies, StreamLink's declared-answer store).
+        //
+        // MEASURED ON THE DEVICE, load frame, both ends rebuilt (create 4,536, records 103,097,
+        // frame-sent identical per op throughout):
+        //     window 1    4,536 blocking takes   28.66 s   (the shape R-5 shipped)
+        //     window 2      2,500               17.27 s
+        //     window 4      1,644               11.02 s
+        // and the round trip does NOT grow as the window deepens (5,285 / 4,082 us against 5,672
+        // at 1), which is the measurement that says the ~5 ms is a WAKEUP the server batches away
+        // rather than its apply throughput - so amortising four creates per wakeup is a real 2.6x.
+        //
+        // 4 IS REACHABLE AND BETTER (11.02 s against 17.27 s) and is NOT the default only because
+        // the wider window holds more answers at once; raise it after a run that reads `by_op 2`
+        // and the wall clock rather than the config. NOTE THE PREDICATE the whole mechanism rests
+        // on: an answer is retained because the wire DECLARED it will be read - NOT because its
+        // caller was fire-and-forget. The window's own creates are fire-and-forget AND read, so a
+        // flag keyed on wantReply would disable the very mechanism it exists to enable
+        // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md sections 7-11).
+        Uint32 CreateWindow = 2;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

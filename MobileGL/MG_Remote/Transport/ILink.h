@@ -199,6 +199,16 @@ namespace MobileGL::MG_Remote::Transport {
         bool PublishIsDelivery = false; // false => Flush() is mandatory before any wait
         std::uint64_t MaxRecordBytes = 0;
         std::uint64_t MaxReplyBytes = 0;
+        // P12: DOES THIS LINK KEEP AN ANSWER UNTIL ITS READER TAKES IT? A stream does - the
+        // answers are the client's own bytes - and a shared pool does NOT: a slot is
+        // `seq % slotCount` and the next answer into it wins, so "the watermark passed this seq"
+        // says nothing about whether the answer is still there.
+        //
+        // IT IS A CAPABILITY RATHER THAN A HOPE because a row that DEFERS its answer (the create
+        // window) may only run where it is true: measured on the device, a deferral across the
+        // ~1,000 records between two creates lost its answer to a bounded buffer every time.
+        // A caller that sees false must take the blocking path instead.
+        bool RetainsReplies = false;
     };
 
     // Non-owning synchronization addresses, acquired once at attachment. They
@@ -284,6 +294,22 @@ namespace MobileGL::MG_Remote::Transport {
                                          const void* payload, std::uint64_t size) = 0;
         virtual MobileGLResult ReadReply(std::uint64_t seq, std::int32_t* outStatus,
                                          const void** outPayload, std::uint64_t* outSize) = 0;
+
+        // P12: DECLARE THAT THIS SEQ'S ANSWER WILL BE READ, so that a link which can retain it
+        // does. Called by the producer side of the wire, in seq order, BEFORE the record is
+        // published - the answer cannot arrive before that, and the reader stores under the same
+        // mutex the declaration takes, so the hand-off needs no second synchronisation.
+        //
+        // WHY THE DECLARATION AND NOT "RETAIN EVERYTHING": a server that ignores the no-reply bit
+        // answers ~55,903 records in one frame where this client reads ~4,501, so retain-on-arrival
+        // grows ~11.3 entries per create and any cap is reached in C/11.3 creates - after which the
+        // eviction wave lands on precisely the oldest WANTED answer, which is the wedge this exists
+        // to avoid. Keyed on the declaration, the retained set is bounded by the CLIENT's own
+        // deferral depth instead of by the server's behaviour.
+        //
+        // A link with RetainsReplies false ignores it (the default), and its callers must not
+        // defer: see the capability's own note.
+        virtual void DeclareReplyRead(std::uint64_t seq) { (void)seq; }
 
         // ---- the reverse channel --------------------------------------------
 

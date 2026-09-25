@@ -392,6 +392,13 @@ namespace MobileGL::MG_Remote::Client {
         // deployment where it matters most.
         Uint64 ReplyPostings() const;
 
+        // P12: DOES THIS LINK KEEP AN ANSWER UNTIL ITS READER TAKES IT? The create window defers
+        // answers across an unbounded amount of other traffic, which only works where the answer
+        // is still there when the drain comes back - measured: a bounded buffer of the last N
+        // answers never is. On a link that answers false the window must not defer at all, so
+        // this is what CreateWindowEffective() is gated on.
+        Bool LinkRetainsReplies() const;
+
         // The reply slot for `seq`, addressed seq % slots with the seq stamped back into the
         // header for self-check (R-3). `outStatus` is 0 OK / 1 DECLINED / 2 ERROR, and
         // DECLINED IS A REAL ANSWER - MapPersistent's nullptr and the four Bool acceptances.

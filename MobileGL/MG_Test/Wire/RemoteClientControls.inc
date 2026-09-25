@@ -1205,21 +1205,22 @@ TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes
 // answers are collected in order. A late DECLINED un-latches its object, which puts every later row
 // for that object back on the blocking path - the repair that already existed, not a new one.
 //
-// THE THREE WAYS THIS CAN GO WRONG, one reading each:
+// ⚠️ THIS CASE RUNS ON THE IN-PROCESS ARM, WHICH IS ShmLink, AND SINCE P12 THAT MEANS THE WINDOW
+// IS OFF HERE BY DESIGN - `CreateWindowEffective()` is gated on LinkRetainsReplies() precisely
+// because a shared pool's slot is `seq % slotCount` and is reused, so a deferred answer may be
+// gone with no way to recover it. What this case pins is therefore THAT GATE, and it is the
+// assertion the device cannot make: set the knob as high as it goes and the row must STILL take the
+// blocking path on a link that cannot retain.
 //
-//   1. THE WINDOW DEFERS NOTHING (the row pays a wait per record and the change is decoration) -
-//      the ON half below;
-//   2. THE WINDOW IS NOT WHAT DECIDES (the row defers while the operator asked it not to, which is
-//      the same defect as 1 with the sign flipped) - THE NEGATIVE CONTROL, run in the SAME CHILD as
-//      the ON half so that both readings share a session, a server, a set of objects and a pair of
-//      counters. MOBILEGL_IPC_CREATE_WINDOW=1 must restore the pre-window shape exactly; this is
-//      the assertion that goes red if the window ever stops being the knob;
-//   3. THE WINDOW HOLDS MORE THAN IT IS SIZED FOR - and the ring is what makes this one quiet: an
-//      unguarded push does not grow a count past its ceiling, it REPLACES the oldest confirmation
-//      and leaves the count exactly where it was. So the invariant is read against the effective
-//      ceiling after every create, the ceiling is read against the array, the array is read against
-//      the reply pool it shares, and the environment is not allowed to raise any of them.
-TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) {
+// THE WINDOW'S OWN BEHAVIOUR IS PINNED ELSEWHERE, ON THE ARM IT SHIPS ON: StreamLinkTest's
+// declared-answer cases for the store, and the stream-arm window case for the row. That split is
+// not tidiness - three rounds of this feature were green here while being inert on the device,
+// because these gates and the device run on different transports.
+//
+// WHAT IS STILL READ HERE, because it is transport-independent: the environment cannot raise the
+// window past the array, the array cannot exceed half the reply pool, and the invariant holds after
+// every create.
+TEST(RemoteClientControls, TheWindowRefusesToDeferOnALinkThatCannotRetainAnswers) {
     const auto child = RunInChild([] {
         ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
         CapsPeer backend;
@@ -1266,68 +1267,30 @@ TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) 
             }
         };
 
-        // ---- THE WINDOW ON: twelve creates, strictly fewer waits ----
+        // ---- THE KNOB IS AS HIGH AS IT GOES, AND THE ROW MUST STILL BLOCK ----
+        MG_Config::Ipc.CreateWindow = 4;
         const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(createOp);
         const Uint64 waitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
         burst(12);
         const Uint64 records = Transport::LinkMetricsRecordsFor(createOp) - recordsBefore;
         const Uint64 waits = Transport::LinkMetricsReplyWaitsFor(createOp) - waitsBefore;
-        std::printf("create window ON:  window=%u records=%llu waits=%llu high_water=%u\n",
+        std::printf("non-retaining link: window=%u records=%llu waits=%llu taken=%llu pending=%u high_water=%u\n",
                     static_cast<unsigned>(MG_Config::Ipc.CreateWindow),
                     static_cast<unsigned long long>(records),
                     static_cast<unsigned long long>(waits),
+                    static_cast<unsigned long long>(ClientCreateWindowTaken()),
+                    static_cast<unsigned>(ClientCreateWindowPending()),
                     static_cast<unsigned>(highWater));
         std::fflush(nullptr);
         if (records < 12) ::_exit(164);
-        // ---- AND THE ANSWERS CAME BACK, WHICH IS THE ASSERTION THAT CANNOT BE FAKED ----
-        // A deferral that is never collected looks EXACTLY like a working one from every other
-        // reading in this case: Pending sits at the ceiling, the fallback keeps the frame moving,
-        // and the record count is right. It is also what the device measured for a whole session
-        // (pending pinned at 4, readfail 8,951) and what a no-reply bit keyed on `wantReply` would
-        // produce ON PURPOSE - the window's emits are wantReply=false, so a server that skipped
-        // them would leave this at zero while `records`, `waits` and `pending` all stayed green.
-        const Uint64 taken = ClientCreateWindowTaken();
-        std::printf("create window ON:  answers_taken=%llu outstanding=%u fallbacks=%llu\n",
-                    static_cast<unsigned long long>(taken),
-                    static_cast<unsigned>(ClientCreateWindowPending()),
-                    static_cast<unsigned long long>(records > taken + ClientCreateWindowPending()
-                                                        ? records - taken - ClientCreateWindowPending()
-                                                        : 0u));
-        std::fflush(nullptr);
-        if (taken == 0) ::_exit(174);
-        // NOTHING IS INVENTED AND NOTHING IS LOST: every answered create is either back in hand
-        // or still outstanding, and the remainder took the blocking fallback.
-        if (taken + ClientCreateWindowPending() > records) ::_exit(175);
-        // THE DEFERRAL ITSELF, and the honest size of the claim: the first `window` records pay
-        // nothing, so twelve records cannot pay twelve waits once anything was deferred. A ratio
-        // would be a promise about how fast the server answers, which is not this suite's to make.
-        if (waits >= records) ::_exit(165);
+        // NOTHING WAS DEFERRED AT ALL, and nothing was left outstanding: on a link that cannot
+        // retain, a window that deferred would be holding answers it may never get back.
+        if (ClientCreateWindowTaken() != 0) ::_exit(177);
+        if (ClientCreateWindowPending() != 0) ::_exit(178);
+        // AND EVERY CREATE PAID ITS ROUND TRIP, which is the pre-window shape exactly. This is the
+        // assertion that goes red if the capability gate is removed.
+        if (waits != records) ::_exit(179);
 
-        // ---- AND THE SAME TWELVE WITH THE WINDOW OFF, IN THIS SAME CHILD ----
-        // The negative control shares everything with the ON half except the knob, which is what
-        // makes it a control rather than a second measurement. ONE WAIT PER RECORD is the
-        // pre-window shape: R-5 shipped with exactly that, and the whole change is the difference
-        // between the two lines this case prints.
-        MG_Config::Ipc.CreateWindow = 1;
-        const Uint64 offRecordsBefore = Transport::LinkMetricsRecordsFor(createOp);
-        const Uint64 offWaitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
-        burst(12);
-        const Uint64 offRecords = Transport::LinkMetricsRecordsFor(createOp) - offRecordsBefore;
-        const Uint64 offWaits = Transport::LinkMetricsReplyWaitsFor(createOp) - offWaitsBefore;
-        std::printf("create window OFF: window=%u records=%llu waits=%llu\n",
-                    static_cast<unsigned>(MG_Config::Ipc.CreateWindow),
-                    static_cast<unsigned long long>(offRecords),
-                    static_cast<unsigned long long>(offWaits));
-        std::fflush(nullptr);
-        if (offRecords < 12) ::_exit(166);
-        // ONE WAIT PER CREATE, EXACTLY. Every create on this path is an EmitAndWait, so the two
-        // counters are equal whatever else the row does - which is the assertion that cannot be
-        // satisfied by a window that is still deferring sometimes.
-        if (offWaits != offRecords) ::_exit(167);
-        // AND THE WINDOW TOOK NOTHING WHILE IT WAS OFF, which is the control the ON half's
-        // `taken` needs: without it, a `taken` that grew for some unrelated reason would read as
-        // a working deferral.
-        if (ClientCreateWindowTaken() != taken) ::_exit(176);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
@@ -1337,14 +1300,18 @@ TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) 
 // P12: A REFUSED CREATE LEAVES THE WINDOW - read ON THE LATCH AND ON THE SUSPECT LIST
 // =====================================================================================
 //
-// The window's answer is provisional, so the one thing it must never do is keep feeding a refused
-// object fire-and-forget creates: the client would hold a confirmation the server has refused, for
-// ever, and every row that reads the latch would believe it. The repair is deliberately the path
-// that already existed - DECLINED un-latches the object, the object leaves the window, its next
-// create BLOCKS and the refusal reaches the caller - and this case reads all three steps rather
-// than the symptom. It then reads the HEAL, which is the other half of the same rule: a blocking
-// create that lands puts the object back, so a transient refusal cannot retire an object from the
-// window for the rest of the process (or, at kCreateSuspectMax of them, retire the window).
+// The answer is what PUBLISHES an object, so the one thing a refusal must never do is leave the
+// client believing it landed: every row that reads the latch would then act on a record the server
+// does not hold. This case reads the whole chain - the refusal leaves the object UNLATCHED, its
+// next storage definition BLOCKS and is refused again, and giving the family its consumer back
+// HEALS it (the create is accepted and the latch comes back).
+//
+// ⚠️ RUNS ON THE IN-PROCESS ARM (ShmLink), WHERE THE WINDOW IS OFF, so what repairs the object
+// here is the LATCH ALONE - the suspect table belongs to the window's provisional accept and the
+// drain is the only thing that fills it, which this case now asserts by finding it EMPTY. The
+// window's own refusal path is pinned on the arm it ships on (StreamLinkTest's declared-answer
+// cases and the stream-arm window case); see the note on the gate above for why that split is not
+// tidiness.
 //
 // THE REFUSAL IS MADE REAL RATHER THAN SIMULATED, and it is the exact case the audit found the two
 // ends can disagree about: the applier asks for bit 10 while the client's mirror still says the
@@ -1384,7 +1351,7 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
             MG_Impl::GLImpl::GenTextures(1, &filler);
             defineStorage(filler, 8);
         }
-        // ---- (a) THE LATCH IS CLEAR AND THE OBJECT IS OUT OF THE WINDOW ----
+        // ---- (a) THE LATCH IS CLEAR, AND THE WINDOW NEVER RAN HERE AT ALL ----
         const auto refusedObject = MG_State::pGLContext->GetTextureObject(refused);
         if (refusedObject == nullptr) ::_exit(174);
         const MG_Pipe::MGPipeHandle refusedHandle =
@@ -1393,9 +1360,14 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
         // THE DIRECT READING, which is what the converted rows read: not "the create was refused"
         // but "this object is not published", which is the fact every fire-and-forget row acts on.
         if (MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, refusedHandle)) ::_exit(176);
-        if (ClientCreateWindowRefusals() == 0) ::_exit(177);
+        // AND THE WINDOW'S OWN BOOKS ARE EMPTY, because this arm cannot retain answers and the
+        // window therefore never deferred - `refusals` and `suspects` are both filled by the
+        // drain and by nothing else. A non-zero reading here would mean the capability gate had
+        // been removed and the row was deferring on a link that cannot hold an answer.
+        if (ClientCreateWindowRefusals() != 0) ::_exit(177);
         const Uint32 suspectsBefore = ClientCreateWindowSuspects();
-        if (suspectsBefore == 0) ::_exit(178);
+        if (suspectsBefore != 0) ::_exit(178);
+        if (ClientCreateWindowPending() != 0) ::_exit(183);
         // ---- (b) AND ITS NEXT CREATE BLOCKS: ONE WAIT PER CREATE, WITH THE WINDOW WIDE OPEN ----
         // The window has room (the ceiling is 4 and this case has just drained it), so a deferring
         // row would pay ZERO waits here. Every create this restorage emits pays one instead, which
@@ -1413,18 +1385,17 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
         if (suspectRecords == 0) ::_exit(179);
         if (suspectWaits < suspectRecords) ::_exit(180);
         // ---- (c) THE HEAL: GIVE THE FAMILY ITS CONSUMER BACK AND RE-DEFINE THE SAME OBJECT ----
-        // The create still blocks (the object is still suspect), now it LANDS, and landing is what
-        // takes it out of the suspect list - exactly one entry, because no other object is touched.
+        // The create still blocks (the latch is still clear), now it LANDS, and landing is what
+        // re-publishes the object for every row that reads the latch.
         Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
         defineStorage(refused, 32);
-        std::printf("refused create healed: published=%d suspects %u -> %u\n",
+        std::printf("refused create healed: published=%d suspects=%u\n",
                     static_cast<int>(MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture,
                                                                      refusedHandle)),
-                    static_cast<unsigned>(suspectsBefore),
                     static_cast<unsigned>(ClientCreateWindowSuspects()));
         std::fflush(nullptr);
         if (!MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, refusedHandle)) ::_exit(181);
-        if (ClientCreateWindowSuspects() != suspectsBefore - 1) ::_exit(182);
+        if (ClientCreateWindowSuspects() != suspectsBefore) ::_exit(182);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
