@@ -23,10 +23,13 @@
 | handoff 基线（无窗口的二进制） | — | 4,536 | 4,536 | 31.26 s | `logs/mcx.client` |
 | 窗口 4 | 4 | 4,536 | **4,536** | **28.64 s** | `logs/mcx-fix4.client` |
 | 窗口 1（负控） | 1 | 4,536 | **4,536** | **28.64 s** | `logs/mcx-fix1.client` |
+| **默认（本轮收尾的 HEAD，窗口 1）** | 1 | 4,536 | **4,536** | 30.79 s | `logs/mcx-final.client` |
 
 `by_op 2` 数的是**走了阻塞路径的 create**（`LinkMetricsBeginReply(ownsReplySlot, op)`，
 `ownsReplySlot = rowCarriesReplySlot && wantReply`，`ClientSession.cpp:1840/1883`）。它没动，就是「一条都没延后」。
-两臂的 `frame-sent` 全表逐 op 相同（4,536 / 20,633 / 3,770 / 18,056 / 12,671 …），也就是**记录一条没少发**。
+两臂的 `frame-sent` 全表逐 op 相同（4,536 / 20,633 / 3,770 / 18,056 / 12,671 …），也就是**记录一条没少发**；
+收尾那一轮（默认值，`mcx-final`）的 `frame-sent` 与它们**逐字节相同**，墙钟的 30.79 s 在 handoff-2 §4.3 说的
+「单次墙钟差含数秒噪声」带内——三臂的墙钟差（28.64 / 28.64 / 30.79）没有一个超出噪声。
 
 窗口确实进去过——临时行（每 500 条打一次）在窗口 4 下的读数：
 
