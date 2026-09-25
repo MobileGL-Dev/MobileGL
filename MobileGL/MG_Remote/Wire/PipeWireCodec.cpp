@@ -1266,6 +1266,12 @@ namespace MobileGL::MG_Remote::Wire {
         if (MG_Util::PipeStats::Enabled()) {
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireRecords, 1);
         }
+        // THE SAME COMMIT, SPLIT BY OP (P12). The CallClass above answers "how many records"; this
+        // answers "which rows", which is the question a wait count cannot: the device run had one
+        // atlas frame pay 43,232 waits while the upload row paid none, so the next thing to know is
+        // how many records those waits were bought for and by whom. Counted here for the reason the
+        // comment above gives - after chunking, no emitter knows how many records its call made.
+        Transport::LinkMetricsNoteRecord(static_cast<std::uint32_t>(op));
 
         ++m_emitSeq;
         // The stage mark: where SEG_STAGE stood once everything this record names had been

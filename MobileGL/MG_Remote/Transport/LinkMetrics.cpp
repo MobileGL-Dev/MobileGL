@@ -18,6 +18,7 @@ namespace {
         // One slot per wire op, plus a last slot for anything past the table. See
         // LinkMetricsMaxOps: the point is that the per-op numbers still SUM to waitReplies.
         std::array<std::uint64_t, LinkMetricsMaxOps> waitRepliesByOp{};
+        std::array<std::uint64_t, LinkMetricsMaxOps> emittedByOp{};
     };
     // The client already has exactly one record producer. The server never writes these.
     struct Metrics {
@@ -64,6 +65,22 @@ namespace {
         }
         if (at == 0) std::snprintf(out, outSize, "(none)");
     }
+    // The same shape for the emission tally: one formatter, two arrays, so the two lines cannot
+    // drift apart in their id spelling.
+    void FormatCounts(const std::array<std::uint64_t, LinkMetricsMaxOps>& counts, char* out,
+                      std::size_t outSize) {
+        std::size_t at = 0;
+        out[0] = '\0';
+        for (std::uint32_t op = 1; op < LinkMetricsMaxOps && at + 24 < outSize; ++op) {
+            if (counts[op] == 0) continue;
+            const int n = std::snprintf(out + at, outSize - at, "%s%u=%llu", at == 0 ? "" : ",",
+                                        static_cast<unsigned>(op),
+                                        static_cast<unsigned long long>(counts[op]));
+            if (n < 0 || static_cast<std::size_t>(n) >= outSize - at) break;
+            at += static_cast<std::size_t>(n);
+        }
+        if (at == 0) std::snprintf(out, outSize, "(none)");
+    }
     void Emit(const char* kind, const Window& w, std::uint64_t wallNs, std::uint64_t cpuNs) {
         char histogram[768]{};
         std::size_t at = 0;
@@ -95,6 +112,18 @@ namespace {
                     static_cast<unsigned long long>(metrics.frame),
                     static_cast<unsigned long long>(w.waitReplies), split);
         }
+        // WHAT THE FRAME SENT, not only what it paid for. Printed for the same frames - a frame
+        // that bought no wait still SENT records, and the count is what says whether the waits are
+        // one per record (a real handshake) or fewer (a batched one).
+        std::uint64_t emitted = 0;
+        for (std::uint32_t op = 1; op < LinkMetricsMaxOps; ++op) emitted += w.emittedByOp[op];
+        if (emitted != 0) {
+            char sent[1024];
+            FormatCounts(w.emittedByOp, sent, sizeof(sent));
+            MGLOG_I("P65LinkMetrics kind=frame-sent frame=%llu records=%llu by_op=%s",
+                    static_cast<unsigned long long>(metrics.frame),
+                    static_cast<unsigned long long>(emitted), sent);
+        }
     }
 }
 void LinkMetricsBegin() {
@@ -121,6 +150,14 @@ void LinkMetricsReplyApplied(std::uint64_t startedNs) {
     for (Window* w : {&metrics.current, &metrics.total}) {
         ++w->samples; w->replyNs += ns; ++w->histogram[bucket];
     }
+}
+void LinkMetricsNoteRecord(std::uint32_t op) {
+    if (!metrics.active) return;
+    const std::uint32_t slot = op < LinkMetricsMaxOps ? op : LinkMetricsMaxOps - 1;
+    ++metrics.current.emittedByOp[slot]; ++metrics.total.emittedByOp[slot];
+}
+std::uint64_t LinkMetricsRecordsFor(std::uint32_t op) {
+    return metrics.total.emittedByOp[op < LinkMetricsMaxOps ? op : LinkMetricsMaxOps - 1];
 }
 std::uint64_t LinkMetricsReplyWaits() { return metrics.total.waitReplies; }
 std::uint64_t LinkMetricsReplyWaitsFor(std::uint32_t op) {

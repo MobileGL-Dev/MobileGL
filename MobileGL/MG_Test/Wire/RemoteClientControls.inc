@@ -972,6 +972,20 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
         }
         // PRINT FIRST, ASSERT SECOND: the table is the point of the case, and a gate that fired
         // before it would hide the numbers on exactly the run that needs them - the red one.
+        //
+        // BOTH HALVES OF THE SAME FRAME: what it PAID (waits) and what it SENT (records). They are
+        // different questions and the pair is the point - item B did not stop the upload records
+        // from being sent, it stopped them from being waited for.
+        std::printf("records sent by op (whole session):\n");
+        for (Uint32 op = 1; op < Transport::LinkMetricsMaxOps; ++op) {
+            const Uint64 records = Transport::LinkMetricsRecordsFor(op);
+            if (records != 0)
+                std::printf("  op=%-24s records=%llu waits=%llu\n",
+                            Codec::WireOpName(static_cast<MGPWireOp>(op)),
+                            static_cast<unsigned long long>(records),
+                            static_cast<unsigned long long>(Transport::LinkMetricsReplyWaitsFor(op)));
+        }
+        std::fflush(nullptr);
         std::printf("shape 2 a texture per sprite: %d textures -> wait_replies=%llu\n", kSprites,
                     static_cast<unsigned long long>(Transport::LinkMetricsReplyWaits() - atlasWaitsBefore));
         for (Uint32 op = 1; op < Transport::LinkMetricsMaxOps; ++op) {
@@ -985,6 +999,11 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
         // drives must NOT be, or the case would also pass on a session that counted nothing.
         if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceSubData)) != 0)
             ::_exit(143);
+        // AND THE UPLOAD RECORDS WERE STILL SENT: the shape 1 stitch is 64 sub-uploads, so the row
+        // must show 64 records with 0 waits. A pair that went to 0/0 together would mean the
+        // emitter stopped sending, which is a different (and much worse) change than item B.
+        if (Transport::LinkMetricsRecordsFor(static_cast<Uint32>(MGPWireOp::ResourceSubData)) < 64)
+            ::_exit(148);
         if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceCreate)) == 0)
             ::_exit(144);
         if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceRespecify)) == 0)

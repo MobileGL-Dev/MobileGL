@@ -26,6 +26,14 @@ namespace MobileGL::MG_Remote::Transport {
     // still counts, or it would pass on a session where nothing was counted at all.
     std::uint64_t LinkMetricsReplyWaits();
     std::uint64_t LinkMetricsReplyWaitsFor(std::uint32_t op);
+
+    // RECORDS EMITTED, PER OP - the other half of the same question. A wait count says what a frame
+    // PAID; this says what it SENT, and the device run that motivated it showed one atlas frame
+    // paying 43,232 waits while the upload row paid none - so the next thing to know is how many
+    // records those waits were bought for and by whom. Counted at the encoder's one commit point
+    // (PipeWireCodec.cpp, ++m_emitSeq), so no row can be emitted without being counted.
+    void LinkMetricsNoteRecord(std::uint32_t op);
+    std::uint64_t LinkMetricsRecordsFor(std::uint32_t op);
     void LinkMetricsPresent();
     void LinkMetricsServerPresent(std::uint64_t serial);
 }
