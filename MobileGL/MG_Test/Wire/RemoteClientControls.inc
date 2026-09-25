@@ -862,4 +862,52 @@ TEST(RemoteClientControls, DeviceLostRespecifyDoesNotDieOfTheUncarriedBytesCheck
     ExpectChildSuccess(child);
 }
 
+// =====================================================================================
+// P12 item B: the texture half stops owning a reply on the wire arm
+// =====================================================================================
+//
+// THE NUMBER IS THE GATE. `wait_replies` is what the handoff measured 55,428 of in one
+// Minecraft frame; LinkMetrics.cpp:76-80 counts exactly the records that OWN a reply slot, so
+// it is the same quantity the per-frame P65LinkMetrics line prints. The case drives it over a
+// live split session: a pure level upload must cross the wire and open NO reply wait, while a
+// create row - which is kWaitReply and always was - still moves the number.
+//
+// THE SECOND HALF IS THE NEGATIVE CONTROL FOR THE FIRST. Without it, a session that counted
+// nothing at all (metrics off, no records) would pass the half that exists to fail.
+//
+// THE RED, RUN ONCE: take the `kClientWire` arm out of MGPipeSubDataWantsItsReply (PipeRoute.h)
+// and the upload delta becomes 1 - the child exits 142.
+TEST(RemoteClientControls, TextureUploadsStopOwningAReplyOnTheWireArm) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        Uint8 pixels[4 * 4 * 4];
+        std::memset(pixels, 0x21, sizeof(pixels));
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+        // THE CONTROL ROW. resource_create is kWaitReply (PipeCalls.def), so it owns a reply
+        // slot and this counter MUST move on it.
+        const auto beforeCreate = Transport::LinkMetricsReplyWaits();
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 4, 4, 0, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        if (Transport::LinkMetricsReplyWaits() <= beforeCreate) ::_exit(140);
+        // THE ROW UNDER TEST. A second write into the same level is a pure resource_subdata: the
+        // resource is created, so no create crosses, and the level is dirty again - the only
+        // record it can produce is the one item B is about.
+        const auto beforeRecords = ClientWireRecordsEmitted();
+        const auto beforeWaits = Transport::LinkMetricsReplyWaits();
+        MG_Impl::GLImpl::TexSubImage2D(0x0DE1, 0, 0, 0, 2, 2, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        if (ClientWireRecordsEmitted() <= beforeRecords) ::_exit(141);
+        if (Transport::LinkMetricsReplyWaits() != beforeWaits) ::_exit(142);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
 #endif

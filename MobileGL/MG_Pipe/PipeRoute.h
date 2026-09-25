@@ -298,14 +298,56 @@ namespace MobileGL::MG_Pipe {
     // THE BUFFER HALF DOES NOT: its Bool is discarded at the only call site there is
     // (MGPipeEmitResourceSubData), and because the row carries kReplySlot the client used to
     // wait for it anyway - one full round trip per 64 KB persistent-map block, whose answer
-    // nobody looked at. THE TEXTURE HALF DOES: DrainTextureSubData clears the level's dirty
-    // flag on an ACCEPTED reply, so its answer is load-bearing (D-D5; making that half
-    // fire-and-forget is a trailing item, not this package's).
+    // nobody looked at.
+    //
+    // THE TEXTURE HALF DOES NOT EITHER, ON THE WIRE ARM (P12, the handoff's item B), and the
+    // argument is that its answer is DERIVABLE there - not that anybody stopped reading it.
+    // DrainTextureSubData still clears the level's dirty flag on an accepted answer (D-D5), and
+    // it still gets one; what it does not get any more is a ROUND TRIP for it:
+    //
+    //   * THE EMISSION IS ALREADY GATED ON THE ANSWER'S CONTENT. A texture record is produced
+    //     only where FamilyIsLive(kMGPipeSubsystemTextureResources, ...) holds, and under split
+    //     that gate IS CapsMirrorInstance().ServerConsumes(bit 10) (PipeFill.cpp:1719-1740) - the
+    //     same published fact the applier's own acceptance belt reads (PipeApply.cpp:1408-1419,
+    //     NoP4aConsumer). So the one server-side refusal this acceptance exists to carry - "no
+    //     consumer", the ID-39 / D-D5 / ID-18 M3 case that is WHY the texture half ever asked -
+    //     cannot be the answer to a record this client emitted.
+    //   * WHAT REMAINS IS A BUG CLASS, AND IT IS LOUD ALREADY. A record whose resource target
+    //     names no texture, or that declares no texels or no bytes, is an MGP_TRIP_WIRE_REPORT on
+    //     the server (PipeApply.cpp:1201-1218, :2245-2252); a record for a handle the applier
+    //     does not hold is counted and named (ResolveResourceIn, :721-728), and the client's own
+    //     tracker prevents it by creating before it ever sends sub-data (PipeFill.cpp:1045-1051).
+    //   * AND EVERY ANSWER THE CLIENT CAN STILL GET FOR FREE, IT STILL GETS: the emitter reads
+    //     this route's Bool exactly as before, so a record the CLIENT cancelled (the device-lost
+    //     latch, an exhausted stage) still answers "not accepted" and the level stays dirty and
+    //     is retried - D-D5's safe direction, unchanged.
+    //
+    // THE WAIT DOES NOT DISAPPEAR, IT MOVES TO THE STAGE. A record whose run does not fit
+    // SEG_STAGE reclaims retired bytes and parks on the stage doorbell (PipeWireCodec.cpp
+    // StageAllocate / ReclaimStagedBytes) - the one wait a run-ahead client owes, and the one
+    // that is proportional to the WINDOW rather than to the call count. That is the whole of item
+    // B: on Minecraft 26.2's atlas frame, 55,428 reply waits at ~4.4 ms each (96 MiB of uploads
+    // through a 32 MiB window) become the handful of stage retirements those same 96 MiB need.
+    // (Measured on the host by RemoteClientControls.TextureUploadsStopOwningAReplyOnTheWireArm,
+    // which counts the reply slots the client opens for a batch of uploads: N -> 0.)
+    //
+    // MONOLITH IS UNTOUCHED, and the arm test is what says so: there the applier's answer is
+    // returned by Mono_ResourceSubData on the calling thread and costs nothing, so there is
+    // nothing to stop waiting for and the predicate keeps its old answer.
     //
     // The test is MGPSubData::Target == kMGPipeResourceTargetBuffer, whole field, which is the
     // invariant MGPipeTypes.h asserts beside the packer and which the applier's own
     // SubDataNamesABuffer already reads.
     inline Bool MGPipeSubDataWantsItsReply(const MGPSubData& record) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE WIRE ARM ONLY. Everything above is an argument about a client talking to a server
+        // over SEG_CMD/SEG_STAGE; a monolith run inside a split build (every unit and
+        // integration-gpu lane is one) keeps the answer it always gave.
+        if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return false;
+#endif
+        // THE PULL BUILD PREPROCESSES TO EXACTLY THIS LINE AND NOTHING ELSE, which is what G1
+        // compares: the arm test above sits inside the build switch, so the pull arm emits the
+        // expression this function has always had.
         return record.Target != kMGPipeResourceTargetBuffer;
     }
 

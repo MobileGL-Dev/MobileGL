@@ -36,6 +36,7 @@
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Transport/ReplySlot.h>
+#include <MG_Remote/Transport/LinkMetrics.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/WireTables.h>

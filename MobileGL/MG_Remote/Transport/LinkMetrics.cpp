@@ -88,6 +88,7 @@ void LinkMetricsReplyApplied(std::uint64_t startedNs) {
         ++w->samples; w->replyNs += ns; ++w->histogram[bucket];
     }
 }
+std::uint64_t LinkMetricsReplyWaits() { return metrics.total.waitReplies; }
 void LinkMetricsStageBytes(std::uint64_t bytes) {
     if (!metrics.active) return;
     metrics.current.stageBytes += bytes; metrics.total.stageBytes += bytes;
