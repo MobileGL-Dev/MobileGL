@@ -15,6 +15,9 @@ namespace {
     struct Window {
         std::uint64_t waitReplies = 0, samples = 0, replyNs = 0, stageBytes = 0;
         std::array<std::uint64_t, 32> histogram{};
+        // One slot per wire op, plus a last slot for anything past the table. See
+        // LinkMetricsMaxOps: the point is that the per-op numbers still SUM to waitReplies.
+        std::array<std::uint64_t, LinkMetricsMaxOps> waitRepliesByOp{};
     };
     // The client already has exactly one record producer. The server never writes these.
     struct Metrics {
@@ -73,9 +76,11 @@ void LinkMetricsBegin() {
     metrics.started = metrics.lastFrame = ClockNs();
     metrics.cpuStarted = metrics.cpuLast = ThreadCpuNs();
 }
-std::uint64_t LinkMetricsBeginReply(bool wantsReply) {
+std::uint64_t LinkMetricsBeginReply(bool wantsReply, std::uint32_t op) {
     if (!metrics.active || !wantsReply) return 0;
+    const std::uint32_t slot = op < LinkMetricsMaxOps ? op : LinkMetricsMaxOps - 1;
     ++metrics.current.waitReplies; ++metrics.total.waitReplies;
+    ++metrics.current.waitRepliesByOp[slot]; ++metrics.total.waitRepliesByOp[slot];
     return ClockNs();
 }
 void LinkMetricsReplyApplied(std::uint64_t startedNs) {
@@ -89,6 +94,9 @@ void LinkMetricsReplyApplied(std::uint64_t startedNs) {
     }
 }
 std::uint64_t LinkMetricsReplyWaits() { return metrics.total.waitReplies; }
+std::uint64_t LinkMetricsReplyWaitsFor(std::uint32_t op) {
+    return metrics.total.waitRepliesByOp[op < LinkMetricsMaxOps ? op : LinkMetricsMaxOps - 1];
+}
 void LinkMetricsStageBytes(std::uint64_t bytes) {
     if (!metrics.active) return;
     metrics.current.stageBytes += bytes; metrics.total.stageBytes += bytes;

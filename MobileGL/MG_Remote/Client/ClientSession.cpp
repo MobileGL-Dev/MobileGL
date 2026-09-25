@@ -1877,7 +1877,10 @@ namespace MobileGL::MG_Remote::Client {
         // Publish the head, record submittedSeq, THEN ring - in that order, which is
         // SessionProducer's one job and RingTest.cpp:446's pin. Notify-then-publish loses the
         // wakeup.
-        const auto replyMetricStart = Transport::LinkMetricsBeginReply(ownsReplySlot);
+        // The op goes with the tally (P12): a total cannot say whether the waits are uploads,
+        // creates or parameter sets, and those three have different fixes.
+        const auto replyMetricStart =
+            Transport::LinkMetricsBeginReply(ownsReplySlot, static_cast<std::uint32_t>(op));
         m_producer.PublishAndNotify(seq);
         if (op == MG_Pipe::MGPWireOp::Present) {
             // A credit is permission to run ahead, not permission to retain the

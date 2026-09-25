@@ -910,4 +910,93 @@ TEST(RemoteClientControls, TextureUploadsStopOwningAReplyOnTheWireArm) {
     ExpectChildSuccess(child);
 }
 
+// =====================================================================================
+// P12 item B: WHICH ROWS BUY THE WAITS - the measurement the handoff left open (its 5.4)
+// =====================================================================================
+//
+// A total cannot answer it. 55,428 reply waits in one frame is the same number whether they are
+// uploads (item B), creates (per resource) or parameter sets (per call), and those three have
+// different fixes - so the split is what says whether B is the whole story or a fraction of one.
+// An atlas-shaped load makes it visible: one sprite per texture, one glTexImage2D and four
+// glTexParameteri, which is the call shape an atlas stitch has.
+//
+// A MEASUREMENT WITH A STRUCTURAL GATE UNDER IT, not a performance gate: the assertions are the
+// ones that can be WRONG about the mechanism (the upload rows contribute zero after item B, the
+// create / respecify / parameter rows do not, and the per-op tally sums to the total), and the
+// numbers themselves are printed for the register.
+TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        constexpr int kSprites = 64;
+        Uint8 pixels[16 * 16 * 4];
+        std::memset(pixels, 0x5a, sizeof(pixels));
+
+        // SHAPE 1 - THE ATLAS STITCH, which is what item B was aimed at: ONE texture and many
+        // small writes into it. If B works, this shape's wait count stops tracking the upload
+        // count at all.
+        GLuint atlas = 0;
+        MG_Impl::GLImpl::GenTextures(1, &atlas);
+        MG_Impl::GLImpl::BindTexture(0x0DE1, atlas);
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 256, 256, 0, 0x1908, 0x1401, nullptr);
+        MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2601);
+        MGP_FILL(DrawArrays);
+        const Uint64 afterAtlasSetup = Transport::LinkMetricsReplyWaits();
+        for (int i = 0; i < kSprites; ++i) {
+            MG_Impl::GLImpl::TexSubImage2D(0x0DE1, 0, (i % 8) * 16, (i / 8) * 16, 16, 16, 0x1908,
+                                           0x1401, pixels);
+            MGP_FILL(DrawArrays); // the drain point
+        }
+        const Uint64 atlasWaits = Transport::LinkMetricsReplyWaits() - afterAtlasSetup;
+        std::printf("shape 1 atlas stitch: %d sub-uploads into one level -> wait_replies=%llu\n",
+                    kSprites, static_cast<unsigned long long>(atlasWaits));
+        const Uint64 atlasWaitsBefore = Transport::LinkMetricsReplyWaits();
+
+        // SHAPE 2 - A TEXTURE PER SPRITE, the other thing a stitcher can do (and what the mipmap
+        // and dynamic-texture paths look like): every sprite pays a storage definition and its
+        // own parameter set.
+        for (int i = 0; i < kSprites; ++i) {
+            GLuint texture = 0;
+            MG_Impl::GLImpl::GenTextures(1, &texture);
+            MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+            MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 16, 16, 0, 0x1908, 0x1401, pixels);
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2802, 0x2901); // WRAP_S = CLAMP_TO_EDGE
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2803, 0x2901); // WRAP_T
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2601); // MIN_FILTER = LINEAR
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2800, 0x2601); // MAG_FILTER = LINEAR
+            MGP_FILL(DrawArrays); // the drain point
+        }
+        // PRINT FIRST, ASSERT SECOND: the table is the point of the case, and a gate that fired
+        // before it would hide the numbers on exactly the run that needs them - the red one.
+        std::printf("shape 2 a texture per sprite: %d textures -> wait_replies=%llu\n", kSprites,
+                    static_cast<unsigned long long>(Transport::LinkMetricsReplyWaits() - atlasWaitsBefore));
+        for (Uint32 op = 1; op < Transport::LinkMetricsMaxOps; ++op) {
+            const Uint64 waits = Transport::LinkMetricsReplyWaitsFor(op);
+            if (waits != 0)
+                std::printf("  op=%-24s waits=%llu\n", Codec::WireOpName(static_cast<MGPWireOp>(op)),
+                            static_cast<unsigned long long>(waits));
+        }
+        std::fflush(nullptr);
+        // THE STRUCTURAL GATE. The upload row must be free (item B) and every other row this load
+        // drives must NOT be, or the case would also pass on a session that counted nothing.
+        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceSubData)) != 0)
+            ::_exit(143);
+        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceCreate)) == 0)
+            ::_exit(144);
+        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceRespecify)) == 0)
+            ::_exit(145);
+        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::SetTextureParams)) == 0)
+            ::_exit(146);
+        Uint64 sum = 0;
+        for (Uint32 op = 0; op < Transport::LinkMetricsMaxOps; ++op)
+            sum += Transport::LinkMetricsReplyWaitsFor(op);
+        if (sum != Transport::LinkMetricsReplyWaits()) ::_exit(147);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
 #endif
