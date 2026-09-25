@@ -111,6 +111,25 @@ void LinkMetricsPresent() {
 void LinkMetricsEnd() {
     if (!metrics.active) return;
     Emit("summary", metrics.total, ClockNs() - metrics.started, ThreadCpuNs() - metrics.cpuStarted);
+    // AND THE PER-OP SPLIT AT THE SAME INSTANT, on its own line. The handoff wanted this number
+    // and could not get it: under spawn the client does not advance the frame window, so the
+    // per-frame lines never print, and a SIGKILL takes the exit-time dump with it. The summary is
+    // written from the one place a client that ends the ordinary way always reaches. `op` is raw -
+    // this file does not include the op table - and the reader names rows with WireOpName.
+    char split[1024];
+    std::size_t at = 0;
+    for (std::uint32_t op = 1; op < LinkMetricsMaxOps && at < sizeof(split); ++op) {
+        const std::uint64_t waits = metrics.total.waitRepliesByOp[op];
+        if (waits == 0) continue;
+        const int n = std::snprintf(split + at, sizeof(split) - at, "%s%u=%llu", at == 0 ? "" : ",",
+                                    static_cast<unsigned>(op),
+                                    static_cast<unsigned long long>(waits));
+        if (n < 0 || static_cast<std::size_t>(n) >= sizeof(split) - at) break;
+        at += static_cast<std::size_t>(n);
+    }
+    MGLOG_I("P65LinkMetrics kind=per-op wait_replies=%llu by_op=%s",
+            static_cast<unsigned long long>(metrics.total.waitReplies),
+            at == 0 ? "(none)" : split);
     metrics.active = false;
 }
 void LinkMetricsServerPresent(std::uint64_t serial) {
