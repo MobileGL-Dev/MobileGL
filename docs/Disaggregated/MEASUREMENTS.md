@@ -30,4 +30,4 @@
 | 13 | P3b/P4b | 纹理上传形状在四种拓扑下完全一致 | [`notes/p34b`](notes/p34b/README.md) |
 | 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | [`notes/p65`](notes/p65/README.md) |
 | 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`notes/p7`](notes/p7/README.md) |
-| 16 | P12 | 上屏两后端 SSIM 1.0；审查修复后待真机复测 | [`notes/p12`](notes/p12/README.md) |
+| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；FCL 与跨机 TCP 收官门仍待完成 | [`notes/p12`](notes/p12/README.md) |

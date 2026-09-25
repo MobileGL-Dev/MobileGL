@@ -2,7 +2,7 @@
 
 **做什么**：在 MobileGL 的前端（处理应用的 GL 调用）和后端（调用 GLES / Vulkan 驱动）之间立一份显式接口——前端把状态变化**推**给后端，后端不再直接读前端的内存。有了这份接口，前后端可以放在两个线程、两个进程，甚至两台机器上运行。
 
-**做到哪了**（2026-09-24）：接口与拆分已完成到"两个进程、可经 TCP 跨机"。当前在做 **P12：让 Android 上的 server 自己开窗口，把画面直接显示到屏幕上**——功能已实现，还差真机复测和两项验收。→ [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)
+**做到哪了**（2026-09-25）：接口与拆分已完成到"两个进程、可经 TCP 跨机"。当前在做 **P12：让 Android 上的 server 自己开窗口，把画面直接显示到屏幕上**——审查后的主机定向测试和 Redmi 真机七项复测已通过；FCL 与跨机 TCP 两项验收仍未完成。→ [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md)
 
 ## 一张图
 

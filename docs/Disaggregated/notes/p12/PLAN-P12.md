@@ -61,6 +61,12 @@
 | 6 | 负控：`MOBILEGL_IPC_SURFACE=server` 打离屏 server | 双侧具名 `Refuse ServerOwned (NoServerDisplay)`；随后同 service 的离屏会话绿 |
 | 7 | 一台设备上只有一个 server | Activity 起来杀 service、service 起来杀 `:mglwin`，互相都验证了 |
 
+### 审查后复测（`feat/disaggregated@1fb18d9e`，2026-09-24）
+
+审查修复后的同一 P12 实现 head 已在 Redmi `2f7cbe2e`（Adreno 830）重建并复跑七项检查。结果与上表一致：Espryt OpenRA SSIM **1.000000**；Magma OpenRA / Minecraft startup **1.000000 / 0.999999511**；串行第二会话和 `Refuse{Busy}` 通过；HOME 失窗得到 `ServerWindowLost` 干净 device-lost，surface 释放 **15 ms**，Activity 存活且重附后新会话 SSIM 1.0；pbuffer 与 `NoServerDisplay` 负控通过；Activity / service 互斥通过。第 6 项初次尝试与上一会话回收竞态命中 Busy；临时测试副本等待 2 秒后重跑，双侧具名拒绝和后续 pbuffer 会话均通过，仓库脚本未改。
+
+审查后主机 **P12 定向 CTest 46/46 通过**：`ServerDisplayTest`、`ServerLoopTest`、`InProcessServer`、`SupervisorChildren`、`ServerOwnedSurface`。这组定向测试不等于完整主机门。证据在测试机 `/home/swung/w7/logs/p12-verify-1fb18d9e/`；日志、APK 和截图按证据数据规则未入仓库。当前 `0fe01588` 相对验证 head 只有文档整理及文档检查配置更新。
+
 ## 3. 还没做（P12 未收官）
 
 按 [`../ROADMAP.md`](../../ROADMAP.md) P12 行的两个出口门，以及本包任务书列出的改小后的条目：
