@@ -39,6 +39,8 @@
 
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeRoute.h>
+// P12: MGPipeHandleIsPublished, the latch that says an object's existence is CONFIRMED.
+#include <MG_Pipe/PipeMutation.h>
 // P5c (ct): EmitObjectDeathRecord resolves the dying object's handle in the CLIENT's own
 // allocator - a client surface, asked on the client thread, which is the one place the lookup
 // is legal under rule E (CONTRACT-P5C.md §5.2).
@@ -328,13 +330,44 @@ namespace MobileGL::MG_Remote::Client {
             if (status == 1) ++g_declined;
         }
 
+        // A PARAMETER CHANGE FOR AN OBJECT WHOSE EXISTENCE IS CONFIRMED OWES NO ANSWER (P12).
+        //
+        // The acceptance this row used to wait for says one thing: "the applier holds a record for
+        // this handle". That is a fact about the SERVER's table, and the client already keeps its
+        // own copy of exactly that fact - MGPipeHandleIsPublished, set when the object's create was
+        // ACCEPTED and never cleared while the record lives (the applier keeps texture records
+        // across a make-current: PipeFill.cpp:3756-3759). So the wait is asking the server a
+        // question the client has already answered.
+        //
+        // WHAT REPLACES IT, on the device run's numbers: this row paid 18,056 of one frame's
+        // 43,232 round trips at ~5 ms each, for records carrying a few hundred bytes. The object's
+        // ONE confirmation is its create, paid at its first use (the emitter sends it proactively
+        // when the latch is clear - EmitTextureParams' HealUnpublishedRecord); every parameter
+        // record after that is emitted fire-and-forget and the caller reads a PROVISIONAL accept,
+        // exactly as resource_subdata has done since item B.
+        //
+        // AND WHEN THE LATCH IS CLEAR THIS ROW STILL WAITS, which is the whole fallback: an object
+        // whose create was refused stays unpublished, so its next parameter record takes the real
+        // answer and the emitter's existing one-retry heal runs. A refusal can only reach here
+        // for an object the client thinks it never published, or for a bug - the two cases that
+        // were already the only ones the per-record wait could name.
         void Wire_SetTextureParams(const MG_Pipe::MGPTextureParams* payload, MG_Pipe::MGPReplySlot* reply) {
             if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithContext().SetTextureParams(payload, reply); return; }
             ClientSession& session = RequireSession("SetTextureParams");
-            Int32 status = 0;
-            const Uint64 seq = session.EmitAndWait(MGPWireOp::SetTextureParams, payload,
-                                                   sizeof(*payload), nullptr, 0, nullptr, 0,
-                                                   &status);
+            const Bool confirmed = MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture,
+                                                                   payload->Res);
+            Int32 status = Wire::ReplySink::kStatusError;
+            Uint64 seq = Wire::kInvalidSeq;
+            if (confirmed) {
+                seq = session.EmitAndWaitTails(MGPWireOp::SetTextureParams, payload, sizeof(*payload),
+                                               nullptr, 0, nullptr, 0, &status, nullptr,
+                                               /*wantReply=*/false);
+                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
+                                                  : Wire::ReplySink::kStatusOk;
+            } else {
+                seq = session.EmitAndWait(MGPWireOp::SetTextureParams, payload, sizeof(*payload),
+                                          nullptr, 0, nullptr, 0, &status);
+            }
             // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);

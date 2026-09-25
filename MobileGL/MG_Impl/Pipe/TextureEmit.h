@@ -921,6 +921,35 @@ namespace MobileGL::MG_Pipe {
             NoteRespecified(entry, desc, accepted);
         }
 
+        // Give an object the server never got its record back: a create with no storage for its
+        // identity, the storage if it has any, and the parameters once so they land on the record
+        // that now exists. Returns whether that send was accepted. ONE attempt per caller - the
+        // caller owns the "one retry, never a loop" rule.
+        // THE ENTRY IS FETCHED, NOT HANDED IN: Entry is declared further down the class, so a
+        // parameter list up here could not name it - while this body, which the compiler treats as
+        // following the complete class, can. It is also the safer shape: the table can grow inside
+        // this call (a view's owner is acquired), and a reference taken by the caller before it
+        // would dangle.
+        Bool HealUnpublishedRecord(ITextureObject& texture, MGPipeHandle handle, Uint16 bindMask,
+                                   const MGPTextureParams& params) {
+            Entry& entry = EntryFor(m_textures, handle);
+            const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
+                texture, handle, bindMask, /*storageDefined=*/false, kMGPipeNullHandle,
+                kMGPipeNullHandle, 0, 0);
+            NoteDesc(healDesc, /*isCreate=*/true);
+            PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
+            const auto* mipmap = MG_State::GLState::AsMipmapTexture(&texture);
+            const Bool hasStorage = mipmap != nullptr
+                                        ? mipmap->GetMipmapLevelCount() > 0
+                                        : texture.GetStorageType() == MobileGL::TextureStorageType::Buffer;
+            if (hasStorage) {
+                // Can grow the table (a view's owner is acquired inside): no Entry& is held
+                // across it - the caller re-fetches its own afterwards.
+                EmitResourceRespecify(texture, MGPipeTextureRespecifyScope::WholeResource, 0, 0);
+            }
+            return MGPipeRouteSetTextureParams(params);
+        }
+
         void EmitTextureParams(ITextureObject& texture) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
             Entry& entry = EntryFor(m_textures, handle);
@@ -985,10 +1014,30 @@ namespace MobileGL::MG_Pipe {
                 MGPipeBuildTextureParams(texture, handle, entry.BuiltinSampler, entry.ForceParamsResync);
             m_lastParams = params;
             ++m_paramSets;
+            // THE FIRST USE OF AN OBJECT THE SERVER NEVER GOT (P12). The refusal branch below is
+            // the same repair, but it can only fire if the record was allowed to WAIT - and the
+            // point of this change is that a record for an object whose existence IS confirmed
+            // need not wait at all. So the check moves BEFORE the send: the confirming create is
+            // the one round trip an object owes, it is paid here at its first use, and every
+            // record after it is fire-and-forget (Wire_SetTextureParams reads the same latch).
+            //
+            // IT IS NOT A NEW MECHANISM: PublishCreate is what the respecify path already calls
+            // when !MGPipeHandleIsPublished (EmitResourceRespecify, above), and the body below is
+            // the one the refusal branch has always run. This runs it on the client's own
+            // knowledge instead of after a round trip that told the client nothing it could not
+            // already see.
+            Bool accepted = false;
+            Bool healed = false;
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                if (!MGPipeHandleIsPublished(MGPipeKind::Texture, handle)) {
+                    accepted = HealUnpublishedRecord(texture, handle, entry.BindMask, params);
+                    healed = true;
+                }
+            }
             // Not behind MGPipeTextureRecordsReachTheApplier() (see its comment): the call is
             // dispatched whenever this emitter runs, so the answer is always a real one.
-            Bool accepted = MGPipeRouteSetTextureParams(params);
-            if (!accepted) {
+            if (!healed) accepted = MGPipeRouteSetTextureParams(params);
+            if (!accepted && !healed) {
                 // THE SELF-HEAL, the respecify path's shape, and the parameters are the one
                 // publication that may be a texture's FIRST: the context's default textures are
                 // constructed before the backend registers its consumer, so no create ever went
@@ -1013,7 +1062,7 @@ namespace MobileGL::MG_Pipe {
                     // across it - `entry` is re-fetched below.
                     EmitResourceRespecify(texture, MGPipeTextureRespecifyScope::WholeResource, 0, 0);
                 }
-                accepted = MGPipeRouteSetTextureParams(params);
+                accepted = HealUnpublishedRecord(texture, handle, entry.BindMask, params);
             }
             Entry& latched = EntryFor(m_textures, handle);
             if (!accepted) {

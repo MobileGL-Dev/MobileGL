@@ -1033,12 +1033,63 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
             ::_exit(144);
         if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceRespecify)) == 0)
             ::_exit(145);
-        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::SetTextureParams)) == 0)
+        // AND SetTextureParams IS DELIBERATELY NOT ON THAT LIST ANY MORE (P12). It was the control
+        // that proved this counter was live; the first-use confirmation moved the row to
+        // fire-and-forget for a confirmed object, so its zero is the FIX rather than a dead counter
+        // - which is why create and respecify above carry that job now, and why the records line
+        // below still has to show the parameter records going out.
+        if (Transport::LinkMetricsRecordsFor(static_cast<Uint32>(MGPWireOp::SetTextureParams)) == 0)
             ::_exit(146);
         Uint64 sum = 0;
         for (Uint32 op = 0; op < Transport::LinkMetricsMaxOps; ++op)
             sum += Transport::LinkMetricsReplyWaitsFor(op);
         if (sum != Transport::LinkMetricsReplyWaits()) ::_exit(147);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+// =====================================================================================
+// P12: the first-use confirmation - an object pays ONE round trip, at its first use
+// =====================================================================================
+//
+// The rule the device run asked for: the round trip is owed by an object's CREATE (that is what
+// says "the applier holds a record for this handle"), and every control record after it is
+// fire-and-forget. The latch that decides is MGPipeHandleIsPublished, which the emitter sets only
+// on an ACCEPTED create - so the row was asking the server a question the client had already
+// answered, at ~5 ms per record (18,056 of one frame's 43,232 waits were this row).
+//
+// THE RED, RUN ONCE: put the unconditional EmitAndWait back into Wire_SetTextureParams and the
+// last assertion below flips - the parameter records start taking replies again.
+TEST(RemoteClientControls, AParameterChangeForAConfirmedObjectTakesNoReply) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        const Uint32 paramsOp = static_cast<Uint32>(MGPWireOp::SetTextureParams);
+        const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+        // FIRST USE, AND THE HARD SHAPE: parameters with no storage at all - the default-texture
+        // case the self-heal comment names. The confirmation is a create with no storage, it is
+        // BLOCKING (the one answer this object owes), and the parameters land with it.
+        MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2601); // MIN_FILTER = LINEAR
+        MGP_FILL(DrawArrays);
+        if (Transport::LinkMetricsRecordsFor(createOp) == 0) ::_exit(150);
+        if (Transport::LinkMetricsReplyWaitsFor(createOp) == 0) ::_exit(151);
+        // NOW THE OBJECT IS CONFIRMED. Eight real parameter changes: every one must still be SENT,
+        // and none of them may take a reply.
+        const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(paramsOp);
+        const Uint64 waitsBefore = Transport::LinkMetricsReplyWaitsFor(paramsOp);
+        for (int i = 0; i < 8; ++i) {
+            MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, (i % 2) != 0 ? 0x2601 : 0x2600);
+            MGP_FILL(DrawArrays);
+        }
+        if (Transport::LinkMetricsRecordsFor(paramsOp) != recordsBefore + 8) ::_exit(152);
+        if (Transport::LinkMetricsReplyWaitsFor(paramsOp) != waitsBefore) ::_exit(153);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
