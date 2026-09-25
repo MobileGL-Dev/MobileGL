@@ -47,6 +47,23 @@ namespace {
         }
         return 1ull << 31;
     }
+    // The per-op split, formatted into a caller buffer. Raw ids: this file includes only
+    // <cstdint> and friends, not the op table, and the reader names rows with WireOpName
+    // (2 ResourceCreate, 3 ResourceRespecify, 47 SetTextureParams, 48 ResourceSubData).
+    void FormatOpSplit(const Window& w, char* out, std::size_t outSize) {
+        std::size_t at = 0;
+        out[0] = '\0';
+        for (std::uint32_t op = 1; op < LinkMetricsMaxOps && at + 24 < outSize; ++op) {
+            const std::uint64_t waits = w.waitRepliesByOp[op];
+            if (waits == 0) continue;
+            const int n = std::snprintf(out + at, outSize - at, "%s%u=%llu", at == 0 ? "" : ",",
+                                        static_cast<unsigned>(op),
+                                        static_cast<unsigned long long>(waits));
+            if (n < 0 || static_cast<std::size_t>(n) >= outSize - at) break;
+            at += static_cast<std::size_t>(n);
+        }
+        if (at == 0) std::snprintf(out, outSize, "(none)");
+    }
     void Emit(const char* kind, const Window& w, std::uint64_t wallNs, std::uint64_t cpuNs) {
         char histogram[768]{};
         std::size_t at = 0;
@@ -66,6 +83,18 @@ namespace {
             static_cast<unsigned long long>(QuantileUpperUs(w, 99)),
             static_cast<unsigned long long>(w.stageBytes), static_cast<unsigned long long>(wallNs),
             static_cast<unsigned long long>(cpuNs), histogram);
+        // AND THE PER-OP SPLIT WITH EVERY FRAME. A whole-session total cannot name the rows behind
+        // ONE frame, and one frame is the whole shape of this problem: the device run that
+        // motivated this printed 43,232 of its 43,629 waits in a single atlas frame, and the exit
+        // summary never appeared at all because a SIGTERM does not take the session's clean stop
+        // path. Skipped when the frame bought nothing, so a steady-state session stays quiet.
+        if (w.waitReplies != 0) {
+            char split[1024];
+            FormatOpSplit(w, split, sizeof(split));
+            MGLOG_I("P65LinkMetrics kind=frame-op frame=%llu wait_replies=%llu by_op=%s",
+                    static_cast<unsigned long long>(metrics.frame),
+                    static_cast<unsigned long long>(w.waitReplies), split);
+        }
     }
 }
 void LinkMetricsBegin() {
@@ -117,19 +146,9 @@ void LinkMetricsEnd() {
     // written from the one place a client that ends the ordinary way always reaches. `op` is raw -
     // this file does not include the op table - and the reader names rows with WireOpName.
     char split[1024];
-    std::size_t at = 0;
-    for (std::uint32_t op = 1; op < LinkMetricsMaxOps && at < sizeof(split); ++op) {
-        const std::uint64_t waits = metrics.total.waitRepliesByOp[op];
-        if (waits == 0) continue;
-        const int n = std::snprintf(split + at, sizeof(split) - at, "%s%u=%llu", at == 0 ? "" : ",",
-                                    static_cast<unsigned>(op),
-                                    static_cast<unsigned long long>(waits));
-        if (n < 0 || static_cast<std::size_t>(n) >= sizeof(split) - at) break;
-        at += static_cast<std::size_t>(n);
-    }
+    FormatOpSplit(metrics.total, split, sizeof(split));
     MGLOG_I("P65LinkMetrics kind=per-op wait_replies=%llu by_op=%s",
-            static_cast<unsigned long long>(metrics.total.waitReplies),
-            at == 0 ? "(none)" : split);
+            static_cast<unsigned long long>(metrics.total.waitReplies), split);
     metrics.active = false;
 }
 void LinkMetricsServerPresent(std::uint64_t serial) {
