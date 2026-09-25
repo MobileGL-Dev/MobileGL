@@ -1406,4 +1406,96 @@ TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlock
     });
     ExpectChildSuccess(child);
 }
+
+// =====================================================================================
+// P12 (handoff-2 §3.3): WHAT THE DROPPED RECORDS ARE REPAIRED BY - AND WHAT THEY ARE NOT
+// =====================================================================================
+//
+// MGPipeApplierReleaseObjectRecords is the served context's teardown and the ONLY scope that
+// empties the applier's object records while the frontend objects live on in the share group.
+// handoff-2 §3 calls the guard for it "latent" because no production code calls it; what has to
+// hold when one does is that the client REPAIRS it, and the repair on paper is the one that
+// already existed: the applier REFUSES a record for a handle it holds nothing for, and
+// RespecifyOnce turns that refusal into a create plus one retry.
+//
+// THIS CASE MEASURES WHETHER THAT STILL HAPPENS, AND THE ANSWER IS NO - the P12 first-use work
+// took the signal away. The refusal can only reach the emitter through an answer the row READS,
+// and both rows that used to read it now answer themselves: the respecify is fire-and-forget for
+// a "confirmed" object (MGPipeResourceRespecifyWantsItsReply) and the params row posts a
+// PROVISIONAL kStatusOk for one (Wire_SetTextureParams), while "confirmed" is
+// MGPipeHandleIsPublished - WHICH STAYS TRUE AFTER THE RECORDS ARE DROPPED, because it answers
+// "did a create GO OUT", not "does the applier still hold it". So the applier is left holding
+// nothing, the client is left believing the object is published, and every later fire-and-forget
+// row for it is answered provisionally. handoff-2 §3.1's "clearing the latch alone is not enough"
+// is the smaller half of this; the larger half is that nothing clears the latch, and nothing can
+// until the applier can say so (its own §3.2 option 3, the reverse channel).
+//
+// THE ASSERTIONS BELOW ARE THEREFORE A DEBT, NOT A SPEC, and they are written to be LOUD about it:
+// they pin today's numbers so that whoever lands the signal sees THIS case go red and knows the
+// repair started working. notes/p12/UNPUBLISH-GUARD-SIGNALS.md §4-§6 has the rest.
+TEST(RemoteClientControls, DroppedApplierRecordsAreNotRepairedTodayAndThisCaseIsTheDebt) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
+        Uint8 pixels[16 * 16 * 4];
+        std::memset(pixels, 0x21, sizeof(pixels));
+        // The applier's own table, read where it is legal to read it: on the apply thread, through
+        // the same probe channel the rest of this file uses.
+        const auto applierTextureRecords = [] {
+            Uint64 count = 0;
+            (void)Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
+                *static_cast<Uint64*>(self) =
+                    static_cast<Uint64>(MG_Pipe::MGPipeApplier().TextureResources.size());
+                return MOBILEGL_OK;
+            }, &count);
+            return count;
+        };
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 8, 8, 0, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        const auto object = MG_State::pGLContext->GetTextureObject(texture);
+        if (object == nullptr) ::_exit(183);
+        const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*object);
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) ::_exit(184);
+        // ---- IT IS REALLY THERE, AND THE LATCH AGREES ----
+        if (applierTextureRecords() == 0) ::_exit(185);
+        if (!MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, handle)) ::_exit(186);
+        // ---- THE DROP, ON THE APPLIER'S OWN THREAD ----
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
+                MG_Pipe::MGPipeApplierReleaseObjectRecords();
+                return MOBILEGL_OK;
+            }, nullptr) != MOBILEGL_OK) ::_exit(187);
+        if (applierTextureRecords() != 0) ::_exit(188);
+        // THE HAZARD IN ONE LINE: the fact every converted row acts on is still true, and it is
+        // answering a question about the PAST ("a create went out") to a reader that needs the
+        // present ("the applier holds it").
+        if (!MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, handle)) ::_exit(189);
+        // ---- THE RESHAPE THAT WOULD HAVE BEEN REFUSED ----
+        const Uint64 createRecordsBefore = Transport::LinkMetricsRecordsFor(createOp);
+        MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 16, 16, 0, 0x1908, 0x1401, pixels);
+        MGP_FILL(DrawArrays);
+        const Uint64 createRecords = Transport::LinkMetricsRecordsFor(createOp) - createRecordsBefore;
+        const Uint64 held = applierTextureRecords();
+        const Bool published = MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, handle);
+        std::printf("dropped-records probe: creates=%llu applier_records=%llu published=%d\n",
+                    static_cast<unsigned long long>(createRecords),
+                    static_cast<unsigned long long>(held), static_cast<int>(published));
+        std::fflush(nullptr);
+        // TODAY'S NUMBERS, AND THE DEBT: no create was emitted (nothing was refused, because the
+        // row did not read its answer), the applier holds nothing, and the client still says the
+        // object is published. INVERT THESE THREE WHEN THE SIGNAL LANDS.
+        if (createRecords != 0) ::_exit(190);
+        if (held != 0) ::_exit(191);
+        if (!published) ::_exit(192);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
 #endif
