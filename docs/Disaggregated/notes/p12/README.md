@@ -7,6 +7,7 @@
 - 当前阶段。状态摘要在 [`../../CURRENT_STAGE_PROGRESS.md`](../../CURRENT_STAGE_PROGRESS.md)；计划与交接 [`PLAN-P12.md`](PLAN-P12.md)；任务书 [`BRIEF-onscreen.md`](BRIEF-onscreen.md)；裁定 [`INTEGRATOR-DECISIONS-P12.md`](INTEGRATOR-DECISIONS-P12.md)（ID-P12-1..15）；只读审计 `map-*.md` 四份。
 - 形状：server APK 自建 `ANativeWindow`（`MobileGLDisplayActivity` 的 SurfaceView，进程内 TCP server，会话串行）把渲染流**上屏**；离屏路径保留、同一时刻一条活跃；client 以 `WindowKind::ServerOwned`（控制修订 3）**完全无头**接入，几何由 server 回传；失窗 → `Fatal{ServerWindowLost}` → 干净 device-lost。
 - 进展：15 个 `(P12)` 提交 + 审查轮修复（10 个问题，ID-P12-5..11）已并入 `feat/disaggregated`；主机门绿（ID-P12-14）、G1 成立（ID-P12-15）；审查后在 `1fb18d9e` 上完成 P12 定向 CTest 46/46 和 Redmi 真机七项复测。当前分支 `0fe01588` 后续提交只改了文档、文档检查范围和基准脚本说明文字，未改 P12 实现。
+- **2026-09-25 追加（会话交接 §4/§5.1）**：**device-lost 的 DECLINED 回复容忍**与**纹理上传的等待粒度**已落地，各有自己的 red-once 门（前者就是进世界后 `Fatal{ProtocolCorruption, "Fence.reply"}` 那条崩溃；后者让单条纯上传的回包等待 1 → 0）。真机端到端（进世界不崩、那一帧墙钟）与 G1 本机复核仍待做，见 [`DEVICELOST-AND-UPLOAD-WAITS.md`](DEVICELOST-AND-UPLOAD-WAITS.md)。
 - 未完成：出口门 (a) FCL 同机 spawn + 杀 server 的 device-lost、(b) 跨机 TCP 入世界 + P6.5 必测数；`CONTRACT-P12.md`；阶段表行里的其余条目（`unix:` 监听、DirectGLES 去全局、freezer、多 context、FCL 开关接线、D8 白名单）。
 
 ## 阶段表行（原 `ROADMAP.md`）
@@ -99,6 +100,7 @@ Android 上的 server 自建窗口（自己的 SurfaceView）把 IPC 渲染流**
 
 | 文件 | 内容 |
 |---|---|
+| [`DEVICELOST-AND-UPLOAD-WAITS.md`](DEVICELOST-AND-UPLOAD-WAITS.md) | 2026-09-25 落地记录：DECLINED 回复容忍（A）与纹理上传等待粒度（B），含门、red-once 与未做项 |
 | [`BRIEF-onscreen.md`](BRIEF-onscreen.md) | P12 subset "on-screen server window" — implementation brief (2026-09-23) |
 | [`fix-icd.sh`](fix-icd.sh) | 钉 lavapipe ICD |
 | [`g1-base-names.sh`](g1-base-names.sh) | G1 基准符号名生成 |

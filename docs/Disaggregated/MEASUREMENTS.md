@@ -10,6 +10,8 @@
 - **拆成两线程**：起初游戏里只有 7–13 fps；优化后 103–106 fps（P5d）；client 发完就走以后，重负载（渲染距离 32）下与单线程持平（P5e）。
 - **拆成两进程**：真机上与两线程成本持平；两者的 GL 线程 CPU 都比单线程少约 30%（后端工作挪到了另一线程 / 进程）（P6）。
 - **跨机**：电脑经 TCP 连手机，102 个集成用例全过；server 被杀后 133 ms、Wi-Fi 断开后约 5 s 干净报"设备丢失"（P6.5）。
+- **纹理上传的等待粒度（P12，handoff §4）**：wire 臂上纹理那半 `resource_subdata` 不再逐条买回包，等待点从「每条记录」落到「SEG_STAGE 窗口用尽」。
+  单条纯上传占用的回包等待 **1 → 0**（`wait_replies`，正是 §3.2 里"一帧 55,428"的那个计数器）；**真机端到端墙钟仍待复测**，见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md)。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
 
 ## 按阶段
@@ -30,4 +32,4 @@
 | 13 | P3b/P4b | 纹理上传形状在四种拓扑下完全一致 | [`notes/p34b`](notes/p34b/README.md) |
 | 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | [`notes/p65`](notes/p65/README.md) |
 | 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`notes/p7`](notes/p7/README.md) |
-| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；FCL 与跨机 TCP 收官门仍待完成 | [`notes/p12`](notes/p12/README.md) |
+| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；FCL 与跨机 TCP 收官门仍待完成 | [`notes/p12`](notes/p12/README.md) |
