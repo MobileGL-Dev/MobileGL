@@ -1112,7 +1112,19 @@ namespace MobileGL::MG_Pipe {
             // below and this aborts by name on the first glBufferData that carries data.
             const Uint64 before = MG_Remote::Client::ClientWireRecordsEmitted();
             MGPipeEmitResourceSubData(buffer, 0, static_cast<SizeT>(buffer.GetSize()));
-            if (MG_Remote::Client::ClientWireRecordsEmitted() == before) {
+            // EXCEPT ON A SESSION THAT HAS STOPPED CARRYING RECORDS (P12). Once the device-lost
+            // latch is set every verb is DECLINED by design (CONTRACT-P6 5.3, ClientSession.cpp
+            // :1837) - the resource_subdata above included - so "it emitted nothing" is the latch
+            // working, not bytes this client forgot to carry: there is no server left for them to
+            // exist on, and P12's own exit gate (a) is that killing the server gives a CLEAN
+            // device-lost latch rather than a corpse. Aborting here turned every clean loss into a
+            // client SIGABRT at its next glBufferData that carries data.
+            //
+            // THE SELF-CHECK KEEPS ITS FULL FORCE ON A LIVE SESSION, which is the case it was
+            // written for: there, a follow-up that emits nothing is still the R-13.3 gap it names
+            // - and DeviceLost() is false.
+            if (MG_Remote::Client::ClientWireRecordsEmitted() == before &&
+                !MG_Remote::Client::ClientSession::DeviceLost()) {
                 // UncarriedInitialBytes, not a second word for the same family: WireTables.cpp:418
                 // already dies of exactly this - a respecify that crossed with no initial bytes -
                 // under that name, and two words for one family is the vocabulary drift a6

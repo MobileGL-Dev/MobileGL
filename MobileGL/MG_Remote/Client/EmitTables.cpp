@@ -1577,6 +1577,43 @@ namespace MobileGL::MG_Remote::Client {
             Uint64 replyBytes = 0;
             session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result),
                                 &status, &replyBytes);
+            // A DECLINED SYNC REPLY IS AN ANSWER, NOT A CORRUPTION (P12). ReplySink opens the
+            // three-value space with "DECLINED IS A REAL ANSWER, not a failure"
+            // (PipeWireCodec.h:457-460) and the escape rows are held to it the other way round -
+            // "ERROR IS NOT A DECLINE", an escape may not fold 2 into false
+            // (WireTables.cpp:446-450). This site folded 1 AND 2 into one abort.
+            //
+            // BOTH VALUES OF 1 ARE REACHABLE WITHOUT A BYTE OF CORRUPTION:
+            //   - the SERVER declines these two rows by design whenever it cannot answer them -
+            //     PostReply(op, seq, ok ? kStatusOk : kStatusDeclined, ok ? &result : nullptr,
+            //     ok ? sizeof(result) : 0) at PipeWireCodec.cpp:1820-1830, which is a legitimate
+            //     zero-length answer to a kWaitReply row (R-5);
+            //   - the CLIENT produces the same status itself once the session stops carrying
+            //     records: the device-lost latch (ClientSession.cpp:1837) and a doorbell that died
+            //     during teardown (ClientSession.cpp:2025, where the comment says outright that
+            //     "the verb did not happen" is reported as DECLINED and not as ERROR).
+            //
+            // AND THE NO-OP IS THE ONE THIS FRONTEND ALREADY GIVES for a fence it cannot wait on:
+            // GL_Sync.cpp:103-106 answers GL_ALREADY_SIGNALED for a sync with no backend handle,
+            // PipeApplier.cpp:175-177 answers GL_ALREADY_SIGNALED for a fence with no native
+            // object (a fence that provably did no work), and DirectGLES.cpp:16489 does the same
+            // for an absent sync. A lost device is that same class of fact.
+            //
+            // WHAT ABORTING HERE COSTS, MEASURED: after a clean device loss Minecraft 26.2's next
+            // glClientWaitSync - the chunk-upload fences - reached this line with DECLINED and died
+            // of Fatal{ProtocolCorruption, "Fence.reply"}, rc=134, instead of the no-op the design
+            // promises ("GL calls become no-ops", design/08-runtime-and-platform.md:33).
+            if (status == Wire::ReplySink::kStatusDeclined) {
+                MGLOG_E_ONCE("MG_Remote client: the peer DECLINED a %s reply - the verb did not "
+                             "happen (a lost device, or a teardown); answering the no-op the "
+                             "frontend uses for a fence it cannot wait on",
+                             Wire::WireOpName(op));
+                return op == MG_Pipe::MGPWireOp::FenceWait ? static_cast<Uint32>(GL_ALREADY_SIGNALED)
+                                                           : 1u;
+            }
+            // ERROR AND A SHORT OK ARE STILL THE PROTOCOL CORRUPTIONS THEY ALWAYS WERE: a
+            // transport fault is not the server saying no, and an OK answer that arrived empty is
+            // a reply nobody can read.
             if (status != Wire::ReplySink::kStatusOk || replyBytes != sizeof(result))
                 Wire::WireProtocolFatal("Fence.reply", "missing or malformed sync result");
             return result;

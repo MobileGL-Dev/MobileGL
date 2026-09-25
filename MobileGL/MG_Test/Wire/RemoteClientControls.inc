@@ -736,4 +736,130 @@ TEST(RemoteClientControls, ADrawOnASessionWithoutTheRunAheadBitStaysStampedBarri
     });
     ExpectChildSuccess(child);
 }
+
+// =====================================================================================
+// P12: a DECLINED reply is an answer, not a corruption
+// =====================================================================================
+//
+// ReplySink's status space is three-valued and its own header says what the values mean:
+// 0 OK, 1 DECLINED IS A REAL ANSWER, 2 ERROR (PipeWireCodec.h:457-460). The escape rows are
+// held to the other half of the same rule - "ERROR IS NOT A DECLINE", an escape may not fold
+// 2 into `false` (WireTables.cpp:446-450). The fence and query consumers folded BOTH 1 and 2
+// into a single abort (EmitTables.cpp ReadFenceReply, QueryEmit.inc ReadQueryReply), so a
+// client that had latched device-lost - where every verb is DECLINED by design,
+// ClientSession.cpp:1837 - died of Fatal{ProtocolCorruption, "Fence.reply"} on its next
+// glClientWaitSync instead of going quiet the way the design promises ("GL calls become
+// no-ops", design/08-runtime-and-platform.md:33).
+//
+// THE PEER BELOW IS THE SERVER'S OWN DECLINE, not a substitution of the status byte: these
+// verbs answer false when the server cannot answer them, and the codec posts exactly that as
+// DECLINED with a zero-length payload (PipeWireCodec.cpp:1820-1830 for the two fence rows,
+// :1841-1861 for the three query rows). The CLIENT's own decline is pinned separately, by
+// LongFenceWaitBudgetStillWakesOnShutdown above.
+//
+// THE RED, RUN ONCE: take the `if (status == Wire::ReplySink::kStatusDeclined)` arm out of
+// ReadFenceReply and the first case below dies of Fatal{ProtocolCorruption, "Fence.reply"}
+// instead of asserting the no-op - which is the split client's Minecraft 26.2 crash.
+struct DecliningSyncPeer : Codec::WireVerbSink {
+    Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override { return true; }
+    Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) override { return false; }
+    Bool OnFenceWait(const MGPFenceWait&, Uint32&) override { return false; }
+    Bool OnQueryCreate(const MGPQueryDesc&) override { return true; }
+    Bool OnQueryBegin(const MGPQueryDesc&) override { return true; }
+    Bool OnQueryCounter(const MGPQueryDesc&) override { return true; }
+    Bool OnQueryAvailable(const MG_Pipe::MGPHandleOnly&, Uint32&) override { return false; }
+    Bool OnQueryResult(const MGPQueryResultRequest&, Codec::QueryResultReply&) override { return false; }
+    Bool OnQueryTimestamp(const MGPTimestampRequest&, Int64&) override { return false; }
+    void Install() {
+        const auto rc = Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<DecliningSyncPeer*>(self));
+            return MOBILEGL_OK;
+        }, this);
+        if (rc != MOBILEGL_OK) ::_exit(130);
+    }
+};
+
+TEST(RemoteClientControls, DeclinedFenceReplyAnswersSignaledInsteadOfAborting) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        DecliningSyncPeer peer;
+        peer.Install();
+        auto* sync = RemoteEmitTable().GL.FenceSync();
+        if (sync == nullptr) ::_exit(131);
+        // glClientWaitSync on a fence nobody can wait on: signaled now, as every fallback in
+        // this tree already answers (GL_Sync.cpp:103-106, PipeApplier.cpp:175-177).
+        if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_ALREADY_SIGNALED) ::_exit(132);
+        // GL_SYNC_STATUS: the same answer, in the boolean the row carries.
+        if (!RemoteEmitTable().GL.GetSyncStatus(sync)) ::_exit(133);
+        RemoteEmitTable().GL.DeleteSync(sync);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteClientControls, DeclinedQueryRepliesAnswerNoAnswerYetInsteadOfAborting) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        DecliningSyncPeer peer;
+        peer.Install();
+        auto* query = RemoteEmitTable().GL.BeginTimeElapsedQuery();
+        if (query == nullptr) ::_exit(134);
+        // GL_QUERY_RESULT_AVAILABLE: "not available" - the answer an unfinished query gives,
+        // and the one that makes a waiting application yield rather than spin.
+        if (RemoteEmitTable().GL.IsQueryResultAvailable(query)) ::_exit(135);
+        // GL_QUERY_RESULT: no value produced, and the caller's out-parameter untouched.
+        Uint64 nanoseconds = 7;
+        if (RemoteEmitTable().GL.GetQueryResult64(query, false, &nanoseconds) || nanoseconds != 7)
+            ::_exit(136);
+        // glGetInteger64v(GL_TIMESTAMP): there is no timestamp to report.
+        if (RemoteEmitTable().GL.GetGpuTimestampNs() != 0) ::_exit(137);
+        RemoteEmitTable().GL.DeleteBackendQuery(query);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+TEST(RemoteClientControls, ErrorFenceReplyStillRefusesByName) {
+    // THE TOLERANCE IS NOT BLANKET. An ERROR is a transport fault or a server-side refusal,
+    // never "the server said no" (R-5/M4), and it keeps the named Fatal it always had.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        // The rows still decline (so the fence is never handed to a backend that cannot
+        // create one) and EVERY answer that is posted says ERROR instead.
+        DecliningSyncPeer rows;
+        rows.Install();
+        ErrorPeer peer;
+        peer.Install();
+        auto* sync = RemoteEmitTable().GL.FenceSync();
+        if (sync == nullptr) ::_exit(138);
+        (void)RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0);
+    });
+    ExpectNamedAbort(child, "Fatal{ProtocolCorruption, \"Fence.reply\"}");
+}
+
+TEST(RemoteClientControls, DeviceLostRespecifyDoesNotDieOfTheUncarriedBytesCheck) {
+    // P12 exit gate (a): killing the server must give a CLEAN device-lost latch. With the
+    // latch set every verb is DECLINED, so the resource_subdata that R-13.3 owes emits
+    // nothing - which is the latch working, not bytes the client forgot to carry. The check
+    // at PipeFill.cpp:1115 compared client record ordinals only, so the next glBufferData
+    // with data aborted the client by name instead.
+    const auto child = RunInChild([] {
+        StartControlSession();
+        // Taken through the production entry point, the way the barrier and the encoder take
+        // it when a descriptor whose far end only the peer held reports hangup.
+        ClientSessionInstance().LatchDeviceLost("RemoteClientControls: the self-check case");
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        GLuint buffer = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &buffer);
+        MG_Impl::GLImpl::BindBuffer(0x8892, buffer);
+        Uint8 seed[64];
+        std::memset(seed, 0x5a, sizeof(seed));
+        MG_Impl::GLImpl::BufferData(0x8892, sizeof(seed), seed, 0x88E4);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
 #endif
