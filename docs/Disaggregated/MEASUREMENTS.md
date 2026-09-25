@@ -11,7 +11,11 @@
 - **拆成两进程**：真机上与两线程成本持平；两者的 GL 线程 CPU 都比单线程少约 30%（后端工作挪到了另一线程 / 进程）（P6）。
 - **跨机**：电脑经 TCP 连手机，102 个集成用例全过；server 被杀后 133 ms、Wi-Fi 断开后约 5 s 干净报"设备丢失"（P6.5）。
 - **纹理上传的等待粒度（P12，handoff §4）**：wire 臂上纹理那半 `resource_subdata` 不再逐条买回包，等待点从「每条记录」落到「SEG_STAGE 窗口用尽」。
-  单条纯上传占用的回包等待 **1 → 0**（`wait_replies`，正是 §3.2 里"一帧 55,428"的那个计数器）；**真机端到端墙钟仍待复测**，见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md)。
+  单条纯上传占用的回包等待 **1 → 0**（`wait_replies`，正是 §3.2 里"一帧 55,428"的那个计数器）。
+  按形状实测（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`，主机 inproc，按 op 计数）：**图集拼接**（一张 level 上 64 次 `glTexSubImage2D`）**64 → 0** 次回包等待；
+  **每 sprite 一张纹理**（64 张纹理 + 256 次 `glTexParameteri`）**384 → 320**，剩下的全是 per-resource / per-call 的三条 row（create 76 / respecify 130 / params 130）——
+  它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号，删掉等待就是删掉信号，裁定见 `CONTRACT-P5E.md` §2.5。
+  **真机端到端墙钟仍待复测**，见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md)。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
 
 ## 按阶段

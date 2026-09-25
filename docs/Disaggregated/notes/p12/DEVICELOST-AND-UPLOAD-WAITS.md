@@ -94,6 +94,28 @@ DECLINED 有三条**完全不含损坏**的产生路径，两条在服务端、�
 其余改动全部落在 split-only 的翻译单元（`MG_Remote/**`）或 `PipeFill.cpp` 的 `#if MOBILEGL_BUILD_DISAGGREGATED` 块内。
 因此 pull 臂预处理后与改动前**逐字符相同**。**本机已按 G1 跑过 A/B**：pull 配置（Release、`/usr/bin/c++`、`MOBILEGL_BUILD_DISAGGREGATED=OFF`、`--target MobileGL`）在 `c984d952`（基线）与 `3b9f536d`（本轮）各建一次，结果 `.text` **13872002 = 13872002** 字节、符号 **31746 / 31746**、**0 增 0 删**，逐符号 `comm` 无任何差异（两棵树留在 `build-g1-base/`、`build-g1-head/`，符号表在各自的 `syms.txt`）。
 
+### 2.4 「同类第二条」到底该不该等（handoff §4.3 末条 + §5.4）
+
+handoff §5.4 说「55,428 次等待里各 op 各占多少」未量化，§4.3 说 `ResourceCreate` / `SetTextureParams` 是同类第二条、"需单独分析"。本轮把两件事一起做了：
+给 `LinkMetrics` 加了**按 op 的回包等待计数**（`LinkMetricsBeginReply(wantsReply, op)` / `LinkMetricsReplyWaitsFor(op)`，与总计数一样只在 `MOBILEGL_PIPE_STATS=1` 时记），
+并用它量了拼接器会产生的两种形状（`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`，先打印后断言，好让红的那一次也留下数字）：
+
+| 形状 | 没有 B | 有 B |
+|---|---|---|
+| **图集拼接**：一张 level 上 64 次 `glTexSubImage2D` | **64** 次回包等待 | **0** |
+| **每 sprite 一张纹理**：64 张纹理 + 256 次 `glTexParameteri` | **384**（`ResourceSubData` 占 128） | **320**（`ResourceCreate` 76 + `ResourceRespecify` 130 + `SetTextureParams` 130，sub-data 0） |
+
+结论两条：
+
+1. **B 正好打在它要打的地方**：上传密集的形状（MC 的图集拼接就是这种）里，回包等待从「每次上传一次」变成 **0**——handoff §4.2 的预期在机制层面成立，
+   与「96 MiB ÷ 32 MiB 窗口 ≈ 3 次等待」是同一件事的两面（剩下的是 stage 退休，不再是回包）。
+2. **剩下三个 row 不能照搬 B**，因为它们等的不是「你收下这批字节了吗」，而是**服务端的记录表里还有没有这个 handle**：
+   - `RespecifyOnce`（`TextureEmit.h:1332-1356`）原文：「the applier's REFUSAL is the only signal that says 'I hold nothing for this handle'」——
+     served context 的 teardown（`MGPipeApplierReleaseObjectRecords`）会丢掉对象记录而前端对象还活着，这件事**客户端本地推不出来**；
+   - `EmitTextureParams`（`:991-1017`）用同一个拒绝做自愈触发器（context 的默认纹理就是这条路径救回来的）；
+   - `PublishCreate`（`:1303-1319`，D-I1/c0b）不能在「被拒绝的 create」上落发布闩，否则死亡路径会为一个不存在的记录发 `resource_destroy`。
+
+   所以这三条按 per-resource / per-call 结算，不是 per-chunk：**删掉等待就是删掉信号**。这条裁定已写进 `CONTRACT-P5E.md` §2.5。
 ## 3. 本轮**没有**做的（下一轮的直接入口）
 
 1. **真机端到端**：A 需要「进世界不再崩」、B 需要「那一帧墙钟 249 s → 约 20 s」的真机数字。需要重出 APK（`assembleTraceRelease` + 签名）、手机 `90cee93` 起 server、跨机 TCP 起 MC 26.2。
@@ -102,8 +124,8 @@ DECLINED 有三条**完全不含损坏**的产生路径，两条在服务端、�
    `launch-mc.py`（按版本 JSON 重建启动命令，已干跑校验：95 条 classpath 条目全部存在、Java 25 由 `javaVersion.majorVersion` 选出）、
    `gl-aliases.sh`（把五个别名建在 `mgl-device/gl-aliases/`，**不放 build 目录**：那里的 `libEGL.so` 会让 server dlopen 自己）、
    `start-phone-server.sh`（装包 + 起 Activity + handoff 那两个就绪判据）。
-2. **同类第二条**：`ResourceCreate` 与 `SetTextureParams` 也是逐条 kWaitReply（handoff §4.3 末条）。B 只处理了上传那半，
-   这两条要单独分析（创建是按资源一次，参数设置是每次调用——收益与风险不同）；`CONTRACT-P5E.md` §2.5 已把这一条写成 "analyzed separately"。
+2. ~~同类第二条~~ **已分析完毕（§2.4）**：`ResourceCreate` / `ResourceRespecify` / `SetTextureParams` 保持 kWaitReply 是有据的裁定，
+   不是遗漏——它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号。**这条不再是待办。**
 3. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
 
 ## 4. 证据位置

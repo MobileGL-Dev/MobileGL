@@ -206,7 +206,20 @@ non-wire arm keep the old answer, which is what G1 measures. Gate:
 `RemoteClientControls.TextureUploadsStopOwningAReplyOnTheWireArm` reads back the same `wait_replies`
 the P65LinkMetrics line prints (`LinkMetricsReplyWaits`), asserting a pure upload moves it by ZERO
 while a `resource_create` row still moves it; red-once with the arm test removed is exit 142.
-`ResourceCreate` and `SetTextureParams` stay `kWaitReply` — same question, asked per resource and
+**`ResourceCreate`, `ResourceRespecify` and `SetTextureParams` stay `kWaitReply`, and that is a
+ruling rather than an omission**: each one's answer carries a fact about the SERVER's record table
+that the client's own tracker provably cannot know. `RespecifyOnce` (`TextureEmit.h:1332-1356`) says
+it in one line - "the applier's REFUSAL is the only signal that says 'I hold nothing for this
+handle'", which is the scope `MGPipeApplierReleaseObjectRecords` leaves behind for a served
+context whose frontend objects live on; `EmitTextureParams` (`:991-1017`) uses its own refusal as
+the same self-heal trigger; and `PublishCreate` (`:1303-1319`, D-I1/c0b) may not take the
+publication latch on a create the applier refused, or the death path emits a `resource_destroy` for
+a record that does not exist. Removing any of those waits removes the signal, so unlike the upload
+half they are not "the emission gate already answered this" rows. Measured split for the two shapes
+a stitcher produces (P12, `RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`): an atlas
+stitch - 64 sub-uploads into one level - goes from 64 reply waits to **0**, while a texture per
+sprite - 64 textures, 256 `glTexParameteri` - goes from 384 to 320, with the remainder all three of
+these rows (create 76, respecify 130, params 130).
 per call, analyzed separately rather than swept in here.
 
 ### 2.6 Event-ring flow control (ARCHITECTURE §11.7 made real)
