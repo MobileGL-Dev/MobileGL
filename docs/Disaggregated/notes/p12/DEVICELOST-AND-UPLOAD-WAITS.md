@@ -121,17 +121,62 @@ handoff §5.4 说「55,428 次等待里各 op 各占多少」未量化，§4.3 �
 `P65LinkMetrics kind=per-op wait_replies=N by_op=2=…,3=…,47=…`（id 是 `MGPWireOp`：2 create / 3 respecify / 47 params / 48 sub-data）。
 handoff §5.4 说过这条数字拿不到——spawn 下 client 不推进帧窗口、逐帧行不打，SIGKILL 又带不走退出时的 dump——而这一行正是从「正常收尾的客户端一定会走到」的那个位置打出来的。
 
-## 3. 本轮**没有**做的（下一轮的直接入口）
 
-1. **真机端到端**：A 需要「进世界不再崩」、B 需要「那一帧墙钟 249 s → 约 20 s」的真机数字。需要重出 APK（`assembleTraceRelease` + 签名）、手机 `90cee93` 起 server、跨机 TCP 起 MC 26.2。
-   注意 handoff §1.3：**GL 别名软链（五个）是必需的**，且本会话的 shell 沙箱给 `/tmp` 挂的是**每次命令全新的 tmpfs**，
-   所以要在同一条命令里建链再跑。本轮已把这条路径的工具做成持久版本放在仓库外的 `mgl-device/`：
-   `launch-mc.py`（按版本 JSON 重建启动命令，已干跑校验：95 条 classpath 条目全部存在、Java 25 由 `javaVersion.majorVersion` 选出）、
-   `gl-aliases.sh`（把五个别名建在 `mgl-device/gl-aliases/`，**不放 build 目录**：那里的 `libEGL.so` 会让 server dlopen 自己）、
-   `start-phone-server.sh`（装包 + 起 Activity + handoff 那两个就绪判据）。
+## 2.5 真机结果（2026-09-25，两台设备上的第二次复现）
+
+> **设备不是 handoff 那台手机**：本轮 `adb` 上的是 `aikjs4s8cys8ba7l`（TrebleDroid GSI，mt6893/Mali，Android 14，GLES 3.2，`192.168.1.178`），
+> 不是 `90cee93`（SM8650/Adreno 750）。所以**绝对数字不可与 handoff 直接比**，可比的是机制与每条 row 的行为。
+> 服务器 APK 用仓库里那份 trace release 自签后装（`mgl-device/mgl-local.jks`，一次性），客户端是本轮 `build-split`，
+> 控制面 `tcp://192.168.1.178:40613`、数据面 stream、`MOBILEGL_IPC_SURFACE=server`，MC 26.2 + NeoForge 用 `--quickPlaySingleplayer` 直接进世界。
+
+### A —— §5.1 的崩溃路径在真机上被走过了两次，都没有崩
+
+两次运行里设备端的窗口都在会话中途消失（设备日志：`Fatal{ServerWindowLost, "surfaceDestroyed"}`），客户端随即闩上 device-lost，
+而**下一条 `FenceWait` 收到的就是 DECLINED**：
+
+~~~
+[20:42:45] [Render thread/ERROR]: MGPipe: DEVICE LOST - the barrier woke on a peer that had hung up …
+[20:42:58] [Render thread/ERROR]: MG_Remote client: the peer DECLINED a FenceWait reply - the verb did not
+                            happen (a lost device, or a teardown); answering the no-op the frontend uses
+                            for a fence it cannot wait on
+~~~
+
+这就是 handoff §5.1 那条崩溃的完整前因后果：**修复前这一行是 `Fatal{ProtocolCorruption, "Fence.reply"}` → rc=134**。
+两次运行客户端日志里的 `Fatal{` 计数都是 **0**；世界也确实进去了（`Saving chunks for level 'ServerLevel[新的世界]'`、
+`Changing view distance to 2, from 10`、`Started 10 worker threads` —— 与 handoff 记录的崩溃上下文同一组）。
+
+### B —— 在真机上确实生效，但它不是那台帧的主因
+
+第一次运行复现了 handoff §3.2 的那种「一帧吞掉全部等待」：
+
+| | handoff（**没有** B，90cee93） | 本轮（**有** B，GSI） |
+|---|---|---|
+| 那一帧的 `wait_replies` | **55,428** | **43,232** |
+| `stage_bytes` | 100,684,804（96 MiB） | 101,421,396（96.7 MiB） |
+| `wall_ms` | 248,996 | **224,780** |
+| `cpu_ms` | 18,391 | 13,413 |
+
+两轮的 stage 字节几乎一样（形状相同），但**这不是受控 A/B**（两台设备），所以能下的结论只有一条，而它是直接证据：
+第二次运行带了逐帧按 op 的拆分行，启动期那两帧是 `2=50,3=68,47=62`、稳态是每帧 1 次（op 9 = `FenceWait`，就是帧围栏），
+**`ResourceSubData`(48) 一次都没有出现** —— B 在真机上按设计生效。
+
+**handoff §4.2 的「55,428 → 约 3」不成立**：那一帧剩下的 43,232 次等待正是 §2.4 裁定「必须等」的三条 row（create / respecify / params），
+按 96.7 MiB ÷ 每 sprite 一次上传估算，约每 sprite 3.5 次非上传等待。**B 是必要的，但不是那 2–3 分钟停滞的充分解**——
+要动那一段，方向不是「把等待去掉」（那会删掉信号），而是**把记录数压下来**（同样的参数不必每条都发、同一 level 的 respecify 可去重）。这一条留给下一轮。
+## 3. 剩余（下一轮的直接入口）
+
+1. **把记录数压下来（新的头号项）**。§2.5 的真机数字说：那一帧剩下的 43,232 次等待全在「必须等」的三条 row 上，
+   约每 sprite 3.5 次非上传记录。等待不能删（§2.4），但**记录可以少发**：
+   - `SetTextureParams` 只在参数真的变了才发（现在的版本闩是不是漏了？）；
+   - `ResourceRespecify` 同一 level 的重复定义可去重（tracker 已有 `LastDesc`）；
+   - `ResourceCreate` 每 sprite 一次是否必要（纹理其实是同一张图集）。
+   方向是「先看清楚那 43,232 条各是什么」，所以下一轮第一件事是**用逐帧 `frame-op` 行 + `ResourceSubData` 之外的计数器跑一次未缓存的冷启动**（本轮第二次运行图集走了缓存，只有启动两帧有量）。
+2. **受控真机 A/B**：本轮两台设备不同（GSI vs handoff 的 90cee93），55,428 vs 43,232 只能算旁证。要给出可比的数字，需要在**同一台设备**上跑一次带 B、一次不带 B（工作树里已有 `build-split/fix-b2.patch` 的往返做法）。
+3. ~~真机端到端~~ **已完成（§2.5）**：A 的崩溃路径在真机上走过两次都没崩；B 在真机上按设计生效（op 48 零等待）。工具在仓库外的 `mgl-device/`：
+   `launch-mc.py`（按版本 JSON 重建启动命令，支持 `MC_QUICKPLAY` / `MC_GAMEDIR`）、`gl-aliases.sh`、`start-phone-server.sh`、`mkeystore`+签名步骤写在 README 里。
 2. ~~同类第二条~~ **已分析完毕（§2.4）**：`ResourceCreate` / `ResourceRespecify` / `SetTextureParams` 保持 kWaitReply 是有据的裁定，
    不是遗漏——它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号。**这条不再是待办。**
-3. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
+4. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
 
 ## 4. 证据位置
 
