@@ -211,6 +211,23 @@ params probe: first=1 same-again=1 changed=2 (deltas 1/0)
    不是遗漏——它们的拒绝是「服务端没有这个 handle」的唯一客户端可见信号。**这条不再是待办。**
 4. **主机门的环境前提**：本机 shell 沙箱没有 `/dev/dri`，所以任何需要真 EGL pbuffer 的车道（`SpawnLane.EventForfeitPeer`、`TcpLane.EventForfeitPeer`）在本会话里必然红（子进程 `kEglSurface = 12`），与本轮改动无关；`EventForfeitPeerTest.cpp:134` 的注释本来就写明这种 runner 会「every case reds before the ring ever fills」。
 
+
+### 2.8 那 ~5 ms 一次往返，到底花在哪：**不是链路**
+
+handoff §3.6 留过一个没解释的现象：把链路从 Wi-Fi 换到 USB（裸往返 5.76 ms → 1.70 ms，快 3.4 倍）墙钟几乎不动（3m15s → 3m03s）。
+本轮在同一台设备上把这件事量清楚了——**同样的帧号、同样的记录数**，只换客户端连的地址（LAN ↔ `adb forward` 的 `127.0.0.1`）：
+
+| frame | Wi-Fi waits | Wi-Fi `rtt_mean` | USB waits | USB `rtt_mean` |
+|---|---|---|---|---|
+| 1 | 26 | 5,156 µs | 26 | **3,451 µs** |
+| 2 | 180 | 7,934 µs | 180 | **5,716 µs** |
+| 3 | 1 | 3,491 µs | 1 | **2,544 µs** |
+| 4 | 1 | 8,106 µs | 1 | **6,579 µs** |
+
+链路（含 adb 的用户态转发这一跳）把单次等待降了约 **25–30%**，量级不变。也就是说 **~5 ms 里的大部分不在链路上**，
+而在「客户端 park → 服务端唤醒/读取/apply/回铃 → 客户端唤醒」这条本地路径上——这与两侧 profile 的形状一致（服务端 65% 在 socket syscall、约 15% 在门铃自旋）。
+**结论：想动这一帧，只有两条路**——(a) 同样多的记录、更少的往返（把等待批起来，回复槽池 8 个 ⇒ K ≤ 8 可证明安全）；
+(b) 降低单次往返的本地成本（服务端 apply/wake 路径、`MOBILEGL_IPC_SPIN_US` 之类）。**不是**换链路，也不是去重记录（§2.7 已证否）。
 ## 4. 证据位置
 
 | 位置 | 内容 |
