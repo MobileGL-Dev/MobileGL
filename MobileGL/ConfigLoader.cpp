@@ -412,6 +412,11 @@ namespace MobileGL::MG_ConfigLoader {
         // xxHash64 changed since the last push are shipped.
         ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
         ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
+        // The create window. DEFAULT 1 - OFF - because the deferral was measured on the device and
+        // cannot be collected (Config.h has the numbers, WireTables.cpp the arithmetic: 59,673
+        // replies per frame into 8 pool slots). Capped at 4 rather than the pool's 8 for the reason
+        // the mechanism is sized that way at all.
+        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 1, 1, 4);
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the

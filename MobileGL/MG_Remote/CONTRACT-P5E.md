@@ -206,20 +206,47 @@ non-wire arm keep the old answer, which is what G1 measures. Gate:
 `RemoteClientControls.TextureUploadsStopOwningAReplyOnTheWireArm` reads back the same `wait_replies`
 the P65LinkMetrics line prints (`LinkMetricsReplyWaits`), asserting a pure upload moves it by ZERO
 while a `resource_create` row still moves it; red-once with the arm test removed is exit 142.
-**`ResourceCreate`, `ResourceRespecify` and `SetTextureParams` stay `kWaitReply`, and that is a
-ruling rather than an omission**: each one's answer carries a fact about the SERVER's record table
-that the client's own tracker provably cannot know. `RespecifyOnce` (`TextureEmit.h:1332-1356`) says
-it in one line - "the applier's REFUSAL is the only signal that says 'I hold nothing for this
-handle'", which is the scope `MGPipeApplierReleaseObjectRecords` leaves behind for a served
-context whose frontend objects live on; `EmitTextureParams` (`:991-1017`) uses its own refusal as
-the same self-heal trigger; and `PublishCreate` (`:1303-1319`, D-I1/c0b) may not take the
-publication latch on a create the applier refused, or the death path emits a `resource_destroy` for
-a record that does not exist. Removing any of those waits removes the signal, so unlike the upload
-half they are not "the emission gate already answered this" rows. Measured split for the two shapes
-a stitcher produces (P12, `RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`): an atlas
-stitch - 64 sub-uploads into one level - goes from 64 reply waits to **0**, while a texture per
-sprite - 64 textures, 256 `glTexParameteri` - goes from 384 to 320, with the remainder all three of
-these rows (create 76, respecify 130, params 130).
+**`ResourceCreate`, `ResourceRespecify` and `SetTextureParams` are `kWaitReply` ROWS, and what the
+caller does with that is now per-object rather than per-row - THIS PARAGRAPH IS THE ONE P12
+SUPERSEDED, and it is rewritten rather than deleted because its reasoning is what the replacement
+had to answer.** Each one's answer carries a fact about the SERVER's record table that the client's
+own tracker cannot know by itself (`RespecifyOnce`, `TextureEmit.h`, "the applier's REFUSAL is the
+only signal that says 'I hold nothing for this handle'" - the scope
+`MGPipeApplierReleaseObjectRecords` leaves behind for a served context whose frontend objects live
+on). What P12 added is the observation that the client holds a REASONABLE COPY of that fact:
+`MGPipeHandleIsPublished`, set only when a create was ACCEPTED, is exactly "the applier holds this
+handle", and it is what `MGPipeResourceRespecifyWantsItsReply` (`PipeRoute.h`) and
+`Wire_SetTextureParams` read. So:
+
+- **`SetTextureParams` and the texture half of `ResourceRespecify` wait only until the object is
+  CONFIRMED.** For a published object the record is fire-and-forget and the caller reads a
+  provisional accept; the object's one real confirmation is its create, paid at its FIRST USE
+  (`EmitTextureParams` -> `HealUnpublishedRecord`, `EmitResourceRespecify`'s unpublished arm). When
+  the latch is clear both rows still wait, and the refusal-driven `RespecifyOnce` heal is unchanged
+  - which is what keeps the paragraph above true rather than merely overruled.
+- **The buffer half of `ResourceRespecify` never waits**: both call sites discard its Bool
+  (`PipeFill.cpp:1105/:1142`).
+- **`ResourceCreate` is the one row whose answer may not be dropped**, because `PublishCreate`
+  latches on it and a false latch makes every row above fire-and-forget against a record the server
+  does not hold. It was given a WINDOW instead of a rule - `MOBILEGL_IPC_CREATE_WINDOW`, answers
+  deferred and collected in order, a late DECLINE un-latching the object - and **the window is OFF
+  BY DEFAULT because the deferral was measured and cannot be collected**: the reply pool is
+  `kDefaultReplySlotCount` = 8 slots deep and one load frame posts 59,673 replies (the server
+  answers every reply-owning record whether or not the client wants the answer), so an answer is
+  overwritten after 8 replies - 0.61 of a create. On the device all 4,536 creates took the blocking
+  path at window 4 and at window 1 alike (28.64 s both ways, against the handoff's 31.3 s
+  pre-window baseline on the same device). `WireTables.cpp`'s section comment carries the counters
+  and the arithmetic. The client-visible consequence is worth stating here: with the window ON, the
+  un-latch that the paragraph above relies on lives in the same unreadable drain, so a refused
+  create would stay latched - a protocol change (a deeper pool, or a "do not answer me" bit) is
+  what a retry would need.
+
+Measured split for the two shapes a stitcher produces (P12,
+`RemoteClientControls.ReplyWaitsByOpForAnAtlasShapedLoad`): an atlas stitch - 64 sub-uploads into
+one level - goes from 64 reply waits to **0**, while a texture per sprite - 64 textures, 256
+`glTexParameteri` - goes from 384 to 320 at the contract commit; the P12 first-use change takes the
+rest of the params/respecify rows out of that frame's wait list entirely (one frame: 43,232 waits ->
+4,543, 221.5 s -> 31.3 s, `MOBILEGL-CS-HANDOFF-2.md` §1).
 per call, analyzed separately rather than swept in here.
 
 ### 2.6 Event-ring flow control (ARCHITECTURE §11.7 made real)

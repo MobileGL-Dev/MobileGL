@@ -53,6 +53,9 @@
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+// P12: MGPipeTextureEmitterInstance(), so a control case can name the handle of an object it
+// created and read the publication latch the converted rows read.
+#include <MG_Impl/Pipe/TextureEmit.h>
 #include <Init.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>

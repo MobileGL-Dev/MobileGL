@@ -78,6 +78,20 @@ namespace MobileGL::MG_Remote::Client {
     // inferred, R-8's rule one level out.
     Uint64 ClientWireRecordsDeclined();
 
+    // ---- P12: the CREATE WINDOW (MOBILEGL_IPC_CREATE_WINDOW) ---------------------------------
+    //
+    // The resource_create row defers its answer instead of dropping it: up to N creates go out
+    // fire-and-forget, the caller reads a provisional accept, and the answers are taken in order.
+    // The four numbers below are what a test can say about that without reaching into the row:
+    // how many answers are outstanding, the ceiling the code actually applies (the config value
+    // clamped to the array), the array's own size, and the two tallies - objects whose create came
+    // back DECLINED and are therefore out of the window, and how many refusals there have been.
+    Uint32 ClientCreateWindowPending();
+    Uint32 ClientCreateWindowEffective();
+    Uint32 ClientCreateWindowArraySize();
+    Uint32 ClientCreateWindowSuspects();
+    Uint64 ClientCreateWindowRefusals();
+
     // TRUE ON THE SERVER ROLE's OWN THREAD (the apply thread), false everywhere else. It is
     // v1's ServerLoop::OnApplyThread(), exposed here because it is table 3's role split made
     // into one predicate and TWO packages read it: the wire emitters below (a routed call that

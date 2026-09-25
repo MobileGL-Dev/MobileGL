@@ -904,13 +904,14 @@ TEST(RemoteClientControls, TextureUploadsStopOwningAReplyOnTheWireArm) {
         // control visible instead of silently wrong.
         const Uint32 uploadOp = static_cast<Uint32>(MGPWireOp::ResourceSubData);
         const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
-        const Uint64 createWaitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
+        const Uint64 createRecordsBefore = Transport::LinkMetricsRecordsFor(createOp);
         GLuint texture = 0;
         MG_Impl::GLImpl::GenTextures(1, &texture);
         MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
         MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 4, 4, 0, 0x1908, 0x1401, pixels);
         MGP_FILL(DrawArrays);
-        if (Transport::LinkMetricsReplyWaitsFor(createOp) <= createWaitsBefore) ::_exit(140);
+        // THE CREATE WENT OUT (the record), and the live control is the fence below.
+        if (Transport::LinkMetricsRecordsFor(createOp) <= createRecordsBefore) ::_exit(140);
         // THE ROW UNDER TEST. A second write into the same level is a pure resource_subdata: the
         // resource is created, so no create crosses, and the level is dirty again - the only
         // record it can produce is the one item B is about.
@@ -1044,7 +1045,7 @@ TEST(RemoteClientControls, ReplyWaitsByOpForAnAtlasShapedLoad) {
         // emitter stopped sending, which is a different (and much worse) change than item B.
         if (Transport::LinkMetricsRecordsFor(static_cast<Uint32>(MGPWireOp::ResourceSubData)) < 64)
             ::_exit(148);
-        if (Transport::LinkMetricsReplyWaitsFor(static_cast<Uint32>(MGPWireOp::ResourceCreate)) == 0)
+        if (Transport::LinkMetricsRecordsFor(static_cast<Uint32>(MGPWireOp::ResourceCreate)) == 0)
             ::_exit(144);
         // AND ResourceRespecify FOLLOWS SetTextureParams OFF THAT LIST FOR THE SAME REASON (P12/R3):
         // for a confirmed object it is fire-and-forget too. What must still hold is that its RECORDS
@@ -1098,7 +1099,19 @@ TEST(RemoteClientControls, AParameterChangeForAConfirmedObjectTakesNoReply) {
         MG_Impl::GLImpl::TexParameteri(0x0DE1, 0x2801, 0x2601); // MIN_FILTER = LINEAR
         MGP_FILL(DrawArrays);
         if (Transport::LinkMetricsRecordsFor(createOp) == 0) ::_exit(150);
-        if (Transport::LinkMetricsReplyWaitsFor(createOp) == 0) ::_exit(151);
+        // THE LIVE CONTROL IS map_persistent, NOT A CREATE AND NOT A FENCE. Not a create, because
+        // the create row now batches its answers behind MOBILEGL_IPC_CREATE_WINDOW. Not a FENCE,
+        // because a control session has no backend object: FenceCreate is refused, FindFence then
+        // dies of Fatal{ProtocolCorruption, "Fence.handle"}, and the child ABORTS - a case cannot
+        // read an exit code off a corpse. map_persistent needs no backend at all: under split its
+        // answer is a CONSTANT DECLINE that still costs a record and still owns a reply slot
+        // (PipeRoute.h, R-6), so it is exactly "a row that always takes its answer".
+        {
+            const Uint64 waitsBeforeControl = Transport::LinkMetricsReplyWaits();
+            MG_Pipe::MGPHandleOnly controlHandle{};
+            (void)MG_Pipe::MGPipeRouteMapPersistent(controlHandle, 64, nullptr);
+            if (Transport::LinkMetricsReplyWaits() <= waitsBeforeControl) ::_exit(151);
+        }
         // NOW THE OBJECT IS CONFIRMED. Eight real parameter changes: every one must still be SENT,
         // and none of them may take a reply.
         const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(paramsOp);
@@ -1178,6 +1191,217 @@ TEST(RemoteClientControls, ABufferRespecifyTakesNoReplyWhileATextureOneStillDoes
         MGP_FILL(DrawArrays);
         if (Transport::LinkMetricsRecordsFor(respecifyOp) <= confirmedRecords) ::_exit(160);
         if (Transport::LinkMetricsReplyWaitsFor(respecifyOp) != confirmedWaits) ::_exit(161);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+// =====================================================================================
+// P12: the CREATE WINDOW - the confirmation is deferred, not dropped
+// =====================================================================================
+//
+// The create row is the last per-record round trip on the load path (4,536 of a frame's 4,543
+// waits) and the one row whose answer IS an object's confirmation. It therefore defers: up to
+// MOBILEGL_IPC_CREATE_WINDOW creates go out, the caller reads a provisional accept, and the
+// answers are collected in order. A late DECLINED un-latches its object, which puts every later row
+// for that object back on the blocking path - the repair that already existed, not a new one.
+//
+// THE THREE WAYS THIS CAN GO WRONG, one reading each:
+//
+//   1. THE WINDOW DEFERS NOTHING (the row pays a wait per record and the change is decoration) -
+//      the ON half below;
+//   2. THE WINDOW IS NOT WHAT DECIDES (the row defers while the operator asked it not to, which is
+//      the same defect as 1 with the sign flipped) - THE NEGATIVE CONTROL, run in the SAME CHILD as
+//      the ON half so that both readings share a session, a server, a set of objects and a pair of
+//      counters. MOBILEGL_IPC_CREATE_WINDOW=1 must restore the pre-window shape exactly; this is
+//      the assertion that goes red if the window ever stops being the knob;
+//   3. THE WINDOW HOLDS MORE THAN IT IS SIZED FOR - and the ring is what makes this one quiet: an
+//      unguarded push does not grow a count past its ceiling, it REPLACES the oldest confirmation
+//      and leaves the count exactly where it was. So the invariant is read against the effective
+//      ceiling after every create, the ceiling is read against the array, the array is read against
+//      the reply pool it shares, and the environment is not allowed to raise any of them.
+TEST(RemoteClientControls, ACreateWindowDefersTheAnswersAndTheWindowOffDoesNot) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
+        Uint8 pixels[4 * 4 * 4];
+        std::memset(pixels, 0x21, sizeof(pixels));
+        // ---- the clamp and the ceiling, before a single record goes out ----
+        // THE WINDOW IS OPT-IN AND THE DEFAULT IS OFF (Config.h: the deferral was measured on the
+        // device and the drain cannot collect it), so both arms of this case SET the knob rather
+        // than inheriting it - the ON half below is the mechanism being exercised, not a claim
+        // about what ships.
+        // WHAT THE OPERATOR WROTE IS NOT WHAT THE CODE MAY USE. With the clamp gone a configured
+        // window of 99 is compared against a count that the ring keeps below its own size, so the
+        // fallback never fires and the push index runs off the array.
+        MG_Config::Ipc.CreateWindow = 99;
+        if (ClientCreateWindowEffective() != ClientCreateWindowArraySize()) ::_exit(170);
+        MG_Config::Ipc.CreateWindow = 4;
+        if (ClientCreateWindowEffective() != 4u) ::_exit(171);
+        // AND THE ARRAY IS SIZED FROM THE POOL IT SHARES, not from a second literal: the pool is
+        // Transport::kDefaultReplySlotCount slots addressed seq % count, and every reply-owning row
+        // (fence, query, the blocking rows themselves) needs one. Raising the window to the whole
+        // pool is the change the handoff names, and it is red here as well as at the static_assert
+        // in WireTables.cpp - deliberately twice, because the compile-time one is the guard and
+        // this one is the statement of what the guard is for.
+        if (ClientCreateWindowArraySize() > Transport::kDefaultReplySlotCount / 2) ::_exit(172);
+
+        // TWELVE OBJECTS, ONE CREATE EACH, AND THE INVARIANT READ AFTER EVERY ONE. This is the
+        // reading a silent overwrite cannot fake: the count stays at the ceiling while an entry is
+        // replaced underneath it.
+        Uint32 highWater = 0;
+        const auto burst = [&](Int32 count) {
+            for (Int32 i = 0; i < count; ++i) {
+                GLuint texture = 0;
+                MG_Impl::GLImpl::GenTextures(1, &texture);
+                MG_Impl::GLImpl::BindTexture(0x0DE1, texture);
+                MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, 4, 4, 0, 0x1908, 0x1401, pixels);
+                MGP_FILL(DrawArrays);
+                if (ClientCreateWindowPending() > ClientCreateWindowEffective()) ::_exit(173);
+                if (ClientCreateWindowPending() > highWater) highWater = ClientCreateWindowPending();
+            }
+        };
+
+        // ---- THE WINDOW ON: twelve creates, strictly fewer waits ----
+        const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(createOp);
+        const Uint64 waitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
+        burst(12);
+        const Uint64 records = Transport::LinkMetricsRecordsFor(createOp) - recordsBefore;
+        const Uint64 waits = Transport::LinkMetricsReplyWaitsFor(createOp) - waitsBefore;
+        std::printf("create window ON:  window=%u records=%llu waits=%llu high_water=%u\n",
+                    static_cast<unsigned>(MG_Config::Ipc.CreateWindow),
+                    static_cast<unsigned long long>(records),
+                    static_cast<unsigned long long>(waits),
+                    static_cast<unsigned>(highWater));
+        std::fflush(nullptr);
+        if (records < 12) ::_exit(164);
+        // THE DEFERRAL ITSELF, and the honest size of the claim: the first `window` records pay
+        // nothing, so twelve records cannot pay twelve waits once anything was deferred. A ratio
+        // would be a promise about how fast the server answers, which is not this suite's to make.
+        if (waits >= records) ::_exit(165);
+
+        // ---- AND THE SAME TWELVE WITH THE WINDOW OFF, IN THIS SAME CHILD ----
+        // The negative control shares everything with the ON half except the knob, which is what
+        // makes it a control rather than a second measurement. ONE WAIT PER RECORD is the
+        // pre-window shape: R-5 shipped with exactly that, and the whole change is the difference
+        // between the two lines this case prints.
+        MG_Config::Ipc.CreateWindow = 1;
+        const Uint64 offRecordsBefore = Transport::LinkMetricsRecordsFor(createOp);
+        const Uint64 offWaitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
+        burst(12);
+        const Uint64 offRecords = Transport::LinkMetricsRecordsFor(createOp) - offRecordsBefore;
+        const Uint64 offWaits = Transport::LinkMetricsReplyWaitsFor(createOp) - offWaitsBefore;
+        std::printf("create window OFF: window=%u records=%llu waits=%llu\n",
+                    static_cast<unsigned>(MG_Config::Ipc.CreateWindow),
+                    static_cast<unsigned long long>(offRecords),
+                    static_cast<unsigned long long>(offWaits));
+        std::fflush(nullptr);
+        if (offRecords < 12) ::_exit(166);
+        // ONE WAIT PER CREATE, EXACTLY. Every create on this path is an EmitAndWait, so the two
+        // counters are equal whatever else the row does - which is the assertion that cannot be
+        // satisfied by a window that is still deferring sometimes.
+        if (offWaits != offRecords) ::_exit(167);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// =====================================================================================
+// P12: A REFUSED CREATE LEAVES THE WINDOW - read ON THE LATCH AND ON THE SUSPECT LIST
+// =====================================================================================
+//
+// The window's answer is provisional, so the one thing it must never do is keep feeding a refused
+// object fire-and-forget creates: the client would hold a confirmation the server has refused, for
+// ever, and every row that reads the latch would believe it. The repair is deliberately the path
+// that already existed - DECLINED un-latches the object, the object leaves the window, its next
+// create BLOCKS and the refusal reaches the caller - and this case reads all three steps rather
+// than the symptom. It then reads the HEAL, which is the other half of the same rule: a blocking
+// create that lands puts the object back, so a transient refusal cannot retire an object from the
+// window for the rest of the process (or, at kCreateSuspectMax of them, retire the window).
+//
+// THE REFUSAL IS MADE REAL RATHER THAN SIMULATED, and it is the exact case the audit found the two
+// ends can disagree about: the applier asks for bit 10 while the client's mirror still says the
+// family is live, so every create the client emits is refused. Narrowing the server's consumed mask
+// reproduces that without touching the client's mirror.
+TEST(RemoteClientControls, ARefusedCreateUnlatchesItsObjectAndItsNextCreateBlocks) {
+    const auto child = RunInChild([] {
+        ::setenv("MOBILEGL_PIPE_STATS", "1", 1);
+        CapsPeer backend;
+        StartControlSession(&backend);
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        // THE WINDOW IS SET HERE, not inherited: this case is about what the window does with a
+        // refusal, so it must have one whatever the suite was launched with.
+        MG_Config::Ipc.CreateWindow = 4;
+        const Uint32 createOp = static_cast<Uint32>(MGPWireOp::ResourceCreate);
+        // ROOM FOR THE LARGEST LEVEL THIS CASE DEFINES. The storage definition's texels travel as
+        // resource_subdata out of the drain list, so the pointer is read after this call returns.
+        Uint8 pixels[64 * 64 * 4];
+        std::memset(pixels, 0x21, sizeof(pixels));
+        Srv::ServerSessionInstance().SetConsumedSubsystems(
+            kMGPipeSubsystemsMigratedAtP4a & ~kMGPipeSubsystemTextureResources);
+        // ---- one object we can name, then enough neighbours to fill and drain the window ----
+        // The drain is what READS a deferred answer, so the refusal of the first create is only
+        // discovered once later creates have pushed the ring past its ceiling.
+        const auto defineStorage = [&](GLuint name, Int32 extent) {
+            MG_Impl::GLImpl::BindTexture(0x0DE1, name);
+            MG_Impl::GLImpl::TexImage2D(0x0DE1, 0, 0x8058, extent, extent, 0, 0x1908, 0x1401, pixels);
+            MGP_FILL(DrawArrays);
+        };
+        GLuint refused = 0;
+        MG_Impl::GLImpl::GenTextures(1, &refused);
+        defineStorage(refused, 8);
+        for (int i = 0; i < 6; ++i) {
+            GLuint filler = 0;
+            MG_Impl::GLImpl::GenTextures(1, &filler);
+            defineStorage(filler, 8);
+        }
+        // ---- (a) THE LATCH IS CLEAR AND THE OBJECT IS OUT OF THE WINDOW ----
+        const auto refusedObject = MG_State::pGLContext->GetTextureObject(refused);
+        if (refusedObject == nullptr) ::_exit(174);
+        const MG_Pipe::MGPipeHandle refusedHandle =
+            MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*refusedObject);
+        if (MG_Pipe::MGPipeHandleIsNull(refusedHandle)) ::_exit(175);
+        // THE DIRECT READING, which is what the converted rows read: not "the create was refused"
+        // but "this object is not published", which is the fact every fire-and-forget row acts on.
+        if (MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, refusedHandle)) ::_exit(176);
+        if (ClientCreateWindowRefusals() == 0) ::_exit(177);
+        const Uint32 suspectsBefore = ClientCreateWindowSuspects();
+        if (suspectsBefore == 0) ::_exit(178);
+        // ---- (b) AND ITS NEXT CREATE BLOCKS: ONE WAIT PER CREATE, WITH THE WINDOW WIDE OPEN ----
+        // The window has room (the ceiling is 4 and this case has just drained it), so a deferring
+        // row would pay ZERO waits here. Every create this restorage emits pays one instead, which
+        // is the blocking path and nothing else.
+        const Uint64 createRecordsBefore = Transport::LinkMetricsRecordsFor(createOp);
+        const Uint64 createWaitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
+        defineStorage(refused, 16);
+        const Uint64 suspectRecords = Transport::LinkMetricsRecordsFor(createOp) - createRecordsBefore;
+        const Uint64 suspectWaits = Transport::LinkMetricsReplyWaitsFor(createOp) - createWaitsBefore;
+        std::printf("refused create: suspect_records=%llu suspect_waits=%llu suspects=%u\n",
+                    static_cast<unsigned long long>(suspectRecords),
+                    static_cast<unsigned long long>(suspectWaits),
+                    static_cast<unsigned>(suspectsBefore));
+        std::fflush(nullptr);
+        if (suspectRecords == 0) ::_exit(179);
+        if (suspectWaits < suspectRecords) ::_exit(180);
+        // ---- (c) THE HEAL: GIVE THE FAMILY ITS CONSUMER BACK AND RE-DEFINE THE SAME OBJECT ----
+        // The create still blocks (the object is still suspect), now it LANDS, and landing is what
+        // takes it out of the suspect list - exactly one entry, because no other object is touched.
+        Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
+        defineStorage(refused, 32);
+        std::printf("refused create healed: published=%d suspects %u -> %u\n",
+                    static_cast<int>(MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture,
+                                                                     refusedHandle)),
+                    static_cast<unsigned>(suspectsBefore),
+                    static_cast<unsigned>(ClientCreateWindowSuspects()));
+        std::fflush(nullptr);
+        if (!MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, refusedHandle)) ::_exit(181);
+        if (ClientCreateWindowSuspects() != suspectsBefore - 1) ::_exit(182);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);

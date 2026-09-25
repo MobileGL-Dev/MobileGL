@@ -548,6 +548,20 @@ namespace MobileGL::MG_Config {
         // every reply-slot row), which is the only place BARRIER-PULLED fields are read. 0
         // restores the per-record barrier of R-1.
         Uint32 BatchWaits = 1;
+        // MOBILEGL_IPC_CREATE_WINDOW: how many RESOURCE_CREATE answers may be outstanding before the
+        // client waits for one. 1 = every create waits, which is the shape R-5 shipped with AND THE
+        // DEFAULT, because the deferral was measured on the device and does not work: the reply pool
+        // is 8 slots and one load frame posts 59,673 replies (create 4,536 + respecify 20,633 +
+        // params 18,056 + sub-data 12,671 + the rest), so an answer is overwritten after 8 replies -
+        // 0.61 of a create - and the window's drain can never read one back. All 4,536 creates took
+        // the blocking path at 4 and at 1 alike (28.64 s both ways). Worse than inert: the
+        // provisional accept latches an object the applier may have refused, and the un-latch that
+        // corrects it lives in that same unreadable drain. WireTables.cpp's section comment has the
+        // counters and the arithmetic, and the gates in RemoteClientControls.inc still pin the
+        // mechanism, which is sound and simply unusable against this much other reply traffic.
+        // N > 1 is reachable for the experiment that would make it usable (a deeper pool, or a way
+        // to tell the server not to answer a fire-and-forget row).
+        Uint32 CreateWindow = 1;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

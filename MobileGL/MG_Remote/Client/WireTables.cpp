@@ -51,6 +51,9 @@
 // P5e (pg): ID-87 asks this package for bytes-per-link measured rather than argued, and the
 // archive's byte count exists exactly once - here, where it is serialised.
 #include <MG_Util/Metrics/PipeStats.h>
+// P12: kDefaultReplySlotCount, because the create window's ceiling is derived from the pool it
+// shares rather than from a number written twice (see kCreateWindowMax below).
+#include <MG_Remote/Transport/ReplySlot.h>
 
 #include <atomic>
 #include <cstdlib>
@@ -316,10 +319,184 @@ namespace MobileGL::MG_Remote::Client {
         // "always accept" is ID-39's 66 lost DirectVulkan uploads and "accept if we emitted" is
         // the same bug wearing a counter.
 
-        void Wire_ResourceCreate(const MG_Pipe::MGPResourceDesc* payload, MG_Pipe::MGPReplySlot* reply) {
-            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply); return; }
-            ClientSession& session = RequireSession("ResourceCreate");
-            Int32 status = 0;
+        // ---- P12: the CREATE WINDOW, AND WHY IT IS OFF ----------------------------------------
+        //
+        // THE IDEA. The create row is the last per-record round trip on the load path (4,536 of one
+        // frame's 4,543 reply waits) and the one row whose answer is not optional: PublishCreate
+        // latches "the applier holds this handle" on it, and that latch is what every converted row
+        // reads. So this row would not STOP reading its answer - it would DEFER it. Up to
+        // MOBILEGL_IPC_CREATE_WINDOW creates go out fire-and-forget, the caller reads a provisional
+        // accept (so the latch is taken), and the answers are collected IN ORDER: the oldest blocks
+        // when the window is full, and one that comes back DECLINED un-latches its object
+        // (MGPipeNoteHandleUnpublished), which sends every later row for that object back down the
+        // blocking path.
+        //
+        // IT DOES NOT WORK, AND NOT FOR A REASON THAT TUNING REACHES. MEASURED on the device (the
+        // same frame, the same binary, the same 101,421,396 B staged, axe aikjs4s8cys8ba7l):
+        //
+        //     MOBILEGL_IPC_CREATE_WINDOW=4   by_op 2 = 4,536   wall 28.64 s
+        //     MOBILEGL_IPC_CREATE_WINDOW=1   by_op 2 = 4,536   wall 28.64 s
+        //     (the handoff's own pre-window baseline was 31.3 s on this device)
+        //
+        // by_op 2 counts the creates that took the BLOCKING path, and it did not move, so no create
+        // deferred. A temporary counter in the row said why: pushed=24, blocked=4,476, took=20,
+        // readfail=8,951, pending pinned at 4. The drain READ the window's answers back and failed
+        // every time.
+        //
+        // WHY, IN THE PROTOCOL'S OWN ARITHMETIC. An answer is readable only until its reply-pool
+        // slot is reused, and the pool is kDefaultReplySlotCount = 8 slots deep. The frame posts a
+        // reply for EVERY reply-owning record - not only for the rows that wait, because the server
+        // cannot know which those are (ClientSession.cpp:1897-1900: "The server posts either way")
+        // - and that is 59,673 replies in this one frame:
+        //
+        //     create 4,536 + respecify 20,633 + params 18,056 + sub-data 12,671 + 3,770 + 6 + 1
+        //
+        // 8 slots against 59,673 replies is a pool that churns 7,459 times per frame, i.e. 13.2
+        // replies between two creates: an answer posted at create N is overwritten after EIGHT
+        // replies, which is 0.61 of a create. There is no window depth for which the deferred
+        // answer still exists when the client comes back for it - the deferral is not slow, it is
+        // UNREADABLE. (A 1-deep "window" is the blocking path, which is what the row does.)
+        //
+        // AND THE FAILURE IS NOT NEUTRAL: with the window on, the provisional accept latches an
+        // object the applier may have refused, and the un-latch that would correct it lives in the
+        // drain - the same drain that cannot read. A refusal therefore becomes an object the client
+        // believes is published, which is exactly the silent divergence the suspect list exists to
+        // prevent. So the default is 1: the row is the pre-window shape unless someone sets
+        // MOBILEGL_IPC_CREATE_WINDOW explicitly, and the machinery below is kept as the record of
+        // what was tried and what it cost (a fix would have to make a deferred answer outlive
+        // 59,673 intervening replies, which means a deeper pool or a way for the client to tell
+        // the server "do not answer this one" - both are wire changes, not tuning).
+        //
+        // The gates that pin it are in MG_Test/Wire/RemoteClientControls.inc, and they still hold:
+        // the window is a coherent mechanism, it is simply unusable on a frame with this much
+        // other reply traffic.
+        constexpr Uint32 kCreateWindowMax = 4;
+        // THE WINDOW MAY NOT OWN MORE THAN HALF THE POOL, and this is where that stops being a
+        // sentence in a comment. The pool is kDefaultReplySlotCount slots addressed seq % count, so
+        // an answer is readable only while its slot has not been reused; every other reply-owning
+        // row - fence, query, and the blocking rows themselves - needs a slot too. The change the
+        // handoff names as the one worth pinning ("someone raises kCreateWindowMax to 8 and steps on
+        // the pool") goes red HERE, by name, at compile time, instead of as a wrong picture on a
+        // device. Raised to 8 it would take the whole pool and leave nothing for the answer the
+        // blocking rows are waiting on.
+        static_assert(kCreateWindowMax <= Transport::kDefaultReplySlotCount / 2,
+                      "the create window may hold at most half the reply pool: the other half "
+                      "belongs to the rows that take their answers immediately");
+        // AND THE ENVIRONMENT MAY NOT RAISE IT EITHER. The configured value is clamped to the
+        // array's own size, so the fixed array below cannot be overrun by a config bound and this
+        // constant having drifted apart. 1 (and anything below it) is the pre-window shape.
+        Uint32 CreateWindowEffective() {
+            if (MG_Config::Ipc.CreateWindow <= 1) return 1;
+            return MG_Config::Ipc.CreateWindow < kCreateWindowMax ? MG_Config::Ipc.CreateWindow
+                                                                  : kCreateWindowMax;
+        }
+        struct PendingCreate {
+            Uint64 Seq = 0;
+            MG_Pipe::MGPipeKind Kind = MG_Pipe::MGPipeKind::None;
+            MG_Pipe::MGPipeHandle Handle{};
+        };
+        PendingCreate g_createWindow[kCreateWindowMax];
+        Uint32 g_createWindowHead = 0;
+        Uint32 g_createWindowCount = 0;
+        Uint64 g_createRefusals = 0;
+
+        // A HANDLE WHOSE CREATE CAME BACK DECLINED IS NEVER WINDOWED AGAIN. Without this the window
+        // would UNDO the repair it exists to keep: every later use of the object sends another create,
+        // reads another provisional accept, and latches the object as published again - so a server
+        // that keeps refusing (the consumer-gate asymmetry the audit found, or any bug) would be fed
+        // fire-and-forget records for ever with the client believing all of them landed. With it, a
+        // refused object leaves the window and its next create is BLOCKING, so the refusal reaches the
+        // caller, the latch stays clear, and every converted row for that object is back on the loud
+        // blocking path. The window is for objects that have never been refused.
+        //
+        // BOUNDED, AND THE BOUND IS THE SAFE DIRECTION: past kCreateSuspectMax suspects the window
+        // switches itself off entirely, which is the pre-window shape.
+        constexpr SizeT kCreateSuspectMax = 256;
+        Vector<MG_Pipe::MGPipeHandle> g_createSuspects;
+
+        Bool CreateIsSuspect(MG_Pipe::MGPipeHandle handle) {
+            for (const MG_Pipe::MGPipeHandle& suspect : g_createSuspects) {
+                if (suspect.Slot == handle.Slot && suspect.Gen == handle.Gen) return true;
+            }
+            return false;
+        }
+        void NoteCreateSuspect(MG_Pipe::MGPipeHandle handle) {
+            if (CreateIsSuspect(handle) || g_createSuspects.size() >= kCreateSuspectMax) return;
+            g_createSuspects.push_back(handle);
+        }
+        void ClearCreateSuspect(MG_Pipe::MGPipeHandle handle) {
+            for (SizeT i = 0; i < g_createSuspects.size(); ++i) {
+                if (g_createSuspects[i].Slot != handle.Slot || g_createSuspects[i].Gen != handle.Gen)
+                    continue;
+                for (SizeT j = i + 1; j < g_createSuspects.size(); ++j)
+                    g_createSuspects[j - 1] = g_createSuspects[j];
+                g_createSuspects.pop_back();
+                return;
+            }
+        }
+
+        // Which publication latch an object's create owns. The three resource kinds are spelled out
+        // rather than defaulted, so a target added later cannot silently borrow the texture latch.
+        MG_Pipe::MGPipeKind CreateRecordKind(const MG_Pipe::MGPResourceDesc& desc) {
+            switch (static_cast<MG_Pipe::MGPipeResourceTarget>(desc.Target)) {
+            case MG_Pipe::MGPipeResourceTarget::Buffer: return MG_Pipe::MGPipeKind::Buffer;
+            case MG_Pipe::MGPipeResourceTarget::Renderbuffer: return MG_Pipe::MGPipeKind::Renderbuffer;
+            default: return MG_Pipe::MGPipeKind::Texture;
+            }
+        }
+
+        // Collect every answer that is already available. `blockForOldest` is the window being full,
+        // which is the one moment an answer is worth waiting for - appliedSeq is monotone, so taking
+        // the oldest is what frees the slot the next create needs. FIFO throughout: an unapplied
+        // oldest means none of the rest are ready either.
+        void DrainCreateWindow(ClientSession& session, Bool blockForOldest) {
+            Bool blocking = blockForOldest;
+            while (g_createWindowCount != 0) {
+                const PendingCreate head = g_createWindow[g_createWindowHead];
+                const Transport::SessionWait wait =
+                    session.WaitForApplied(head.Seq, blocking ? 120000u : 0u);
+                if (wait != Transport::SessionWait::Reached) return;
+                Int32 status = Wire::ReplySink::kStatusError;
+                Uint64 size = 0;
+                // AN UNREADABLE SLOT IS NOT AN ERROR: ReadReply refuses when the stamp does not
+                // match yet (or when the answer does not fit the scratch), and treating that as
+                // ERROR would invent a transport fault out of a reader that arrived early. The
+                // entry stays in the window and is taken at the next drain.
+                if (!session.ReadReply(head.Seq, nullptr, 0, &status, &size)) return;
+                // ERROR IS NOT A DECLINE (M4 / R-5), and a deferred answer does not change that:
+                // the same named Fatal the blocking take raises.
+                if (status == Wire::ReplySink::kStatusError) {
+                    SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"resource_create\"} - the row answered "
+                            "ERROR, which is not an acceptance answer; folding it into accepted or "
+                            "refused would make a transport fault look like a resource decision");
+                }
+                if (status == Wire::ReplySink::kStatusDeclined) {
+                    MG_Pipe::MGPipeNoteHandleUnpublished(head.Kind, head.Handle);
+                    NoteCreateSuspect(head.Handle);
+                    ++g_createRefusals;
+                } else {
+                    // It landed: the object is published for real, so it is no longer suspect.
+                    ClearCreateSuspect(head.Handle);
+                }
+                g_createWindowHead = (g_createWindowHead + 1) % kCreateWindowMax;
+                --g_createWindowCount;
+                blocking = false;
+            }
+        }
+        // THE PRE-WINDOW SHAPE, AND THE HEAL BESIDE IT. Every path that cannot defer takes this
+        // one: the window off, the object already refused, the suspect list full, and the window
+        // still full after a blocking drain. The record waits and its caller reads the REAL
+        // answer.
+        //
+        // AND AN ACCEPTED CREATE TAKES ITS OBJECT BACK OUT OF THE SUSPECT LIST. "Never windowed
+        // again" is the answer to a REFUSAL, and a blocking create that landed means the refusal
+        // is over - the object is published, by the caller's own latch, on the answer this call
+        // just read. Leaving the entry standing would retire the object from the window for the
+        // rest of the process, and kCreateSuspectMax such recoveries would retire the WINDOW
+        // itself, which is the one way this row's speed-up can be lost with nothing going wrong.
+        void EmitCreateBlocking(ClientSession& session, const MG_Pipe::MGPResourceDesc* payload,
+                                MG_Pipe::MGPReplySlot* reply) {
+            Int32 status = Wire::ReplySink::kStatusError;
             const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceCreate, payload,
                                                    sizeof(*payload), nullptr, 0, nullptr, 0,
                                                    &status);
@@ -328,6 +505,58 @@ namespace MobileGL::MG_Remote::Client {
             MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);
             ++g_emitted;
             if (status == 1) ++g_declined;
+            if (status == 0) ClearCreateSuspect(payload->Resource);
+        }
+        void Wire_ResourceCreate(const MG_Pipe::MGPResourceDesc* payload, MG_Pipe::MGPReplySlot* reply) {
+            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply); return; }
+            ClientSession& session = RequireSession("ResourceCreate");
+            const Uint32 window = CreateWindowEffective();
+            // THE WINDOW OFF RESTORES THE OLD SHAPE EXACTLY, and is the negative control for it.
+            // THE WINDOW OFF, THE SUSPECT LIST FULL, OR AN OBJECT THAT HAS ALREADY BEEN REFUSED:
+            // all four take the blocking branch, which is the pre-window shape - and on the device
+            // this is the branch the whole row takes, because the deferral above it cannot be
+            // collected. See the section comment for the measurement and the arithmetic.
+            if (window <= 1 || g_createSuspects.size() >= kCreateSuspectMax ||
+                CreateIsSuspect(payload->Resource)) {
+                EmitCreateBlocking(session, payload, reply);
+                return;
+            }
+            // Take what is already answerable, and if the window is full take the oldest for real.
+            // The poll is not politeness: it is what keeps a burst shorter than the window from
+            // leaving its answers unread until the next burst.
+            DrainCreateWindow(session, /*blockForOldest=*/false);
+            if (g_createWindowCount >= window) {
+                DrainCreateWindow(session, /*blockForOldest=*/true);
+                // IF IT IS STILL FULL the oldest answer is not readable yet, and the window is a
+                // fixed array: pushing would silently OVERWRITE a confirmation. This record takes
+                // the blocking path instead - slower for this one call, never lossy. Reaching it
+                // at all means the oldest answer did not arrive inside the drain's own budget, so
+                // the session is on its way out; it is a net, not a hot path. The comparison is
+                // against the effective window, which is what the array below is sized for, so
+                // this line IS the overwrite guard.
+                if (g_createWindowCount >= window) {
+                    EmitCreateBlocking(session, payload, reply);
+                    return;
+                }
+            }
+            Int32 status = Wire::ReplySink::kStatusError;
+            const Uint64 seq =
+                session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr,
+                                         0, nullptr, 0, &status, nullptr, /*wantReply=*/false);
+            if (seq == Wire::kInvalidSeq) {
+                // Cancelled: there is no ordinal to read an answer from, and the caller must NOT
+                // latch an object the record never described.
+                MG_Pipe::MGPipePostReply(*reply, Wire::ReplySink::kStatusDeclined, 0u);
+                ++g_emitted;
+                ++g_declined;
+                return;
+            }
+            g_createWindow[(g_createWindowHead + g_createWindowCount) % kCreateWindowMax] =
+                PendingCreate{seq, CreateRecordKind(*payload), payload->Resource};
+            ++g_createWindowCount;
+            reply->Id = seq;
+            MG_Pipe::MGPipePostReply(*reply, Wire::ReplySink::kStatusOk, 1u);
+            ++g_emitted;
         }
 
         // A PARAMETER CHANGE FOR AN OBJECT WHOSE EXISTENCE IS CONFIRMED OWES NO ANSWER (P12).
@@ -921,6 +1150,23 @@ namespace MobileGL::MG_Remote::Client {
 
     Uint64 ClientWireRecordsEmitted() { return g_emitted; }
     Uint64 ClientWireRecordsDeclined() { return g_declined; }
+
+    // ---- P12: the CREATE WINDOW, as numbers a test can read ---------------------------------
+    //
+    // The window is a DEFERRAL, so the property that has to be checkable is not "is it faster"
+    // but "was every deferred answer eventually taken, and did the window ever hold more than it
+    // is sized for". Pending is that second question, and it is the one a silent overwrite would
+    // answer wrongly: the ring wraps, so an unguarded push would not grow the count past the
+    // ceiling - it would REPLACE the oldest confirmation and leave the count where it was. Read it
+    // against the effective ceiling and the array size, which are the two numbers the guard itself
+    // is written in terms of, and not against a literal repeated in the test.
+    Uint32 ClientCreateWindowPending() { return g_createWindowCount; }
+    Uint32 ClientCreateWindowEffective() { return CreateWindowEffective(); }
+    Uint32 ClientCreateWindowArraySize() { return kCreateWindowMax; }
+    // Objects whose create came back DECLINED: out of the window, next create blocking, and back
+    // in the moment a blocking create lands.
+    Uint32 ClientCreateWindowSuspects() { return static_cast<Uint32>(g_createSuspects.size()); }
+    Uint64 ClientCreateWindowRefusals() { return g_createRefusals; }
 
 } // namespace MobileGL::MG_Remote::Client
 
