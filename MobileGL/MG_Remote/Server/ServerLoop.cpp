@@ -739,6 +739,30 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession& session = *m_session;
         Transport::SessionConsumer& consumer = session.Consumer();
         PipeApplier& applier = session.Applier();
+        // ---- P65ServerFrame: WHERE THE SERVER'S TIME GOES (P12 measurement) -----------------
+        //
+        // THE CLIENT SIDE IS MEASURED OUT AND THE SERVER'S IS NOT MEASURED AT ALL. Every reading
+        // this harness produces is the CLIENT's - wall_ns, wait_replies, client_thread_cpu_ns - and
+        // they now add up to less than the frame: at window 6 the client burns 2.5 s of CPU and
+        // 1,162 blocking waits, and removing 292 of those waits (window 8) moves the wall clock by
+        // nothing. The same 101 MB over USB instead of WiFi moves it by nothing either. What is
+        // left is the one process nobody has timed: the server applying 103,097 records.
+        //
+        // THE SPLIT IS THE POINT. apply_ms is the sum of the time spent INSIDE
+        // PipeApplier::ApplyOne - the GL work, the decode, the reply posts - and wall_ms is Present
+        // to Present on the apply thread. Their difference is everything that is NOT applying:
+        // waiting on the ring for the next record, retiring, and the socket. So one line answers
+        // "is the phone CPU-bound, or is it waiting for the client?" without a profiler, which is
+        // the question the next optimisation has to be chosen from.
+        //
+        // FUNCTION-LOCAL STATIC BECAUSE THE FRAME DOES NOT FIT IN ONE DrainRing CALL: records
+        // trickle in, so a frame spans many drains, and state that reset per drain would measure a
+        // batch. There is exactly one apply thread (ServerLoopInstance's), which is what makes a
+        // static safe here; the same reasoning the drain tally above uses.
+        static auto sFrameWallStart = std::chrono::steady_clock::now();
+        static std::uint64_t sFrameApplyNs = 0;
+        static std::uint64_t sFrameRecords = 0;
+        static std::uint64_t sFrameIndex = 0;
         Uint64 applied = 0;
         for (;;) {
             if (SessionLatched()) break;
@@ -749,7 +773,33 @@ namespace MobileGL::MG_Remote::Server {
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
                 [this, &applier](const Transport::RingRecordView& record) {
+                    const auto applyStarted = std::chrono::steady_clock::now();
                     applier.ApplyOne(record);
+                    // P65ServerFrame: timed around the ONE call that is the server's work, and
+                    // summed across the drains a frame spans. See the block above DrainRing's loop.
+                    sFrameApplyNs += static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - applyStarted)
+                            .count());
+                    ++sFrameRecords;
+                    if (record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present)) {
+                        const auto now = std::chrono::steady_clock::now();
+                        const auto wallNs = static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(now - sFrameWallStart)
+                                .count());
+                        const double applyMs = static_cast<double>(sFrameApplyNs) / 1e6;
+                        const double wallMs = static_cast<double>(wallNs) / 1e6;
+                        MGLOG_I("P65ServerFrame frame=%llu records=%llu apply_ms=%.1f wall_ms=%.1f "
+                                "outside_ms=%.1f - apply_ms is the sum of PipeApplier::ApplyOne, "
+                                "wall_ms is Present to Present on the apply thread, and the "
+                                "difference is waiting for work plus retirement plus the socket",
+                                static_cast<unsigned long long>(++sFrameIndex),
+                                static_cast<unsigned long long>(sFrameRecords), applyMs, wallMs,
+                                wallMs - applyMs);
+                        sFrameWallStart = now;
+                        sFrameApplyNs = 0;
+                        sFrameRecords = 0;
+                    }
                     // THE TALLY MOVES HERE, INSIDE THE CALLBACK, AND NOT AFTER THE BATCH. s1's
                     // SessionConsumer::ApplyOne publishes appliedSeq the instant this callback
                     // returns, and publishing appliedSeq is what releases the client from the

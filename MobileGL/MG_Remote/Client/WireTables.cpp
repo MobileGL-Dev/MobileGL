@@ -398,7 +398,7 @@ namespace MobileGL::MG_Remote::Client {
         // (THE NARRATIVE ABOVE PREDATES RETENTION and ends at "the default is 1". It is kept as
         // the record of what was tried; what made the window work is the declared-answer store,
         // and the default is 2 - Config.h carries the device numbers.)
-        constexpr Uint32 kCreateWindowMax = 8;
+        constexpr Uint32 kCreateWindowMax = 12;
         // THE POOL ARGUMENT THAT USED TO PIN THIS AT 4 IS GONE, AND WHY IT IS GONE IS THE ONE
         // THING TO RE-CHECK BEFORE RAISING IT AGAIN. It read: the pool is kDefaultReplySlotCount
         // slots addressed seq % count, so an answer is readable only while its slot has not been
@@ -451,6 +451,32 @@ namespace MobileGL::MG_Remote::Client {
         // answers from existing at all - the second is what a no-reply bit keyed on wantReply
         // would produce, and it would leave every other reading green.
         Uint64 g_createWindowTaken = 0;
+        // P12 MEASUREMENT: WHY A CREATE DOES NOT DEFER. The window's own arithmetic says a frame's
+        // blocking takes should be creates/window (4,536/6 = 756 at the shipped default), and the
+        // device measures 1,155 - a CONSTANT ~400 that does not move when the window deepens (at
+        // window 8 the ideal is 567 and the measurement is 859). A constant is a fixed population
+        // rather than a queueing effect, and the four exits below are the only ways into it, so
+        // counting them by name is what says which one it is. It matters because the frame turned
+        // out to be LATENCY-bound, not throughput-bound (the server applies all 103,097 records in
+        // 1.95 s of a 9.64 s frame, and the client's 1,161 blocking takes at ~4.9 ms are 5.7 s of
+        // it) - so the way to make it faster is fewer blocks, not a faster apply.
+        Uint64 g_blockNoWindow = 0, g_blockSuspectsFull = 0, g_blockSuspectObject = 0,
+               g_blockWindowStillFull = 0, g_blockTotal = 0;
+        void NoteCreateBlocked(Uint64& reason) {
+            ++reason;
+            ++g_blockTotal;
+            // Once per 256 blocks: a handful of lines per load frame, and the composition is
+            // readable from any one of them.
+            if (g_blockTotal % 256 == 0) {
+                MGLOG_I("P12 create blocks: total=%llu no-window=%llu suspects-full=%llu "
+                        "suspect-object=%llu window-still-full=%llu",
+                        static_cast<unsigned long long>(g_blockTotal),
+                        static_cast<unsigned long long>(g_blockNoWindow),
+                        static_cast<unsigned long long>(g_blockSuspectsFull),
+                        static_cast<unsigned long long>(g_blockSuspectObject),
+                        static_cast<unsigned long long>(g_blockWindowStillFull));
+            }
+        }
 
         // A HANDLE WHOSE CREATE CAME BACK DECLINED IS NEVER WINDOWED AGAIN. Without this the window
         // would UNDO the repair it exists to keep: every later use of the object sends another create,
@@ -624,6 +650,13 @@ namespace MobileGL::MG_Remote::Client {
             // all four take the blocking branch, which is the pre-window shape - and on the device
             // this is the branch the whole row takes, because the deferral above it cannot be
             // collected. See the section comment for the measurement and the arithmetic.
+            if (window <= 1) {
+                NoteCreateBlocked(g_blockNoWindow);
+            } else if (g_createSuspects.size() >= kCreateSuspectMax) {
+                NoteCreateBlocked(g_blockSuspectsFull);
+            } else if (CreateIsSuspect(payload->Resource)) {
+                NoteCreateBlocked(g_blockSuspectObject);
+            }
             if (window <= 1 || g_createSuspects.size() >= kCreateSuspectMax ||
                 CreateIsSuspect(payload->Resource)) {
                 // THE WINDOW RETIRES HERE, AND IT MAY BE HOLDING ANSWERS (P12). This branch is
@@ -650,6 +683,7 @@ namespace MobileGL::MG_Remote::Client {
                 // against the effective window, which is what the array below is sized for, so
                 // this line IS the overwrite guard.
                 if (g_createWindowCount >= window) {
+                    NoteCreateBlocked(g_blockWindowStillFull);
                     EmitCreateBlocking(session, payload, reply);
                     return;
                 }

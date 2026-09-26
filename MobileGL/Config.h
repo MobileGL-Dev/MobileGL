@@ -594,7 +594,7 @@ namespace MobileGL::MG_Config {
         // caller was fire-and-forget. The window's own creates are fire-and-forget AND read, so a
         // flag keyed on wantReply would disable the very mechanism it exists to enable
         // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md sections 7-11).
-        Uint32 CreateWindow = 6;
+        Uint32 CreateWindow = 10;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

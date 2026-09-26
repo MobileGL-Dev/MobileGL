@@ -420,7 +420,7 @@ namespace MobileGL::MG_ConfigLoader {
         // declared answers, and the device sweep showed the wall clock still falling at the old
         // cap of 4 (see WireTables.cpp's kCreateWindowMax). WireTables.cpp's static_assert and
         // StreamLink's crossing log are the checks on this number.
-        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 6, 1, 8);
+        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 10, 1, 12);
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the
