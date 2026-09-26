@@ -179,13 +179,36 @@ namespace {
         ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
         const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
         glDeleteTextures(1, &texture);
-        // THE FENCE, the framebuffer case's exactly (MOBILEGL_IPC_BATCH_WAITS, default on):
-        // object_death is a kCtxObject value-class record, published WITHOUT waiting for its
-        // own apply, and the server-side tally only moves at apply time. Without a wait
-        // boundary this read races the apply thread - it passed by timing until P5d round 3's
-        // clock-free spin changed that timing, then failed 1 in 5. A clear is kCtxVerb and
-        // still waits, and its wait covers the death.
-        glClear(GL_COLOR_BUFFER_BIT);
+        // THE FENCE, AND WHY IT IS NO LONGER A CLEAR.
+        //
+        // object_death is a kCtxObject value-class record whose wait class is kWaitNone, so
+        // under run-ahead the client publishes it and moves on, and the server-side tally below
+        // only moves at APPLY time. The clear this case used to fence on is kWaitNone TOO -
+        // PipeCalls.def's Clear row - so once the wait column governed (P5e's run-ahead), it
+        // waited for nothing and the read below raced the apply thread. Nothing had hidden that
+        // for a while except the per-record barriers the converted rows still took; P12 took
+        // those away on the wire arm (set_texture_params, respecify and the texture sub-data
+        // stop owning an answer), the client now runs further ahead, and the race stopped being
+        // a rarity. MEASURED on this entry under llvmpipe: 2 red of 5 runs (`deaths` 1 vs 1,
+        // the record applied a moment later) and 3 green of 3 with MOBILEGL_IPC_RUN_AHEAD=0. A
+        // timing race, never a lost record: the notice is emitted and applied either way.
+        //
+        // WHAT IS A REAL BOUNDARY, MEASURED ON ALL THREE ARMS RATHER THAN ASSUMED. The
+        // harness's applied-seq fence (WaitForSplitAppliedForTesting) is the right shape for
+        // inproc - and it is NOT usable here: this case is registered on the spawn and tcp arms
+        // too, the client's progress page there is advanced by frames rather than by the
+        // peer's own apply, and the wait times out. MEASURED with that fence in place: this
+        // case red at 5.0 s on DirectGLES.Tcp.Ct.
+        //
+        // A READBACK IS THE ONE BOUNDARY THAT HOLDS ON EVERY ARM. ReadPixels is
+        // kReplySlot|kWaitReply, so the client blocks on its answer, and an answer is posted
+        // only after its record has been APPLIED - and the ring applies in order, so the death
+        // published before it is applied too. (On the spawn and tcp arms the counter below
+        // comes from the peer's log, which ServerCounters() syncs before it reads - and that
+        // sync is itself a round trip the death has already crossed.)
+        GLubyte fencePixel[4]{};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the fence readback left a GL error behind";
         const auto afterCounters = ServerCounters();
         ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
         EXPECT_GT(afterCounters.deaths, deathsBefore)
@@ -314,12 +337,17 @@ namespace {
         const bool slotsReadable =
             PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsBefore);
         glDeleteFramebuffers(1, &fbo);
-        // THE FENCE (MOBILEGL_IPC_BATCH_WAITS, default on): object_death is a kCtxObject
-        // value-class record - published WITHOUT waiting for its own apply (production-safe:
-        // the in-order ring applies it before any record that recycles the slot). The
-        // server-side counter this assertion reads only moves at apply time, so it needs a
-        // wait boundary: a clear is kCtxVerb and still waits, and its wait covers the death.
-        glClear(GL_COLOR_BUFFER_BIT);
+        // THE FENCE, the texture case's exactly: object_death is a kCtxObject value-class
+        // record with wait class kWaitNone, so under run-ahead it is published WITHOUT waiting
+        // for its own apply (production-safe: the in-order ring applies it before any record
+        // that recycles the slot), and the server-side counter this assertion reads only moves
+        // at apply time. A clear cannot be that boundary - its own class is kWaitNone too - so
+        // this waits on a READBACK, which is kWaitReply on every arm. The texture case carries
+        // the measurements, including the boundary that is right for inproc and wrong for
+        // spawn/tcp.
+        GLubyte fencePixel[4]{};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the fence readback left a GL error behind";
         const auto afterCounters = ServerCounters();
         ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
         EXPECT_GT(afterCounters.deaths, deathsBefore)
