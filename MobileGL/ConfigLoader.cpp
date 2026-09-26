@@ -412,12 +412,15 @@ namespace MobileGL::MG_ConfigLoader {
         // xxHash64 changed since the last push are shipped.
         ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
         ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
-        // The create window. DEFAULT 2, and it works because a link that declares RetainsReplies
+        // The create window. DEFAULT 6, and it works because a link that declares RetainsReplies
         // keeps a declared answer until its reader takes it - Config.h carries the three reasons it
-        // was inert before and the device numbers (28.66 s at 1, 17.27 s at 2, 11.02 s at 4).
-        // Capped at 4: the retained set is bounded by the window's own depth, and 4 is what the
-        // declared-answer store's capacity is written against.
-        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 2, 1, 4);
+        // was inert before, the device numbers, and the sweep that put the default at 6 rather
+        // than 4 or 8 (the curve flattens at 6: 4->5 buys 1.92 s, 5->6 0.53 s, 6->8 nothing).
+        // Capped at 8: the retained set is bounded by the window's own depth, the store holds 24
+        // declared answers, and the device sweep showed the wall clock still falling at the old
+        // cap of 4 (see WireTables.cpp's kCreateWindowMax). WireTables.cpp's static_assert and
+        // StreamLink's crossing log are the checks on this number.
+        ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 6, 1, 8);
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the
@@ -514,12 +517,16 @@ namespace MobileGL::MG_ConfigLoader {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // One line, on the arm where these numbers decide behaviour, because every one of
         // them is a number a bug report has to quote.
+        // CREATE-WINDOW IS IN THIS LINE BECAUSE A RUN HAS TO SAY WHICH WINDOW IT USED. It was
+        // missing while the value was a number nobody varied, and the moment it became one that
+        // changes the wall clock by seconds (the P12 sweep: 28.3 s at 1 down to 10.8 s at 6) a
+        // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
-                "persistent-block=%uKiB "
+                "persistent-block=%uKiB create-window=%u "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
-                ipc.PersistentBlockKb, ipc.AdoptTier,
+                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),

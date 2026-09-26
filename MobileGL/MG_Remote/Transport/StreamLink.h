@@ -38,6 +38,14 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult ReadReply(std::uint64_t, std::int32_t*, const void**, std::uint64_t*) override;
         void DeclareReplyRead(std::uint64_t) override;
 
+        // THE DECLARED-ANSWER STORE'S CAPACITY, and it is a PUBLIC NUMBER rather than a private
+        // one because the client's create window is bounded by it: WireTables.cpp's
+        // kCreateWindowMax static_assert and RemoteClientControls' ceiling case both read it, and
+        // a bound that is restated in prose in three places is a bound that drifts. The argument
+        // for the VALUE (why 24, and why overflow is a Fatal and never an eviction) is in the
+        // .cpp beside the store it sizes.
+        static constexpr std::size_t kRetainedAnswersMax = 24;
+
         // P12 diagnostics for the declared-answer store. RetainedOutstanding is what the capacity
         // is about (it must stay near the window's depth, not grow with the server's answers);
         // RetainedTotal counts the answers kept for their readers; SkippedUnwanted counts the ones

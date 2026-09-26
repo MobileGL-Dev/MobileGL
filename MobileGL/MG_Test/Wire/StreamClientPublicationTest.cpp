@@ -262,7 +262,11 @@ namespace {
 
     TEST_F(StreamClientWindow, EveryDeferredCreateAnswerComesBackOnTheShippingArm) {
         const Uint32 savedWindow = MG_Config::Ipc.CreateWindow;
-        MG_Config::Ipc.CreateWindow = 4;
+        // THE DEEPEST WINDOW THE CODE SUPPORTS, so the case exercises the ceiling rather than a
+        // comfortable middle: more deferred answers outstanding means more of the store spent, and
+        // the crowding below is what has to survive it. (The CAP itself is pinned by
+        // RemoteClientControls' window-ceiling case; this one pins that the answers come back.)
+        MG_Config::Ipc.CreateWindow = 8;
         StartServo();
         const std::uint64_t takenBefore = Client::ClientCreateWindowTaken();
         constexpr Int32 kCreates = 24;
@@ -331,7 +335,7 @@ namespace {
         EXPECT_LE(pending, Client::ClientCreateWindowEffective());
         // AND THE ROW REALLY IS DEFERRING HERE, so the case cannot pass by taking the blocking
         // path on every create (which is what a link the window refuses to run on looks like).
-        EXPECT_EQ(Client::ClientCreateWindowEffective(), 4u);
+        EXPECT_EQ(Client::ClientCreateWindowEffective(), 8u);
         EXPECT_TRUE(client.LinkRetainsReplies());
         MG_Config::Ipc.CreateWindow = savedWindow;
     }

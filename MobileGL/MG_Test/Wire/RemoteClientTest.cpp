@@ -37,6 +37,9 @@
 #include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Transport/ReplySlot.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
+// P12: StreamLink::kRetainedAnswersMax, the store capacity RemoteClientControls' window-ceiling
+// case reads instead of restating it.
+#include <MG_Remote/Transport/StreamLink.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/WireTables.h>

@@ -5,6 +5,9 @@
 #include "Doorbell.h"
 #include "ReplySlot.h"
 #include "Framing.h"
+// P12: the declared-answer store's crossing log. Same include as LinkMetrics.cpp's, rather than
+// <Includes.h>, because this file is transport-layer and pulls nothing else from the tree.
+#include <MG_Util/Debug/Log.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -138,7 +141,8 @@ namespace MobileGL::MG_Remote::Transport {
         // cleared its dirty flags at EMISSION (PipeApply.h:298-304), so nobody re-sends those
         // texels. The capacity is sized so that cannot be reached, and reaching it is a bug that
         // says its own name.
-        static constexpr std::size_t kRetainedCap = 24;
+        // ONE DEFINITION, IN THE HEADER, because the client's window is bounded by this number.
+        static constexpr std::size_t kRetainedCap = StreamLink::kRetainedAnswersMax;
         struct StoredReply {
             std::uint64_t seq = 0;
             std::int32_t status = 0;
@@ -153,6 +157,10 @@ namespace MobileGL::MG_Remote::Transport {
         std::size_t wantCursor = 0;
         std::vector<StoredReply> retained;
         std::uint64_t skippedUnwanted = 0, unansweredWanted = 0, retainedTotal = 0;
+        // P12: the most declared answers this store ever held at once. The cap is an overflow
+        // Fatal rather than an eviction, so the MAXIMUM is the number that says whether a given
+        // window depth has room - a sample at teardown answers a different question.
+        std::uint64_t retainedPeak = 0;
         std::uint64_t lastProgressSeq = 0;
         std::chrono::steady_clock::time_point lastProgress = std::chrono::steady_clock::now();
         LinkArena records{}, events{};
@@ -391,6 +399,19 @@ namespace MobileGL::MG_Remote::Transport {
                             slot.status = static_cast<std::int32_t>(static_cast<std::uint32_t>(b));
                             slot.bytes.assign(payload, payload + size);
                             ++retainedTotal;
+                            // LOGGED AS IT CROSSES EVERY QUARTER OF THE CAP, not sampled: at most
+                            // four lines per run, and they are the ones a "how deep may the window
+                            // go" question is answered from without a rebuild (P12's
+                            // MOBILEGL_IPC_CREATE_WINDOW sweep reads exactly these).
+                            if (retained.size() > retainedPeak) {
+                                retainedPeak = retained.size();
+                                if (retainedPeak % (kRetainedCap / 4) == 0) {
+                                    MGLOG_I("P12 store: peak=%llu of cap=%llu declared answers "
+                                            "outstanding; the window's depth is what is spent here",
+                                            static_cast<unsigned long long>(retainedPeak),
+                                            static_cast<unsigned long long>(kRetainedCap));
+                                }
+                            }
                         } else {
                             // NOBODY DECLARED IT: drop it. This is what keeps the store bounded
                             // against a server that answers records this client never reads.

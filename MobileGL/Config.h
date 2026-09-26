@@ -572,14 +572,29 @@ namespace MobileGL::MG_Config {
         // at 1), which is the measurement that says the ~5 ms is a WAKEUP the server batches away
         // rather than its apply throughput - so amortising four creates per wakeup is a real 2.6x.
         //
-        // 4 IS REACHABLE AND BETTER (11.02 s against 17.27 s) and is NOT the default only because
-        // the wider window holds more answers at once; raise it after a run that reads `by_op 2`
-        // and the wall clock rather than the config. NOTE THE PREDICATE the whole mechanism rests
+        // 6 IS THE DEFAULT, AND IT IS WHERE THE CURVE FLATTENS - the sweep that says so is the
+        // one the paragraph above asked for, and it moved the ceiling too (kCreateWindowMax is 8
+        // now; the old 4 was derived from a reply pool the window does not run on). Three
+        // interleaved runs per arm on one binary, load frame, create 4,536 sent in every arm:
+        //
+        //     window 4   1,503 blocking takes   13.23 s median   (spread 11.37-16.29)
+        //     window 5   1,277                  11.31 s          (10.61-12.12)
+        //     window 6   1,155                  10.79 s          ( 9.69-10.81)
+        //     window 8     859                  10.96 s          ( 8.92-11.03)
+        //
+        // 4->5 buys 1.92 s, 5->6 buys 0.53 s, 6->8 buys NOTHING (-0.18 s, inside a session noise
+        // of ~1.5-2 s) - so 6 is the smallest window on the flat part and the extra answers a
+        // deeper one holds buy no time. AND PAST THIS POINT THE FRAME IS NOT WAIT-BOUND ANY MORE:
+        // window 8 pays 296 fewer blocking takes than window 6 and the wall clock does not move.
+        // The store is not the constraint either - its peak is logged as it crosses (StreamLink's
+        // P12 line) and reads 6..11 against a cap of 24 at every arm from 5 up. What is left is
+        // the constant ~350-400 creates that block for a reason depth does not reach, and the
+        // 101 MB / 103k records the SERVER has to apply. NOTE THE PREDICATE the whole mechanism rests
         // on: an answer is retained because the wire DECLARED it will be read - NOT because its
         // caller was fire-and-forget. The window's own creates are fire-and-forget AND read, so a
         // flag keyed on wantReply would disable the very mechanism it exists to enable
         // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md sections 7-11).
-        Uint32 CreateWindow = 2;
+        Uint32 CreateWindow = 6;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

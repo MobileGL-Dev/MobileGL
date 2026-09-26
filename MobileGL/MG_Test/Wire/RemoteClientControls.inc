@@ -1232,24 +1232,27 @@ TEST(RemoteClientControls, TheWindowRefusesToDeferOnALinkThatCannotRetainAnswers
         Uint8 pixels[4 * 4 * 4];
         std::memset(pixels, 0x21, sizeof(pixels));
         // ---- the clamp and the ceiling, before a single record goes out ----
-        // THE WINDOW IS OPT-IN AND THE DEFAULT IS OFF (Config.h: the deferral was measured on the
-        // device and the drain cannot collect it), so both arms of this case SET the knob rather
-        // than inheriting it - the ON half below is the mechanism being exercised, not a claim
-        // about what ships.
+        // BOTH ARMS SET THE KNOB rather than inheriting it: this case is about what the code does
+        // with a configured window, and not a claim about which value ships (the default is 2 -
+        // Config.h carries the device numbers).
         // WHAT THE OPERATOR WROTE IS NOT WHAT THE CODE MAY USE. With the clamp gone a configured
         // window of 99 is compared against a count that the ring keeps below its own size, so the
         // fallback never fires and the push index runs off the array.
         MG_Config::Ipc.CreateWindow = 99;
         if (ClientCreateWindowEffective() != ClientCreateWindowArraySize()) ::_exit(170);
-        MG_Config::Ipc.CreateWindow = 4;
-        if (ClientCreateWindowEffective() != 4u) ::_exit(171);
-        // AND THE ARRAY IS SIZED FROM THE POOL IT SHARES, not from a second literal: the pool is
-        // Transport::kDefaultReplySlotCount slots addressed seq % count, and every reply-owning row
-        // (fence, query, the blocking rows themselves) needs one. Raising the window to the whole
-        // pool is the change the handoff names, and it is red here as well as at the static_assert
-        // in WireTables.cpp - deliberately twice, because the compile-time one is the guard and
-        // this one is the statement of what the guard is for.
-        if (ClientCreateWindowArraySize() > Transport::kDefaultReplySlotCount / 2) ::_exit(172);
+        MG_Config::Ipc.CreateWindow = 8;
+        if (ClientCreateWindowEffective() != 8u) ::_exit(171);
+        // AND THE ARRAY IS SIZED FROM THE STORE IT SHARES, not from a second literal (P12). This
+        // line used to read "at most half the REPLY POOL", which was true while an answer was read
+        // back out of a slot pool addressed seq % slotCount - and the window does not run on such
+        // a link: CreateWindowEffective() is gated on ILink::RetainsReplies, false for ShmLink, so
+        // the pool-addressed transport holds a window of 1. On the link where it does run, an
+        // answer waits in the declared-answer store instead, so the bound that matters is the
+        // store's - read from the constant rather than restated, for the reason the pool version
+        // read kDefaultReplySlotCount. WireTables.cpp's static_assert is the compile-time half of
+        // the same sentence, deliberately twice: that one is the guard, this one is what it is for.
+        if (ClientCreateWindowArraySize() > Transport::StreamLink::kRetainedAnswersMax / 2)
+            ::_exit(172);
 
         // TWELVE OBJECTS, ONE CREATE EACH, AND THE INVARIANT READ AFTER EVERY ONE. This is the
         // reading a silent overwrite cannot fake: the count stays at the ceiling while an entry is
@@ -1268,7 +1271,7 @@ TEST(RemoteClientControls, TheWindowRefusesToDeferOnALinkThatCannotRetainAnswers
         };
 
         // ---- THE KNOB IS AS HIGH AS IT GOES, AND THE ROW MUST STILL BLOCK ----
-        MG_Config::Ipc.CreateWindow = 4;
+        MG_Config::Ipc.CreateWindow = ClientCreateWindowArraySize();
         const Uint64 recordsBefore = Transport::LinkMetricsRecordsFor(createOp);
         const Uint64 waitsBefore = Transport::LinkMetricsReplyWaitsFor(createOp);
         burst(12);

@@ -54,6 +54,9 @@
 // P12: kDefaultReplySlotCount, because the create window's ceiling is derived from the pool it
 // shares rather than from a number written twice (see kCreateWindowMax below).
 #include <MG_Remote/Transport/ReplySlot.h>
+// P12: kRetainedAnswersMax, the store capacity the window's own ceiling is derived from - the
+// constant itself rather than a second literal, so the two cannot drift.
+#include <MG_Remote/Transport/StreamLink.h>
 // P12: LinkMetricsBeginReply/ReplyApplied, so the window's blocking take is visible in by_op 2.
 #include <MG_Remote/Transport/LinkMetrics.h>
 
@@ -392,18 +395,37 @@ namespace MobileGL::MG_Remote::Client {
         // The gates that pin it are in MG_Test/Wire/RemoteClientControls.inc, and they still hold:
         // the window is a coherent mechanism, it is simply unusable on a frame with this much
         // other reply traffic.
-        constexpr Uint32 kCreateWindowMax = 4;
-        // THE WINDOW MAY NOT OWN MORE THAN HALF THE POOL, and this is where that stops being a
-        // sentence in a comment. The pool is kDefaultReplySlotCount slots addressed seq % count, so
-        // an answer is readable only while its slot has not been reused; every other reply-owning
-        // row - fence, query, and the blocking rows themselves - needs a slot too. The change the
-        // handoff names as the one worth pinning ("someone raises kCreateWindowMax to 8 and steps on
-        // the pool") goes red HERE, by name, at compile time, instead of as a wrong picture on a
-        // device. Raised to 8 it would take the whole pool and leave nothing for the answer the
-        // blocking rows are waiting on.
-        static_assert(kCreateWindowMax <= Transport::kDefaultReplySlotCount / 2,
-                      "the create window may hold at most half the reply pool: the other half "
-                      "belongs to the rows that take their answers immediately");
+        // (THE NARRATIVE ABOVE PREDATES RETENTION and ends at "the default is 1". It is kept as
+        // the record of what was tried; what made the window work is the declared-answer store,
+        // and the default is 2 - Config.h carries the device numbers.)
+        constexpr Uint32 kCreateWindowMax = 8;
+        // THE POOL ARGUMENT THAT USED TO PIN THIS AT 4 IS GONE, AND WHY IT IS GONE IS THE ONE
+        // THING TO RE-CHECK BEFORE RAISING IT AGAIN. It read: the pool is kDefaultReplySlotCount
+        // slots addressed seq % count, so an answer is readable only while its slot has not been
+        // reused, and a window owning half of them would starve the rows that take their answers
+        // immediately - the change the handoff named as the one worth pinning, "someone raises
+        // kCreateWindowMax to 8 and steps on the pool". That is true of a link whose answers live
+        // in a SLOT POOL, and the window does not run on one: CreateWindowEffective() is gated on
+        // ILink::RetainsReplies, which is false for ShmLink, so on the pool-addressed transport
+        // the window is 1 and holds nothing. On the link where it does run - StreamLink - an
+        // answer is kept in the declared-answer store until its reader takes it, so depth costs
+        // STORE ENTRIES, not pool slots.
+        //
+        // SO THE SAME RULE IS RE-DERIVED AGAINST THE RIGHT OBJECT: at most half of StreamLink's
+        // kRetainedCap = 24, the other half being the one blocking row in flight and whatever a
+        // retired window has stranded. The store's overflow is a named Fatal and never an
+        // eviction, so exceeding this costs a run rather than a wrong picture - and the store
+        // logs its own peak as it crosses, which is what a future raise must be argued from.
+        //
+        // MEASURED, device load frame, three interleaved runs per arm: the curve had NOT flattened
+        // at the old cap (1->2 saved 10.29 s, 2->3 3.74 s, 3->4 1.83 s), which is why this
+        // constant moved at all.
+        static_assert(kCreateWindowMax <= Transport::StreamLink::kRetainedAnswersMax / 2,
+                      "the create window may hold at most half of StreamLink's declared-answer "
+                      "store: the other half belongs to the one blocking row in flight and to "
+                      "whatever a retired window has stranded. The store's overflow is a named "
+                      "Fatal rather than an eviction, so this bound is about losing a run, not "
+                      "about a wrong picture");
         // AND THE ENVIRONMENT MAY NOT RAISE IT EITHER. The configured value is clamped to the
         // array's own size, so the fixed array below cannot be overrun by a config bound and this
         // constant having drifted apart. 1 (and anything below it) is the pre-window shape.
