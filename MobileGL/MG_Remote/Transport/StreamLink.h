@@ -11,6 +11,23 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         StreamLink();
         ~StreamLink() override;
+        // P65READ: THE SERVER'S SOCKET-READ PATH, ACCOUNTED WHERE IT CAN BE SEEN. The counters are
+        // published from the io thread's recv loop and read by the APPLY thread, because the io
+        // thread's own MGLOG_ lines never reach the phone's forwarded log (only mgl-srv-apply and
+        // mgl-display-ser do - measured, not assumed). Taking them RESETS them, so one call is one
+        // frame's worth of the stage nothing else measures: the frame's time is not the client's GL
+        // thread (13%) and not PipeApplier::ApplyOne (11%), and this is what sits between them.
+        struct ReadStats {
+            std::uint64_t bytes = 0;     // payload bytes taken off the socket
+            std::uint64_t calls = 0;     // recv() calls it took
+            std::uint64_t reads = 0;     // Link::Read() calls (one per header, envelope or chunk)
+            std::uint64_t nsInRecv = 0;  // wall time inside recv - blocking included
+            std::uint64_t nsTotal = 0;   // wall time inside Read
+        };
+        static ReadStats TakeReadStats();
+        // The client's half: bytes handed to the io thread's sendmsg, the calls it took, and the
+        // wall time inside sendmsg (blocking included). nsInRecv carries the send time.
+        static ReadStats TakeSendStats();
         MobileGLResult Attach(int dataFd, SessionSegments& mirrors, TransportRoleTag role);
         MobileGLResult AttachOwned(int dataFd, const struct SessionSegmentSizes& sizes, TransportRoleTag role);
         // PH-7 (4), ID-P7-3. The SERVER's half of a nonce-bound data connection, in two steps.

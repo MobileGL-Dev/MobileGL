@@ -10,6 +10,7 @@
 
 #include "ServerLoop.h"
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Remote/Transport/StreamLink.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <Config.h>
@@ -789,13 +790,30 @@ namespace MobileGL::MG_Remote::Server {
                                 .count());
                         const double applyMs = static_cast<double>(sFrameApplyNs) / 1e6;
                         const double wallMs = static_cast<double>(wallNs) / 1e6;
+                        // AND THE STAGE NOTHING ELSE COVERS: the io thread's socket reads, which
+                        // its own MGLOG_ lines cannot report (the phone's forwarded log carries
+                        // mgl-srv-apply and mgl-display-ser only). read_ms is wall time inside
+                        // recv - blocking included - so a frame that is 90% read_ms is a frame the
+                        // reader spent WAITING for bytes, and one that is mostly recv calls with
+                        // little read_ms is a reader that is copying.
+                        const auto read = Transport::StreamLink::TakeReadStats();
                         MGLOG_I("P65ServerFrame frame=%llu records=%llu apply_ms=%.1f wall_ms=%.1f "
-                                "outside_ms=%.1f - apply_ms is the sum of PipeApplier::ApplyOne, "
-                                "wall_ms is Present to Present on the apply thread, and the "
-                                "difference is waiting for work plus retirement plus the socket",
+                                "outside_ms=%.1f | read: %llu B in %llu recv(%llu reads) "
+                                "recv_ms=%.1f total_ms=%.1f (%.0f%% blocked, %.1f MB/s)",
                                 static_cast<unsigned long long>(++sFrameIndex),
                                 static_cast<unsigned long long>(sFrameRecords), applyMs, wallMs,
-                                wallMs - applyMs);
+                                wallMs - applyMs,
+                                static_cast<unsigned long long>(read.bytes),
+                                static_cast<unsigned long long>(read.calls),
+                                static_cast<unsigned long long>(read.reads),
+                                static_cast<double>(read.nsInRecv) / 1e6,
+                                static_cast<double>(read.nsTotal) / 1e6,
+                                read.nsTotal ? 100.0 * static_cast<double>(read.nsInRecv) /
+                                                   static_cast<double>(read.nsTotal)
+                                             : 0.0,
+                                read.nsTotal ? static_cast<double>(read.bytes) /
+                                                   (static_cast<double>(read.nsTotal) / 1e9) / 1e6
+                                             : 0.0);
                         sFrameWallStart = now;
                         sFrameApplyNs = 0;
                         sFrameRecords = 0;

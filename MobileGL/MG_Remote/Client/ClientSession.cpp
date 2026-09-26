@@ -13,6 +13,7 @@
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Handshake.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
+#include <MG_Remote/Transport/StreamLink.h>
 
 #include "../CapsCodec.h"
 #include "../Protocol/generated/protocol_generated.h"
@@ -2260,6 +2261,16 @@ namespace MobileGL::MG_Remote::Client {
             // overlap and at most one frame of added latency (ruling 4 / ID-92).
             const Uint64 awaited = serial - credit;
             ++m_presentCreditWaits;
+            // P65CLIENTPACE: WHERE THE CLIENT'S FRAME GOES, ONE LINE PER FRAME.
+            //
+            // The frame is a lockstep ping-pong and every stage measured so far is IDLE: the client
+            // GL thread at 13% of the frame, the server's apply at 7%, and the server's io thread
+            // 97% blocked in recv waiting for this side. So the missing time is on the CLIENT, and
+            // this is the only per-frame wait the client is known to take - it blocks here until
+            // the server acknowledges the swap of (serial - credit). With it, the io thread's send
+            // side (is the socket full?) and the frame's own wall/CPU, the 80% has nowhere left to
+            // hide: it is either this wait, the send, or the game.
+            const auto paceStarted = std::chrono::steady_clock::now();
             const BarrierWaitScope waiting;
             Transport::SessionWait wait = Transport::SessionWait::TimedOut;
             for (;;) {
@@ -2286,6 +2297,17 @@ namespace MobileGL::MG_Remote::Client {
             // ShutDown is teardown and returns: the present did not happen, the same answer
             // the barrier gives on a dead doorbell.
             if (wait == Transport::SessionWait::Reached) DrainEventRing(*m_events);
+            const double creditMs =
+                static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - paceStarted).count()) / 1e6;
+            const auto io = Transport::StreamLink::TakeSendStats();
+            MGLOG_I("P65ClientPace present=%llu credit_wait_ms=%.1f | io: %llu B in %llu sendmsg "
+                    "send_ms=%.1f total_ms=%.1f",
+                    static_cast<unsigned long long>(serial), creditMs,
+                    static_cast<unsigned long long>(io.bytes),
+                    static_cast<unsigned long long>(io.calls),
+                    static_cast<double>(io.nsInRecv) / 1e6,
+                    static_cast<double>(io.nsTotal) / 1e6);
         }
         m_presentsSent = serial;
         return serial;

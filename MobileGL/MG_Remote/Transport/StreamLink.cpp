@@ -27,6 +27,16 @@
 #endif
 
 namespace MobileGL::MG_Remote::Transport {
+    // P65Read's counters: written by the server's io thread, drained by its apply thread (see
+    // StreamLink::TakeReadStats).
+    static std::atomic<std::uint64_t> gReadBytes{0}, gReadCalls{0}, gReadReads{0};
+    static std::atomic<std::uint64_t> gReadNsInRecv{0}, gReadNsTotal{0};
+    // P65CLIENTPACE's send half: the io thread's side of the same question. A sendmsg that blocks
+    // is the socket full, i.e. the WRITE side's back-pressure - and on a client whose frame is 80%
+    // waiting, "is it waiting to hand bytes over, or waiting for the game to make them" is the
+    // whole question. Time spent inside sendmsg, not calls made.
+    static std::atomic<std::uint64_t> gSendBytes{0}, gSendCalls{0}, gSendNsInSend{0};
+    static std::atomic<std::uint64_t> gSendNsTotal{0};
     namespace {
         constexpr std::uint64_t kDataEnvelopeBytes = 20;
         constexpr std::uint64_t kMaxDataPayload = kMaxFramePayloadSize - kDataEnvelopeBytes;
@@ -187,9 +197,32 @@ namespace MobileGL::MG_Remote::Transport {
         }
         bool Read(void* data, std::size_t size) {
 #if !defined(_WIN32)
+            // P65Read: THE SERVER'S SOCKET-READ PATH, WHICH NOTHING MEASURED. The per-frame
+            // clocks say the frame's time is NOT in the client's GL thread (13%) and NOT in
+            // PipeApplier::ApplyOne (11%) - 76% of a 105-185 ms frame is outside both, and the
+            // only stage between them is this loop. Two different worlds look identical from
+            // outside it and need opposite fixes:
+            //   * few BIG recvs with little time blocked -> the reader is copying, i.e. one
+            //     thread's throughput is the ceiling;
+            //   * many SMALL recvs, most of the wall spent blocked -> the reader is STARVED and
+            //     the client (or the batching on its side) sets the pace.
+            // Counted here rather than sampled from /proc because the question is per-call, not
+            // per-thread. Printed every kReadMarkBytes so a frame's worth of traffic yields
+            // several lines and no line can be lost to a quiet period.
+            constexpr std::uint64_t kReadMarkBytes = 8ull * 1024ull * 1024ull;
+            (void)kReadMarkBytes;
+            const auto readStarted = std::chrono::steady_clock::now();
+            std::uint64_t calls = 0;
             auto* p = static_cast<std::uint8_t*>(data);
+            const auto wanted = size;
             while (size) {
+                const auto recvStarted = std::chrono::steady_clock::now();
                 const auto n = ::recv(fd, p, size, 0);
+                gReadNsInRecv.fetch_add(static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - recvStarted).count()),
+                    std::memory_order_relaxed);
+                ++calls;
                 if (n < 0 && errno == EINTR) continue;
                 if (n <= 0) {
                     Die(!stopping.load(std::memory_order_acquire));
@@ -198,6 +231,13 @@ namespace MobileGL::MG_Remote::Transport {
                 p += n;
                 size -= static_cast<std::size_t>(n);
             }
+            gReadCalls.fetch_add(calls, std::memory_order_relaxed);
+            gReadReads.fetch_add(1, std::memory_order_relaxed);
+            gReadBytes.fetch_add(wanted, std::memory_order_relaxed);
+            gReadNsTotal.fetch_add(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - readStarted).count()),
+                std::memory_order_relaxed);
             return true;
 #else
             (void)data;
@@ -221,8 +261,16 @@ namespace MobileGL::MG_Remote::Transport {
             msghdr message{};
             message.msg_iov = vectors;
             message.msg_iovlen = size ? 2 : 1;
+            const auto sendStarted = std::chrono::steady_clock::now();
+            std::uint64_t sendCalls = 0;
             while (message.msg_iovlen) {
+                const auto syscallStarted = std::chrono::steady_clock::now();
                 const auto sent = ::sendmsg(fd, &message, MSG_NOSIGNAL);
+                gSendNsInSend.fetch_add(static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - syscallStarted).count()),
+                    std::memory_order_relaxed);
+                ++sendCalls;
                 if (sent < 0 && errno == EINTR) continue;
                 if (sent <= 0) {
                     Die(!stopping.load(std::memory_order_acquire));
@@ -239,6 +287,12 @@ namespace MobileGL::MG_Remote::Transport {
                     message.msg_iov->iov_len -= consumed;
                 }
             }
+            gSendCalls.fetch_add(sendCalls, std::memory_order_relaxed);
+            gSendBytes.fetch_add(size, std::memory_order_relaxed);
+            gSendNsTotal.fetch_add(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - sendStarted).count()),
+                std::memory_order_relaxed);
             return true;
 #else
             (void)payload;
@@ -424,6 +478,25 @@ namespace MobileGL::MG_Remote::Transport {
             }
         }
     };
+
+    StreamLink::ReadStats StreamLink::TakeSendStats() {
+        ReadStats out;
+        out.bytes = gSendBytes.exchange(0, std::memory_order_relaxed);
+        out.calls = gSendCalls.exchange(0, std::memory_order_relaxed);
+        out.nsInRecv = gSendNsInSend.exchange(0, std::memory_order_relaxed);
+        out.nsTotal = gSendNsTotal.exchange(0, std::memory_order_relaxed);
+        return out;
+    }
+
+    StreamLink::ReadStats StreamLink::TakeReadStats() {
+        ReadStats out;
+        out.bytes = gReadBytes.exchange(0, std::memory_order_relaxed);
+        out.calls = gReadCalls.exchange(0, std::memory_order_relaxed);
+        out.reads = gReadReads.exchange(0, std::memory_order_relaxed);
+        out.nsInRecv = gReadNsInRecv.exchange(0, std::memory_order_relaxed);
+        out.nsTotal = gReadNsTotal.exchange(0, std::memory_order_relaxed);
+        return out;
+    }
 
     StreamLink::StreamLink() : m_impl(new Impl) {}
     StreamLink::~StreamLink() {
