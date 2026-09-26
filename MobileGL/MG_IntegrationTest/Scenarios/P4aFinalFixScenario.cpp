@@ -215,6 +215,32 @@ void main() { oColor = texture(uTex, vUv); }
                           << " (" << image.ColorName(cx, cy) << ")" << std::endl;
             }
 
+            // A REAL BOUNDARY BEFORE ANY WHITE-BOX READ OF THE APPLIER (P12).
+            //
+            // The reads below (RecordIsReadable and its callers) read state that lives in the
+            // APPLIER, and the records they assert about are the mask moves a sticky-bit change
+            // produces - `resource_respecify` rows. P12 made that row FIRE-AND-FORGET for a texture
+            // whose existence is already confirmed (PipeRoute.h's
+            // MGPipeResourceRespecifyWantsItsReply: the answer only ever said "the applier holds a
+            // record for this handle", which the client's own publication latch already answers), so
+            // the client no longer waits, and a read taken immediately after the setter now races
+            // the apply thread. MEASURED: DirectGLES.P4aFinalFixScenario's DSA case red with
+            // `Serial` 7 vs 7 and the RENDER_TARGET bit clear, twice in a row, on the inproc arm -
+            // and it is exactly the failure the CtWireScenario death gates had, from the same cause.
+            //
+            // A READBACK IS THE BOUNDARY THAT HOLDS ON EVERY ARM: ReadPixels is
+            // kReplySlot|kWaitReply, the client blocks on its answer, and an answer is posted only
+            // after its record has been APPLIED - so every record published before it, the mask move
+            // included, is applied too. (The harness's applied-seq fence would be the other choice
+            // and it is right for inproc only; it times out on the spawn/tcp arms, which this file
+            // has no registrations on today but may grow.)
+            void FenceTheApplierRead() {
+                GLubyte fencePixel[4]{};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
+                    << "the applier-read fence left a GL error behind";
+            }
+
             // The white-box gate of the M-A case: true when the applier holds a record for the
             // texture in this process. Prints the decline.
             bool RecordIsReadable(unsigned glTextureName, const char* what, PipeTextureResourceRecordPeek* out) {
@@ -563,6 +589,7 @@ void main() { oColor = texture(uTex, vUv); }
             (void)uploadsReadable;
             glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            FenceTheApplierRead();
             if (readable) {
                 ASSERT_TRUE(PeekPipeTextureResourceRecord(texture, &record));
                 EXPECT_EQ(record.ImageBindableHint, 1u)
@@ -637,6 +664,7 @@ void main() { oColor = texture(uTex, vUv); }
             glCreateFramebuffers(1, &namedFbo);
             glNamedFramebufferTexture(namedFbo, GL_COLOR_ATTACHMENT0, early, 0);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            FenceTheApplierRead();
             if (earlyReadable) {
                 ASSERT_TRUE(PeekPipeTextureResourceRecord(early, &earlyRecord));
                 EXPECT_NE(earlyRecord.BindMask & (1u << 7), 0u)
