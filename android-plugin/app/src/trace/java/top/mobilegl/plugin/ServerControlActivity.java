@@ -13,6 +13,7 @@ import android.util.Log;
 import android.util.TypedValue;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -25,12 +26,13 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Control screen for the offscreen render server ({@link MobileGLServerService}).
- * Collects the service's {@code listen}/{@code token}/{@code env} extras and starts or
- * stops it; no native code of its own. The endpoint is a tcp://host:port for remote
- * clients, or an @abstract name / filesystem path for on-device ones. One server per
- * device (P12 D8): starting this service kills the on-screen display server in :mglwin,
- * and vice versa.
+ * Control screen for the render server, in either shape: the offscreen supervisor
+ * ({@link MobileGLServerService}) or the on-screen display server
+ * ({@link MobileGLDisplayActivity}), which renders a client's window surface onto this
+ * screen. Collects the shared {@code listen}/{@code token}/{@code env} extras and starts
+ * or stops the selected one; no native code of its own. The endpoint is a tcp://host:port
+ * for remote clients, or an @abstract name / filesystem path for on-device ones. One
+ * server per device (P12 D8): the two shapes replace each other.
  */
 public final class ServerControlActivity extends Activity {
     private static final String TAG = "MobileGLServerCtl";
@@ -51,6 +53,7 @@ public final class ServerControlActivity extends Activity {
     private EditText listenField;
     private EditText tokenField;
     private EditText envField;
+    private CheckBox onScreenBox;
     private Button startButton;
     private Button stopButton;
     private TextView statusView;
@@ -74,13 +77,16 @@ public final class ServerControlActivity extends Activity {
         contentLayout.addView(makeText("MobileGL Render Server", 20, COLOR_TEXT, true));
 
         TextView hint = makeText(
-                "Starts the offscreen render server (libMobileGLServer.so --serve) as a foreground "
-                        + "service. Endpoint forms: tcp://host:port for remote clients, @name for an "
+                "Starts the render server. Offscreen (default): the supervisor "
+                        + "(libMobileGLServer.so --serve) runs as a foreground service. On-screen "
+                        + "window: the server runs in a display Activity that renders the client's "
+                        + "frames onto this screen (clients opt in with MOBILEGL_IPC_SURFACE=server). "
+                        + "Endpoint forms: tcp://host:port for remote clients, @name for an "
                         + "on-device abstract socket, or a filesystem path (relative to the app's "
                         + "files dir) for on-device clients. Non-loopback TCP requires a token of at "
                         + "least " + MIN_TOKEN_BYTES + " bytes; unix endpoints need none. Extra env "
                         + "uses the KEY=VALUE;KEY grammar (e.g. MOBILEGL_BACKEND_TYPE=DirectVulkan). "
-                        + "One server per device: this replaces the on-screen display server.",
+                        + "One server per device: the two modes replace each other.",
                 12, COLOR_INFO, false);
         LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -90,6 +96,15 @@ public final class ServerControlActivity extends Activity {
         listenField = addField(contentLayout, "Listen endpoint", DEFAULT_ENDPOINT, dp(16));
         tokenField = addField(contentLayout, "Auth token (empty = loopback only)", "", dp(8));
         envField = addField(contentLayout, "Extra env (optional)", "", dp(8));
+
+        onScreenBox = new CheckBox(this);
+        onScreenBox.setText("On-screen window (render client frames onto this screen)");
+        onScreenBox.setTextColor(COLOR_TEXT);
+        onScreenBox.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams boxParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        boxParams.topMargin = dp(8);
+        contentLayout.addView(onScreenBox, boxParams);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -121,8 +136,8 @@ public final class ServerControlActivity extends Activity {
         statusParams.topMargin = dp(12);
         contentLayout.addView(statusView, statusParams);
 
-        if (isServiceRunning()) {
-            setStatus("Service is running (started outside this screen).", COLOR_WARN);
+        if (isServerRunning()) {
+            setStatus("A server is running (started outside this screen).", COLOR_WARN);
         } else {
             setStatus("Stopped.", COLOR_INFO);
         }
@@ -189,23 +204,28 @@ public final class ServerControlActivity extends Activity {
                 }
             };
         }
-        if (isServiceRunning()) {
-            setStatus("Service already running; stop it before reconfiguring.", COLOR_WARN);
+        if (isServerRunning()) {
+            setStatus("A server is already running; stop it before reconfiguring.", COLOR_WARN);
             return;
         }
 
-        Intent intent = new Intent(this, MobileGLServerService.class);
+        final boolean onScreen = onScreenBox.isChecked();
+        Intent intent = new Intent(this,
+                onScreen ? MobileGLDisplayActivity.class : MobileGLServerService.class);
         intent.putExtra("listen", endpoint);
         intent.putExtra("token", token);
         if (!env.isEmpty()) intent.putExtra("env", env);
         try {
-            startForegroundService(intent);
+            // The display Activity runs the server in its own process (:mglwin) and shows the
+            // client's window surface; launching it brings that window to the front.
+            if (onScreen) startActivity(intent);
+            else startForegroundService(intent);
         } catch (RuntimeException error) {
-            Log.e(TAG, "cannot start MobileGLServerService", error);
-            setStatus("startForegroundService failed: " + error, COLOR_FAIL);
+            Log.e(TAG, "cannot start the render server", error);
+            setStatus("start failed: " + error, COLOR_FAIL);
             return;
         }
-        setStatus("Starting " + endpoint + " ...", COLOR_INFO);
+        setStatus("Starting " + endpoint + (onScreen ? " (on-screen)" : "") + " ...", COLOR_INFO);
         probeUntilListening(probeDisplay, probe);
     }
 
@@ -235,8 +255,27 @@ public final class ServerControlActivity extends Activity {
         Thread probe = probeThread;
         if (probe != null) probe.interrupt();
         boolean stopped = stopService(new Intent(this, MobileGLServerService.class));
-        setStatus(stopped ? "Stopped." : "Stop requested, but the service was not running.",
-                stopped ? COLOR_INFO : COLOR_WARN);
+        boolean displayKilled = killDisplayServer();
+        setStatus(stopped || displayKilled ? "Stopped." : "Stop requested, but no server was running.",
+                stopped || displayKilled ? COLOR_INFO : COLOR_WARN);
+    }
+
+    /**
+     * Kills the on-screen server's process (:mglwin). Same uid, so killProcess is allowed;
+     * this mirrors MobileGLServerService.stopDisplayServer for the reverse direction.
+     */
+    private boolean killDisplayServer() {
+        ActivityManager activities = getSystemService(ActivityManager.class);
+        String displayProcess = getPackageName() + ":mglwin";
+        List<ActivityManager.RunningAppProcessInfo> processes = activities.getRunningAppProcesses();
+        if (processes == null) return false;
+        for (ActivityManager.RunningAppProcessInfo process : processes) {
+            if (displayProcess.equals(process.processName)) {
+                android.os.Process.killProcess(process.pid);
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -267,11 +306,12 @@ public final class ServerControlActivity extends Activity {
                 }
             }
             runOnUiThread(() -> {
-                if (isServiceRunning()) {
-                    setStatus("Service running but " + display
-                            + " did not accept a probe; see logcat tag MobileGLServer.", COLOR_WARN);
+                if (isServerRunning()) {
+                    setStatus("Server running but " + display + " did not accept a probe; "
+                            + "see logcat tags MobileGLServer/MobileGLDisplay.", COLOR_WARN);
                 } else {
-                    setStatus("Service exited; see logcat tag MobileGLServer.", COLOR_FAIL);
+                    setStatus("Server exited; see logcat tags MobileGLServer/MobileGLDisplay.",
+                            COLOR_FAIL);
                 }
             });
         }, "mgl-server-probe");
@@ -279,14 +319,23 @@ public final class ServerControlActivity extends Activity {
         thread.start();
     }
 
-    private boolean isServiceRunning() {
+    /** True when either server shape is up: the supervisor service or the :mglwin process. */
+    private boolean isServerRunning() {
         ActivityManager activities = getSystemService(ActivityManager.class);
         List<ActivityManager.RunningServiceInfo> services =
                 activities.getRunningServices(Integer.MAX_VALUE);
-        if (services == null) return false;
-        for (ActivityManager.RunningServiceInfo service : services) {
-            if (MobileGLServerService.class.getName().equals(service.service.getClassName())) {
-                return true;
+        if (services != null) {
+            for (ActivityManager.RunningServiceInfo service : services) {
+                if (MobileGLServerService.class.getName().equals(service.service.getClassName())) {
+                    return true;
+                }
+            }
+        }
+        String displayProcess = getPackageName() + ":mglwin";
+        List<ActivityManager.RunningAppProcessInfo> processes = activities.getRunningAppProcesses();
+        if (processes != null) {
+            for (ActivityManager.RunningAppProcessInfo process : processes) {
+                if (displayProcess.equals(process.processName)) return true;
             }
         }
         return false;
