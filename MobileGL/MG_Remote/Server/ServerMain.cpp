@@ -1246,6 +1246,108 @@ private:
     Clock::time_point m_acceptResumeAt{};
 };
 
+// THE UNIX SHAPE OF THE IN-PROCESS DISPLAY SERVER (P12 D5 extended to unix endpoints). The
+// endpoint is an @abstract name or a filesystem path. A client's control AND data connections
+// pair by arrival order (AcceptPair) and the shm segments' descriptors cross by SCM_RIGHTS, so
+// there is no DataBind to route and no pre-auth gate - both are TCP exposure machinery, and a
+// unix peer is local by construction (the forked unix supervisor runs without either). Sessions
+// take the TCP in-process shape's thread hand-off: one at a time, Busy for a second client, the
+// latch reset between sessions, stop by g_inProcessStop.
+class UnixInProcessSupervisor {
+public:
+    UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted)
+        : m_listener(listener), m_sessionsFaulted(sessionsFaulted) {}
+
+    ~UnixInProcessSupervisor() {
+        // Run() only returns with the session thread joined; a listener failure (73) is the
+        // one way out with it live, and it is never left running behind the supervisor.
+        if (m_sessionThread.joinable()) m_sessionThread.join();
+    }
+
+    int Run() {
+        for (;;) {
+            if (g_inProcessStop.load(std::memory_order_acquire)) return StopServing();
+            Reap();
+            std::unique_ptr<SocketTransport> control;
+            const auto accepted = SocketTransport::AcceptPair(m_listener, 250, control);
+            if (accepted == MOBILEGL_ERR_TIMEOUT) continue;
+            if (accepted != MOBILEGL_OK) {
+                WireLogError("MG_Remote server: the in-process unix listener failed (rc=%d)",
+                             static_cast<int>(accepted));
+                return 73;
+            }
+            // exit_group's close window, as the forked loop's: a client reconnecting the moment
+            // its session ended must not be told Busy by a session that is exiting.
+            const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+            while (m_active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
+                if (Reap()) break;
+                ::usleep(1000);
+            }
+            if (m_active > 0) {
+                RefuseBusy(*control, "one session is already active");
+                continue;
+            }
+            StartSessionThread(std::move(control));
+        }
+    }
+
+private:
+    // The same reap as the TCP shape's ReapSessionThread: join, count faults, reset the latch
+    // for the next session in this process.
+    bool Reap() {
+        if (m_active <= 0 || !m_sessionDone.load(std::memory_order_acquire)) return false;
+        if (m_sessionThread.joinable()) m_sessionThread.join();
+        const int code = m_sessionExit.load(std::memory_order_acquire);
+        m_active = -1;
+        if (code != 0) ++m_sessionsFaulted;
+        ResetSessionLatch();
+        WireLogError("MG_Remote server: in-process unix session #%lu pid=%d reaped exit=%d%s sessionsFaulted=%lu",
+                     m_sessionOrdinal, static_cast<int>(::getpid()), code,
+                     code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted);
+        return true;
+    }
+
+    void StartSessionThread(std::unique_ptr<SocketTransport> connection) {
+        if (m_sessionThread.joinable()) m_sessionThread.join(); // reaped already; never live here
+        m_sessionDone.store(false, std::memory_order_release);
+        m_sessionExit.store(0, std::memory_order_release);
+        ++m_sessionOrdinal;
+        try {
+            // No hand-off pair and no pre-read Hello: the session reads its own first frame and
+            // binds its shm segments from the fds the pair's second connection carries.
+            m_sessionThread = std::thread([this, conn = std::move(connection)]() mutable {
+                const int code = RunSession(std::move(conn), {}, {}, -1, DataSource::None, 10000,
+                                            /*inProcess=*/true);
+                m_sessionExit.store(code, std::memory_order_release);
+                m_sessionDone.store(true, std::memory_order_release);
+            });
+        } catch (...) {
+            WireLogError("MG_Remote server: could not start the in-process unix session thread; the "
+                         "connection is closed (it cannot be refused: it moved into the failed thread)");
+            return;
+        }
+        m_active = ::getpid();
+        WireLogError("MG_Remote server: in-process unix session #%lu started on a thread (pid=%d)",
+                     m_sessionOrdinal, static_cast<int>(::getpid()));
+    }
+
+    int StopServing() {
+        while (m_active > 0) {
+            if (!Reap()) ::usleep(10000);
+        }
+        WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
+        return 0;
+    }
+
+    int m_listener;
+    unsigned long& m_sessionsFaulted;
+    std::thread m_sessionThread;
+    std::atomic<bool> m_sessionDone{false};
+    std::atomic<int> m_sessionExit{0};
+    unsigned long m_sessionOrdinal = 0;
+    pid_t m_active = -1;
+};
+
 // The server's environment preconditions, shared by the exec'd supervisor and the in-process
 // display server (P12 D5: "same env preconditions as mobilegl_server_main"). 0 when they hold.
 int CheckServerEnvironment() {
@@ -1373,11 +1475,14 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
 // P12 (on-screen server window), D5. See InProcessServer.h for the contract.
 extern "C" __attribute__((visibility("default"))) int mobilegl_server_serve_inprocess(const char* endpoint) {
     if (const int refused = CheckServerEnvironment(); refused != 0) return refused;
-    if (endpoint == nullptr || std::strncmp(endpoint, "tcp://", 6) != 0) {
-        WireLogError("MG_Remote server: the in-process display server serves tcp:// only; '%s' is not one",
-                     endpoint == nullptr ? "(null)" : endpoint);
+    if (endpoint == nullptr || endpoint[0] == '\0') {
+        WireLogError("MG_Remote server: the in-process display server needs an endpoint (tcp://, "
+                     "@abstract or a filesystem path)");
         return 71;
     }
+    // tcp:// takes the TCP supervisor's thread hand-off; anything else is a unix endpoint
+    // (@abstract name or filesystem path), taken by the unix supervisor with the same threads.
+    const bool tcpEndpoint = std::strncmp(endpoint, "tcp://", 6) == 0;
     bool idle = false;
     if (!g_inProcessServing.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
         WireLogError("MG_Remote server: an in-process display server is already serving in this process; "
@@ -1411,13 +1516,18 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_serve_inpr
                  Server::ServerDisplayInstance().HasDisplay() ? "installed" : "NOT installed - offscreen only");
     unsigned long sessionsFaulted = 0;
     int result = 0;
-    {
+    if (tcpEndpoint) {
         TcpSupervisor supervisor(listener, Server::PreAuthKnobs::FromEnvironment(), sessionsFaulted,
                                  TcpSupervisor::Handoff::Thread, &g_inProcessStop);
+        result = supervisor.Run();
+    } else {
+        UnixInProcessSupervisor supervisor(listener, sessionsFaulted);
         result = supervisor.Run();
     }
     LogSupervisorSummary(sessionsFaulted);
     ::close(listener);
+    // A filesystem unix endpoint leaves a node behind; an abstract name has none.
+    if (!tcpEndpoint && endpoint[0] != '@') ::unlink(endpoint);
     g_inProcessStop.store(false, std::memory_order_release);
     g_inProcessServing.store(false, std::memory_order_release);
     return result;
