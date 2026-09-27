@@ -563,6 +563,25 @@ by name (`NoServerDisplay`) and that service goes on serving.
 
 ## TCP credit and Stage measurements
 
+For a paired frame-time breakdown, enable `MOBILEGL_PIPE_STATS=1` in both roles
+and keep their logs. The following reducer matches client and server present
+serials, drops the first (unpaired) server interval and one warmup frame, and
+reports avg/p50/p99 in milliseconds plus percentages of client present time:
+
+```bash
+python3 tools/trace_replay/frame_stats.py \
+  --client-log mobilegl.client.log --server-log mobilegl.server.log \
+  --warmup-frames 1 --output frame-stats.json
+```
+
+`transport_wait_ms` measures wall time in the client producer's transport park
+(flush, spin and sleep). It includes waiting for replies, present credit and
+ring space; it is not socket latency. Client and server CPU can overlap with
+each other and with a transport wait, so each percentage uses the client
+present interval as its denominator and the three percentages need not sum to
+100%. A missing frame is rejected. Percentiles use nearest rank over per-frame
+samples.
+
 `benchmark_tcp_credits.py` runs the complete OpenRA and rd12 traces at credits
 1, 2, and 3, then selects matching client/server tail frame IDs (100 and 200
 frames respectively). Extract the unchanged trace files as

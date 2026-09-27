@@ -14,6 +14,7 @@ namespace MobileGL::MG_Remote::Transport {
 namespace {
     struct Window {
         std::uint64_t waitReplies = 0, samples = 0, replyNs = 0, stageBytes = 0;
+        std::uint64_t transportWaitNs = 0;
         std::array<std::uint64_t, 32> histogram{};
         // One slot per wire op, plus a last slot for anything past the table. See
         // LinkMetricsMaxOps: the point is that the per-op numbers still SUM to waitReplies.
@@ -92,14 +93,16 @@ namespace {
         }
         MGLOG_I("P65LinkMetrics kind=%s frame=%llu wait_replies=%llu rtt_samples=%llu "
                 "rtt_mean_us=%.3f rtt_p50_upper_us=%llu rtt_p99_upper_us=%llu "
-                "stage_bytes=%llu wall_ns=%llu client_thread_cpu_ns=%llu rtt_hist_us_pow2=%s",
+                "stage_bytes=%llu wall_ns=%llu client_thread_cpu_ns=%llu "
+                "transport_wait_ns=%llu rtt_hist_us_pow2=%s",
             kind, static_cast<unsigned long long>(metrics.frame),
             static_cast<unsigned long long>(w.waitReplies), static_cast<unsigned long long>(w.samples),
             w.samples == 0 ? 0.0 : double(w.replyNs) / double(w.samples) / 1000.0,
             static_cast<unsigned long long>(QuantileUpperUs(w, 50)),
             static_cast<unsigned long long>(QuantileUpperUs(w, 99)),
             static_cast<unsigned long long>(w.stageBytes), static_cast<unsigned long long>(wallNs),
-            static_cast<unsigned long long>(cpuNs), histogram);
+            static_cast<unsigned long long>(cpuNs),
+            static_cast<unsigned long long>(w.transportWaitNs), histogram);
         // AND THE PER-OP SPLIT WITH EVERY FRAME. A whole-session total cannot name the rows behind
         // ONE frame, and one frame is the whole shape of this problem: the device run that
         // motivated this printed 43,232 of its 43,629 waits in a single atlas frame, and the exit
@@ -166,6 +169,15 @@ std::uint64_t LinkMetricsReplyWaitsFor(std::uint32_t op) {
 void LinkMetricsStageBytes(std::uint64_t bytes) {
     if (!metrics.active) return;
     metrics.current.stageBytes += bytes; metrics.total.stageBytes += bytes;
+}
+std::uint64_t LinkMetricsBeginTransportWait() {
+    return metrics.active ? ClockNs() : 0;
+}
+void LinkMetricsEndTransportWait(std::uint64_t startedNs) {
+    if (!metrics.active || startedNs == 0) return;
+    const auto elapsed = ClockNs() - startedNs;
+    metrics.current.transportWaitNs += elapsed;
+    metrics.total.transportWaitNs += elapsed;
 }
 void LinkMetricsPresent() {
     if (!metrics.active) return;
