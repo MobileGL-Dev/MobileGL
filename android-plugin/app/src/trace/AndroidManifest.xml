@@ -8,6 +8,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application>
+        <!-- Launcher entry: start/stop the offscreen TCP supervisor (MobileGLServerService).
+             The trace flavor removes PostActivity, so without this the APK has no icon. -->
+        <activity
+            android:name=".ServerControlActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MobileGLPlugin">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <service
             android:name=".MobileGLServerService"
             android:exported="true"
