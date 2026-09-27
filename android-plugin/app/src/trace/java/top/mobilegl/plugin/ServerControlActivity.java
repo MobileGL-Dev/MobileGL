@@ -5,6 +5,8 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Typeface;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.Log;
@@ -16,16 +18,19 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Control screen for the offscreen split TCP server ({@link MobileGLServerService}).
+ * Control screen for the offscreen render server ({@link MobileGLServerService}).
  * Collects the service's {@code listen}/{@code token}/{@code env} extras and starts or
- * stops it; no native code of its own. One server per device (P12 D8): starting this
- * service kills the on-screen display server in :mglwin, and vice versa.
+ * stops it; no native code of its own. The endpoint is a tcp://host:port for remote
+ * clients, or an @abstract name / filesystem path for on-device ones. One server per
+ * device (P12 D8): starting this service kills the on-screen display server in :mglwin,
+ * and vice versa.
  */
 public final class ServerControlActivity extends Activity {
     private static final String TAG = "MobileGLServerCtl";
@@ -66,14 +71,16 @@ public final class ServerControlActivity extends Activity {
         scrollView.addView(contentLayout);
         setContentView(scrollView);
 
-        contentLayout.addView(makeText("MobileGL Split TCP Server", 20, COLOR_TEXT, true));
+        contentLayout.addView(makeText("MobileGL Render Server", 20, COLOR_TEXT, true));
 
         TextView hint = makeText(
-                "Starts the offscreen supervisor (libMobileGLServer.so --serve) as a foreground "
-                        + "service. Listening on a non-loopback address requires a token of at least "
-                        + MIN_TOKEN_BYTES + " bytes. Extra env uses the KEY=VALUE;KEY grammar "
-                        + "(e.g. MOBILEGL_BACKEND_TYPE=DirectVulkan). One server per device: this "
-                        + "replaces the on-screen display server.",
+                "Starts the offscreen render server (libMobileGLServer.so --serve) as a foreground "
+                        + "service. Endpoint forms: tcp://host:port for remote clients, @name for an "
+                        + "on-device abstract socket, or a filesystem path (relative to the app's "
+                        + "files dir) for on-device clients. Non-loopback TCP requires a token of at "
+                        + "least " + MIN_TOKEN_BYTES + " bytes; unix endpoints need none. Extra env "
+                        + "uses the KEY=VALUE;KEY grammar (e.g. MOBILEGL_BACKEND_TYPE=DirectVulkan). "
+                        + "One server per device: this replaces the on-screen display server.",
                 12, COLOR_INFO, false);
         LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -133,15 +140,54 @@ public final class ServerControlActivity extends Activity {
         String token = tokenField.getText().toString();
         String env = envField.getText().toString().trim();
 
-        String[] hostPort = parseTcpEndpoint(endpoint);
-        if (hostPort == null) {
-            setStatus("Invalid endpoint: expected tcp://host:port", COLOR_FAIL);
-            return;
-        }
-        if (!isLoopback(hostPort[0]) && token.getBytes().length < MIN_TOKEN_BYTES) {
-            setStatus("Non-loopback listen requires a token of at least "
-                    + MIN_TOKEN_BYTES + " bytes.", COLOR_FAIL);
-            return;
+        String probeDisplay;
+        Probe probe;
+        if (endpoint.startsWith("tcp://")) {
+            String[] hostPort = parseTcpEndpoint(endpoint);
+            if (hostPort == null) {
+                setStatus("Invalid TCP endpoint: expected tcp://host:port", COLOR_FAIL);
+                return;
+            }
+            if (!isLoopback(hostPort[0]) && token.getBytes().length < MIN_TOKEN_BYTES) {
+                setStatus("Non-loopback listen requires a token of at least "
+                        + MIN_TOKEN_BYTES + " bytes.", COLOR_FAIL);
+                return;
+            }
+            final String probeHost = isWildcard(hostPort[0]) ? "127.0.0.1" : hostPort[0];
+            final int port;
+            try {
+                port = Integer.parseInt(hostPort[1]);
+            } catch (NumberFormatException error) {
+                setStatus("Invalid port in endpoint.", COLOR_FAIL);
+                return;
+            }
+            probeDisplay = probeHost + ":" + port;
+            probe = () -> {
+                try (Socket socket = new Socket()) {
+                    socket.connect(new InetSocketAddress(probeHost, port), PROBE_TIMEOUT_MS);
+                }
+            };
+        } else {
+            String invalid = validateUnixEndpoint(endpoint);
+            if (invalid != null) {
+                setStatus(invalid, COLOR_FAIL);
+                return;
+            }
+            final boolean abstractName = endpoint.startsWith("@");
+            final String address = abstractName ? endpoint.substring(1)
+                    : endpoint.startsWith("/") ? endpoint
+                    : new File(getFilesDir(), endpoint).getAbsolutePath();
+            final LocalSocketAddress.Namespace namespace = abstractName
+                    ? LocalSocketAddress.Namespace.ABSTRACT : LocalSocketAddress.Namespace.FILESYSTEM;
+            probeDisplay = endpoint;
+            probe = () -> {
+                LocalSocket socket = new LocalSocket();
+                try {
+                    socket.connect(new LocalSocketAddress(address, namespace));
+                } finally {
+                    socket.close();
+                }
+            };
         }
         if (isServiceRunning()) {
             setStatus("Service already running; stop it before reconfiguring.", COLOR_WARN);
@@ -160,7 +206,29 @@ public final class ServerControlActivity extends Activity {
             return;
         }
         setStatus("Starting " + endpoint + " ...", COLOR_INFO);
-        probeUntilListening(hostPort[0], hostPort[1]);
+        probeUntilListening(probeDisplay, probe);
+    }
+
+    /**
+     * unix endpoint check: an @abstract name or a filesystem path (relative paths resolve
+     * against the app's files dir, which is the service's working directory). Returns the
+     * problem, or null when the endpoint is usable. No token: an AF_UNIX address is reachable
+     * only from this device, and an abstract name only from this app.
+     */
+    private String validateUnixEndpoint(String endpoint) {
+        if (endpoint.isEmpty()) {
+            return "Endpoint is empty.";
+        }
+        if (endpoint.contains("://")) {
+            return "Unknown endpoint scheme; use tcp://host:port, @name or a filesystem path.";
+        }
+        String resolved = endpoint.startsWith("@") || endpoint.startsWith("/") ? endpoint
+                : new File(getFilesDir(), endpoint).getAbsolutePath();
+        // sun_path is 108 bytes on Linux/Android, and an abstract name drops the '@' into it.
+        if (resolved.getBytes().length >= 108) {
+            return "Endpoint is too long for an AF_UNIX address.";
+        }
+        return null;
     }
 
     private void stopServer() {
@@ -172,27 +240,23 @@ public final class ServerControlActivity extends Activity {
     }
 
     /**
-     * Confirms the supervisor bound its socket: connect to the endpoint (loopback when it
-     * listens on a wildcard address) until one attempt succeeds. The server closes each
-     * unauthenticated probe after its pre-auth timeout; at most {@link #PROBE_ATTEMPTS}
-     * probes are made, then the screen reports whatever the service state is.
+     * Confirms the supervisor bound its socket: connect to the endpoint until one attempt
+     * succeeds. TCP probes go to loopback when the server listens on a wildcard address;
+     * unix probes use LocalSocket. The server closes each unauthenticated probe after its
+     * pre-auth timeout; at most {@link #PROBE_ATTEMPTS} probes are made, then the screen
+     * reports whatever the service state is.
      */
-    private void probeUntilListening(String host, String portText) {
-        final String probeHost = isWildcard(host) ? "127.0.0.1" : host;
-        final int port;
-        try {
-            port = Integer.parseInt(portText);
-        } catch (NumberFormatException error) {
-            setStatus("Invalid port in endpoint.", COLOR_FAIL);
-            return;
-        }
-        Thread probe = new Thread(() -> {
+    private interface Probe {
+        void connect() throws Exception;
+    }
+
+    private void probeUntilListening(String display, Probe probe) {
+        Thread thread = new Thread(() -> {
             for (int attempt = 1; attempt <= PROBE_ATTEMPTS; ++attempt) {
                 if (Thread.currentThread().isInterrupted()) return;
-                try (Socket socket = new Socket()) {
-                    socket.connect(new InetSocketAddress(probeHost, port), PROBE_TIMEOUT_MS);
-                    runOnUiThread(() -> setStatus(
-                            "Listening on " + probeHost + ":" + port, COLOR_PASS));
+                try {
+                    probe.connect();
+                    runOnUiThread(() -> setStatus("Listening on " + display, COLOR_PASS));
                     return;
                 } catch (Exception refused) {
                     try {
@@ -204,15 +268,15 @@ public final class ServerControlActivity extends Activity {
             }
             runOnUiThread(() -> {
                 if (isServiceRunning()) {
-                    setStatus("Service running but " + probeHost + ":" + port
+                    setStatus("Service running but " + display
                             + " did not accept a probe; see logcat tag MobileGLServer.", COLOR_WARN);
                 } else {
                     setStatus("Service exited; see logcat tag MobileGLServer.", COLOR_FAIL);
                 }
             });
         }, "mgl-server-probe");
-        probeThread = probe;
-        probe.start();
+        probeThread = thread;
+        thread.start();
     }
 
     private boolean isServiceRunning() {
