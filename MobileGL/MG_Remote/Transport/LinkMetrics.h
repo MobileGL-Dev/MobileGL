@@ -17,6 +17,11 @@ namespace MobileGL::MG_Remote::Transport {
     std::uint64_t LinkMetricsBeginReply(bool wantsReply, std::uint32_t op);
     void LinkMetricsReplyApplied(std::uint64_t startedNs);
     void LinkMetricsStageBytes(std::uint64_t bytes);
+    // Wall time spent in the producer's transport park (flush, spin and sleep).
+    // The server can run concurrently, so this is an independently measured
+    // duration, not a residual obtained by subtracting role CPU clocks.
+    std::uint64_t LinkMetricsBeginTransportWait();
+    void LinkMetricsEndTransportWait(std::uint64_t startedNs);
 
     // THE SAME NUMBER THE PER-FRAME LINE PRINTS AS `wait_replies` (P65LinkMetrics), read back
     // in-process. P12 item B needs it as a GATE rather than as a log line: "the texture half no
