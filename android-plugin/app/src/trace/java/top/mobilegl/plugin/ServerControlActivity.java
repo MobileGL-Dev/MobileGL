@@ -141,6 +141,23 @@ public final class ServerControlActivity extends Activity {
         } else {
             setStatus("Stopped.", COLOR_INFO);
         }
+
+        // Intent extras prefill the form, so adb can drive the screen without the IME:
+        // --es listen @name --es token T --es env "K=V;K" --ez onscreen true --ez start true
+        // (--ez stop true instead stops). This mirrors how every other entry point in this
+        // APK is already driven by extras.
+        Intent intent = getIntent();
+        if (intent != null) {
+            String prefillListen = intent.getStringExtra("listen");
+            if (prefillListen != null) listenField.setText(prefillListen);
+            String prefillToken = intent.getStringExtra("token");
+            if (prefillToken != null) tokenField.setText(prefillToken);
+            String prefillEnv = intent.getStringExtra("env");
+            if (prefillEnv != null) envField.setText(prefillEnv);
+            if (intent.getBooleanExtra("onscreen", false)) onScreenBox.setChecked(true);
+            if (intent.getBooleanExtra("stop", false)) stopServer();
+            else if (intent.getBooleanExtra("start", false)) startServer();
+        }
     }
 
     @Override
