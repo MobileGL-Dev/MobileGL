@@ -982,6 +982,12 @@ if (ANDROID AND MOBILEGL_BUILD_INTEGRATION_TEST)
     add_subdirectory(MobileGL/MG_IntegrationTest)
 endif()
 
+# The replay runner also builds for Android: an adb-shell executable that can
+# dial a render server on the device (unix or TCP) without any Activity.
+if (ANDROID AND MOBILEGL_BUILD_TRACE_REPLAY)
+    add_subdirectory(tools/trace_replay)
+endif()
+
 # ---------------------------------------------------------------------------
 # P0 spike A: the Android delivery chain for a second native executable.
 #

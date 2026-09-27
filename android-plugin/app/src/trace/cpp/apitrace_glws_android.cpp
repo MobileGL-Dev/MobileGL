@@ -75,6 +75,14 @@ int ResolveHeight(int height) {
     return height > 0 ? height : 1;
 }
 
+// A HEADLESS command-line replay (no ANativeWindow) that still wants a window surface: the
+// window will be the MobileGL server's (MOBILEGL_IPC_SURFACE=server), so the config must
+// carry EGL_WINDOW_BIT for the null-window eglCreateWindowSurface in createSurface.
+bool WantsServerOwnedWindow() {
+    const char *mode = std::getenv("MOBILEGL_TRACE_SURFACE");
+    return gNativeWindow == nullptr && mode != nullptr && std::strcmp(mode, "window") == 0;
+}
+
 void *Lookup(const char *name) {
     if (gMobileGl == nullptr) {
         gMobileGl = dlopen("libMobileGL.so", RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
@@ -206,6 +214,22 @@ private:
                     static_cast<const AndroidVisual *>(visual)->config,
                     gNativeWindow,
                     nullptr);
+        } else if (!pbuffer && WantsServerOwnedWindow()) {
+            // HEADLESS COMMAND-LINE REPLAY (P12 D9, same shape as the desktop glws_egl path):
+            // the window is the MobileGL SERVER's (MOBILEGL_IPC_SURFACE=server,
+            // WindowKind::ServerOwned), so the native window is none and the size the trace
+            // wants rides EGL_WIDTH/EGL_HEIGHT. Gated on MOBILEGL_TRACE_SURFACE=window so the
+            // APK's pbuffer mode (no ANativeWindow either) keeps its pbuffer.
+            const EGLint windowAttribs[] = {
+                    EGL_WIDTH, surfaceWidth,
+                    EGL_HEIGHT, surfaceHeight,
+                    EGL_NONE,
+            };
+            surface = gEgl.createWindowSurface(
+                    gDisplay,
+                    static_cast<const AndroidVisual *>(visual)->config,
+                    EGLNativeWindowType{},
+                    windowAttribs);
         } else {
             const EGLint attribs[] = {
                     EGL_WIDTH, surfaceWidth,
@@ -334,7 +358,8 @@ Visual *createVisual(bool doubleBuffer, unsigned samples, Profile profile) {
     }
 
     const EGLint attribs[] = {
-            EGL_SURFACE_TYPE, gNativeWindow == nullptr ? EGL_PBUFFER_BIT : EGL_WINDOW_BIT,
+            EGL_SURFACE_TYPE,
+            gNativeWindow == nullptr && !WantsServerOwnedWindow() ? EGL_PBUFFER_BIT : EGL_WINDOW_BIT,
             EGL_RENDERABLE_TYPE,
             visual->api == EGL_OPENGL_ES_API ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_BIT,
             EGL_RED_SIZE, 8,

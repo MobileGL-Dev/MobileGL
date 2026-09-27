@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-if(NOT UNIX OR ANDROID)
-    message(STATUS "MobileGL trace replay runner is only enabled on desktop Unix")
+if(NOT UNIX)
+    message(STATUS "MobileGL trace replay runner is only enabled on Unix (Android included)")
     return()
 endif()
 
@@ -139,7 +139,9 @@ target_link_libraries(mobilegl_trace_common PUBLIC
 
 add_library(mobilegl_trace_glproc STATIC
         "${APITRACE_GENERATED_DIR}/glproc.cpp"
-        "${MOBILEGL_TRACE_ROOT}/apitrace_glproc_mobilegl.cpp")
+        # Android resolves GL through the same loader glue as the APK runner; desktop
+        # keeps its own.
+        "$<IF:$<BOOL:${ANDROID}>,${MOBILEGL_TRACE_SHARED_CPP_DIR}/apitrace_glproc_android.cpp,${MOBILEGL_TRACE_ROOT}/apitrace_glproc_mobilegl.cpp>")
 if(APPLE)
     target_compile_definitions(mobilegl_trace_glproc PRIVATE GL_SILENCE_DEPRECATION)
 endif()
@@ -225,7 +227,9 @@ add_library(mobilegl_trace_glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
         "${MOBILEGL_TRACE_ROOT}/apitrace_fbo_dump.cpp"
-        "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp"
+        # Android uses the APK runner's glws/glproc glue (pbuffer, or the server-owned
+        # null-window surface for a headless replay); desktop uses the EGL one.
+        "$<IF:$<BOOL:${ANDROID}>,${MOBILEGL_TRACE_SHARED_CPP_DIR}/apitrace_glws_android.cpp,${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp>"
         "${MOBILEGL_TRACE_SHARED_CPP_DIR}/trace_benchmark.cpp")
 if(APPLE)
     set(MOBILEGL_TRACE_APPLE_FRAMEWORKS
@@ -241,6 +245,7 @@ target_include_directories(mobilegl_trace_glretrace_common PUBLIC
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/helpers"
         "${APITRACE_ROOT}/retrace"
+        "${MOBILEGL_TRACE_ROOT}"
         "${MOBILEGL_TRACE_SHARED_CPP_DIR}")
 target_compile_definitions(mobilegl_trace_glretrace_common PRIVATE
         exit=mobilegl_apitrace_exit
@@ -279,6 +284,9 @@ else()
             "-Wl,--start-group"
             ${MOBILEGL_TRACE_REPLAY_LINK_LIBRARIES}
             "-Wl,--end-group")
+endif()
+if(ANDROID)
+    target_link_libraries(mobilegl_trace_replay PRIVATE android log)
 endif()
 
 # The `K=V;K=V` environment passthrough is the only hand-rolled parse between a CI flag

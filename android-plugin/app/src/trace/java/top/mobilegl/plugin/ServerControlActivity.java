@@ -98,7 +98,7 @@ public final class ServerControlActivity extends Activity {
         envField = addField(contentLayout, "Extra env (optional)", "", dp(8));
 
         onScreenBox = new CheckBox(this);
-        onScreenBox.setText("On-screen window (render client frames onto this screen)");
+        onScreenBox.setText("On-screen window (render client frames onto this screen; tcp:// only)");
         onScreenBox.setTextColor(COLOR_TEXT);
         onScreenBox.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         LinearLayout.LayoutParams boxParams = new LinearLayout.LayoutParams(
@@ -154,6 +154,14 @@ public final class ServerControlActivity extends Activity {
         String endpoint = listenField.getText().toString().trim();
         String token = tokenField.getText().toString();
         String env = envField.getText().toString().trim();
+
+        // The in-process display server only accepts tcp:// (ServerMain's in-process arm);
+        // the unix forms belong to the offscreen supervisor.
+        if (onScreenBox.isChecked() && !endpoint.startsWith("tcp://")) {
+            setStatus("The on-screen display server serves tcp:// only; use a tcp:// endpoint "
+                    + "or uncheck On-screen window.", COLOR_FAIL);
+            return;
+        }
 
         String probeDisplay;
         Probe probe;
