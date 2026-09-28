@@ -19,6 +19,12 @@
     operation Utils::CheckGLESError();
 
 namespace MobileGL::MG_Backend::DirectGLES {
+    // Queries the backend's current window-surface size (TGLES/ANGLE eglQuerySurface).
+    // Returns false when no backend surface is current or size is still 0x0.
+    // Used by EGLImpl::QuerySurface as a fallback when the frontend SurfaceObject
+    // has not yet been resized (window surfaces start Width=0 until ResizeSurface).
+    Bool QueryBackendSurfaceSize(Int& outWidth, Int& outHeight);
+
     // Re-establishes the frontend texture-unit bindings on the native ES context.
     // Content uploads use scratch bindings, so draws and dispatches call this after
     // texture synchronization.

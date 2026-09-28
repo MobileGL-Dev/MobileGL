@@ -23,6 +23,7 @@
 #include <Config.h>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <format>
 
 namespace MobileGL::MG_Backend::DirectGLES {
@@ -79,6 +80,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool IsGLESProbeMultisampleTarget(TextureTarget target) {
             return target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
+        }
+
+        Bool HasGLExtension(const MG_External::GLESFunctionsTable& gl, const char* name) {
+            if (!gl.glGetStringi || !gl.glGetIntegerv || !name) return false;
+            GLint count = 0;
+            gl.glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+            for (GLint i = 0; i < count; ++i) {
+                const GLubyte* ext = gl.glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i));
+                if (ext && std::strcmp(reinterpret_cast<const char*>(ext), name) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // TEXTURE_2D_MULTISAMPLE_ARRAY storage (glTexStorage3DMultisample) is ES 3.2
+        // core, or ES 3.1 + GL_OES_texture_storage_multisample_2d_array. On drivers
+        // with neither (e.g. MetalANGLE = ES 3.0), ANGLE still returns a non-null
+        // entry-point stub that faults when called (pointer presence proves nothing
+        // — see Loader.cpp), so the probe must not touch it. Skipping leaves the
+        // target honestly unsupported in the caps cache instead of crashing inside
+        // MakeEGLCurrent -> InitCapabilities.
+        Bool IsTextureMultisampleArraySupported(const MG_External::GLESFunctionsTable& gl,
+                                                const MG_External::GLESCapabilities& capabilities) {
+            const Bool esAtLeast32 = capabilities.GLESVersion.Major > 3 ||
+                                     (capabilities.GLESVersion.Major == 3 &&
+                                      capabilities.GLESVersion.Minor >= 2);
+            if (esAtLeast32) return true;
+            return HasGLExtension(gl, "GL_OES_texture_storage_multisample_2d_array");
         }
 
         GLenum GetFramebufferAttachment(TextureInternalFormat format) {
@@ -664,6 +694,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // of the cache empty and stopped any fallback format from being selected for
                     // them (a GL_DEPTH_COMPONENT32 1D texture then got no storage at all).
                     const TextureTarget probeTarget = TextureImpl::MapToBackendTextureTarget(target);
+
+                    // Skip multisample-array probing on drivers that cannot allocate
+                    // it (see IsTextureMultisampleArraySupported): calling the stub
+                    // entry point would SIGSEGV inside the first MakeEGLCurrent.
+                    // The cache slot keeps its default (unsupported) state.
+                    if (probeTarget == TextureTarget::Texture2DMultisampleArray &&
+                        !IsTextureMultisampleArraySupported(gl, capabilities)) {
+                        continue;
+                    }
 
                     Bool shouldProbeFallback = hasForcedFallback;
                     if (!hasForcedFallback) {

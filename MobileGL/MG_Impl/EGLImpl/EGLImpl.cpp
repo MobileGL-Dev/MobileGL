@@ -10,6 +10,7 @@
 #include "../GetProcAddress.h"
 #include <Init.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_State/EGLState/Core.h>
 #include <mutex>
 #include <sstream>
@@ -396,7 +397,23 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->QuerySurface(display, surface, attribute, value) ? EGL_TRUE : EGL_FALSE;
+        if (!state->QuerySurface(display, surface, attribute, value)) {
+            return EGL_FALSE;
+        }
+        // Window surfaces are created with Width=0/Height=0 and only learn
+        // their size via ResizeSurface (often never called on the MetalLayer
+        // path). The backend (TGLES) knows the real drawable size after
+        // tglHostAttachMetalLayer — fall through so eglQuerySurface reports
+        // real pixels instead of 0x0 (launchers probe this for readbacks).
+        if (value && *value == 0 && (attribute == EGL_WIDTH || attribute == EGL_HEIGHT)) {
+            Int backendW = 0;
+            Int backendH = 0;
+            if (MG_Backend::DirectGLES::QueryBackendSurfaceSize(backendW, backendH) && backendW > 0 &&
+                backendH > 0) {
+                *value = static_cast<EGLint>(attribute == EGL_WIDTH ? backendW : backendH);
+            }
+        }
+        return EGL_TRUE;
     }
 
     char const* QueryString(EGLDisplay display, EGLint name) {

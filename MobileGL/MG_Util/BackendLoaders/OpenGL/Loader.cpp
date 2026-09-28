@@ -9,6 +9,7 @@
 #include "Loader.h"
 #include "MG_Util/SelfTest/DriverBugProbes.h"
 #include "MG_Util/Types.h"
+#include "MG_Backend/DirectGLES/MetalANGLE_GLES32_Shim.h"
 #include <Config.h>
 #include <cmath>
 #if defined(_WIN32)
@@ -85,9 +86,32 @@ namespace MobileGL::MG_Util::BackendLoader {
             "" // Keep this last so the dynamic loader can use LD_LIBRARY_PATH.
         };
 
+#if defined(MOBILEGL_IOS)
+        Dl_info selfInfo{};
+        String selfDir;
+        if (dladdr(reinterpret_cast<const void*>(&OpenLib), &selfInfo) != 0 && selfInfo.dli_fname != nullptr) {
+            String fullPath = selfInfo.dli_fname;
+            SizeT lastSlash = fullPath.find_last_of('/');
+            if (lastSlash != String::npos) {
+                selfDir = fullPath.substr(0, lastSlash + 1);
+            }
+        }
+#endif
+
         void* lib = nullptr;
 
         Int flags = RTLD_LOCAL | RTLD_NOW;
+#if defined(MOBILEGL_IOS)
+        if (!selfDir.empty()) {
+            for (const auto& name : names) {
+                String path_name = selfDir + name;
+                if ((lib = dlopen(path_name.c_str(), flags))) {
+                    MGLOG_I("Loaded GL backend library: %s", path_name.c_str());
+                    return lib;
+                }
+            }
+        }
+#endif
         for (const auto& prefix : LibPathPrefixes) {
             for (const auto& name : names) {
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
@@ -550,10 +574,28 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC_OPTIONAL(glDrawElementsInstancedBaseInstanceEXT)
             INIT_GLES_FUNC_OPTIONAL(glDrawElementsInstancedBaseVertexBaseInstanceEXT)
         }
+
+        if (!funcs.glShaderStorageBlockBinding) {
+            funcs.glShaderStorageBlockBinding = &MetalANGLE_Shim::Stub_glShaderStorageBlockBinding;
+        }
+
+#if defined(MOBILEGL_IOS)
+        const char* angleBackendEnv = std::getenv("MOBILEGL_ANGLE_BACKEND");
+        if (angleBackendEnv != nullptr && std::strcmp(angleBackendEnv, "metal") == 0) {
+            MGLOG_I("AcquireGLESFunctions: Installing MetalANGLE GLES 3.2 compatibility shims");
+            MetalANGLE_Shim::InstallGLES32Shims(funcs, procAddress);
+        }
+#endif
     }
 
     void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs) {
         void* eglLib = nullptr;
+#if defined(MOBILEGL_IOS)
+        // iOS opens ANGLE's *implementation* library (libGLESv2) instead of its libEGL
+        // front-end, so each public egl* entry point has to be taken from the EGL_*
+        // forwarder it exports.  See the comment in the iOS branch below.
+        Bool eglEntryPointsAreForwarders = false;
+#endif
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
         void* angleGlesLib = nullptr;
 #endif
@@ -565,6 +607,57 @@ namespace MobileGL::MG_Util::BackendLoader {
             return;
         }
         eglLib = OpenLib({"libEGL.dll"});
+#elif defined(MOBILEGL_IOS)
+        // On iOS, DirectGLES runs via ANGLE (MetalANGLE or VulkanANGLE).
+        //
+        // Open the requested backend's own libGLESv2 — it contains the real EGL
+        // implementation, exported under the internal EGL_* names — instead of ANGLE's
+        // libEGL front-end wrapper.  The wrapper resolves its implementation library as
+        //
+        //     GetExecutableDirectory() + "/Frameworks/" + ANGLE_DISPATCH_LIBRARY
+        //
+        // (src/common/system_utils_posix.cpp, ANGLE_PLATFORM_IOS_FAMILY), i.e. a FIXED
+        // path inside the app bundle.  The bundle ships both ANGLE builds and that path
+        // holds the Vulkan one, so selecting MetalANGLE used to run the Vulkan backend:
+        // its WSI then fails to bind the game's CAMetalLayer on iOS and
+        // eglCreateWindowSurface() returns EGL_BAD_NATIVE_WINDOW (0x300B), which aborts
+        // Minecraft's window creation ("No supported graphics backend was found" ->
+        // exit(0)).  Resolving the entry points from the selected backend's own library
+        // makes the pairing deterministic and independent of the bundle layout, exactly
+        // like the Android wrapper-variant path below.
+        const char* angleBackendEnv = std::getenv("MOBILEGL_ANGLE_BACKEND");
+        Bool useTgles = (angleBackendEnv != nullptr && std::strcmp(angleBackendEnv, "tgles") == 0);
+        Bool useMetalAngle = (angleBackendEnv != nullptr && std::strcmp(angleBackendEnv, "metal") == 0);
+        if (useTgles) {
+            // TGLES (launcher-bundled libtgles.dylib): a full GLES 3.2 -> Metal
+            // implementation that exports the PUBLIC egl* names directly, so no
+            // EGL_* forwarder translation is needed (see eglEntryPointsAreForwarders
+            // below). GLES entry points resolve through its eglGetProcAddress via
+            // the shared AcquireGLESFunctions path. No MoltenVK needed: TGLES
+            // drives Metal directly. The launcher (gl_bridge.m) attaches the
+            // CAMetalLayer through tglHostAttachMetalLayer after the window
+            // surface is created.
+            MGLOG_I("AcquireEGLFunctions: Selected TGLES (libtgles.dylib)");
+            eglLib = OpenLib({"libtgles.dylib"});
+        } else if (useMetalAngle) {
+            MGLOG_I("AcquireEGLFunctions: Selected MetalANGLE (libGLESv2_angle_metal)");
+            eglLib = OpenLib({"libGLESv2_angle_metal", "libGLESv2_angle_metal.dylib"});
+        } else {
+            MGLOG_I("AcquireEGLFunctions: Selected VulkanANGLE (libGLESv2_angle_vulkan)");
+            OpenLib({"libMoltenVK.dylib"});
+            OpenLib({"libvulkan.dylib", "libvulkan.1.dylib"});
+            eglLib = OpenLib({"libGLESv2_angle_vulkan", "libGLESv2_angle_vulkan.dylib"});
+        }
+        // Fail loudly: a null table would make every EGL call a null dereference later.
+        if (!eglLib) {
+            MGLOG_F("Failed to open the GLES implementation library for the %s backend",
+                    useTgles ? "TGLES" : (useMetalAngle ? "MetalANGLE" : "VulkanANGLE"));
+            return;
+        }
+        // ANGLE's implementation library exports only the internal EGL_*
+        // forwarders; TGLES exports the public egl* names, so only ANGLE
+        // backends need the forwarder translation in resolveEGLProc below.
+        eglEntryPointsAreForwarders = !useTgles;
 #else
         if (UseAngle()) {
             void* glesLib = OpenLib({"libGLESv2_angle.so"});
@@ -581,20 +674,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                 return;
             }
         } else {
-#if defined(MOBILEGL_IOS)
-            eglLib = OpenLib({"libtinygl4angle.dylib"});
-#else
-            // Versioned SONAME first. The unversioned "libEGL.so" is a development
-            // symlink: it ships in libegl-dev/mesa-libEGL-devel, NOT in the runtime
-            // package, so a machine that can run GL perfectly well may not have it -
-            // every stock Ubuntu/Debian runtime image, the GitHub Actions runners
-            // included. Asking only for the unversioned name there makes dlopen fail,
-            // which used to leave the whole EGL function table null and take the next
-            // call through a null pointer (SIGSEGV inside InitDisplayAndContext).
-            // Developer machines have both names, which is exactly why this only ever
-            // showed up in CI.
             eglLib = OpenLib({"libEGL.so.1", "libEGL.so"});
-#endif
         }
 #endif // !_WIN32
 
@@ -616,6 +696,23 @@ namespace MobileGL::MG_Util::BackendLoader {
                 String target = "EGL_";
                 target += name + 3;
                 return ProcAddress(angleGlesLib, target.c_str());
+            }
+#endif
+#if defined(MOBILEGL_IOS)
+            if (eglEntryPointsAreForwarders) {
+                // ANGLE's implementation library exports only the internal EGL_*
+                // forwarders; the public egl* names live in the libEGL front-end we
+                // deliberately do not go through on iOS.
+                String target = "EGL_";
+                target += name + 3;  // strip the leading "egl"
+                void* proc = ProcAddress(eglLib, target.c_str());
+                if (!proc && std::strcmp(name, "eglSwapBuffersWithDamageEXT") == 0)
+                {
+                    // The only entry point whose EGL_* counterpart is named differently
+                    // (ANGLE implements it as EGL_SwapBuffersWithDamageKHR).
+                    proc = ProcAddress(eglLib, "EGL_SwapBuffersWithDamageKHR");
+                }
+                return proc;
             }
 #endif
             return ProcAddress(eglLib, name);
@@ -1774,6 +1871,14 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    Avoid sampler mipmap min filter: %s",
                 caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
         MGLOG_I("    Avoid explicit LOD bias: %s", caps.AvoidExplicitLodBias ? "true" : "false");
+
+#if defined(MOBILEGL_IOS)
+        const char* angleBackendEnv = std::getenv("MOBILEGL_ANGLE_BACKEND");
+        if (angleBackendEnv != nullptr && std::strcmp(angleBackendEnv, "metal") == 0) {
+            MGLOG_I("FillInGLESCapabilities: Applying MetalANGLE GLES 3.2 capability patches");
+            MetalANGLE_Shim::PatchMetalANGLECapabilities(caps, glesFuncs);
+        }
+#endif
 
         // Last line of defence. Capability init is the very first thing that touches the driver,
         // so anything it leaves in the error queue surfaces at the APPLICATION's first

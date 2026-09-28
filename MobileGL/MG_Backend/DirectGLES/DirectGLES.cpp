@@ -55,6 +55,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static SharedPtr<MG_State::GLState::SamplerObject> g_rawDepthFetchSamplerState;
     static SharedPtr<SamplerImpl::BackendSamplerObject> g_rawDepthFetchSamplerBackend;
 
+    Bool QueryBackendSurfaceSize(Int& outWidth, Int& outHeight) {
+        return QueryCurrentSurfaceSize(outWidth, outHeight);
+    }
+
     // Two objects are the same binding iff they share a control block. Raw addresses lie
     // (a freed object's heap slot is reused), but a held weak_ptr pins the control block,
     // so no later object can ever owner-equal a snapshot of its predecessor.
@@ -6915,6 +6919,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
+        // MetalANGLE is ES 3.0: no compute stage exists. The frontend gates on
+        // SupportsComputeShader, but a missed gate must decline — never crash
+        // on the null entry point. (VulkanANGLE provides real compute.)
+        if (!g_GLESFuncs.glDispatchCompute) {
+            MGLOG_E_ONCE("DispatchCompute declined: no compute support on this ANGLE backend (MetalANGLE ES 3.0?)");
+            return;
+        }
         PrepareForCompute(false);
         g_GLESFuncs.glDispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
@@ -6923,6 +6934,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
+        if (!g_GLESFuncs.glDispatchComputeIndirect) {
+            MGLOG_E_ONCE("DispatchComputeIndirect declined: no compute support on this ANGLE backend (MetalANGLE ES 3.0?)");
+            return;
+        }
         PrepareForCompute(true);
         g_GLESFuncs.glDispatchComputeIndirect(indirect);
     }
@@ -6940,6 +6955,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void MemoryBarrier(GLbitfield barriers) {
+        // No-op when the driver has no barrier entry point (MetalANGLE ES 3.0):
+        // there is no compute/GPU-written storage to order, so skipping is
+        // semantically safe. Still flush for ANGLE renderers when possible to
+        // preserve the original ordering guarantee where it exists.
+        if (!g_GLESFuncs.glMemoryBarrier) {
+            if (g_GLESFuncs.glFlush) {
+                g_GLESFuncs.glFlush();
+            }
+            return;
+        }
         g_GLESFuncs.glMemoryBarrier(LowerAtomicCounterBarrierBits(barriers));
         if (g_GLESCapabilities.IsAngleRenderer) {
             g_GLESFuncs.glFlush();
@@ -6947,6 +6972,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
+        if (!g_GLESFuncs.glMemoryBarrierByRegion) {
+            // Fall back to the full barrier when the by-region variant is absent;
+            // if that is absent too, a flush is the safest ordering available.
+            if (g_GLESFuncs.glMemoryBarrier) {
+                g_GLESFuncs.glMemoryBarrier(LowerAtomicCounterBarrierBits(barriers));
+            } else if (g_GLESFuncs.glFlush) {
+                g_GLESFuncs.glFlush();
+            }
+            return;
+        }
         g_GLESFuncs.glMemoryBarrierByRegion(LowerAtomicCounterBarrierBits(barriers));
     }
 
@@ -9947,16 +9982,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    // Last ANGLE-side EGL error seen by DirectGLES. The outer bridge
+    // (EGLImpl::CreateWindowSurface) remaps EVERY backend failure to
+    // EGL_BAD_NATIVE_WINDOW, so without this the real driver error
+    // (BAD_MATCH/BAD_SURFACE/...) is invisible in the log.
+    // NOTE: MGLOG alone is not enough — MobileGL's Log() sink (stdout/file)
+    // is not captured by the launcher's latestlog.txt, so the message is ALSO
+    // duplicated to stderr (which the launcher does capture) to guarantee
+    // visibility on-device.
+    static EGLint DrainAngleError(const char* where) {
+        EGLint err = EGL_SUCCESS;
+        if (g_EGLFuncs.eglGetError) {
+            err = g_EGLFuncs.eglGetError();
+        }
+        if (err != EGL_SUCCESS) {
+            MGLOG_E("DirectGLES: ANGLE error 0x%04x at %s "
+                    "(0x300b=BAD_NATIVE_WINDOW bad layer, 0x3009=BAD_MATCH config/surface mismatch, "
+                    "0x300d=BAD_SURFACE driver/swapchain failure)",
+                    err, where);
+            std::fprintf(stderr,
+                         "[MobileGL-DirectGLES] ANGLE error 0x%04x at %s "
+                         "(0x300b=bad layer, 0x3009=config/surface mismatch, 0x300d=driver/swapchain failure)\n",
+                         err, where);
+            std::fflush(stderr);
+        }
+        return err;
+    }
+
     static Bool InitDisplayAndContext(EGLint surfaceBit, NativeWindowType window = static_cast<NativeWindowType>(0)) {
         DestroyEGLContext();
 
         g_Display = g_EGLFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (g_Display == EGL_NO_DISPLAY) return false;
+        if (g_Display == EGL_NO_DISPLAY) {
+            DrainAngleError("InitDisplayAndContext/eglGetDisplay");
+            return false;
+        }
 
-        if (!g_EGLFuncs.eglInitialize(g_Display, nullptr, nullptr)) return false;
+        if (!g_EGLFuncs.eglInitialize(g_Display, nullptr, nullptr)) {
+            DrainAngleError("InitDisplayAndContext/eglInitialize");
+            return false;
+        }
         g_EGLFuncs.eglBindAPI(EGL_OPENGL_ES_API);
 
-        if (!ChooseConfigForSurface(surfaceBit, g_Config, window)) return false;
+        if (!ChooseConfigForSurface(surfaceBit, g_Config, window)) {
+            MGLOG_E("InitDisplayAndContext: no EGL config for surfaceBit=0x%x", surfaceBit);
+            return false;
+        }
 
         // Negotiate the highest ES 3.x context. Version-strict EGL implementations
         // (ANGLE) return exactly the requested minor, and a bare CLIENT_VERSION 3
@@ -9975,6 +10046,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
         g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, legacyContextAttribs);
+        if (g_Context == EGL_NO_CONTEXT) {
+            DrainAngleError("InitDisplayAndContext/eglCreateContext");
+        }
         return g_Context != EGL_NO_CONTEXT;
     }
 
@@ -9999,14 +10073,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool InitWindowSurface(NativeWindowType window) {
-        if (!window) return false;
+        if (!window) {
+            MGLOG_E("InitWindowSurface: null native window");
+            return false;
+        }
 
         if (!InitDisplayAndContext(EGL_WINDOW_BIT, window)) return false;
 
         g_Surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, g_Config, window, nullptr);
-        if (g_Surface == EGL_NO_SURFACE) return false;
+        if (g_Surface == EGL_NO_SURFACE) {
+            DrainAngleError("InitWindowSurface/eglCreateWindowSurface");
+            return false;
+        }
 
-        if (!MakeCurrent()) return false;
+        if (!MakeCurrent()) {
+            DrainAngleError("InitWindowSurface/MakeCurrent");
+            return false;
+        }
 
         ApplyRequestedSwapInterval();
         PublishDefaultFramebufferDepthStencilFormat();
@@ -10612,7 +10695,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
             slot = {g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), g_syncContextGeneration, serial};
         }
 
-        g_EGLFuncs.eglSwapBuffers(g_Display, g_Surface);
+        const EGLBoolean swapOk = g_EGLFuncs.eglSwapBuffers(g_Display, g_Surface);
+        // Launcher visibility: the return was historically ignored, so a
+        // failing host swap (e.g. TGLES Present with nothing committed)
+        // produced a silent black screen. Log failures to stderr (captured
+        // by the launcher log) throttled: first occurrence + every 300th.
+        // Also report the one-time backend-context/fence state so a black
+        // screen with successful swaps points at the draw path instead.
+        {
+            static Bool once = false;
+            static Uint64 swapFailCount = 0;
+            if (!once) {
+                once = true;
+                const Bool current = IsBackendContextCurrentOnThisThread();
+                MGLOG_I("DirectGLES::Present: backend context current on swap thread=%s canFence=%s",
+                        current ? "yes" : "NO", canFence ? "yes" : "no");
+                std::fprintf(stderr,
+                             "[MobileGL-DirectGLES] Present: backendCtxCurrent=%s canFence=%s\n",
+                             current ? "yes" : "NO", canFence ? "yes" : "no");
+                std::fflush(stderr);
+            }
+            if (!swapOk) {
+                ++swapFailCount;
+                if (swapFailCount == 1 || (swapFailCount % 300) == 0) {
+                    const EGLint error =
+                        g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+                    MGLOG_E("DirectGLES::Present: native eglSwapBuffers FAILED (count=%llu) error=0x%04x",
+                            (unsigned long long)swapFailCount, error);
+                    std::fprintf(stderr,
+                                 "[MobileGL-DirectGLES] eglSwapBuffers FAILED (count=%llu) error=0x%04x "
+                                 "(0x3003=BAD_ALLOC incl. TGLES empty present, 0x300d=BAD_SURFACE)\n",
+                                 (unsigned long long)swapFailCount, error);
+                    std::fflush(stderr);
+                }
+            }
+        }
 
         if (canFence && g_GLESFuncs.glGetSynciv) {
             // Fences signal in submission order within one context, so the highest
