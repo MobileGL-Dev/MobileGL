@@ -28,3 +28,4 @@ tools/trace_replay/work/
 __pycache__/
 *.py[cod]
 /.gradle
+/.trace-work/
