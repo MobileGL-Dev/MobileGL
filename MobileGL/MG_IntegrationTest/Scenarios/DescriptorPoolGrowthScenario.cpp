@@ -135,6 +135,21 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
         Census ReadCensus() {
             Census out;
 #if !defined(__ANDROID__)
+            // P11 M2: THE POOLS ARE THE SERVER RENDERER'S under a split transport, and under
+            // run-ahead a swap - or a draw - returns here before the server has applied it: a census
+            // taken right after the burst's swap read the pools as they were before the burst
+            // (cachedSets=0, measured under load). So first the harness's applied-seq fence (the
+            // TriangleScenario / MagmaWireReclaimScenario shape): every record this client emitted
+            // is applied. Inproc only - the census is in-process, spawn and tcp answer unavailable
+            // - and the read itself then runs on the apply thread (GetDescriptorPoolCensus).
+            // The fence's default 5 s is not enough here: the burst is 4096 draws with a queue-idle
+            // rewind in the middle, and on a loaded host lavapipe applies it in more than that
+            // (measured: 21 of 40 runs past 5 s beside the retrace lane).
+            if (const SplitRuntimeState runtime = PeekSplitRuntime();
+                runtime.transportResolved && runtime.transportName == "inproc") {
+                EXPECT_TRUE(WaitForSplitAppliedForTesting(runtime.emitSeq, 120000))
+                    << "the server never applied record " << runtime.emitSeq << " before the census";
+            }
             const auto census = MobileGL::MG_Backend::DirectVulkan::GetDescriptorPoolCensus();
             out.available = census.available;
             out.pools = census.pools;
