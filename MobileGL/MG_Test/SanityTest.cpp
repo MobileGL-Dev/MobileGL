@@ -16,6 +16,7 @@
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
+#include <MG_Backend/DirectVulkan/DirectVulkan.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -319,6 +320,22 @@ TEST(DirectVulkanSanity, AdvertisesUniformBufferObjectAndStencilTexturing) {
               extensions.end());
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_stencil_texturing),
               extensions.end());
+}
+
+// P11 M: THE SERVER HALF OF A SPLIT eglSwapInterval. The client's emit-table slot forwards the
+// call as one control frame (ServerLoopTest.TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame,
+// P10 B) and the server answers it with backend->SetEGLSwapInterval, whose base implementation
+// calls the backend table's SetSwapInterval. Magma's slot was null until dev@c60639db, so the
+// request was dropped there on every arm. Through the backend object, as the server calls it:
+// the request has to land where the next renderer and Present read it. No renderer exists here,
+// so nothing is rebuilt.
+TEST(DirectVulkanSanity, SetEglSwapIntervalReachesTheBackendTable) {
+    MobileGL::MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    ASSERT_NE(backend.GetBackendFunctions().SetSwapInterval, nullptr);
+    backend.SetEGLSwapInterval(0);
+    EXPECT_EQ(MobileGL::MG_Backend::DirectVulkan::GetRequestedSwapInterval(), MobileGL::Optional<MobileGL::Int>(0));
+    backend.SetEGLSwapInterval(1);
+    EXPECT_EQ(MobileGL::MG_Backend::DirectVulkan::GetRequestedSwapInterval(), MobileGL::Optional<MobileGL::Int>(1));
 }
 
 // Voxy only ever needed the extensions, which stay advertised whatever the version is; the version
