@@ -390,6 +390,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolveOcclusionQueryResult(const Vector<Uint32>& slots, Uint64& outSamples);
 
         void RequestSwapchainResize(Uint32 width, Uint32 height);
+        // eglSwapInterval. Records the request; Present rebuilds the swapchain for it once the
+        // current frame is on screen, and only when it maps to a different present mode. A
+        // renderer created without an app window ignores it: its surface (headless, or an
+        // AImageReader nobody consumes) is never displayed, and FIFO there would block once
+        // the reader's queue fills.
+        void SetSwapInterval(Int interval);
         // Re-query the surface and report whether the live swapchain no longer matches it
         // (size or orientation). This - not a VK_SUBOPTIMAL_KHR result - is what decides a
         // rebuild, so a surface the driver merely considers suboptimal cannot thrash.
@@ -760,6 +766,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Shutdown() deletes it.
         void* m_fallbackImageReader = nullptr;
         VulkanRendererConfig m_config;
+        // Constructed for the app's window rather than a pbuffer (m_window is later filled in
+        // for the pbuffer fallbacks too, so it cannot tell them apart).
+        Bool m_presentsToAppWindow = false;
+        // The m_config.SwapInterval the live swapchain was built for; Present compares the two.
+        Optional<Int> m_swapchainSwapInterval;
         Bool m_swapchainResizeRequested = false;
         // Presentation is suspended while the window is zero-area (minimized): the
         // swapchain is unusable/out of date, so Present drops frames instead of
