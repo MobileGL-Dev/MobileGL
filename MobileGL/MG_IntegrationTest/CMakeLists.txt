@@ -3655,7 +3655,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # table's FenceSync / GetSyncStatus / ClientWaitSync), so the same three cases.
         foreach(fenceCase ZeroTimeoutPollLoopsEndInBoundedTime
                           PollsOfASignaledFenceCrossNothing
-                          AFenceThatFinishesWhileTheClientOnlyPollsIsReported)
+                          AFenceThatFinishesWhileTheClientOnlyPollsIsReported
+                          PacedFrameFenceWaitsBench)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.Fence."
                 TEST_FILTER "FencePollScenario.${fenceCase}"

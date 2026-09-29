@@ -19,6 +19,10 @@
 // runs on the monolith lanes too. The other two are about the wire and skip where there is none.
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <string>
 #include <thread>
 
 #include "../Harness/ScenarioFixture.h"
@@ -143,6 +147,52 @@ namespace MGITest {
                 << "the loop needed an escalated round trip: the server did not report the fence on its "
                    "own while the client only polled";
             EXPECT_GE(after.fenceServerReports - before.fenceServerReports, 1u);
+        }
+
+        // P10 A's PAIRED RECORD - a measurement, not a gate: it skips unless
+        // MGITEST_FENCE_PACE_BENCH=1. Minecraft's shape, which no trace in the replay corpus
+        // carries: every frame queues work and a fence, swaps, and waits - with a timeout - on the
+        // fence it made two frames earlier. The same entry run with MOBILEGL_IPC_POLL_ESCALATE=0
+        // and with the default is the A/B; it prints frames, wall time, reply-slot records and the
+        // fence counters.
+        TEST_F(FencePollScenario, PacedFrameFenceWaitsBench) {
+            if (!Ready()) return;
+            const char* bench = std::getenv("MGITEST_FENCE_PACE_BENCH");
+            if (bench == nullptr || std::string(bench) != "1") {
+                GTEST_SKIP() << "a measurement: set MGITEST_FENCE_PACE_BENCH=1";
+            }
+            const std::string why = SplitRuntimeSkipReason();
+            if (!why.empty()) GTEST_SKIP() << why;
+            constexpr int kFrames = 600;
+            // MGITEST_FENCE_PACE_LAG: how many frames back the waited fence is (default 2).
+            const char* lagEnv = std::getenv("MGITEST_FENCE_PACE_LAG");
+            const size_t lag = lagEnv != nullptr && std::atoi(lagEnv) > 0 ? static_cast<size_t>(std::atoi(lagEnv)) : 2;
+            std::deque<GLsync> inFlight;
+            const SplitRuntimeState before = PeekSplitRuntime();
+            const auto start = Clock::now();
+            for (int frame = 0; frame < kFrames; ++frame) {
+                QueueWork();
+                inFlight.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+                Gl().EndFrame();
+                if (inFlight.size() > lag) {
+                    GLsync old = inFlight.front();
+                    inFlight.pop_front();
+                    const GLenum waited = glClientWaitSync(old, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull);
+                    EXPECT_TRUE(waited == GL_ALREADY_SIGNALED || waited == GL_CONDITION_SATISFIED) << waited;
+                    glDeleteSync(old);
+                }
+            }
+            const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+            const SplitRuntimeState after = PeekSplitRuntime();
+            for (GLsync sync : inFlight) glDeleteSync(sync);
+            const char* escalate = std::getenv("MOBILEGL_IPC_POLL_ESCALATE");
+            std::printf("P10BENCH transport=%s poll-escalate=%s lag=%zu frames=%d ms=%.1f ms/frame=%.3f "
+                        "reply-records=%llu fence-round-trips=%llu fence-local=%llu fence-reports=%llu\n",
+                        after.transportName.c_str(), escalate != nullptr ? escalate : "(default)", lag, kFrames, ms,
+                        ms / kFrames, after.replyPostings - before.replyPostings,
+                        after.fenceRoundTrips - before.fenceRoundTrips,
+                        after.fenceLocalAnswers - before.fenceLocalAnswers,
+                        after.fenceServerReports - before.fenceServerReports);
         }
 
     } // namespace
