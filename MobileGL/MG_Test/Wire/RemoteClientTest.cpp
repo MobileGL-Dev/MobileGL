@@ -2582,7 +2582,7 @@ TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
 //
 //   AllocateStorage, TruncateMipmapLevels, UpdateMipmapSubData, MapMipmapData,
 //   MarkStorageDirty, MarkStorageDirtyRegion, IsStorageDirty, GetStorageDirtyRegion,
-//   GetStorageDirtyRects
+//   GetStorageDirtyRects, GetStorageDirtyFootprint (P11 M2)
 //
 // P5e (tx2): THE SHAPE READS JOIN THE LIST, and the sentence that stood here is why they could
 // not before - "the per-draw binding walk reads them every draw". P5e is the commit that makes
@@ -2638,6 +2638,13 @@ MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRegionFromTheApplyThreadIsFatalByNa
 MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRectsFromTheApplyThreadIsFatalByName, 719,
                        (void)texture.GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0,
                                                           nullptr, 0))
+// P11 M2: dev 9524c688's exact dirty footprint joins the dirty model's rows. The server's
+// footprint is the record's region list (Managers.cpp's handle arm), never this accessor.
+MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyFootprintFromTheApplyThreadIsFatalByName, 720,
+                       ([&texture] {
+                           Vector<MG_State::GLState::MipmapDirtyRegion> footprint;
+                           texture.GetStorageDirtyFootprint(TextureUploadTarget::Texture2D, 0, footprint);
+                       }()))
 // ---- P5e (tx2): the seven shape reads the P4a/P5c list exempted ----------------------------
 MGL_TEXTURE_GUARD_TEST(TextureGetMipmapLevelCountFromTheApplyThreadIsFatalByName, 721,
                        (void)texture.GetMipmapLevelCount())
