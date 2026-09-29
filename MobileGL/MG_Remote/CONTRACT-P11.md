@@ -329,3 +329,18 @@ MC 26.3（同 app，spawn+shm 与 inproc × 两后端 × 旋钮 0 / 2）ssim 全
 - G1：pull 构建符号增 0 减 0，`.text` 不变；原生改动在 `MG_Remote` 与两后端的线路路径（`MOBILEGL_BUILD_DISAGGREGATED` 下）；Espryt 的 T0 导入只在 `__ANDROID__`。
 - G5：`ProcessDeferredBufferReleases` 等 P3a / P4a 名单上的函数逐字不动（T0 退役放在它之后的 `ProcessDeferredT0Retires`）。
 - 线上格式：控制协议修订 5（`LinkTerms.adoptTier`）；Offer 走 aux 描述符通道，不是新帧。
+
+## B2 追加：删除仍绑定在索引绑定点上的 buffer
+
+- **缺陷（B2 之前就有，`b9b14c47` 同样复现）**：`BufferState::MarkBufferObjectForDeletion` 解绑索引绑定点，但不动绑定点代次（`NoteBindPointChanged`）。dirty 位 15 / 16 / 17（`Tracker.h`）只看代次，所以窗口不重发，server 一直指着死 buffer 的句柄；槽位以新代次被复用后，下一次遍历窗口的 draw / dispatch 就去要旧代次。
+  - Espryt：`Fatal{ProtocolCorruption, "BackendSlotTable.Generation"}`（`Managers.cpp:3507`），整个会话死掉。
+  - Magma：不 Fatal，句柄解析不到 wire buffer，声明了该点的 draw / dispatch 被具名拒绝后丢掉（`Magma wire decline [ComputeUniformBufferBinding]`）。
+  - 触发面：storage / atomic 在 Espryt 的每次 draw（storage 窗口整窗遍历）和声明该点的程序；uniform 在 compute（整窗遍历）和声明该点的程序，且只在程序没换时才触发，因为 uniform 窗口的 shutter 混入了程序身份；transform feedback 目前没有消费者（位 17 只计算、不发射）。
+- **修法（`4aec5621`）**：删除时解绑的每个索引目标都调用 `NoteBindPointChanged`；transform-feedback 对象切换（`RestoreBoundTransformFeedbackState`，写绑定点的第四处）也调用。都在 `MOBILEGL_PIPE_PUSH` 下：代次计数器本身只存在于 push 构建。其余写入口（`BindBuffer{Base,Range}_State`、`SetNamedTransformFeedbackBinding`）原本就会动代次。
+- **Magma 单体（`7784d6bb`，新用例暴露的旧崩溃）**：程序声明的 uniform block 所在点为空时，`ResolveUniformBufferPayload` 解引用空指针。现在改给一个清零的块，与线路臂一致。
+- **门**：`DeletedBoundBufferScenario` 覆盖 storage / uniform / atomic counter / transform feedback 四个目标。
+  - 注册：单体用 ambient `DirectGLES.` / `DirectVulkan.`；Espryt 用 `Split` / `Spawn` / `Tcp`（`mgl_itest_register_split_arms`）；Magma 用 `DirectVulkan.<arm>.DeletedBound.`；另有同进程两例的回归 `…LargeArenaAdoptionScenario.GpuWriteThenTheTierCaseInOneProcess`，两后端 × 三臂。
+  - red-once（去掉修法）：前三个目标在 Espryt 三臂和 inproc 都 abort，报上面那条 Fatal；在 Magma 三臂和 inproc 都失败，dispatch 被丢；同进程对在 Espryt 三臂都 abort。transform feedback 在两后端都保持绿（没有消费者）；单体在两后端都保持绿（没有窗口）。
+  - red-once（去掉 Magma 空 UBO 分支）：`DirectVulkan.DeletedBoundBufferScenario.AUniformBuffer…` 单体 SegFault。
+  - 每次拷回原文件、`cmp` 相同、touch 后复绿。
+- **G1**：符号增 0 减 0；`.text` a5b933 → a5ba13（+224 字节），全部来自 `UniformManager::ResolveUniformBufferPayload`（Magma 修复：单体属于 pull 构建，这里改的是真实行为，没有加守卫）。`BufferState.cpp` / `Core.cpp` 按 pull 构建自己的参数预处理，新旧逐字相同。
