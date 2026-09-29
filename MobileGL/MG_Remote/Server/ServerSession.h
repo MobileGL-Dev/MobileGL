@@ -57,6 +57,7 @@
 #include "../Transport/RoleMemory.h"
 #include "../Transport/SessionRings.h"
 #include "../Wire/PipeWireCodec.h"
+#include "ApplyThreadPolicy.h"
 #include "PipeApplier.h"
 
 namespace MobileGL::MG_Remote::Server {
@@ -181,6 +182,11 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 CallMask() const;
 
         Bool Accepted() const;
+        // P11 B1: who the client is - its Hello's dial mode - and whether it uses shared segments
+        // (false = the stream plane), both set by Accept before Welcome. ServerLoop picks the apply
+        // thread's `auto` affinity and spin from them (ApplyThreadPolicy.h).
+        ApplyPeer Peer() const { return m_peer; }
+        Bool PeerSharedSegments() const { return m_peerSharedSegments; }
         // Teardown: after the apply thread has been joined, never before - a record still in
         // flight can still resolve a segment offset (table 3's fourth column).
         void Close();
@@ -309,6 +315,8 @@ namespace MobileGL::MG_Remote::Server {
         Bool m_consumedSet = false;
         Bool m_sizesSet = false;
         Bool m_accepted = false;
+        ApplyPeer m_peer = ApplyPeer::InProcess;
+        Bool m_peerSharedSegments = true;
         // PH-6. Written by the apply thread (the only SEG_EVENT producer), reset by Accept.
         std::atomic<Bool> m_reverseChannelForfeit{false};
         std::atomic<Uint64> m_forfeitDrops{0};

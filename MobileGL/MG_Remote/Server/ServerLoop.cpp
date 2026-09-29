@@ -9,6 +9,7 @@
 // P5 package v1: the apply thread, its affinity, its parking, and the EGL ownership move.
 
 #include "ServerLoop.h"
+#include "ApplyThreadPolicy.h"
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
@@ -23,6 +24,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <thread>
 
 #if defined(__linux__) || defined(__ANDROID__)
@@ -82,22 +84,19 @@ namespace MobileGL::MG_Remote::Server {
             return mask;
         }
 
-        // MOBILEGL_IPC_SERVER_AFFINITY = `auto` | `off` | an explicit mask (0x... or decimal).
-        // The RAW STRING is what Config keeps, because the resolved mask is what gets logged -
-        // "an affinity that silently did nothing looks exactly like one that worked"
-        // (CONTRACT-P5 5).
-        Uint64 RequestedAffinityMask(const char* raw, Bool* outRecognised) {
-            *outRecognised = true;
-            if (raw == nullptr || raw[0] == '\0') return DetectBigCoreMask();
-            if (std::strcmp(raw, "auto") == 0) return DetectBigCoreMask();
-            if (std::strcmp(raw, "off") == 0) return 0;
-            char* end = nullptr;
-            const unsigned long long parsed = std::strtoull(raw, &end, 0);
-            if (end == raw || (end != nullptr && *end != '\0')) {
-                *outRecognised = false;
-                return 0;
-            }
-            return static_cast<Uint64>(parsed);
+        // One bit per cpu the process can count, the same count DetectBigCoreMask walks - what
+        // lets ApplyThreadPolicy tell a real prime set from a symmetric machine's "every cpu".
+        Uint64 OnlineCpuMask() {
+            const Uint cpuCount = std::min(64u, std::max(1u, std::thread::hardware_concurrency()));
+            return cpuCount >= 64 ? ~0ull : ((1ull << cpuCount) - 1);
+        }
+
+        // Whether MOBILEGL_IPC_SPIN_US was set at all: ConfigLoader answers 50 for "unset" and
+        // for "50", and the dialled-in peer's default spin (ApplyThreadPolicy.h) applies only to
+        // the first.
+        Bool SpinSetExplicitly() {
+            const char* text = std::getenv("MOBILEGL_IPC_SPIN_US");
+            return text != nullptr && text[0] != '\0';
         }
 
         void NameThisThread(const char* name) {
@@ -406,9 +405,20 @@ namespace MobileGL::MG_Remote::Server {
         // forwarder (the in-process display server's) sends to the client. Inert otherwise.
         MG_Util::Debug::SetThreadForwardsLogToPeer(true);
 
-        Bool recognised = true;
+        // MOBILEGL_IPC_SERVER_AFFINITY = `auto` | `off` | an explicit mask (0x... or decimal).
+        // The RAW STRING is what Config keeps, because the resolved mask is what gets logged -
+        // "an affinity that silently did nothing looks exactly like one that worked"
+        // (CONTRACT-P5 5). P11 B1: `auto` now depends on who the client is (ApplyThreadPolicy.h),
+        // and so does the spin before each park.
+        ServerSession& session = *m_session;
         const char* raw = AffinityStringFromConfig();
-        const Uint64 requested = RequestedAffinityMask(raw, &recognised);
+        const Bool automatic = raw == nullptr || raw[0] == '\0' || std::strcmp(raw, "auto") == 0;
+        const ApplyThreadPolicy policy =
+            SelectApplyThreadPolicy(raw, SpinSetExplicitly(), SpinUsFromConfig(), session.Peer(),
+                                    session.PeerSharedSegments(), automatic ? DetectBigCoreMask() : 0,
+                                    OnlineCpuMask());
+        const Bool recognised = policy.recognised;
+        const Uint64 requested = policy.requestedMask;
         m_affinityMask = ApplyAffinity(requested);
         if (!recognised) {
             MGLOG_E("MG_Remote server: MOBILEGL_IPC_SERVER_AFFINITY='%s' is not `auto`, `off` or "
@@ -421,11 +431,11 @@ namespace MobileGL::MG_Remote::Server {
         // an operator typed and the mask is what the kernel took.
         MGLOG_I("MG_Remote server: mgl-srv-apply started. MOBILEGL_IPC_SERVER_AFFINITY='%s' "
                 "requested mask 0x%llx, RESOLVED mask 0x%llx (0 = no affinity applied), spin "
-                "%u us",
+                "%u us; peer %s on %s, policy %s",
                 raw == nullptr ? "" : raw, static_cast<unsigned long long>(requested),
-                static_cast<unsigned long long>(m_affinityMask), SpinUsFromConfig());
+                static_cast<unsigned long long>(m_affinityMask), policy.spinUs, ApplyPeerName(session.Peer()),
+                session.PeerSharedSegments() ? "shared segments" : "stream", policy.rule);
 
-        ServerSession& session = *m_session;
         // The decoder is built HERE, on this thread, because PipeWireDecoder is "not thread
         // safe: one decoder on the apply thread, by construction" and its constructor installs
         // the process-wide apply hook.
@@ -434,7 +444,7 @@ namespace MobileGL::MG_Remote::Server {
         const auto signals = session.DataLink()->Signals();
         Transport::Doorbell& bell = session.DataLink()->ConsumerBell();
         Transport::RingConsumer& ring = session.CommandRing();
-        const Uint32 spinUs = SpinUsFromConfig();
+        const Uint32 spinUs = policy.spinUs;
 
         // THE PARK CONDITION IS THREE THINGS, NOT ONE, AND THAT IS THE WHOLE REASON THIS LOOP
         // DOES NOT CALL SessionConsumer::WaitForWork.

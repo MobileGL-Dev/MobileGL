@@ -654,6 +654,10 @@ namespace MobileGL::MG_Remote::Server {
             hello->dialMode() != ::MobileGL::Wire::DialMode::Connect)
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::MalformedHello,
                                    "unknown dial mode");
+        // P11 B1: remembered for the apply thread's `auto` policy (ApplyThreadPolicy.h).
+        m_peer = hello->dialMode() == ::MobileGL::Wire::DialMode::Connect ? ApplyPeer::Connected
+                 : hello->dialMode() == ::MobileGL::Wire::DialMode::Fork  ? ApplyPeer::Forked
+                                                                          : ApplyPeer::InProcess;
         const MobileGLResult compatible = ValidatePeerHandshake(transport, hello->abiMajor(),
             hello->abiMinor(), hello->wireFingerprint(), theirStamp, hello->dialMode());
         if (compatible != MOBILEGL_OK) return compatible;
@@ -665,6 +669,7 @@ namespace MobileGL::MG_Remote::Server {
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                    "unsupported or missing link terms");
         const bool stream = terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream;
+        m_peerSharedSegments = !stream; // P11 B1: the apply thread's `auto` policy reads the plane too
         if (stream && transport.Role() == Transport::TransportRole::InProcess)
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                    "stream requires a data connection");
