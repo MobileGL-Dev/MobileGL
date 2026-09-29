@@ -2054,9 +2054,13 @@ namespace MobileGL::MG_Remote::Client {
             // ReadPixels intentionally refuses this with Fatal{ReadbackDeclined, "ReadPixels"}:
             // unlike acceptance rows it cannot return successfully without complete pixels.
             if (statusOut != nullptr) *statusOut = Wire::ReplySink::kStatusDeclined;
-            MGLOG_E("MG_Remote client: the barrier for %s (seq %llu) woke on a dead doorbell; the "
-                    "server is gone and this verb did not happen (reported as DECLINED, not ERROR)",
-                    Wire::WireOpName(op), static_cast<unsigned long long>(seq));
+            // Said while it is news. Once the device-lost latch is up (it logged the hangup), every
+            // later verb lands here too - an FCL game issues thousands per second - and one line
+            // each buried the log (113,080 lines in 48 s on the phone).
+            if (!DeviceLost())
+                MGLOG_E("MG_Remote client: the barrier for %s (seq %llu) woke on a dead doorbell; the "
+                        "server is gone and this verb did not happen (reported as DECLINED, not ERROR)",
+                        Wire::WireOpName(op), static_cast<unsigned long long>(seq));
             return seq;
         }
         if (wait != Transport::SessionWait::Reached) {
@@ -2196,8 +2200,9 @@ namespace MobileGL::MG_Remote::Client {
             }
             // The doorbell died: teardown, not a fault - the same answer EmitAndWaitTails
             // gives, and for the same reason.
-            MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "
-                    "server is gone", why);
+            if (!DeviceLost()) // see the barrier above: the latch already said it
+                MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "
+                        "server is gone", why);
             return;
         }
         if (wait != Transport::SessionWait::Reached) {
