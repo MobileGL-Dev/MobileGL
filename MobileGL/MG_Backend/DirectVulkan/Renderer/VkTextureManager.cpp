@@ -2835,9 +2835,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkDeviceSize offset = 0;
             // Sub-region upload (a small sprite in a big atlas): only the dirty box
             // is staged and copied. texelSize keeps the LEVEL extent - the staging
-            // row copy needs it for the shadow's stride. Plain color formats only;
-            // the RGB-expand and depth(+stencil) conversion passes rewrite whole
-            // levels and stay full-size.
+            // row copy needs it for the stride. Color formats only (an RGB-expanded
+            // level is cut from its expanded bytes); the depth(+stencil) conversion
+            // passes rewrite whole levels and stay full-size.
             Bool subRegion = false;
             IntVec3 regionLo = {0, 0, 0};
             IntVec3 regionSize = {0, 0, 0};
@@ -2900,19 +2900,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 uploadItem.source = source;
                 uploadItem.offset = stagingSize;
                 uploadItem.uploadByteSize = byteSize;
-                if (!formatInfo.expandRgbToRgba &&
-                    GetAspectMaskForFormat(outResource.format) == VK_IMAGE_ASPECT_COLOR_BIT) {
+                // The RGB -> RGBA expansion rewrites the level texel for texel into a tight buffer
+                // of its own, so it runs first and the dirty region below is taken from whichever
+                // bytes are staged. Uploading an expanded level WHOLE put the shadow's stale texels
+                // over whatever the GPU had drawn into the rest of it.
+                if (formatInfo.expandRgbToRgba) {
+                    const Bool expanded = ExpandRgbSourceToRgba(source, byteSize, texelSize, formatInfo,
+                                                                uploadItem.expandedData);
+                    MOBILEGL_ASSERT(expanded,
+                                    "UploadDirtyMipLevels: failed to expand RGB textureId=%d target=%s level=%u to RGBA staging data",
+                                    mipmapTexture.GetExternalIndex(),
+                                    MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
+                    uploadItem.uploadByteSize = uploadItem.expandedData.size();
+                }
+                const SizeT levelBytes = uploadItem.uploadByteSize;
+                if (GetAspectMaskForFormat(outResource.format) == VK_IMAGE_ASPECT_COLOR_BIT) {
                     const auto region = mipmapTexture.GetStorageDirtyRegion(target, level);
                     const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
                                              static_cast<SizeT>(texelSize.y()) *
                                              static_cast<SizeT>(std::max(texelSize.z(), 1));
                     if (!region.Empty() && !region.CoversWholeLevel(texelSize) && texelCount > 0 &&
-                        byteSize % texelCount == 0) {
+                        levelBytes % texelCount == 0) {
                         uploadItem.subRegion = true;
                         uploadItem.regionLo = region.lo;
                         uploadItem.regionSize = {region.hi.x() - region.lo.x(), region.hi.y() - region.lo.y(),
                                                  region.hi.z() - region.lo.z()};
-                        uploadItem.texelBytes = byteSize / texelCount;
+                        uploadItem.texelBytes = levelBytes / texelCount;
                         uploadItem.uploadByteSize = static_cast<SizeT>(uploadItem.regionSize.x()) *
                                                     static_cast<SizeT>(uploadItem.regionSize.y()) *
                                                     static_cast<SizeT>(uploadItem.regionSize.z()) *
@@ -2952,15 +2965,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             }
                         }
                     }
-                }
-                if (formatInfo.expandRgbToRgba) {
-                    const Bool expanded = ExpandRgbSourceToRgba(source, byteSize, texelSize, formatInfo,
-                                                                uploadItem.expandedData);
-                    MOBILEGL_ASSERT(expanded,
-                                    "UploadDirtyMipLevels: failed to expand RGB textureId=%d target=%s level=%u to RGBA staging data",
-                                    mipmapTexture.GetExternalIndex(),
-                                    MG_Util::ConvertTextureUploadTargetToString(target).c_str(), level);
-                    uploadItem.uploadByteSize = uploadItem.expandedData.size();
                 }
                 uploadItems.push_back(Move(uploadItem));
                 if (!uploadItems.back().expandedData.empty()) {

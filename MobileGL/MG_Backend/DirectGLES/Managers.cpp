@@ -3090,7 +3090,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // they use, so the type stays trivially default-constructible and the
         // declaration costs nothing on the levels that never reach the ring.
         struct UnpackStagingBlock {
-            const Uint8* src;      // top-left texel of the region in the level shadow
+            const Uint8* src;      // top-left texel of the region in the level's upload bytes
             SizeT rowBytes;        // bytes per region row (region width * bpp)
             SizeT rows;            // region height
             SizeT slices;          // region depth (1 for 2D)
@@ -4376,33 +4376,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             Vector<Uint8> packedUploadData;
                             uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
                                                                  uploadData, byteSize, &glType, packedUploadData);
-                            // Leaves `uploadData` pointing at its own buffer when it fires, which
-                            // is exactly what takes the sub-rect fast path below out of play: that
-                            // path strides into the SHADOW, and the widened texels are four
-                            // components wide where the shadow's are one or two.
+                            // Leaves `uploadData` pointing at its own buffer when it fires, with
+                            // texels four components wide where the shadow's are one or two.
                             Vector<Uint8> imageWidenedUploadData;
                             uploadData = PrepareImageWidenedUpload(imageWidening, texelSize, uploadData, byteSize,
                                                                    imageWidenedUploadData);
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), texelSize);
                             // Sub-rect upload: when only a region of the level changed (a
-                            // 16x16 sprite in a 1024x512 atlas, the per-frame lightmap) and
-                            // the shadow bytes go to the driver unconverted, upload just that
-                            // region with UNPACK_ROW_LENGTH striding into the level shadow.
-                            // Conversion fallbacks rewrite the whole level into a fresh
-                            // buffer, so they stay on the full-level path, as do targets
-                            // whose backend upload size differs from the shadow's texel size.
+                            // 16x16 sprite in a 1024x512 atlas, the per-frame lightmap), upload
+                            // just that region with UNPACK_ROW_LENGTH striding into the level.
+                            // Not an optimization alone: the shadow never sees a GPU write, so
+                            // the texels OUTSIDE the region may be stale there and must not go
+                            // up over what the GPU drew. Every conversion above rewrites the
+                            // whole level texel for texel into a tight buffer of its own, so the
+                            // region is taken from whichever buffer `uploadData` now names, at
+                            // that buffer's bytes per texel.
+                            SizeT uploadBytes = 0;
+                            if (uploadData == mipData) {
+                                uploadBytes = byteSize;
+                            } else if (!imageWidenedUploadData.empty() &&
+                                       uploadData == imageWidenedUploadData.data()) {
+                                uploadBytes = imageWidenedUploadData.size();
+                            } else if (!packedUploadData.empty() && uploadData == packedUploadData.data()) {
+                                uploadBytes = packedUploadData.size();
+                            } else if (!widenedUploadData.empty() && uploadData == widenedUploadData.data()) {
+                                uploadBytes = widenedUploadData.size();
+                            } else if (!convertedUploadData.empty() && uploadData == convertedUploadData.data()) {
+                                uploadBytes = convertedUploadData.size() * sizeof(Float);
+                            }
+                            // A 1D array's ES image is a 2D array one texel high with the layers
+                            // in depth, while the shadow keeps the layers as rows: same texels in
+                            // the same order, so a region maps across by moving its y to z.
+                            const Bool layersAsRows = stateTextureObject->GetTarget() == TextureTarget::Texture1DArray;
                             const auto dirtyRegion = textureMipmapObject->GetStorageDirtyRegion(uploadTarget, level);
                             const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
                                                      static_cast<SizeT>(texelSize.y()) *
                                                      static_cast<SizeT>(std::max(texelSize.z(), 1));
                             const Bool subRectEligible =
-                                uploadData == mipData && !dirtyRegion.Empty() &&
-                                !dirtyRegion.CoversWholeLevel(texelSize) && texelCount > 0 &&
-                                byteSize % texelCount == 0 && uploadSize.x() == texelSize.x() &&
-                                uploadSize.y() == texelSize.y() &&
-                                std::max(uploadSize.z(), 1) == std::max(texelSize.z(), 1);
-                            const SizeT bpp = subRectEligible ? byteSize / texelCount : 0;
+                                !dirtyRegion.Empty() && !dirtyRegion.CoversWholeLevel(texelSize) && texelCount > 0 &&
+                                uploadBytes > 0 && uploadBytes % texelCount == 0 &&
+                                (layersAsRows ? std::max(texelSize.z(), 1) == 1
+                                              : uploadSize.x() == texelSize.x() && uploadSize.y() == texelSize.y() &&
+                                                    std::max(uploadSize.z(), 1) == std::max(texelSize.z(), 1));
+                            const SizeT bpp = subRectEligible ? uploadBytes / texelCount : 0;
                             const IntVec3 regionSize = {dirtyRegion.hi.x() - dirtyRegion.lo.x(),
                                                         dirtyRegion.hi.y() - dirtyRegion.lo.y(),
                                                         dirtyRegion.hi.z() - dirtyRegion.lo.z()};
@@ -4418,7 +4435,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // whole level while the touched texels are a few percent of
                             // it. The storage's bounded rect list recovers the true
                             // footprint; each rect is uploaded with the same
-                            // ROW_LENGTH striding into the level shadow as the box
+                            // ROW_LENGTH striding into the level as the box
                             // path. The storage only hands the list out when its
                             // summed area is materially smaller than the box (0
                             // otherwise), so the extra calls always move fewer bytes.
@@ -4439,12 +4456,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     dirtyRectCount = 0;
                                 }
                             }
-                            const auto rectShadowPtr = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
+                            const auto rectUploadPtr = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
                                 return static_cast<const Uint8*>(uploadData) +
                                        static_cast<SizeT>(rect.lo.z()) * levelSliceBytes +
                                        static_cast<SizeT>(rect.lo.y()) * levelRowBytes +
                                        static_cast<SizeT>(rect.lo.x()) * bpp;
                             };
+                            // A shadow-grid box as the ES image addresses it, and the image height
+                            // that strides the source to match; they differ only for a 1D array
+                            // (layersAsRows), whose rows are ES layers of a one-texel-high image.
+                            struct BackendBox {
+                                GLint x, y, z;
+                                GLsizei w, h, d;
+                            };
+                            const auto ToBackendBox = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
+                                const GLsizei w = static_cast<GLsizei>(rect.hi.x() - rect.lo.x());
+                                const GLsizei h = static_cast<GLsizei>(rect.hi.y() - rect.lo.y());
+                                const GLsizei d = static_cast<GLsizei>(rect.hi.z() - rect.lo.z());
+                                return layersAsRows ? BackendBox{rect.lo.x(), 0, rect.lo.y(), w, 1, h}
+                                                    : BackendBox{rect.lo.x(), rect.lo.y(), rect.lo.z(), w, h, d};
+                            };
+                            const GLint imageHeight = layersAsRows ? 1 : texelSize.y();
                             // Unpack-ring staging plan, decided ONCE for whichever branch
                             // below runs: either every glTexSubImage of this level sources
                             // from the ring or none does, so the pixel-unpack binding is
@@ -4469,7 +4501,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                     const auto& rect = dirtyRects[r];
                                     stagingBlocks[r] = {
-                                        rectShadowPtr(rect),
+                                        rectUploadPtr(rect),
                                         static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
                                         static_cast<SizeT>(rect.hi.y() - rect.lo.y()),
                                         static_cast<SizeT>(std::max(rect.hi.z() - rect.lo.z(), 1)),
@@ -4528,7 +4560,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat,
                                             glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
-                                                       : static_cast<const void*>(rectShadowPtr(rect)));
+                                                       : static_cast<const void*>(rectUploadPtr(rect)));
                                     }
                                     // The surrounding ScopedDefaultUnpackState shadow says 0.
                                     if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -4560,19 +4592,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 if (subRectEligible && dirtyRectCount >= 2) {
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
-                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
                                     }
                                     for (SizeT r = 0; r < dirtyRectCount; ++r) {
-                                        const auto& rect = dirtyRects[r];
+                                        const auto box = ToBackendBox(dirtyRects[r]);
                                         g_GLESFuncs.glTexSubImage3D(
-                                            glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
-                                            rect.lo.y(), rect.lo.z(),
-                                            static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
-                                            static_cast<GLsizei>(rect.hi.y() - rect.lo.y()),
-                                            static_cast<GLsizei>(rect.hi.z() - rect.lo.z()), glFormat,
-                                            glType,
+                                            glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z,
+                                            box.w, box.h, box.d, glFormat, glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
-                                                       : static_cast<const void*>(rectShadowPtr(rect)));
+                                                       : static_cast<const void*>(rectUploadPtr(dirtyRects[r])));
                                     }
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -4581,14 +4609,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 } else if (subRectEligible) {
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
-                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
                                     }
+                                    const auto box = ToBackendBox(dirtyRegion);
                                     g_GLESFuncs.glTexSubImage3D(
-                                        glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
-                                        dirtyRegion.lo.y(), dirtyRegion.lo.z(),
-                                        static_cast<GLsizei>(regionSize.x()),
-                                        static_cast<GLsizei>(regionSize.y()),
-                                        static_cast<GLsizei>(regionSize.z()), glFormat, glType,
+                                        glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z, box.w, box.h,
+                                        box.d, glFormat, glType,
                                         ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset)
                                                    : static_cast<const void*>(regionPtr));
                                     if (!ringStaged) {
