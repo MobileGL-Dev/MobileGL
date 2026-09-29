@@ -122,6 +122,19 @@ void RefuseBusy(SocketTransport& transport, const char* detail) {
     Refuse(transport, Protocol::RefuseCode::Busy, detail);
 }
 
+// P11 B1 (CONTRACT-P11 B1): HOW LONG A PAIRED UNIX SESSION WAITS FOR ITS HELLO - FOR EVER; ITS END
+// IS THE PEER'S EOF. The pair's identity is settled before this wait (PairAcceptor paired the two
+// connections by the nonce each presented), and a unix endpoint is reachable only by this user / this
+// app (SELinux on Android, 0600 on a path). Since B1 the server app's broker presents the PairBinds at
+// hand-off, the moment it connects, while the program it is for may still be loading - a Termux program
+// can spend many seconds on its assets before its first EGL call sends the Hello. The old 10 s (the
+// same budget as TCP's pre-auth) refused such a program by name; there is no bound here that is long
+// enough for every program, so there is none: a program that exits (or closes the descriptors) ends
+// the wait with EOF ("control peer closed before sending a first frame"), and while it lives it holds
+// the one session slot, as a rendering session would. TCP keeps its pre-auth deadline (PreAuthKnobs),
+// and the in-process display server keeps 10 s (its stop waits for the session thread).
+constexpr std::uint32_t kPairedUnixHelloWaitMs = Transport::kWaitForever;
+
 // The single-session TCP shape's wait for its data connection's DataBind (ListenerSource).
 constexpr std::uint32_t kFirstFrameWaitMs = 2000;
 constexpr std::uint64_t kFirstFrameMaxBytes = Server::kPreAuthFirstFrameMaxBytes;
@@ -1521,7 +1534,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             }
             ::close(listener);
             if (endpoint[0] != '@') ::unlink(endpoint.c_str());
-            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000));
+            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, kPairedUnixHelloWaitMs));
         }
         reap();
         // exit_group closes files just before waitpid can observe the exit.
@@ -1546,7 +1559,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             // supervisor's refusal of one would not end it while this session lives (TcpSupervisor's
             // fork does the same with its pending peers).
             if (pairs) pairs->CloseInForkedChild();
-            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000));
+            ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, kPairedUnixHelloWaitMs));
         }
         if (child < 0) {
             RefuseBusy(*control, "could not create session child");

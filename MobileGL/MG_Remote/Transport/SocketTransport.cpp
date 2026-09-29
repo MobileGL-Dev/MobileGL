@@ -460,7 +460,8 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     MobileGLResult SocketTransport::AdoptConnectedPair(int controlFd, int auxFd,
-                                                       std::unique_ptr<SocketTransport>& outClient) {
+                                                       std::unique_ptr<SocketTransport>& outClient,
+                                                       bool pairedAtHandoff) {
         outClient.reset();
         // Checked before a byte is written, so a stale or mistyped `fd:` names what it points at
         // instead of writing a PairBind into something that is not the server.
@@ -482,9 +483,16 @@ namespace MobileGL::MG_Remote::Transport {
         // from here they are this session's, and a program's own children must not inherit them.
         ::fcntl(controlFd, F_SETFD, FD_CLOEXEC);
         ::fcntl(auxFd, F_SETFD, FD_CLOEXEC);
-        // P11 PAIR: whoever opened the two connections, the CLIENT presents the pair's identity -
-        // one fresh nonce, control then aux - exactly as ConnectTo does, before the Hello. The
-        // broker that connected them wrote nothing on them.
+        // P11 PAIR / ID-P11-12: WHOEVER OPENED THE TWO CONNECTIONS PRESENTS THE PAIR'S IDENTITY - one
+        // fresh nonce, control then aux, before the Hello. Since B1's follow-up the server app's broker
+        // does it at hand-off (`pairedAtHandoff`: the helper says so with MOBILEGL_IPC_FD_PAIRED=1), so
+        // the pairing budget no longer waits on this program reaching its first EGL call; a pair
+        // somebody connected without presenting (a test's bare connects, an older broker) is presented
+        // here, exactly as ConnectTo does.
+        if (pairedAtHandoff) {
+            outClient = std::make_unique<SocketTransport>(controlFd, auxFd, TransportRole::Client);
+            return MOBILEGL_OK;
+        }
         std::uint8_t nonce[kPairNonceBytes];
         MobileGLResult result = MintNonce(nonce, sizeof(nonce));
         if (result == MOBILEGL_OK) {
@@ -496,11 +504,10 @@ namespace MobileGL::MG_Remote::Transport {
             const auto auxBind = EncodePairBind(nonce, true);
             result = SendFirstFrame(auxFd, auxBind.data(), auxBind.size(), "fd: aux connection's PairBind");
         }
-        if (result != MOBILEGL_OK) {
-            ::close(controlFd);
-            ::close(auxFd);
-            return result;
-        }
+        // A failed send leaves both descriptors open for the caller: the usual cause is a server that
+        // already refused and closed the pair (a PairBind presented past its pairing budget), and the
+        // refusal it wrote is still readable on the control connection (ClientSession reads it, by name).
+        if (result != MOBILEGL_OK) return result;
         outClient = std::make_unique<SocketTransport>(controlFd, auxFd, TransportRole::Client);
         return MOBILEGL_OK;
     }
@@ -893,7 +900,7 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
 
-    MobileGLResult SocketTransport::AdoptConnectedPair(int, int, std::unique_ptr<SocketTransport>& outClient) {
+    MobileGLResult SocketTransport::AdoptConnectedPair(int, int, std::unique_ptr<SocketTransport>& outClient, bool) {
         outClient.reset();
         WireLogError("MG_Remote SocketTransport: the fd: endpoint is POSIX only (CONTRACT-P11 B1)");
         return MOBILEGL_ERR_UNSUPPORTED;

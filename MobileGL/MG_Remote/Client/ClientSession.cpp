@@ -883,13 +883,29 @@ namespace MobileGL::MG_Remote::Client {
             }
             m_connectDial = true;
             m_dataEndpoint.clear();
+            // ID-P11-12: the broker that connected the pair presents its PairBinds at hand-off, and the
+            // helper says so; then this process must not present a second pair (the server would read
+            // it where the Hello belongs).
+            const char* pairedText = std::getenv("MOBILEGL_IPC_FD_PAIRED");
+            const bool pairedAtHandoff = pairedText != nullptr && std::strcmp(pairedText, "1") == 0;
             std::unique_ptr<Transport::SocketTransport> socket;
-            const auto adopted = Transport::SocketTransport::AdoptConnectedPair(control, aux, socket);
+            const auto adopted = Transport::SocketTransport::AdoptConnectedPair(control, aux, socket, pairedAtHandoff);
+            if (adopted == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+                // The PairBinds could not be sent: the server had already closed the pair. Its reason
+                // is usually still on the control connection - a pair presented past the pairing budget
+                // gets Refuse{Authentication} - so it is read and named rather than left as a send error.
+                Transport::SocketTransport closedPair(control, aux, Transport::TransportRole::Client);
+                std::vector<Uint8> frame;
+                if (ReceiveEnvelope(closedPair, frame, 500) == MOBILEGL_OK && LogPeerRefusal(ParseEnvelope(frame)))
+                    return MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                MGLOG_E("MG_Remote: the server closed the fd: pair before it was presented, and left no refusal");
+                return adopted;
+            }
             if (adopted != MOBILEGL_OK) return adopted;
             const auto started = StartOverSocket(std::move(socket));
             if (started == MOBILEGL_OK) {
-                MGLOG_I("MG_Remote client: control=fd data=shm server=fd:%d,%d pid=%u dial=connect", control, aux,
-                        m_peerServerPid);
+                MGLOG_I("MG_Remote client: control=fd data=shm server=fd:%d,%d pid=%u dial=connect paired=%s", control,
+                        aux, m_peerServerPid, pairedAtHandoff ? "handoff" : "client");
             }
             return started;
         }

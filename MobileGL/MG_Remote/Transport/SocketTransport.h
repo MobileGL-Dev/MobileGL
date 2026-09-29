@@ -108,11 +108,14 @@ namespace MobileGL::MG_Remote::Transport {
         // endpoint. A broker in the server's own app (the only context SELinux lets connect to its
         // endpoint) opened both connections and handed the client ends over; this adopts them. Both
         // must be open, connected AF_UNIX stream sockets and distinct (refused by name otherwise,
-        // nothing written). They become CLOEXEC, and the client then presents one PairBind pair on
-        // them - a fresh nonce, control then aux - exactly as ConnectTo does: the broker writes
-        // nothing, so the server's PairAcceptor pairs them by the client's own nonce.
+        // nothing written). They become CLOEXEC. `pairedAtHandoff`: whoever connected them already
+        // presented the PairBind pair (ID-P11-12: the server app's broker does, at hand-off), and
+        // nothing is written; otherwise this presents one - a fresh nonce, control then aux - exactly
+        // as ConnectTo does, before the Hello. TRANSPORT_CLOSED when that send failed: the descriptors
+        // are then left open, because the server's refusal may be waiting on the control connection.
         static MobileGLResult AdoptConnectedPair(int controlFd, int auxFd,
-                                                 std::unique_ptr<SocketTransport>& outClient);
+                                                 std::unique_ptr<SocketTransport>& outClient,
+                                                 bool pairedAtHandoff = false);
 
         // ---- PH-7 (4), ID-P7-3: a TCP data connection is BOUND, not paired --------
         //
