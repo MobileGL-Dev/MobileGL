@@ -140,7 +140,11 @@ The client shadow for such levels is stale and that is CORRECT: the two readers 
 observe the staleness are both named refusals under split — `glGetTexImage` served from the
 client shadow (class C, P9) and `texture-remint-pull` (`Fatal{UnmigratedEmulation}`). This is
 i1's copy-image-shadow-mirror ruling (CONTRACT-P5B §2) applied to the mip chain, and tx
-reports which scenarios reach either Fatal.
+reports which scenarios reach either Fatal. **AMENDED (P9 W2):** the second reader is gone rather
+than refused — under a transport a re-mint reads the GPU level itself
+(`RequireImageBindableStorageByHandle`) and never the client shadow, so a GPU-generated level
+survives it; the marker and `OnTexturePullRequest` were deleted
+(`docs/Disaggregated/notes/p9/W2-REMINT.md`).
 
 ### 2.4 The audit gate (E-P5c #2)
 

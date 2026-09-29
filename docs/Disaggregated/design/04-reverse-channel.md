@@ -32,9 +32,21 @@
 - **唯一允许同步 ack 的入口是 `glBufferStorage`**：`ResourceRespecify` 的 `kNeedsAck` 由逐记录谓词收窄到"不可变 **buffer**"（D-A2），纹理 OOM 在 monolith 里本来就推迟到 sync 时刻。respecify 带逐 level 作用域与"只换元数据"的形式，不误丢已接受的待上传。
 - 其余错误一律晚到，走有序的 `OnGlError`。
 
-### 8.4 唯一的新停顿类：server 发起的纹理重铸拉取（D-B6）
+### 8.4 纹理重铸：字节全在 server 手里，没有拉取（P9 W2 撤销原「唯一的新停顿类」D-B6）
 
-server 不保留纹素；image-bindable 重铸、整格式再生、view 源重铸会要求重发 level。缓解：`ImageBindableHint` 预防主因；拉取异步（阻塞 apply 线程，不阻塞应用线程）；保留 LRU 默认关（`MOBILEGL_PIPE_TEXEL_RETAIN_MB=0`）；显式终止符可带零个 region。真实语料上发生率可忽略（780 个统计窗口 2 次）；split 下这条路径今天仍是具名 `Fatal{UnmigratedEmulation, "texture-remint-pull"}`，归 P9。
+原设计假设 server 不保留纹素、重铸要把 level 从 client 拉回来。P5c 之后 server 有 `StagedTextureStore`，GPU 写过的层本来就在 GPU 图像里——**两个后端的重铸都不需要 client 的任何字节**：
+
+| | split 下重铸的字节来源 | monolith |
+|---|---|---|
+| Espryt | `RequireImageBindableStorageByHandle`：驱动上确实存在的层逐层读回旧 GPU 纹理，pending 盒用 store 合并；驱动没有的层（最后一次 sync 之后才定义）不读，store 覆盖就重放 store，否则跳过；驱动拒读而 store 覆盖时退回 store；已 immutable 且无需加宽的原样保留 | 前端臂重放 client 影子 |
+| Magma | 重建带 `STORAGE` 的 VkImage，`PreserveTextureContentsOnRecreate` GPU→GPU 拷贝 | 同左 |
+
+- 只改读 store 不够：GPU 写过的层 store 里是旧字节或没有字节；语料里 Espryt 的两次重铸（`iris-photon`、`iris-derivative`）都是 store 无字节的渲染目标。
+- 「整格式再生」两臂都只上传 pending 层、不回读也不拉取；「view 源重铸」只剩源需要加宽，走同一条 ByHandle 路径。
+- 删除：`OnTexturePullRequest`（回调 9 → 8）、`texture-remint-pull` 标记。op 50 `ResourceSubDataComplete` 只追加不删，留作退役行（解码拒收）。`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里，随 P13 删（G1）。
+- `ImageBindableHint` 仍是预防：hint 在第一次 sync 前到达就直接按 image-bindable 分配，省掉一次 server 回读 + 重传。
+- 已知 dev 缺陷（非 P9）：monolith Espryt 的前端臂重放 client 影子，覆盖 GPU 写过的纹素。
+- 普查、覆盖矩阵、门与 red-once：[`notes/p9/W2-REMINT.md`](../notes/p9/W2-REMINT.md)。
 
 ### 8.5 XFB scatter 留在 server
 

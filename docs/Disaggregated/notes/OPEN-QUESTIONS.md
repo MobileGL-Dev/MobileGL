@@ -5,7 +5,7 @@
 P0 已回答的不再列出（spike A 的域、spike B 的分档、`posix_spawn` 不可用、OOM 探测惯用法、`GetInteger64i_v`/`GetProgramiv` 退役、D21 与 `RenderbufferObject` lifetime id、动态 accessor 基线）。
 
 1. **client 侧 dirty 走查的真实每 draw CPU 代价。** 已答（P2–P4a）：推送没有在拉取基线之下净减少；Release 下 P2 边界 +6–12%，P3a 在 VAO 切换密的 rd12 上再加 +17–19 pt，P4a 在 Espryt 上 +3.4–5.7 pt（`MEASUREMENTS.md` §3–§5）。用户 2026-09-08 接受，性能自此只记录。
-2. **真实语料上纹理重铸拉取的发生率。** 已答（P4a）：可忽略，保留 LRU 维持默认 0——79 例 × 两后端 780 个统计窗口里共 2 次（`iris-photon`、`iris-derivative` 各 1，只在 DirectGLES）。但 P5b 下这条路径是具名 Fatal，正是这两条 trace 加 `create-indirect` GLES 的首阻塞（P9）。
+2. **真实语料上纹理重铸拉取的发生率。** 已答（P4a）：可忽略，保留 LRU 维持默认 0——79 例 × 两后端 780 个统计窗口里共 2 次（`iris-photon`、`iris-derivative` 各 1，只在 DirectGLES）。但 P5b 下这条路径是具名 Fatal，正是这两条 trace 加 `create-indirect` GLES 的首阻塞（P9）。**P9 W2 关闭**：重铸不需要拉取——server 读 GPU 层、store 补 pending 盒（Espryt），GPU→GPU 拷贝（Magma）；77 行 × {monolith, inproc} 普查仍是同两次（都是 store 无字节的渲染目标），`OnTexturePullRequest` 已删（[`p9/W2-REMINT.md`](p9/W2-REMINT.md)）。
 3. **spike B 的 `untrusted_app` 域复核。** 两台设备的分档在 `shell` 域测得；从应用进程再跑一次 `extmem_probe`（spike A 的 exec 钩子已可用）。P11 前做。**2026-09-22 降级**：只对同机臂的 T0 / T1 有意义，stream 数据面不需要。
 4. **渲染状态的 wire 粒度。** 已答（P2）：16 个边界 / 15 个 chunk，7 pipeline 396 B + 8 dynamic 772 B；CSO LRU 64 暂定，P13 重调。
 5. **无存储的 capability。** 已答（P2）：`FramebufferSrgb`、`DepthClamp`、`TextureCubeMapSeamless` 三个都补了真存储，`sizeof(RenderStateParameters)` 仍 1168。

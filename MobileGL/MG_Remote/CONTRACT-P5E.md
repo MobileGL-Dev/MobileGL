@@ -494,7 +494,12 @@ per unit, not every slot of every touched unit; coverage is unchanged (views ∪
 attachment lists ∪ the waited texture ops). `RequireImageBindableStorage`'s re-dirty arm
 (`Managers.cpp:5930-5962`, already aborting three frames deep) becomes a NAMED refusal at its
 entry under a transport, `Fatal{UnmigratedEmulation, "image-bindable-redirty"}`; `ImageBindableHint`
-is the prevention, P9 owns the pull. `GenerateMipmap(target)` under a transport resolves the
+is the prevention, P9 owns the pull. **AMENDED (P9 W2):** there is no pull. `c1bf7e15` (P5f) made the
+by-handle arm a server-owned promotion (`RequireImageBindableStorageByHandle`: GPU level read back,
+staged store for pending boxes, immutable core formats kept) and the frontend re-dirty arm is
+monolith-only; P9 W2 closed its two holes (a level the driver does not hold is not read; a refused
+readback falls back to a covered staged level) and deleted `OnTexturePullRequest` and the
+`texture-remint-pull` marker (`docs/Disaggregated/notes/p9/W2-REMINT.md`). `GenerateMipmap(target)` under a transport resolves the
 texture from `VerbMipRes` (as `EnsureGenerateMipmapStorageAllocated` already does, `DirectGLES.cpp:8736`),
 never the active unit (`:9563-9566`), and its row flips to `kWaitNone`. `m_force*Resync` are
 server-set and never cleared by the wire; the wire bits are never cleared by the server (D-E2, now

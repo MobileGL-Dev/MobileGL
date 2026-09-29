@@ -160,6 +160,7 @@
 - **#6（`iris-derivative` × DirectGLES）**：P5b 在这一格停在 `Fatal{UnmigratedEmulation, "texture-remint-pull"}`；在头上该站点**未被到达**
   （transport 下 `MGPipeUnmigratedEmulation` 无条件 `MGLOG_F` + `abort`，`PipeApply.cpp:3517-3524`，日志里没有这一行即没有到达），所以这 26.9k px **不是 remint 拉取**。
   monolith 自身在这条 trace 上两轮就不逐字节（630 px、最大差 3），系统差（最大差 56）比噪声大一个量级、split 对 golden 更近。**未归因**，记在 §7。
+  **2026-09-29 P9 W2 已归因**：是 monolith 的错，不是 split 的——monolith Espryt 在该 trace 上重铸一张 RGBA16F 渲染目标时重放 client 影子（全零），覆盖了 GPU 写过的纹素；split 读 GPU 层所以对。让 monolith 改放 GPU 字节后 `actual.png` 与 split 逐字节相同（SSIM 0.996196552 → 0.996376198），见 [`../p9/W2-REMINT.md`](../p9/W2-REMINT.md) §6。
 - **#7**：噪声，不是分歧；列出是因为单遍普查会把它读成分歧。
 
 ## 4. P9 例外表
@@ -206,7 +207,7 @@ P5b 的 72 个通过格在头上两臂全活。
 
 - **TCP 臂**：`MOBILEGL_TRACE_TCP_ENDPOINT` 未配置（`tools/trace_replay/CMakeLists.txt:503-506` 只在配置时注册），本普查无 TCP 读数。
 - `rd12-odinlite`（`ci: false`）与 `iterationrp` × DirectGLES（已注册、不在 CI 矩阵）未跑；verify 臂不在本包。
-- 逐 draw 二分：§3 #1–#6 的第一条分歧 draw 未定位；#6 的系统差未归因（候选方向：monolith 自身在该 trace 上不确定，先要一个确定的 monolith 对照）。
+- 逐 draw 二分：§3 #1–#6 的第一条分歧 draw 未定位；#6 的系统差未归因（候选方向：monolith 自身在该 trace 上不确定，先要一个确定的 monolith 对照）。**#6 已由 P9 W2 归因**（monolith Espryt 重铸重放过期影子，[`../p9/W2-REMINT.md`](../p9/W2-REMINT.md) §6）。
 - 三遍逐字节只对 7 个分歧行做了；其余 70 行是单遍 `=`。
 - 设备：本包全在主机；设备上的 P9 例外（若有）由 wave 4 的门 3 终局跑回答。
 
