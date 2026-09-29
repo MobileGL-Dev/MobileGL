@@ -2787,23 +2787,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // Replaces one level's shadow bytes with what the driver texture holds for it, then copies
-        // back the client writes the driver has not been sent yet (the level's pending rects, the
-        // same boxes a plain sync would upload over the driver's copy). Returns false, leaving the
-        // shadow untouched, when the driver's copy cannot stand in for the shadow: the client owns
-        // every byte of the level, the level is stored compressed, the driver has no image at this
-        // level and extent (defined after the last sync), or the readback cannot be served (a
-        // multisample image, a format the driver will not attach to a framebuffer).
+        // back the client writes the driver has not been sent yet - exactly the texels written
+        // (the level's dirty footprint), not the union box or the rect list, which also span texels
+        // the client never wrote and which only the driver's copy holds correctly. Returns false,
+        // leaving the shadow untouched, when the driver's copy cannot stand in for the shadow: the
+        // client wrote every texel of the level, the level is stored compressed, the driver has no
+        // image at this level and extent (defined after the last sync), or the readback cannot be
+        // served (a multisample image, a format the driver will not attach to a framebuffer).
         static Bool AdoptDriverLevelIntoShadow(GLuint backendTextureId, BackendTextureObject& backendTexture,
                                                const MG_State::GLState::ITextureObject& stateTextureObject,
                                                MG_State::GLState::TextureObjectMipmap& mipmapObject,
                                                TextureUploadTarget uploadTarget, Uint level) {
             const IntVec3 texelSize = mipmapObject.GetMipmapTexelSize(uploadTarget, level);
             const IntVec3 extent{texelSize.x(), texelSize.y(), std::max(texelSize.z(), 1)};
-            const Bool dirty = mipmapObject.IsStorageDirty(uploadTarget, level);
-            const MG_State::GLState::MipmapDirtyRegion dirtyRegion =
-                dirty ? mipmapObject.GetStorageDirtyRegion(uploadTarget, level)
-                      : MG_State::GLState::MipmapDirtyRegion{};
-            if (dirty && dirtyRegion.CoversWholeLevel(extent)) return false;
+            const SizeT texelCount =
+                static_cast<SizeT>(extent.x()) * static_cast<SizeT>(extent.y()) * static_cast<SizeT>(extent.z());
+            Vector<MG_State::GLState::MipmapDirtyRegion> pending;
+            mipmapObject.GetStorageDirtyFootprint(uploadTarget, level, pending);
+            // Disjoint boxes, so their texels add up; a union box spanning the level is not enough.
+            SizeT pendingTexels = 0;
+            for (const auto& box : pending) {
+                pendingTexels += box.TexelCount();
+            }
+            if (!pending.empty() && pendingTexels >= texelCount) return false;
             if (mipmapObject.GetMipmapCompressedFormat(uploadTarget, level) != GL_NONE) return false;
             if (!g_GLESFuncs.glGetTexLevelParameteriv) return false;
 
@@ -2833,28 +2839,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
             const SizeT shadowBytes = mipmapObject.GetMipmapByteSize(uploadTarget, level);
-            const SizeT texelCount =
-                static_cast<SizeT>(extent.x()) * static_cast<SizeT>(extent.y()) * static_cast<SizeT>(extent.z());
             auto* shadow = static_cast<Uint8*>(mipmapObject.MapMipmapData(uploadTarget, level));
             if (shadow == nullptr || snapshot.size() != shadowBytes || texelCount == 0 || shadowBytes % texelCount) {
                 return false;
             }
 
-            if (dirty) {
-                // The rects index the SHADOW's texel grid (a 1D array's layers are its rows), which
+            if (!pending.empty()) {
+                // The boxes index the SHADOW's texel grid (a 1D array's layers are its rows), which
                 // is also the snapshot's byte order.
                 const SizeT bpp = shadowBytes / texelCount;
                 const SizeT rowBytes = static_cast<SizeT>(extent.x()) * bpp;
                 const SizeT sliceBytes = static_cast<SizeT>(extent.y()) * rowBytes;
-                constexpr SizeT kMaxPending = MG_State::GLState::MipmapStorage::kMaxDirtyRects;
-                MG_State::GLState::MipmapDirtyRegion pending[kMaxPending];
-                SizeT pendingCount = mipmapObject.GetStorageDirtyRects(uploadTarget, level, pending, kMaxPending);
-                if (pendingCount == 0) {
-                    pending[0] = dirtyRegion;
-                    pendingCount = 1;
-                }
-                for (SizeT i = 0; i < pendingCount; ++i) {
-                    const auto& box = pending[i];
+                for (const auto& box : pending) {
                     if (box.Empty()) continue;
                     const SizeT spanBytes = static_cast<SizeT>(box.hi.x() - box.lo.x()) * bpp;
                     for (Int z = box.lo.z(); z < box.hi.z(); ++z) {
@@ -4340,6 +4336,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     ScopedDefaultUnpackState unpackState;
+                    // Per-level scratch of the exact-footprint path, hoisted to reuse capacity.
+                    Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
+                    Vector<UnpackStagingBlock> stagingBlockOverflow;
                     for (auto& uploadTarget : uploadTargets) {
                         for (SizeT level = 0; level < mipmapCount; ++level) {
                             if (!textureMipmapObject->IsStorageDirty(uploadTarget, level)) {
@@ -4413,13 +4412,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
                                                      static_cast<SizeT>(texelSize.y()) *
                                                      static_cast<SizeT>(std::max(texelSize.z(), 1));
-                            const Bool subRectEligible =
-                                !dirtyRegion.Empty() && !dirtyRegion.CoversWholeLevel(texelSize) && texelCount > 0 &&
-                                uploadBytes > 0 && uploadBytes % texelCount == 0 &&
+                            // Whether a box of the level can be addressed at all: whole texels in
+                            // the upload bytes, and an ES image shaped like the shadow.
+                            const Bool regionsAddressable =
+                                !dirtyRegion.Empty() && texelCount > 0 && uploadBytes > 0 &&
+                                uploadBytes % texelCount == 0 &&
                                 (layersAsRows ? std::max(texelSize.z(), 1) == 1
                                               : uploadSize.x() == texelSize.x() && uploadSize.y() == texelSize.y() &&
                                                     std::max(uploadSize.z(), 1) == std::max(texelSize.z(), 1));
-                            const SizeT bpp = subRectEligible ? uploadBytes / texelCount : 0;
+                            const Bool subRectEligible = regionsAddressable && !dirtyRegion.CoversWholeLevel(texelSize);
+                            const SizeT bpp = regionsAddressable ? uploadBytes / texelCount : 0;
                             const IntVec3 regionSize = {dirtyRegion.hi.x() - dirtyRegion.lo.x(),
                                                         dirtyRegion.hi.y() - dirtyRegion.lo.y(),
                                                         dirtyRegion.hi.z() - dirtyRegion.lo.z()};
@@ -4456,6 +4458,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     dirtyRectCount = 0;
                                 }
                             }
+                            // Everything above - the union box, the ring's one-box rule, the rect
+                            // list with its merges, fold and 3/4 cut-off - may upload shadow texels
+                            // the client did not write, which is only harmless while the driver
+                            // still holds those texels as they were last uploaded. Once it may hold
+                            // GPU writes, the level goes up as exactly the texels written, one box
+                            // (one ring job) each, whatever that costs: more boxes, and a union box
+                            // that spans the whole level no longer means a whole-level upload.
+                            const MG_State::GLState::MipmapDirtyRegion* uploadRects = dirtyRects;
+                            SizeT uploadRectCount = dirtyRectCount;
+                            if (m_driverMayHoldGpuWrites && regionsAddressable) {
+                                textureMipmapObject->GetStorageDirtyFootprint(uploadTarget, level, dirtyFootprint);
+                                // One box is the union box itself, which the branches below already
+                                // upload exactly (as the whole level when it is the whole level).
+                                if (dirtyFootprint.size() >= 2) {
+                                    uploadRects = dirtyFootprint.data();
+                                    uploadRectCount = dirtyFootprint.size();
+                                } else {
+                                    uploadRectCount = 0;
+                                }
+                            }
+                            const Bool perRectUpload = regionsAddressable && uploadRectCount >= 2;
                             const auto rectUploadPtr = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
                                 return static_cast<const Uint8*>(uploadData) +
                                        static_cast<SizeT>(rect.lo.z()) * levelSliceBytes +
@@ -4491,15 +4514,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // client-pointer path makes the driver walk, which strides over
                             // the whole level width.
                             UnpackStagingBlock
-                                stagingBlocks[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                                stagingBlockArray[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                            UnpackStagingBlock* stagingBlocks = stagingBlockArray;
                             SizeT stagingBlockCount = 0;
                             const Bool ringUsable = BufferImpl::UnpackRingAvailable();
                             if (!ringUsable) {
                                 // Nothing to plan: every branch below keeps the client
                                 // pointer and its ROW_LENGTH striding, unchanged.
-                            } else if (subRectEligible && dirtyRectCount >= 2) {
-                                for (SizeT r = 0; r < dirtyRectCount; ++r) {
-                                    const auto& rect = dirtyRects[r];
+                            } else if (perRectUpload) {
+                                // Only an exact footprint outgrows the array (see uploadRects).
+                                if (uploadRectCount > MG_State::GLState::MipmapStorage::kMaxDirtyRects) {
+                                    stagingBlockOverflow.resize(uploadRectCount);
+                                    stagingBlocks = stagingBlockOverflow.data();
+                                }
+                                for (SizeT r = 0; r < uploadRectCount; ++r) {
+                                    const auto& rect = uploadRects[r];
                                     stagingBlocks[r] = {
                                         rectUploadPtr(rect),
                                         static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
@@ -4509,7 +4538,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         levelSliceBytes,
                                         0};
                                 }
-                                stagingBlockCount = dirtyRectCount;
+                                stagingBlockCount = uploadRectCount;
                             } else if (subRectEligible) {
                                 stagingBlocks[0] = {regionPtr,
                                                     static_cast<SizeT>(regionSize.x()) * bpp,
@@ -4550,10 +4579,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
                             case TextureTarget::Texture2D:
                             case TextureTarget::TextureCubeMap:
-                                if (subRectEligible && dirtyRectCount >= 2) {
+                                if (perRectUpload) {
                                     if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
-                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
-                                        const auto& rect = dirtyRects[r];
+                                    for (SizeT r = 0; r < uploadRectCount; ++r) {
+                                        const auto& rect = uploadRects[r];
                                         g_GLESFuncs.glTexSubImage2D(
                                             glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
                                             rect.lo.y(), static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
@@ -4589,18 +4618,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // ES 3.2 has GL_TEXTURE_CUBE_MAP_ARRAY natively and it stores exactly
                             // like a 2D array whose depth is 6 * the cube count.
                             case TextureTarget::TextureCubeMapArray:
-                                if (subRectEligible && dirtyRectCount >= 2) {
+                                if (perRectUpload) {
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
                                     }
-                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
-                                        const auto box = ToBackendBox(dirtyRects[r]);
+                                    for (SizeT r = 0; r < uploadRectCount; ++r) {
+                                        const auto box = ToBackendBox(uploadRects[r]);
                                         g_GLESFuncs.glTexSubImage3D(
                                             glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z,
                                             box.w, box.h, box.d, glFormat, glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
-                                                       : static_cast<const void*>(rectUploadPtr(dirtyRects[r])));
+                                                       : static_cast<const void*>(rectUploadPtr(uploadRects[r])));
                                     }
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -5147,6 +5176,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
         StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject> g_backendTextureObjects;
+
+        void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
+            SharedPtr<MG_State::GLState::ITextureObject> storage = textureObject;
+            // Bounded: GL resolves a view of a view to the original storage, so this takes one step.
+            for (Uint hop = 0; storage && storage->IsTextureView() && hop < 4; ++hop) {
+                storage = storage->GetViewStorageOwner();
+            }
+            if (!storage) return;
+            auto* slot = g_backendTextureObjects.Find(storage.get());
+            auto& backendObj = slot ? *slot : g_backendTextureObjects.GetOrCreate(storage);
+            if (!backendObj) {
+                backendObj = MakeShared<BackendTextureObject>();
+            }
+            backendObj->NoteDriverSideWrite();
+        }
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
@@ -5307,6 +5351,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return false;
                 }
                 backendTextureObject->SyncMipmapsToBackend(textureObject);
+                // From here on every draw, clear and blit into this framebuffer can write the
+                // texture behind the shadow's back.
+                TextureImpl::NoteDriverSideTextureWrite(textureObject);
                 if (attachmentObject.IsLayered()) {
                     g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
                                                      backendTextureObject->GetBackendTextureId(),

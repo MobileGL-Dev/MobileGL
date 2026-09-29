@@ -1707,6 +1707,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            // Before the sync: `backendTexture` below is a reference into the registry, which the
+            // lookup inside the note may reshuffle.
+            if (imageBinding.Access != GL_READ_ONLY) {
+                NoteDriverSideTextureWrite(imageBinding.Texture);
+            }
             auto& backendTexture = SyncTextureObjectToBackend(imageBinding.Texture, true);
             const Bool layerable = SupportsLayeredImageBinding(imageBinding.Texture->GetTarget());
             const GLboolean layered = layerable ? imageBinding.Layered : GL_FALSE;
@@ -5919,6 +5924,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 continue;
             }
 
+            TextureImpl::NoteDriverSideTextureWrite(destinationTexture);
             auto backendSource = TextureImpl::SyncTextureObjectToBackend(sourceTexture);
             auto backendDestination = TextureImpl::SyncTextureObjectToBackend(destinationTexture);
             if (!backendSource || !backendDestination) continue;
@@ -6635,6 +6641,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject((Int)activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
+        if (textureObject) TextureImpl::NoteDriverSideTextureWrite(textureObject);
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
         if (!backendTextureSlot || !*backendTextureSlot) {
             MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
@@ -6730,6 +6737,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
+        if (textureObject) TextureImpl::NoteDriverSideTextureWrite(textureObject);
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
         if (!backendTextureSlot || !*backendTextureSlot) {
             MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
@@ -6879,6 +6887,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             TextureImpl::SyncTextureObjectToBackend(texture);
             return;
         }
+        // Every path below writes the levels above the base on the driver only.
+        TextureImpl::NoteDriverSideTextureWrite(texture);
         auto& backendTexture = TextureImpl::SyncTextureObjectToBackend(texture);
 
         if (IsDepthOnlyFormat(texture->GetFormat())) {
@@ -7152,6 +7162,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // dereference. The frontend validator is what keeps this unreachable and what reports
         // the error the application is owed; declining is only how a future gap up there stops
         // being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
+        if (!dstEndpoint.IsRenderbuffer() && dstEndpoint.Texture) {
+            TextureImpl::NoteDriverSideTextureWrite(dstEndpoint.Texture);
+        }
         if (!MakeGLESCopyImageEndpoint(srcEndpoint, srcTarget, srcX, srcY, srcZ, src) ||
             !MakeGLESCopyImageEndpoint(dstEndpoint, dstTarget, dstX, dstY, dstZ, dst)) {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);

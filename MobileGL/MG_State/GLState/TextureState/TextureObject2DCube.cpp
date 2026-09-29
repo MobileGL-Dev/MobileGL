@@ -75,6 +75,11 @@ namespace MobileGL {
                                                       outRects, maxRects);
             }
 
+            void TextureObject2DCube::GetStorageDirtyFootprint(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                               Vector<MipmapDirtyRegion>& outRects) const {
+                m_textureStorage.GetDirtyFootprint(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, outRects);
+            }
+
             void TextureObject2DCube::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                               GLenum internalFormat, const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,

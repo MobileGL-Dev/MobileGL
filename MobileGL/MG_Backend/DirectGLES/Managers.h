@@ -976,6 +976,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // carrier the storage is an integer texture holding codes and glGetTexImage still owes
             // the application floats.
             Bool RequiresImageBindableStorage() const { return m_imageBindableStorageRequired; }
+            // See m_driverMayHoldGpuWrites. Callers holding the STATE texture use
+            // NoteDriverSideTextureWrite, which also reaches the storage behind a view.
+            void NoteDriverSideWrite() { m_driverMayHoldGpuWrites = true; }
             void Bind(GLenum target, Uint unit = TempTextureUnit);
             Uint GetBackendTextureId() const;
 
@@ -1059,6 +1062,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
+            // Whether the driver texture may hold texels the shadow never saw. Set the first time
+            // anything other than a texel upload can write it - an application framebuffer
+            // attachment, a writable image binding, a copy or blit into it, a driver-side mipmap
+            // generation - and never cleared. Until then the driver holds, outside a level's
+            // pending writes, exactly the shadow bytes it was last sent, so those writes may go up
+            // as their union box (one unpack-ring job, which is what Mali needs); from then on
+            // only the texels the client wrote may go up, since the shadow is stale everywhere
+            // else. See SyncMipmapsToBackend.
+            Bool m_driverMayHoldGpuWrites = false;
             // Latches the "this driver has no buffer textures" report to once per texture. The
             // report is emitted from the respecify path, which bails before recording the state
             // it was asked to apply - so without the latch the texture stays permanently dirty
@@ -1126,6 +1138,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
             Bool imageBindableStorageRequired = false);
+        // Every path that lets the DRIVER write a texture's texels calls this (see
+        // BackendTextureObject::m_driverMayHoldGpuWrites): an application framebuffer attachment,
+        // a writable image binding, a copy, blit or mipmap generation into it. A view writes its
+        // storage texture's image, so the storage texture is the one marked.
+        void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.
