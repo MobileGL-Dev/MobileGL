@@ -142,6 +142,19 @@ table DataBind {
   nonce: [ubyte];
 }
 
+// P11 PAIR. The FIRST frame on each of the two connections a socket client opens with
+// SocketTransport::ConnectTo - control, then aux (the SCM_RIGHTS socket; the data connection on a
+// tcp:// ConnectTo) - and on control the only frame before the Hello. `nonce` is 128 bits from the
+// client's CSPRNG, the same on both; `aux` says which of the two this connection is. The server
+// holds every accepted connection until it has presented this and pairs the two halves by the
+// nonce, never by arrival order (Server/PairAcceptor.h): a stray connection, or a second client
+// connecting at the same moment, cannot become half of this client's session. A control connection
+// whose first frame is a Hello is a peer from before this message and is refused by name.
+table PairBind {
+  nonce: [ubyte];
+  aux: bool;
+}
+
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
@@ -401,6 +414,7 @@ union CtrlMsg {
   LogFlush,
   DataBind,
   SurfaceProgress,
+  PairBind,
 }
 
 table CtrlEnvelope {

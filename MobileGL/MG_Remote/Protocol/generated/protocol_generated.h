@@ -50,6 +50,9 @@ struct WelcomeBuilder;
 struct DataBind;
 struct DataBindBuilder;
 
+struct PairBind;
+struct PairBindBuilder;
+
 struct CapsSnapshot;
 struct CapsSnapshotBuilder;
 
@@ -552,11 +555,12 @@ enum class CtrlMsg : uint8_t {
   LogFlush = 12,
   DataBind = 13,
   SurfaceProgress = 14,
+  PairBind = 15,
   MIN = NONE,
-  MAX = SurfaceProgress
+  MAX = PairBind
 };
 
-inline const CtrlMsg (&EnumValuesCtrlMsg())[15] {
+inline const CtrlMsg (&EnumValuesCtrlMsg())[16] {
   static const CtrlMsg values[] = {
     CtrlMsg::NONE,
     CtrlMsg::Hello,
@@ -572,13 +576,14 @@ inline const CtrlMsg (&EnumValuesCtrlMsg())[15] {
     CtrlMsg::Refuse,
     CtrlMsg::LogFlush,
     CtrlMsg::DataBind,
-    CtrlMsg::SurfaceProgress
+    CtrlMsg::SurfaceProgress,
+    CtrlMsg::PairBind
   };
   return values;
 }
 
 inline const char * const *EnumNamesCtrlMsg() {
-  static const char * const names[16] = {
+  static const char * const names[17] = {
     "NONE",
     "Hello",
     "Welcome",
@@ -594,13 +599,14 @@ inline const char * const *EnumNamesCtrlMsg() {
     "LogFlush",
     "DataBind",
     "SurfaceProgress",
+    "PairBind",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameCtrlMsg(CtrlMsg e) {
-  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::SurfaceProgress)) return "";
+  if (::flatbuffers::IsOutRange(e, CtrlMsg::NONE, CtrlMsg::PairBind)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesCtrlMsg()[index];
 }
@@ -663,6 +669,10 @@ template<> struct CtrlMsgTraits<MobileGL::Wire::DataBind> {
 
 template<> struct CtrlMsgTraits<MobileGL::Wire::SurfaceProgress> {
   static const CtrlMsg enum_value = CtrlMsg::SurfaceProgress;
+};
+
+template<> struct CtrlMsgTraits<MobileGL::Wire::PairBind> {
+  static const CtrlMsg enum_value = CtrlMsg::PairBind;
 };
 
 template <bool B = false>
@@ -1476,6 +1486,76 @@ inline ::flatbuffers::Offset<DataBind> CreateDataBindDirect(
   return MobileGL::Wire::CreateDataBind(
       _fbb,
       nonce__);
+}
+
+struct PairBind FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
+  typedef PairBindBuilder Builder;
+  struct Traits;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_NONCE = 4,
+    VT_AUX = 6
+  };
+  const ::flatbuffers::Vector<uint8_t> *nonce() const {
+    return GetPointer<const ::flatbuffers::Vector<uint8_t> *>(VT_NONCE);
+  }
+  bool aux() const {
+    return GetField<uint8_t>(VT_AUX, 0) != 0;
+  }
+  template <bool B = false>
+  bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyOffset(verifier, VT_NONCE) &&
+           verifier.VerifyVector(nonce()) &&
+           VerifyField<uint8_t>(verifier, VT_AUX, 1) &&
+           verifier.EndTable();
+  }
+};
+
+struct PairBindBuilder {
+  typedef PairBind Table;
+  ::flatbuffers::FlatBufferBuilder &fbb_;
+  ::flatbuffers::uoffset_t start_;
+  void add_nonce(::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> nonce) {
+    fbb_.AddOffset(PairBind::VT_NONCE, nonce);
+  }
+  void add_aux(bool aux) {
+    fbb_.AddElement<uint8_t>(PairBind::VT_AUX, static_cast<uint8_t>(aux), 0);
+  }
+  explicit PairBindBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  ::flatbuffers::Offset<PairBind> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = ::flatbuffers::Offset<PairBind>(end);
+    return o;
+  }
+};
+
+inline ::flatbuffers::Offset<PairBind> CreatePairBind(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    ::flatbuffers::Offset<::flatbuffers::Vector<uint8_t>> nonce = 0,
+    bool aux = false) {
+  PairBindBuilder builder_(_fbb);
+  builder_.add_nonce(nonce);
+  builder_.add_aux(aux);
+  return builder_.Finish();
+}
+
+struct PairBind::Traits {
+  using type = PairBind;
+  static auto constexpr Create = CreatePairBind;
+};
+
+inline ::flatbuffers::Offset<PairBind> CreatePairBindDirect(
+    ::flatbuffers::FlatBufferBuilder &_fbb,
+    const std::vector<uint8_t> *nonce = nullptr,
+    bool aux = false) {
+  auto nonce__ = nonce ? _fbb.CreateVector<uint8_t>(*nonce) : 0;
+  return MobileGL::Wire::CreatePairBind(
+      _fbb,
+      nonce__,
+      aux);
 }
 
 struct CapsSnapshot FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
@@ -2416,6 +2496,9 @@ struct CtrlEnvelope FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   const MobileGL::Wire::SurfaceProgress *msg_as_SurfaceProgress() const {
     return msg_type() == MobileGL::Wire::CtrlMsg::SurfaceProgress ? static_cast<const MobileGL::Wire::SurfaceProgress *>(msg()) : nullptr;
   }
+  const MobileGL::Wire::PairBind *msg_as_PairBind() const {
+    return msg_type() == MobileGL::Wire::CtrlMsg::PairBind ? static_cast<const MobileGL::Wire::PairBind *>(msg()) : nullptr;
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -2480,6 +2563,10 @@ template<> inline const MobileGL::Wire::DataBind *CtrlEnvelope::msg_as<MobileGL:
 
 template<> inline const MobileGL::Wire::SurfaceProgress *CtrlEnvelope::msg_as<MobileGL::Wire::SurfaceProgress>() const {
   return msg_as_SurfaceProgress();
+}
+
+template<> inline const MobileGL::Wire::PairBind *CtrlEnvelope::msg_as<MobileGL::Wire::PairBind>() const {
+  return msg_as_PairBind();
 }
 
 struct CtrlEnvelopeBuilder {
@@ -2578,6 +2665,10 @@ inline bool VerifyCtrlMsg(::flatbuffers::VerifierTemplate<B> &verifier, const vo
     }
     case CtrlMsg::SurfaceProgress: {
       auto ptr = reinterpret_cast<const MobileGL::Wire::SurfaceProgress *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case CtrlMsg::PairBind: {
+      auto ptr = reinterpret_cast<const MobileGL::Wire::PairBind *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
