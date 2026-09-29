@@ -49,7 +49,10 @@ public final class ExternalClientBroker extends BroadcastReceiver {
     public static final String KEY_VERSION = "version";
     public static final int PROTOCOL_VERSION = 1;
 
-    /** The broker's answer: int version, then the control and aux descriptors. */
+    /**
+     * The broker's answer: int version, the control and aux descriptors, then long applyCore - the cpu
+     * mask the server's `auto` policy reserves for this session's apply thread (0 = none).
+     */
     public static final int REPLY_FDS = IBinder.FIRST_CALL_TRANSACTION;
     /** The broker's refusal: String code, String message. */
     public static final int REPLY_REFUSED = IBinder.FIRST_CALL_TRANSACTION + 1;
@@ -166,9 +169,12 @@ public final class ExternalClientBroker extends BroadcastReceiver {
             data.writeInt(PROTOCOL_VERSION);
             control.writeToParcel(data, 0);
             aux.writeToParcel(data, 0);
+            // The core the server reserves for this session's apply thread (0 = none): the helper keeps
+            // the client off it. Appended after the descriptors; a reader that stops before it is fine.
+            data.writeLong(target.applyCore);
             boolean delivered = callback.transact(REPLY_FDS, data, null, IBinder.FLAG_ONEWAY);
             Log.i(TAG, "brokered a connection pair to " + target.endpoint + " for a client (delivered="
-                    + delivered + ")");
+                    + delivered + ", apply core 0x" + Long.toHexString(target.applyCore) + ")");
         } catch (Exception error) {
             Log.e(TAG, "could not hand the connection pair to the client", error);
         } finally {

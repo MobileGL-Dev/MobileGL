@@ -40,12 +40,32 @@ public final class MobileGLServerService extends Service {
         final String endpoint;
         final String token;
         final Process process;
+        // The core the server's `auto` policy gives a dialled-in shared-segment client's apply thread
+        // (ServerEnvironment.reservedApplyCore); the broker hands it to the helper, which keeps the
+        // client off it. 0 = none reserved.
+        final long applyCore;
 
-        BrokerTarget(String endpoint, String token, Process process) {
+        BrokerTarget(String endpoint, String token, Process process, long applyCore) {
             this.endpoint = endpoint;
             this.token = token;
             this.process = process;
+            this.applyCore = applyCore;
         }
+    }
+
+    /** cpuinfo_max_freq of every cpu this process can count (0 where unreadable). */
+    private static long[] cpuMaxFrequenciesKHz() {
+        int count = Math.min(64, Math.max(1, Runtime.getRuntime().availableProcessors()));
+        long[] frequencies = new long[count];
+        for (int cpu = 0; cpu < count; cpu++) {
+            File file = new File("/sys/devices/system/cpu/cpu" + cpu + "/cpufreq/cpuinfo_max_freq");
+            try (BufferedReader reader = new BufferedReader(new java.io.FileReader(file))) {
+                frequencies[cpu] = Long.parseLong(reader.readLine().trim());
+            } catch (Exception unreadable) {
+                frequencies[cpu] = 0;
+            }
+        }
+        return frequencies;
     }
 
     // Set when a supervisor the broker can reach is running, cleared when it stops. The broker runs
@@ -135,6 +155,10 @@ public final class MobileGLServerService extends Service {
         if (endpoint == null) endpoint = "tcp://127.0.0.1:40613";
         final String envExtra = intent == null ? null : intent.getStringExtra("env");
         final String token = intent == null ? null : intent.getStringExtra("token");
+        java.util.Map<String, String> requested = new java.util.HashMap<>();
+        ServerEnvironment.apply(requested, envExtra);
+        final long applyCore = ServerEnvironment.reservedApplyCore(cpuMaxFrequenciesKHz(),
+                requested.get("MOBILEGL_IPC_SERVER_AFFINITY"));
         try {
             supervisor = startSupervisor(endpoint, envExtra, token, "mgl-supervisor-log", startId, true);
             // P11 B1: the broker's target. A unix endpoint is reachable by this app as it is (a
@@ -145,14 +169,16 @@ public final class MobileGLServerService extends Service {
                         new java.security.SecureRandom().nextLong() & 0xffffffffL);
                 brokerSupervisor = startSupervisor(privateName, envExtra, token, "mgl-broker-supervisor-log",
                         startId, false);
-                brokerTarget = new BrokerTarget(privateName, token, brokerSupervisor);
+                brokerTarget = new BrokerTarget(privateName, token, brokerSupervisor, applyCore);
                 Log.i(TAG, "same-device external clients: broker listener " + privateName
-                        + " beside the TCP-only supervisor on " + endpoint);
+                        + " beside the TCP-only supervisor on " + endpoint + "; apply core reserved for them 0x"
+                        + Long.toHexString(applyCore));
             } else {
                 String unix = endpoint.startsWith("@") || endpoint.startsWith("/") ? endpoint
                         : new File(getFilesDir(), endpoint).getAbsolutePath();
-                brokerTarget = new BrokerTarget(unix, token, supervisor);
-                Log.i(TAG, "same-device external clients: the broker connects to " + unix);
+                brokerTarget = new BrokerTarget(unix, token, supervisor, applyCore);
+                Log.i(TAG, "same-device external clients: the broker connects to " + unix
+                        + "; apply core reserved for them 0x" + Long.toHexString(applyCore));
             }
         } catch (Exception error) {
             Log.e(TAG, "cannot start TCP supervisor", error);

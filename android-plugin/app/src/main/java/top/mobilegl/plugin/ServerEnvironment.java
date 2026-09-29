@@ -82,6 +82,34 @@ public final class ServerEnvironment {
     }
 
     /**
+     * P11 B1 (CONTRACT-P11 B1): the core the server's `auto` policy reserves for the apply thread of a
+     * dialled-in shared-segment client - MG_Remote/Server/ApplyThreadPolicy.h ReservedApplyCore over
+     * ServerLoop.cpp's DetectBigCoreMask, mirrored here so the broker can tell the helper which core to
+     * keep the client off. {@code maxFreqKHz[i]} is cpu i's cpuinfo_max_freq (0 = unreadable, which
+     * like the native probe gives no answer). A cpu is big when its ceiling is within 15% of the peak;
+     * the reserved core is the LOWEST big one, and only when the big set is a strict subset of at least
+     * two. 0 = none. {@code affinityOverride} is the server's MOBILEGL_IPC_SERVER_AFFINITY: anything
+     * but unset / empty / {@code auto} is an operator's own placement, and then nothing is reserved.
+     */
+    public static long reservedApplyCore(long[] maxFreqKHz, String affinityOverride) {
+        if (affinityOverride != null && !affinityOverride.isEmpty() && !affinityOverride.equals("auto")) return 0;
+        int count = Math.min(64, maxFreqKHz.length);
+        long peak = 0;
+        for (int cpu = 0; cpu < count; cpu++) {
+            if (maxFreqKHz[cpu] <= 0) return 0;
+            peak = Math.max(peak, maxFreqKHz[cpu]);
+        }
+        if (count == 0 || peak == 0) return 0;
+        long big = 0;
+        for (int cpu = 0; cpu < count; cpu++) {
+            if (maxFreqKHz[cpu] >= peak * 85 / 100) big |= 1L << cpu;
+        }
+        long online = count >= 64 ? ~0L : (1L << count) - 1;
+        if ((big & online) == online || Long.bitCount(big) < 2) return 0;
+        return Long.lowestOneBit(big);
+    }
+
+    /**
      * Aspect-fit (letterbox / pillarbox): the largest {@code bufferWidth:bufferHeight} rectangle
      * inside a {@code containerWidth x containerHeight} view, as {width, height}. {-1, -1} (fill the
      * container, MATCH_PARENT) when either size is unknown or no fixed buffer size is set.

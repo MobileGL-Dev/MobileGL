@@ -44,8 +44,10 @@ import java.util.Map;
  * Two connected sockets: it clears their close-on-exec flag and {@code execve}s the program with
  * {@code MOBILEGL_TRANSPORT=spawn}, {@code MOBILEGL_IPC_CONTROL=fd:<control>,<aux>},
  * {@code MOBILEGL_IPC_DATA=shm} and {@code MOBILEGL_IPC_TOKEN} (the session's Hello carries it too).
- * A refusal: it prints the broker's name for it and exits with that refusal's code. No answer at
- * all within the timeout: it says so and exits {@value #EXIT_NO_ANSWER}.
+ * When the broker names a cpu core the server reserves for the session's apply thread, the program is
+ * exec'd through {@code taskset} on every other core (see {@link #clientMask}; {@code --keep-affinity}
+ * opts out). A refusal: it prints the broker's name for it and exits with that refusal's code. No
+ * answer at all within the timeout: it says so and exits {@value #EXIT_NO_ANSWER}.
  */
 public final class ExternalClientHelper {
     private static final String TAG = "MobileGLHelper";
@@ -64,8 +66,26 @@ public final class ExternalClientHelper {
     public static final int EXIT_EXEC_FAILED = 73;
 
     private static final long DEFAULT_TIMEOUT_MS = 10000;
+    private static final String TASKSET = "/system/bin/taskset";
     private static final Object answered = new Object();
     private static boolean done = false;
+    private static volatile boolean keepAffinity = false;
+
+    /**
+     * Every cpu this device counts except the server's reserved apply core, or 0 (no mask) when none is
+     * reserved or nothing would be left. Why: the server pins a dialled-in shared-segment client's
+     * apply thread to that core and spins there, and a client the scheduler also puts there (an
+     * adb-shell one on the Redmi) is starved: rd12 27 fps on shared memory against 51 over tcp;
+     * kept off it, the client takes the other prime core (CONTRACT-P11 B1). The cost: the whole program
+     * loses that one core. --keep-affinity opts out.
+     */
+    private static long clientMask(long applyCore) {
+        if (applyCore == 0) return 0;
+        int count = Math.min(64, Math.max(1, Runtime.getRuntime().availableProcessors()));
+        long online = count >= 64 ? ~0L : (1L << count) - 1;
+        long mask = online & ~applyCore;
+        return mask == 0 || mask == online ? 0 : mask;
+    }
 
     public static void main(String[] args) {
         Looper.prepareMainLooper();
@@ -80,6 +100,8 @@ public final class ExternalClientHelper {
                 break;
             } else if ("--server".equals(arg) && i + 1 < args.length) {
                 serverPackage = args[++i];
+            } else if ("--keep-affinity".equals(arg)) {
+                keepAffinity = true;
             } else if ("--timeout-ms".equals(arg) && i + 1 < args.length) {
                 try {
                     timeoutMs = Long.parseLong(args[++i]);
@@ -124,11 +146,16 @@ public final class ExternalClientHelper {
                     int version = data.readInt();
                     ParcelFileDescriptor control = ParcelFileDescriptor.CREATOR.createFromParcel(data);
                     ParcelFileDescriptor aux = ParcelFileDescriptor.CREATOR.createFromParcel(data);
+                    long applyCore = data.dataAvail() >= 8 ? data.readLong() : 0;
                     int controlFd = inheritable(control);
                     int auxFd = inheritable(aux);
-                    Log.i(TAG, "broker v" + version + " handed over fd:" + controlFd + "," + auxFd + "; exec "
-                            + programPath);
-                    exec(programPath, argv, controlFd, auxFd, presented);
+                    long mask = keepAffinity ? 0 : clientMask(applyCore);
+                    say("broker v" + version + " handed over fd:" + controlFd + "," + auxFd
+                            + (mask != 0 ? "; the server's apply core 0x" + Long.toHexString(applyCore)
+                                    + " reserved, the program runs on cpu mask 0x" + Long.toHexString(mask)
+                                    : "; no cpu mask applied")
+                            + "; exec " + programPath);
+                    exec(programPath, argv, controlFd, auxFd, presented, mask);
                 } catch (Throwable error) {
                     say("could not exec " + programPath + ": " + error);
                     finish(EXIT_EXEC_FAILED);
@@ -195,7 +222,7 @@ public final class ExternalClientHelper {
         System.err.println(PREFIX + problem);
         System.err.println("usage: MOBILEGL_IPC_TOKEN=<token> CLASSPATH=<server APK> app_process / "
                 + ExternalClientHelper.class.getName()
-                + " [--server <package>] [--timeout-ms <n>] [--] <program> [args...]");
+                + " [--server <package>] [--timeout-ms <n>] [--keep-affinity] [--] <program> [args...]");
         System.exit(EXIT_USAGE);
     }
 
@@ -240,7 +267,8 @@ public final class ExternalClientHelper {
         return pfd.detachFd();
     }
 
-    private static void exec(String path, List<String> argv, int control, int aux, String token) throws Exception {
+    private static void exec(String path, List<String> argv, int control, int aux, String token, long cpuMask)
+            throws Exception {
         Map<String, String> env = new LinkedHashMap<>();
         String[] inherited = Os.environ();
         if (inherited != null) {
@@ -257,7 +285,18 @@ public final class ExternalClientHelper {
         env.put("MOBILEGL_IPC_TOKEN", token);
         List<String> envp = new ArrayList<>();
         for (Map.Entry<String, String> entry : env.entrySet()) envp.add(entry.getKey() + "=" + entry.getValue());
-        Os.execve(path, argv.toArray(new String[0]), envp.toArray(new String[0]));
+        if (cpuMask != 0 && new File(TASKSET).canExecute()) {
+            // No sched_setaffinity from Java: toybox taskset sets the mask and execvp's the program,
+            // which inherits it (and the two descriptors, whose close-on-exec flag is already clear).
+            List<String> wrapped = new ArrayList<>();
+            wrapped.add(TASKSET);
+            wrapped.add(Long.toHexString(cpuMask));
+            wrapped.add(path);
+            wrapped.addAll(argv.subList(1, argv.size()));
+            Os.execve(TASKSET, wrapped.toArray(new String[0]), envp.toArray(new String[0]));
+        } else {
+            Os.execve(path, argv.toArray(new String[0]), envp.toArray(new String[0]));
+        }
         throw new IllegalStateException("execve returned");
     }
 

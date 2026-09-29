@@ -94,6 +94,25 @@ public final class ServerEnvironmentTest {
         expect("an unmeasured view fills the view",
                 java.util.Arrays.toString(ServerEnvironment.aspectFit(0, 0, 640, 480)), "[-1, -1]");
 
+        // ---- P11 B1: the apply core the broker tells the helper to keep the client off ------------------
+        // The Java mirror of MG_Remote/Server/ApplyThreadPolicy.h ReservedApplyCore over DetectBigCoreMask.
+        long[] redmi = {3532800, 3532800, 3532800, 3532800, 3532800, 3532800, 4320000, 4320000};
+        expect("the Redmi (cpu6-7 prime): the LOWEST prime core, cpu6",
+                ServerEnvironment.reservedApplyCore(redmi, null), 0x40L);
+        expect("`auto` and an empty override are the policy's own", ServerEnvironment.reservedApplyCore(redmi, "auto"),
+                0x40L);
+        expect("an operator's affinity (a mask or off) reserves nothing",
+                ServerEnvironment.reservedApplyCore(redmi, "0x80") + ServerEnvironment.reservedApplyCore(redmi, "off"),
+                0L);
+        expect("a symmetric machine has no prime pair to split",
+                ServerEnvironment.reservedApplyCore(new long[]{2000000, 2000000, 2000000, 2000000}, ""), 0L);
+        expect("one prime core is not a pair",
+                ServerEnvironment.reservedApplyCore(new long[]{1800000, 1800000, 1800000, 3000000}, null), 0L);
+        expect("within 15% of the peak is big: cpu2 and cpu3 of {1.0, 1.0, 2.6, 3.0} GHz, the lowest is cpu2",
+                ServerEnvironment.reservedApplyCore(new long[]{1000000, 1000000, 2600000, 3000000}, null), 0x4L);
+        expect("an unreadable ceiling gives no answer, like the native probe",
+                ServerEnvironment.reservedApplyCore(new long[]{3532800, 0, 4320000, 4320000}, null), 0L);
+
         if (failures != 0) {
             System.err.println("ServerEnvironmentTest: " + failures + " failure(s)");
             System.exit(1);

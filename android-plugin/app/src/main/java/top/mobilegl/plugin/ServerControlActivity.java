@@ -461,7 +461,8 @@ public final class ServerControlActivity extends Activity {
         text.append(launchCommand(usable ? token : "<token>")).append("\n\n")
                 .append("Broker: ").append(getPackageName()).append('/').append(ExternalClientBroker.class.getName())
                 .append("\nThe token travels in the environment (MOBILEGL_IPC_TOKEN, or MOBILEGL_IPC_TOKEN_FILE=<file>)")
-                .append(", never on the command line. The program runs over shared memory; the server keeps")
+                .append(", never on the command line. The program runs over shared memory, off the one cpu core")
+                .append(" the server's render thread takes (--keep-affinity to opt out); the server keeps")
                 .append(" running as a foreground service. Battery: set both this app and the client's app to")
                 .append(" \"No restrictions\".");
         launchCommandView.setText(text.toString());
