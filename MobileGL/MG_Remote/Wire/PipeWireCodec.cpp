@@ -1840,10 +1840,11 @@ namespace MobileGL::MG_Remote::Wire {
             // used to decline UNCONDITIONALLY and AdoptTier had no reference anywhere on the
             // codec path, so MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises
             // "parse and are Fatal at use, naming P11" - decoded as an ordinary DECLINED and
-            // the operator got a run that looked like a working T0. AdoptTierIsEmulate returns
-            // true at T2 and ABORTS at T0/T1 on its own named diagnostic, so the return value
-            // is deliberately not a branch: P5 declines at every tier it survives (R-6), and
-            // the two forbidden ones never get this far.
+            // the operator got a run that looked like a working T0. Since P11 A1 the tier is
+            // settled at the handshake (Transport/AdoptTier.h): a stream refused T0/T1 there by
+            // name and runs T2, shared segments died there, so a settled session answers true
+            // and only a map_persistent no handshake settled still aborts by name. The return
+            // value is deliberately not a branch: every surviving tier declines (R-6).
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 (void)MG_Remote::Client::AdoptTierIsEmulate();
             }

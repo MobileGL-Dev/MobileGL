@@ -268,10 +268,13 @@ namespace MobileGL::MG_Remote::Client {
     // draw-path binding walks move to the client.
     void PushPersistentMapsBeforeVerb();
 
-    // R-6's tier gate, and the ONE spelling of it. True for MOBILEGL_IPC_ADOPT_TIER=2, the
-    // only tier P5 implements; 0 (a real cross-process shared mapping) and 1 (a server-side
-    // staging map) parse - so the negative control has a name before the thing it controls
-    // exists - and are a NAMED refusal here rather than a silent fall back to T2. It is asked
+    // R-6's tier gate, read at use. True for MOBILEGL_IPC_ADOPT_TIER=2, the only implemented
+    // tier. The tiers are design/07's: T0 = the client allocates an AHardwareBuffer and the
+    // server imports it (P11 package B), T1 = the server exports an opaque fd (closed), T2 =
+    // decline and push. 0 and 1 are SETTLED AT THE HANDSHAKE (P11 A1, Transport/AdoptTier.h):
+    // a stream refuses them by name and runs T2, a client over shared segments dies by name
+    // there. So a settled session answers true here; only a map_persistent no handshake
+    // settled is still a named refusal. It is asked
     // by MGPipeApplyMapPersistent, which is where the decline is decided, so the client's
     // three adoption call sites keep their existing "null means declined" branch and the
     // map-persistent-roundtrips counter keeps counting ATTEMPTS in both arms (E3(c) asserts

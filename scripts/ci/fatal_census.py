@@ -184,7 +184,7 @@ FAMILY_ROW = re.compile(r"^\s*X\(([A-Za-z][A-Za-z0-9]*)\s*,", re.MULTILINE)
 REFUSE_ENUM = re.compile(r"enum\s+RefuseCode\s*:[^{]*\{(.*?)\}", re.DOTALL)
 ENUM_VALUE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", re.MULTILINE)
 
-# Two client-side declines that borrow the Refuse vocabulary for a refusal that never becomes a
+# Local declines that borrow the Refuse vocabulary for a refusal that never becomes a
 # wire Refuse frame, so no peer ever reads the word and no RefuseCode can carry it. Listed rather
 # than renamed: inventing enumerators for them would move `wireFingerprint`, which is a protocol
 # change and not a wave-0 instrument's to make. Recorded for the integrator.
@@ -195,6 +195,9 @@ LOCAL_REFUSAL_WORDS = {
     "InitialCapsSnapshot":
         "ClientSession.cpp:1292/:1302 - the CLIENT refusing a Welcome that carried no initial "
         "capabilities; the handshake has already been answered, so the decline is local",
+    "AdoptTierOnStream":
+        "Transport/AdoptTier.cpp (P11 A1) - either side refusing its OWN MOBILEGL_IPC_ADOPT_TIER=0/1 "
+        "on a stream data plane and running T2; the session goes on, so no Refuse frame is sent",
 }
 
 

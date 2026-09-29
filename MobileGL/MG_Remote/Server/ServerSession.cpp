@@ -15,6 +15,7 @@
 #include "../CapsCodec.h"
 #include "../Handshake.h"
 #include "../Transport/LinkMetrics.h"
+#include "../Transport/AdoptTier.h"
 #include "../Protocol/generated/protocol_generated.h"
 #include "../Transport/InProcessTransport.h"
 
@@ -672,6 +673,11 @@ namespace MobileGL::MG_Remote::Server {
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Backend,
                 "backend request differs from server", m_backend == nullptr ? 0 :
                 static_cast<Uint32>(m_backend->GetBackendType()), hello->backendType());
+
+        // ---- P11 A1: this side's adopt tier, from its own knob and the plane the Hello asked
+        // for, before a byte of Welcome. A stream refuses T0/T1 by name and serves T2; over
+        // shared segments the client settles it (Transport/AdoptTier.h). 0/1 never die here.
+        (void)Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Server);
 
         // ---- 3. the four segments, both control pages, the rings.
         MobileGLResult created = MOBILEGL_ERR_UNSUPPORTED;

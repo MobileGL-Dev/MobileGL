@@ -19,6 +19,7 @@
 #include "../Server/ServerLoop.h"
 #include "../Server/ServerSession.h"
 #include "../Protocol/SurfaceOpCodec.h"
+#include "../Transport/AdoptTier.h"
 #include "../Transport/FdPassing.h"
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
@@ -790,6 +791,11 @@ namespace MobileGL::MG_Remote::Client {
                 Stop();
                 return result;
             }
+            // P11 A1: the adopt tier, settled by the side that holds the knob once the link terms
+            // say which plane this is (inproc is shared segments by construction), before any
+            // record. T0/T1 over shared segments die here by name (Transport/AdoptTier.h).
+            (void)Transport::SettleAdoptTierAtHandshake(
+                terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream, Transport::AdoptTierSide::Client);
             // The four SegmentRefs are what a spawn client MAPS (P6). Under inproc the mapping
             // already exists, so what they are good for here is the cross-check that the two
             // sides agree about the geometry at all - which is the assertion that would
@@ -1026,6 +1032,10 @@ namespace MobileGL::MG_Remote::Client {
                 return result;
             }
             stream = terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream;
+            // P11 A1: as in StartOverTransportPair - the knob against the plane the link terms
+            // settled, before the data connection and before any record. A stream refuses T0/T1
+            // by name and runs T2; shared segments die here by name (Transport/AdoptTier.h).
+            (void)Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Client);
             if (stream) {
                 // PH-7 (4). A Stream Welcome without a nonce of exactly the minted width names no
                 // data connection this client could open; refused rather than guessed at.

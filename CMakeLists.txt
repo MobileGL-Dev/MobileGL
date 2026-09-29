@@ -613,6 +613,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
         # umbrella header - out of the header-only wire code (WireLog.h).
         MobileGL/MG_Remote/Transport/WireLog.cpp
+        # P11 A1: the adopt tier settled at the handshake from the knob and the data plane, by
+        # both roles (so SERVER-partition code in the link ratchet, not the client's tracker).
+        MobileGL/MG_Remote/Transport/AdoptTier.cpp
         # ---- P5: the three new directories ------------------------------
         # Wire/   the G3 codec: MGPWireRec_* in and out of SEG_CMD, blobs and
         #         var-tails in and out of SEG_STAGE.                    [w1]

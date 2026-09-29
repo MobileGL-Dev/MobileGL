@@ -257,7 +257,7 @@ namespace {
     // RESIDENT, residency comes only from AdoptPersistentMap, and every persistent-map
     // acquisition declines under split by R-6 (PipeApply.cpp's MGPipeApplyMapPersistent:
     // "A SPLIT BUILD RUNS AT TIER T2 AND DECLINES EVERY ACQUISITION, ALWAYS"; T0/T1 are
-    // P11's and AdoptTierIsEmulate is a named Fatal for them). So the capability is wired
+    // unimplemented, refused by name at the handshake since P11 A1). So the capability is wired
     // AHEAD of its consumer on purpose, and `rsd=` on the PipeStats line is the counter that
     // will show the records the day P11 lands a tier that adopts. See notes/p7/magma-c.md.
     TEST_F(CtWireScenario, TheServerPublishesTheResidentSubDataCapabilityFromItsOwnTable) {

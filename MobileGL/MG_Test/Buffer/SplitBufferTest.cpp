@@ -30,6 +30,7 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Client/GpuWritePending.h>
 #include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_Remote/Transport/AdoptTier.h>
 #endif
 
 using namespace MobileGL;
@@ -84,6 +85,7 @@ namespace {
             // membership assertion in this file would then be about a different code path.
             MG_State::GLState::SetBufferBackendOps(nullptr);
             g_mintedPersistentBase = nullptr;
+            MG_Remote::Transport::ForgetAdoptTierSettlementForTest();
             PersistentMapTracker::Instance().ClearForTest();
             MG_State::pGLContext = Move(m_context);
             MG_Config::Transport = m_transport;
@@ -536,14 +538,31 @@ TEST_F(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheReques
     EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
 }
 
-// R-6's tier gate. T2 is the only tier P5 implements; the other two are a NAMED refusal and
-// their spelling exists now so the P11 negative control has one.
+// R-6's tier gate in P11 A1's shape (CONTRACT-P11 §1). T2 is the only implemented tier, and 0 / 1
+// are SETTLED AT THE HANDSHAKE by the data plane rather than discovered at the first
+// map_persistent: a stream refuses them by name and runs T2 on either side, a client over shared
+// segments dies there by name, a server over shared segments serves T2. The at-use check trusts a
+// settled session and still dies by name for a map_persistent no handshake settled. The session
+// halves are RemoteClientControls.AdoptTier*OverSharedSegments* and AdoptTierStreamTest.
 TEST_F(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) {
+    namespace Tier = MG_Remote::Transport;
     EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
-    MG_Config::Ipc.AdoptTier = 0;
-    EXPECT_DEATH(MG_Remote::Client::AdoptTierIsEmulate(), "");
-    MG_Config::Ipc.AdoptTier = 1;
-    EXPECT_DEATH(MG_Remote::Client::AdoptTierIsEmulate(), "");
+    for (const Uint32 tier : {0u, 1u}) {
+        SCOPED_TRACE(tier);
+        MG_Config::Ipc.AdoptTier = tier;
+        Tier::ForgetAdoptTierSettlementForTest();
+        EXPECT_DEATH(MG_Remote::Client::AdoptTierIsEmulate(), "UnimplementedAdoptTier.*no handshake settled");
+        EXPECT_DEATH(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Client),
+                     "UnimplementedAdoptTier.*refused at the handshake over shared segments");
+        for (const auto side : {Tier::AdoptTierSide::Client, Tier::AdoptTierSide::Server}) {
+            Tier::ForgetAdoptTierSettlementForTest();
+            EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(true, side), 2u);
+            EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
+        }
+        Tier::ForgetAdoptTierSettlementForTest();
+        EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Server), 2u);
+        EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
+    }
     MG_Config::Ipc.AdoptTier = 2;
 }
 

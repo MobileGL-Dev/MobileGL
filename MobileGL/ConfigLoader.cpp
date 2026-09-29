@@ -430,8 +430,8 @@ namespace MobileGL::MG_ConfigLoader {
         // torn read rather than a divergence. The batch is therefore off whenever the
         // shadow comparer is armed.
         if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
-        // 2 is the only tier P5 implements (R-6). 0 and 1 parse here and are refused at the
-        // point of use, which is where the "P11" in the message belongs.
+        // 2 is the only implemented tier (R-6). 0 and 1 parse here and are settled at the
+        // handshake from the data plane (P11 A1, MG_Remote/Transport/AdoptTier.h).
         ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);
         ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
         // P5e (MG_Remote/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every

@@ -8,6 +8,7 @@
 
 #include "PersistentMapTracker.h"
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Remote/Transport/AdoptTier.h>
 
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
@@ -1246,27 +1247,23 @@ namespace MobileGL::MG_Remote::Client {
     Bool AdoptTierIsEmulate() {
         const Uint32 tier = MG_Config::Ipc.AdoptTier;
         if (tier == 2) return true;
-        // A NAMED refusal, not a silent fall back to T2. T0 (a real cross-process shared
-        // mapping) and T1 (a server-side staging map) are P11's, and the reason the knob
-        // parses them today is that the negative control needs a spelling before the thing
-        // it controls exists. Falling back would make `MOBILEGL_IPC_ADOPT_TIER=0` look like
-        // a working T0 run and silently produce pmap bytes it must not produce.
-        // 0 and 1 are the two CONTRACT §5 promises - a real cross-process shared mapping and a
-        // server-side staging map - and they name P11. Anything else is not a tier at all, and
-        // saying "P11 implements it" of a 7 would be a lie the operator then repeats. Both die
-        // here rather than at parse, which is late: the abort lands at the first
-        // map_persistent, so a mis-set run gets through EGL bring-up and a frame of setup
-        // first. Moving it to the parse means a knob-validity rule in ConfigLoader, which is
-        // c0's file; filed for the integrator rather than taken here.
-        // `dl` (CONTRACT-P6 5.2): THE FAMILY WORD THIS SITE NEVER CARRIED. a6 found two aborts
-        // under MG_Remote/ with no Fatal{ marker at all, so "the log stays verbatim" was not true
-        // of them and no family grep could see them - this is one. (The other, WireLog.cpp's, is
-        // the sanctioned funnel: every one of its callers passes a Fatal{ string of its own.)
+        // P11 A1 (CONTRACT-P11 §1): THE VERDICT IS THE HANDSHAKE'S, NOT THIS CALL'S. Both roles
+        // settle the tier from the knob and the data plane before the first record
+        // (Transport/AdoptTier.cpp): a stream refuses T0/T1 by name and runs T2, a client over
+        // shared segments dies by name there, and a server over shared segments serves the T2
+        // its client settled. So a settled session reaching this with 0/1 is a T2 session and
+        // says nothing more - the one line was the handshake's.
+        if (tier <= 1 && Transport::AdoptTierSettledAtHandshake()) return true;
+        // A map_persistent NO handshake settled (a session-free caller) is still a NAMED
+        // refusal rather than a silent T2: falling back would make `MOBILEGL_IPC_ADOPT_TIER=0`
+        // look like a working T0 run and silently produce pmap bytes it must not produce.
+        // Anything above 2 is not a tier at all.
+        // `dl` (CONTRACT-P6 5.2): the family word every death here carries.
         if (tier <= 1) {
             SessionFail(MGFatalFamily::UnimplementedAdoptTier,
                     "MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
-                    "names an adoption tier P11 implements and P5 does not; P5 runs at T2 "
-                    "(emulate) only.",
+                    "reached a map_persistent that no handshake settled; T0 and T1 are not "
+                    "implemented and only T2 (emulate) runs.",
                     static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         } else {
             SessionFail(MGFatalFamily::UnimplementedAdoptTier,

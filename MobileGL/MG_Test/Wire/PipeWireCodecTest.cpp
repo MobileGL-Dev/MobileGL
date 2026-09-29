@@ -51,6 +51,7 @@
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/CapsCodec.h>
+#include <MG_Remote/Transport/AdoptTier.h>
 #include <MG_Remote/Transport/Ring.h>
 #include <MG_Remote/Wire/PipeWireCodec.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
@@ -2947,31 +2948,76 @@ TEST_F(PipeWireCodecTest, ASecondProcessResolverIsFatalRatherThanASilentRace) {
     EXPECT_NE(r.Log.find("already installed"), std::string::npos) << r.Log;
 }
 
-// ---- R-6 / contract §5: the two forbidden adoption tiers die ON THE WIRE PATH TOO --------
+// ---- R-6 / P11 A1 (CONTRACT-P11 §1): the codec's MapPersistent arm and the adopt tier -----
 //
-// wave1-codex-verify.md §4: `AdoptTier` had ZERO references anywhere on the codec path, so
-// MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises "parse and are Fatal at use,
-// naming P11" - decoded as an ordinary DECLINED. The verifier set each forbidden tier inside
-// KReplySlotMapPersistentIsAConstantDecline and watched its successful-decline assertions
-// still pass, on BOTH tiers.
-//
-// THESE ARE FORKED, NOT EXPECT_DEATH, for the reason at the top of this file - and forking is
-// what lets the case REQUIRE THE DIAGNOSTIC rather than any abort: r.Log is searched for the
-// exact sentence AdoptTierIsEmulate prints. ID-46 finding 10 is an empty death regex; the
-// EXPECT_NE lines below are the opposite of that, and a crash for any other reason fails the
-// case on the log it prints.
-//
-// I made both red once, by doing X: X = restoring the unconditional decline in
-// PipeWireCodec.cpp's MapPersistent arm (deleting the AdoptTierIsEmulate call). Both children
-// then exit 0 having posted a clean DECLINED, and both cases fail on DiedOfAbort.
+// wave1-codex-verify.md §4 found `AdoptTier` had ZERO references on the codec path, so a T0/T1
+// run decoded as an ordinary DECLINED and looked like a working T0. The arm has asked the tier
+// since. P11 A1 moved the VERDICT to the handshake (Transport/AdoptTier.h): a stream refuses
+// T0/T1 by name there and runs T2, shared segments die there. So this arm now sees two shapes:
+//   * after a stream handshake settled the tier, T0/T1 DECLINE like T2, with no second refusal
+//     line - the two cases below that used to be "dies at use";
+//   * with no handshake behind it, the arm still dies by name (forked, for the log), which keeps
+//     the wave-1 finding pinned: red once by deleting the arm's AdoptTierIsEmulate call - the
+//     child then exits 0 having posted a clean DECLINED.
+// The session-level halves are AdoptTierStreamTest and RemoteClientControls.AdoptTier*.
 
-TEST_F(PipeWireCodecTest, AdoptTierZeroIsFatalOnTheWirePathAndNamesP11) {
+namespace {
+    void ExpectStreamSettledTierDeclinesOnTheWire(Uint32 tier) {
+        const MG_Config::TransportMode savedTransport = MG_Config::Transport;
+        const Uint32 savedTier = MG_Config::Ipc.AdoptTier;
+        struct Restore {
+            MG_Config::TransportMode T;
+            Uint32 A;
+            ~Restore() {
+                MG_Config::Transport = T;
+                MG_Config::Ipc.AdoptTier = A;
+                Transport::ForgetAdoptTierSettlementForTest();
+            }
+        } restore{savedTransport, savedTier};
+        MG_Config::Transport = MG_Config::TransportMode::InProcess;
+        MG_Config::Ipc.AdoptTier = tier;
+        Transport::ForgetAdoptTierSettlementForTest();
+        const std::string before = ReadLog();
+        ASSERT_EQ(Transport::SettleAdoptTierAtHandshake(true, Transport::AdoptTierSide::Server), 2u);
+
+        Wire2 wire;
+        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
+        for (int record = 0; record < 2; ++record) {
+            ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)), kInvalidSeq);
+            bool applied = false;
+            ASSERT_TRUE(wire.PumpOne(&applied));
+            EXPECT_TRUE(applied);
+        }
+        ASSERT_EQ(wire.Answers().All.size(), 2u);
+        for (const auto& answer : wire.Answers().All) {
+            EXPECT_EQ(answer.Status, ReplySink::kStatusDeclined);
+            EXPECT_TRUE(answer.Bytes.empty());
+        }
+        const std::string delta = ReadLog().substr(before.size());
+        const std::string line = "Refuse{AdoptTierOnStream, \"T" + std::to_string(tier) + "\"}";
+        std::size_t count = 0;
+        for (auto at = delta.find(line); at != std::string::npos; at = delta.find(line, at + 1)) ++count;
+        EXPECT_EQ(count, 1u) << "one refusal at the handshake and none per map_persistent:\n" << delta;
+        EXPECT_EQ(delta.find("Fatal{"), std::string::npos) << delta;
+    }
+} // namespace
+
+TEST_F(PipeWireCodecTest, AdoptTierZeroAfterAStreamHandshakeIsADeclineOnTheWirePath) {
+    ExpectStreamSettledTierDeclinesOnTheWire(0u);
+}
+
+TEST_F(PipeWireCodecTest, AdoptTierOneAfterAStreamHandshakeIsADeclineOnTheWirePath) {
+    ExpectStreamSettledTierDeclinesOnTheWire(1u);
+}
+
+TEST_F(PipeWireCodecTest, AnUnsettledAdoptTierStillDiesByNameOnTheWirePath) {
     const ChildResult r = RunInChild([] {
         // The child dies; nothing needs restoring. The transport half is the same conjunction
         // MGPipeApplyMapPersistent uses - a monolith TRANSPORT mints like push (ID-42) and is
         // not the arm this record can arrive on.
         MG_Config::Transport = MG_Config::TransportMode::InProcess;
         MG_Config::Ipc.AdoptTier = 0u;
+        Transport::ForgetAdoptTierSettlementForTest();
         Wire2 wire;
         const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
         (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
@@ -2980,24 +3026,7 @@ TEST_F(PipeWireCodecTest, AdoptTierZeroIsFatalOnTheWirePathAndNamesP11) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnimplementedAdoptTier, \"T0\"} - MOBILEGL_IPC_ADOPT_TIER=0 "
-                          "names an adoption tier P11 implements"),
-              std::string::npos)
-        << r.Log;
-}
-
-TEST_F(PipeWireCodecTest, AdoptTierOneIsFatalOnTheWirePathAndNamesP11) {
-    const ChildResult r = RunInChild([] {
-        MG_Config::Transport = MG_Config::TransportMode::InProcess;
-        MG_Config::Ipc.AdoptTier = 1u;
-        Wire2 wire;
-        const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
-        (void)wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle));
-        bool applied = false;
-        (void)wire.PumpOne(&applied);
-    });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnimplementedAdoptTier, \"T1\"} - MOBILEGL_IPC_ADOPT_TIER=1 "
-                          "names an adoption tier P11 implements"),
+                          "reached a map_persistent that no handshake settled"),
               std::string::npos)
         << r.Log;
 }
