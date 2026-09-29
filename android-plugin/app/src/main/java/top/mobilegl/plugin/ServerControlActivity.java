@@ -84,7 +84,9 @@ public final class ServerControlActivity extends Activity {
                         + "Endpoint forms: tcp://host:port for remote clients, @name for an "
                         + "on-device abstract socket, or a filesystem path (relative to the app's "
                         + "files dir) for on-device clients. Non-loopback TCP requires a token of at "
-                        + "least " + MIN_TOKEN_BYTES + " bytes; unix endpoints need none. Extra env "
+                        + "least " + MIN_TOKEN_BYTES + " bytes; unix endpoints need none, but GL programs "
+                        + "from other apps (Termux, adb shell) reach the server through its broker, which "
+                        + "needs one (see the launch command below). Extra env "
                         + "uses the KEY=VALUE;KEY grammar (e.g. MOBILEGL_BACKEND_TYPE=DirectVulkan). "
                         + "One server per device: the two modes replace each other.",
                 12, COLOR_INFO, false);
@@ -135,6 +137,8 @@ public final class ServerControlActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         statusParams.topMargin = dp(12);
         contentLayout.addView(statusView, statusParams);
+
+        addExternalClientSection(contentLayout);
 
         if (isServerRunning()) {
             setStatus("A server is running (started outside this screen).", COLOR_WARN);
@@ -368,6 +372,99 @@ public final class ServerControlActivity extends Activity {
             }
         }
         return false;
+    }
+
+    // ---- P11 B1 (CONTRACT-P11 B1): the launch command for same-device external clients ----------
+    //
+    // A GL program started from another app (Termux, adb shell) cannot connect to this app's unix
+    // endpoint (SELinux), so it runs ExternalClientHelper under app_process with THIS APK as its class
+    // path; the helper asks ExternalClientBroker for a connected pair and execs the program on it. The
+    // program's side needs three facts it cannot look up itself - package visibility filters `pm path`
+    // for an app, and a native program has no Context - so this screen prints them: the APK path, the
+    // helper class, the broker component, and how the token travels (the environment, never argv).
+
+    private TextView launchCommandView;
+
+    private void addExternalClientSection(LinearLayout parent) {
+        TextView title = makeText("Same-device GL programs (Termux, adb shell, other apps)", 14, COLOR_TEXT, true);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleParams.topMargin = dp(20);
+        parent.addView(title, titleParams);
+
+        launchCommandView = makeText("", 12, COLOR_INFO, false);
+        launchCommandView.setTextIsSelectable(true);
+        LinearLayout.LayoutParams commandParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        commandParams.topMargin = dp(8);
+        parent.addView(launchCommandView, commandParams);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        rowParams.topMargin = dp(8);
+        parent.addView(row, rowParams);
+
+        Button generate = new Button(this);
+        generate.setText("Generate token");
+        generate.setAllCaps(false);
+        generate.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        generate.setOnClickListener(v -> {
+            byte[] bytes = new byte[16];
+            new java.security.SecureRandom().nextBytes(bytes);
+            StringBuilder hex = new StringBuilder();
+            for (byte b : bytes) hex.append(String.format(Locale.ROOT, "%02x", b & 0xff));
+            tokenField.setText(hex.toString());
+        });
+        row.addView(generate);
+
+        Button copy = new Button(this);
+        copy.setText("Copy launch command");
+        copy.setAllCaps(false);
+        copy.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        copyParams.leftMargin = dp(8);
+        row.addView(copy, copyParams);
+        copy.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MobileGL launch command",
+                    launchCommand(tokenField.getText().toString())));
+            setStatus("Launch command copied (it carries the token: paste it only where you run the program).",
+                    COLOR_INFO);
+        });
+
+        tokenField.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(android.text.Editable s) { refreshLaunchCommand(); }
+        });
+        refreshLaunchCommand();
+    }
+
+    /** The one line a user pastes before their program: token in the environment, the APK as class path. */
+    private String launchCommand(String token) {
+        return "MOBILEGL_IPC_TOKEN='" + token + "' CLASSPATH=" + getApplicationInfo().sourceDir
+                + " app_process / " + ExternalClientHelper.class.getName() + " -- <program> [args...]";
+    }
+
+    private void refreshLaunchCommand() {
+        if (launchCommandView == null) return;
+        String token = tokenField.getText().toString();
+        boolean usable = token.getBytes().length >= ExternalClientBroker.MIN_TOKEN_BYTES;
+        StringBuilder text = new StringBuilder();
+        if (!usable) {
+            text.append("Needs an Auth token of at least ").append(ExternalClientBroker.MIN_TOKEN_BYTES)
+                    .append(" bytes (Generate token), then start the server offscreen.\n\n");
+        }
+        text.append(launchCommand(usable ? token : "<token>")).append("\n\n")
+                .append("Broker: ").append(getPackageName()).append('/').append(ExternalClientBroker.class.getName())
+                .append("\nThe token travels in the environment (MOBILEGL_IPC_TOKEN, or MOBILEGL_IPC_TOKEN_FILE=<file>)")
+                .append(", never on the command line. The program runs over shared memory; the server keeps")
+                .append(" running as a foreground service. Battery: set both this app and the client's app to")
+                .append(" \"No restrictions\".");
+        launchCommandView.setText(text.toString());
     }
 
     /** {host, port} for tcp://host:port, or null. */

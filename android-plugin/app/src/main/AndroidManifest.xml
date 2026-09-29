@@ -49,6 +49,18 @@
             android:exported="${serverComponentsExported}"
             android:foregroundServiceType="dataSync"
             android:process=":mglsrv" />
+        <!-- P11 B1 (CONTRACT-P11 B1): the connection broker for a same-device GL client in another
+             security context (Termux, adb shell, another app), reached by ExternalClientHelper - an
+             app_process under the client's uid - in an explicit broadcast. It checks the IPC token
+             against the running server's, connects twice to the server's own unix endpoint (which
+             SELinux lets only this app do) and hands the client ends back over Binder. EXPORTED IN
+             BOTH FLAVOURS: that is the point of it, and the token is the guard (a server started
+             without a token of at least 16 bytes hands out nothing). In the server's own process,
+             where the running service's endpoint and token are; it never starts the server. -->
+        <receiver
+            android:name=".ExternalClientBroker"
+            android:exported="true"
+            android:process=":mglsrv" />
         <!-- P12 (on-screen server window): the ON-SCREEN display server. Its own process (:mglwin)
              runs the TCP server on a thread and renders a headless client's window surface
              (MOBILEGL_IPC_SURFACE=server) onto its SurfaceView. One server at a time: starting it

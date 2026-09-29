@@ -25,7 +25,38 @@ public final class MobileGLServerService extends Service {
     // P12 (D8): the on-screen display server's process. Only one server is active on the device.
     private static final long DISPLAY_SERVER_EXIT_WAIT_MS = 5000;
     private volatile Process supervisor;
+    // P11 B1: the private abstract listener beside a TCP-only supervisor (see BrokerTarget).
+    private volatile Process brokerSupervisor;
     private PowerManager.WakeLock wakeLock;
+
+    /**
+     * P11 B1 (CONTRACT-P11 B1): where {@link ExternalClientBroker} connects for a same-device client in
+     * another security context, and the token it checks. A unix endpoint (@name or a path) is used as
+     * it is; a TCP-only server gets a second supervisor on a private abstract name beside it - same
+     * binary, same environment and token - because the broker's descriptors must be a unix pair to
+     * carry the shared segments. Only this app's processes can connect to either (SELinux).
+     */
+    static final class BrokerTarget {
+        final String endpoint;
+        final String token;
+        final Process process;
+
+        BrokerTarget(String endpoint, String token, Process process) {
+            this.endpoint = endpoint;
+            this.token = token;
+            this.process = process;
+        }
+    }
+
+    // Set when a supervisor the broker can reach is running, cleared when it stops. The broker runs
+    // in this same process (:mglsrv), so a broadcast that finds null here finds no server.
+    private static volatile BrokerTarget brokerTarget;
+
+    /** The running server's broker target, or null when none is running. */
+    static BrokerTarget brokerTarget() {
+        BrokerTarget target = brokerTarget;
+        return target != null && target.process != null && target.process.isAlive() ? target : null;
+    }
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -102,46 +133,75 @@ public final class MobileGLServerService extends Service {
         stopDisplayServer();
         String endpoint = intent == null ? null : intent.getStringExtra("listen");
         if (endpoint == null) endpoint = "tcp://127.0.0.1:40613";
+        final String envExtra = intent == null ? null : intent.getStringExtra("env");
+        final String token = intent == null ? null : intent.getStringExtra("token");
         try {
-            File executable = new File(getApplicationInfo().nativeLibraryDir, "libMobileGLServer.so");
-            ProcessBuilder builder = new ProcessBuilder(executable.getAbsolutePath(), endpoint, "--serve");
-            builder.directory(getFilesDir()).redirectErrorStream(true);
-            Map<String, String> env = builder.environment();
-            // The replay runner's KEY=VALUE;KEY grammar (unset and empty values included) and the
-            // server role's forced keys, shared with MobileGLDisplayActivity (P12 D7).
-            ServerEnvironment.applyServerRole(env,
-                    intent == null ? null : intent.getStringExtra("env"),
-                    intent == null ? null : intent.getStringExtra("token"),
-                    /*backend=*/null,
-                    new File(getFilesDir(), "mgl.log").getAbsolutePath());
-            env.put("LD_LIBRARY_PATH", getApplicationInfo().nativeLibraryDir);
-            supervisor = builder.start();
-            final Process child = supervisor;
-            new Thread(() -> {
-                try (BufferedReader output = new BufferedReader(new InputStreamReader(child.getInputStream()))) {
-                    String line;
-                    while ((line = output.readLine()) != null) Log.i(TAG, line);
-                    Log.i(TAG, "supervisor exited " + child.waitFor());
-                } catch (java.io.InterruptedIOException stopped) {
-                    // onDestroy's Process.destroy() closes this stream under the read: the service
-                    // is being stopped (P12 D8: the display Activity stops it), not failing.
-                    Log.i(TAG, "supervisor output closed: the service is stopping");
-                } catch (Exception error) {
-                    Log.e(TAG, "supervisor output failed", error);
-                } finally {
-                    stopSelf(startId);
-                }
-            }, "mgl-supervisor-log").start();
+            supervisor = startSupervisor(endpoint, envExtra, token, "mgl-supervisor-log", startId, true);
+            // P11 B1: the broker's target. A unix endpoint is reachable by this app as it is (a
+            // relative path resolves against filesDir, the supervisor's working directory); a TCP
+            // one gets a private abstract listener of its own (BrokerTarget).
+            if (endpoint.startsWith("tcp://")) {
+                String privateName = "@" + getPackageName() + ".broker." + Long.toHexString(
+                        new java.security.SecureRandom().nextLong() & 0xffffffffL);
+                brokerSupervisor = startSupervisor(privateName, envExtra, token, "mgl-broker-supervisor-log",
+                        startId, false);
+                brokerTarget = new BrokerTarget(privateName, token, brokerSupervisor);
+                Log.i(TAG, "same-device external clients: broker listener " + privateName
+                        + " beside the TCP-only supervisor on " + endpoint);
+            } else {
+                String unix = endpoint.startsWith("@") || endpoint.startsWith("/") ? endpoint
+                        : new File(getFilesDir(), endpoint).getAbsolutePath();
+                brokerTarget = new BrokerTarget(unix, token, supervisor);
+                Log.i(TAG, "same-device external clients: the broker connects to " + unix);
+            }
         } catch (Exception error) {
             Log.e(TAG, "cannot start TCP supervisor", error);
+            brokerTarget = null;
             stopSelf(startId);
         }
         return START_NOT_STICKY;
     }
 
+    /**
+     * Execs one {@code libMobileGLServer.so <endpoint> --serve} with the server role's environment and
+     * logs its output. When {@code primary}, its exit stops the service.
+     */
+    private Process startSupervisor(String endpoint, String envExtra, String token, String logThreadName,
+                                    int startId, boolean primary) throws java.io.IOException {
+        File executable = new File(getApplicationInfo().nativeLibraryDir, "libMobileGLServer.so");
+        ProcessBuilder builder = new ProcessBuilder(executable.getAbsolutePath(), endpoint, "--serve");
+        builder.directory(getFilesDir()).redirectErrorStream(true);
+        Map<String, String> env = builder.environment();
+        // The replay runner's KEY=VALUE;KEY grammar (unset and empty values included) and the
+        // server role's forced keys, shared with MobileGLDisplayActivity (P12 D7).
+        ServerEnvironment.applyServerRole(env, envExtra, token, /*backend=*/null,
+                new File(getFilesDir(), primary ? "mgl.log" : "mgl.broker.log").getAbsolutePath());
+        env.put("LD_LIBRARY_PATH", getApplicationInfo().nativeLibraryDir);
+        final Process child = builder.start();
+        new Thread(() -> {
+            try (BufferedReader output = new BufferedReader(new InputStreamReader(child.getInputStream()))) {
+                String line;
+                while ((line = output.readLine()) != null) Log.i(TAG, line);
+                Log.i(TAG, (primary ? "supervisor" : "broker supervisor") + " exited " + child.waitFor());
+            } catch (java.io.InterruptedIOException stopped) {
+                // onDestroy's Process.destroy() closes this stream under the read: the service
+                // is being stopped (P12 D8: the display Activity stops it), not failing.
+                Log.i(TAG, "supervisor output closed: the service is stopping");
+            } catch (Exception error) {
+                Log.e(TAG, "supervisor output failed", error);
+            } finally {
+                if (primary) stopSelf(startId);
+            }
+        }, logThreadName).start();
+        return child;
+    }
+
     @Override public void onDestroy() {
+        brokerTarget = null;
         Process child = supervisor;
         if (child != null) child.destroy();
+        Process broker = brokerSupervisor;
+        if (broker != null) broker.destroy();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopForeground(STOP_FOREGROUND_REMOVE);
         super.onDestroy();

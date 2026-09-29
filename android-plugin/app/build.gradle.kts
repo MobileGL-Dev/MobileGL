@@ -169,6 +169,9 @@ android {
 
     buildFeatures {
         resValues = true
+        // P11 B1: ExternalClientHelper's default --server is BuildConfig.APPLICATION_ID - the package of
+        // the very APK an app_process loaded it from (flavour and id suffix included).
+        buildConfig = true
     }
 
     flavorDimensions += "profile"
