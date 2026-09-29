@@ -537,11 +537,13 @@ void main() { oColor = texture(uTex, vUv); }
                 return;
             }
 
-            // THE NUMBER ROADMAP OPEN QUESTION 2 ASKS FOR: a texture Espryt allocated BEFORE the
-            // hint reached it is re-minted image-bindable at the bind - its levels replayed from
-            // the client's shadow in monolith - one re-mint, counted. Under inproc the server
-            // keeps this immutable RGBA8 allocation instead and counts nothing (P9 W2). Arming
-            // the counter here is what makes it readable without a stats-enabled lane.
+            // THE NUMBER ROADMAP OPEN QUESTION 2 ASKS FOR, on a texture Espryt allocated BEFORE the
+            // hint reached it. An immutable RGBA8 allocation is already what an image unit needs,
+            // so neither arm re-mints it and the counter does not move: the server has kept it
+            // since P9 W2, and the monolith re-mint has had the same keep path since dev's
+            // 568090f0 (merged in P11 M), where it used to re-mint from the shadow and count one.
+            // A counted re-mint is TextureRemintPullScenario's A and H. Arming the counter here is
+            // what makes it readable without a stats-enabled lane.
             unsigned long long pullsBefore = 0;
             const bool pullsReadable = PeekPipeStatsTextureRemintPulls(&pullsBefore);
 
@@ -581,11 +583,10 @@ void main() { oColor = texture(uTex, vUv); }
 
             // THE TRANSITION. An immutable texture has no storage-defining respecify left, so the
             // hint can only arrive as a metadata update (ID-18 M4). Espryt syncs the texture
-            // eagerly inside glBindImageTexture and the widening re-mints its storage, replaying
-            // every defined level from the shadow (the re-mint the counter below counts), so
-            // the standing upload is consumed by that regeneration here and the picture that
-            // follows is blue whatever the metadata respecify did to the record - the KEPT
-            // property is proved further down, on a texture no re-mint stands in front of.
+            // eagerly inside glBindImageTexture and KEEPS the allocation (above), so the standing
+            // upload is consumed by the kept storage's own sync and the picture that follows is
+            // blue - the KEPT property of the record is proved further down, on a texture that is
+            // image-bindable already.
             (void)uploadsBeforeBind;
             (void)uploadsReadable;
             glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
@@ -609,14 +610,10 @@ void main() { oColor = texture(uTex, vUv); }
                 const auto runtime = PeekSplitRuntime();
                 if (runtime.transportResolved && runtime.transportName == "inproc") {
                     ASSERT_TRUE(runtime.sessionActive);
-                    EXPECT_EQ(pullsAfter, pullsBefore)
-                        << "the server must preserve this already immutable RGBA8 allocation; "
-                           "image binding needs no re-mint";
-                } else {
-                    EXPECT_EQ(pullsAfter, pullsBefore + 1)
-                        << "the monolith re-mint of a texture allocated before its hint was not counted "
-                           "(trp= on the stats line is ROADMAP open question 2's number)";
                 }
+                EXPECT_EQ(pullsAfter, pullsBefore)
+                    << "an already immutable RGBA8 allocation must be kept on every arm; image binding "
+                       "needs no re-mint (trp= on the stats line is ROADMAP open question 2's number)";
             }
 
             // THE PREVENTION HALF, measured the other way round: a texture whose hint arrives at
