@@ -13,7 +13,7 @@
 | 后端 | 入世界、画面上屏 | `kill -9` server | FCL 之后 |
 |---|---|---|---|
 | Espryt（DirectGLES） | ✅ 夜晚草原，天空 / 树 / 手 / 快捷栏都在；client `present` 计数持续增长 | `DEVICE LOST`（1 行），54 ms（修日志洪水前的构建，精确计时）；修后构建同样闩锁 1 次 | 进程还在（修前构建观察 100 s；修后构建 ≥ 20 s），后续 present 被 DECLINED 空转 |
-| Magma（DirectVulkan） | ✅ 画面上屏、`present` 持续增长 | `DEVICE LOST`（1 行），33 ms（修前构建，精确计时）；修后构建同样闩锁 1 次 | 进程还在（修前 ≥ 30 s；修后 ≥ 10 s） |
+| Magma（DirectVulkan） | ✅ 画面上屏、`present` 持续增长；竖屏窗口里也是完整画面（几何修复后） | `DEVICE LOST`（1 行），33 ms（修前构建，精确计时）；修后构建同样闩锁 1 次 | 进程还在（修前 ≥ 30 s；修后 ≥ 10 s） |
 
 ## 为了跑通做的三件事
 
@@ -28,7 +28,16 @@
 
 ## 没验证 / 观察到的
 
-- **Magma 在竖屏 server 窗口里画面位置不对**：游戏帧 2620×1280，窗口 1280×2620，画面只出现在窗口下部、被裁掉一部分；Espryt 那次是横屏窗口，没有这个现象。是几何 / 预旋转问题，还没查。
+- （已修）竖屏 server 窗口里画面被裁：见下一节。
 - 没测性能、没测输入（server 窗口不转发触摸，游戏是自己进世界的，没有人操作）、没测长时间稳定性。
 - 时序有要求：FCL 的 JVMActivity 出现后要再等约 10 s 才把 server 窗口切到前台，否则游戏因 surface 未就绪卡住启动。
 - 每个后端只跑了一遍。
+
+## 竖屏窗口里画面被裁（已修）
+
+**现象：** server 窗口是竖屏（1280×2620）时，游戏帧 2620×1280 只画出左下角 1280×1280 的一块，热键栏被切掉一半。最初只在 Magma 上看到，**Espryt 在竖屏窗口里同样被裁，Magma 在横屏窗口里是对的**——所以不是后端问题，是窗口方向。
+**根因：** SDL（Minecraft 的 Android 后端）建 EGL window surface 时不带 `EGL_WIDTH` / `EGL_HEIGHT`，client 于是向 server 请求 **0×0**（"用 server 窗口自己的大小"）；server 窗口取了竖屏尺寸，client 的默认帧缓冲就成了 1280×2620，
+而游戏按它自己的窗口（FCL 的 2620×1280）渲染，1:1 画进去就被裁了。server 侧其实早就支持"client 指定尺寸 → `setFixedSize` + 视图等比留黑边"（`MobileGLDisplayActivity`），只是这一路没人传尺寸。
+**修法：** `EGLImpl::CreateWindowSurface`（split 构建、Android、server-owned 窗口）在没有 `EGL_WIDTH/HEIGHT` 时用传进来的 native window 的 `ANativeWindow_getWidth/Height` 作请求尺寸。
+修后日志 `display geometry 2620x1280 requested (SurfaceHolder.setFixedSize)`，竖屏窗口里显示完整的一帧、上下留黑边，两个后端都一样（截图 `geom-*-portrait-fixed.png`）。
+**没验证：** 修后的横屏窗口没有重测（这台机的 `cmd window user-rotation lock 1` 没让显示转过去；修前横屏两个后端都是对的，请求尺寸与窗口相同，理应不变）。

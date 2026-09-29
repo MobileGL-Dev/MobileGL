@@ -14,7 +14,7 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 | 代码审查发现的 10 个问题 | ✅ 已修 |
 | 主机门与单进程构建二进制不变（G1） | ✅ 原主机门 / G1 见 ID-P12-14/15；审查后 P12 定向 CTest **46/46**（`1fb18d9e`） |
 | 真机 7 项检查（两个后端上屏、排队与拒绝、窗口丢失、离屏不受影响……） | ✅ 审查后在 Redmi `2f7cbe2e` 复测通过（`1fb18d9e`）；明细见 [`notes/p12/README.md`](notes/p12/README.md) |
-| 验收 A：同一台手机上用 FCL 以两个后端进游戏，杀掉 server 后干净报"设备丢失" | ✅ 2026-09-29：Render Server 屏 + FCL（新增版本设置「游戏退到后台时不暂停」），双后端入世界，杀 server 后 33–54 ms 闩住 device-lost，FCL 不崩；[`notes/p12/FCL-ACCEPTANCE.md`](notes/p12/FCL-ACCEPTANCE.md)。Magma 竖屏窗口画面位置不对，未查 |
+| 验收 A：同一台手机上用 FCL 以两个后端进游戏，杀掉 server 后干净报"设备丢失" | ✅ 2026-09-29：Render Server 屏 + FCL（新增版本设置「游戏退到后台时不暂停」），双后端入世界，杀 server 后 33–54 ms 闩住 device-lost，FCL 不崩；[`notes/p12/FCL-ACCEPTANCE.md`](notes/p12/FCL-ACCEPTANCE.md)。竖屏 server 窗口里画面被裁的问题已查明并修复（client 请求尺寸为 0×0，现在取 native window 的大小） |
 | 验收 B：另一台电脑经 TCP 连手机进游戏，并记录链路数据 | ✅ 2026-09-28：WSL client 经 Wi-Fi 重放 rd12 世界内 trace，ssim 0.999883、251/251 帧；必测数见 [`notes/p12/CROSSHOST-ACCEPTANCE.md`](notes/p12/CROSSHOST-ACCEPTANCE.md)（client 是 trace 重放器，不是活的 Minecraft） |
 
 ## 性能现状（2026-09-28，Redmi 未定频交错 A/B）

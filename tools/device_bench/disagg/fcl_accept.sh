@@ -21,6 +21,9 @@ A() { adb -s "$S" "$@"; }; Ash() { adb -s "$S" shell "$@" | tr -d '\r'; }
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 A shell "am force-stop $F; am force-stop $T; input keyevent KEYCODE_WAKEUP; input keyevent 82; svc power stayon true"
+# ROTATION=0|1|2|3 pins the display rotation for the run (0 = portrait, 1 = landscape); freed at the end.
+[ -n "${ROTATION:-}" ] && A shell "cmd window user-rotation lock $ROTATION"
+trap '[ -n "${ROTATION:-}" ] && A shell "cmd window user-rotation free"' EXIT
 A shell "printf 'MOBILEGL_BACKEND_TYPE=$BACKEND\nMOBILEGL_IPC_CONTROL=tcp://127.0.0.1:40613\nMOBILEGL_IPC_DATA=stream\nMOBILEGL_IPC_SURFACE=server\n' > /sdcard/FCL/mg_env.txt; echo spawn > /sdcard/FCL/mg_transport.txt"
 A shell "run-as $F grep -c keepRunningInBackground files/config.json" | grep -q '^[1-9]' || { log "FATAL: keepRunningInBackground is not set in FCL's config.json"; exit 1; }
 A logcat -c
