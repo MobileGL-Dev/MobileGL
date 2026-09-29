@@ -67,9 +67,16 @@ if grep -Fq 'fclPlugin' <<<"$trace_manifest"; then
   echo '::error::Trace APK must not advertise renderer-plugin metadata' >&2
   exit 1
 fi
-if grep -Fq 'android.intent.action.MAIN' <<<"$trace_manifest"; then
-  echo '::error::Trace APK must not expose a launcher activity' >&2
+# The trace APK IS a launchable app now: PostActivity (the POST self-test screen) is its
+# entry icon and the bottom navigation bar switches to the render server screen. What is
+# left of the old "no launcher" contract is the count - exactly ONE MAIN activity, so a
+# screen that accidentally grows a launcher entry (ServerControlActivity was one for a day)
+# reds here instead of shipping two icons.
+main_count=$(grep -Fc 'android.intent.action.MAIN' <<<"$trace_manifest")
+if [[ "$main_count" -ne 1 ]]; then
+  echo "::error::Trace APK must expose exactly one launcher activity (PostActivity); found ${main_count} android.intent.action.MAIN" >&2
   exit 1
 fi
+require 'PostActivity' "$trace_manifest" 'trace launcher activity (PostActivity)'
 
 echo 'Validated unified MobileGL plugin APK and isolated trace APK.'
