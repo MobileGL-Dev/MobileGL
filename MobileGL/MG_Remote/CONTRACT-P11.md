@@ -99,7 +99,7 @@
 
 ## B1：同机外部 client 经 app_process helper 与令牌 broker 走共享内存
 
-依据 [`PLAN-P11.md`](../../docs/Disaggregated/notes/p11/PLAN-P11.md) §2 B、[`B0-CROSS-APP.md`](../../docs/Disaggregated/notes/p11/B0-CROSS-APP.md)、[`HSPIKE.md`](../../docs/Disaggregated/notes/p11/HSPIKE.md)（ID-P11-13）。消费者：同一台手机上从另一个 app（Termux、adb shell）启动、没有 Java `Context` 的原生 GL 程序。
+依据 [`PLAN-P11.md`](../../docs/Disaggregated/notes/p11/PLAN-P11.md) §2 B、[`B0-CROSS-APP.md`](../../docs/Disaggregated/notes/p11/B0-CROSS-APP.md)、[`HSPIKE.md`](../../docs/Disaggregated/notes/p11/HSPIKE.md)（ID-P11-13）。消费者：同一台手机上从另一个 app（Termux、adb shell）启动、没有 Java `Context` 的原生 GL 程序。证据根 `~/w7/notes/p11/evidence/b1/`（下文的 `evidence/b1/…`、`m-probe*`、`freeze-*` 都在它下面），报告 `~/w7/notes/p11/b1-report.md`。
 
 ### 链路
 
