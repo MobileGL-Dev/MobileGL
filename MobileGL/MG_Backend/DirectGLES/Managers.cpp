@@ -6463,10 +6463,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // every byte of the level, the level is stored compressed, the driver has no image at this
         // level and extent (defined after the last sync), or the readback cannot be served (a
         // multisample image, a format the driver will not attach to a framebuffer).
+        //
+        // P11 M, `pipePending` (push builds): THE CLIENT WRITES THE DRIVER HAS NOT BEEN SENT MAY
+        // LIVE IN THE APPLIER'S PENDING SET INSTEAD. On the texture handle arm the client clears its
+        // own dirty flags when it emits a level (D-D5), so the frontend model below answers "clean"
+        // for a write that is still only in the shadow; the entry the applier accumulated for this
+        // (uploadTarget, level) names the same shadow-grid boxes. Both are merged over the
+        // snapshot, and an entry whose union box covers the level owns every byte of it, exactly as
+        // a covering dirty region does. Null on the pull build's arm and the legacy arm.
         static Bool AdoptDriverLevelIntoShadow(GLuint backendTextureId, BackendTextureObject& backendTexture,
                                                const MG_State::GLState::ITextureObject& stateTextureObject,
                                                MG_State::GLState::TextureObjectMipmap& mipmapObject,
-                                               TextureUploadTarget uploadTarget, Uint level) {
+                                               TextureUploadTarget uploadTarget, Uint level
+#if MOBILEGL_PIPE_PUSH
+                                               ,
+                                               const MG_Pipe::MGPipeResourceRecord::PendingUpload* pipePending
+#endif
+        ) {
             const IntVec3 texelSize = mipmapObject.GetMipmapTexelSize(uploadTarget, level);
             const IntVec3 extent{texelSize.x(), texelSize.y(), std::max(texelSize.z(), 1)};
             const Bool dirty = mipmapObject.IsStorageDirty(uploadTarget, level);
@@ -6474,6 +6487,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 dirty ? mipmapObject.GetStorageDirtyRegion(uploadTarget, level)
                       : MG_State::GLState::MipmapDirtyRegion{};
             if (dirty && dirtyRegion.CoversWholeLevel(extent)) return false;
+#if MOBILEGL_PIPE_PUSH
+            // Every box the entry names, checked against the level before anything is read: a box
+            // outside it is a corrupt record, and the answer is the pre-readback one (keep the
+            // shadow) rather than a copy out of bounds.
+            const auto pipeBoxInLevel = [&](Int32 x, Int32 y, Int32 z, Uint32 w, Uint32 h, Uint32 d) {
+                return x >= 0 && y >= 0 && z >= 0 && Uint64(x) + w <= Uint64(extent.x()) &&
+                       Uint64(y) + h <= Uint64(extent.y()) && Uint64(z) + d <= Uint64(extent.z());
+            };
+            if (pipePending != nullptr) {
+                const auto& box = pipePending->UnionBox;
+                if (!pipeBoxInLevel(box.X, box.Y, box.Z, box.W, box.H, box.D)) {
+                    MGLOG_E_ONCE("MGPipe: texture %u level %u: a pending upload's box lies outside the level; the "
+                                 "image-bindable re-mint replays the shadow as it stands",
+                                 stateTextureObject.GetExternalIndex(), level);
+                    return false;
+                }
+                for (const auto& region : pipePending->Regions) {
+                    if (!pipeBoxInLevel(region.X, region.Y, region.Z, region.W, region.H, region.D)) {
+                        MGLOG_E_ONCE("MGPipe: texture %u level %u: a pending upload's region lies outside the "
+                                     "level; the image-bindable re-mint replays the shadow as it stands",
+                                     stateTextureObject.GetExternalIndex(), level);
+                        return false;
+                    }
+                }
+                if (box.X == 0 && box.Y == 0 && box.Z == 0 && box.W == static_cast<Uint32>(extent.x()) &&
+                    box.H == static_cast<Uint32>(extent.y()) && box.D == static_cast<Uint32>(extent.z())) {
+                    return false;
+                }
+            }
+#endif
             if (mipmapObject.GetMipmapCompressedFormat(uploadTarget, level) != GL_NONE) return false;
             if (!g_GLESFuncs.glGetTexLevelParameteriv) return false;
 
@@ -6536,6 +6579,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
+#if MOBILEGL_PIPE_PUSH
+            if (pipePending != nullptr) {
+                // The same merge for the applier's entry: its regions when it carries a list, its
+                // union box when it does not (RegionCount 0 = "the box is the whole story", D-D3).
+                const SizeT bpp = shadowBytes / texelCount;
+                const SizeT rowBytes = static_cast<SizeT>(extent.x()) * bpp;
+                const SizeT sliceBytes = static_cast<SizeT>(extent.y()) * rowBytes;
+                const auto mergePipeBox = [&](Int32 x, Int32 y, Int32 z, Uint32 w, Uint32 h, Uint32 d) {
+                    for (Uint32 slice = 0; slice < d; ++slice) {
+                        for (Uint32 row = 0; row < h; ++row) {
+                            const SizeT offset = static_cast<SizeT>(z + static_cast<Int32>(slice)) * sliceBytes +
+                                                 static_cast<SizeT>(y + static_cast<Int32>(row)) * rowBytes +
+                                                 static_cast<SizeT>(x) * bpp;
+                            Memcpy(snapshot.data() + offset, shadow + offset, static_cast<SizeT>(w) * bpp);
+                        }
+                    }
+                };
+                if (pipePending->Regions.empty()) {
+                    const auto& box = pipePending->UnionBox;
+                    mergePipeBox(box.X, box.Y, box.Z, box.W, box.H, box.D);
+                } else {
+                    for (const auto& region : pipePending->Regions) {
+                        mergePipeBox(region.X, region.Y, region.Z, region.W, region.H, region.D);
+                    }
+                }
+            }
+#endif
             Memcpy(shadow, snapshot.data(), shadowBytes);
             return true;
         }
@@ -6646,9 +6716,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
                         if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
                         if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
+#if MOBILEGL_PIPE_PUSH
+                        // This level's entry in the applier's pending set, read BEFORE the re-arm
+                        // below turns it into a whole-level box: the client writes it still owes
+                        // (see AdoptDriverLevelIntoShadow). Resolved per level - the re-arm may grow
+                        // the record's set and move what an earlier pointer named.
+                        const MG_Pipe::MGPipeResourceRecord* rearmRecord =
+                            MG_Pipe::MGPipeHandleIsNull(rearmRes) ? nullptr : PipeTextureRecordForHandle(rearmRes);
+                        const MG_Pipe::MGPipeResourceRecord::PendingUpload* rearmPending =
+                            rearmRecord != nullptr ? FindPipeTextureUpload(*rearmRecord, static_cast<Uint16>(uploadTarget),
+                                                                           static_cast<Uint16>(level))
+                                                   : nullptr;
+#endif
                         if (hadBackendStorage &&
                             !AdoptDriverLevelIntoShadow(m_backendTextureId, *this, *stateTextureObject,
-                                                        *mipmapObject, uploadTarget, level)) {
+                                                        *mipmapObject, uploadTarget, level
+#if MOBILEGL_PIPE_PUSH
+                                                        ,
+                                                        rearmPending
+#endif
+                                                        )) {
                             MGLOG_D("Texture %u level %u: re-minting from the shadow, the driver's copy is not "
                                     "readable here",
                                     stateTextureObject->GetExternalIndex(), level);
