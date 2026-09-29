@@ -5,6 +5,7 @@
 #include "Doorbell.h"
 #include "ReplySlot.h"
 #include "Framing.h"
+#include "LinkMetrics.h"
 // P12: the declared-answer store's crossing log. Same include as LinkMetrics.cpp's, rather than
 // <Includes.h>, because this file is transport-layer and pulls nothing else from the tree.
 #include <MG_Util/Debug/Log.h>
@@ -28,7 +29,7 @@
 
 namespace MobileGL::MG_Remote::Transport {
     // P65Read's counters: written by the server's io thread, drained by its apply thread (see
-    // StreamLink::TakeReadStats).
+    // LinkMetricsTakeReadStats).
     static std::atomic<std::uint64_t> gReadBytes{0}, gReadCalls{0}, gReadReads{0};
     static std::atomic<std::uint64_t> gReadNsInRecv{0}, gReadNsTotal{0};
     // P65CLIENTPACE's send half: the io thread's side of the same question. A sendmsg that blocks
@@ -479,8 +480,8 @@ namespace MobileGL::MG_Remote::Transport {
         }
     };
 
-    StreamLink::ReadStats StreamLink::TakeSendStats() {
-        ReadStats out;
+    LinkIoStats LinkMetricsTakeSendStats() {
+        LinkIoStats out;
         out.bytes = gSendBytes.exchange(0, std::memory_order_relaxed);
         out.calls = gSendCalls.exchange(0, std::memory_order_relaxed);
         out.nsInRecv = gSendNsInSend.exchange(0, std::memory_order_relaxed);
@@ -488,8 +489,8 @@ namespace MobileGL::MG_Remote::Transport {
         return out;
     }
 
-    StreamLink::ReadStats StreamLink::TakeReadStats() {
-        ReadStats out;
+    LinkIoStats LinkMetricsTakeReadStats() {
+        LinkIoStats out;
         out.bytes = gReadBytes.exchange(0, std::memory_order_relaxed);
         out.calls = gReadCalls.exchange(0, std::memory_order_relaxed);
         out.reads = gReadReads.exchange(0, std::memory_order_relaxed);

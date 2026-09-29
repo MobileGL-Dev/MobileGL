@@ -13,7 +13,6 @@
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Handshake.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
-#include <MG_Remote/Transport/StreamLink.h>
 
 #include "../CapsCodec.h"
 #include "../Protocol/generated/protocol_generated.h"
@@ -2300,7 +2299,7 @@ namespace MobileGL::MG_Remote::Client {
             const double creditMs =
                 static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - paceStarted).count()) / 1e6;
-            const auto io = Transport::StreamLink::TakeSendStats();
+            const auto io = Transport::LinkMetricsTakeSendStats();
             MGLOG_I("P65ClientPace present=%llu credit_wait_ms=%.1f | io: %llu B in %llu sendmsg "
                     "send_ms=%.1f total_ms=%.1f",
                     static_cast<unsigned long long>(serial), creditMs,

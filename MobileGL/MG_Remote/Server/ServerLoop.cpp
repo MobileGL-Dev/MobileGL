@@ -10,7 +10,7 @@
 
 #include "ServerLoop.h"
 #include <MG_Remote/FatalFunnel.h>
-#include <MG_Remote/Transport/StreamLink.h>
+#include <MG_Remote/Transport/LinkMetrics.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <Config.h>
@@ -796,7 +796,7 @@ namespace MobileGL::MG_Remote::Server {
                         // recv - blocking included - so a frame that is 90% read_ms is a frame the
                         // reader spent WAITING for bytes, and one that is mostly recv calls with
                         // little read_ms is a reader that is copying.
-                        const auto read = Transport::StreamLink::TakeReadStats();
+                        const auto read = Transport::LinkMetricsTakeReadStats();
                         MGLOG_I("P65ServerFrame frame=%llu records=%llu apply_ms=%.1f wall_ms=%.1f "
                                 "outside_ms=%.1f | read: %llu B in %llu recv(%llu reads) "
                                 "recv_ms=%.1f total_ms=%.1f (%.0f%% blocked, %.1f MB/s)",

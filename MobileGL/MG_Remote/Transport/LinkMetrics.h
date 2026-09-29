@@ -1,4 +1,6 @@
-// P6.5 transport measurements. Called only by the single client producer.
+// P6.5 transport measurements. The Window state is written only by the single client
+// producer; the socket-io counters drained by LinkMetricsTakeReadStats/TakeSendStats are
+// atomic and cross-thread (io thread writes, apply/client thread reads) - see below.
 #pragma once
 #include <cstdint>
 
@@ -41,4 +43,28 @@ namespace MobileGL::MG_Remote::Transport {
     std::uint64_t LinkMetricsRecordsFor(std::uint32_t op);
     void LinkMetricsPresent();
     void LinkMetricsServerPresent(std::uint64_t serial);
+
+    // P65READ: THE SERVER'S SOCKET-READ PATH, ACCOUNTED WHERE IT CAN BE SEEN. The counters are
+    // published from the io thread's recv loop and read by the APPLY thread, because the io
+    // thread's own MGLOG_ lines never reach the phone's forwarded log (only mgl-srv-apply and
+    // mgl-display-ser do - measured, not assumed). Taking them RESETS them, so one call is one
+    // frame's worth of the stage nothing else measures: the frame's time is not the client's GL
+    // thread (13%) and not PipeApplier::ApplyOne (11%), and this is what sits between them.
+    //
+    // Free functions, NOT StreamLink members: the P6.5 seam gate (scripts/ci/link_seam_purity.py)
+    // rejects a concrete-link include outside Transport, and the readers of these numbers live in
+    // ClientSession/ServerLoop. The counters themselves stay in StreamLink.cpp beside the recv /
+    // sendmsg loops that feed them.
+    struct LinkIoStats {
+        std::uint64_t bytes = 0;     // payload bytes taken off the socket
+        std::uint64_t calls = 0;     // recv() calls it took
+        std::uint64_t reads = 0;     // Link::Read() calls (one per header, envelope or chunk)
+        std::uint64_t nsInRecv = 0;  // wall time inside recv - blocking included
+        std::uint64_t nsTotal = 0;   // wall time inside Read
+    };
+    LinkIoStats LinkMetricsTakeReadStats();
+    // The client's half: bytes handed to the io thread's sendmsg, the calls it took, and the
+    // wall time inside sendmsg (blocking included). nsInRecv carries the send time; reads is
+    // unused on this side.
+    LinkIoStats LinkMetricsTakeSendStats();
 }
