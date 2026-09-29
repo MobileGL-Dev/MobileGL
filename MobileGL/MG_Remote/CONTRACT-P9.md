@@ -4,7 +4,7 @@
 
 ## 范围
 
-server → client 的结果回传在 split 下不阻塞、不丢、不乱序。本阶段落地：PACK-PBO 回读不等回复（§1）；server 日志按级别转发、不阻塞（§2）；`OnGlError` 的观察时点写成契约（§3）；两条故障注入（§4）。路线图原文里已由前序阶段做完的（异步 reply、2 MiB 回复槽与分带回读、XFB 删除）不重做，见交接 §2。
+server → client 的结果回传在 split 下不阻塞、不丢、不乱序。本阶段落地：PACK-PBO 回读不等回复（§1）；server 日志按级别转发、不阻塞（§2）；`OnGlError` 的观察时点写成契约（§3）；两条故障注入（§4）；纹理重铸不需要拉取（§5）。事件量的批处理 / 收窄没有实测需求，不做（ID-P9-7）。路线图原文里已由前序阶段做完的（异步 reply、2 MiB 回复槽与分带回读、XFB 删除）不重做，见交接 §2。
 
 ## 1. 读进 pack buffer 的回读（W1）
 
@@ -53,7 +53,19 @@ server → client 的结果回传在 split 下不阻塞、不丢、不乱序。�
 
 - **F2**：client 停读控制 socket（`ClientSession::PauseControlReaderForTest`），server 以测试旋钮 `MOBILEGL_TEST_APPLY_LOG_FLOOD=<n>` 让 apply 线程每条记录打 n 行 WARN + 1 行 ERROR。apply 线程不被日志卡住（约 16 MiB / 400 条记录 0.4 s 过完，单行交接最长 53–148 µs）；≤ WARN 的丢弃全部有流内说明；≥ ERROR 全部按序到达。控制与 SEG_EVENT 都不排空时，会话经既有 `ReverseChannelForfeit{NotDraining}` 以 exit 0 结束，同一 supervisor 接下一个连接。门：`LogForwardTest`（15 例）、`EventForfeitPeer.StreamLogFlood*`（2 例）。
 
+## 5. 纹理重铸（W2）
+
+- **没有纹理拉取**。重铸（为 image 绑定把纹理升级成可绑定存储）是 server 本地路径，反向通道不含任何"向 client 要纹素"的请求：
+  - Espryt（`RequireImageBindableStorageByHandle`）：只读回驱动上**确实存在且尺寸相符**的层（`NativeTextureLevelHasExtent`），pending 盒用 `StagedTextureStore` 合并；驱动没有的层——store 覆盖就重放 store，否则跳过（GL 里其内容本就未定义）；驱动拒绝读回而 store 覆盖该层时退回 store（记一次 `remint-readback-fallback`），两者都没有才 `Fatal`；已 immutable 且无需加宽的核心格式原样保留。
+  - Magma：重建带 `STORAGE` 用途的 VkImage，`PreserveTextureContentsOnRecreate` GPU→GPU 拷贝。
+- `TextureRemintPulls`（`trp=`）在 server 路径计数（重铸了已持有的存储时；保留路径不计）。
+- `MGPipeCallbacks` 删去 `OnTexturePullRequest`；op 50 `ResourceSubDataComplete` 留作退役行（解码仍拒收），`protocol.fbs` 不变。两处 `Fatal{UnmigratedEmulation, "texture-remint-pull"}` 删除（`EveryUnmigratedEmulationIsNamedOnce` 5 → 4）。
+- 测试旋钮 `MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE`（server 读）强制读回失败，驱动 fallback 用例。
+- 门：`TextureRemintPullScenario`（14 例）× 两后端 × monolith/Split/Spawn/Tcp，外加 Espryt Split/Spawn 的 4 条强制失败条目；monolith Espryt 上 7 个 GPU 写过的用例按名跳过，指向 dev 缺陷（ID-P9-8）。
+
 ## 不变量
 
 - G1：pull 构建符号增 0 减 0、`.text` 不变（新代码全在 `MOBILEGL_BUILD_DISAGGREGATED` 下；`GL_Texture.cpp` 的宏在 pull 构建里为空）。
 - 目录只追加：`MGP_CALL_LIST_DOCUMENTED_COUNT` 81 → 83，`kMGPipeVerifiedPayloadCount` 82 → 83，stamp 表 32 → 34 行。
+- 回调 9 → 7（`OnLog`、`OnTexturePullRequest` 删除；剩 `OnGlError`、`OnGpuWritten`、`OnBufferWriteback`、`OnTextureWriteback`、`OnMipLevelsGenerated`、`OnSurfaceChanged`、`OnCapsInvalidated`，其中后三个仍无生产者，不在本阶段）。
+- 控制协议修订号不变（3）；`protocol.fbs` 未改。

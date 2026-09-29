@@ -26,7 +26,7 @@
 | 1–2 | 边界：两张表、三种拓扑；对象模型：句柄、两种代数、CSO | [`design/01-boundary-and-objects.md`](design/01-boundary-and-objects.md) |
 | 3–4 | 调用目录、生成器 G1–G8、能力位；记录与 payload 格式 | [`design/02-catalogue-and-records.md`](design/02-catalogue-and-records.md) |
 | 5–7 | 前端 tracker（何时推、推什么、怎么去重）；纹理上传；着色器 | [`design/03-frontend.md`](design/03-frontend.md) |
-| 8 | 反向通道：八个回调、有序性、错误与 ack、纹理重铸拉取、XFB | [`design/04-reverse-channel.md`](design/04-reverse-channel.md) |
+| 8 | 反向通道：七个回调、有序性、错误与 ack、纹理重铸（server 本地，无拉取）、XFB | [`design/04-reverse-channel.md`](design/04-reverse-channel.md) |
 | 9–10 | 后端改造（`PipeInputs`、memo 重键、A/B 臂）；server 侧 applier | [`design/05-backend-and-server.md`](design/05-backend-and-server.md) |
 | 11 | 传输：共享段、环、门铃、控制面、背压、等待规则、事件、两根轴 | [`design/06-transport.md`](design/06-transport.md) |
 | 12–13 | persistent map 与大缓冲采纳；回读、往返清单、五部分验证门 | [`design/07-memory-readback-verification.md`](design/07-memory-readback-verification.md) |

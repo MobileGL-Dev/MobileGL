@@ -6,7 +6,7 @@
 
 ### 8.1 `MGPipeCallbacks`（`MG_Pipe/MGPipeCallbacks.h`）
 
-八个具名回调 + 一个正向终止符（`ResourceSubDataComplete`），取代后端直接 poke 前端对象的 95 个调用点（具名化是有意偏离 D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
+七个具名回调，取代后端直接 poke 前端对象的 95 个调用点（具名化是有意偏离 D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
 
 | 回调 | 作用 |
 |---|---|
@@ -14,12 +14,11 @@
 | `OnGpuWritten` | GPU 写过的 buffer 范围（收窄 client 保守自建的 pending 集） |
 | `OnBufferWriteback` | PBO 回读、XFB 捕获结果；必须与 epoch bump 有序 |
 | `OnTextureWriteback` | CPU 回退生成 mip 的纹素 |
-| `OnTexturePullRequest` | §8.4 |
 | `OnMipLevelsGenerated` | 只带形状 |
 | `OnSurfaceChanged` | 默认帧缓冲的格式与尺寸（server 拥有显示时 client 靠它得知窗口尺寸） |
 | `OnCapsInvalidated` | 取代 `InvalidateCompileEnv` |
 
-`OnLog` 已删除（P9 W3，回调 9 → 8）：零生产者、零消费者、无 `EventKind`。server 日志走控制面 `LogLine`（带 `level`），由 `MG_Remote/Transport/LogForward.h` 的队列 + 发送线程转发：≤WARN 有损（队列满即丢、计数、流内 `LogForward{Dropped}` 标出缺口），≥ERROR 无损 + 限速（超速排队延迟；超出错误字节上限时合并成一条 `LogForward{Coalesced}`），FATAL 有界等待写出；日志线程永不等 socket。
+`OnLog` 已删除（P9 W3；与 W2 删除的 `OnTexturePullRequest` 合计，回调 9 → 7）：零生产者、零消费者、无 `EventKind`。server 日志走控制面 `LogLine`（带 `level`），由 `MG_Remote/Transport/LogForward.h` 的队列 + 发送线程转发：≤WARN 有损（队列满即丢、计数、流内 `LogForward{Dropped}` 标出缺口），≥ERROR 无损 + 限速（超速排队延迟；超出错误字节上限时合并成一条 `LogForward{Coalesced}`），FATAL 有界等待写出；日志线程永不等 socket。
 
 后端凭空造的前端对象（Magma 占位纹理、swapchain 默认 FB 占位）改为 server 原生；pull 构建里的 `m_backend` 类成员真删会动 `sizeof`（G1），随 P13 退役（D-K）。
 
@@ -43,7 +42,7 @@
 
 - 只改读 store 不够：GPU 写过的层 store 里是旧字节或没有字节；语料里 Espryt 的两次重铸（`iris-photon`、`iris-derivative`）都是 store 无字节的渲染目标。
 - 「整格式再生」两臂都只上传 pending 层、不回读也不拉取；「view 源重铸」只剩源需要加宽，走同一条 ByHandle 路径。
-- 删除：`OnTexturePullRequest`（回调 9 → 8）、`texture-remint-pull` 标记。op 50 `ResourceSubDataComplete` 只追加不删，留作退役行（解码拒收）。`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里，随 P13 删（G1）。
+- 删除：`OnTexturePullRequest`（与 W3 删除的 `OnLog` 合计，回调 9 → 7）、`texture-remint-pull` 标记。op 50 `ResourceSubDataComplete` 只追加不删，留作退役行（解码拒收）。`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里，随 P13 删（G1）。
 - `ImageBindableHint` 仍是预防：hint 在第一次 sync 前到达就直接按 image-bindable 分配，省掉一次 server 回读 + 重传。
 - 已知 dev 缺陷（非 P9）：monolith Espryt 的前端臂重放 client 影子，覆盖 GPU 写过的纹素。
 - 普查、覆盖矩阵、门与 red-once：[`notes/p9/W2-REMINT.md`](../notes/p9/W2-REMINT.md)。
