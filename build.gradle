@@ -22,6 +22,11 @@ def mobileGlAbiFilters = {
 def mobileGlBuildServerSpike = {
     (rootProject.findProperty('mobilegl.buildServerSpike') ?: System.getenv('MOBILEGL_BUILD_SERVER_SPIKE') ?: 'OFF') as String
 }
+// P11 A3 opt-in, same rules as the spike above: -Pmobilegl.buildExtmemProbe=ON packages
+// tools/spikes/extmem_probe as libMobileGLExtmemProbe.so into the trace flavour only.
+def mobileGlBuildExtmemProbe = {
+    (rootProject.findProperty('mobilegl.buildExtmemProbe') ?: System.getenv('MOBILEGL_BUILD_EXTMEM_PROBE') ?: 'OFF') as String
+}
 
 // Shared native shape for BOTH plugin and trace APKs. The render server (libMobileGLServer.so and
 // the display server's JNI) is part of the split shape, and both flavors of a standalone plugin
@@ -111,6 +116,7 @@ android {
                         // grow a binary nothing loads. See mobileGlBuildServerSpike
                         // above for the two ways to enable it.
                         arguments "-DMOBILEGL_BUILD_SERVER_SPIKE=${mobileGlBuildServerSpike()}"
+                        arguments "-DMOBILEGL_BUILD_EXTMEM_PROBE=${mobileGlBuildExtmemProbe()}"
                     }
                 }
             }

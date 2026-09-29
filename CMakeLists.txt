@@ -29,6 +29,7 @@ option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-pr
 # only decides whether the shims are compiled in.
 option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" OFF)
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
+option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 # The PipeInputs strangler (ARCHITECTURE.md 9.2). OFF is the pull build and must stay
 # byte-identical to a tree without either option: MGB_CTX is the live GLContext, no
 # MGPipe/PipeInputs source is compiled, every MGP_FILL is ((void)0).
@@ -1102,6 +1103,28 @@ if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
     # the library directory when the generator gave us one.
     if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(MobileGLServerSpike PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+endif()
+
+if (ANDROID AND MOBILEGL_BUILD_EXTMEM_PROBE)
+    # P11 A3 (open question 3): the spike-B external-memory probe, exec'd from the trace
+    # app's own process by the spike hook (`--es mobilegl_spike_spawn
+    # libMobileGLExtmemProbe.so`), so its rows answer for the untrusted_app domain. The
+    # same PIE-executable-named-like-a-library shape as MobileGLServerSpike above; it
+    # links nothing from MobileGL.
+    add_executable(MobileGLExtmemProbe
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/extmem_probe/extmem_probe.cpp)
+    set_target_properties(MobileGLExtmemProbe PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        OUTPUT_NAME "MobileGLExtmemProbe"
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLExtmemProbe PRIVATE -fPIE)
+    target_link_options(MobileGLExtmemProbe PRIVATE -pie)
+    target_link_libraries(MobileGLExtmemProbe PRIVATE vulkan EGL GLESv3 android log)
+    if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(MobileGLExtmemProbe PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
     endif()
 endif()
