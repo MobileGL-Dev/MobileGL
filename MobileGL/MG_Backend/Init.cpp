@@ -81,9 +81,10 @@ namespace MobileGL::MG_Backend {
         // DirectGLES consumes all thirteen migrated families (P2's 0..6, P3a's 7..8, P4a's
         // 9..12): it registers the resource op table in Initialize()
         // (BackendObject_DirectGLES.cpp:849) and reads every other family out of gPipeInputs.
-        // DirectVulkan registers NO resource ops - MGPipeSetResourceOps has exactly one caller
-        // in the whole tree and it is Managers.cpp:2594 - so bit 7 is CLEAR for it, which is
-        // the same fact ObjectSubsystemControlScenario already pins from the client side.
+        // DirectVulkan registers its wire resource op table off monolith only
+        // (VkBufferManager::RegisterWireResourceOps, VkBufferManager.cpp): under a transport it
+        // owns buffer stores and claims bit 7 (the P4a mask, see ConsumedSubsystemsFor below);
+        // under monolith it registers none and its buffers keep the legacy BufferBackendOps path.
         // P5e (MG_Remote/CONTRACT-P5E.md §6.2). THE ONE CONSTANT THE WHOLE PHASE HANGS ON.
         //
         // kCapRunAheadApply says "this server applies an unbarriered record without reading

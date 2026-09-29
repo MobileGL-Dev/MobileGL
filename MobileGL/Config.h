@@ -202,9 +202,12 @@ namespace MobileGL::MG_Config {
         // persistently+coherently mapped storage at definition time (negative control /
         // escape hatch). Frontend-scoped: it engages only where the active backend
         // provides AcquirePersistentMap. With adoption on, an app SubData into a busy
-        // 128MB arena is a plain memcpy into GPU-visible memory; every driver-mediated
-        // route for the same write stalls the thread or ghost-copies the whole arena on
-        // this class of Mali driver, and the arena stops costing its size again in RAM.
+        // 128MB arena lands GPU-ordered through the backend's resident-subdata op
+        // (BufferObject::LandBytesIntoResidentStore, since 0ee3384b: an in-place write
+        // tore the frames still reading the old bytes) - still no driver-mediated write
+        // into the busy mutable store, which on this class of Mali driver stalls the
+        // thread or ghost-copies the whole arena, and the arena stops costing its size
+        // again in RAM.
         Bool DisableLargeBufferAdoption = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
@@ -610,10 +613,11 @@ namespace MobileGL::MG_Config {
         // poll loop cannot outlive a late report. 0 = every poll crosses, as before P10: the A/B
         // arm and the red-once of the no-reply gate (FencePollScenario).
         Uint32 PollEscalate = 64;
-        // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
-        // is the only tier P5 implements and the reason persistent-map-push can be non-zero
-        // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the
-        // negative control has a spelling the day P11 writes it.
+        // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (T2: client keeps the shadow and pushes), the
+        // only implemented tier and the reason persistent-map-push can be non-zero at all
+        // (R-6). 0 (T0) and 1 (T1) parse and are settled at the handshake (P11 A1,
+        // MG_Remote/Transport/AdoptTier.h): a stream data plane refuses them by name and runs
+        // T2; over shared segments the client dies by name before any record.
         Uint32 AdoptTier = 2;
         // MOBILEGL_IPC_VERB_BARRIER: 1 = the client blocks at every verb boundary until
         // appliedSeq reaches its emitSeq (R-1). 0 is the negative control: it is EXPECTED to

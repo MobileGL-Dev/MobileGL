@@ -673,7 +673,8 @@ readback and the reply-slot pool (P9); `DynamicBackendParameters`' fixed-width r
 
 **The two-axis transport stack — control × data, TCP-capable, cross-build — is P6.5** and is the
 IPC track's next stage (§10.3). P9 builds its reply semantics on P6.5's message replies rather than
-on a slot pool, and P11's T0/T1 are refused by name on a stream data plane.
+on a slot pool, and P11's T0/T1 are refused by name on a stream data plane (landed by P11 A1 at
+the handshake: `Transport/AdoptTier.cpp`, `SettleAdoptTierAtHandshake`; CONTRACT-P11 §1).
 **Untrusted-guest hardening is `Ph`**, and it must land before any shipping server app accepts a
 connection from a guest it did not produce — including the `Fatal`-policy flip (§5.2), the
 handle-slot budget, and the caps in §12.

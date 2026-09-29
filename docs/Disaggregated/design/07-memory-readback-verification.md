@@ -10,7 +10,7 @@
 |---|---|---|
 | T0 | client 分配 `AHardwareBuffer` BLOB，server 导入（Vulkan / GLES） | 唯一在两台设备、两个后端上都完整读写的档（P11 主攻） |
 | T1 | server 导出 opaque fd | 仅 Adreno 的 Vulkan 路径 |
-| T2 | 拒绝，client 侧推送 | 永久正确回退；**今天 split 用的档**（`MOBILEGL_IPC_ADOPT_TIER=2`），stream 数据面上强制 |
+| T2 | 拒绝，client 侧推送 | 永久正确回退；**今天 split 用的档**（`MOBILEGL_IPC_ADOPT_TIER=2`），stream 数据面上强制（P11 A1：两端握手时 `Transport::SettleAdoptTierAtHandshake` 对 0/1 打一行 `Refuse{AdoptTierOnStream}` 并走 T2；共享段上 client 握手期 `Fatal{UnimplementedAdoptTier}`，[`CONTRACT-P11.md`](../../../MobileGL/MG_Remote/CONTRACT-P11.md) §1） |
 
 T2 下 client 侧推送三件套：不做 map/unmap 命令对（payload 带 `hasLiveHostWrites`）；在每个 validate 点按块（`MOBILEGL_IPC_PERSISTENT_BLOCK_KB`，默认 64）推送可达的已映射 buffer，脏页追踪 + 哈希抑制只发变化的块（P5d）；门 `PersistentCoherentMapScenario`。`mpr` 数的是每一次 `MapPersistent` 发射（铸成或拒绝都算），所以在 monolith 下也可断言。
 

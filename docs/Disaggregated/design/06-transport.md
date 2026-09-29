@@ -12,7 +12,7 @@
 | `SEG_STAGE` | client | 32 MiB | bulk 字节：buffer / 纹理 subdata、UBO、client 数组、persistent-map 脏块 |
 | `SEG_REPLY` | server | 16 MiB，8 × 2 MiB slot | readback 像素、acceptance 答案（ID-47） |
 | `SEG_EVENT` | server | 256 KiB SPSC ring | 回调事件 |
-| `SEG_SHADOW` / `SEG_ADOPT` | client / server | — | 零拷贝 shadow（Phase 2）/ ≥16 MiB 采纳（P11）；stream 数据面上具名拒绝 |
+| `SEG_SHADOW` / `SEG_ADOPT` | client / server | — | 零拷贝 shadow（Phase 2）/ ≥16 MiB 采纳（P11）；stream 数据面上具名拒绝（`MG_Remote/Transport/AdoptTier.cpp`，握手期，P11 A1） |
 
 段在同机上由 `ShmSegment` 创建（Android `ASharedMemory`、Linux `memfd`、Windows `CreateFileMappingW`），描述符经 `SCM_RIGHTS` 传递；stream 数据面上两端各持一份同尺寸的私有段（§11.9）。
 
