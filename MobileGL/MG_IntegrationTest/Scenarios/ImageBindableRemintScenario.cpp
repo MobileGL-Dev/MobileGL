@@ -200,6 +200,14 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
                 EXPECT_EQ(linked, GL_TRUE) << "the copy program did not link";
                 glUseProgram(program);
+                // P11 M: A BARRIER THE SPEC DOES NOT ASK FOR, pinned for the reason
+                // TextureRemintPullScenario's twin gives (ID-P9-11, DEBTS "待归因"): on llvmpipe the
+                // kept-allocation case (GpuClearOverAnImmutableUploadSurvives - no re-mint to
+                // serialize anything) read the pre-clear upload once on the push-monolith arm under
+                // load, the same shape P9 measured 3/30 on the split arm. The cases ask what the
+                // storage HOLDS after the first image binding, not how a clear orders against an
+                // image load, so the ordering is pinned here.
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
                 glDispatchCompute(1, 1, 1);
                 glMemoryBarrier(GL_ALL_BARRIER_BITS);
                 glUseProgram(0);
