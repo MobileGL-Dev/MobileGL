@@ -6303,6 +6303,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     m_forceTextureParamsResync = true;
                     return;
                 }
+                // P9 W2 (notes/p9/W2-REMINT.md): EVERY BYTE THIS RE-MINT REPLAYS IS ALREADY ON THE
+                // SERVER. The GPU image holds what the GPU wrote (render targets, clears, copies,
+                // generated mips, image stores) and the staged store holds what the client uploaded;
+                // the client is never asked, so no pull protocol exists. Reading only the store would
+                // be wrong: a GPU-written level's store run is stale or absent - both host corpus
+                // re-mints (iris-photon, iris-derivative) are render targets with no staged bytes.
+                const Bool hadBackendStorage = m_isInitialized;
+                // The R-16 control for W2-b's fallback below: a readback the driver refuses cannot be
+                // produced on the host (llvmpipe renders every image format), so the test lane forces
+                // one. Read by the SERVER, like the MGITEST_MAGMA_FORCE_* knobs.
+                static const Bool s_forceReadbackFailure =
+                    std::getenv("MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE") != nullptr;
                 auto& store = MG_Remote::Server::ServerStagedTexture();
                 const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
                 const auto target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
@@ -6331,16 +6343,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const Bool pendingWhole = pending && (pending->Regions.empty()
                             ? coversWhole(pending->UnionBox)
                             : std::any_of(pending->Regions.begin(), pending->Regions.end(), coversWhole));
-                        if (m_isInitialized && !(covered && pendingWhole)) {
+                        // W2-a: ONLY A LEVEL THE DRIVER ACTUALLY HOLDS IS READ BACK. The store's
+                        // Defined-ness follows the client's respecifies, the driver's follows this
+                        // twin's last sync, and the two differ for a level defined (null data, or null
+                        // data plus a partial upload) after that sync: the driver has no such level, so
+                        // the GPU cannot have written it. A covered level then replays its staged run
+                        // (the client's whole-level shadow, pending boxes included) and an uncovered one
+                        // is undefined content with nothing to preserve. Reading it anyway was
+                        // Fatal{ResourceUnavailable, "image-promotion-readback"} on legal GL.
+                        const Bool nativeLevel =
+                            m_isInitialized &&
+                            NativeTextureLevelHasExtent(m_backendTextureId, target, uploadTarget,
+                                                        static_cast<GLint>(level), extent);
+                        if (nativeLevel && !(covered && pendingWhole)) {
                             Vector<Uint8> snapshot;
-                            if (!ReadTextureLevelTight(m_backendTextureId, target, uploadTarget, format,
-                                    static_cast<GLint>(level), extent, /*sourceUsesImageCarrier=*/false,
-                                    canonicalFormat, canonicalType, snapshot)) {
+                            const Bool readBack =
+                                !s_forceReadbackFailure &&
+                                ReadTextureLevelTight(m_backendTextureId, target, uploadTarget, format,
+                                                      static_cast<GLint>(level), extent,
+                                                      /*sourceUsesImageCarrier=*/false, canonicalFormat,
+                                                      canonicalType, snapshot);
+                            if (!readBack && !covered) {
+                                // The GPU holds this level, the driver will not hand it back, and no
+                                // CPU byte of it exists anywhere: the one case with no honest answer.
                                 MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-readback\"} {%u,%u} level=%u",
                                         res.Slot, res.Gen, level);
                                 std::abort();
                             }
-                            if (pending) {
+                            if (!readBack) {
+                                // W2-b: the driver refused the readback (a format it cannot attach
+                                // to a framebuffer - SNORM without EXT_render_snorm, 16-bit norm
+                                // without EXT_texture_norm16, float without EXT_color_buffer_float)
+                                // but the store covers the level. Its staged run is exactly what the
+                                // monolith re-mint replays; texels the GPU wrote since that upload
+                                // are not preserved, which is monolith's answer too.
+                                MGLOG_W_ONCE("MGPipe: image promotion of texture {%u,%u} level %u: the driver "
+                                             "refused the readback (internal format %u); replaying the level's "
+                                             "staged bytes instead (remint-readback-fallback)",
+                                             res.Slot, res.Gen, level, record.Desc.InternalFormat);
+                            }
+                            if (readBack && pending) {
                                 // Native contents include prior draws/image
                                 // writes; the pending stage owns ONLY its boxes.
                                 // Merge those boxes before adopting a whole-level
@@ -6375,7 +6417,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
                                 }
                             }
-                            store.Adopt(key, targetCode, levelCode, extent, snapshot.data(), snapshot.size());
+                            if (readBack) {
+                                store.Adopt(key, targetCode, levelCode, extent, snapshot.data(), snapshot.size());
+                            }
                         }
                         // Undefined contents have no byte run to preserve. A
                         // first allocation can still be image-bindable without
@@ -6388,6 +6432,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             std::abort();
                         }
                     }
+                }
+                // W2-d: `trp=` counts a re-mint of storage the backend ALREADY held, on this arm as
+                // on the frontend one (which counts in RequireImageBindableStorage). The keep path
+                // above is not a re-mint and returns before this; a first allocation holds nothing.
+                if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
                 }
             }
 #else
@@ -6412,10 +6462,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 #if MOBILEGL_PIPE_PUSH
-            // Whether this transition re-mints storage that ALREADY EXISTED on the backend: that
-            // is the remint PULL (the levels below are replayed from the client's shadow to fill
-            // the new carrier), and it is what ROADMAP open question 2 counts. A texture reaching
-            // here uninitialised is allocated image-bindable up front and pulls nothing.
+            // Whether this transition re-mints storage that ALREADY EXISTED on the backend (the
+            // levels below are replayed from the client's shadow to fill the new carrier): what
+            // `trp=` counts. A texture reaching here uninitialised is allocated image-bindable up
+            // front and replays nothing.
             const Bool hadBackendStorage = m_isInitialized;
 #endif
             m_imageBindableStorageRequired = true;
@@ -6431,28 +6481,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // glGetTexImage, a draw that samples it, an FBO attach - which is why it survived so
             // long: the scenario that binds the image immediately after uploading never sees it.
             //
-            // P4a (D-M): THIS RE-DIRTY IS AN EMULATION THAT CANNOT SURVIVE A SPLIT, and it is
-            // the head of ARCHITECTURE.md:299-308's one new stall class. The server is reaching
-            // BACK into the client's own dirty model to ask for texels it does not hold; under
-            // split there is no client address space to reach into and the levels have to be
-            // PULLED across the reverse channel. P4a supplies mitigation 1 - the prevention
-            // half, MGPResourceDesc::ImageBindableHint on every create and respecify, so a
-            // texture that has ever been image-bound is allocated in the carrier from the start
-            // and never reaches this path - and NAMES the site. Mitigations 2-4 (the async pull,
-            // the bounded retention and the ResourceSubDataComplete terminator) and
-            // TextureRemintPullScenario are P9's, and P4a must not build half a terminator.
+            // THIS IS THE MONOLITH ARM ONLY. Under a transport the re-mint is the server's own
+            // (RequireImageBindableStorageByHandle: the GPU level read back, the staged store for
+            // what the client uploaded), and nothing selects this function there - the image
+            // units sync from the record, the metadata respecify calls the by-handle overload, and
+            // a frontend object reaching the loop below would meet the layer-1 guard
+            // (Fatal{RoleViolation, "texture-legacy-arm"}) first. P9 W2 retired the
+            // `texture-remint-pull` marker this comment used to describe: no pull protocol exists
+            // because no byte of a re-mint has to come from the client (notes/p9/W2-REMINT.md).
             //
-            // In monolith the code below keeps running exactly as it does today: the Fatal is a
-            // split-only arm and the monolith body of MGPipeUnmigratedEmulation is a no-op.
+            // KNOWN MONOLITH DEFECT, NOT FIXED HERE (W2-REMINT.md §6): replaying the client's shadow
+            // loses whatever the GPU wrote into the level since the upload - a render target, a
+            // clear, a generated mip - because the shadow never saw it. The split arm reads the GPU.
             //
-            // THE MARKER IS RAISED WHERE A LEVEL IS ACTUALLY REPLAYED, not on entry (review
-            // N-4). ImageBindableHint IS the prevention half of mitigation 1, and D's own
-            // metadata-respecify arm makes the hint's ARRIVAL the trigger for entering this
-            // function - so a glBindImageTexture on a texture whose storage is not yet defined
-            // reaches here, finds no defined level, replays nothing, and would nevertheless have
-            // counted (and, under split, aborted at) the very emulation the hint exists to
-            // prevent. What the marker is about is stated in its own comment above: reaching
-            // BACK into the client's dirty model for texels. No texels owed, nothing to mark.
+            // THE COUNT IS TAKEN WHERE A LEVEL IS ACTUALLY REPLAYED, not on entry (review N-4): a
+            // glBindImageTexture on a texture whose storage is not yet defined reaches here, finds
+            // no defined level and replays nothing.
 #if MOBILEGL_PIPE_PUSH
             // P4a (review M-1): ON THE HANDLE ARM THE RE-DIRTY HAS TO REACH THE APPLIER'S SET,
             // not only the frontend's model. The client cleared its own flags when it emitted
@@ -6465,7 +6509,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Both models are written, not one: the frontend's because the legacy arm reads it
             // and because the client's own NoteLevelDirty hook rides on it, the applier's
             // because that is what this arm consumes.
-            Bool markedRemintPull = false;
+            Bool countedRemint = false;
             const MG_Pipe::MGPipeHandle rearmRes =
                 TextureResourceSubsystemEnabled()
                     ? [&]() {
@@ -6486,41 +6530,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              stateTextureObject->GetExternalIndex());
             }
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (gt): under an active transport the replay loop below reaches the layer-1
-            // texture guard (MarkStorageDirty on a frontend object is Fatal{RoleViolation,
-            // "texture-legacy-arm"}) BEFORE the N-4 marker it owns - so the marker is hoisted
-            // here, ahead of the first guarded contact, with its semantics unchanged: raised
-            // only when a level would actually be replayed. The predicate is answered by the
-            // server's own staged-texture store rather than the frontend's extent walk: a
-            // Defined level has a non-zero extent and bytes on the frontend (the two conditions
-            // the loop tests), and an undefined one reads {0,0,0} and is skipped. A texture with
-            // no applier record (rearmRes null, the MGLOG_E_ONCE arm above) falls through to the
-            // guard, which names the same violation one level down.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-                !MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
-                const auto* rearmRecord = PipeTextureRecordForHandle(rearmRes);
-                if (rearmRecord != nullptr) {
-                    auto& rearmStore = MG_Remote::Server::ServerStagedTexture();
-                    const Uint64 rearmKey = MG_Remote::Server::StagedTextureStore::KeyForHandle(rearmRes);
-                    Bool anyLevelWouldReplay = false;
-                    for (const auto& uploadTarget :
-                         BufferImpl::StagedUploadTargetsForPipeTarget(rearmRecord->Desc.Target)) {
-                        for (Uint32 level = 0; level < rearmRecord->Desc.Levels; ++level) {
-                            if (rearmStore.IsLevelDefined(rearmKey, static_cast<Uint16>(uploadTarget),
-                                                          static_cast<Uint16>(level))) {
-                                anyLevelWouldReplay = true;
-                                break;
-                            }
-                        }
-                        if (anyLevelWouldReplay) break;
-                    }
-                    if (anyLevelWouldReplay) {
-                        MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
-                    }
-                }
-            }
-#endif
             if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
                 const auto levelCount = mipmapObject->GetMipmapLevelCount();
                 for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
@@ -6530,13 +6539,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
                         mipmapObject->MarkStorageDirty(uploadTarget, level, true);
 #if MOBILEGL_PIPE_PUSH
-                        // N-4: one level owed is what makes this an unmigrated emulation. Once
-                        // per transition, not once per level: the marker names the SITE.
-                        if (!markedRemintPull) {
-                            MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
-                            markedRemintPull = true;
-                            // THE COUNTER BEHIND ROADMAP OPEN QUESTION 2 (final review M-A): one per
-                            // transition that replays a level of storage the backend already held.
+                        // THE COUNTER BEHIND ROADMAP OPEN QUESTION 2 (final review M-A): once per
+                        // transition that replays a level of storage the backend already held,
+                        // not once per level.
+                        if (!countedRemint) {
+                            countedRemint = true;
                             if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
                                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
                             }

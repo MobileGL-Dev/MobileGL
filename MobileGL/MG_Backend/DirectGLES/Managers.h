@@ -1963,7 +1963,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // allocation, or capture the old native contents, merge pending
             // upload regions and re-arm the server's whole-level replay set.
             // First allocations use staged bytes directly. No frontend dirty
-            // flag, allocator or pixel-store object participates.
+            // flag, allocator or pixel-store object participates. P9 W2: a level
+            // the driver does not hold (defined after the last sync) is never read
+            // back, and a readback the driver refuses falls back to the staged
+            // level when the store covers it (notes/p9/W2-REMINT.md).
             void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
                                                      const MG_Pipe::MGPipeResourceRecord& record);
 #endif

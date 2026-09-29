@@ -32,6 +32,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool ReadTextureLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
                                TextureInternalFormat logicalFormat, GLint level, const IntVec3& logicalExtent,
                                Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes);
+    // Whether the NATIVE texture currently holds `level` of `uploadTarget` at `logicalExtent`
+    // (glGetTexLevelParameteriv). False for a level the driver never allocated - one defined after
+    // the texture's last sync - so a re-mint does not read what is not there. A query the driver
+    // refuses answers true, keeping the caller on its readback path.
+    Bool NativeTextureLevelHasExtent(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
+                                     GLint level, const IntVec3& logicalExtent);
 #endif
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);

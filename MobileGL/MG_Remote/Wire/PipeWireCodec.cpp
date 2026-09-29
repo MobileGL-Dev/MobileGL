@@ -2323,8 +2323,10 @@ namespace MobileGL::MG_Remote::Wire {
         }
 
         case MGPWireOp::ResourceSubDataComplete:
-            // The forward terminator of a SERVER-initiated texture pull (section 7.1). There
-            // is no client producer and no applier; the reverse channel is P7/P9.
+            // RETIRED (P9 W2). It was to be the forward terminator of a SERVER-initiated texture
+            // pull (section 7.1), and no such pull exists: a re-mint reads the GPU level and the
+            // server's own staged store (notes/p9/W2-REMINT.md). The row stays because opcodes
+            // only ever grow; no client emits it and a record that claims it is declined.
             return false;
 
         case MGPWireOp::ResourceFlushRange:

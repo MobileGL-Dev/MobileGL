@@ -614,8 +614,8 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
 
     // FINAL REVIEW M-A: glBindImageTexture IS THE EARLIEST PRODUCER OF kMGPipeBindShaderImage -
     // the bit the ImageBindableHint is derived from - and the emitted image set's walk is D-A4's
-    // (any texture named in an emitted MGPImageView). The hint is the PREVENTION half of the
-    // texture-remint stall class: a texture the server knows may be image-bound is allocated
+    // (any texture named in an emitted MGPImageView). The hint PREVENTS the texture re-mint
+    // (P9 W2): a texture the server knows may be image-bound is allocated
     // image-bindable up front, so it has to arrive before the first sync, i.e. at the bind.
     // Nothing produced the bit before the fix round.
     TEST(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind) {

@@ -280,6 +280,44 @@
         return true;
     }
 
+    // P9 W2-a. The store's Defined-ness follows the client's respecifies; the driver's follows the
+    // twin's last sync. A re-mint asks this before reading a level back, because a level defined
+    // after that sync (null data, or null data plus a partial upload) is not on the driver yet and
+    // its FBO attachment is incomplete - which used to end the session at
+    // Fatal{ResourceUnavailable, "image-promotion-readback"} on legal GL.
+    Bool NativeTextureLevelHasExtent(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
+                                     GLint level, const IntVec3& logicalExtent) {
+        if (!texture || level < 0 || !g_GLESFuncs.glGetTexLevelParameteriv) return true;
+        const IntVec3 extent = TextureImpl::GetBackendUploadSize(target, logicalExtent);
+        const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+        GLenum binding = GL_NONE;
+        switch (nativeTarget) {
+        case GL_TEXTURE_2D: binding = GL_TEXTURE_BINDING_2D; break;
+        case GL_TEXTURE_3D: binding = GL_TEXTURE_BINDING_3D; break;
+        case GL_TEXTURE_2D_ARRAY: binding = GL_TEXTURE_BINDING_2D_ARRAY; break;
+        case GL_TEXTURE_CUBE_MAP: binding = GL_TEXTURE_BINDING_CUBE_MAP; break;
+        case GL_TEXTURE_CUBE_MAP_ARRAY: binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY; break;
+        default: return true;
+        }
+        // A cube's levels are per face; every other target answers for the whole level.
+        const GLenum queryTarget = nativeTarget == GL_TEXTURE_CUBE_MAP
+            ? TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget) : nativeTarget;
+        DrainESErrors();
+        GLint previous = 0;
+        g_GLESFuncs.glGetIntegerv(binding, &previous);
+        g_GLESFuncs.glBindTexture(nativeTarget, texture);
+        GLint width = 0, height = 0, depth = 0;
+        g_GLESFuncs.glGetTexLevelParameteriv(queryTarget, level, GL_TEXTURE_WIDTH, &width);
+        g_GLESFuncs.glGetTexLevelParameteriv(queryTarget, level, GL_TEXTURE_HEIGHT, &height);
+        g_GLESFuncs.glGetTexLevelParameteriv(queryTarget, level, GL_TEXTURE_DEPTH, &depth);
+        const Bool answered = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        g_GLESFuncs.glBindTexture(nativeTarget, static_cast<GLuint>(previous));
+        if (!answered) return true;
+        const Bool layered = nativeTarget == GL_TEXTURE_3D || nativeTarget == GL_TEXTURE_2D_ARRAY ||
+                             nativeTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
+        return width == extent.x() && height == extent.y() && (!layered || depth == extent.z());
+    }
+
     Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes) {
         const auto* record = PipeTextureRecordForHandle(info.Res);
         if (!record) return false;

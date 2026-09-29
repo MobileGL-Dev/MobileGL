@@ -1109,19 +1109,21 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
                  "ScissorTestEnabledMask");
 }
 
-// The reverse channel is exactly EIGHT callbacks: plan B's section 7.1 wrote ten, and the tenth
+// The reverse channel is exactly SEVEN callbacks: plan B's section 7.1 wrote ten, and the tenth
 // (OnXfbScatterReady) went with the design it belonged to when P5c/P5f moved the XFB scatter to
 // the server's own staged shadow and its OnBufferWriteback return path. P3b/P4b espryt D1 slice 3
 // deleted the declaration; this case is what makes the struct's shrink a measured fact rather
 // than a claim, since the static_assert beside kMGPipeCallbackCount only proves the two agree.
-// P9 W3 deleted the ninth, OnLog, which never had a producer either: the server's log lines are
-// LogLine frames on the control plane (MG_Remote/Transport/LogForward.h), not reverse records.
+// P9 took two more, neither of which ever had a producer: W2 deleted OnTexturePullRequest (a
+// texture re-mint never needs the client's texels - the server reads the GPU level and its own
+// staged store, notes/p9/W2-REMINT.md), and W3 deleted OnLog (the server's log lines are LogLine
+// frames on the control plane, MG_Remote/Transport/LogForward.h, not reverse records).
 //
 // THE CASE NAME STAYS "…HasTenCallbacks" DELIBERATELY. G2/G14 say the ctest name set only ever
 // grows, so renaming this would delete a name the gate is watching; the count it asserts is what
 // has to be right, and the comment is where the number lives.
 TEST(PipeCatalogue, ReverseChannelHasTenCallbacks) {
-    EXPECT_EQ(kMGPipeCallbackCount, 8u);
+    EXPECT_EQ(kMGPipeCallbackCount, 7u);
     EXPECT_EQ(sizeof(MGPipeCallbacks), kMGPipeCallbackCount * sizeof(void (*)()));
 }
 
@@ -1424,16 +1426,22 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 // say WHICH one was lost. The purity gate greps the count; this says what the count is of.
 TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // Every one of these is an emulation that reads or writes CLIENT memory a split server
-    // would not have: a CPU shadow mirror, a CPU mipmap fallback, a shadow-conversion readback,
-    // and the re-dirty of already-uploaded levels that a texture re-mint performs.
+    // would not have: a CPU shadow mirror, a CPU mipmap fallback and a shadow-conversion
+    // readback.
+    //
+    // FOUR, NOT FIVE (P9 W2). The fifth was "texture-remint-pull", the re-dirty of
+    // already-uploaded levels that RequireImageBindableStorage performs, and the head of the one
+    // new stall class the design admitted. It went because the stall class did: under a transport
+    // the re-mint is the server's own (RequireImageBindableStorageByHandle reads the GPU level and
+    // replays the staged store), the frontend arm that carried the marker is monolith-only, and no
+    // pull protocol or ResourceSubDataComplete terminator exists (notes/p9/W2-REMINT.md).
     const char* const kNames[] = {
         "copy-image-shadow-mirror",     // the glCopyImageSubData CPU-shadow mirror
         "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated
         "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
         "get-tex-image-shadow",         // GetTexImageViaShadowConversion
-        "texture-remint-pull",          // RequireImageBindableStorage's re-dirty
     };
-    EXPECT_EQ(std::size(kNames), 5u);
+    EXPECT_EQ(std::size(kNames), 4u);
     // No duplicates: two sites sharing a name would make the grepped count and this list
     // disagree in the one direction nobody would notice.
     for (SizeT i = 0; i < std::size(kNames); ++i) {
@@ -1441,12 +1449,6 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
             EXPECT_STRNE(kNames[i], kNames[j]);
         }
     }
-    // The last one is the head of the only NEW stall class the design admits, and P4a supplies
-    // exactly one of its four mitigations - prevention, through ImageBindableHint on every
-    // create and respecify. The async pull, the bounded retention and the
-    // ResourceSubDataComplete terminator are a later phase's, and P4a must not build half a
-    // terminator.
-    EXPECT_STREQ(kNames[4], "texture-remint-pull");
 #if MOBILEGL_PIPE_PUSH
     // In monolith it really is a no-op: calling it changes nothing and returns nothing. The
     // teeth are a split server's, and the call site is what P8 gives them to.

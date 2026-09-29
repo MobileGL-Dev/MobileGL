@@ -182,13 +182,15 @@ namespace MobileGL::MG_Util::PipeStats {
         // hides is ~+6 ms/frame, so an emission-shape divergence has to be a difference of two
         // numbers rather than something only a GPU can see.
         ClientTextureUploadEmissions,
-        // THE TEXTURE-REMINT PULL RATE (ROADMAP open question 2; P4a final review M-A). Counted
-        // by Espryt once per transition in which a texture that ALREADY HAD backend storage is
-        // re-minted image-bindable and its defined levels are replayed from the client's shadow
-        // (RequireImageBindableStorage) - the reach-back a split cannot make (D-M) and the one
-        // ImageBindableHint exists to prevent. A texture whose hint arrived before its first
-        // sync is allocated image-bindable up front and never counts. `trp=` on the summary
-        // line; the number that decides MOBILEGL_PIPE_TEXEL_RETAIN_MB's default.
+        // THE TEXTURE RE-MINT RATE (ROADMAP open question 2; P4a final review M-A). Counted by
+        // Espryt once per transition in which a texture that ALREADY HAD backend storage is
+        // re-minted image-bindable - on the monolith arm by RequireImageBindableStorage (levels
+        // replayed from the client's shadow), under a transport by
+        // RequireImageBindableStorageByHandle (the GPU level read back, the staged store for
+        // pending boxes; an immutable core-format texture it keeps as-is does not count). The
+        // name still says "pull": P9 W2 found no re-mint needs the client, so none is pulled,
+        // and the name stays because it is printed and peeked (`trp=`). A texture whose hint
+        // arrived before its first sync is allocated image-bindable up front and never counts.
         TextureRemintPulls,
         // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4). `rsd=` - THE RESIDENT SUB-DATA
         // EMISSION COUNT: one per `buffer_subdata_resident` record (opcode 49) the CLIENT

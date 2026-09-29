@@ -233,9 +233,9 @@ namespace MobileGL::MG_Pipe {
         desc.StorageKind = MGPipeTextureStorageKindForTarget(texture.GetTarget());
         desc.BindMask = bindMask;
         // STICKY AND FOREVER: everImageBound, the client-side answer MGPipeTypes.h asks for.
-        // It is the PREVENTION half of the texture-remint stall class - a texture the server
-        // knows may be image-bound is allocated image-bindable up front, so the re-mint that
-        // would have to pull its texels back never happens.
+        // It PREVENTS the texture re-mint - a texture the server knows may be image-bound is
+        // allocated image-bindable up front, so the server never has to read its levels back
+        // and re-upload them into a new carrier (P9 W2).
         desc.ImageBindableHint = (bindMask & kMGPipeBindShaderImage) != 0 ? 1 : 0;
         if (storageDefined) {
             const MGPipeTextureExtent extent = MGPipeTextureExtentOf(texture);
@@ -702,8 +702,7 @@ namespace MobileGL::MG_Pipe {
         // mask rides resource_create and every resource_respecify - and an IMMUTABLE texture has
         // no further respecify, that being what immutable means - so for the canonical order
         // `glTexStorage2D(...); glBindImageTexture(...)` the applier's record kept
-        // ImageBindableHint = 0 for ever and the PREVENTION half of the texture-remint stall
-        // class never fired. So a mask that actually MOVES re-emits the stored descriptor with
+        // ImageBindableHint = 0 for ever and the re-mint PREVENTION never fired. So a mask that actually MOVES re-emits the stored descriptor with
         // the new mask: every storage-defining field is byte-identical to what the applier
         // holds, which is exactly the shape wire applies as a METADATA UPDATE - the descriptor
         // is replaced, no reallocation is acked, and NO pending upload is dropped, so a mask

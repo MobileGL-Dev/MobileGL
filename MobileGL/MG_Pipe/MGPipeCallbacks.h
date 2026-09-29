@@ -15,12 +15,20 @@
 // The backend -> frontend reverse channel, named (plan B section 7.1).
 //
 // Today this traffic is 95 call sites across 17 methods poked directly into frontend
-// objects. gallium has no vocabulary for shadow writeback, GPU-write notification, texture
-// re-send requests or default-framebuffer geometry, because in Mesa the state tracker and
-// the driver share an address space. Naming them as eight callbacks plus one forward
-// terminator (MGPipeContext::ResourceSubDataComplete) is the deliberate deviation (D8).
+// objects. gallium has no vocabulary for shadow writeback, GPU-write notification or
+// default-framebuffer geometry, because in Mesa the state tracker and the driver share an
+// address space. Naming them as callbacks is the deliberate deviation (D8).
 //
-// EIGHT, NOT THE TEN PLAN B WROTE. The tenth was OnXfbScatterReady, and it went with the
+// SEVEN, NOT THE TEN PLAN B WROTE. Three went, each because nothing produces it.
+//
+// OnTexturePullRequest, the server asking the client to re-send a texture's levels after
+// re-minting it (with op 50 ResourceSubDataComplete as the forward terminator). P9 W2 measured
+// that no re-mint needs the client: Espryt's server reads the GPU level back and replays its own
+// staged store, Magma copies GPU to GPU, on every arm (notes/p9/W2-REMINT.md). So the callback
+// went; op 50 stays in the opcode table as a retired row (opcodes only ever grow) and its decoder
+// still declines it.
+//
+// OnXfbScatterReady went with the
 // design it belonged to: plan B put the XFB scatter on the CLIENT (the server would hand
 // back the packed scratch and the client would run the patch loop over its own shadow), so
 // there had to be a callback that told the client the layout. P5c/P5f went the other way -
@@ -31,8 +39,8 @@
 // reader of this file has to rule out by hand, and the size assertion below made it look
 // load-bearing.
 //
-// The ninth was OnLog, deleted in P9 W3 for the same reason: zero producers, zero consumers,
-// no EventKind. Plan B pictured the server's log lines as reverse-channel records; they never
+// And OnLog, deleted in P9 W3 for the same reason: zero producers, zero consumers, no
+// EventKind. Plan B pictured the server's log lines as reverse-channel records; they never
 // were. They travel the CONTROL plane as LogLine frames (protocol.fbs), written by the server's
 // logger through its log forward (MG_Remote/Transport/LogForward.h) - which is also where the
 // severity policy this entry's comment promised ("<= WARN lossy, >= ERROR lossless and rate
@@ -50,11 +58,6 @@ namespace MobileGL::MG_Pipe {
         void (*OnGpuWritten)(MGPipeHandle res, Uint rangeCount, const MGPRange* ranges);
         void (*OnBufferWriteback)(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes);
         void (*OnTextureWriteback)(MGPipeHandle res, const MGPBox* box, MGPBlobRef bytes);
-        // The one new stall class in this design (D-B6): the server recast a texture and
-        // needs its texels back. The client answers with zero or more ResourceSubData
-        // records terminated by ResourceSubDataComplete carrying the same pullSerial.
-        void (*OnTexturePullRequest)(MGPipeHandle res, Uint16 target, Uint16 firstLevel, Uint16 levelCount,
-                                     Uint64 pullSerial);
         // SHAPE ONLY, never bytes: the client owns the CPU shadow and allocates the levels
         // itself.
         void (*OnMipLevelsGenerated)(MGPipeHandle res, Uint16 base, Uint16 count);
@@ -64,9 +67,9 @@ namespace MobileGL::MG_Pipe {
         void (*OnCapsInvalidated)();
     };
 
-    // Eight, and the count is asserted so a ninth cannot be added without touching the
+    // Seven, and the count is asserted so an eighth cannot be added without touching the
     // transport's reverse-channel record table.
-    inline constexpr SizeT kMGPipeCallbackCount = 8;
+    inline constexpr SizeT kMGPipeCallbackCount = 7;
     static_assert(sizeof(MGPipeCallbacks) == kMGPipeCallbackCount * sizeof(void (*)()),
                   "MGPipeCallbacks gained or lost a callback");
 

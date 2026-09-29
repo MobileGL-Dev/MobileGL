@@ -1217,8 +1217,8 @@ namespace MobileGL::MG_Pipe {
     // BindMask / ImageBindableHint bit reaches the applier only on a respecify, and an
     // IMMUTABLE texture has no further one - that is what immutable means - so the canonical
     // order (glTexStorage2D, then glBindImageTexture or an FBO attachment) would leave the
-    // record's hint at 0 for ever, and the hint is the PREVENTION half of the texture-remint
-    // stall class. So B re-emits the descriptor when the mask moves, and a record whose
+    // record's hint at 0 for ever, and the hint is what PREVENTS the texture re-mint (a
+    // server-side readback and re-upload, P9 W2). So B re-emits the descriptor when the mask moves, and a record whose
     // STORAGE-DEFINING fields all equal the stored descriptor's is applied as a metadata
     // update:
     //

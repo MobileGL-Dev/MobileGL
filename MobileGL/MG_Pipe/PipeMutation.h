@@ -430,15 +430,16 @@ namespace MobileGL::MG_Pipe {
     // all, glBindImageTexture's state setter (TextureState.h, MG_State), which may include no
     // emit header at all. So the note goes through this door, exactly as the birth hooks do.
     // Nothing produced either bit before the fix round: ImageBindableHint was always 0, the
-    // metadata respecify (ID-18 M4) had no live trigger, and the remint pull the hint exists to
+    // metadata respecify (ID-18 M4) had no live trigger, and the re-mint the hint exists to
     // prevent was neither prevented nor counted.
     //
     // UNCONDITIONAL IN A PUSH BUILD, like the mints: the mask is CLIENT state the framebuffer
     // emitter ORs into whether or not the texture family is on, and the emission a mask move
     // causes (the metadata respecify) is gated inside the emitter on the family's own pair.
     void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit);
-    // glBindImageTexture. The hint is the PREVENTION half of the texture-remint stall class -
-    // a texture the server knows may be image-bound is allocated image-bindable up front - so it
+    // glBindImageTexture. The hint PREVENTS the texture re-mint (a server-side readback and
+    // re-upload of every defined level, P9 W2) - a texture the server knows may be image-bound is
+    // allocated image-bindable up front - so it
     // has to reach the applier before the texture's first sync, i.e. at the bind itself, not at
     // the validate point's image walk (which notes it as well, D-A4's letter).
     void MGPipeNoteTextureImageBound(MG_State::GLState::ITextureObject& texture);

@@ -13232,9 +13232,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // WHAT THE SKIP LOSES IS BOUNDED BY TWO FATALS, which is the whole reason it is allowed
         // to be a skip rather than a port: a later glGetTexImage of the destination served from
-        // the shadow is class C wave 3 (Fatal{UnmigratedVerb, "GetTexImage"}, P9) and a texture
-        // re-mint that re-uploads the level is Fatal{UnmigratedEmulation, "texture-remint-pull"}
-        // (Managers.cpp:5634). Neither can silently read the un-mirrored shadow.
+        // the shadow is class C wave 3 (Fatal{UnmigratedVerb, "GetTexImage"}, P9), and a texture
+        // re-mint under a transport reads the GPU level itself (RequireImageBindableStorageByHandle,
+        // P9 W2) rather than any shadow. Neither can silently read the un-mirrored shadow.
         //
         // BEHIND #if MOBILEGL_BUILD_DISAGGREGATED so the pull build's code does not move (G1),
         // and the arm is the TRANSPORT and not the build - build-split runs its unit and
@@ -14952,10 +14952,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Session::Fail entirely, which is the funnel the census gate watches.
         //
         // THE FUNNEL KEEPS ITS TEETH FOR THE OTHER SITES: MGPipeUnmigratedEmulation still
-        // aborts for generate-mipmap-storage, generate-mipmap-cpu-fallback,
-        // generate-mipmap-cpu-filter and texture-remint-pull, which really do reach into a
-        // client address space. Only this call site is retired, and only because its own
-        // premise did not hold.
+        // aborts for generate-mipmap-storage, generate-mipmap-cpu-fallback and
+        // generate-mipmap-cpu-filter, which really do reach into a client address space. Only
+        // this call site is retired here, and only because its own premise did not hold
+        // (texture-remint-pull went the same way in P9 W2, for the same reason).
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             if (shadow == nullptr) {
                 MGLOG_E_ONCE("GetTexImage: no level shadow on this side for target=0x%x level=%d, and under an "

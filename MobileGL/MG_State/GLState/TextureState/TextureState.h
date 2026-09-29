@@ -35,9 +35,9 @@ namespace MobileGL::MG_State::GLState {
             ++Version;
 #if MOBILEGL_PIPE_PUSH
             // P4a D-A4 / final review M-A: the EARLIEST producer of kMGPipeBindShaderImage. The
-            // ImageBindableHint the bit feeds is the prevention half of the texture-remint stall
-            // class (a texture the server knows may be image-bound is allocated image-bindable
-            // up front), so it has to reach the applier before the texture's first sync - at
+            // ImageBindableHint the bit feeds prevents the texture re-mint (a texture the server
+            // knows may be image-bound is allocated image-bindable up front, P9 W2), so it has
+            // to reach the applier before the texture's first sync - at
             // the bind, not at the next validate point's image walk. Push-only through the
             // contract's door, like every other hook in this directory (G1).
             if (Texture) MG_Pipe::MGPipeNoteTextureImageBound(*Texture);

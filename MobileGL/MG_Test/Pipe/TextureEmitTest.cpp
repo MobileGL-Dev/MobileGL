@@ -433,8 +433,8 @@ TEST(TextureEmit, AnImageBoundTextureCarriesTheImageBindableHintForever) {
     EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 0);
 
     Textures().NoteTextureBoundAs(handle, kMGPipeBindShaderImage);
-    // The next respecify carries the hint - and it is the PREVENTION half of the texture-remint
-    // stall class, so it must never go back to 0 afterwards.
+    // The next respecify carries the hint - and it is what PREVENTS the texture re-mint, so it
+    // must never go back to 0 afterwards.
     texture->AllocateStorage(TextureUploadTarget::Texture2D, 1, MipmapInput{IntVec3{4, 4, 1}, 4 * 4 * 4});
     EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 1);
     texture->AllocateStorage(TextureUploadTarget::Texture2D, 2, MipmapInput{IntVec3{2, 2, 1}, 2 * 2 * 4});
@@ -1348,7 +1348,7 @@ TEST(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayL
 // THE CANONICAL ORDER FOR THE TEXTURES THE HINT WAS WRITTEN FOR: glTexStorage2D, then
 // glBindImageTexture. An IMMUTABLE texture has no further respecify - that is what immutable
 // means - so before this the applier's record kept ImageBindableHint = 0 for ever and the
-// PREVENTION half of the texture-remint stall class was a no-op for exactly its own target.
+// texture re-mint PREVENTION was a no-op for exactly its own target.
 TEST(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation) {
     TextureScope scope;
     const auto texture = MakeTexture2D(18, 32);
