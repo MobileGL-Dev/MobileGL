@@ -216,6 +216,32 @@ TEST(RemoteClientAdoptT0, KnobZeroOverSharedSegmentsAsksT0AndFallsBackToT2ByName
     EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
 }
 
+// Knob 2 (the default) is today's T2, byte for byte: the Hello asks 2, the server settles nothing at
+// its bind even where T0 would work (the stand-in platform and importer are installed), no caps bit,
+// map_persistent declines as before, and neither side prints a T0 line.
+// RED-ONCE: make AdoptTierAskFor ask 0 whatever the knob -> the stand-in grants and imports, 200/202.
+TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.AdoptTier = 2;
+        T0::SetPlatformForTest(&kFakePlatform);
+        MG_Pipe::MGPipeSetResourceOps(&g_fakeOps);
+        StartControlSession();
+        GrantAtFirstBind();
+        if (Srv::ServerSessionInstance().AdoptT0Asked()) ::_exit(200);
+        if (Srv::ServerSessionInstance().AdoptT0()) ::_exit(201);
+        const auto seed = Pattern(kT0Bytes, 0x55);
+        const MGPHandleOnly handle = MakeBufferStore(5, kT0Bytes);
+        if (MGPipeRouteMapPersistent(handle, kT0Bytes, seed.data()) != nullptr) ::_exit(202);
+        if (g_fakeImports.count != 0) ::_exit(203);
+        if (ClientSessionInstance().AdoptT0()) ::_exit(204);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    for (const char* line : {"T0 POST", "T0 granted", "AdoptT0", "T0 store", "T0 imported", "AdoptTier"})
+        EXPECT_EQ(child.Log.find(line), std::string::npos) << line << "\n" << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
+}
+
 // Knob 1 names T1, which P11 closed: one named refusal, the Hello asks T2, never a Fatal.
 TEST(RemoteClientAdoptT0, KnobOneIsRefusedByNameAndAsksT2) {
     const auto child = RunInChild([] {
