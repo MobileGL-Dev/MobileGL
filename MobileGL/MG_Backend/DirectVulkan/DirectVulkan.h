@@ -147,4 +147,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // only exist as vkCmdWriteTimestamp results); the frontend falls back.
     Int64 GetGpuTimestampNs();
     void Present();
+    // eglSwapInterval. Remembered across renderers: one created for a later window surface
+    // starts from the app's last request (GetRequestedSwapInterval) instead of the default.
+    void SetSwapInterval(Int interval);
+    Optional<Int> GetRequestedSwapInterval();
 } // namespace MobileGL::MG_Backend::DirectVulkan

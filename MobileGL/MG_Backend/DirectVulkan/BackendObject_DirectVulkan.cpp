@@ -363,7 +363,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
         BumpRendererGeneration();
-        pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow);
+        VulkanRendererConfig config;
+        config.SwapInterval = GetRequestedSwapInterval();
+        pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
         return true;
@@ -484,6 +486,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         return BackendObject::SwapEGLBuffers(dpy, draw);
+    }
+
+    void BackendObject_DirectVulkan::SetEGLSwapInterval(Int interval) {
+        // Same lock as SwapEGLBuffers: the renderer reads the request in Present.
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        BackendObject::SetEGLSwapInterval(interval);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLSurface(EGLSurface surface) {
@@ -727,6 +735,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool funcsTableInitialized = false;
         if (!funcsTableInitialized) {
             funcsTable.Present = Present;
+            funcsTable.SetSwapInterval = SetSwapInterval;
             funcsTable.GL.DrawArrays = DrawArrays;
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;

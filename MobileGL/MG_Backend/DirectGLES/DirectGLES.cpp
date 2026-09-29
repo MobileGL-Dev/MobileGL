@@ -15169,9 +15169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
 #include "WireTextureReadback.inc"
-#endif
 
     static Bool IsLegacyNativeReadPixelsFormat(GLenum format) {
         return format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED || format == GL_RED_INTEGER ||

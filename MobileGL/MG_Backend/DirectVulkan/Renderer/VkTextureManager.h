@@ -332,6 +332,11 @@ public:
         // into the frame's PRE command buffer - which executes strictly before the
         // frame's commands - instead of splitting the active render pass.
         Uint64 lastRecordingGeneration = 0;
+        // The same, for the last recorded command that WRITES the image (a render pass it is an
+        // attachment of, a clear, a blit/copy into it, a mip generation, a storage-image binding).
+        // An upload into an image written this recording has to be ordered after that write
+        // (VulkanRenderer::OrderPendingUploadAfterRecording).
+        Uint64 lastRecordingWriteGeneration = 0;
         // Snapshot of ITextureObject::GetContentVersion() at the last successful sync;
         // lets SyncTexture skip the whole re-check/re-upload when content is unchanged.
         Uint64 syncedContentVersion = 0;
@@ -381,6 +386,7 @@ public:
             std::swap(this->storageUsageResolved, that.storageUsageResolved);
             std::swap(this->syncedTextureParamsVersion, that.syncedTextureParamsVersion);
             std::swap(this->lastRecordingGeneration, that.lastRecordingGeneration);
+            std::swap(this->lastRecordingWriteGeneration, that.lastRecordingWriteGeneration);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
             std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
@@ -623,6 +629,26 @@ public:
     Bool WasTouchedThisRecording(const TextureResource& resource) const {
         return resource.lastRecordingGeneration == m_recordingGeneration;
     }
+    // A write is a use too. See TextureResource::lastRecordingWriteGeneration.
+    void StampResourceRecordingWrite(TextureResource& resource) const {
+        resource.lastRecordingGeneration = m_recordingGeneration;
+        resource.lastRecordingWriteGeneration = m_recordingGeneration;
+    }
+    void StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture);
+    // Upload-ordering queries (VulkanRenderer::OrderPendingUploadAfterRecording). None of them
+    // syncs, so nothing pending is uploaded by asking. All answer for the STORAGE texture.
+    //
+    // Uploads are recorded into a batch submitted AHEAD of the frame's recording
+    // (FlushPendingUploads), so an upload into an image the open recording already WROTE lands
+    // before that write, which then overwrites the newer texels. (An image the recording only
+    // read keeps the old trade: its earlier reads see the newer texels.)
+    Bool HasLiveImage(MG_State::GLState::ITextureObject& textureOrView) const;
+    // The next sync would record client texels into the image that is live now: same shape (a
+    // shape change mints a new image instead) and content moved since the last sync.
+    Bool HasPendingTexelUpload(MG_State::GLState::ITextureObject& textureOrView) const;
+    Bool WasTextureWrittenThisRecording(MG_State::GLState::ITextureObject& textureOrView) const;
+    // The live resource, or null.
+    TextureResource* FindTextureResource(MG_State::GLState::ITextureObject& textureOrView);
     // Records that this texture is bound to a GL image unit, so its image must carry
     // VK_IMAGE_USAGE_STORAGE_BIT. Must be called before NeedsStorageImagePreparation, and
     // therefore before the render pass is committed: an image that has to be upgraded is

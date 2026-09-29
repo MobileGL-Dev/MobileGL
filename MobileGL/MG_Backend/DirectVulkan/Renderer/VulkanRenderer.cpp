@@ -2003,6 +2003,9 @@ void main() {
                         outBinding.label, texture->GetExternalIndex());
                 return false;
             }
+            if (!isReadFramebuffer) {
+                textureManager.StampResourceRecordingWrite(*resource);
+            }
 
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
@@ -2119,6 +2122,9 @@ void main() {
                         outBinding.label, texture->GetExternalIndex(), static_cast<Uint32>(requiredAspectMask));
                 return false;
             }
+            if (!isReadFramebuffer) {
+                textureManager.StampResourceRecordingWrite(*resource);
+            }
 
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
@@ -2159,6 +2165,7 @@ void main() {
                         texture.GetExternalIndex(), mipLevel, resource->mipLevels);
                 return false;
             }
+            textureManager.StampResourceRecordingWrite(*resource);
 
             outBinding.image = resource->image;
             outBinding.trackedLayout = &resource->layout;
@@ -3175,7 +3182,10 @@ void main() {
     }
 
     VulkanRenderer::VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg)
-        : m_window(window), m_config(cfg) {
+        : m_window(window), m_config(cfg), m_presentsToAppWindow(window != NativeWindowType{}) {
+        if (!m_presentsToAppWindow) {
+            m_config.SwapInterval.reset();
+        }
         // Initialize();
     }
 
@@ -7381,6 +7391,15 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
             activeRenderPass = nullptr;
         }
+        // The syncs below upload each sampled texture's pending texels into a batch that runs
+        // ahead of this recording; one whose image the recording already cleared or drew into
+        // would be overwritten by that earlier work. Submit it first, here, before anything below
+        // records into the frame or decides from the active pass.
+        for (auto* sampledTexture : sampledTextures) {
+            if (sampledTexture != nullptr && OrderPendingUploadAfterRecording(frame, *sampledTexture)) {
+                activeRenderPass = nullptr;
+            }
+        }
         Bool needSampledTextureTransitions = false;
         auto& sampledResources = m_sampledResourcesScratch;
         sampledResources.assign(sampledTextures.size(), nullptr);
@@ -8203,6 +8222,7 @@ void main() {
                         m_renderPassManager->QueueRenderbufferClear(
                             {.mask = GL_COLOR_BUFFER_BIT, .color = payload.color}, attachment);
                     } else if (attachment.IsTexture()) {
+                        SettleTexelsBeforeQueuedClear(*fbo, attachment);
                         m_clearManager->QueueClear({.mask = GL_COLOR_BUFFER_BIT, .color = payload.color},
                                                    attachment);
                     }
@@ -8214,6 +8234,19 @@ void main() {
             return;
         }
 
+        if ((deferredMask & GL_COLOR_BUFFER_BIT) != 0) {
+            for (const auto drawBuffer : fbo->GetDrawBuffers()) {
+                if (drawBuffer != FramebufferAttachmentType::None) {
+                    SettleTexelsBeforeQueuedClear(*fbo, fbo->GetAttachment(drawBuffer));
+                }
+            }
+        }
+        if ((deferredMask & GL_DEPTH_BUFFER_BIT) != 0) {
+            SettleTexelsBeforeQueuedClear(*fbo, fbo->GetAttachment(FramebufferAttachmentType::Depth));
+        }
+        if ((deferredMask & GL_STENCIL_BUFFER_BIT) != 0) {
+            SettleTexelsBeforeQueuedClear(*fbo, fbo->GetAttachment(FramebufferAttachmentType::Stencil));
+        }
         m_clearManager->QueueClear(deferredMask, payload, *fbo);
         m_renderPassManager->QueueRenderbufferClear(deferredMask, payload, *fbo);
     }
@@ -8291,6 +8324,7 @@ void main() {
             if (!attachment.IsTexture()) {
                 return;
             }
+            SettleTexelsBeforeQueuedClear(framebuffer, attachment);
             m_clearManager->QueueClear(payload, attachment);
         };
 
@@ -8657,7 +8691,8 @@ void main() {
     }
 
     Bool VulkanRenderer::MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
-                                                           MG_State::GLState::ITextureObject& texture) {
+                                                           MG_State::GLState::ITextureObject& texture,
+                                                           Bool uploadPendingTexels) {
         Vector<PendingClearEntry> pendingClears;
         if (!m_clearManager->GetPendingClears(&texture, pendingClears)) {
             return true;
@@ -8669,8 +8704,9 @@ void main() {
                             commandBuffer != m_frameContext.GetCurrent().commandBuffer,
                         "MaterializePendingClearForTexture requires no active render pass on the target buffer");
 
-        auto* resource = m_textureManager->SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr) {
+        auto* resource = uploadPendingTexels ? m_textureManager->SyncTextureAndGetDescriptor(texture)
+                                             : m_textureManager->FindTextureResource(texture);
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
             // Declined sync (an incomplete texture, say). Nothing to clear into, and every line
             // below dereferences this - the assert that used to stand here is compiled out of
             // every build past DEBUG.
@@ -8822,11 +8858,70 @@ void main() {
                         "MaterializePendingClearForTexture: failed to transition textureId=%d to sampled layout",
                         texture.GetExternalIndex());
         resource->layout = sampledLayout;
+        // The clear is now a write in this recording, which is what orders a later upload into
+        // the image after it (OrderPendingUploadAfterRecording).
+        m_textureManager->StampResourceRecordingWrite(*resource);
 
         m_clearManager->PopPendingClear(&texture);
         MGLOG_D("MaterializePendingClearForTexture: textureId=%d pending clear materialized",
                 texture.GetExternalIndex());
         return true;
+    }
+
+    Bool VulkanRenderer::OrderPendingUploadAfterRecording(FrameContext::FrameData& frame,
+                                                          MG_State::GLState::ITextureObject& texture) {
+        if (!m_textureManager->HasPendingTexelUpload(texture)) {
+            return false;
+        }
+        // An open pass drawing into the image stamps that write only when it ends.
+        if (const auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
+            activeRenderPass != nullptr && ActiveRenderPassUsesTexture(*activeRenderPass, texture)) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+        const Bool clearFirst = m_clearManager->HasPendingClear(&texture);
+        if (!clearFirst && !m_textureManager->WasTextureWrittenThisRecording(texture)) {
+            // Nothing recorded writes the image: the upload may run ahead of the recording.
+            return false;
+        }
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+        if (clearFirst && !MaterializePendingClearForTexture(frame.commandBuffer, texture,
+                                                             /*uploadPendingTexels=*/false)) {
+            MGLOG_E_ONCE("OrderPendingUploadAfterRecording: textureId=%d kept its queued clear; it may land over "
+                         "texels written after it",
+                         texture.GetExternalIndex());
+        }
+        if (!FlushPendingCommands()) {
+            MGLOG_E_ONCE("OrderPendingUploadAfterRecording: submit failed; textureId=%d's upload may run ahead of "
+                         "earlier work on it",
+                         texture.GetExternalIndex());
+            return false;
+        }
+        m_frameContext.BeginCommandRecording();
+        // New command buffer: the same reset SetupDraw applies when it begins one.
+        m_lastSampledSetValid = false;
+        return true;
+    }
+
+    void VulkanRenderer::SettleTexelsBeforeQueuedClear(
+        const MG_State::GLState::FramebufferObject& framebuffer,
+        const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        // The default framebuffer's attachments are placeholders: its clears land on the
+        // swapchain image (MaterializePendingClearForDefaultFramebuffer) and it has no texels.
+        if (framebuffer.IsDefaultFramebuffer() || !attachment.IsTexture() || attachment.IsRenderbuffer()) {
+            return;
+        }
+        const auto texture = attachment.GetTexture();
+        if (!texture || (m_textureManager->HasLiveImage(*texture) &&
+                         !m_textureManager->HasPendingTexelUpload(*texture))) {
+            return;
+        }
+        OrderPendingUploadAfterRecording(m_frameContext.GetCurrent(), *texture);
+        m_textureManager->SyncTextureAndGetDescriptor(*texture);
     }
 
     Bool VulkanRenderer::MaterializeMultisamplePendingClear(VkCommandBuffer commandBuffer,
@@ -10782,6 +10877,7 @@ void main() {
         const Bool dstClearReady = materializeClear(dstEndpoint);
         MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination objectId=%u",
                         __func__, CopyImageEndpointName(dstEndpoint));
+        m_textureManager->StampTextureRecordingWrite(dstEndpoint.Texture.get());
 
         const VkImageLayout srcOriginalLayout = *srcImage.trackedLayout;
         const VkImageLayout dstOriginalLayout = *dstImage.trackedLayout;
@@ -11066,6 +11162,13 @@ void main() {
         }
 
         auto& frame = m_frameContext.GetCurrent();
+        if (!readFbo->IsDefaultFramebuffer()) {
+            // The read syncs the source texture, whose pending texels must land after work already
+            // recorded against it (see OrderPendingUploadAfterRecording).
+            if (const auto readTexture = readFbo->GetAttachment(readFbo->GetReadBuffer()).GetTexture()) {
+                OrderPendingUploadAfterRecording(frame, *readTexture);
+            }
+        }
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
         }
@@ -11791,6 +11894,9 @@ void main() {
             return;
         }
 
+        // The sync below uploads pending texels, which must land after work already recorded
+        // against this image (see OrderPendingUploadAfterRecording).
+        OrderPendingUploadAfterRecording(m_frameContext.GetCurrent(), *textureObject);
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*textureObject);
         // Two shapes end up in the same place, and for the same reason: the GL level being read has
         // no GPU storage, so UploadDirtyMipLevels never wrote it and the CPU shadow is the ONLY copy
@@ -12136,6 +12242,7 @@ void main() {
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
         MOBILEGL_ASSERT(resource != nullptr && resource->image != VK_NULL_HANDLE,
                 "GenerateMipmap failed to resync the backend texture after allocating mip storage.");
+        m_textureManager->StampResourceRecordingWrite(*resource);
         if (resource->layout == VK_IMAGE_LAYOUT_UNDEFINED) {
             const VkImageLayout finalLayout = ResolveGenerateMipmapFinalLayout(resource->aspect);
             Bool transitioned = VkTextureManager::TransitionImageLayout(
@@ -14406,8 +14513,22 @@ void main() {
         if (!m_swapchainResizeRequested && SwapchainIsOutOfDate()) {
             m_swapchainResizeRequested = true;
         }
+        // A new eglSwapInterval lands here too, between frames: this one is on screen and the
+        // next has recorded nothing. Only a different present mode is worth the rebuild (it
+        // drops every pipeline); otherwise the live swapchain already paces as asked.
+        if (m_config.SwapInterval != m_swapchainSwapInterval) {
+            if (SwapchainObject::ChooseSwapchainPresentMode(m_swapchainObject.GetSupportedPresentModes(),
+                                                            m_config.SwapInterval) !=
+                m_swapchainObject.GetPresentMode()) {
+                m_swapchainResizeRequested = true;
+            } else {
+                MGLOG_D("DirectVulkan: swap interval %d -> %s", *m_config.SwapInterval,
+                        SwapchainObject::GetPresentModeName(m_swapchainObject.GetPresentMode()));
+                m_swapchainSwapInterval = m_config.SwapInterval;
+            }
+        }
         if (m_swapchainResizeRequested) {
-            MGLOG_D("Present, processing requested swapchain resize");
+            MGLOG_D("Present, processing requested swapchain rebuild (resize or swap interval)");
             if (!RecreateSwapchain()) {
                 m_presentSuspended = true;
                 m_swapchainResizeRequested = false;
@@ -16085,7 +16206,12 @@ void main() {
         m_swapchainObject.Create(m_device, m_physicalDevice.handle, m_surface,
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily),
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.presentFamily),
-                                 m_config.MaxFramesInFlight, desiredExtent);
+                                 m_config.MaxFramesInFlight, desiredExtent, m_config.SwapInterval);
+        if (m_config.SwapInterval && m_config.SwapInterval != m_swapchainSwapInterval) {
+            MGLOG_D("DirectVulkan: swap interval %d -> %s", *m_config.SwapInterval,
+                    SwapchainObject::GetPresentModeName(m_swapchainObject.GetPresentMode()));
+        }
+        m_swapchainSwapInterval = m_config.SwapInterval;
         // The FragCoordYFlip variants bake this height in; it is the only input to a shader
         // module that lives outside the GL program, so the factory has to learn it here (and on
         // every recreation, which is the only way it can change).
@@ -16539,6 +16665,12 @@ void main() {
         m_config.SurfaceWidth = width;
         m_config.SurfaceHeight = height;
         m_swapchainResizeRequested = true;
+    }
+
+    void VulkanRenderer::SetSwapInterval(Int interval) {
+        if (m_presentsToAppWindow) {
+            m_config.SwapInterval = interval;
+        }
     }
 
     VkInstance VulkanRenderer::GetInstance() const {

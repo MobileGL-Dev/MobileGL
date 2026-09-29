@@ -26,13 +26,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         static SwapchainCapabilities GetSwapchainCapabilities(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface);
         static VkSurfaceFormatKHR ChooseSwapchainSurfaceFormat(const Vector<VkSurfaceFormatKHR>& availableFormats);
-        static VkPresentModeKHR ChooseSwapchainPresentMode(const Vector<VkPresentModeKHR>& availablePresentModes);
+        // swapInterval is the app's eglSwapInterval, empty until it asks (s_desiredPresentModes
+        // ranks the modes then). 0 wants IMMEDIATE, else MAILBOX, else FIFO; >= 1 wants FIFO,
+        // which cannot skip vblanks, so 2 and up pace like 1; a negative interval (adaptive
+        // vsync) wants FIFO_RELAXED, else FIFO.
+        static VkPresentModeKHR ChooseSwapchainPresentMode(const Vector<VkPresentModeKHR>& availablePresentModes,
+                                                           Optional<Int> swapInterval = Nullopt);
+        static const char* GetPresentModeName(VkPresentModeKHR presentMode);
 
         void Create(VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, Uint32 graphicsQueueFamily,
-                    Uint32 presentQueueFamily, Uint32 minImageCountHint, VkExtent2D desiredExtent);
+                    Uint32 presentQueueFamily, Uint32 minImageCountHint, VkExtent2D desiredExtent,
+                    Optional<Int> swapInterval);
         void Shutdown(VkDevice device);
 
         VkSwapchainKHR GetHandle() const { return m_swapchain; }
+        VkPresentModeKHR GetPresentMode() const { return m_presentMode; }
+        // The surface's present modes as queried when this swapchain was created.
+        const Vector<VkPresentModeKHR>& GetSupportedPresentModes() const { return m_supportedPresentModes; }
         const VkSurfaceFormatKHR& GetSurfaceFormat() const { return m_surfaceFormat; }
         VkExtent2D GetExtent() const { return m_extent; }
         // Surface-space extent (before the pre-rotation quarter-turn swap) this swapchain was
@@ -79,6 +89,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
+        VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        Vector<VkPresentModeKHR> m_supportedPresentModes;
         VkSurfaceFormatKHR m_surfaceFormat{};
         VkExtent2D m_extent{};
         VkExtent2D m_surfaceExtent{};

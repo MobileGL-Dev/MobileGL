@@ -23,15 +23,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Content uploads use scratch bindings, so draws and dispatches call this after
     // texture synchronization.
     void BindCurrentTextures();
-#if MOBILEGL_BUILD_DISAGGREGATED
-    Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes);
-    // Native/server-only color level readback. Returns tightly packed, owned
+    // Driver-side color/depth level readback. Returns tightly packed, owned
     // bytes in the requested pair; never consults a frontend texture or PACK/PBO.
-    // The caller resolves identity/extent from its resource record and supplies
-    // whether the SOURCE allocation already uses an image carrier.
+    // The caller supplies identity and extent, and whether the SOURCE allocation
+    // already uses an image carrier.
     Bool ReadTextureLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
                                TextureInternalFormat logicalFormat, GLint level, const IntVec3& logicalExtent,
                                Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes);
     // Whether the NATIVE texture currently holds `level` of `uploadTarget` at `logicalExtent`
     // (glGetTexLevelParameteriv). False for a level the driver never allocated - one defined after
     // the texture's last sync - so a re-mint does not read what is not there. A query the driver

@@ -1,6 +1,7 @@
 // Included in DirectGLES.cpp after the native packed-word readback helper.
-// The server needs owned tight rows for a storage promotion, not client PACK
-// layout or a fallback into a frontend texture's potentially stale shadow.
+// A storage promotion needs the driver's own texels as owned tight rows, not
+// client PACK layout or a fallback into a frontend texture's potentially stale
+// shadow.
     class ScopedWireTextureReadLevel {
     public:
         ScopedWireTextureReadLevel(GLuint texture, GLenum target, GLint level)
@@ -280,6 +281,7 @@
         return true;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
     // P9 W2-a. The store's Defined-ness follows the client's respecifies; the driver's follows the
     // twin's last sync. A re-mint asks this before reading a level back, because a level defined
     // after that sync (null data, or null data plus a partial upload) is not on the driver yet and
@@ -345,3 +347,4 @@
         bytes = Move(result);
         return true;
     }
+#endif // MOBILEGL_BUILD_DISAGGREGATED

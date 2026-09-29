@@ -1741,4 +1741,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MG_Util::PipeStats::OnPresent();
         }
     }
+
+    namespace {
+        Optional<Int> g_requestedSwapInterval;
+    } // namespace
+
+    void SetSwapInterval(Int interval) {
+        g_requestedSwapInterval = interval;
+        if (pVulkanRenderer) {
+            pVulkanRenderer->SetSwapInterval(interval);
+        }
+    }
+
+    Optional<Int> GetRequestedSwapInterval() {
+        return g_requestedSwapInterval;
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan
