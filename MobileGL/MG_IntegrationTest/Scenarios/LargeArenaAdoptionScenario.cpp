@@ -49,8 +49,10 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PersistentMapPeek.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitLane.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -94,6 +96,9 @@ void main() { word = 0xC0FFEEu; }
         // Set by the MapPersistentRoundtrips. ctest entry and by nothing else; a harness marker,
         // never read by the library.
         constexpr const char* kLaneMarker = "MGITEST_MPR_LANE";
+        // P11 A1: set (to the tier the lane names, "T0") only by the `.AdoptTier0.` tcp entries,
+        // which also set MOBILEGL_IPC_ADOPT_TIER=0; a harness marker, never read by the library.
+        constexpr const char* kAdoptTierRefusalMarker = "MGITEST_ADOPT_TIER_REFUSAL";
         // Draws issued against the arena inside the counted window. One definition, many draws:
         // "one per definition" (1) and "one per draw" (kDrawsInTheWindow) have to be different
         // numbers or the assertion cannot tell them apart.
@@ -259,6 +264,27 @@ void main() { word = 0xC0FFEEu; }
                              px.data());
                 return px;
             }
+
+            // P11 A2: the arena's tier as the frontend object records it, against the lane's
+            // declaration. Adopted = the resource owner minted a persistent coherent mapping and
+            // the CPU shadow was released; emulated = the owner declined (T2) and the shadow is
+            // the truth. Pixels cannot tell them apart - every case above is green on both.
+            void ExpectDeclaredArm(const std::string& declared, const char* when) {
+                bool adopted = false;
+                ASSERT_TRUE(PeekBufferIsAdoptedPersistentMap(m_arena, &adopted))
+                    << "no frontend BufferObject behind the arena " << when;
+                const std::string landed = adopted ? "adopted" : "emulated";
+                RecordProperty(std::string("arena_arm_") + (m_armPeeks++ == 0 ? "defined" : "used"),
+                               landed.c_str());
+                EXPECT_EQ(declared, landed)
+                    << "the lane declared the " << declared << " arm and the " << (kArenaBytes >> 20)
+                    << " MiB arena is " << landed << " " << when
+                    << ". Monolith lanes adopt on both backends (Espryt's handle arm mints through "
+                       "Ops_H_MapPersistentTracked, Magma's legacy AcquirePersistentMap); split lanes "
+                       "run T2, where every acquisition declines.";
+            }
+
+            int m_armPeeks = 0;
 
             unsigned int m_program = 0;
             unsigned int m_compute = 0;
@@ -503,6 +529,94 @@ void main() { word = 0xC0FFEEu; }
                "adoption removed, re-introduced - and 0 would mean the emission stopped happening. It "
                "reported: "
             << window.line;
+    }
+
+    // P11 A2 (MG_Remote/CONTRACT-P11.md §2): WHICH TIER THE ARENA REALLY LANDED IN. The cases above
+    // are green whether the arena adopted or stayed emulated, so the lane declares the arm
+    // (MGITEST_PERSISTENT_MAP_ARM) and this case asserts it, the way
+    // PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares does for a sub-16-MiB map.
+    // Asked twice: after the NULL-data definition (TryAdoptLargeStorage's door) and after a frame
+    // of use that ends in an SSBO binding and a dispatch (the storage-binding door,
+    // EnsureGpuResidentStorage, which Magma's server walk opens). Lanes that declare nothing - the
+    // ambient entries, which run under whatever transport the job exports - skip.
+    TEST_F(LargeArenaAdoptionScenario, TheArenaLandsInTheTierItsLaneDeclares) {
+        if (!Ready() || IsSkipped()) return;
+        const std::string declared = SplitLane::DeclaredPersistentMapArm();
+        if (declared.empty()) {
+            GTEST_SKIP() << "this lane declares no arm: MGITEST_PERSISTENT_MAP_ARM is set only by the "
+                            "lanes that pin their transport (monolith: adopted; the split arms: "
+                            "emulated)";
+        }
+        if (!PersistentMapPeekAvailable()) {
+            GTEST_SKIP() << "this lane declares the " << declared << " arm but Harness/PersistentMapPeek "
+                            "cannot look in this build (on Android this module links the shipping "
+                            "library, built -fvisibility=hidden). 'Could not look' is not 'it was "
+                         << declared << "'.";
+        }
+        ExpectDeclaredArm(declared, "right after its NULL-data definition");
+        if (HasFatalFailure()) return;
+
+        UploadQuad(1.f, 0.f, 0.f);
+        DrawQuad();
+        EXPECT_GT(CenterPixel()[0], 200) << "the draw from the arena never landed";
+        Gl().EndFrame();
+
+        GLint maxComputeStorageBlocks = 0;
+        glGetIntegerv(GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, &maxComputeStorageBlocks);
+        if (maxComputeStorageBlocks >= 1) {
+            const GLuint compute = CompileStage(GL_COMPUTE_SHADER, kMarkerComputeSource);
+            ASSERT_NE(compute, 0u) << m_buildLog;
+            m_compute = glCreateProgram();
+            glAttachShader(m_compute, compute);
+            glLinkProgram(m_compute);
+            glDeleteShader(compute);
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, m_arena, 0, sizeof(unsigned int));
+            glUseProgram(m_compute);
+            glDispatchCompute(1, 1, 1);
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+            unsigned int marker = 0;
+            glBindBuffer(GL_ARRAY_BUFFER, m_arena);
+            glGetBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(marker), &marker);
+            EXPECT_EQ(marker, 0xC0FFEEu) << "the dispatch through the arena's SSBO binding never landed";
+        } else {
+            RecordProperty("arena_arm_used", "not asked: no compute shader storage blocks");
+        }
+        EXPECT_EQ(FirstGLError(), 0u);
+        ExpectDeclaredArm(declared, "after a frame of draws, an SSBO binding and a dispatch");
+    }
+
+    // P11 A1 (MG_Remote/CONTRACT-P11.md §1): THE TCP LANE WITH MOBILEGL_IPC_ADOPT_TIER=0. A stream
+    // data plane has no memory the two sides share, so the client refuses the knob by name at its
+    // handshake - exactly one `Refuse{AdoptTierOnStream, "T0"}` line in its log - and the session
+    // runs T2: the other cases in the same `.AdoptTier0.` lane are green and the arena is emulated.
+    // Before A1 this lane ran T2 silently. Everywhere else it skips.
+    TEST_F(LargeArenaAdoptionScenario, AStreamSessionRefusesTheAdoptTierOnceByName) {
+        if (!Ready() || IsSkipped()) return;
+        const char* tier = std::getenv(kAdoptTierRefusalMarker);
+        if (tier == nullptr || tier[0] == '\0') {
+            GTEST_SKIP() << "runs only in the `.AdoptTier0.` tcp entries, which set "
+                            "MOBILEGL_IPC_ADOPT_TIER=0 and " << kAdoptTierRefusalMarker << "=T0";
+        }
+        if (PipeStatsWindow::LibraryLogPath().empty()) {
+            GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the client's log is "
+                            "where the refusal is written";
+        }
+        // A frame of the arena's work first: a refusal is only worth reading from a session that
+        // then ran - and an armed split lane requires the case to move the record ordinal anyway.
+        UploadQuad(0.f, 1.f, 0.f);
+        DrawQuad();
+        EXPECT_GT(CenterPixel()[1], 200) << "the session that refused the tier did not render";
+        EXPECT_EQ(FirstGLError(), 0u);
+        Gl().EndFrame();
+
+        const std::string log = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::LibraryLogPath());
+        const std::string line = std::string("Refuse{AdoptTierOnStream, \"") + tier + "\"}";
+        std::size_t count = 0;
+        for (auto at = log.find(line); at != std::string::npos; at = log.find(line, at + 1)) ++count;
+        RecordProperty("adopt_tier_refusals", static_cast<int>(count));
+        EXPECT_EQ(count, 1u) << "the client names MOBILEGL_IPC_ADOPT_TIER on a stream exactly once, at "
+                                "its handshake (" << line << "), in " << PipeStatsWindow::LibraryLogPath();
+        EXPECT_EQ(log.find("Fatal{UnimplementedAdoptTier"), std::string::npos) << log;
     }
 
 } // namespace MGITest

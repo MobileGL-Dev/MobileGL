@@ -25,6 +25,9 @@ foreach(listName IN ITEMS @MGL_SPLIT_ARM_TEST_LISTS@)
         elseif(entry MATCHES "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares$")
             set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
                 "MGITEST_PMAP_LANE=1;MGITEST_PERSISTENT_MAP_ARM=emulated;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
+        elseif(entry MATCHES "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares$")
+            # P11 A2: every split arm runs T2, so the arena is declared emulated.
+            set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")
         elseif(entry MATCHES "CtWireScenario\\.")
             set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MOBILEGL_TEST_SERVER_COUNTERS=1")
         endif()

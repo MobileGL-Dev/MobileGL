@@ -122,6 +122,16 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
     f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES)
 
 
+# P11 A1: THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. `.AdoptTier0.` runs
+# LargeArenaAdoptionScenario with MOBILEGL_IPC_ADOPT_TIER=0 on the CLIENT: a stream data plane
+# refuses that tier by name and runs T2 (the scenario is green there), while over shared segments -
+# the split and spawn arms - the same knob dies at the handshake by design (CONTRACT-P11 §1), so a
+# split or spawn copy could only ever be a death. Each tail must match at least one tcp entry, or
+# the exception names nothing. (The DirectGLES `.AdoptTier0.` twins need no entry: the Espryt
+# CASE pattern does not parse a middle segment, so they never enter that comparison.)
+MAGMA_TCP_ONLY = (".AdoptTier0.",)
+
+
 def lane_names(build_dir, label):
     """Every ctest entry name under an ANCHORED label (`ctest -L` is a regex, not a name)."""
     out = subprocess.run(["ctest", "-N", "-L", "^" + label + "$"], cwd=build_dir,
@@ -169,7 +179,7 @@ def tcp_lock_check(build_dir):
     return False
 
 
-def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
+def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=(), tcp_only=()):
     """The three arms of one tier must name the same set after the arm segment comes off.
 
     `inproc_only` drops a key from the comparison for EVERY non-split arm; `no_tcp` drops it for
@@ -195,6 +205,20 @@ def compare_arms(build_dir, tier, labels, inproc_only=(), no_tcp=()):
         return False
     failed = False
     reference = "split"
+    if tcp_only and "tcp" in sets:
+        for tail in tcp_only:
+            hits = sorted(k for k in sets["tcp"] if tail in k)
+            if not hits:
+                print(f"::error::{tier}: the tcp-only tail {tail!r} matches no tcp entry - an exception "
+                      f"about nothing.", file=sys.stderr)
+                return True
+            elsewhere = sorted(k for arm, keys in sets.items() if arm != "tcp" for k in keys if tail in k)
+            if elsewhere:
+                print(f"::error::{tier}: the tcp-only tail {tail!r} also names non-tcp entries "
+                      f"{elsewhere}.", file=sys.stderr)
+                return True
+            print(f"{tier}: {len(hits)} tcp-only entrie(s) excluded from the comparison ({tail})")
+        sets["tcp"] = {k for k in sets["tcp"] if not any(only in k for only in tcp_only)}
     comparable = {k for k in sets[reference]
                   if not any(only in k for only in inproc_only)}
     if len(comparable) != len(sets[reference]):
@@ -294,7 +318,8 @@ def main():
                             "spawn": "integration-magma-spawn",
                             "tcp": "integration-magma-tcp"},
                            inproc_only=MAGMA_INPROC_ONLY,
-                           no_tcp=MAGMA_SERVER_ENV_KNOB_NO_TCP)
+                           no_tcp=MAGMA_SERVER_ENV_KNOB_NO_TCP,
+                           tcp_only=MAGMA_TCP_ONLY)
     failed |= compare_arms(args.build_dir, "magma informational tier",
                            {"split": "integration-magma-all-split",
                             "spawn": "integration-magma-all-spawn",

@@ -2042,6 +2042,13 @@ jobs:
               "PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw",
               "PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
               "StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding",
+              # P11 A2: the >= 16 MiB arena and its tier assertion (emulated).
+              "LargeArenaAdoptionScenario.SubDataAfterAnInFlightDrawReachesTheNextDraw",
+              "LargeArenaAdoptionScenario.RespecifiedVertexArenaKeepsVaoBindings",
+              "LargeArenaAdoptionScenario.RespecifiedIndexArenaKeepsVaoBinding",
+              "LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite",
+              "LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack",
+              "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares",
           ]
           slp.require_green(json.load(open(sys.argv[2])), sys.argv[3],
                             ["DirectVulkan.Split.Buffers." + name for name in cases])
@@ -2104,6 +2111,12 @@ jobs:
               "PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw",
               "PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw",
               "StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding",
+              "LargeArenaAdoptionScenario.SubDataAfterAnInFlightDrawReachesTheNextDraw",
+              "LargeArenaAdoptionScenario.RespecifiedVertexArenaKeepsVaoBindings",
+              "LargeArenaAdoptionScenario.RespecifiedIndexArenaKeepsVaoBinding",
+              "LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite",
+              "LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack",
+              "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares",
           ]
           required = [sys.argv[4] + name for name in cases]
           if sys.argv[5] == "tcp":

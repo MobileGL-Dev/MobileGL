@@ -1495,14 +1495,25 @@ gtest_discover_tests(MobileGLIntegrationTest
 # No log path: none of these three cases reads one, and giving them one would only add a file for
 # four processes to truncate. The fourth case skips in both lanes for exactly that reason, saying
 # so.
+#
+# P11 A2: both lanes pin monolith, so both DECLARE the adopted arm (MGITEST_PERSISTENT_MAP_ARM) and
+# LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares asserts the 24 MiB arena really
+# adopted on the handle arm (Ops_H_MapPersistentTracked) and on the legacy one. Red once with
+# MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION=1 in the job environment (CONTRACT-P11 §2).
 mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
+    "MOBILEGL_TRANSPORT=monolith" "MGITEST_PERSISTENT_MAP_ARM=adopted"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x1fff"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
+    "MOBILEGL_TRANSPORT=monolith" "MGITEST_PERSISTENT_MAP_ARM=adopted"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x7f"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+# ... and Magma's monolith half: the legacy AcquirePersistentMap (the wire resource table is
+# registered only off monolith, VkBufferManager.cpp RegisterWireResourceOps).
+mgl_itest_join_environment(MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT
+    "MOBILEGL_TRANSPORT=monolith" "MGITEST_PERSISTENT_MAP_ARM=adopted"
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.ResourceSubsystemOn."
@@ -1521,6 +1532,15 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS "integration-gpu\;integration-monolith-control"
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.ArenaArm."
+    TEST_FILTER "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS "integration-gpu\;integration-monolith-control"
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT}"
 )
 
 # --- G12: the P4a subsystem A/B, and its dependency refusal ---------------------------
@@ -2407,6 +2427,30 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("ClearThenReadPixelsScenario.*" "")
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
+    # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case
+    # is declared emulated per entry by SplitLogPaths (T2: every acquisition declines); the mpr and
+    # adopt-tier-refusal cases skip here for want of their lane markers. The Magma arms are the
+    # gated `Arena.` block beside `Pbo.` / `Fence.` below, plus the Buffers lane.
+    mgl_itest_register_split_arms("LargeArenaAdoptionScenario.*" "")
+    # P11 A1 (CONTRACT-P11 §1): the tcp arm with MOBILEGL_IPC_ADOPT_TIER=0. A stream refuses the
+    # tier by name at the client's handshake and runs T2, so the whole scenario is green here and
+    # AStreamSessionRefusesTheAdoptTierOnceByName reads exactly one refusal line. TCP ONLY by
+    # construction: over shared segments (split, spawn) the same knob dies at the handshake, which
+    # is the unit gate RemoteClientControls.AdoptTier*OverSharedSegments*. The `.AdoptTier0.` tail is
+    # what keeps these names out of spawn_lane_parity.py's case set (see MAGMA_TCP_ONLY there).
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Tcp.AdoptTier0."
+        TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+        TEST_FILTER "LargeArenaAdoptionScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-tcp"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_TCP_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_TIER_REFUSAL=T0"
+            FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp
+    )
+    list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+    math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
 
     # ---- P3b/P4b espryt D1 slice 1: THE ORPHANED XFB CAPTURE TARGET -------------------------
     #
@@ -3697,6 +3741,16 @@ endif()
 # Fatal{ReplyTooLarge, "ReadPixels 256x512 0x1908/0x1406 2097152 > 2097136"}. One entry per case
 # for a private log each - two processes append to it on the spawn arm.
 if (MOBILEGL_BUILD_DISAGGREGATED)
+    # P11: LargeArenaAdoptionScenario's cases that run on every Magma arm - the five behavioural
+    # cases and the tier assertion (the mpr and adopt-tier-refusal cases need lane markers of their
+    # own). The `Arena.` block below and the Buffers lane both walk it.
+    set(MGL_ITEST_ARENA_CASES
+        SubDataAfterAnInFlightDrawReachesTheNextDraw
+        RespecifiedVertexArenaKeepsVaoBindings
+        RespecifiedIndexArenaKeepsVaoBinding
+        ReadbackSeesTheLatestCpuWrite
+        GpuWriteIntoTheArenaIsReadBack
+        TheArenaLandsInTheTierItsLaneDeclares)
     set(MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV
         "MOBILEGL_BACKEND_TYPE=DirectVulkan"
         "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1" "MOBILEGL_IPC_RUN_AHEAD=1"
@@ -3753,6 +3807,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
         endforeach()
+        # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on Magma's three arms, in the
+        # same flavour. Declared emulated: every split acquisition declines (the wire resource
+        # table's MapPersistent returns null, VkBufferManager.cpp), so the tier case asserts T2
+        # on every arm; DirectVulkan.ArenaArm. is its monolith (adopted) half.
+        foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Arena."
+                TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
+        endforeach()
+        # P11 A1 (CONTRACT-P11 §1): the tcp arm with MOBILEGL_IPC_ADOPT_TIER=0 - refused by name at
+        # the client's handshake, T2, the scenario green. TCP ONLY by construction (over shared
+        # segments the knob dies at the handshake); spawn_lane_parity.py names the tail in
+        # MAGMA_TCP_ONLY.
+        if(mglItestArm STREQUAL "Tcp")
+            foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS AStreamSessionRefusesTheAdoptTierOnceByName)
+                gtest_discover_tests(MobileGLIntegrationTest
+                    TEST_PREFIX "DirectVulkan.Tcp.AdoptTier0."
+                    TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
+                    DISCOVERY_TIMEOUT 30
+                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                        ${mglItestArmProperties}
+                        ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_TIER_REFUSAL=T0\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0-tcp-${arenaCase}.log")
+            endforeach()
+        endif()
     endforeach()
 endif()
 
@@ -3915,7 +3997,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             CrossFrameBufferScenario.IndexOrphanAndReupload
             PersistentCoherentMapScenario.TwoWritesThroughTheCoherentPointerEachReachTheirOwnDraw
             PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw
-            StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding)
+            StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding
+            # P11 A2: the >= 16 MiB arena, the flavour's MGITEST_PERSISTENT_MAP_ARM=emulated
+            # asserted by its tier case (MG_Remote/CONTRACT-P11.md §2).
+            LargeArenaAdoptionScenario.SubDataAfterAnInFlightDrawReachesTheNextDraw
+            LargeArenaAdoptionScenario.RespecifiedVertexArenaKeepsVaoBindings
+            LargeArenaAdoptionScenario.RespecifiedIndexArenaKeepsVaoBinding
+            LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite
+            LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack
+            LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectVulkan.${mglItestArm}.Buffers."
             TEST_FILTER "${bufferCase}"
