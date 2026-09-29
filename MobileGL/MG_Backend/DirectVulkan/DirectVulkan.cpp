@@ -1764,6 +1764,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
 
     DescriptorPoolCensus GetDescriptorPoolCensus() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P11 M2: UNDER A TRANSPORT THE POOLS ARE THE SERVER RENDERER'S, and its apply thread
+        // grows, rewinds and trims them while the test thread would be reading - a census taken
+        // after a swap the client ran ahead of, or mid-burst, walks a set cache BeginFrame may be
+        // clearing. Inproc, the server is a thread of this process: the read is posted to it as
+        // the test probe, which runs between drain batches, so it sees every record published
+        // before it and none half-applied - without waiting on the GPU, which is the point of the
+        // trim case (it gives a burst back with other slots' work in flight). Spawn and tcp keep
+        // their pools in another process; the client has no renderer and answers unavailable.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            !MG_Remote::Server::ServerLoop::OnApplyThread()) {
+            if (MG_Config::Transport != MG_Config::TransportMode::InProcess) return DescriptorPoolCensus{};
+            DescriptorPoolCensus census{};
+            const MobileGLResult result = MG_Remote::Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                +[](void* user) -> MobileGLResult {
+                    *static_cast<DescriptorPoolCensus*>(user) =
+                        pVulkanRenderer ? pVulkanRenderer->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
+                    return MOBILEGL_OK;
+                },
+                &census);
+            return result == MOBILEGL_OK ? census : DescriptorPoolCensus{};
+        }
+#endif
         return pVulkanRenderer ? pVulkanRenderer->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
