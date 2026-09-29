@@ -76,6 +76,7 @@
 #include <signal.h>
 #include <inttypes.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2786,6 +2787,9 @@ static void runT0Parent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
 // mapping kept stale lines".
 // ---------------------------------------------------------------------------
 
+static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds,
+                           uint32_t seedBase);
+
 static int childT0Sustained(int sock) {
     setRecvTimeout(sock, 60);
     T0SRequest rq{};
@@ -2832,12 +2836,23 @@ static int childT0Sustained(int sock) {
     int sendRc = AHardwareBuffer_sendHandleToUnixSocket(ahb, sock);
     pr("child: T0S held lock ptr=%p, sendHandle rc=%d", p, sendRc);
     if (sendRc != 0) return 6;
+    const int rc2 = t0sClientRounds(sock, ahb, p, lockRc, rq.rounds, rq.seedBase);
+    AHardwareBuffer_release(ahb);
+    return rc2;
+}
 
+// The client half of the T0S rounds, after the handle has been sent: per round the CPU writes
+// REG_A through the held lock, the server's GPU reads it and fills REG_E / REG_F, and the client
+// checks both fills through the still-held pointer; then unlock + relock. The caller releases.
+static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds,
+                           uint32_t seedBase) {
+    uint32_t tag = 0;
+    size_t got = 0;
     uint32_t lastVk = 0, lastGl = 0, lastMask = 0;
-    for (uint32_t i = 0; i < rq.rounds; ++i) {
+    for (uint32_t i = 0; i < rounds; ++i) {
         T0SRound r{};
         r.round = i;
-        r.seedA = rq.seedBase + i * 0x01010101u;
+        r.seedA = seedBase + i * 0x01010101u;
         writeRegion(p, REG_A, r.seedA);  // through the held lock, no unlock
         if (!sendMsg(sock, MSG_T0S_ROUND, &r, sizeof(r), -1)) return 7;
         T0SGpuDone gd{};
@@ -2868,7 +2883,6 @@ static int childT0Sustained(int sock) {
     snprintf(dn.note, sizeof(dn.note), "held ptr=%p relock ptr=%p", p, q);
     sendMsg(sock, MSG_T0S_DONE, &dn, sizeof(dn), -1);
     recvMsg(sock, &tag, nullptr, 0, &got, nullptr);  // BYE
-    AHardwareBuffer_release(ahb);
     return 0;
 }
 
@@ -2916,6 +2930,10 @@ static GLuint buildT0SCompute(std::string* fail) {
     return prog;
 }
 
+static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size,
+                     uint32_t rounds, const char* rowPrefix, pid_t pid);
+static void printSummary();
+
 static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, uint32_t rounds) {
     const uint32_t seedBase = 0x5A000001u;
     int sock = -1;
@@ -2949,7 +2967,19 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
         reapChild(pid);
         return;
     }
+    t0sServe(c, g, glOk, sock, ahb, size, rounds, "T0S-sustained-lock", pid);
+    AHardwareBuffer_release(ahb);
+    close(sock);
+}
 
+// The server half of the T0S rounds on a received (still client-locked) AHB: import it into
+// Vulkan and GL, run `rounds` rounds against the client on `sock`, take its DONE, send BYE, and
+// record <rowPrefix>-vulkan / -gles / <rowPrefix>. `pid` >= 0 is a spawned child to reap. The
+// caller releases the AHB and closes `sock`.
+static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size,
+                     uint32_t rounds, const char* rowPrefix, pid_t pid) {
+    uint32_t tag = 0;
+    size_t got = 0;
     // --- Vulkan import of the (still client-locked) AHB ---
     VkBuffer vbuf = VK_NULL_HANDLE;
     VkDeviceMemory vmem = VK_NULL_HANDLE;
@@ -3115,7 +3145,9 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
     dn.relockMismatchE = dn.relockMismatchF = -3;
     bool gotDone = recvMsg(sock, &tag, &dn, sizeof(dn), &got, nullptr) && tag == MSG_T0S_DONE;
     sendMsg(sock, MSG_BYE, nullptr, 0, -1);
-    std::string reap = reapChild(pid);
+    std::string reap = pid >= 0 ? reapChild(pid) : std::string("no child");
+    const std::string rowVk = std::string(rowPrefix) + "-vulkan";
+    const std::string rowGl = std::string(rowPrefix) + "-gles";
 
     auto rowStatus = [&](bool ready, uint32_t rd, uint32_t wr) -> const char* {
         if (!ready) return "FAIL";
@@ -3123,13 +3155,13 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
         if (rd > 0 || wr > 0) return "PARTIAL";
         return "FAIL";
     };
-    record("T0S-sustained-lock-vulkan", rowStatus(vkReady, vkRead, vkWrite),
+    record(rowVk.c_str(), rowStatus(vkReady, vkRead, vkWrite),
            fmt("rounds=%u/%u gpuReadOfHeldCpuWrite=%u gpuFillSeenByHeldLock=%u serverHostMapRead=%u%s | after "
                "unlock+relock: fill=%lld | %s%s",
                roundsRun, rounds, vkRead, vkWrite, vkHostRead, vhost ? "" : "(no host map)",
                (long long)dn.relockMismatchE, vkReady ? vkFirst.c_str() : vkFail.c_str(),
                hostFirst.empty() ? "" : (" | " + hostFirst).c_str()));
-    record("T0S-sustained-lock-gles", rowStatus(glReady, glRead, glWrite),
+    record(rowGl.c_str(), rowStatus(glReady, glRead, glWrite),
            fmt("rounds=%u/%u computeReadOfHeldCpuWrite=%u computeFillSeenByHeldLock=%u | after unlock+relock: "
                "fill=%lld | %s",
                roundsRun, rounds, glRead, glWrite, (long long)dn.relockMismatchF,
@@ -3157,7 +3189,7 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
     }
     std::string why;
     const char* status = legVerdict(legs, &why);
-    record("T0S-sustained-lock", status,
+    record(rowPrefix, status,
            fmt("%s | size=%llu regionBase=%llu rounds=%u client lock rc=%d, unlock rc=%d, relock rc=%d (%s) %s | %s",
                legTrace(legs).c_str(), (unsigned long long)size, (unsigned long long)gRegionBase, rounds,
                gotDone ? dn.lockRc : -99, gotDone ? dn.unlockRc : -99, gotDone ? dn.relockRc : -99,
@@ -3169,10 +3201,352 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
     if (vhost) vkUnmapMemory(c.device, vmem);
     if (vmem) vkFreeMemory(c.device, vmem, nullptr);
     if (vbuf) vkDestroyBuffer(c.device, vbuf, nullptr);
-    AHardwareBuffer_release(ahb);
-    close(sock);
     (void)lastVk;
     (void)lastGl;
+}
+
+// ---------------------------------------------------------------------------
+// P11 B2 step 1: does a client's AHardwareBuffer cross the REAL routes into the server app?
+//
+//   server  `libMobileGLServer.so <endpoint> --serve`: the probe packaged in the render server's
+//           place (-Pmobilegl.extmemProbeAsServer=ON), so MobileGLServerService execs it where the
+//           supervisor would run - in the server app's own untrusted_app domain - and B1's broker
+//           connects to it, writes its PairBind pair and hands the connected pair to the helper.
+//           Each accepted pair: skip the PairBind frame on both connections (told apart by the
+//           frame length: control 64 bytes, aux 68 - PairBindFrames.java), then serve the client.
+//   client  `extmem_probe --route-client[=<endpoint>]`: exec'd by the B1 helper with
+//           MOBILEGL_IPC_CONTROL=fd:<control>,<aux> (routes a/b), or connecting to <endpoint>
+//           itself (same app only - another domain is refused `connectto`, B0).
+//
+// Per variant the client allocates a BLOB AHB, locks it ONCE for the whole run, and hands it over
+//   direct  AHardwareBuffer_sendHandleToUnixSocket on the aux connection itself;
+//   hop     on a fresh socketpair whose other end travels over aux by SCM_RIGHTS (the server
+//           then receives the handle from that socket).
+// Then the T0S rounds run on the control connection: the server imports the handle into Vulkan
+// and GL, its GPU reads what the client's CPU wrote through the held lock and writes fills the
+// client checks through the same held pointer. Rows: ROUTE-<variant>-<size>{,-vulkan,-gles}.
+// ---------------------------------------------------------------------------
+
+enum : uint32_t { MSG_RT_HELLO = 40, MSG_RT_HOP = 41, MSG_RT_SERVER = 42 };
+
+struct RtHello {
+    uint32_t variant;  // 0 direct, 1 hop
+    uint32_t rounds;
+    uint64_t size;
+    uint64_t regionBase;
+    uint32_t seedBase;
+    int32_t pad;
+    char client[192];
+    char note[160];
+};
+
+struct RtServer {
+    int32_t received;  // 1 = the handle arrived and describes as a BLOB of `size`
+    int32_t pad;
+    char server[192];
+    char note[192];
+};
+
+static std::string selfContext() {
+    std::string sec = readSmallFile("/proc/self/attr/current");
+    while (!sec.empty() && (sec.back() == '\n' || sec.back() == '\0')) sec.pop_back();
+    return fmt("%s uid=%d pid=%d", sec.c_str(), (int)getuid(), (int)getpid());
+}
+
+static const char* kRtControlPrefixHex =
+    "100000004d474c4308000e0007000800080000000000000f0c0000000000060008000400060000000400000010000000";
+static const char* kRtAuxPrefixHex =
+    "100000004d474c4308000c0007000800080000000000000f0c00000008000c000800070008000000000000010400000010000000";
+
+static std::vector<uint8_t> rtPairBindFrame(bool aux, const uint8_t nonce[16]) {
+    const char* hex = aux ? kRtAuxPrefixHex : kRtControlPrefixHex;
+    std::vector<uint8_t> payload;
+    for (size_t i = 0; hex[i] && hex[i + 1]; i += 2) {
+        char b[3] = {hex[i], hex[i + 1], 0};
+        payload.push_back((uint8_t)strtoul(b, nullptr, 16));
+    }
+    payload.insert(payload.end(), nonce, nonce + 16);
+    std::vector<uint8_t> out(8);
+    const uint32_t magic = 0x464C474Du, len = (uint32_t)payload.size();
+    memcpy(out.data(), &magic, 4);
+    memcpy(out.data() + 4, &len, 4);
+    out.insert(out.end(), payload.begin(), payload.end());
+    return out;
+}
+
+// Reads one framed control message's header and payload; returns the payload length or -1.
+static int rtSkipFrame(int fd) {
+    uint32_t hdr[2] = {0, 0};
+    if (!readAll(fd, hdr, sizeof(hdr))) return -1;
+    if (hdr[0] != 0x464C474Du || hdr[1] > 4096) return -1;
+    std::vector<uint8_t> skip(hdr[1]);
+    if (hdr[1] && !readAll(fd, skip.data(), hdr[1])) return -1;
+    return (int)hdr[1];
+}
+
+static int rtListen(const char* endpoint) {
+    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0) return -1;
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    socklen_t len;
+    if (endpoint[0] == '@') {
+        strncpy(a.sun_path + 1, endpoint + 1, sizeof(a.sun_path) - 2);
+        len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(endpoint + 1));
+    } else {
+        unlink(endpoint);
+        strncpy(a.sun_path, endpoint, sizeof(a.sun_path) - 1);
+        len = (socklen_t)sizeof(a);
+    }
+    if (bind(s, (struct sockaddr*)&a, len) != 0 || listen(s, 16) != 0) {
+        pr("route server: bind/listen %s failed errno=%d", endpoint, errno);
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+static int rtConnect(const char* endpoint) {
+    int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0) return -1;
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    socklen_t len;
+    if (endpoint[0] == '@') {
+        strncpy(a.sun_path + 1, endpoint + 1, sizeof(a.sun_path) - 2);
+        len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + strlen(endpoint + 1));
+    } else {
+        strncpy(a.sun_path, endpoint, sizeof(a.sun_path) - 1);
+        len = (socklen_t)sizeof(a);
+    }
+    if (connect(s, (struct sockaddr*)&a, len) != 0) {
+        pr("route client: connect %s failed errno=%d", endpoint, errno);
+        close(s);
+        return -1;
+    }
+    return s;
+}
+
+static void rtServePair(VkCtx& c, GlCtx& g, bool glOk, int ctl, int aux) {
+    setRecvTimeout(ctl, 60);
+    setRecvTimeout(aux, 60);
+    for (;;) {
+        RtHello h{};
+        uint32_t tag = 0;
+        size_t got = 0;
+        if (!recvMsg(ctl, &tag, &h, sizeof(h), &got, nullptr) || tag == MSG_BYE) break;
+        if (tag != MSG_RT_HELLO) {
+            pr("route server: unexpected tag %u", tag);
+            break;
+        }
+        h.client[sizeof(h.client) - 1] = 0;
+        h.note[sizeof(h.note) - 1] = 0;
+        gRegionBase = h.regionBase;
+        const char* vname = h.variant ? "hop" : "direct";
+        pr("route server: client [%s] variant=%s size=%llu rounds=%u (%s)", h.client, vname,
+           (unsigned long long)h.size, h.rounds, h.note);
+        AHardwareBuffer* ahb = nullptr;
+        int rc = -1;
+        std::string how;
+        if (h.variant == 0) {
+            rc = AHardwareBuffer_recvHandleFromUnixSocket(aux, &ahb);
+            how = fmt("recvHandleFromUnixSocket(aux) rc=%d errno=%d", rc, errno);
+        } else {
+            int hopFd = -1;
+            uint32_t t2 = 0;
+            if (!recvMsg(aux, &t2, nullptr, 0, &got, &hopFd) || t2 != MSG_RT_HOP || hopFd < 0) {
+                how = fmt("hop socket did not arrive over aux (tag=%u fd=%d errno=%d)", t2, hopFd, errno);
+            } else {
+                rc = AHardwareBuffer_recvHandleFromUnixSocket(hopFd, &ahb);
+                how = fmt("hop %s; recvHandleFromUnixSocket(hop) rc=%d errno=%d", describeFd(hopFd).c_str(), rc,
+                          errno);
+                close(hopFd);
+            }
+        }
+        RtServer sv{};
+        snprintf(sv.server, sizeof(sv.server), "%s", selfContext().c_str());
+        if (rc == 0 && ahb) {
+            AHardwareBuffer_Desc d{};
+            AHardwareBuffer_describe(ahb, &d);
+            sv.received = (d.format == AHARDWAREBUFFER_FORMAT_BLOB && d.width == h.size) ? 1 : 0;
+            snprintf(sv.note, sizeof(sv.note), "%s | desc w=%u fmt=0x%x usage=0x%llx", how.c_str(), d.width,
+                     d.format, (unsigned long long)d.usage);
+        } else {
+            snprintf(sv.note, sizeof(sv.note), "%s", how.c_str());
+        }
+        pr("route server: %s", sv.note);
+        sendMsg(ctl, MSG_RT_SERVER, &sv, sizeof(sv), -1);
+        const std::string row = fmt("ROUTE-%s-%llu", vname, (unsigned long long)h.size);
+        if (!sv.received) {
+            record(row.c_str(), "FAIL", fmt("client [%s] -> server [%s]: %s", h.client, sv.server, sv.note));
+            if (ahb) AHardwareBuffer_release(ahb);
+            break;
+        }
+        pr("route server: client [%s] -> server [%s]", h.client, sv.server);
+        t0sServe(c, g, glOk, ctl, ahb, h.size, h.rounds, row.c_str(), -1);
+        AHardwareBuffer_release(ahb);
+    }
+}
+
+static int routeServe(const char* endpoint) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    gRole = "route-server";
+    signal(SIGPIPE, SIG_IGN);
+    pr("extmem route server: %s", selfContext().c_str());
+    VkCtx c;
+    const bool vkOk = vkCtxInit(c, false);
+    GlCtx g;
+    const bool glOk = glCtxInit(g);
+    pr("extmem route server: vulkan=%d gl=%d", (int)vkOk, (int)glOk);
+    if (!vkOk) return 1;
+    int ls = rtListen(endpoint);
+    if (ls < 0) return 2;
+    // The service's readiness line (srv.sh waits for it) - the real supervisor says the same.
+    pr("extmem route server: listening on %s", endpoint);
+    int pendingCtl = -1, pendingAux = -1;
+    for (;;) {
+        int s = accept4(ls, nullptr, nullptr, SOCK_CLOEXEC);
+        if (s < 0) {
+            if (errno == EINTR) continue;
+            pr("route server: accept errno=%d", errno);
+            return 3;
+        }
+        setRecvTimeout(s, 10);
+        const int n = rtSkipFrame(s);
+        if (n == 64) {
+            if (pendingCtl >= 0) close(pendingCtl);
+            pendingCtl = s;
+        } else if (n == 68) {
+            if (pendingAux >= 0) close(pendingAux);
+            pendingAux = s;
+        } else {
+            pr("route server: connection without a PairBind (frame=%d) closed", n);
+            close(s);
+            continue;
+        }
+        if (pendingCtl >= 0 && pendingAux >= 0) {
+            pr("route server: paired control=%d aux=%d", pendingCtl, pendingAux);
+            rtServePair(c, g, glOk, pendingCtl, pendingAux);
+            close(pendingCtl);
+            close(pendingAux);
+            pendingCtl = pendingAux = -1;
+            gResults.clear();
+        }
+    }
+}
+
+static int rtClientVariant(int ctl, int aux, uint32_t variant, uint64_t size, uint32_t rounds, bool atEnd) {
+    AHardwareBuffer_Desc desc{};
+    desc.width = (uint32_t)size;
+    desc.height = 1;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_BLOB;
+    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
+                 AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+    AHardwareBuffer* ahb = nullptr;
+    const int arc = AHardwareBuffer_allocate(&desc, &ahb);
+    const char* vname = variant ? "hop" : "direct";
+    const std::string row = fmt("ROUTE-%s-%llu-client", vname, (unsigned long long)size);
+    if (arc != 0 || !ahb) {
+        record(row.c_str(), "FAIL", fmt("AHardwareBuffer_allocate rc=%d", arc));
+        return 3;
+    }
+    void* p = nullptr;
+    const int lockRc = AHardwareBuffer_lock(
+        ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &p);
+    if (lockRc != 0 || !p) {
+        record(row.c_str(), "FAIL", fmt("held lock rc=%d", lockRc));
+        AHardwareBuffer_release(ahb);
+        return 4;
+    }
+    memset(p, 0, (size_t)size);
+    gRegionBase = atEnd ? size - kRegionCount * kRegion : 0;
+    RtHello h{};
+    h.variant = variant;
+    h.rounds = rounds;
+    h.size = size;
+    h.regionBase = gRegionBase;
+    h.seedBase = 0x3B000001u + variant * 0x100u;
+    snprintf(h.client, sizeof(h.client), "%s", selfContext().c_str());
+    snprintf(h.note, sizeof(h.note), "held lock ptr=%p", p);
+    int sendRc = -1;
+    if (!sendMsg(ctl, MSG_RT_HELLO, &h, sizeof(h), -1)) {
+        record(row.c_str(), "FAIL", fmt("hello send errno=%d", errno));
+    } else if (variant == 0) {
+        sendRc = AHardwareBuffer_sendHandleToUnixSocket(ahb, aux);
+    } else {
+        int sp[2];
+        if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) == 0) {
+            sendRc = AHardwareBuffer_sendHandleToUnixSocket(ahb, sp[0]);
+            close(sp[0]);
+            if (sendRc == 0 && !sendMsg(aux, MSG_RT_HOP, nullptr, 0, sp[1])) sendRc = -errno;
+            close(sp[1]);
+        }
+    }
+    RtServer sv{};
+    uint32_t tag = 0;
+    size_t got = 0;
+    const bool haveServer = recvMsg(ctl, &tag, &sv, sizeof(sv), &got, nullptr) && tag == MSG_RT_SERVER;
+    sv.server[sizeof(sv.server) - 1] = 0;
+    sv.note[sizeof(sv.note) - 1] = 0;
+    int rrc = 10;
+    if (sendRc != 0 || !haveServer || !sv.received) {
+        record(row.c_str(), "FAIL",
+               fmt("sendRc=%d serverAnswered=%d received=%d server [%s]: %s", sendRc, (int)haveServer,
+                   (int)sv.received, sv.server, sv.note));
+    } else {
+        rrc = t0sClientRounds(ctl, ahb, p, lockRc, rounds, h.seedBase);
+        record(row.c_str(), rrc == 0 ? "OK" : "FAIL",
+               fmt("client [%s] -> server [%s] | %s | rounds rc=%d (the server's rows carry the GPU verdict)",
+                   h.client, sv.server, sv.note, rrc));
+    }
+    AHardwareBuffer_release(ahb);
+    return rrc;
+}
+
+static int routeClient(const char* endpoint, uint64_t size, uint32_t rounds, bool atEnd) {
+    gRole = "route-client";
+    signal(SIGPIPE, SIG_IGN);
+    int ctl = -1, aux = -1;
+    const char* env = getenv("MOBILEGL_IPC_CONTROL");
+    bool paired = false;
+    if (endpoint && *endpoint) {
+        ctl = rtConnect(endpoint);
+        aux = rtConnect(endpoint);
+    } else if (env && !strncmp(env, "fd:", 3) && sscanf(env + 3, "%d,%d", &ctl, &aux) == 2) {
+        const char* pe = getenv("MOBILEGL_IPC_FD_PAIRED");
+        paired = pe && !strcmp(pe, "1");
+    } else {
+        pr("route client: no endpoint and MOBILEGL_IPC_CONTROL is not fd:<c>,<a> (%s)", env ? env : "unset");
+        return 2;
+    }
+    if (ctl < 0 || aux < 0) return 2;
+    pr("route client: %s control=%d aux=%d %s aux=%s", selfContext().c_str(), ctl, aux,
+       paired ? "paired at hand-off" : "presenting its own PairBind pair", describeFd(aux).c_str());
+    if (!paired) {
+        uint8_t nonce[16];
+        FILE* r = fopen("/dev/urandom", "rb");
+        if (!r || fread(nonce, 1, 16, r) != 16) memset(nonce, 0x5A, 16);
+        if (r) fclose(r);
+        const std::vector<uint8_t> fc = rtPairBindFrame(false, nonce), fa = rtPairBindFrame(true, nonce);
+        if (!writeAll(ctl, fc.data(), fc.size()) || !writeAll(aux, fa.data(), fa.size())) {
+            pr("route client: PairBind write failed errno=%d", errno);
+            return 3;
+        }
+    }
+    setRecvTimeout(ctl, 60);
+    int worst = 0;
+    for (uint32_t v = 0; v < 2; ++v) {
+        const int rc = rtClientVariant(ctl, aux, v, size, rounds, atEnd);
+        if (rc != 0) worst = rc;
+    }
+    sendMsg(ctl, MSG_BYE, nullptr, 0, -1);
+    printSummary();
+    close(ctl);
+    close(aux);
+    return worst;
 }
 
 #else  // !PROBE_HAVE_AHB
@@ -3190,6 +3564,14 @@ static int childT0Sustained(int) {
 }
 static void runT0SustainedParent(VkCtx&, GlCtx&, bool, uint64_t, uint32_t) {
     record("T0S-sustained-lock", "SKIP", "AHardwareBuffer is Android-only; host build cannot run T0S");
+}
+static int routeServe(const char*) {
+    pr("the AHB route server is Android-only");
+    return 1;
+}
+static int routeClient(const char*, uint64_t, uint32_t, bool) {
+    pr("the AHB route client is Android-only");
+    return 1;
 }
 
 #endif  // PROBE_HAVE_AHB
@@ -3690,7 +4072,11 @@ static std::vector<std::string> readArgsFile(const std::string& path) {
 }
 
 int main(int argc, char** argv) {
+    // P11 B2 step 1: exec'd by MobileGLServerService as `libMobileGLServer.so <endpoint> --serve`.
+    if (argc >= 3 && !strcmp(argv[2], "--serve")) return routeServe(argv[1]);
     uint64_t size = kDefaultSize;
+    bool routeClientMode = false;
+    std::string routeEndpoint;
     const char* childRoute = nullptr;
     bool doT1 = true, doT0 = true, doT3 = true, doGles = true;
     bool regionsAtEnd = false;
@@ -3715,6 +4101,11 @@ int main(int argc, char** argv) {
             static std::string route;  // outlives `args`
             route = a + 8;
             childRoute = route.c_str();
+        } else if (!strcmp(a, "--route-client")) {
+            routeClientMode = true;
+        } else if (!strncmp(a, "--route-client=", 15)) {
+            routeClientMode = true;
+            routeEndpoint = a + 15;
         } else if (!strncmp(a, "--size=", 7)) {
             size = strtoull(a + 7, nullptr, 0);
         } else if (!strncmp(a, "--region-base=", 14)) {
@@ -3740,6 +4131,8 @@ int main(int argc, char** argv) {
             doGles = false;
         } else if (!strcmp(a, "--help")) {
             printf("usage: extmem_probe [markerPath] [--size=BYTES] [--regions-at-end] [--sustained-lock[=ROUNDS]]\n"
+                   "       extmem_probe --route-client[=@endpoint] [--size=BYTES] [--sustained-lock=ROUNDS] [--regions-at-end]\n"
+                   "       extmem_probe <endpoint> --serve   (packaged as libMobileGLServer.so)\n"
                    "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained] [--no-gles]\n"
                    "  markerPath: exec-hook mode; options are also read from <markerPath>.args\n");
             return 0;
@@ -3748,6 +4141,8 @@ int main(int argc, char** argv) {
     if (size < kRegionCount * kRegion) size = kRegionCount * kRegion;
     size = (size + kRegion - 1) / kRegion * kRegion;
     if (regionsAtEnd && !childRoute) gRegionBase = size - kRegionCount * kRegion;
+    if (routeClientMode)
+        return routeClient(routeEndpoint.c_str(), size, sustainedRounds ? sustainedRounds : 4, regionsAtEnd);
 
     // A peer that has already exited must not take this process down with it.
     signal(SIGPIPE, SIG_IGN);

@@ -27,6 +27,12 @@ def mobileGlBuildServerSpike = {
 def mobileGlBuildExtmemProbe = {
     (rootProject.findProperty('mobilegl.buildExtmemProbe') ?: System.getenv('MOBILEGL_BUILD_EXTMEM_PROBE') ?: 'OFF') as String
 }
+// P11 B2 step 1, spike only: -Pmobilegl.extmemProbeAsServer=ON also packages the probe AS
+// libMobileGLServer.so (the real server becomes libMobileGLServerReal.so), so the render server's
+// service and B1's broker run the AHB route probe in the server's place. Never for a real APK.
+def mobileGlExtmemProbeAsServer = {
+    (rootProject.findProperty('mobilegl.extmemProbeAsServer') ?: 'OFF') as String
+}
 
 // Shared native shape for BOTH plugin and trace APKs. The render server (libMobileGLServer.so and
 // the display server's JNI) is part of the split shape, and both flavors of a standalone plugin
@@ -117,6 +123,7 @@ android {
                         // above for the two ways to enable it.
                         arguments "-DMOBILEGL_BUILD_SERVER_SPIKE=${mobileGlBuildServerSpike()}"
                         arguments "-DMOBILEGL_BUILD_EXTMEM_PROBE=${mobileGlBuildExtmemProbe()}"
+                        arguments "-DMOBILEGL_EXTMEM_PROBE_AS_SERVER=${mobileGlExtmemProbeAsServer()}"
                     }
                 }
             }

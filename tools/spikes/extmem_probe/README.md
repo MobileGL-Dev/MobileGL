@@ -180,3 +180,22 @@ copy; GL compute on the `glBufferStorageExternalEXT` buffer) and fills REG_E / R
 and the client reads both fills through the still-held pointer; after the last
 round it unlocks and relocks once more (`after unlock+relock`), which separates
 "GPU writes never landed" from "the held mapping kept stale lines".
+
+## Route mode (P11 B2 step 1)
+
+Does a client's AHB cross the *real* B1 routes into the server app? A spike APK built with
+`-Pmobilegl.buildExtmemProbe=ON -Pmobilegl.extmemProbeAsServer=ON` packages the probe as
+`libMobileGLServer.so` (the real server becomes `libMobileGLServerReal.so`), so
+`MobileGLServerService` execs `libMobileGLServer.so <endpoint> --serve` = the probe's route server
+in the server app's own domain, and B1's broker connects to it and writes its PairBind pair.
+
+* `--serve` (argv[2]): listen on `<endpoint>`; pair each two connections by their PairBind frame
+  length (control 64 bytes, aux 68); per client variant receive the handle, import it into
+  Vulkan and GL, and run the T0S rounds on the control connection. Rows `ROUTE-<variant>-<size>`.
+* `--route-client[=@endpoint]`: from `MOBILEGL_IPC_CONTROL=fd:<c>,<a>` (the B1 helper; presents
+  its own PairBind pair unless `MOBILEGL_IPC_FD_PAIRED=1`) or by connecting itself (same app only).
+  Two variants per run: `direct` (`AHardwareBuffer_sendHandleToUnixSocket` on the aux connection)
+  and `hop` (sent on a fresh socketpair whose other end travels over aux by `SCM_RIGHTS`).
+  `--size`, `--sustained-lock=N` (default 4), `--regions-at-end` as above.
+
+Never ship an APK built with `extmemProbeAsServer`: it has no render server.

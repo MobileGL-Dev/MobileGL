@@ -30,6 +30,7 @@ option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-pr
 option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process, two-role) split shims; implies MOBILEGL_BUILD_DISAGGREGATED" OFF)
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
+option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
 # The PipeInputs strangler (ARCHITECTURE.md 9.2). OFF is the pull build and must stay
 # byte-identical to a tree without either option: MGB_CTX is the live GLContext, no
 # MGPipe/PipeInputs source is compiled, every MGP_FILL is ((void)0).
@@ -1126,5 +1127,28 @@ if (ANDROID AND MOBILEGL_BUILD_EXTMEM_PROBE)
     if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
         set_target_properties(MobileGLExtmemProbe PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
+    if (MOBILEGL_EXTMEM_PROBE_AS_SERVER)
+        # P11 B2 step 1, spike APKs only: MobileGLServerService execs `libMobileGLServer.so
+        # <endpoint> --serve` and B1's broker connects to whatever that listens on, so the probe
+        # takes the server's file name and answers "does a client's AHardwareBuffer cross this
+        # route into the server app" on the real route (tools/spikes/extmem_probe, route mode).
+        if (TARGET MobileGLServer)
+            set_target_properties(MobileGLServer PROPERTIES OUTPUT_NAME "MobileGLServerReal")
+        endif()
+        add_executable(MobileGLExtmemProbeAsServer
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/extmem_probe/extmem_probe.cpp)
+        set_target_properties(MobileGLExtmemProbeAsServer PROPERTIES
+            PREFIX "lib"
+            SUFFIX ".so"
+            OUTPUT_NAME "MobileGLServer"
+            POSITION_INDEPENDENT_CODE ON)
+        target_compile_options(MobileGLExtmemProbeAsServer PRIVATE -fPIE)
+        target_link_options(MobileGLExtmemProbeAsServer PRIVATE -pie)
+        target_link_libraries(MobileGLExtmemProbeAsServer PRIVATE vulkan EGL GLESv3 android log)
+        if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+            set_target_properties(MobileGLExtmemProbeAsServer PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+        endif()
     endif()
 endif()
