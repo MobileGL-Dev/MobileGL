@@ -5,7 +5,7 @@
 # base commit : 14e1c8b9b103b6900be8f174cf5f5b1a50dcfd66
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_PIPE_PUSH=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : build-split
-# count       : 171
+# count       : 172 (171 at the base commit; +1 P11 M2, TextureObjectWithOneMipmap::GetStorageDirtyFootprint)
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores; `# P13` marks a symbol that cannot fall before P13 establishes module
@@ -160,6 +160,7 @@ MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapCompressedForm
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapLevelCount() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapRequestedCompressedFormat(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapTexelSize(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
+MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyFootprint(MobileGL::TextureUploadTarget, unsigned int, std::vector<MobileGL::MG_State::GLState::MipmapDirtyRegion, std::allocator<MobileGL::MG_State::GLState::MipmapDirtyRegion> >&) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12); P11 M2: dev 9524c688's new virtual on the same vtable
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyRects(MobileGL::TextureUploadTarget, unsigned int, MobileGL::MG_State::GLState::MipmapDirtyRegion*, unsigned long) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyRegion(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::IsComplete() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
