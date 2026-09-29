@@ -8,17 +8,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application>
-        <!-- Launcher entry: start/stop the offscreen TCP supervisor (MobileGLServerService).
-             The trace flavor removes PostActivity, so without this the APK has no icon. -->
+        <!-- Render server control screen: start/stop the offscreen TCP supervisor
+             (MobileGLServerService) or the on-screen display server. Not the launcher:
+             PostActivity is the entry icon and the bottom navigation bar switches between
+             the two screens; exported so adb can drive it by explicit component with
+             listen/token/env/onscreen/start/stop extras. -->
         <activity
             android:name=".ServerControlActivity"
             android:exported="true"
-            android:theme="@style/Theme.MobileGLPlugin">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.MobileGLPlugin" />
         <service
             android:name=".MobileGLServerService"
             android:exported="true"
@@ -41,9 +40,6 @@
             android:theme="@style/Theme.MobileGLPlugin" />
         <activity
             android:name=".PluginActivity"
-            tools:node="remove" />
-        <activity
-            android:name=".PostActivity"
             tools:node="remove" />
         <meta-data
             android:name="fclPlugin"

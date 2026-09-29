@@ -72,7 +72,7 @@ public final class ServerControlActivity extends Activity {
         scrollView.setBackgroundColor(COLOR_BACKGROUND);
         scrollView.setFillViewport(true);
         scrollView.addView(contentLayout);
-        setContentView(scrollView);
+        setContentView(NavBar.wrap(this, scrollView, NavBar.TAB_SERVER));
 
         contentLayout.addView(makeText("MobileGL Render Server", 20, COLOR_TEXT, true));
 
@@ -142,11 +142,23 @@ public final class ServerControlActivity extends Activity {
             setStatus("Stopped.", COLOR_INFO);
         }
 
-        // Intent extras prefill the form, so adb can drive the screen without the IME:
-        // --es listen @name --es token T --es env "K=V;K" --ez onscreen true --ez start true
-        // (--ez stop true instead stops). This mirrors how every other entry point in this
-        // APK is already driven by extras.
-        Intent intent = getIntent();
+        handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    /**
+     * Intent extras prefill the form, so adb can drive the screen without the IME:
+     * --es listen @name --es token T --es env "K=V;K" --ez onscreen true --ez start true
+     * (--ez stop true instead stops). This mirrors how every other entry point in this
+     * APK is already driven by extras.
+     */
+    private void handleIntent(Intent intent) {
         if (intent != null) {
             String prefillListen = intent.getStringExtra("listen");
             if (prefillListen != null) listenField.setText(prefillListen);
