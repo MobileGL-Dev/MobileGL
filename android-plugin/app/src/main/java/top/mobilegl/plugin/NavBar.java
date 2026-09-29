@@ -10,11 +10,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * Bottom navigation bar switching between the dev screens (POST and the render
- * server control). The bar only appears in flavors that ship both screens: the
- * plugin flavor has no ServerControlActivity, so wrap() returns the content
- * unchanged there. Tabs switch by reordering the other activity to the front,
- * so each screen keeps its state while the other is open.
+ * Bottom navigation bar switching between the POST screen and the render server
+ * control screen. Tabs switch by reordering the other activity to the front, so each
+ * screen keeps its state while the other is open.
  */
 public final class NavBar {
     public static final int TAB_POST = 0;
@@ -25,19 +23,10 @@ public final class NavBar {
     private static final int COLOR_TAB_INACTIVE = 0xFF9E9E9E;
     private static final int BAR_HEIGHT_DP = 56;
 
-    private static final String SERVER_ACTIVITY = "top.mobilegl.plugin.ServerControlActivity";
-
     private NavBar() {}
 
-    /** Returns content wrapped with the bottom bar, or content unchanged in plugin builds. */
+    /** Returns content wrapped with the bottom bar. */
     public static View wrap(Activity activity, View content, int currentTab) {
-        final Class<?> serverClass;
-        try {
-            serverClass = Class.forName(SERVER_ACTIVITY);
-        } catch (ClassNotFoundException notInThisFlavor) {
-            return content;
-        }
-
         LinearLayout root = new LinearLayout(activity);
         root.setOrientation(LinearLayout.VERTICAL);
         root.addView(content, new LinearLayout.LayoutParams(
@@ -47,7 +36,7 @@ public final class NavBar {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setBackgroundColor(COLOR_BAR);
         addTab(activity, bar, "POST", PostActivity.class, currentTab == TAB_POST);
-        addTab(activity, bar, "Render Server", serverClass, currentTab == TAB_SERVER);
+        addTab(activity, bar, "Render Server", ServerControlActivity.class, currentTab == TAB_SERVER);
         root.addView(bar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(activity, BAR_HEIGHT_DP)));
         return root;

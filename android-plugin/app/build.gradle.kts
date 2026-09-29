@@ -35,7 +35,10 @@ fun Project.mobileGlCmakeCompilerLauncher(): String =
 
 // Match the native module's two switches, including INPROC implying the parent
 // option. A D/P plugin must ask its launcher to select the transport at runtime;
-// compiling MG_Remote alone leaves ConfigLoader's default on monolith.
+// compiling MG_Remote alone leaves ConfigLoader's default on monolith. The native module
+// builds the split shape by default in a standalone build (it carries the render server),
+// so this is only the opt-in for the launcher-selected in-process TRANSPORT: unset, the
+// plugin still runs monolith.
 fun Project.mobileGlDisaggregatedEnabled(): Boolean {
     fun enabled(value: Any?): Boolean = value?.toString()?.trim()?.uppercase().orEmpty() in setOf("1", "ON", "YES", "TRUE", "Y")
     return enabled(findProperty("mobilegl.buildDisaggregated") ?: System.getenv("MOBILEGL_BUILD_DISAGGREGATED")) ||
@@ -172,11 +175,17 @@ android {
     productFlavors {
         create("plugin") {
             dimension = "profile"
+            // The shipped renderer plugin keeps its render-server components private; the
+            // screen and NavBar start them from inside the app.
+            manifestPlaceholders["serverComponentsExported"] = "false"
         }
         create("trace") {
             dimension = "profile"
             applicationIdSuffix = ".trace"
             versionNameSuffix = "-trace"
+            // Debuggable dev APK: adb (tcp_device_server.py, the CI TCP lane) starts the
+            // server components directly by explicit component name.
+            manifestPlaceholders["serverComponentsExported"] = "true"
         }
     }
 

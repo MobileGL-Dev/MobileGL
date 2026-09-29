@@ -8,7 +8,7 @@
 
 // P12 (on-screen server window), D3/D5/D6/D7. THE JNI GLUE OF THE IN-PROCESS DISPLAY SERVER.
 //
-// The trace APK's MobileGLDisplayActivity (android:process=":mglwin") owns a SurfaceView and runs
+// The APK's MobileGLDisplayActivity (android:process=":mglwin") owns a SurfaceView and runs
 // the TCP server on a thread of its own process, so a headless client (MOBILEGL_IPC_SURFACE=server)
 // renders straight onto that SurfaceView. This file is the whole native half of that Activity:
 //

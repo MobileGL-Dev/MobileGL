@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The server role's environment, shared by the two servers the trace APK can run.
+ * The server role's environment, shared by the two servers the APK can run.
  *
  * <p>{@link MobileGLServerService} exec's the offscreen supervisor with it (a ProcessBuilder
  * environment); {@link MobileGLDisplayActivity} applies it to its OWN process with Os.setenv /

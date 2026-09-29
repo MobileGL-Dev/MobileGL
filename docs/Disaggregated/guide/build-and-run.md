@@ -31,6 +31,6 @@ ctest --test-dir build-split -L 'integration-(spawn|tcp)' --output-on-failure   
 ## Android
 
 - 三份 APK flavour：pull / push / split（Gradle 属性 `mobilegl.pipePush`、`mobilegl.buildDisaggregated`、`mobilegl.buildDisaggregatedInproc`）。split APK 同样要设 `MOBILEGL_TRANSPORT`，不设就是单进程对照。
-- 设备侧 server 有两种形态：离屏的前台 Service（`MobileGLServerService`）与上屏的 `MobileGLDisplayActivity`；同一时刻只有一个。
+- 设备侧 server 有两种形态：离屏的前台 Service（`MobileGLServerService`）与上屏的 `MobileGLDisplayActivity`；同一时刻只有一个。plugin 与 trace 两个 flavour 的 APK 都带（standalone 构建默认开 `mobilegl.buildDisaggregated`），入口是 APK 底部导航栏的 “Render Server” 页；plugin flavour 的这三个组件不导出，只有 trace 允许 adb 直接按组件名拉起。
 - 电脑当 client、手机当 server 的跨机配置（起 server、设令牌、`adb forward` 备用路线）见 [`../notes/p65/README.md`](../notes/p65/README.md) 的"两边怎么配"。
 - 性能对比只用 Redmi `2f7cbe2e`，按 [`pin-verification-2026-09-07.md`](pin-verification-2026-09-07.md) 定频，reboot-clean、同热窗口、配对 A/B。

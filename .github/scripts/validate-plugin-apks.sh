@@ -61,6 +61,24 @@ if ! grep -Eq '^lib/[^/]+/libMobileGL\.so$' <<<"$plugin_contents"; then
   exit 1
 fi
 
+# The render server is not trace-only: both flavors carry the control screen, the offscreen
+# service, the on-screen display activity, and (split native builds) the supervisor executable.
+# The plugin APK ships to users, so its build keeps the three components private (manifest
+# placeholder serverComponentsExported=false); only the debuggable trace APK exports them for adb.
+for component in ServerControlActivity MobileGLServerService MobileGLDisplayActivity; do
+  require "$component" "$plugin_manifest" "plugin render server component ($component)"
+  require "$component" "$trace_manifest" "trace render server component ($component)"
+done
+if [[ "${MOBILEGL_CI_DISAGGREGATED:-OFF}" == "ON" ]]; then
+  trace_contents=$(unzip -Z1 "$trace_apk")
+  for entry in "plugin:${plugin_contents}" "trace:${trace_contents}"; do
+    if ! grep -Eq '^lib/[^/]+/libMobileGLServer\.so$' <<<"${entry#*:}"; then
+      echo "::error::${entry%%:*} APK does not contain libMobileGLServer.so (both flavors ship the render server)" >&2
+      exit 1
+    fi
+  done
+fi
+
 require 'top.mobilegl.plugin.trace' "$trace_manifest" 'trace package name'
 require 'top.mobilegl.plugin.TRACE_REPLAY' "$trace_manifest" 'trace replay action'
 if grep -Fq 'fclPlugin' <<<"$trace_manifest"; then

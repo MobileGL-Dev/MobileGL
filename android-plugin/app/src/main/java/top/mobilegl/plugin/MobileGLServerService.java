@@ -18,7 +18,7 @@ import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Map;
 
-/** Trace-only entry point for a TCP supervisor; EGL belongs to its session children. */
+/** Entry point for the offscreen TCP supervisor; EGL belongs to its session children. */
 public final class MobileGLServerService extends Service {
     private static final String TAG = "MobileGLServer";
     private static final String CHANNEL = "mobilegl-server";

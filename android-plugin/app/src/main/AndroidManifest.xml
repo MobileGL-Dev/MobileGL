@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- The render server (ServerControlActivity / MobileGLServerService /
+         MobileGLDisplayActivity): a TCP listener kept alive by a wake lock in a data-sync
+         foreground service. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:hasCode="true"
         android:label="${appLabel}"
@@ -21,6 +29,41 @@
             android:name=".PluginActivity"
             android:exported="true"
             android:theme="@style/Theme.MobileGLPlugin.NoDisplay" />
+
+        <!-- Render server control screen: start/stop the offscreen TCP supervisor
+             (MobileGLServerService) or the on-screen display server. Not a launcher: the
+             bottom navigation bar (NavBar) switches between it and PostActivity. Both flavors
+             ship the server (libMobileGLServer.so + the display server's JNI in libMobileGL.so).
+             serverComponentsExported: the trace flavor is a debuggable dev APK that adb drives by
+             explicit component (listen/token/env/onscreen/start/stop extras), so it exports
+             them. The plugin flavor ships to users, and an exported component would let any app
+             on the device start a server with an env of its own choosing. singleTop delivers the
+             adb extras to a running screen through onNewIntent. -->
+        <activity
+            android:name=".ServerControlActivity"
+            android:exported="${serverComponentsExported}"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.MobileGLPlugin" />
+        <service
+            android:name=".MobileGLServerService"
+            android:exported="${serverComponentsExported}"
+            android:foregroundServiceType="dataSync"
+            android:process=":mglsrv" />
+        <!-- P12 (on-screen server window): the ON-SCREEN display server. Its own process (:mglwin)
+             runs the TCP server on a thread and renders a headless client's window surface
+             (MOBILEGL_IPC_SURFACE=server) onto its SurfaceView. One server at a time: starting it
+             stops MobileGLServerService, starting the service kills :mglwin. Software window
+             rendering keeps HWUI off EGL here (Espryt's teardown terminates the default display);
+             configChanges keeps the Surface through rotation and overlay changes. -->
+        <activity
+            android:name=".MobileGLDisplayActivity"
+            android:configChanges="@integer/trace_replay_config_changes"
+            android:exported="${serverComponentsExported}"
+            android:hardwareAccelerated="false"
+            android:launchMode="singleTop"
+            android:process=":mglwin"
+            android:taskAffinity="${applicationId}.mglwin"
+            android:theme="@style/Theme.MobileGLPlugin" />
 
         <!-- One benchmark run per process: the backend is latched at MobileGL
              init and Espryt teardown kills the process-default EGL display, so
