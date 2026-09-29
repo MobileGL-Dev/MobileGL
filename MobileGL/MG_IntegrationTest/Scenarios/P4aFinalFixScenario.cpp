@@ -33,7 +33,7 @@
 //        must see it too.
 //   M-A  Nothing produced kMGPipeBindSampler / kMGPipeBindShaderImage, so ImageBindableHint was
 //        dead: the applier never saw a texture become image-bound, the metadata respecify
-//        (ID-18 M4) had no live trigger, and the remint pull the hint exists to prevent was
+//        (ID-18 M4) had no live trigger, and the re-mint the hint exists to prevent was
 //        neither prevented nor counted. The case here reads the applier's record around a
 //        glBindImageTexture: the hint arrives as a metadata update that keeps the pending upload
 //        standing beside it, and the picture after the transition is the texels that upload
@@ -538,9 +538,10 @@ void main() { oColor = texture(uTex, vUv); }
             }
 
             // THE NUMBER ROADMAP OPEN QUESTION 2 ASKS FOR: a texture Espryt allocated BEFORE the
-            // hint reached it is re-minted image-bindable at the bind and its levels replayed
-            // from the client's shadow - one remint pull, counted. Arming the counter here is
-            // what makes it readable without a stats-enabled lane.
+            // hint reached it is re-minted image-bindable at the bind - its levels replayed from
+            // the client's shadow in monolith - one re-mint, counted. Under inproc the server
+            // keeps this immutable RGBA8 allocation instead and counts nothing (P9 W2). Arming
+            // the counter here is what makes it readable without a stats-enabled lane.
             unsigned long long pullsBefore = 0;
             const bool pullsReadable = PeekPipeStatsTextureRemintPulls(&pullsBefore);
 
@@ -581,10 +582,10 @@ void main() { oColor = texture(uTex, vUv); }
             // THE TRANSITION. An immutable texture has no storage-defining respecify left, so the
             // hint can only arrive as a metadata update (ID-18 M4). Espryt syncs the texture
             // eagerly inside glBindImageTexture and the widening re-mints its storage, replaying
-            // every defined level from the shadow (the remint pull the counter below counts), so
+            // every defined level from the shadow (the re-mint the counter below counts), so
             // the standing upload is consumed by that regeneration here and the picture that
             // follows is blue whatever the metadata respecify did to the record - the KEPT
-            // property is proved further down, on a texture no remint stands in front of.
+            // property is proved further down, on a texture no re-mint stands in front of.
             (void)uploadsBeforeBind;
             (void)uploadsReadable;
             glBindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
@@ -610,11 +611,11 @@ void main() { oColor = texture(uTex, vUv); }
                     ASSERT_TRUE(runtime.sessionActive);
                     EXPECT_EQ(pullsAfter, pullsBefore)
                         << "the server must preserve this already immutable RGBA8 allocation; "
-                           "image binding needs no remint pull";
+                           "image binding needs no re-mint";
                 } else {
                     EXPECT_EQ(pullsAfter, pullsBefore + 1)
                         << "the monolith re-mint of a texture allocated before its hint was not counted "
-                           "as a remint pull (trp= on the stats line is ROADMAP open question 2's number)";
+                           "(trp= on the stats line is ROADMAP open question 2's number)";
                 }
             }
 

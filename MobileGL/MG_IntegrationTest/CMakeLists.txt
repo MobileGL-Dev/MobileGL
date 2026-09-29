@@ -108,6 +108,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/ImageTargetKindScenario.cpp
     Scenarios/ImageFormatQualifierScenario.cpp
+    Scenarios/TextureRemintPullScenario.cpp
     Scenarios/NonCoreImageFormatScenario.cpp
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/EmptyTextureLevelScenario.cpp
@@ -2688,6 +2689,40 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1, so it does not green-skip on these arms.
     mgl_itest_register_split_arms("InvalidImageUnitScenario.*" "")
 
+    # ---- P9 W2: A TEXTURE RE-MINT NEEDS NO BYTE FROM THE CLIENT ------------------------------
+    #
+    # The ROADMAP's `TextureRemintPullScenario`, and it proves the opposite of its name: the
+    # server re-mints from the GPU level and its own staged store, so no pull protocol exists
+    # (notes/p9/W2-REMINT.md). Espryt's three arms here; the Magma arms are laid by hand in the
+    # `DirectVulkan.<arm>.Remint.` block, where the gated Magma flavour lives; both backends' monolith
+    # entries come from the whole-binary discovery.
+    mgl_itest_register_split_arms("TextureRemintPullScenario.*" "")
+
+    # W2-b's control. MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE is read by the SERVER (the
+    # promotion in RequireImageBindableStorageByHandle), so it reaches inproc and spawn - the spawned
+    # server copies this process's environment - and never the tcp lane's shared fixture: split and
+    # spawn only, the MAGMA_SERVER_ENV_KNOB_NO_TCP reason. The entries carry their own label rather
+    # than integration-{split,spawn} so the Espryt spawn-parity sets stay knob-free; integration-gpu
+    # is what runs them in the gate. Only the uploaded-only cases: their levels are covered by the
+    # store, so the fallback must still produce the right texels and the server log must name it.
+    foreach(mglItestArm IN ITEMS Split Spawn)
+        string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+        string(TOLOWER "${mglItestArm}" mglItestArmLower)
+        foreach(remintFallbackCase AnUploadedMutableTextureKeepsItsTexelsAcrossTheImageBind
+                                   AWidenedFormatsUploadSurvivesTheCarrierRemint
+                                   AnRgba8SnormUploadSurvivesTheImageBind
+                                   AnRgba16SnormImmutableUploadSurvivesTheCarrierRemint)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestArm}.RemintFallback."
+                TEST_FILTER "TextureRemintPullScenario.${remintFallbackCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-gpu\\;integration-remint-fallback-${mglItestArmLower}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint-fallback-${mglItestArmLower}-${remintFallbackCase}.log")
+        endforeach()
+    endforeach()
+
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
     # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
@@ -3608,6 +3643,40 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-pbo${mglItestArmLogTag}-${pboCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
+# P9 W2: THE TEXTURE RE-MINT ON MAGMA, all three arms, GATED. A storage-usage upgrade recreates
+# the VkImage and copies the old one into it GPU to GPU (PreserveTextureContentsOnRecreate), so
+# no byte comes from the client here either (notes/p9/W2-REMINT.md). The gated band flavour
+# (role-split state, strict errors, run-ahead), one entry per case for a private log each.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaRemintEnvironment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(remintCase AnUploadedMutableTextureKeepsItsTexelsAcrossTheImageBind
+                           AGpuClearAfterTheUploadSurvivesTheImageBind
+                           AnImmutableTexturesGpuClearSurvivesTheImageBind
+                           ANullDefinedTextureWrittenOnlyByTheGpuSurvivesTheImageBind
+                           APendingPartialUploadMergesOverGpuWrittenTexels
+                           AGeneratedMipLevelSurvivesTheImageBind
+                           AGpuClearedMipLevelSurvivesTheImageBind
+                           ALevelDefinedWithoutDataAfterTheLastSyncDoesNotEndTheSession
+                           ALevelRedefinedLargerWithoutDataAfterTheLastSyncDoesNotEndTheSession
+                           APartialUploadIntoALevelDefinedAfterTheLastSyncReachesTheImage
+                           AWidenedFormatsGpuClearSurvivesTheCarrierRemint
+                           AWidenedFormatsUploadSurvivesTheCarrierRemint
+                           AnRgba8SnormUploadSurvivesTheImageBind
+                           AnRgba16SnormImmutableUploadSurvivesTheCarrierRemint)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Remint."
+                TEST_FILTER "TextureRemintPullScenario.${remintCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
         endforeach()
     endforeach()
 endif()

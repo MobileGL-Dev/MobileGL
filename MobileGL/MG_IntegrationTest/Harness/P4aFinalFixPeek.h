@@ -29,9 +29,11 @@ namespace MGITest {
     };
     bool PeekPipeTextureResourceRecord(unsigned glTextureName, PipeTextureResourceRecordPeek* out);
 
-    // The process-wide texture-remint pull count (PipeStats "tex-remint-pulls", `trp=` on the
+    // The process-wide texture re-mint count (PipeStats "tex-remint-pulls", `trp=` on the
     // summary line; ROADMAP open question 2). Arms the PipeStats counters for this process on
     // the first call, which is what lets a case read the number without a stats-enabled lane.
+    // Process-wide means it sees the SERVER's count only where the server is this process:
+    // monolith and inproc, never spawn or tcp.
     bool PeekPipeStatsTextureRemintPulls(unsigned long long* out);
     // Espryt's count of texture uploads it actually issued (PipeStats "tex-upload-emissions"):
     // what tells a CONSUMED pending upload apart from a DROPPED one, since the record's set is
