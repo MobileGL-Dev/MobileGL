@@ -60,14 +60,43 @@ namespace MobileGL {
             action(user);
         }
 
-        void WritePeerLog(const char* message) {
+        int LogLevelFromAndroidPriority(int priority) {
+            switch (priority) {
+            case ANDROID_LOG_VERBOSE:
+            case ANDROID_LOG_DEBUG: return MOBILEGL_LOG_LEVEL_DEBUG;
+            case ANDROID_LOG_INFO: return MOBILEGL_LOG_LEVEL_INFO;
+            case ANDROID_LOG_WARN: return MOBILEGL_LOG_LEVEL_WARN;
+            case ANDROID_LOG_ERROR: return MOBILEGL_LOG_LEVEL_ERROR;
+            case ANDROID_LOG_FATAL: return MOBILEGL_LOG_LEVEL_FATAL;
+            default: return MOBILEGL_LOG_LEVEL_INFO;
+            }
+        }
+
+        const char* LogLevelTag(int level) {
+            // The same five words MGLOG_D..MGLOG_F put in a header (Log.h), so a tagged peer line
+            // reads like a local one.
+            static const char* const kTags[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+            if (level < MOBILEGL_LOG_LEVEL_DEBUG) level = MOBILEGL_LOG_LEVEL_DEBUG;
+            if (level > MOBILEGL_LOG_LEVEL_FATAL) level = MOBILEGL_LOG_LEVEL_FATAL;
+            return kTags[level];
+        }
+
+        void WritePeerLog(int level, const char* message) {
             std::lock_guard<std::mutex> lock(LogMutex());
             const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
             if (!path || !*path) path = MOBILEGL_LOG_FILE_PATH;
             if (!path || !*path) return;
             if (!s_serverLogFile) s_serverLogFile = std::fopen(RoleLogPath(path, LogRole::Server).c_str(), "w");
             if (s_serverLogFile) {
+                // A server-formatted line starts with its own "[time] [OS thread/LEVEL]: " header,
+                // level tag included, and is written untouched. Anything else gets the wire's level
+                // as its tag and a line end if it lacks one: the severity must survive into the file
+                // whatever the peer put in the text.
+                const bool headed = message[0] == '[';
+                if (!headed) std::fprintf(s_serverLogFile, "[peer/%s]: ", LogLevelTag(level));
                 std::fputs(message, s_serverLogFile);
+                const std::size_t length = std::strlen(message);
+                if (!headed && (length == 0 || message[length - 1] != '\n')) std::fputc('\n', s_serverLogFile);
                 std::fflush(s_serverLogFile);
             }
         }
@@ -315,10 +344,21 @@ namespace MobileGL {
 
             WriteToFile(out.c_str());
 #if MOBILEGL_BUILD_DISAGGREGATED
+            // P9 W3: the forwarder is told the line's severity (LogForwarder, Log.h).
+            const int level = LogLevelFromAndroidPriority(androidLogLevel);
             bool forwardOutsideLock = false;
+            bool forwardWasSessionScoped = false;
             if (s_forwarder && ThreadIsServerRole() && !t_forwarding) {
-                if (!s_forwardSessionThreadsOnly) s_forwarder(s_forwarderUser, out.c_str());
-                else forwardOutsideLock = t_forwardsToPeer;
+                forwardWasSessionScoped = s_forwardSessionThreadsOnly;
+                if (!s_forwardSessionThreadsOnly) {
+                    // A FATAL line goes out after the log mutex is released, like a session-scoped
+                    // one: the forwarder may wait (bounded) for it to reach the peer before the
+                    // process aborts, and must not hold every other thread's line while it does.
+                    if (level >= MOBILEGL_LOG_LEVEL_FATAL) forwardOutsideLock = true;
+                    else s_forwarder(s_forwarderUser, level, out.c_str());
+                } else {
+                    forwardOutsideLock = t_forwardsToPeer;
+                }
             }
 #endif
 
@@ -327,11 +367,13 @@ namespace MobileGL {
             if (forwardOutsideLock) {
                 // SetSessionLogForwarder: this thread belongs to the live session. The line goes out
                 // after the log mutex is released, so a stalled client holds only the forward mutex.
+                // (And a FATAL line of either kind, for the reason above.) Re-asked under the
+                // forward mutex, because the forwarder may have been replaced or cleared since.
                 lock.unlock();
                 std::lock_guard<std::mutex> forwardLock(ForwardMutex());
-                if (s_forwarder != nullptr && s_forwardSessionThreadsOnly) {
+                if (s_forwarder != nullptr && s_forwardSessionThreadsOnly == forwardWasSessionScoped) {
                     t_forwarding = true;
-                    s_forwarder(s_forwarderUser, out.c_str());
+                    s_forwarder(s_forwarderUser, level, out.c_str());
                     t_forwarding = false;
                 }
             }

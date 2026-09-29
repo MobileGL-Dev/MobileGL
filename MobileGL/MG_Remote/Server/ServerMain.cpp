@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 #include "../Transport/Doorbell.h"
 #include "../Transport/FdPassing.h"
+#include "../Transport/LogForward.h"
 #include "../Transport/SocketTransport.h"
 #include "../Transport/WireLog.h"
 #include "../Protocol/SurfaceOpCodec.h"
@@ -55,13 +56,42 @@ void Refuse(SocketTransport& transport, Protocol::RefuseCode code, const char* d
     WireLogError("MG_Remote server: Refuse{%s} %s", Protocol::EnumNameRefuseCode(code), detail);
 }
 
-void ForwardLog(void* user, const char* text) {
-    auto& transport = *static_cast<ITransport*>(user);
-    flatbuffers::FlatBufferBuilder builder(512);
-    auto log = Protocol::CreateLogLine(builder, Protocol::LogLevel::Info, builder.CreateString(text));
-    auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::LogLine, log.Union());
-    Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
-    (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
+// P9 W3. The log forward's unblock hook (LogForward.h, Close): the channel's sender is still inside a
+// write to a client that has not read for the whole close budget, at the end of the session. Cutting
+// the control socket is what returns that write (EPIPE) so the thread can be joined - the session is
+// over by then (every caller is on RunSession's way out), and the socket is closed right after anyway.
+// Not through SocketTransport::Shutdown: that takes the send mutex the blocked write holds.
+void UnblockControlSend(void* user) {
+    const int fd = static_cast<SocketTransport*>(user)->StreamFd();
+    if (fd >= 0) (void)::shutdown(fd, SHUT_RDWR);
+}
+
+// The forward's counters, once, into the server's OWN log - the forwarder is already gone by the time
+// they are final, so this line is local; what the client saw of the same story is the in-stream
+// LogForward{Dropped} / {Coalesced} lines at each gap. WARN when anything was lost, delayed past a
+// deadline or cut, so it survives a production build; otherwise a D line.
+void LogForwardSummary(const Transport::LogForwardCounters& counters) {
+    const bool eventful = counters.lossyDropped != 0 || counters.errorsCoalesced != 0 || counters.abandoned != 0 ||
+                          counters.fatalFlushTimeouts != 0 || counters.transportFailed;
+    if (eventful) {
+        MGLOG_W("MG_Remote server: log forwarding ended - forwarded=%llu dropped(<=WARN)=%llu (%llu bytes) "
+                "coalesced(ERROR)=%llu paced(ERROR)=%llu notices=%llu abandoned=%llu fatal-flush-timeouts=%llu "
+                "transport-failed=%d max-offer-us=%llu",
+                static_cast<unsigned long long>(counters.forwarded),
+                static_cast<unsigned long long>(counters.lossyDropped),
+                static_cast<unsigned long long>(counters.lossyDroppedBytes),
+                static_cast<unsigned long long>(counters.errorsCoalesced),
+                static_cast<unsigned long long>(counters.errorsPaced),
+                static_cast<unsigned long long>(counters.notices),
+                static_cast<unsigned long long>(counters.abandoned),
+                static_cast<unsigned long long>(counters.fatalFlushTimeouts), counters.transportFailed ? 1 : 0,
+                static_cast<unsigned long long>(counters.maxOfferNs / 1000));
+    } else {
+        MGLOG_D("MG_Remote server: log forwarding ended - forwarded=%llu paced(ERROR)=%llu max-offer-us=%llu",
+                static_cast<unsigned long long>(counters.forwarded),
+                static_cast<unsigned long long>(counters.errorsPaced),
+                static_cast<unsigned long long>(counters.maxOfferNs / 1000));
+    }
 }
 
 // p7/spawnhang. THE PROGRESS REPORT: Wire::SurfaceProgress, sent by the thread that posted the op
@@ -192,13 +222,22 @@ Server::ServerSession::DataConnectionSource ListenerSource(int listener, int con
     };
 }
 
-struct FlushAck { ITransport* transport; std::uint64_t seq; };
+// `forward` is the session's log forward when there is one (P9 W3). The ack then goes out THROUGH it,
+// queued behind every line forwarded before the flush, because a forwarded line is no longer on the
+// wire when its MGLOG returns - sending the ack directly could overtake lines still queued, and
+// MGPipeSyncPeerLog's promise is that they are in the client's file when the ack arrives.
+struct FlushAck { ITransport* transport; Transport::LogForwardChannel* forward; std::uint64_t seq; };
 void SendLogAck(void* pointer) {
     auto& ack = *static_cast<FlushAck*>(pointer);
     flatbuffers::FlatBufferBuilder builder(64);
     auto flush = Protocol::CreateLogFlush(builder, ack.seq, true);
     auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::LogFlush, flush.Union());
     Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
+    if (ack.forward != nullptr) {
+        ack.forward->OfferControlFrame(
+            std::vector<std::uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()));
+        return;
+    }
     (void)ack.transport->SendFrame({builder.GetBufferPointer(), builder.GetSize()});
 }
 
@@ -429,11 +468,25 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     // code, exactly as before.
     bool backendBuilt = false;
     bool acceptTried = false;
-    const auto endSession = [&](int code) -> int {
-        if (!inProcess) return code;
-        // Both point at `control`, which dies with this frame.
-        loop.SetControlProgressSink(nullptr, nullptr);
+    // P9 W3: the TCP session's log forward (LogForward.h), made where forwarding is switched on below.
+    // Declared up here because every way out has to take it down the same way: the logger stops
+    // calling it FIRST (so no line is offered to a channel being destroyed), then the channel drains
+    // within its close budget and its sender is joined, then its counters are said locally. Every
+    // shape, forked or not: a forked child's early return destroys the channel with this frame, and a
+    // forwarder left pointing at it would be a dangling pointer for however many lines remain.
+    std::unique_ptr<Transport::LogForwardChannel> logForward;
+    const auto stopLogForwarding = [&] {
         MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
+        if (!logForward) return;
+        const auto counters = logForward->Close();
+        logForward.reset();
+        LogForwardSummary(counters);
+    };
+    const auto endSession = [&](int code) -> int {
+        stopLogForwarding();
+        if (!inProcess) return code;
+        // Points at `control`, which dies with this frame (the log forwarder did too, above).
+        loop.SetControlProgressSink(nullptr, nullptr);
         if (backendBuilt) {
             // Stop() joins a running apply thread (it destroys the backend on it), or - never
             // started - drops the backend here; either way the display lease goes with it.
@@ -575,11 +628,18 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
 
     const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
     if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0)) {
+        // P9 W3: the forward is a queue with a sender thread of its own, graded by severity
+        // (LogForward.h): a client that stops reading control no longer holds any logging thread -
+        // the apply thread above all - inside a socket write.
+        logForward = std::make_unique<Transport::LogForwardChannel>(*control, &UnblockControlSend, control.get());
         // P12 review fix: in-process, only THIS session's threads (this one and its apply thread)
         // forward, and outside the log mutex - the UI thread, the listener and the next session's
         // refusals share this process and must neither reach this client nor wait on it.
-        if (inProcess) MobileGL::MG_Util::Debug::SetSessionLogForwarder(&ForwardLog, control.get());
-        else MobileGL::MG_Util::Debug::SetLogForwarder(&ForwardLog, control.get());
+        if (inProcess)
+            MobileGL::MG_Util::Debug::SetSessionLogForwarder(&Transport::LogForwardChannel::ForwardThunk,
+                                                             logForward.get());
+        else
+            MobileGL::MG_Util::Debug::SetLogForwarder(&Transport::LogForwardChannel::ForwardThunk, logForward.get());
     }
     // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
     // below) and is the one that says "still running" while the apply thread runs it. Cleared
@@ -700,7 +760,7 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
                         static_cast<unsigned long long>(verbs.ExpectedApplierResetSerial()),
                         static_cast<unsigned long long>(verbs.ObjectDeaths()));
             }
-            FlushAck ack{control.get(), flush->seq()};
+            FlushAck ack{control.get(), logForward.get(), flush->seq()};
             MobileGL::MG_Util::Debug::WithLogBarrier(&SendLogAck, &ack);
             continue;
         }
@@ -749,7 +809,8 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
                      static_cast<unsigned long long>(SessionLatchCount()), kSessionLatchedExitCode);
     }
     session.Close();
-    MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
+    // P9 W3: the forwarder is cleared, the forward drains (bounded) and its counters are logged.
+    stopLogForwarding();
     // P12 (D5): the backend loop.Stop() destroyed is not this session's to point at any more.
     if (inProcess) session.SetBackend(nullptr);
     // The caller's exit (a forked child's ExitSessionProcess) closes control after cleanup/flush -

@@ -1109,17 +1109,19 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
                  "ScissorTestEnabledMask");
 }
 
-// The reverse channel is exactly NINE callbacks: plan B's section 7.1 wrote ten, and the tenth
+// The reverse channel is exactly EIGHT callbacks: plan B's section 7.1 wrote ten, and the tenth
 // (OnXfbScatterReady) went with the design it belonged to when P5c/P5f moved the XFB scatter to
 // the server's own staged shadow and its OnBufferWriteback return path. P3b/P4b espryt D1 slice 3
 // deleted the declaration; this case is what makes the struct's shrink a measured fact rather
 // than a claim, since the static_assert beside kMGPipeCallbackCount only proves the two agree.
+// P9 W3 deleted the ninth, OnLog, which never had a producer either: the server's log lines are
+// LogLine frames on the control plane (MG_Remote/Transport/LogForward.h), not reverse records.
 //
 // THE CASE NAME STAYS "…HasTenCallbacks" DELIBERATELY. G2/G14 say the ctest name set only ever
 // grows, so renaming this would delete a name the gate is watching; the count it asserts is what
 // has to be right, and the comment is where the number lives.
 TEST(PipeCatalogue, ReverseChannelHasTenCallbacks) {
-    EXPECT_EQ(kMGPipeCallbackCount, 9u);
+    EXPECT_EQ(kMGPipeCallbackCount, 8u);
     EXPECT_EQ(sizeof(MGPipeCallbacks), kMGPipeCallbackCount * sizeof(void (*)()));
 }
 

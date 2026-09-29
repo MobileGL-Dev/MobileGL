@@ -60,5 +60,5 @@ shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与�
 
 - `CreateShaderState` 过线的是逐 stage SPIR-V + 反射归档，**不是源码**：glslang 全在 client、SPIRV-Cross 全在 server，文件级切割；server 侧无编译池。归档序列化器 `ProgramArtifactsCodec`，monolith 只在 verify 构建里调它（D-H3）。
 - server 在 verb 时刻从已推送状态**惰性特化**（D-B2：draw FBO clamp mask、fragColor 广播数、storage-block 绑定签名、image 格式、patch 参数等）——正是两个后端原来的做法。
-- link / compile 失败不需要同步返回：`GL_LINK_STATUS` 由 client 从 `ProgramObject` 回答，后端失败以 `OnLog` ≥ERROR 无损呈现。
+- link / compile 失败不需要同步返回：`GL_LINK_STATUS` 由 client 从 `ProgramObject` 回答，后端失败以 server 日志的 ≥ERROR 行（控制面 `LogLine`，无损，`MG_Remote/Transport/LogForward.h`）呈现。
 - 内部 shader（颜色 blit、深度 mip、multisample resolve）烘焙成签进树的 SPIR-V（`Wire*Spirv.h`），新鲜度门 `MOBILEGL_BAKED_INTERNAL_SHADERS`（`MG_Test/SelfTest/BakedInternalShadersTest.cpp`）重跑树内 glslang 逐字节比对（P7）。

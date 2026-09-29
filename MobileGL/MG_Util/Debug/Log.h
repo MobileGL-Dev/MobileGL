@@ -136,7 +136,19 @@ namespace MobileGL {
             void Close();
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-            using LogForwarder = void (*)(void*, const char*);
+            // P9 W3: THE FORWARDER IS TOLD EACH LINE'S SEVERITY, as a MOBILEGL_LOG_LEVEL_* value.
+            // It used to get the text alone, so the server stamped every forwarded line
+            // LogLevel::Info on the wire - and the one policy the wire's LogLine.level exists for
+            // (<= WARN lossy, >= ERROR lossless and rate limited; design/04 §8.1) had nothing to
+            // decide on. The text still carries its own "/LEVEL]" tag; the number is what a
+            // forwarder can act on without parsing it back out.
+            //
+            // A forwarder is called for every line a forwarding thread logs, so it must not block
+            // on its peer (MG_Remote/Transport/LogForward.h is the one ServerMain installs). A
+            // FATAL line is the exception it may make, for a bounded time: it is handed over
+            // OUTSIDE the log mutex (Log.cpp), so a forwarder that waits for it to reach the peer
+            // before the process aborts holds no other thread's log line hostage.
+            using LogForwarder = void (*)(void* user, int level, const char* line);
             void SetLogForwarder(LogForwarder forwarder, void* user);
             // P12 review fix (log forwarding). THE IN-PROCESS DISPLAY SERVER'S FORWARDER, scoped to
             // the live session's own threads. SetLogForwarder forwards every server-role thread's
@@ -148,11 +160,30 @@ namespace MobileGL {
             // the log mutex, under a forward mutex of its own, so a client that stops reading stalls
             // the session's threads and not every thread that logs (the UI thread's surface
             // callbacks). SetLogForwarder(nullptr, nullptr) clears either kind and waits for a send in
-            // flight.
+            // flight. (Since P9 W3 the forwarder ServerMain installs does not wait on the client at
+            // all - it queues, and a sender thread of its own does the socket write - so "a client
+            // that stops reading" stalls neither; the forward mutex is kept for the barrier.)
             void SetSessionLogForwarder(LogForwarder forwarder, void* user);
             void SetThreadForwardsLogToPeer(bool forwards);
-            void WritePeerLog(const char* message);
+            // The CLIENT's writer for a line its server forwarded, into `<base>.server.log`.
+            // `level` is the severity the server sent (a MOBILEGL_LOG_LEVEL_* value, mapped back
+            // from the wire by MG_Remote::Transport::LogLevelFromWire). A line the server formatted
+            // carries its own "[time] [OS thread/LEVEL]: " header and is written as it came; a line
+            // without one - anything that does not start with '[' - is written behind a
+            // "[peer/LEVEL]: " tag, so the severity the wire carried is in the file either way.
+            void WritePeerLog(int level, const char* message);
             void WithLogBarrier(void (*action)(void*), void* user);
+
+            // THE SEVERITY OF A LINE, from what Log() is actually given. Log()'s signature is part
+            // of the pull build's symbol set (G1), so it cannot grow a level argument; the Android
+            // priority it already takes is a faithful carrier of the five MGLOG_* levels (Log.h's
+            // MGLOG_D..MGLOG_F pass ANDROID_LOG_DEBUG..ANDROID_LOG_FATAL). VERBOSE reads as DEBUG,
+            // and the three priorities no MGLOG_* passes (UNKNOWN, DEFAULT, SILENT) as INFO - a
+            // guess, but one that neither drops a real diagnostic's severity nor invents one.
+            int LogLevelFromAndroidPriority(int priority);
+            // "DEBUG" / "INFO" / "WARN" / "ERROR" / "FATAL": the tag MGLOG_* writes into a line's
+            // header, for a writer that has only the number. Out of range clamps to the nearest end.
+            const char* LogLevelTag(int level);
             // P6: ONE LOG PER ROLE, and the role is a per-THREAD fact because under inproc both
             // roles live in one process. The client keeps MOBILEGL_LOG_FILE_PATH unchanged so
             // every existing reader keeps its path; the server's lines go to the same path with

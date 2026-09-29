@@ -162,6 +162,44 @@ namespace MobileGL::MG_Remote::Server {
 #endif
         }
 
+        // P9 W3, FAULT INJECTION F2 (HANDOFF-P9 §4): THE APPLY THREAD AS A LOG FIREHOSE.
+        //
+        // MOBILEGL_TEST_APPLY_LOG_FLOOD=<n> makes the apply thread log, after EVERY record it applies,
+        // `n` WARN lines of about 600 bytes and one ERROR line, each numbered in its own series
+        // ("flood warn #k", "flood error #k"). It is the one producer F2 needs and nothing in the
+        // tree otherwise is: production logging is not allowed to repeat on a per-record path
+        // (Log.h), so no real verb can be made to fill a TCP control connection with lines at will -
+        // and "the apply thread is not held by logging while its client does not read" can only be
+        // asserted about a thread that is logging a lot. The numbering is what lets the test prove
+        // every ERROR line arrived (in order) while WARN lines were dropped.
+        //
+        // Meant for a server in its OWN process (a `--serve` session child). A TEST knob: read once
+        // per Start(), 0 unless set, capped, and it says so in the log when it is set.
+        Uint32 ApplyLogFloodLinesForTest() {
+            const char* text = std::getenv("MOBILEGL_TEST_APPLY_LOG_FLOOD");
+            if (text == nullptr || *text == '\0') return 0;
+            const long lines = std::strtol(text, nullptr, 10);
+            if (lines <= 0) return 0;
+            const Uint32 capped = static_cast<Uint32>(std::min<long>(lines, 4096));
+            MGLOG_W("MG_Remote server: MOBILEGL_TEST_APPLY_LOG_FLOOD=%u - every applied record logs that many "
+                    "WARN lines and one ERROR line. A test-only lever (fault injection F2); never set it in a "
+                    "measured run",
+                    static_cast<unsigned>(capped));
+            return capped;
+        }
+
+        void FloodLogForTest(Uint32 warnLines) {
+            // One apply thread per process (ServerLoopInstance's), so plain counters are enough.
+            static unsigned long long s_warn = 0;
+            static unsigned long long s_error = 0;
+            static const std::string kFiller(560, 'w');
+            for (Uint32 i = 0; i < warnLines; ++i) {
+                MGLOG_W("MG_Remote server: MOBILEGL_TEST_APPLY_LOG_FLOOD flood warn #%llu %s", ++s_warn,
+                        kFiller.c_str());
+            }
+            MGLOG_E("MG_Remote server: MOBILEGL_TEST_APPLY_LOG_FLOOD flood error #%llu", ++s_error);
+        }
+
     } // namespace
 
     // ---------------------------------------------------------------------------------
@@ -236,6 +274,7 @@ namespace MobileGL::MG_Remote::Server {
         m_serverOwnedSurfaces.clear();
         m_windowLostRequested.store(false, std::memory_order_release);
         m_serverWindowsLost.store(0, std::memory_order_release);
+        m_testLogFloodLines = ApplyLogFloodLinesForTest();
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
             m_exited = false;
@@ -783,6 +822,8 @@ namespace MobileGL::MG_Remote::Server {
                             std::chrono::steady_clock::now() - applyStarted)
                             .count());
                     ++sFrameRecords;
+                    // P9 W3, F2: outside the apply timing above; 0 in every run that is not F2.
+                    if (m_testLogFloodLines != 0) FloodLogForTest(m_testLogFloodLines);
                     if (record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present)) {
                         const auto now = std::chrono::steady_clock::now();
                         const auto wallNs = static_cast<std::uint64_t>(

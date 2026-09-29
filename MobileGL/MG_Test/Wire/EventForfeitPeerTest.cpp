@@ -51,6 +51,21 @@
 // Everything that uses a ClientSession runs in a FORKED CHILD. The session singleton latches
 // device-lost for the rest of its process once its server goes away, so the "next connection"
 // must come from a process that never had a first one.
+//
+// P9 W3 ADDS FAULT INJECTION F2 (HANDOFF-P9 §4), stream plane only because only a TCP server
+// forwards its log: the peer STOPS READING ITS CONTROL CONNECTION (ClientSession::
+// PauseControlReaderForTest, with its receive buffer shrunk so the kernel cannot absorb the flood)
+// while the server's apply thread logs far more than any socket holds (MOBILEGL_TEST_APPLY_LOG_FLOOD:
+// per applied record, 64 WARN lines and one numbered ERROR line). Two arms:
+//   * control only - SEG_EVENT is drained. The apply thread must get through the whole flood while
+//     nobody reads (the server's own log reaches the last record's ERROR line), <= WARN lines must
+//     be dropped and counted, and once the peer reads again every ERROR line the server logged must
+//     be in the peer's `<base>.server.log`, in order, with the WARN gap marked by LogForward{Dropped}
+//     lines whose counts add up;
+//   * control and SEG_EVENT both - the reverse channel must end the way it always has, by
+//     ReverseChannelForfeit{NotDraining} after the knob and a session that exits 0, rather than an
+//     apply thread parked in a log write that never finishes.
+// Before W3 both hung: the forward was a blocking socket write made by the logging thread itself.
 
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
@@ -74,6 +89,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -122,6 +138,25 @@ namespace {
     constexpr std::uint32_t kReadbacks = 5;
     constexpr MGP::MGPipeHandle kBuffer{41u, 1u};
 
+    // F2 (P9 W3). The flood: kFloodRecords records published while the peer reads nothing, each of
+    // which makes the server's apply thread log kFloodWarnLinesPerRecord WARN lines of ~650 bytes and
+    // one ERROR line (ServerLoop.cpp, MOBILEGL_TEST_APPLY_LOG_FLOOD) - about 16 MiB, against a
+    // server send buffer this host caps at 4 MiB and a forward queue of 1 MiB for <= WARN.
+    constexpr std::uint32_t kFloodWarnLinesPerRecord = 64;
+    constexpr std::uint32_t kFloodRecords = 400;
+    // THE PEER'S RECEIVE BUFFER WHILE IT IS NOT READING. Without this the kernel absorbs the flood
+    // instead of the server: this host's tcp_rmem lets a receive buffer autotune to 32 MiB, and a
+    // peer whose socket takes the whole flood is not a peer that stopped reading.
+    constexpr int kStalledReceiveBufferBytes = 16 * 1024;
+    // How long the apply thread gets to log the whole flood with nobody reading it. It needs well
+    // under a second; the budget is for a loaded runner.
+    constexpr std::uint32_t kFloodBudgetMs = 15000;
+    // The longest one forward may take a logging thread (the summary's max-offer-us). The channel
+    // spends a lock and a copy; a forward that waited on the peer would spend the whole stall.
+    constexpr unsigned long long kMaxOfferUs = 500 * 1000;
+    constexpr const char* kFloodErrorNeedle = "MOBILEGL_TEST_APPLY_LOG_FLOOD flood error #";
+    constexpr const char* kFloodWarnNeedle = "MOBILEGL_TEST_APPLY_LOG_FLOOD flood warn #";
+
     std::string ServerImage() {
         if (const char* explicitPath = std::getenv("MOBILEGL_TEST_SERVER_PATH")) return explicitPath;
         return "libMobileGLServer.so";
@@ -165,8 +200,11 @@ namespace {
     // TRANSPORT / SERVER_PATH / RING_MB / STAGE_MB outright, and nothing a CLIENT was told may
     // leak into the server - so every MOBILEGL_IPC_* goes and the few this scenario means are
     // stated. MOBILEGL_IPC_LOG_FORWARD=0 keeps the server's lines in its own role log, which is
-    // what the assertions below read.
-    std::vector<std::string> SupervisorEnvironment(const std::string& logBase, std::uint32_t waitMs) {
+    // what the assertions below read. F2 (P9 W3) turns forwarding ON - that is what it tests - and
+    // gives its peer a log base of its own, so the forwarded copy and the server's own file never
+    // share a path; and it sets the apply thread's flood.
+    std::vector<std::string> SupervisorEnvironment(const std::string& logBase, std::uint32_t waitMs,
+                                                   bool forwardLog = false, std::uint32_t floodLines = 0) {
         std::vector<std::string> env;
         for (char** e = ::environ; e != nullptr && *e != nullptr; ++e) {
             const std::string entry(*e);
@@ -178,7 +216,8 @@ namespace {
         }
         env.emplace_back("MOBILEGL_IPC_ROLE=server");
         env.emplace_back("MOBILEGL_IPC_DIAL=no");
-        env.emplace_back("MOBILEGL_IPC_LOG_FORWARD=0");
+        env.emplace_back(forwardLog ? "MOBILEGL_IPC_LOG_FORWARD=1" : "MOBILEGL_IPC_LOG_FORWARD=0");
+        if (floodLines != 0) env.emplace_back("MOBILEGL_TEST_APPLY_LOG_FLOOD=" + std::to_string(floodLines));
         env.emplace_back(WaitKnobEntry(waitMs));
         env.emplace_back("MOBILEGL_LOG_FILE_PATH=" + logBase);
         const std::string image = ServerImage();
@@ -187,9 +226,10 @@ namespace {
         return env;
     }
 
-    pid_t LaunchSupervisor(const std::string& endpoint, const std::string& logBase, std::uint32_t waitMs) {
+    pid_t LaunchSupervisor(const std::string& endpoint, const std::string& logBase, std::uint32_t waitMs,
+                           bool forwardLog = false, std::uint32_t floodLines = 0) {
         const std::string image = ServerImage();
-        std::vector<std::string> env = SupervisorEnvironment(logBase, waitMs);
+        std::vector<std::string> env = SupervisorEnvironment(logBase, waitMs, forwardLog, floodLines);
         std::vector<char*> envp;
         for (auto& entry : env) envp.push_back(entry.data());
         envp.push_back(nullptr);
@@ -253,16 +293,18 @@ namespace {
     }
 
     // Polls the supervisor's log until `needle` has appeared `times` times, or the budget runs
-    // out. Returns the milliseconds it took, or -1.
+    // out. Returns the milliseconds it took, or -1. F2's logs run to tens of MiB, so its polls are
+    // spaced wider (`every`) rather than re-reading the whole file a hundred times a second.
     long long WaitForLog(const std::string& logBase, const std::string& needle, std::size_t times,
-                         std::chrono::milliseconds budget) {
+                         std::chrono::milliseconds budget,
+                         std::chrono::milliseconds every = std::chrono::milliseconds(10)) {
         const auto start = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() - start < budget) {
             if (Count(ServerLog(logBase), needle) >= times) {
                 return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                              start).count();
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(every);
         }
         return -1;
     }
@@ -305,14 +347,16 @@ namespace {
         kServerNotReaped = 19,
         kServerExitedNonZero = 20,
         kRawFrame = 21,
+        // F2 (P9 W3).
+        kNoControlReader = 22,
+        kFloodPublish = 23,
     };
 
-    // Everything a peer does between its handshake and the moment SEG_EVENT is full with the
-    // server waiting on one more writeback. Returns kChildOk or the step that failed.
-    int FillTheEventRingWithoutDraining(Client::ClientSession& client) {
-        // A pbuffer context on the server's apply thread, through the same forwarders
-        // BackendObject_Remote uses. The handles are the client's names for them; the server keys
-        // its surfaces by them and never dereferences one.
+    // A pbuffer context on the server's apply thread, through the same forwarders
+    // BackendObject_Remote uses. The handles are the client's names for them; the server keys
+    // its surfaces by them and never dereferences one. These are SURFACE OPS - they cross the
+    // control connection both ways - so a peer that is going to stop reading control does this first.
+    int BringUpPbufferContext() {
         const auto display = reinterpret_cast<EGLDisplay>(std::uintptr_t{0x4d47});
         const auto surface = reinterpret_cast<EGLSurface>(std::uintptr_t{0x5346});
         const auto context = reinterpret_cast<EGLContext>(std::uintptr_t{0x4358});
@@ -320,6 +364,39 @@ namespace {
         if (!Server::ServerInitializeEGLDisplay(display, &major, &minor)) return kEglDisplay;
         if (!Server::ServerCreateEGLPbufferSurface(surface, 16, 16)) return kEglSurface;
         if (!Server::ServerMakeEGLCurrent(display, surface, surface, context)) return kEglCurrent;
+        return kChildOk;
+    }
+
+    // F2 (P9 W3): THE PEER STOPS READING ITS CONTROL CONNECTION, then makes the server's apply thread
+    // log the flood. The receive buffer is shrunk first (kStalledReceiveBufferBytes), then the reader
+    // is paused - from here nothing is taken off the socket, not a log line, not a reply - and then
+    // kFloodRecords set_patch_state records are published without waiting. set_patch_state because it
+    // is pure applier state: no GL call, no reply, no event, so the only thing each one produces on
+    // the server is the flood's log lines.
+    int StopReadingControlAndFlood(Client::ClientSession& client) {
+        auto* control = client.ControlSocketForTest();
+        if (control == nullptr) return kNoControlReader;
+        const int receiveBuffer = kStalledReceiveBufferBytes;
+        (void)::setsockopt(control->StreamFd(), SOL_SOCKET, SO_RCVBUF, &receiveBuffer, sizeof(receiveBuffer));
+        if (!client.PauseControlReaderForTest(true)) return kNoControlReader;
+        for (std::uint32_t i = 0; i < kFloodRecords; ++i) {
+            MGP::MGPPatchState patch{};
+            patch.Vertices = 3;
+            if (!PublishWithoutWaiting(client, MGP::MGPWireOp::SetPatchState, patch)) return kFloodPublish;
+        }
+        return kChildOk;
+    }
+
+    // Everything a peer does between its handshake and the moment SEG_EVENT is full with the
+    // server waiting on one more writeback. Returns kChildOk or the step that failed. `afterContext`
+    // (F2) runs once the context is up and before the buffer is made.
+    int FillTheEventRingWithoutDraining(Client::ClientSession& client, const std::function<int()>& afterContext = {}) {
+        const int up = BringUpPbufferContext();
+        if (up != kChildOk) return up;
+        if (afterContext) {
+            const int done = afterContext();
+            if (done != kChildOk) return done;
+        }
 
         // One buffer with defined content, staged whole: create, respecify, one sub-data record.
         // These three WAIT, and that is fine - the ring holds one small surface event at most so
@@ -764,6 +841,266 @@ namespace {
         RemoveRoleLogsIfGreen(logBase);
     }
 
+    // ---- F2 (P9 W3): a peer that stops reading control while the apply thread floods its log ----
+
+    std::string ReadFileWhole(const std::string& path) {
+        std::string all;
+        if (FILE* file = std::fopen(path.c_str(), "rb")) {
+            char chunk[65536];
+            std::size_t got = 0;
+            while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) all.append(chunk, got);
+            std::fclose(file);
+        }
+        return all;
+    }
+
+    // The numbers after every `needle` in `text`, in file order.
+    std::vector<unsigned long long> Indices(const std::string& text, const std::string& needle) {
+        std::vector<unsigned long long> out;
+        for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) {
+            out.push_back(std::strtoull(text.c_str() + at + needle.size(), nullptr, 10));
+        }
+        return out;
+    }
+
+    // `name=<number>` on a line, or ~0 when the field is not there.
+    unsigned long long Field(const std::string& line, const std::string& name) {
+        const auto at = line.find(name + "=");
+        if (at == std::string::npos) return ~0ull;
+        return std::strtoull(line.c_str() + at + name.size() + 1, nullptr, 10);
+    }
+
+    // The sum of the counts the in-stream LogForward{Dropped} notices name.
+    unsigned long long NamedDrops(const std::string& text) {
+        unsigned long long sum = 0;
+        for (const auto count : Indices(text, "LogForward{Dropped} - ")) sum += count;
+        return sum;
+    }
+
+    // THE F2 PEER. Handshake, a pbuffer context, then StopReadingControlAndFlood - and, in the
+    // undrained arm, the event-ring fill behind it (so the apply thread meets the full SEG_EVENT only
+    // after it has logged the whole flood). Writes one byte to `published` when the last record is on
+    // the wire. The drained arm then waits for `release`, reads its control connection again, and
+    // calls SyncPeerLog - the LogFlush whose ack is queued behind every line the server forwarded
+    // before it - and writes one byte to `synced`: from then on the peer's `<base>.server.log` holds
+    // everything the server forwarded. It stops cleanly when released a second time. The undrained
+    // arm never reads again and leaves by _exit, as the other non-draining peers do.
+    [[noreturn]] void FloodPeer(const std::string& control, const std::string& peerBase, bool alsoStopDraining,
+                                int published, int release, int synced) {
+        // WritePeerLog reads MOBILEGL_LOG_FILE_PATH at each write, so this is the peer's forwarded copy.
+        ::setenv("MOBILEGL_LOG_FILE_PATH", peerBase.c_str(), 1);
+        ConfigureClient(control);
+        auto& client = Client::ClientSessionInstance();
+        if (client.StartSpawned() != MOBILEGL_OK) ::_exit(kNoWelcome);
+        if (alsoStopDraining) {
+            const int filled = FillTheEventRingWithoutDraining(client, [&client] { return StopReadingControlAndFlood(client); });
+            if (filled != kChildOk) ::_exit(filled);
+        } else {
+            const int up = BringUpPbufferContext();
+            if (up != kChildOk) ::_exit(up);
+            const int flooded = StopReadingControlAndFlood(client);
+            if (flooded != kChildOk) ::_exit(flooded);
+        }
+        const char one = 1;
+        (void)::write(published, &one, 1);
+        char go = 0;
+        (void)::read(release, &go, 1);
+        if (alsoStopDraining) ::_exit(kChildOk);
+        client.PauseControlReaderForTest(false);
+        client.SyncPeerLog();
+        (void)::write(synced, &one, 1);
+        (void)::read(release, &go, 1);
+        client.Stop();
+        ::_exit(kChildOk);
+    }
+
+    void RunLogFloodArm(bool alsoStopDraining) {
+        std::signal(SIGPIPE, SIG_IGN); // as RunArm: no write in this file may kill the test process
+        PinHeadlessEgl();
+        const std::string tag = std::string("stream-flood-") + (alsoStopDraining ? "undrained-" : "") +
+                                std::to_string(::getpid());
+        const std::string logBase = "/tmp/mgl-fz3-" + tag + ".log";
+        const std::string peerBase = "/tmp/mgl-fz3-" + tag + "-peer.log";
+        const std::string peerLogPath =
+            MobileGL::MG_Util::Debug::RoleLogPath(peerBase.c_str(), MobileGL::MG_Util::Debug::LogRole::Server);
+        MobileGL::MG_Util::Debug::TruncateRoleLogs(logBase.c_str());
+        MobileGL::MG_Util::Debug::TruncateRoleLogs(peerBase.c_str());
+        const std::uint16_t port = FreeLoopbackPort();
+        ASSERT_NE(port, 0) << "no free loopback port";
+        const std::string endpoint = "tcp://127.0.0.1:" + std::to_string(port);
+        const std::uint32_t waitMs = kEventWaitMs;
+        const pid_t supervisor =
+            LaunchSupervisor(endpoint, logBase, waitMs, /*forwardLog=*/true, kFloodWarnLinesPerRecord);
+        ASSERT_GT(supervisor, 0);
+        struct Reap {
+            pid_t pid;
+            ~Reap() { StopSupervisor(pid); }
+        } reapSupervisor{supervisor};
+        ASSERT_GE(WaitForLog(logBase, "listening on", 1, std::chrono::milliseconds(10000)), 0)
+            << "the supervisor never listened\n" << ServerLog(logBase);
+
+        int published[2] = {-1, -1}, release[2] = {-1, -1}, synced[2] = {-1, -1};
+        ASSERT_EQ(::pipe(published), 0);
+        ASSERT_EQ(::pipe(release), 0);
+        ASSERT_EQ(::pipe(synced), 0);
+        std::fflush(nullptr);
+        const pid_t peer = ::fork();
+        ASSERT_GE(peer, 0);
+        if (peer == 0) {
+            ::close(published[0]);
+            ::close(release[1]);
+            ::close(synced[0]);
+            FloodPeer(endpoint, peerBase, alsoStopDraining, published[1], release[0], synced[1]);
+        }
+        ::close(published[1]);
+        ::close(release[0]);
+        ::close(synced[1]);
+        struct ReleasePeer {
+            int fd;
+            pid_t pid;
+            ~ReleasePeer() {
+                const char go[2] = {1, 1};
+                (void)::write(fd, go, 2);
+                ::close(fd);
+                int status = 0;
+                if (pid > 0 && ::waitpid(pid, &status, WNOHANG) == 0) {
+                    ::kill(pid, SIGKILL);
+                    ::waitpid(pid, &status, 0);
+                }
+            }
+        } releasePeer{release[1], peer};
+
+        char byte = 0;
+        const ssize_t got = ::read(published[0], &byte, 1);
+        ::close(published[0]);
+        if (got != 1) {
+            const int code = WaitChild(peer, std::chrono::milliseconds(5000));
+            releasePeer.pid = -1;
+            ::close(synced[0]);
+            FAIL() << "the flood peer did not get its records out (child exit " << code << ")\n"
+                   << ServerLog(logBase).substr(0, 20000);
+        }
+        const auto every = std::chrono::milliseconds(200);
+
+        if (!alsoStopDraining) {
+            // (1) THE APPLY THREAD IS NOT HELD BY LOGGING. With the peer reading nothing, the server's
+            // own log must reach the flood's last record: every one of the kFloodRecords records is
+            // applied (and logs its ERROR line) while the control connection takes no byte. A forward
+            // that waits on the socket stalls the apply thread a few MiB in, and this never arrives.
+            const long long reachedMs =
+                WaitForLog(logBase, kFloodErrorNeedle, kFloodRecords, std::chrono::milliseconds(kFloodBudgetMs), every);
+            ASSERT_GE(reachedMs, 0) << "the apply thread did not get through the flood while its client was not "
+                                       "reading control - it was held by logging ("
+                                    << Count(ServerLog(logBase), kFloodErrorNeedle) << " of " << kFloodRecords
+                                    << " records' ERROR lines logged after " << kFloodBudgetMs << " ms)";
+            // (2) The peer reads again and synchronises its log.
+            const char go = 1;
+            ASSERT_EQ(::write(release[1], &go, 1), 1);
+            struct pollfd wait{synced[0], POLLIN, 0};
+            ASSERT_EQ(::poll(&wait, 1, 30000), 1) << "the peer never finished SyncPeerLog\n" << ServerLog(logBase).substr(0, 20000);
+            ASSERT_EQ(::read(synced[0], &byte, 1), 1) << "the peer died in SyncPeerLog (child exit "
+                                                      << WaitChild(peer, std::chrono::milliseconds(5000)) << ")";
+            ::close(synced[0]);
+            const std::string serverLog = ServerLog(logBase);
+            const std::string peerLog = ReadFileWhole(peerLogPath);
+            // (3) >= ERROR IS NOT LOST: every ERROR line the server logged is in the peer's copy, in
+            // the server's order - and that order is 1..N with no gap.
+            const auto serverErrors = Indices(serverLog, kFloodErrorNeedle);
+            const auto peerErrors = Indices(peerLog, kFloodErrorNeedle);
+            EXPECT_GE(serverErrors.size(), static_cast<std::size_t>(kFloodRecords));
+            EXPECT_EQ(peerErrors, serverErrors) << "an ERROR line the server logged did not reach the client ("
+                                                << peerErrors.size() << " of " << serverErrors.size() << ")";
+            for (std::size_t i = 0; i < peerErrors.size(); ++i) {
+                if (peerErrors[i] != i + 1) {
+                    ADD_FAILURE() << "the client's ERROR lines are not 1..N in order at " << i << ": " << peerErrors[i];
+                    break;
+                }
+            }
+            // (4) <= WARN IS LOSSY AND SAYS SO: WARN lines were dropped, and the LogForward{Dropped}
+            // notices in the peer's copy account for exactly the ones that are missing from it.
+            const std::size_t serverWarns = Count(serverLog, kFloodWarnNeedle);
+            const std::size_t peerWarns = Count(peerLog, kFloodWarnNeedle);
+            const unsigned long long namedDrops = NamedDrops(peerLog);
+            // Each applied record logs kFloodWarnLinesPerRecord WARN lines beside its one ERROR line.
+            EXPECT_EQ(serverWarns, serverErrors.size() * kFloodWarnLinesPerRecord);
+            EXPECT_LT(peerWarns, serverWarns) << "no WARN line was dropped: the flood never outran the socket, so "
+                                                 "this arm proved nothing about backpressure";
+            EXPECT_GT(namedDrops, 0ull) << "WARN lines were dropped without a LogForward{Dropped} line saying so";
+            EXPECT_EQ(peerWarns + namedDrops, serverWarns)
+                << "the WARN lines the client has and the drops it was told of do not add up to what the server logged";
+            // (5) The session ends cleanly, and the server's own summary agrees: drops counted, no
+            // ERROR coalesced, nothing abandoned, and no forward held its logging thread.
+            ASSERT_EQ(::write(release[1], &go, 1), 1);
+            const int code = WaitChild(peer, std::chrono::milliseconds(30000));
+            releasePeer.pid = -1;
+            EXPECT_EQ(code, static_cast<int>(kChildOk)) << "the flood peer did not stop cleanly";
+            ASSERT_GE(WaitForLog(logBase, "log forwarding ended", 1, std::chrono::milliseconds(15000), every), 0)
+                << "the session never logged its forward's summary";
+            const std::string summary = LineWith(ServerLog(logBase), "log forwarding ended");
+            std::printf("[f2] %.400s\n", summary.c_str());
+            EXPECT_GE(Field(summary, "dropped(<=WARN)"), namedDrops) << summary;
+            EXPECT_NE(Field(summary, "dropped(<=WARN)"), ~0ull) << summary;
+            EXPECT_EQ(Field(summary, "coalesced(ERROR)"), 0ull) << summary;
+            EXPECT_EQ(Field(summary, "abandoned"), 0ull) << summary;
+            EXPECT_EQ(Field(summary, "transport-failed"), 0ull) << summary;
+            // One notice per gap, not one per ERROR line that got through the gap (the first cut of
+            // the channel wrote 373 here, one between every pair of the flood's ERROR lines).
+            EXPECT_LE(Field(summary, "notices"), 8ull) << summary;
+            EXPECT_LT(Field(summary, "max-offer-us"), kMaxOfferUs)
+                << "one forward held its logging thread for longer than " << kMaxOfferUs << " us\n" << summary;
+            EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos);
+        } else {
+            ::close(synced[0]);
+            // Control AND SEG_EVENT both undrained: the apply thread gets through the flood (the
+            // forward drops and never waits), meets the full SEG_EVENT, forfeits it by name after the
+            // knob, and the session ends with exit 0 - its log forward cut at close, since this peer
+            // never reads again. Before W3 the apply thread parked inside a log write a few MiB into
+            // the flood and none of this happened.
+            const long long budget = static_cast<long long>(waitMs) + kFloodBudgetMs + 20000;
+            const long long stoppedMs = WaitForLog(logBase, "mgl-srv-apply stops on ReverseChannelForfeit", 1,
+                                                   std::chrono::milliseconds(budget), every);
+            const long long reapedMs =
+                WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 1, std::chrono::milliseconds(budget), every);
+            const std::string log = ServerLog(logBase);
+            ASSERT_GE(stoppedMs, 0) << "the server never reached the forfeit: its apply thread was held ("
+                                    << Count(log, kFloodErrorNeedle) << " of " << kFloodRecords
+                                    << " flood records applied)";
+            ASSERT_GE(reapedMs, 0) << "the supervisor never reaped the forfeited session with exit 0";
+            EXPECT_GE(Count(log, kFloodErrorNeedle), static_cast<std::size_t>(kFloodRecords));
+            const std::string forfeit = LineWith(log, "ReverseChannelForfeit{");
+            EXPECT_NE(forfeit.find("ReverseChannelForfeit{NotDraining} - kEventBufferWriteback"), std::string::npos)
+                << forfeit;
+            EXPECT_NE(forfeit.find(WaitKnobEntry(waitMs)), std::string::npos) << forfeit;
+            const std::string summary = LineWith(log, "log forwarding ended");
+            std::printf("[f2] %.400s\n", summary.c_str());
+            ASSERT_FALSE(summary.empty()) << "the session never logged its forward's summary";
+            EXPECT_GT(Field(summary, "dropped(<=WARN)"), 0ull) << summary;
+            EXPECT_NE(Field(summary, "dropped(<=WARN)"), ~0ull) << summary;
+            EXPECT_EQ(Field(summary, "coalesced(ERROR)"), 0ull) << summary;
+            // A peer that never reads again: the close budget ran out and the rest was cut.
+            EXPECT_GT(Field(summary, "abandoned"), 0ull) << summary;
+            EXPECT_LT(Field(summary, "max-offer-us"), kMaxOfferUs) << summary;
+            EXPECT_EQ(log.find("Fatal{"), std::string::npos);
+            EXPECT_EQ(log.find("reaped signal="), std::string::npos) << "a session died of a signal";
+            // The same supervisor welcomes the next connection.
+            std::fflush(nullptr);
+            const pid_t next = ::fork();
+            ASSERT_GE(next, 0);
+            if (next == 0) NextPeer(endpoint);
+            const int nextCode = WaitChild(next, std::chrono::milliseconds(30000));
+            EXPECT_EQ(nextCode, static_cast<int>(kChildOk)) << "the next connection was not welcomed";
+            EXPECT_GE(WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 2, std::chrono::milliseconds(10000), every), 0)
+                << "the welcomed session did not end cleanly";
+        }
+        RemoveRoleLogsIfGreen(logBase);
+        if (!::testing::Test::HasFailure()) {
+            MobileGL::MG_Util::Debug::TruncateRoleLogs(peerBase.c_str());
+            for (const char* role : {".client.log", ".server.log"}) {
+                ::unlink((peerBase.substr(0, peerBase.size() - 4) + role).c_str());
+            }
+        }
+    }
+
 } // namespace
 
 TEST(EventForfeitPeer, ShmPeerThatStopsDrainingIsForfeitedAndTheNextConnectionIsWelcomed) {
@@ -806,6 +1143,15 @@ TEST(EventForfeitPeer, StreamControlStreamThatEndsWhileTheServerWaitsStopsTheWai
 
 TEST(EventForfeitPeer, StreamControlHalfClosedWhileTheServerWaitsIsPeerGone) {
     RunArm(true, Scenario::ControlHalfClosedWhileWaiting);
+}
+
+// P9 W3, fault injection F2 (HANDOFF-P9 §4). Stream plane only: only a TCP server forwards its log.
+TEST(EventForfeitPeer, StreamLogFloodWhileControlIsNotReadHoldsNoApplyThreadAndLosesNoError) {
+    RunLogFloodArm(/*alsoStopDraining=*/false);
+}
+
+TEST(EventForfeitPeer, StreamLogFloodWithControlAndSegEventUndrainedEndsByForfeitNotAHang) {
+    RunLogFloodArm(/*alsoStopDraining=*/true);
 }
 
 #endif

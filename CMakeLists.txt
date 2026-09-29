@@ -607,6 +607,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Transport/InProcessTransport.cpp
         MobileGL/MG_Remote/Transport/SocketTransport.cpp
         MobileGL/MG_Remote/Transport/ControlInbox.cpp
+        # P9 W3: the server's log forward - a queue and a sender thread, graded by severity
+        # (<= WARN lossy, >= ERROR lossless and paced), so no logging thread writes the socket.
+        MobileGL/MG_Remote/Transport/LogForward.cpp
         # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
         # umbrella header - out of the header-only wire code (WireLog.h).
         MobileGL/MG_Remote/Transport/WireLog.cpp

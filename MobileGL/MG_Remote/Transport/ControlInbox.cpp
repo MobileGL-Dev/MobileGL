@@ -1,5 +1,6 @@
 #include "ControlInbox.h"
 #include "Doorbell.h"
+#include "LogForward.h"
 #include "../Protocol/SurfaceOpCodec.h"
 #include <MG_Util/Debug/Log.h>
 #include <chrono>
@@ -18,11 +19,21 @@ namespace MobileGL::MG_Remote::Transport {
         if (m_reader.joinable()) m_reader.join();
     }
 
+    void ControlInbox::PauseReadingForTest(bool paused) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pausedForTest = paused;
+        m_cv.notify_all();
+    }
+
     void ControlInbox::Read() {
         for (;;) {
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
+                std::unique_lock<std::mutex> lock(m_mutex);
                 if (m_stop) return;
+                if (m_pausedForTest) {
+                    m_cv.wait(lock, [&] { return m_stop || !m_pausedForTest; });
+                    continue;
+                }
             }
             std::uint64_t size = 0;
             auto result = m_transport.ReceiveFrame({nullptr, 0}, &size, 100);
@@ -38,7 +49,9 @@ namespace MobileGL::MG_Remote::Transport {
                 else {
                     const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(frame.data());
                     if (const auto* log = envelope->msg_as_LogLine()) {
-                        if (log->text()) MG_Util::Debug::WritePeerLog(log->text()->c_str());
+                        // P9 W3: filed with the severity the server sent (LogForward.h's mapping).
+                        if (log->text())
+                            MG_Util::Debug::WritePeerLog(LogLevelFromWire(log->level()), log->text()->c_str());
                         continue;
                     }
                 }

@@ -30,6 +30,10 @@ if (NOT WIN32)
     # exact first-frame reader, the backoff's arithmetic, the knobs). Its reader is a socket read,
     # so POSIX for the same reason.
     list(APPEND MOBILEGL_WIRE_TESTS PreAuthGateTest)
+    # P9 W3: the graded log forward - the level mapping both ways, the logger's level reaching the
+    # forwarder, and the channel against a transport whose writes can be held (and a real socket
+    # pair nobody reads). POSIX for the socket pair.
+    list(APPEND MOBILEGL_WIRE_TESTS LogForwardTest)
     # P6 sm: two MobileGL processes. Needs the real server image beside it, so
     # the dependency is declared after the loop rather than assumed.
     list(APPEND MOBILEGL_WIRE_TESTS ServerSpawnTest)

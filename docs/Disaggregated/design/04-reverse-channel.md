@@ -6,7 +6,7 @@
 
 ### 8.1 `MGPipeCallbacks`（`MG_Pipe/MGPipeCallbacks.h`）
 
-九个具名回调 + 一个正向终止符（`ResourceSubDataComplete`），取代后端直接 poke 前端对象的 95 个调用点（具名化是有意偏离 D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
+八个具名回调 + 一个正向终止符（`ResourceSubDataComplete`），取代后端直接 poke 前端对象的 95 个调用点（具名化是有意偏离 D8）。monolith 下直调，split 下是 `SEG_EVENT` 上的记录。
 
 | 回调 | 作用 |
 |---|---|
@@ -18,7 +18,8 @@
 | `OnMipLevelsGenerated` | 只带形状 |
 | `OnSurfaceChanged` | 默认帧缓冲的格式与尺寸（server 拥有显示时 client 靠它得知窗口尺寸） |
 | `OnCapsInvalidated` | 取代 `InvalidateCompileEnv` |
-| `OnLog` | ≤WARN 有损，≥ERROR 无损 + 速率限制 |
+
+`OnLog` 已删除（P9 W3，回调 9 → 8）：零生产者、零消费者、无 `EventKind`。server 日志走控制面 `LogLine`（带 `level`），由 `MG_Remote/Transport/LogForward.h` 的队列 + 发送线程转发：≤WARN 有损（队列满即丢、计数、流内 `LogForward{Dropped}` 标出缺口），≥ERROR 无损 + 限速（超速排队延迟；超出错误字节上限时合并成一条 `LogForward{Coalesced}`），FATAL 有界等待写出；日志线程永不等 socket。
 
 后端凭空造的前端对象（Magma 占位纹理、swapchain 默认 FB 占位）改为 server 原生；pull 构建里的 `m_backend` 类成员真删会动 `sizeof`（G1），随 P13 退役（D-K）。
 

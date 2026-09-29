@@ -99,6 +99,15 @@ namespace MobileGL::MG_Remote::Client {
         // m_remoteControlMutex and drains first; a caller of this does neither, which is the
         // point. Null unless spawned.
         Transport::SocketTransport* ControlSocketForTest() { return m_socketTransport.get(); }
+        // P9 W3's fault injection F2 ONLY (EventForfeitPeerTest): the control READER, so a TCP peer
+        // can stop taking anything off its control connection - the server's forwarded log lines
+        // included - and later resume (ControlInbox::PauseReadingForTest). False when there is no
+        // reader to pause (not a stream session).
+        bool PauseControlReaderForTest(bool paused) {
+            if (!m_controlInbox) return false;
+            m_controlInbox->PauseReadingForTest(paused);
+            return true;
+        }
 
         // CONTRACT-P6 4.3: THE PID THE SERVER STATED IN ITS Welcome, which is not the same fact
         // as the pid this session's launcher recorded - that one is local knowledge, this one

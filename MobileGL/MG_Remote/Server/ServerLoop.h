@@ -569,6 +569,9 @@ namespace MobileGL::MG_Remote::Server {
         std::atomic<Uint64> m_parkBlocks{0};
         std::atomic<void (*)()> m_beforeRetireHook{nullptr};
         std::atomic<void (*)()> m_betweenRecordsHook{nullptr};
+        // P9 W3, fault injection F2: MOBILEGL_TEST_APPLY_LOG_FLOOD, read by Start(). Zero - the only
+        // value a production run has - makes the per-record test a load of this and nothing else.
+        Uint32 m_testLogFloodLines = 0;
 
         // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and
         // read ONLY on the apply thread inside ApplyMakeCurrent, so it needs no lock; the two
