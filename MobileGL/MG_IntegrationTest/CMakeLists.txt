@@ -596,10 +596,12 @@ gtest_discover_tests(MobileGLIntegrationTest
 )
 
 # OversizedRecordingSplitScenario with the command-buffer draw budget PINNED to 64. The ambient
-# registrations run its 1024-draw frame under the default budget, which never splits it; this
-# entry splits it 15 times, so the pixels prove a split loses nothing, and the arming assertion
-# (the renderer's latched MGLOG_I) proves the split happened at all - on a renderer that records
-# the whole frame into one command buffer, it is the assertion that goes red. DirectVulkan only:
+# registrations run its cases under the default budget, which never splits them; this entry
+# splits every case at least once between the draws that leave state (depth, stencil, a blend
+# destination, multisample samples, an open query, an active capture) and the draws that
+# consume it, so the results prove a split carries all of it, and the arming assertion (the
+# renderer's latched MGLOG_I) proves the split happened at all - on a renderer that records the
+# whole frame into one command buffer, it is the assertion that goes red. DirectVulkan only:
 # the budget steers nothing on DirectGLES, whose driver flushes on its own.
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectVulkan.SplitRecording."
