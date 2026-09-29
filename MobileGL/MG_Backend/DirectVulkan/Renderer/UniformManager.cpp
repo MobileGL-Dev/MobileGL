@@ -2099,9 +2099,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform, frontendBinding);
         const auto& bufferObject = bindingPoint.GetBoundObject();
-        MOBILEGL_ASSERT(bufferObject != nullptr,
-                        "ResolveUniformBufferPayload: no UBO bound at frontend binding %u for block '%s'",
-                        frontendBinding, program.GetUniformBlockName(static_cast<Uint32>(blockIndex)).c_str());
+        static thread_local Vector<Uint8> paddedUbo;
+        if (bufferObject == nullptr) {
+            // A block the program declares at a point with nothing bound - never bound, or its
+            // buffer was deleted while bound, which unbinds it (UnboundUniformBlockScenario). GL
+            // leaves what the shader READS undefined and raises no error; this used to dereference
+            // the null object. Answer it with a zeroed block of the reflected size instead.
+            const VkDeviceSize blockSize =
+                static_cast<VkDeviceSize>(program.GetUBOSizeAt(static_cast<Uint32>(blockIndex)));
+            paddedUbo.assign(static_cast<SizeT>(blockSize > 0 ? blockSize : 16), 0);
+            out.payload = paddedUbo.data();
+            out.payloadSize = static_cast<VkDeviceSize>(paddedUbo.size());
+            return true;
+        }
         bufferObject->SyncPersistentMappedRange();
 
         MOBILEGL_ASSERT(bufferObject->MappedData() != nullptr && bufferObject->GetSize() != 0,
@@ -2134,7 +2144,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         outSize = blockSize;
         outData = bufferObject->MappedData() + static_cast<SizeT>(rangeStart);
         if (available < blockSize) {
-            static thread_local Vector<Uint8> paddedUbo;
             paddedUbo.assign(static_cast<SizeT>(blockSize), 0);
             Memcpy(paddedUbo.data(), outData, static_cast<SizeT>(available));
             outData = paddedUbo.data();
