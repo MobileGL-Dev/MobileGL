@@ -15333,6 +15333,30 @@ void main() {
         // P7 gate 5 (g5-msprobe): which multisample depth/stencil resolve arm goes first is measured
         // once the device exists (ArmWireDepthResolveOrder, below), not keyed on the vendor.
         m_wirePreferShaderDepthResolve = false;
+        // P11 B2 (T0): a client's AHardwareBuffer imported as a wire buffer store. Wire arms, on
+        // Android, whenever the device advertises the extension - not per session: the device is
+        // created once per server and a later session asking T0 must find it able. Enabling it
+        // changes no T2 behaviour; only an import uses it. The 1.0-era dependencies are core at the
+        // 1.1 this device is created at, and are enabled too when advertised (the spike's set).
+        m_wireAhbImport = false;
+        m_wireGetAhbProperties = nullptr;
+#if defined(__ANDROID__)
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
+            IsExtensionSupported(availableExtensions, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
+            IsExtensionSupported(availableExtensions, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
+            m_wireAhbImport = true;
+            for (const char* name : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+                                     VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+                                     VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
+                                     VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+                                     VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
+                                     VK_KHR_BIND_MEMORY_2_EXTENSION_NAME, VK_KHR_MAINTENANCE_1_EXTENSION_NAME}) {
+                if (IsExtensionSupported(availableExtensions, name))
+                    EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, name);
+            }
+        }
+#endif
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {
@@ -15891,6 +15915,11 @@ void main() {
         if (wireDepthResolveEnabled) {
             m_wireCreateRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(
                 vkGetDeviceProcAddr(m_device, wireDepthResolveCore ? "vkCreateRenderPass2" : "vkCreateRenderPass2KHR"));
+        }
+        if (m_wireAhbImport) {
+            m_wireGetAhbProperties =
+                reinterpret_cast<void*>(vkGetDeviceProcAddr(m_device, "vkGetAndroidHardwareBufferPropertiesANDROID"));
+            if (m_wireGetAhbProperties == nullptr) m_wireAhbImport = false;
         }
 #endif
 
@@ -16732,6 +16761,19 @@ void main() {
     VkInstance VulkanRenderer::GetInstance() const {
         return m_instance;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VulkanRenderer::GetWireAhbImport(WireAhbImport& out) const {
+        out = WireAhbImport{};
+        if (!m_wireAhbImport || m_device == VK_NULL_HANDLE || m_wireGetAhbProperties == nullptr) return false;
+        out.device = m_device;
+        out.queue = m_graphicsQueue;
+        out.queueFamily = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+        vkGetPhysicalDeviceMemoryProperties(m_physicalDevice.handle, &out.memory);
+        out.getAhbProperties = m_wireGetAhbProperties;
+        return true;
+    }
+#endif
 
     Bool VulkanRenderer::IsDrawIndirectCountExtensionEnabled() const {
         return m_drawIndirectCountExtensionEnabled;

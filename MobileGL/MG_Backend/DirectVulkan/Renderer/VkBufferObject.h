@@ -64,7 +64,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         void* GetMappedData() const { return m_mappedData; }
         Bool IsMapped() const { return m_mappedData != nullptr; }
-        Bool IsValid() const { return m_allocator != nullptr && m_buffer != VK_NULL_HANDLE && m_allocation != nullptr; }
+        Bool IsValid() const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (m_externalMemory != VK_NULL_HANDLE) return m_buffer != VK_NULL_HANDLE;
+#endif
+            return m_allocator != nullptr && m_buffer != VK_NULL_HANDLE && m_allocation != nullptr;
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P11 B2 (T0): a store whose memory is NOT this allocator's - a client's AHardwareBuffer
+        // imported with VK_ANDROID_external_memory_android_hardware_buffer into `memory` (a
+        // dedicated allocation bound to `buffer`, mapped persistently at `mapped`). It behaves
+        // like any mapped store (GetSlice, Upload, Invalidate), and Destroy frees the buffer and
+        // the memory and drops `ahb` - which is why the store goes through the wire arm's
+        // serial-gated deferred release like every other: the AHardwareBuffer is let go only once
+        // no submission can still name it. `coherent` = the memory type is HOST_COHERENT.
+        void AdoptExternal(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize size,
+                           void* mapped, Bool coherent, void* ahb);
+        Bool IsExternal() const { return m_externalMemory != VK_NULL_HANDLE; }
+#endif
 
     private:
         VmaAllocator m_allocator = nullptr;
@@ -72,5 +90,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaAllocation m_allocation = nullptr;
         void* m_mappedData = nullptr;
         VkDeviceSize m_size = 0;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        VkDevice m_device = VK_NULL_HANDLE;
+        VkDeviceMemory m_externalMemory = VK_NULL_HANDLE;
+        void* m_externalAhb = nullptr;
+        Bool m_externalCoherent = true;
+        void MoveExternalFrom(VkBufferObject& other);
+#endif
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

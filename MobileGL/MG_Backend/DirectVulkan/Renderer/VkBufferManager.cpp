@@ -15,6 +15,12 @@
 #include "MG_Pipe/MGPipeCallbacks.h"
 #include "MG_Pipe/PipeApply.h"
 #include "MG_Remote/Server/StagedShadow.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include "MG_Remote/Transport/AdoptT0.h"
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#endif
 #include <Config.h>
 #include <cstdlib>
 #endif
@@ -206,6 +212,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // modified ranges. A server pointer is never donated across the wire.
             .MapPersistent = [](MG_Pipe::MGPipeHandle, Uint64, const void*) -> void* { return nullptr; },
             .UnmapPersistent = [](MG_Pipe::MGPipeHandle) {},
+#if defined(__ANDROID__)
+            // P11 B2 (T0): the one door a server pointer is still never donated through stays shut;
+            // what T0 adds is the other direction - the CLIENT's pages imported as the store.
+            .ImportExternal = [](MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) -> Bool {
+                return WireManager().ImportWireBuffer(res, ahb, size);
+            },
+            .SelfTestExternal = [](char* why, Uint64 whyBytes) -> Bool {
+                return VkBufferManager::SelfTestWireImport(why, whyBytes);
+            },
+#endif
         };
 #endif
     } // namespace
@@ -245,7 +261,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // to wait for a submission (DeferredWireRelease), and three lines from now the record
         // no longer carries it.
         const Uint64 orphanedUseSerial = resource->lastUseSerial;
-        DeferWireRelease(std::move(resource->buffer), orphanedUseSerial);
+        // P11 B2: a T0 store is ALWAYS released through the serial-gated list (never "at once"),
+        // so the client's AHardwareBuffer outlives every submission that can still name it however
+        // the client's own release (at this respecify) raced the frames in flight.
+        DeferWireRelease(std::move(resource->buffer),
+                         resource->imported ? T0ReleaseSerial(orphanedUseSerial) : orphanedUseSerial);
+        resource->imported = false;
         resource->size = desc.Width;
         resource->lastUseSerial = 0;
         resource->lastUseSubmitIndex = 0;  // M2 r2: the new store carries no submission yet (B3's stamp is per store)
@@ -537,10 +558,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size) {
-        Vector<Uint8> bytes(static_cast<SizeT>(size));
-        if (!ReadWireBuffer(res, offset, size, bytes.data())) {
+        // P11 B2: A T0 STORE'S READBACK IS "DONE, NO BYTES". Its pages are the client's
+        // AHardwareBuffer, so what the client needs before it reads them is this server's GPU
+        // having finished every write to them - the resident copies WriteWireBuffer recorded and
+        // any shader write - and nothing crossing SEG_EVENT. The wait is the store's own host-access
+        // wait (a barrier to host, then the sync point's submission); the reply then says "done".
+        // One death for both shapes: the store could not be made readable.
+        auto* resource = FindWireBuffer(res);
+        const Bool t0 = resource != nullptr && resource->imported;
+        Vector<Uint8> bytes(t0 ? 0 : static_cast<SizeT>(size));
+        if (t0 ? !WaitForWireBufferHostAccess(*resource) : !ReadWireBuffer(res, offset, size, bytes.data())) {
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-readback\"} {slot=%u, gen=%u}", res.Slot, res.Gen);
             std::abort();
+        }
+        if (t0) {
+            ++m_sliceEpochCounter;
+            return;
         }
         if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == nullptr) {
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-writeback-callback\"}");
@@ -573,10 +606,305 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &range);
     }
 
+    // ---- P11 B2: T0 - THE CLIENT'S AHardwareBuffer AS A WIRE STORE -----------------------------
+
+    // The serial a T0 store is released under: its last use, or - when no GPU command has named it
+    // since a host-access wait - the current frame's, so the release still waits for the sync
+    // point rather than taking DeferWireRelease's "never named, destroy now" arm. Conservative by
+    // at most one submission.
+    Uint64 VkBufferManager::T0ReleaseSerial(Uint64 lastUseSerial) const {
+        if (lastUseSerial != 0) return lastUseSerial;
+        return m_frameSerial != 0 ? m_frameSerial : 1;
+    }
+
+#if defined(__ANDROID__)
+    namespace {
+        Int32 T0PickMemoryType(const VkPhysicalDeviceMemoryProperties& props, Uint32 bits,
+                               VkMemoryPropertyFlags want) {
+            for (Uint32 i = 0; i < props.memoryTypeCount; ++i) {
+                if ((bits & (1u << i)) != 0 && (props.memoryTypes[i].propertyFlags & want) == want)
+                    return static_cast<Int32>(i);
+            }
+            return -1;
+        }
+
+        struct T0ImportedBuffer {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            void* mapped = nullptr;
+            Bool coherent = true;
+        };
+
+        void T0DestroyImported(VkDevice device, T0ImportedBuffer& imported) {
+            if (imported.mapped != nullptr) vkUnmapMemory(device, imported.memory);
+            if (imported.buffer != VK_NULL_HANDLE) vkDestroyBuffer(device, imported.buffer, nullptr);
+            if (imported.memory != VK_NULL_HANDLE) vkFreeMemory(device, imported.memory, nullptr);
+            imported = T0ImportedBuffer{};
+        }
+
+        // A VkBuffer on a dedicated allocation IMPORTED from `ahb`, in a host-visible memory type
+        // (coherent preferred), mapped whole. The server's own host map is what WriteWireBuffer's
+        // idle path and every CPU reader of a wire store use, so a type without HOST_VISIBLE is a
+        // refusal, not a degraded import. Nothing is left behind on failure.
+        Bool T0ImportAhb(const VulkanRenderer::WireAhbImport& ctx, void* ahb, Uint64 size, VkBufferUsageFlags usage,
+                         T0ImportedBuffer& out, String& why) {
+            out = T0ImportedBuffer{};
+            const auto getProperties =
+                reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(ctx.getAhbProperties);
+            VkAndroidHardwareBufferPropertiesANDROID properties{
+                VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+            VkResult result = getProperties(ctx.device, static_cast<const AHardwareBuffer*>(ahb), &properties);
+            if (result != VK_SUCCESS) {
+                why = "vkGetAndroidHardwareBufferPropertiesANDROID -> " + std::to_string(static_cast<int>(result));
+                return false;
+            }
+            VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+            VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bufferInfo.pNext = &external;
+            bufferInfo.size = size;
+            bufferInfo.usage = usage;
+            bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            result = vkCreateBuffer(ctx.device, &bufferInfo, nullptr, &out.buffer);
+            if (result != VK_SUCCESS) {
+                out.buffer = VK_NULL_HANDLE;
+                why = "vkCreateBuffer(external AHB) -> " + std::to_string(static_cast<int>(result));
+                return false;
+            }
+            Int32 type = T0PickMemoryType(ctx.memory, properties.memoryTypeBits,
+                                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            out.coherent = type >= 0;
+            if (type < 0)
+                type = T0PickMemoryType(ctx.memory, properties.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            if (type < 0) {
+                why = "no host-visible memory type can import it (memoryTypeBits 0x" +
+                      std::to_string(properties.memoryTypeBits) + ")";
+                T0DestroyImported(ctx.device, out);
+                return false;
+            }
+            VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+            dedicated.buffer = out.buffer;
+            VkImportAndroidHardwareBufferInfoANDROID import{VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+            import.buffer = static_cast<AHardwareBuffer*>(ahb);
+            import.pNext = &dedicated;
+            VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocateInfo.pNext = &import;
+            allocateInfo.allocationSize = properties.allocationSize;
+            allocateInfo.memoryTypeIndex = static_cast<Uint32>(type);
+            result = vkAllocateMemory(ctx.device, &allocateInfo, nullptr, &out.memory);
+            if (result != VK_SUCCESS) {
+                out.memory = VK_NULL_HANDLE;
+                why = "vkAllocateMemory(import AHB) -> " + std::to_string(static_cast<int>(result));
+                T0DestroyImported(ctx.device, out);
+                return false;
+            }
+            result = vkBindBufferMemory(ctx.device, out.buffer, out.memory, 0);
+            if (result == VK_SUCCESS) result = vkMapMemory(ctx.device, out.memory, 0, VK_WHOLE_SIZE, 0, &out.mapped);
+            if (result != VK_SUCCESS || out.mapped == nullptr) {
+                out.mapped = nullptr;
+                why = "vkBindBufferMemory/vkMapMemory -> " + std::to_string(static_cast<int>(result));
+                T0DestroyImported(ctx.device, out);
+                return false;
+            }
+            return true;
+        }
+    } // namespace
+#endif
+
+    Bool VkBufferManager::ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) {
+#if defined(__ANDROID__)
+        auto* resource = FindWireBuffer(res);
+        if (resource == nullptr || ahb == nullptr || size == 0 || size != resource->size) return false;
+        VulkanRenderer::WireAhbImport ctx;
+        if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx)) {
+            MGLOG_W_ONCE("Magma T0: this device did not take VK_ANDROID_external_memory_android_hardware_buffer");
+            return false;
+        }
+        VkBufferUsageFlags usage = kPersistentBackedUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (m_initInfo.transformFeedbackUsageEnabled) usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+        T0ImportedBuffer imported;
+        String why;
+        if (!T0ImportAhb(ctx, ahb, size, usage, imported, why)) {
+            MGLOG_W("Magma T0: store {slot=%u, gen=%u} (%llu bytes) not imported - %s", res.Slot, res.Gen,
+                    static_cast<unsigned long long>(size), why.c_str());
+            return false;
+        }
+        // The T2 store it replaces goes the way a respecify's does (and any draw still naming it
+        // keeps it until its submission completes).
+        DeferWireRelease(std::move(resource->buffer), resource->lastUseSerial);
+        MG_Remote::Transport::AdoptT0::AcquireImported(ahb);
+        resource->buffer.AdoptExternal(ctx.device, imported.buffer, imported.memory, size, imported.mapped,
+                                       imported.coherent, ahb);
+        resource->imported = true;
+        resource->lastUseSerial = 0;
+        resource->lastUseSubmitIndex = 0;
+        resource->gpuWritesPending = false;
+        // The whole store holds bytes the client supplied (its AHB, seeded from its shadow).
+        resource->stagedCoverage.clear();
+        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
+        ++m_sliceEpochCounter;
+        ++m_wireStoreCount;
+        NoteWireStorePeaks();
+        PublishWireReclaimGauges();
+        MGLOG_D("Magma T0: imported {slot=%u, gen=%u} (%llu bytes, %s memory)", res.Slot, res.Gen,
+                static_cast<unsigned long long>(size), imported.coherent ? "coherent" : "non-coherent");
+        return true;
+#else
+        (void)res;
+        (void)ahb;
+        (void)size;
+        return false;
+#endif
+    }
+
+    // THE POST (B2; decided by probe, never by driver name). The AHB API promises CPU coherence only
+    // across an unlock/lock, and T0 holds the client's lock for the store's life, so this exercises
+    // that pattern on THIS device before kCapAdoptT0 may be published:
+    //   hold - a 64 KiB BLOB allocated and locked by the test, never unlocked while it runs;
+    //   read - this server's own host map of the import reads what the CPU wrote through the lock;
+    //   gpu  - one submission copies that pattern out of the import (the GPU read) and fills another
+    //          region of it (the GPU write), then a transfer->host barrier and a fence wait;
+    //   back - the fill is read through the HELD pointer, the copy from a host-visible staging buffer.
+    Bool VkBufferManager::SelfTestWireImport(char* whyOut, Uint64 whyBytes) {
+        const auto answer = [&](Bool ok, const String& text) {
+            std::snprintf(whyOut, static_cast<SizeT>(whyBytes), "%s", text.c_str());
+            return ok;
+        };
+#if defined(__ANDROID__)
+        VulkanRenderer::WireAhbImport ctx;
+        if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx))
+            return answer(false, "the device did not take VK_ANDROID_external_memory_android_hardware_buffer");
+        constexpr Uint64 kBytes = 64 * 1024;
+        constexpr Uint32 kWords = 1024;          // one 4 KiB region
+        constexpr Uint64 kFillAt = 4 * 4096;     // region 4
+        constexpr Uint32 kFillWord = 0x6C0FFEE0u;
+        Vector<Uint32> pattern(kBytes / 4);
+        for (SizeT i = 0; i < pattern.size(); ++i) pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
+        MG_Remote::Transport::AdoptT0::HeldStore held;
+        String why;
+        if (!MG_Remote::Transport::AdoptT0::AllocateHeld(kBytes, pattern.data(), held, why))
+            return answer(false, "hold: " + why);
+        T0ImportedBuffer imported, staging;
+        VkCommandPool pool = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+        String verdict;
+        Bool ok = false;
+        do {
+            if (!T0ImportAhb(ctx, held.ahb, kBytes,
+                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                             imported, why)) {
+                verdict = "import: " + why;
+                break;
+            }
+            if (!imported.coherent) {
+                VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+                range.memory = imported.memory;
+                range.size = VK_WHOLE_SIZE;
+                vkInvalidateMappedMemoryRanges(ctx.device, 1, &range);
+            }
+            if (std::memcmp(imported.mapped, pattern.data(), kWords * 4) != 0) {
+                verdict = "read: the server's host map of the import does not hold the CPU's pattern";
+                break;
+            }
+            // A host-visible staging buffer for the GPU read's destination.
+            VkBufferCreateInfo stagingInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            stagingInfo.size = kWords * 4;
+            stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            stagingInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (vkCreateBuffer(ctx.device, &stagingInfo, nullptr, &staging.buffer) != VK_SUCCESS) {
+                staging.buffer = VK_NULL_HANDLE;
+                verdict = "staging buffer";
+                break;
+            }
+            VkMemoryRequirements requirements{};
+            vkGetBufferMemoryRequirements(ctx.device, staging.buffer, &requirements);
+            const Int32 stagingType = T0PickMemoryType(ctx.memory, requirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            VkMemoryAllocateInfo stagingAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            stagingAlloc.allocationSize = requirements.size;
+            stagingAlloc.memoryTypeIndex = static_cast<Uint32>(stagingType < 0 ? 0 : stagingType);
+            if (stagingType < 0 || vkAllocateMemory(ctx.device, &stagingAlloc, nullptr, &staging.memory) != VK_SUCCESS ||
+                vkBindBufferMemory(ctx.device, staging.buffer, staging.memory, 0) != VK_SUCCESS ||
+                vkMapMemory(ctx.device, staging.memory, 0, VK_WHOLE_SIZE, 0, &staging.mapped) != VK_SUCCESS) {
+                verdict = "staging memory";
+                break;
+            }
+            std::memset(staging.mapped, 0, kWords * 4);
+            VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            poolInfo.queueFamilyIndex = ctx.queueFamily;
+            poolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            VkCommandBuffer commands = VK_NULL_HANDLE;
+            VkCommandBufferAllocateInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            commandInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            commandInfo.commandBufferCount = 1;
+            VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            if (vkCreateCommandPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
+                pool = VK_NULL_HANDLE;
+                verdict = "command pool";
+                break;
+            }
+            commandInfo.commandPool = pool;
+            if (vkAllocateCommandBuffers(ctx.device, &commandInfo, &commands) != VK_SUCCESS ||
+                vkCreateFence(ctx.device, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
+                verdict = "command buffer / fence";
+                break;
+            }
+            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(commands, &begin);
+            VkMemoryBarrier hostWrites{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            hostWrites.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+            hostWrites.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                                 &hostWrites, 0, nullptr, 0, nullptr);
+            VkBufferCopy region{0, 0, kWords * 4};
+            vkCmdCopyBuffer(commands, imported.buffer, staging.buffer, 1, &region);
+            vkCmdFillBuffer(commands, imported.buffer, kFillAt, kWords * 4, kFillWord);
+            VkMemoryBarrier toHost{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
+                                 0, nullptr, 0, nullptr);
+            vkEndCommandBuffer(commands);
+            VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &commands;
+            if (vkQueueSubmit(ctx.queue, 1, &submit, fence) != VK_SUCCESS ||
+                vkWaitForFences(ctx.device, 1, &fence, VK_TRUE, 2'000'000'000ull) != VK_SUCCESS) {
+                verdict = "gpu: the submission did not complete within 2 s";
+                break;
+            }
+            Uint32 gpuRead = 0, heldSaw = 0;
+            const auto* copied = static_cast<const Uint32*>(staging.mapped);
+            const auto* heldWords = static_cast<const Uint32*>(held.ptr);
+            for (Uint32 i = 0; i < kWords; ++i) {
+                if (copied[i] == pattern[i]) ++gpuRead;
+                if (heldWords[kFillAt / 4 + i] == kFillWord) ++heldSaw;
+            }
+            ok = gpuRead == kWords && heldSaw == kWords;
+            verdict = "64 KiB AHB, lock held throughout: host map read ok (" +
+                      String(imported.coherent ? "coherent" : "non-coherent") + " memory), GPU read " +
+                      std::to_string(gpuRead) + "/1024 words of the CPU's pattern, GPU write seen through the "
+                      "held lock " + std::to_string(heldSaw) + "/1024 words";
+        } while (false);
+        if (fence != VK_NULL_HANDLE) vkDestroyFence(ctx.device, fence, nullptr);
+        if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(ctx.device, pool, nullptr);
+        T0DestroyImported(ctx.device, staging);
+        T0DestroyImported(ctx.device, imported);
+        MG_Remote::Transport::AdoptT0::ReleaseHeld(held);
+        return answer(ok, verdict);
+#else
+        return answer(false, "no AHardwareBuffer on this platform");
+#endif
+    }
+
     void VkBufferManager::DestroyWireBuffer(MG_Pipe::MGPipeHandle res) {
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         if (found == m_wireBuffers.end()) return;
-        DeferWireRelease(std::move(found->second.buffer), found->second.lastUseSerial);
+        DeferWireRelease(std::move(found->second.buffer),
+                         found->second.imported ? T0ReleaseSerial(found->second.lastUseSerial)
+                                                : found->second.lastUseSerial); // P11 B2, as Respecify
         m_wireBuffers.erase(found);
         ++m_sliceEpochCounter;
         PublishWireReclaimGauges();

@@ -160,6 +160,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GetSyncPointSubmitIndex(), which answers m_submitCounter when nothing is recorded -
         // true for a fence taken at that instant, wrong for work about to be recorded.
         Uint64 GetWireNextSubmitIndex() const { return m_submitCounter + 1; }
+        // P11 B2 (T0): what importing a client's AHardwareBuffer as a wire buffer store needs from
+        // this device. False when the device did not take VK_ANDROID_external_memory_android_
+        // hardware_buffer at creation (not Android, not advertised, or a monolith device).
+        struct WireAhbImport {
+            VkDevice device = VK_NULL_HANDLE;
+            VkQueue queue = VK_NULL_HANDLE;
+            Uint32 queueFamily = 0;
+            VkPhysicalDeviceMemoryProperties memory{};
+            void* getAhbProperties = nullptr; // PFN_vkGetAndroidHardwareBufferPropertiesANDROID
+        };
+        Bool GetWireAhbImport(WireAhbImport& out) const;
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
@@ -574,6 +585,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // target unwritten while the shader control resolved - the shader arm then resolves
         // first and the render-pass arm is the fallback (P7 gate 5, g5-msprobe).
         Bool m_wirePreferShaderDepthResolve = false;
+        // P11 B2 (T0): the device took the AHardwareBuffer import extensions at creation, and the
+        // one entry point the import needs (PFN_vkGetAndroidHardwareBufferPropertiesANDROID).
+        Bool m_wireAhbImport = false;
+        void* m_wireGetAhbProperties = nullptr;
         // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
         // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
         void ArmWireDepthResolveOrder();

@@ -134,6 +134,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes);
         void ReadbackWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
         void DestroyWireBuffer(MG_Pipe::MGPipeHandle res);
+        // P11 B2 (T0): make the client's AHardwareBuffer `ahb` (a BLOB of `size` bytes) buffer
+        // `res`'s store - a VkBuffer on memory imported through
+        // VK_ANDROID_external_memory_android_hardware_buffer, host-visible and mapped like every
+        // wire store, so every wire path (draw binds, WriteWireBuffer's ordered copy, CPU readers)
+        // applies unchanged. The T2 store it replaces goes through DeferWireRelease. False = not
+        // imported (the T2 store is untouched and the client is DECLINED).
+        Bool ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size);
+        // The POST self-test of the sustained-lock pattern on this device (see the definition).
+        static Bool SelfTestWireImport(char* why, Uint64 whyBytes);
 #endif
 
         // Recreate all per-frame transient arenas
@@ -245,12 +254,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Only ranges actually submitted by resource_subdata are covered. No
             // shadow is retained: flush cannot replay stale bytes over GPU writes.
             Vector<Range1D> stagedCoverage;
+            // P11 B2 (T0): `buffer` is the client's imported AHardwareBuffer. Its readback posts
+            // no bytes (the client reads its own pages once the wait below it is done).
+            Bool imported = false;
         };
         static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
             return (static_cast<Uint64>(res.Gen) << 32) | res.Slot;
         }
         WireBufferResource* FindWireBuffer(MG_Pipe::MGPipeHandle res);
         Bool WaitForWireBufferHostAccess(WireBufferResource& resource);
+        // P11 B2: the serial a T0 store's release waits behind (never "destroy at once").
+        Uint64 T0ReleaseSerial(Uint64 lastUseSerial) const;
 
         // P7 wave 4 (M2), ID-P7-27: THE WIRE ARM'S ORPHANS NEED A RECLAIM THAT IS NOT A FRAME
         // BOUNDARY.

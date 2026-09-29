@@ -8,13 +8,45 @@
 
 #include "VkBufferObject.h"
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Transport/AdoptT0.h>
+#endif
+
 namespace MobileGL::MG_Backend::DirectVulkan {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void VkBufferObject::MoveExternalFrom(VkBufferObject& other) {
+        m_device = other.m_device;
+        m_externalMemory = other.m_externalMemory;
+        m_externalAhb = other.m_externalAhb;
+        m_externalCoherent = other.m_externalCoherent;
+        other.m_device = VK_NULL_HANDLE;
+        other.m_externalMemory = VK_NULL_HANDLE;
+        other.m_externalAhb = nullptr;
+        other.m_externalCoherent = true;
+    }
+
+    void VkBufferObject::AdoptExternal(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize size,
+                                       void* mapped, Bool coherent, void* ahb) {
+        Destroy();
+        m_device = device;
+        m_buffer = buffer;
+        m_externalMemory = memory;
+        m_mappedData = mapped;
+        m_size = size;
+        m_externalCoherent = coherent;
+        m_externalAhb = ahb;
+    }
+#endif
+
     VkBufferObject::VkBufferObject(VkBufferObject&& other) noexcept {
         m_allocator = other.m_allocator;
         m_buffer = other.m_buffer;
         m_allocation = other.m_allocation;
         m_mappedData = other.m_mappedData;
         m_size = other.m_size;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MoveExternalFrom(other);
+#endif
 
         other.m_allocator = nullptr;
         other.m_buffer = VK_NULL_HANDLE;
@@ -35,6 +67,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_allocation = other.m_allocation;
         m_mappedData = other.m_mappedData;
         m_size = other.m_size;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MoveExternalFrom(other);
+#endif
 
         other.m_allocator = nullptr;
         other.m_buffer = VK_NULL_HANDLE;
@@ -89,6 +124,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferObject::Destroy() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_externalMemory != VK_NULL_HANDLE) {
+            // P11 B2 (T0): an imported AHardwareBuffer store. Reached through the wire arm's
+            // deferred release, i.e. once no submission can still name it.
+            if (m_mappedData != nullptr) vkUnmapMemory(m_device, m_externalMemory);
+            if (m_buffer != VK_NULL_HANDLE) vkDestroyBuffer(m_device, m_buffer, nullptr);
+            vkFreeMemory(m_device, m_externalMemory, nullptr);
+            MG_Remote::Transport::AdoptT0::ReleaseImported(m_externalAhb);
+            m_mappedData = nullptr;
+            m_buffer = VK_NULL_HANDLE;
+            m_externalMemory = VK_NULL_HANDLE;
+            m_externalAhb = nullptr;
+            m_device = VK_NULL_HANDLE;
+            m_externalCoherent = true;
+            m_size = 0;
+            return;
+        }
+#endif
         Unmap();
         if (m_allocator != nullptr && m_buffer != VK_NULL_HANDLE && m_allocation != nullptr) {
             vmaDestroyBuffer(m_allocator, m_buffer, m_allocation);
@@ -117,6 +170,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferObject::Unmap() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // An imported store stays mapped for its life (Destroy unmaps it).
+        if (m_externalMemory != VK_NULL_HANDLE) return;
+#endif
         if (!IsValid() || m_mappedData == nullptr) {
             m_mappedData = nullptr;
             return;
@@ -143,6 +200,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         Memcpy(static_cast<Uint8*>(mapped) + offset, data, static_cast<SizeT>(size));
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_externalMemory != VK_NULL_HANDLE) {
+            if (m_externalCoherent) return true;
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+            range.memory = m_externalMemory;
+            range.offset = 0;
+            range.size = VK_WHOLE_SIZE;
+            return vkFlushMappedMemoryRanges(m_device, 1, &range) == VK_SUCCESS;
+        }
+#endif
         const VkResult flushResult = vmaFlushAllocation(m_allocator, m_allocation, offset, size);
         if (flushResult != VK_SUCCESS) {
             MGLOG_E_ONCE("VkBufferObject::Upload failed: vmaFlushAllocation returned %d", flushResult);
@@ -167,6 +234,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resolvedSize == 0) {
             return true;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_externalMemory != VK_NULL_HANDLE) {
+            if (m_externalCoherent) return true;
+            VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+            range.memory = m_externalMemory;
+            range.offset = 0;
+            range.size = VK_WHOLE_SIZE;
+            return vkInvalidateMappedMemoryRanges(m_device, 1, &range) == VK_SUCCESS;
+        }
+#endif
 
         const VkResult result = vmaInvalidateAllocation(m_allocator, m_allocation, offset, resolvedSize);
         if (result != VK_SUCCESS) {
