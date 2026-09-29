@@ -32,7 +32,7 @@
 
 - **B0（设备探针，先做）**：跨 app 的 client 用 **retrace client + server app** 实现（用户 2026-09-29；不走 Termux 的路子）。两种 client：(a) retrace client 作为可执行文件在 adb shell 里运行（`shell` 域，最好驱动，先用它打通全链）；(b) trace APK 里的 retrace client，render server 跑在另一个包名的 APK 里（`untrusted_app` 域、不同 uid 与类别，代表 Termux 一类 client 的真实处境，复核 ① ②）。测 ① retrace client 能否连上 server app 的 abstract unix 套接字并用 `SCM_RIGHTS` 传 fd（MLS 类别下预计被拒，要实测）；② 不通时由两个 app 自己的 Java 侧引导：server app 暴露一个 bound Service，返回 socketpair 一端的 `ParcelFileDescriptor`，client app 绑定后交给原生 client；③ 经这条通道传 AHardwareBuffer 并导入（接 A3）。
 - **B1（跨 app 共享内存数据面）**：控制面走 B0 选出的通道、数据面 `SharedSegments`（memfd 经 fd 传）——P10 设备实测同一 rd12 在 tcp loopback 51 fps、spawn+shm 120 fps（`notes/p10/C-MEASUREMENTS.md` §2），这一步本身就是外部 client 最大的收益，与 T0 无关。
-- **B2（T0）**：在 B1 的通道上做 AHB 导入，形状如下。
+- **B2（T0）**：在 B1 的通道上做 AHB 导入，形状如下。**必须留开关（用户 2026-09-29）**：`MOBILEGL_IPC_ADOPT_TIER` 就是这个开关——`2`（默认）= 不走零拷贝，行为与今天相同（共享内存段 + client 推送，T2）；`0` = 走零拷贝（T0）。开了但本会话用不了（server 自测不通过、server 端关了零拷贝、数据面是 Stream）时退回 T2 并记一行具名日志，不 Fatal（A1 现在共享段上 0/1 的握手期 Fatal 随 B2 改为此回退）；server 端另有允许 / 禁止零拷贝的开关。默认值在 B2 的真机门之后按数据再议。
 
 B2 的形状：控制 op `AdoptStore` 经 unix 套接字传 AHB（Stream 上 A1 拒绝）；Espryt `glBufferStorageExternalEXT`、Magma `VK_ANDROID_external_memory_android_hardware_buffer` 导入；server 起角色时自测、发布 `kCapAdoptT0`；client 取 min(旋钮, caps, 数据面规则)；释放由 server 本地 fence 门控；CPU 读前 server 排空常驻写并等 GPU。主机只能验协议与回退（Linux 没有 AHB），GPU 正确性靠设备门。控制协议修订 3 → 4。预期：T0 省的是 RSS 与 Create 类持久映射推送，不减少 26.3 的 stage 字节。
 
