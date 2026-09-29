@@ -2,8 +2,10 @@
 # Wi-Fi TCP throughput WSL -> phone, 3 reps, sink to /dev/null, nc restarted per rep.
 set -u
 PORT=5213
+# Through a TCP-terminating proxy this measures the proxy, not Wi-Fi (the 09-28 run did).
+bash "$(dirname "$0")/tcp_path_check.sh" || exit 1
 for rep in 1 2 3; do
-  adb -s 2f7cbe2e shell "pkill -f 'toybox nc' 2>/dev/null; nohup toybox nc -4 -l -p $PORT -q 180 >/dev/null 2>/data/local/tmp/nc.err </dev/null & echo up_$rep"
+  adb -s 2f7cbe2e shell "pkill -f '^toybox nc' 2>/dev/null; nohup toybox nc -4 -l -p $PORT -q 180 >/dev/null 2>/data/local/tmp/nc.err </dev/null & echo up_$rep"
   sleep 1
   wsl -d Ubuntu -- bash -c "
 python3 - <<'EOF'
@@ -25,7 +27,7 @@ except Exception as e:
     print(f'rep: FAIL {e}')
 EOF
 "
-  adb -s 2f7cbe2e shell "pkill -f 'toybox nc' 2>/dev/null" >/dev/null
+  adb -s 2f7cbe2e shell "pkill -f '^toybox nc' 2>/dev/null" >/dev/null
   sleep 1
 done
 echo NETBENCH_DONE

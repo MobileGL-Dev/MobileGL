@@ -66,15 +66,24 @@ attach is SELinux-blocked for shell uid on the bench device, while same-uid
 `/proc` reads via `run-as` work. Build for the device with the NDK
 (`aarch64-linux-android*-clang`), push, run under `run-as`.
 
+## tcp_path_check.sh — run before any cross-host measurement
+
+Connects from WSL to a closed port on the phone. End to end, the phone refuses
+it; if the connect is accepted, something on the host (here v2rayN's `xray_tun`,
+WSL's default route) is terminating TCP and relaying it. That fakes sub-ms RTTs,
+and on 2026-09-28 it stalled the MobileGL control stream. The stall read as a
+server hang at eglMakeCurrent. Exit 0 = end to end, 1 = middlebox,
+2 = filtered. Fix: `ip route replace <phone>/32 via <LAN gateway> dev eth0`
+as root in WSL (temporary; delete it afterwards).
+
 ## netbench.sh — Wi-Fi TCP throughput baseline
 
-WSL -> phone bulk transfer over `toybox nc` sink, 3 reps. The `nc` listener
-must keep stdin open or it exits on EOF and RSTs the connection.
+WSL -> phone bulk transfer over `toybox nc` sink, 3 reps; refuses to run
+unless `tcp_path_check.sh` passes. The `nc` listener must keep stdin open or it
+exits on EOF and RSTs the connection, and `pkill` must be anchored
+(`'^toybox nc'`) or it kills the adb shell that is about to start the listener.
 
-## phone_strace.sh / fdprobe.sh / wifi_hang_repro.sh — cross-host hang kit
+## phone_strace.sh — session-child strace
 
-Repro and evidence-capture for the cross-host control-plane hang (WSL client ->
-phone server wedges at eglMakeCurrent; bytes ACKed, rx queue drained, session
-child never sees POLLIN). `phone_strace.sh` attaches the device
-`/system/bin/strace` as the app uid via `run-as` (shell-uid ptrace is blocked);
-`fdprobe.sh` reconciles `/proc/<pid>/fd` socket inodes against `/proc/net/tcp`.
+Attaches the device `/system/bin/strace` to the server's session child as the
+app uid via `run-as` (shell-uid ptrace is blocked).
