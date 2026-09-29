@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -527,9 +528,30 @@ TEST(CapsMirrorTest, GlGetIntegervReadsTheDynamicParametersBackOutOfTheMirror) {
     EXPECT_EQ(dynamic.UniformBufferOffsetAlignment, 64u);
 }
 
+namespace {
+    // The client's compile switch, pinned for one case and put back after it: since P10 B the
+    // mirror re-derives GL_KHR_parallel_shader_compile from it on every adoption.
+    class ClientCompileSwitchScope {
+    public:
+        explicit ClientCompileSwitchScope(MG_Config::QuirkOverride mode)
+            : m_saved(MG_Config::Features.AsyncShaderCompile) {
+            MG_Config::Features.AsyncShaderCompile = mode;
+        }
+        ~ClientCompileSwitchScope() { MG_Config::Features.AsyncShaderCompile = m_saved; }
+        ClientCompileSwitchScope(const ClientCompileSwitchScope&) = delete;
+        ClientCompileSwitchScope& operator=(const ClientCompileSwitchScope&) = delete;
+
+    private:
+        MG_Config::QuirkOverride m_saved;
+    };
+} // namespace
+
 TEST(CapsMirrorTest, GlGetStringiReadsTheAdvertisedExtensionListBackOutOfTheMirror) {
     // glGetStringi(GL_EXTENSIONS) is GL_Getter.cpp:654 -> GetRendererInfo().RendererGLInfo, the
-    // same list CompileEnv.cpp:124 copies into the compile env.
+    // same list CompileEnv.cpp:124 copies into the compile env. Compilation is pinned inline
+    // here, so the one entry the client decides for itself (the case below) is not in the list
+    // and what reads back is the server's list exactly.
+    const ClientCompileSwitchScope inlineCompile(MG_Config::QuirkOverride::ForceOff);
     Snapshot s = MakeSnapshot(kMGPipeSubsystemResources, 0);
     s.Renderer.RendererGLInfo.Extensions.push_back(E_GL_ARB_timer_query);
     AdoptSnapshot(s);
@@ -537,6 +559,46 @@ TEST(CapsMirrorTest, GlGetStringiReadsTheAdvertisedExtensionListBackOutOfTheMirr
     ASSERT_EQ(extensions.size(), 1u);
     EXPECT_EQ(extensions[0], E_GL_ARB_timer_query);
     EXPECT_EQ(CapsMirrorInstance().Renderer().RendererGLInfo.TargetGLVersion.Major, 4);
+}
+
+TEST(CapsMirrorTest, TheParallelShaderCompileEntryIsTheClientsCompileSwitchNotTheServers) {
+    // P10 B (CapsMirror.cpp, ReconcileClientCompileExtensions). GL_KHR_parallel_shader_compile
+    // describes the compile pool, and under split the pool is the CLIENT's - so whatever the
+    // server's list says about it, the mirror answers this process's switch, in both directions,
+    // and leaves every other entry alone. The integration half is the Tcp arm's
+    // AsyncOff.ExtensionStringMatchesTheConfiguration, whose fixture server compiles
+    // asynchronously while the client does not. Red once by removing the reconcile call from
+    // CapsMirror::Adopt: the first two expectations below fail.
+    auto count = [](const Vector<GLExtension>& list, GLExtension e) {
+        return std::count(list.begin(), list.end(), e);
+    };
+    Snapshot s = MakeSnapshot(kMGPipeSubsystemResources, 0);
+    {
+        // The server compiles asynchronously and says so; this client compiles inline.
+        const ClientCompileSwitchScope inlineCompile(MG_Config::QuirkOverride::ForceOff);
+        s.Renderer.RendererGLInfo.Extensions = {E_GL_ARB_timer_query, E_GL_KHR_parallel_shader_compile};
+        AdoptSnapshot(s);
+        const auto& extensions = CapsMirrorInstance().Renderer().RendererGLInfo.Extensions;
+        EXPECT_EQ(count(extensions, E_GL_KHR_parallel_shader_compile), 0)
+            << "the server's advertisement survived a client that compiles inline";
+        EXPECT_EQ(count(extensions, E_GL_ARB_timer_query), 1);
+    }
+    {
+        // The other way round: the server does not, this client does.
+        const ClientCompileSwitchScope asyncCompile(MG_Config::QuirkOverride::ForceOn);
+        s.Renderer.RendererGLInfo.Extensions = {E_GL_ARB_timer_query};
+        AdoptSnapshot(s);
+        const auto& extensions = CapsMirrorInstance().Renderer().RendererGLInfo.Extensions;
+        EXPECT_EQ(count(extensions, E_GL_KHR_parallel_shader_compile), 1)
+            << "a client that compiles asynchronously did not advertise it";
+        EXPECT_EQ(count(extensions, E_GL_ARB_timer_query), 1);
+
+        // And a list that already agrees is not touched - no second copy of the entry.
+        s.Renderer.RendererGLInfo.Extensions = {E_GL_KHR_parallel_shader_compile, E_GL_ARB_timer_query};
+        AdoptSnapshot(s);
+        EXPECT_EQ(CapsMirrorInstance().Renderer().RendererGLInfo.Extensions,
+                  (Vector<GLExtension>{E_GL_KHR_parallel_shader_compile, E_GL_ARB_timer_query}));
+    }
 }
 
 TEST(CapsMirrorTest, ReArrivalIsTheInvalidationAndMovesTheGeneration) {
