@@ -273,6 +273,10 @@ static int64_t checkPattern(const void* p, uint64_t bytes, uint32_t seed) {
 // proves the far end of the allocation is mapped and GPU-reachable, not only its first
 // pages. The parent hands the value to every child with --region-base=.
 static uint64_t gRegionBase = 0;
+// --hold-ms=N (P11 B2 memory calibration): the T0S client keeps its AHB locked this long after
+// the last round, while the parent still holds its Vulkan and GL imports, so an outside sampler
+// can read what a held, imported AHB of --size bytes costs in each accounting.
+static uint32_t gHoldMs = 0;
 static uint64_t regOff(int region) { return gRegionBase + (uint64_t)region * kRegion; }
 
 static void writeRegion(void* base, int region, uint32_t seed) {
@@ -1371,7 +1375,9 @@ static pid_t spawnChild(const char* route, int* parentSock) {
         ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
         if (n <= 0) _exit(90);
         self[n] = 0;
-        char* argv[] = {self, arg, base, nullptr};
+        char hold[64];
+        snprintf(hold, sizeof(hold), "--hold-ms=%u", gHoldMs);
+        char* argv[] = {self, arg, base, hold, nullptr};
         execv(self, argv);
         _exit(91);
     }
@@ -2871,6 +2877,10 @@ static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, 
     }
     T0SDone dn{};
     dn.lockRc = lockRc;
+    if (gHoldMs) {
+        pr("child: holding the locked AHB (%p) for %u ms", p, gHoldMs);
+        usleep(static_cast<useconds_t>(gHoldMs) * 1000u);
+    }
     dn.unlockRc = AHardwareBuffer_unlock(ahb, nullptr);
     void* q = nullptr;
     dn.relockRc = AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &q);
@@ -4108,6 +4118,8 @@ int main(int argc, char** argv) {
             routeEndpoint = a + 15;
         } else if (!strncmp(a, "--size=", 7)) {
             size = strtoull(a + 7, nullptr, 0);
+        } else if (!strncmp(a, "--hold-ms=", 10)) {
+            gHoldMs = (uint32_t)strtoul(a + 10, nullptr, 0);
         } else if (!strncmp(a, "--region-base=", 14)) {
             gRegionBase = strtoull(a + 14, nullptr, 0);
         } else if (!strcmp(a, "--regions-at-end")) {
