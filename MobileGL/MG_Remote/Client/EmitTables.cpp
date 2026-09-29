@@ -861,15 +861,23 @@ namespace MobileGL::MG_Remote::Client {
                    ReadbackBytesPerPixel(format, type);
         }
 
-        void ApplyReadbackByteSwap(void* pixels, Uint64 bytes, GLenum type,
-                                   const PixelStoreParameters& pack) {
-            if (!pack.SwapBytes || pixels == nullptr) return;
+        // GL_PACK_SWAP_BYTES as the width of the byte group it reverses for `type`, 0 when there
+        // is nothing to reverse. One rule for both places a swap happens: the reply form swaps
+        // here, and the pack-buffer form (P9) carries the number to the server, which swaps there.
+        Uint32 ReadbackSwapGroup(GLenum type, const PixelStoreParameters& pack) {
+            if (!pack.SwapBytes) return 0;
             const auto dataType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
             SizeT group = MG_Util::GetSizedTexturePixelDataTypeSize(dataType);
             if (group == 0) group = MG_Util::GetBaseTexturePixelDataTypeSize(dataType);
             // This packed depth/stencil type contains two independent 32-bit words.
             if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) group = 4;
-            if (group <= 1) return;
+            return group <= 1 ? 0 : static_cast<Uint32>(group);
+        }
+
+        void ApplyReadbackByteSwap(void* pixels, Uint64 bytes, GLenum type,
+                                   const PixelStoreParameters& pack) {
+            const SizeT group = ReadbackSwapGroup(type, pack);
+            if (group == 0 || pixels == nullptr) return;
             auto* data = static_cast<Uint8*>(pixels);
             for (Uint64 at = 0; at + group <= bytes; at += group) {
                 for (SizeT i = 0; i < group / 2; ++i) {
@@ -963,6 +971,56 @@ namespace MobileGL::MG_Remote::Client {
                 return;
             }
 
+            // One band's source record, the same for both destinations below.
+            const auto bandInfo = [&](const ReadbackBand& band, Uint64 bandBytes) {
+                MG_Pipe::MGPReadbackInfo info{};
+                info.Res = MG_Pipe::kMGPipeNullHandle; // "the bound read surface answers"
+                info.Box = MG_Pipe::MGPBox{ReadbackBandOrigin(x, band.FirstColumn),
+                                           ReadbackBandOrigin(y, band.FirstRow), 0,
+                                           static_cast<Uint32>(band.Columns),
+                                           static_cast<Uint32>(band.Rows), 1};
+                info.Format = static_cast<Uint32>(format);
+                info.Type = static_cast<Uint32>(type);
+                info.Target = 0;
+                info.Level = 0;
+                info.DstOffset = 0;
+                info.DstSize = bandBytes;
+                return info;
+            };
+
+            // P9 (W1, CONTRACT-P9.md §1): A PACK BUFFER IS ANSWERED BY NOTHING. Each band crosses
+            // as read_pixels_to_buffer naming the buffer and the band's place in it - the
+            // layout above, per band - and the client neither waits nor copies: the server lands
+            // the rows, and the mark (taken first, like every producer row's) is what sends the
+            // next CPU read of the buffer through resource_readback. The bands are the reply
+            // form's for the SERVER's sake, not the wire's: the server reads each one into its
+            // scratch before landing it, and the reply cap is the bound it already enforces on
+            // that scratch (PH-3). The monolith arm is untouched - it maps the driver PBO back
+            // inside its own ReadPixels, as it always has.
+            if (pbo) {
+                const MG_Pipe::MGPipeHandle target = PackBufferReadbackTarget(pbo, pboOffset + layout.End);
+                if (!MG_Pipe::MGPipeHandleIsNull(target)) {
+                    MarkReadPixelsPackBuffer();
+                    const Uint32 swapGroup = ReadbackSwapGroup(type, pack);
+                    ForEachReadbackBand(static_cast<Uint64>(width), static_cast<Uint64>(height), plan,
+                                        [&](const ReadbackBand& band) {
+                        MG_Pipe::MGPReadbackToBuffer record{};
+                        record.Src = bandInfo(band, TightReadbackBytes(static_cast<GLsizei>(band.Columns),
+                                                                       static_cast<GLsizei>(band.Rows),
+                                                                       format, type));
+                        record.Dst = target;
+                        record.DstBase = pboOffset + layout.Start + band.FirstRow * layout.RowStride +
+                                         band.FirstColumn * bytesPerPixel;
+                        record.RowStride = layout.RowStride;
+                        record.ImageStride = 0;
+                        record.SwapGroup = swapGroup;
+                        session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixelsToBuffer, &record,
+                                            sizeof(record), nullptr, 0, nullptr, 0, nullptr);
+                    });
+                    return;
+                }
+            }
+
             // THE COMMON CASE KEEPS THE ZERO-COPY. A neutral pack state means the destination
             // layout IS the tight layout, so each band's reply lands straight in the
             // application's buffer at the band's tight offset (whole-width bands and single-row
@@ -983,18 +1041,7 @@ namespace MobileGL::MG_Remote::Client {
                 const Uint64 bandBytes = TightReadbackBytes(static_cast<GLsizei>(band.Columns),
                                                             static_cast<GLsizei>(band.Rows),
                                                             format, type);
-                MG_Pipe::MGPReadbackInfo info{};
-                info.Res = MG_Pipe::kMGPipeNullHandle; // "the bound read surface answers"
-                info.Box = MG_Pipe::MGPBox{ReadbackBandOrigin(x, band.FirstColumn),
-                                           ReadbackBandOrigin(y, band.FirstRow), 0,
-                                           static_cast<Uint32>(band.Columns),
-                                           static_cast<Uint32>(band.Rows), 1};
-                info.Format = static_cast<Uint32>(format);
-                info.Type = static_cast<Uint32>(type);
-                info.Target = 0;
-                info.Level = 0;
-                info.DstOffset = 0;
-                info.DstSize = bandBytes;
+                MG_Pipe::MGPReadbackInfo info = bandInfo(band, bandBytes);
 
                 // CHECKED BEFORE THE EMISSION, not after the answer (ID-47), through S1's
                 // helper, for every record. The plan makes it true by construction; it stays

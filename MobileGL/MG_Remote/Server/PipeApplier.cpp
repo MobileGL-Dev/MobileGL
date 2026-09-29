@@ -393,14 +393,7 @@ namespace MobileGL::MG_Remote::Server {
         image.DstOffset = 0;
         image.DstSize = tight;
         Vector<Uint8> bytes;
-        Bool ok = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        if (m_backend && m_backend->GetBackendType() == BackendType::DirectGLES)
-            ok = MG_Backend::DirectGLES::ReadTextureImageWire(image, bytes);
-        else if (m_backend && m_backend->GetBackendType() == BackendType::DirectVulkan &&
-                 MG_Backend::DirectVulkan::pVulkanRenderer)
-            ok = MG_Backend::DirectVulkan::pVulkanRenderer->ReadTextureImageWire(image, bytes);
-#endif
+        const Bool ok = ReadTextureImageTight(image, bytes);
         if (!ok || bytes.size() != tight) {
             replies->PostReply(seq, Wire::ReplySink::kStatusError, nullptr, 0);
             return false;
@@ -470,13 +463,29 @@ namespace MobileGL::MG_Remote::Server {
                          static_cast<unsigned long long>(bpp));
         }
 
-        const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
-        if (table == nullptr || table->GL.ReadPixels == nullptr) {
+        if (!ReadBoundFramebufferTight(info, tight)) {
             // A well-formed call can still be unsupported by this server; return the
             // established decline status after the peer-controlled size has been checked.
             replies->PostReply(seq, Wire::ReplySink::kStatusDeclined, nullptr, 0);
             return false;
         }
+
+        // m-7: the answer is written into the slot HERE, mid-apply, while the verb stamp is still
+        // up - and that is safe for exactly one reason, which is the contract's and is stated so it
+        // is not mistaken for luck: the client reaches a reply slot ONLY through appliedSeq
+        // (ReplySlot.h's ORDERING clause), never by polling the slot's own stamp, and s1's
+        // SessionConsumer::ApplyOne publishes appliedSeq only AFTER PipeApplier::ApplyOne has run
+        // LeaveApplier() and (on the joint tree) dropped the ScopedApplierEntry. So by the time the
+        // client is allowed to look at this slot, the apply-side gPipeInputs flag is already down.
+        replies->PostReply(seq, Wire::ReplySink::kStatusOk, m_readbackScratch.data(), tight);
+        m_readbackBytes += tight;
+        ++m_readbacks;
+        return true;
+    }
+
+    Bool ServerVerbSink::ReadBoundFramebufferTight(const MG_Pipe::MGPReadbackInfo& info, Uint64 tight) {
+        const MG_Backend::GlobalBackendFunctionsTable* table = Table("read_pixels");
+        if (table == nullptr || table->GL.ReadPixels == nullptr) return false;
         if (tight > m_readbackScratch.size()) {
             m_readbackScratch.resize(static_cast<SizeT>(tight));
         }
@@ -501,18 +510,181 @@ namespace MobileGL::MG_Remote::Server {
         MG_Pipe::MGPPixelPackState restorePack{};
         restorePack.Pack = savedPack;
         MG_Pipe::MGPipeApplySetPixelPackState(restorePack);
-
-        // m-7: the answer is written into the slot HERE, mid-apply, while the verb stamp is still
-        // up - and that is safe for exactly one reason, which is the contract's and is stated so it
-        // is not mistaken for luck: the client reaches a reply slot ONLY through appliedSeq
-        // (ReplySlot.h's ORDERING clause), never by polling the slot's own stamp, and s1's
-        // SessionConsumer::ApplyOne publishes appliedSeq only AFTER PipeApplier::ApplyOne has run
-        // LeaveApplier() and (on the joint tree) dropped the ScopedApplierEntry. So by the time the
-        // client is allowed to look at this slot, the apply-side gPipeInputs flag is already down.
-        replies->PostReply(seq, Wire::ReplySink::kStatusOk, m_readbackScratch.data(), tight);
-        m_readbackBytes += tight;
-        ++m_readbacks;
         return true;
+    }
+
+    Bool ServerVerbSink::ReadTextureImageTight(const MG_Pipe::MGPReadbackInfo& image, Vector<Uint8>& bytes) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (m_backend && m_backend->GetBackendType() == BackendType::DirectGLES)
+            return MG_Backend::DirectGLES::ReadTextureImageWire(image, bytes);
+        if (m_backend && m_backend->GetBackendType() == BackendType::DirectVulkan &&
+            MG_Backend::DirectVulkan::pVulkanRenderer)
+            return MG_Backend::DirectVulkan::pVulkanRenderer->ReadTextureImageWire(image, bytes);
+#endif
+        (void)image;
+        (void)bytes;
+        return false;
+    }
+
+    // ---- P9 (W1, MG_Remote/CONTRACT-P9.md §1): the pack-buffer readbacks ------------------------
+    //
+    // WHY THE ROWS GO THROUGH THE APPLIER'S BUFFER-WRITE GATE AND NOT THROUGH THE DRIVER'S OWN
+    // PBO READ. Monolith binds the driver buffer as GL_PIXEL_PACK_BUFFER and lets glReadPixels
+    // write it, then maps the whole store back into the frontend shadow (DirectGLES.cpp's
+    // "PBO used, mapping buffer to client memory"). A server has two stores per buffer - the
+    // backend's (GL buffer / VkBuffer) and R-11's staged shadow that every later drain uploads
+    // from - and a driver-side write reaches only the first: the next queued range drained from
+    // the shadow would then land OLD bytes over the pixels on Espryt, and Magma has no pack path
+    // in its ReadPixels at all. MGPipeApplyResourceSubData is the one write both backends already
+    // take from the server (Ops_H_SubData adopts into the staged shadow and queues the range;
+    // WriteWireBuffer orders the copy against in-flight reads), so the rows are exactly what a
+    // client glBufferSubData of the same bytes would have been - same serial bump, same epoch
+    // bump, same ordering against the records that follow.
+    //
+    // THE READ IS THE REPLY FORM'S, byte for byte (ReadBoundFramebufferTight /
+    // ReadTextureImageTight), so the two forms cannot disagree about what a pixel is; only the
+    // destination moved. The PACK layout is the client's arithmetic (ReadbackLayout) carried in
+    // the record, and the byte swap is applied to the tight bytes first, exactly where the client
+    // applied it to its reply.
+    //
+    // A FAILED READ IS LOUD. The reply form's failures reach the client as ERROR / DECLINED and
+    // end in a named Fatal there (RequireReadbackReplyComplete: "a blocking readback has no pixels
+    // to return"); this form has no reply to carry them, and a pack buffer left holding its old
+    // bytes is the same silently wrong answer. So the refusal latches here, under the same family
+    // words.
+
+    Bool ServerVerbSink::LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight,
+                                              Uint64 bytesPerPixel, const char* call) {
+        const MG_Pipe::MGPBox& box = record.Src.Box;
+        const Uint64 rowBytes = static_cast<Uint64>(box.W) * bytesPerPixel;
+        const Uint64 rows = box.H;
+        const Uint64 images = box.D;
+        const Uint64 tightBytes = rowBytes * rows * images; // the caller proved this fits
+        if (record.RowStride < rowBytes || (images > 1 && record.ImageStride < record.RowStride)) {
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.layout\"} row stride %llu "
+                    "is narrower than a tight row (%llu) or image stride %llu narrower than a row; the "
+                    "client's ReadbackLayout never produces either",
+                    call, static_cast<unsigned long long>(record.RowStride),
+                    static_cast<unsigned long long>(rowBytes),
+                    static_cast<unsigned long long>(record.ImageStride));
+        }
+        if (record.SwapGroup != 0) {
+            const Uint64 group = record.SwapGroup;
+            if (group != 2 && group != 4 && group != 8) {
+                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.SwapGroup\"} %llu is "
+                        "not a byte group GL_PACK_SWAP_BYTES can reverse (2, 4 or 8)",
+                        call, static_cast<unsigned long long>(group));
+            }
+            for (Uint64 at = 0; at + group <= tightBytes; at += group) {
+                for (Uint64 i = 0; i < group / 2; ++i) std::swap(tight[at + i], tight[at + group - 1 - i]);
+            }
+        }
+
+        // ONE WRITE PER CONTIGUOUS RUN: the whole read when the layout is tight (the common
+        // case - a neutral pack state, or an image-packed read of whole images), one per image
+        // when only the rows are tight, one per row otherwise. The bytes between rows are the
+        // application's (GL_PACK_ROW_LENGTH / ALIGNMENT padding) and are never written.
+        const Bool rowsTight = record.RowStride == rowBytes;
+        const Bool imagesTight = images == 1 || record.ImageStride == rowBytes * rows;
+        const Uint64 runBytes = rowsTight ? (imagesTight ? tightBytes : rowBytes * rows) : rowBytes;
+        const Uint64 runsPerImage = rowsTight ? 1 : rows;
+        const Uint64 imageRuns = rowsTight && imagesTight ? 1 : images;
+        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
+        for (Uint64 z = 0; z < imageRuns; ++z) {
+            for (Uint64 r = 0; r < runsPerImage; ++r) {
+                // DstBase + z * ImageStride + r * RowStride, checked: a peer can write any
+                // three numbers, and a wrapped offset would name bytes the range gate below
+                // then accepts.
+                if ((z != 0 && record.ImageStride > (kUint64Max - record.DstBase) / z) ||
+                    (r != 0 && record.RowStride > kUint64Max / r)) {
+                    return Wire::WireProtocolLatch(call, "destination offset overflows");
+                }
+                const Uint64 imageBase = record.DstBase + z * record.ImageStride;
+                if (r * record.RowStride > kUint64Max - imageBase) {
+                    return Wire::WireProtocolLatch(call, "destination offset overflows");
+                }
+                const Uint64 offset = imageBase + r * record.RowStride;
+                MG_Pipe::MGPSubData write{};
+                write.Res = record.Dst;
+                write.Target = MG_Pipe::kMGPipeResourceTargetBuffer;
+                // HasLiveHostWrites stays 0 and that is the client's fact, not a default: the
+                // client takes this form only for a pack buffer it does not map (EmitTables.cpp,
+                // PackBufferReadbackIsAsync), so "no live host writer" is what a glBufferSubData
+                // of the same bytes would have said.
+                if (!MG_Pipe::MGPipeSetSubDataBufferRange(write, offset, runBytes)) {
+                    return Wire::WireProtocolLatchAt(call, offset, 0x7FFFFFFFull);
+                }
+                const Uint8* bytes = tight + (z * runsPerImage + r) * runBytes;
+                ++m_bufferReadbackWrites;
+                // The acceptance is the applier's (a dead handle is a counted no-op, a range
+                // past the store a trip wire), so a refused write ends the landing here.
+                if (!MG_Pipe::MGPipeApplyResourceSubData(write, bytes, nullptr)) return false;
+            }
+        }
+        ++m_bufferReadbacks;
+        return true;
+    }
+
+    Bool ServerVerbSink::OnReadPixelsToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) {
+        const MG_Pipe::MGPReadbackInfo& info = record.Src;
+        const Uint64 bpp = static_cast<Uint64>(MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(static_cast<GLenum>(info.Format)),
+            MG_Util::ConvertGLEnumToTexturePixelDataType(static_cast<GLenum>(info.Type))));
+        // The reply form's shape checks, and its PH-3 bound: the scratch is sized from the
+        // record, so the SERVER's own maxReplyBytes caps it exactly as it caps an answer - the
+        // client bands this form by the same number (PlanReadbackBands), so no correct client
+        // is refused by it.
+        if (bpp == 0 || info.Box.W == 0 || info.Box.H == 0 || info.Box.D != 1 ||
+            info.Box.W > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
+            info.Box.H > static_cast<Uint32>(std::numeric_limits<GLsizei>::max())) {
+            return Wire::WireProtocolLatch("ReadPixelsToBuffer.extent", "invalid read box or format");
+        }
+        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
+        const Uint64 width = info.Box.W;
+        const Uint64 height = info.Box.H;
+        if (width > kUint64Max / height || width * height > kUint64Max / bpp) {
+            return Wire::WireProtocolLatch("ReadPixelsToBuffer.extent", "tight extent overflows");
+        }
+        const Uint64 tight = width * height * bpp;
+        if (m_maxReplyBytes == 0 || tight > m_maxReplyBytes ||
+            tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+            return Wire::WireProtocolLatchAt("ReadPixelsToBuffer.extent", tight, m_maxReplyBytes);
+        }
+        if (info.DstOffset != 0 || info.DstSize != tight) {
+            return Wire::WireProtocolLatchAt("ReadPixelsToBuffer.Src.DstSize", info.DstSize, tight);
+        }
+        if (!ReadBoundFramebufferTight(info, tight)) {
+            return SessionLatch(MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"ReadPixelsToBuffer\"} - the server "
+                    "has no GL.ReadPixels; the pack buffer would keep bytes the application is "
+                    "about to read as pixels, and there is no reply to carry the decline");
+        }
+        return LandReadbackInBuffer(record, m_readbackScratch.data(), bpp, "ReadPixelsToBuffer");
+    }
+
+    Bool ServerVerbSink::OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) {
+        const MG_Pipe::MGPReadbackInfo& info = record.Src;
+        const Uint64 bpp = static_cast<Uint64>(MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+            MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)));
+        if (!bpp || !info.Box.W || !info.Box.H || !info.Box.D || info.Box.X || info.Box.Y || info.Box.Z) {
+            return Wire::WireProtocolLatch("GetTextureImageToBuffer.extent", "invalid tight image extent");
+        }
+        const Uint64 tight = static_cast<Uint64>(info.Box.W) * info.Box.H * info.Box.D * bpp;
+        if (tight / bpp / info.Box.W / info.Box.H != info.Box.D) {
+            return Wire::WireProtocolLatch("GetTextureImageToBuffer.extent", "tight extent overflows");
+        }
+        if (info.DstOffset != 0 || info.DstSize != tight) {
+            return Wire::WireProtocolLatchAt("GetTextureImageToBuffer.Src.DstSize", info.DstSize, tight);
+        }
+        Vector<Uint8> bytes;
+        if (!ReadTextureImageTight(info, bytes) || bytes.size() != tight) {
+            return SessionLatch(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"GetTextureImageToBuffer\"} - the level "
+                    "could not be read (%llu of %llu bytes); the reply form answers ERROR here, and "
+                    "this form has no reply to carry it",
+                    static_cast<unsigned long long>(bytes.size()),
+                    static_cast<unsigned long long>(tight));
+        }
+        return LandReadbackInBuffer(record, bytes.data(), bpp, "GetTextureImageToBuffer");
     }
 
     // P5b's server-side stub shape (CONTRACT-P5B.md): the same line the client's class-C table

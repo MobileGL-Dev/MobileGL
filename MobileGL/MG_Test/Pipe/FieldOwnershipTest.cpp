@@ -330,7 +330,10 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryCounter), MGPipeVerb::QueryCounterTimestamp);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::QueryTimestamp), MGPipeVerb::GetGpuTimestampNs);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::DeleteStreamOutput), MGPipeVerb::DeleteTransformFeedback);
-    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{32});
+    // P9: the pack-buffer halves stamp as the verbs they reproduce.
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ReadPixelsToBuffer), MGPipeVerb::ReadPixels);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetTextureImageToBuffer), MGPipeVerb::GetTextureImage);
+    EXPECT_EQ(kMGPipeVerbBoundaryOpCount, SizeT{34});
     EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
 
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:

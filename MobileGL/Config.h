@@ -595,6 +595,14 @@ namespace MobileGL::MG_Config {
         // flag keyed on wantReply would disable the very mechanism it exists to enable
         // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md sections 7-11).
         Uint32 CreateWindow = 10;
+        // MOBILEGL_IPC_PBO_READBACK_SYNC (P9 W1, MG_Remote/CONTRACT-P9.md §1): 1 = a glReadPixels
+        // or glGetTexImage into a bound GL_PIXEL_PACK_BUFFER takes the reply-slot form again -
+        // the client waits for the pixels and uploads them into the buffer itself, as before P9.
+        // 0 (default) sends read_pixels_to_buffer / get_texture_image_to_buffer, waits for
+        // nothing, and marks the buffer GPU-written. The 1 arm is the A/B control and the
+        // red-once of the wait-count gate (PackBufferReadbackScenario): it must show a reply
+        // wait per read.
+        Uint32 PboReadbackSync = 0;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

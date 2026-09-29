@@ -1,6 +1,9 @@
 // Included in EmitTables.cpp's client-only anonymous namespace.
 // The server returns owned tight pixels. Only the client interprets PACK state
-// and application pointers; PBO rows are ordinary buffer uploads after the reply.
+// and application pointers. A pack-buffer destination (P9) is answered by nothing: the
+// client sends the layout it computed and the server lands the rows in the buffer; the
+// reply form's "PBO rows are ordinary buffer uploads after the reply" remains the arm for
+// a buffer PackBufferReadbackTarget refuses.
         struct ReadbackLayout {
             Uint64 RowBytes = 0, RowStride = 0, ImageStride = 0, Start = 0, End = 0, Tight = 0;
         };
@@ -39,6 +42,30 @@
             MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Remote/Client", caller,
                     "Pixel packing exceeds the destination or its addressable range."));
+        }
+
+        // P9 (W1, MG_Remote/CONTRACT-P9.md §1): MAY A READ INTO THIS PACK BUFFER GO WITHOUT A
+        // REPLY? The answer is the buffer's handle when it may - the read then crosses as
+        // read_pixels_to_buffer / get_texture_image_to_buffer, lands server-side, and the buffer
+        // is marked GPU-written - and the null handle when the reply-slot form has to carry it.
+        // `end` is the last byte past the application's offset the read touches.
+        //
+        // Each refusal is a case the mark cannot keep its promise in, not a preference:
+        //   - MOBILEGL_IPC_PBO_READBACK_SYNC=1, the A/B and red-once arm;
+        //   - no readback route (BufferWritebackIsReachable: no size, or the resource family
+        //     is not on the wire), so SyncGpuWrites would clear the mark with nothing fetched;
+        //   - a MAPPED buffer. Only a persistent mapping can be live across a read, and its
+        //     reader takes the bytes straight from the pointer through no call this side sees:
+        //     no SyncGpuWrites would ever run for it, and the pixels would never arrive;
+        //   - a range MGPSubData cannot name (a buffer offset stops at 2^31-1);
+        //   - a buffer that never crossed: it has no handle for the server to write into, and
+        //     the reply form's UploadSubData is what creates it.
+        MG_Pipe::MGPipeHandle PackBufferReadbackTarget(const SharedPtr<MG_State::GLState::BufferObject>& pbo,
+                                                       Uint64 end) {
+            if (!pbo || MG_Config::Ipc.PboReadbackSync != 0) return MG_Pipe::kMGPipeNullHandle;
+            if (!BufferWritebackIsReachable(*pbo) || pbo->IsMapped()) return MG_Pipe::kMGPipeNullHandle;
+            if (end > 0x7FFFFFFFull) return MG_Pipe::kMGPipeNullHandle;
+            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer, pbo->GetLifetimeId());
         }
 
         void EmitGetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
@@ -80,6 +107,29 @@
             info.Type = type;
             info.Target = wholeCube ? GL_TEXTURE_CUBE_MAP : MG_Util::ConvertTextureUploadTargetToGLEnum(uploadTarget);
             info.Level = static_cast<Uint16>(level);
+            // P9 (W1): into a pack buffer, ONE record and no wait. The whole level crosses at
+            // once - there is no reply slot to fit, and the server reads the whole level for
+            // every window of the reply form anyway - and the rows land in the buffer at the
+            // layout computed above. The mark goes first, like every producer row's: the set
+            // describes the work the record is about to start.
+            if (pbo) {
+                const MG_Pipe::MGPipeHandle target = PackBufferReadbackTarget(pbo, pboOffset + layout.End);
+                if (!MG_Pipe::MGPipeHandleIsNull(target)) {
+                    MarkReadPixelsPackBuffer();
+                    MG_Pipe::MGPReadbackToBuffer record{};
+                    record.Src = info;
+                    record.Src.DstOffset = 0;
+                    record.Src.DstSize = tight;
+                    record.Dst = target;
+                    record.DstBase = pboOffset + layout.Start;
+                    record.RowStride = layout.RowStride;
+                    record.ImageStride = layout.ImageStride;
+                    record.SwapGroup = ReadbackSwapGroup(type, pack);
+                    session.EmitAndWait(MG_Pipe::MGPWireOp::GetTextureImageToBuffer, &record,
+                                        sizeof(record), nullptr, 0, nullptr, 0, nullptr);
+                    return;
+                }
+            }
             Vector<Uint8> bytes(static_cast<SizeT>(tight));
             const Uint64 capacity = session.MaxReplyBytes();
             if (!capacity) Wire::WireProtocolFatal("GetTextureImage.reply", "zero reply capacity");

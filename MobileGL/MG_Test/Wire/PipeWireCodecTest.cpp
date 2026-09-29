@@ -277,6 +277,20 @@ namespace {
                 FramebufferCopies.push_back(copy);
                 return true;
             }
+            // P9 (CONTRACT-P9.md §1): the pack-buffer readbacks, one recorder for both rows and
+            // the op each arrived through, so a swapped dispatch arm is visible.
+            Bool OnReadPixelsToBuffer(const MGPReadbackToBuffer& record) override {
+                BufferReadbacks.push_back(record);
+                BufferReadbackOps.push_back(MGPWireOp::ReadPixelsToBuffer);
+                return true;
+            }
+            Bool OnGetTextureImageToBuffer(const MGPReadbackToBuffer& record) override {
+                BufferReadbacks.push_back(record);
+                BufferReadbackOps.push_back(MGPWireOp::GetTextureImageToBuffer);
+                return true;
+            }
+            std::vector<MGPReadbackToBuffer> BufferReadbacks;
+            std::vector<MGPWireOp> BufferReadbackOps;
             // ---- P5c's rows (CONTRACT-P5C.md §5): the two control records, recorded the same
             // way so a round trip asserts the arm and the record intact.
             Bool OnApplierReset(const MGPApplierReset& reset) override {
@@ -1633,6 +1647,50 @@ TEST_F(PipeWireCodecTest, CopyFramebufferToTextureReachesTheSinkForBothForms) {
     EXPECT_EQ(wire.Sink().FramebufferCopies[1].SubImage, 1u);
     EXPECT_EQ(wire.Sink().FramebufferCopies[1].XOffset, 4);
     EXPECT_EQ(wire.Sink().FramebufferCopies[1].Width, 64);
+}
+
+// P9 (CONTRACT-P9.md §1): both pack-buffer rows reach their own sink arm with the record
+// intact, and neither takes a reply slot - the decoder hands no seq and no sink, and the
+// reply-slot readback counter the reply form moves stays at zero.
+TEST_F(PipeWireCodecTest, PackBufferReadbacksReachTheirOwnArmsAndPostNoReply) {
+    Wire2 wire;
+    MGPReadbackToBuffer pixels{};
+    pixels.Src.Box = MGPBox{3, 5, 0, 16, 8, 1};
+    pixels.Src.Format = 0x1908; // GL_RGBA
+    pixels.Src.Type = 0x1401;   // GL_UNSIGNED_BYTE
+    pixels.Src.DstSize = 16u * 8u * 4u;
+    pixels.Dst = MakeHandle(41);
+    pixels.DstBase = 12;
+    pixels.RowStride = 80;
+    pixels.SwapGroup = 0;
+    MGPReadbackToBuffer image = pixels;
+    image.Src.Res = MakeHandle(7);
+    image.Src.Box = MGPBox{0, 0, 0, 4, 4, 6};
+    image.Src.Target = 0x8513; // GL_TEXTURE_CUBE_MAP
+    image.Src.DstSize = 4u * 4u * 6u * 4u;
+    image.ImageStride = 4u * 80u;
+    image.SwapGroup = 4;
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ReadPixelsToBuffer, &pixels, sizeof(pixels)),
+              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::GetTextureImageToBuffer, &image, sizeof(image)),
+              kInvalidSeq);
+    bool applied = false;
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_TRUE(wire.PumpOne(&applied));
+    EXPECT_TRUE(applied);
+    ASSERT_EQ(wire.Sink().BufferReadbacks.size(), 2u);
+    EXPECT_EQ(wire.Sink().BufferReadbackOps[0], MGPWireOp::ReadPixelsToBuffer);
+    EXPECT_EQ(wire.Sink().BufferReadbackOps[1], MGPWireOp::GetTextureImageToBuffer);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[0].Dst.Slot, pixels.Dst.Slot);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[0].Src.Box.X, 3);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[0].DstBase, 12u);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[0].RowStride, 80u);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[1].Src.Res.Slot, image.Src.Res.Slot);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[1].Src.Box.D, 6u);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[1].ImageStride, 320u);
+    EXPECT_EQ(wire.Sink().BufferReadbacks[1].SwapGroup, 4u);
+    EXPECT_TRUE(wire.Sink().Readbacks.empty()) << "a pack-buffer read reached the reply-slot arm";
 }
 
 // =====================================================================================

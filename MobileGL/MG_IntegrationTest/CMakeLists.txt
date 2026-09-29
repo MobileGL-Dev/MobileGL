@@ -84,6 +84,9 @@ add_executable(MobileGLIntegrationTest
     # P7 gate 5 (g5-readback): readbacks larger than one reply slot. Ordinary GL cases, so the
     # monolith arms run them too - that is the parity half of the split registrations below.
     Scenarios/BandedReadbackScenario.cpp
+    # P9 (W1): reads into a pixel pack buffer answered by nothing. Ordinary GL cases too, plus
+    # one wire case that skips where there is no wire.
+    Scenarios/PackBufferReadbackScenario.cpp
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClientVertexArrayScenario.cpp
@@ -2447,6 +2450,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # buffer, depth and packed depth/stencil, and glGetTexImage's windowed twin. The Magma arms of
     # the same cases are the `Band.` block after the Fm lane below.
     mgl_itest_register_split_arms("BandedReadbackScenario.*" "")
+    # P9 (W1, MG_Remote/CONTRACT-P9.md §1): the pack-buffer readback crosses as
+    # read_pixels_to_buffer / get_texture_image_to_buffer and is answered by nothing. Six parity
+    # cases (every pack parameter, the map reader, a byte swap, a layered glGetTexImage, an upload
+    # FROM the buffer the read filled, a later write over part of it) and the wire case (no
+    # reply-slot record, one mark per read). The Magma arms are the `Pbo.` block after the Band
+    # block below.
+    mgl_itest_register_split_arms("PackBufferReadbackScenario.*" "")
 
     # DepthStencilReadbackMatrixScenario GETS ITS OWN BLOCK, because it needs a variable the
     # registration macro cannot carry: MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1.
@@ -3580,6 +3590,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/g5-band${mglItestArmLogTag}-${bandCase}.log")
+        endforeach()
+        # P9 (W1): the pack-buffer readback on Magma. The server half is backend-neutral - the
+        # reply form's read, then the applier's buffer-write gate (WriteWireBuffer here) - so the
+        # same seven cases, same flavour.
+        foreach(pboCase ReadPixelsIntoAPackBufferMatchesClientMemoryUnderEveryPackState
+                        MapBufferRangeAfterAPackBufferReadSeesThePixels
+                        SwapBytesIntoAPackBufferMatchesClientMemory
+                        GetTexImageIntoAPackBufferMatchesClientMemory
+                        APackBufferReadFeedsAnUploadFromTheSameBuffer
+                        ALaterBufferSubDataWinsOverThePackReadWhereTheyOverlap
+                        APackBufferReadPostsNoReplyAndMarksTheBuffer)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Pbo."
+                TEST_FILTER "PackBufferReadbackScenario.${pboCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-pbo${mglItestArmLogTag}-${pboCase}.log")
         endforeach()
     endforeach()
 endif()

@@ -340,3 +340,11 @@ inline void MGP_SetProgramBindings(const MGPProgramBindings* payload, const void
 inline void MGP_DeleteStreamOutput(const MGPStreamOutputBind* payload) {
     gMGPipeContext.DeleteStreamOutput(payload);
 }
+
+inline void MGP_ReadPixelsToBuffer(const MGPReadbackToBuffer* payload) {
+    gMGPipeContext.ReadPixelsToBuffer(payload);
+}
+
+inline void MGP_GetTextureImageToBuffer(const MGPReadbackToBuffer* payload) {
+    gMGPipeContext.GetTextureImageToBuffer(payload);
+}

@@ -870,6 +870,65 @@ TEST(RemoteClientControls, DeviceLostRespecifyDoesNotDieOfTheUncarriedBytesCheck
 }
 
 // =====================================================================================
+// P9 F1 (CONTRACT-P9.md §4): the device is lost with a pack-buffer read still owed
+// =====================================================================================
+//
+// A glReadPixels into a pack buffer is answered by nothing (read_pixels_to_buffer) and marks the
+// buffer GPU-written; the bytes arrive only when a CPU read fetches them. If the server dies in
+// between, that fetch is DECLINED - and the client shadow still holds what the buffer held
+// before the read. The peer below plays a server that took the read and died before landing
+// it: it counts the record and writes nothing. The map that follows must end BY NAME, never
+// hand the old bytes back as pixels.
+//
+// THE REDS, RUN ONCE: with MOBILEGL_IPC_PBO_READBACK_SYNC=1 the read takes the reply form, the
+// peer sees no pack-buffer record and the child exits 151; without AwaitBufferWriteback's
+// device-lost arm the child still aborts, but as Fatal{UnimplementedWritebackWait}, which names
+// a missing wait rather than a lost device.
+struct PackReadPeer : Codec::WireVerbSink {
+    std::atomic<Uint32> packReads{0};
+    Bool OnReadPixelsToBuffer(const MGPReadbackToBuffer&) override {
+        packReads.fetch_add(1);
+        return true;
+    }
+    void Install() {
+        auto rc = Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<PackReadPeer*>(self));
+            return MOBILEGL_OK;
+        }, this);
+        if (rc != MOBILEGL_OK) ::_exit(150);
+    }
+};
+
+TEST(RemoteClientControls, APackReadOwedWhenTheDeviceIsLostNeverReadsBackAsTheOldBytes) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        PackReadPeer peer;
+        peer.Install();
+        MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        constexpr GLenum kPixelPackBuffer = 0x88EB;
+        GLuint buffer = 0;
+        MG_Impl::GLImpl::GenBuffers(1, &buffer);
+        MG_Impl::GLImpl::BindBuffer(kPixelPackBuffer, buffer);
+        Uint8 before[64];
+        std::memset(before, 0x5a, sizeof(before));
+        MG_Impl::GLImpl::BufferData(kPixelPackBuffer, sizeof(before), before, 0x88EA /* STREAM_READ */);
+        // 4x4 RGBA8 = the whole buffer, read to offset 0.
+        RemoteEmitTable().GL.ReadPixels(0, 0, 4, 4, 0x1908, 0x1401, nullptr);
+        ClientSessionInstance().WaitForApplyToCatchUp("F1 pack read");
+        if (peer.packReads.load() != 1) ::_exit(151);
+        ClientSessionInstance().LatchDeviceLost("RemoteClientControls: the server died with the pack read owed");
+        Uint8 after[64];
+        std::memset(after, 0, sizeof(after));
+        MG_Impl::GLImpl::GetBufferSubData(kPixelPackBuffer, 0, sizeof(after), after);
+        // Reaching here means the read returned: the bytes are the ones from BEFORE the pixels.
+        ::_exit(152);
+    });
+    ExpectNamedAbort(child, "Fatal{ReadbackDeclined, \"buffer-writeback\"}");
+}
+
+// =====================================================================================
 // P12 item B: the texture half stops owning a reply on the wire arm
 // =====================================================================================
 //

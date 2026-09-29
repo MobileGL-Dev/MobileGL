@@ -20,6 +20,7 @@
 #include <MG_Remote/Client/CapsMirror.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Client/EmitTables.h>
+#include <MG_Remote/Client/GpuWritePending.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <chrono>
 #include <atomic>
@@ -164,6 +165,9 @@ namespace MGITest {
             state.cmdWrapPads = encoder.CmdWrapPads();
             state.cmdBytesWritten = encoder.CmdBytesWritten();
             state.stageReclaimWaits = encoder.StageReclaimWaits();
+            state.replyPostings = session->ReplyPostings();
+            state.packBufferReadbackMarks = MobileGL::MG_Remote::Client::ProducerMarkCount(
+                MobileGL::MG_Remote::Client::GpuWriteProducer::ReadPixelsPackBuffer);
         }
 #endif
         return state;

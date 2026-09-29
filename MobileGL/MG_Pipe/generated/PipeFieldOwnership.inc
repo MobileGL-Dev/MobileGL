@@ -301,12 +301,14 @@ constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     case MGPWireOp::QueryCounter: return MGPipeVerb::QueryCounterTimestamp;
     case MGPWireOp::QueryTimestamp: return MGPipeVerb::GetGpuTimestampNs;
     case MGPWireOp::DeleteStreamOutput: return MGPipeVerb::DeleteTransformFeedback;
+    case MGPWireOp::ReadPixelsToBuffer: return MGPipeVerb::ReadPixels;
+    case MGPWireOp::GetTextureImageToBuffer: return MGPipeVerb::GetTextureImage;
     default:
         return MGPipeVerb::kVerbCount;
     }
 }
 
-inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 32;
+inline constexpr SizeT kMGPipeVerbBoundaryOpCount = 34;
 inline constexpr SizeT kMGPipeVerbBoundaryExemptCount = 3;
 
 // ---- THE §7 ALLOWLIST, DERIVED RATHER THAN WRITTEN (ID-116) --------------------------

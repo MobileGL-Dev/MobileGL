@@ -253,6 +253,19 @@ namespace MobileGL::MG_Remote::Client {
         // UnmigratedVerbFatal), and it is what gives the hole a red spelling before the
         // transport arrives.
         if (!buffer.HasOutstandingGpuWrite()) return;
+        // P9 F1 (CONTRACT-P9.md §4): THE DEVICE WENT AWAY WITH THE WRITE STILL OWED. A lost device
+        // DECLINES every record, so the readback that was to bring the GPU's bytes back was never
+        // sent - and the shadow the caller is about to read holds whatever the buffer held BEFORE
+        // the write (for a pack-buffer read, the bytes before the pixels). Returning it would be the
+        // one outcome the reverse channel exists to prevent: stale bytes that look like a
+        // successful read. It is the reply form's ReadbackDeclined, arriving one call later.
+        if (ClientSession::DeviceLost()) {
+            SessionFail(MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"buffer-writeback\"} - buffer %u "
+                    "still owes a GPU write (a pack-buffer read or a shader store) and the device is "
+                    "lost, so its readback was declined; its shadow holds the bytes from before the "
+                    "write and is not returned as the GPU's",
+                    buffer.GetExternalIndex());
+        }
         SessionFail(MGFatalFamily::UnimplementedWritebackWait, "MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
                 "still has an outstanding GPU write after its readback was emitted. The wait is "
                 "ClientSession::EmitAndWait's (R-3: the reply slot id IS the record seq); P5 package "

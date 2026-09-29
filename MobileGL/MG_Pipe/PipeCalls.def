@@ -140,9 +140,14 @@
 //     this one describes what happened to it since. It lands with a NULL ROUTE and a sink that
 //     refuses it by name until package pg wires the emitter, exactly as set_shader_buffers has
 //     sat catalogued-and-dead since P4a. 80 unique records.
+//   - delete_stream_output (opcode 81) took the XFB object's deletion across; 81 records.
+//   - P9 (MG_Remote/CONTRACT-P9.md §1) appended TWO more (opcodes 82..83):
+//     read_pixels_to_buffer and get_texture_image_to_buffer, the pack-buffer halves of the two
+//     readbacks, answered by nothing (ID-57's fire-and-forget). Like P5b's five they reach
+//     WireVerbSink only and have no monolith producer. 83 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 81
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 83
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -339,7 +344,18 @@
     /* ---- names only handles and values is exactly what rule F admits.                        ---- */ \
     X(SetProgramBindings,       MGPProgramBindings,         kCtxState,  kVarTail|kHostSpan,         kWaitNone)        \
     /* Deletion carries the GL argument and its never-reused capture identity. */                          \
-    X(DeleteStreamOutput,       MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitNone)
+    X(DeleteStreamOutput,       MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitNone)        \
+    /* ---- APPENDED BY P9 (MG_Remote/CONTRACT-P9.md §1), opcodes 82..83: the pack-buffer     ---- */ \
+    /* ---- halves of read_pixels and get_texture_image. The reply-slot rows above keep every ---- */ \
+    /* ---- read into client memory; a read whose destination is a bound PIXEL_PACK_BUFFER    ---- */ \
+    /* ---- crosses as one of these instead, names the buffer by handle, and is answered by   ---- */ \
+    /* ---- nothing - the server lands the rows in the buffer and the client marks it         ---- */ \
+    /* ---- GPU-written (ID-57's fire-and-forget). kWaitNone: the apply reads only server      ---- */ \
+    /* ---- state and the record, and no BARRIER_PULLED row is left for it to read. Neither    ---- */ \
+    /* ---- has an MGPipeApply* entry point or a monolith producer: monolith reads into its    ---- */ \
+    /* ---- driver PBO inside the backend's own ReadPixels, as before (G1).                   ---- */ \
+    X(ReadPixelsToBuffer,       MGPReadbackToBuffer,        kCtxVerb,   kNone,                      kWaitNone)        \
+    X(GetTextureImageToBuffer,  MGPReadbackToBuffer,        kCtxObject, kNone,                      kWaitNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

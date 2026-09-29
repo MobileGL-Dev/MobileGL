@@ -1625,6 +1625,38 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPReadbackInfo, 64);
 
+    // P9 (W1, MG_Remote/CONTRACT-P9.md §1): read_pixels_to_buffer / get_texture_image_to_buffer,
+    // the two readbacks whose destination is a bound GL_PIXEL_PACK_BUFFER. The destination is
+    // the pack buffer's RESOURCE HANDLE (CONTRACT-P5 row 23: "a PBO destination is a resource
+    // handle and needs no Seg field"), so nothing comes back and the client does not wait: the
+    // server reads exactly the tight pixels the reply-slot form would have answered and writes
+    // them into Dst row by row through the applier's ordinary buffer-write gate, and the client
+    // marks Dst GPU-written (GpuWritePending.h row 4). A later CPU read of Dst reaches the bytes
+    // through resource_readback, like any other buffer the GPU wrote.
+    //
+    //   Src          the reply form's record, unchanged: the box, format, type, target and
+    //                level; Src.DstOffset / Src.DstSize are 0 / the tight w*h*d*bpp extent
+    //                and are checked, not used for placement.
+    //   Dst          the pack buffer.
+    //   DstBase      byte offset in Dst of the first texel of the first row of the first image:
+    //                the application's offset plus GL_PACK_SKIP_{PIXELS,ROWS,IMAGES} already
+    //                applied, because the layout arithmetic is the client's (ReadbackLayout).
+    //   RowStride    bytes between two rows in Dst (GL_PACK_ROW_LENGTH and GL_PACK_ALIGNMENT
+    //                applied). Never smaller than a tight row.
+    //   ImageStride  bytes between two images in Dst (GL_PACK_IMAGE_HEIGHT applied). Only read
+    //                when Src.Box.D > 1.
+    //   SwapGroup    GL_PACK_SWAP_BYTES as the width of the byte group to reverse (2, 4 or 8),
+    //                0 for no swap - the client's ApplyReadbackByteSwap rule, precomputed there so
+    //                the server does not re-derive the type table.
+    struct MGPReadbackToBuffer {
+        MGPReadbackInfo Src;
+        MGPipeHandle Dst;
+        Uint64 DstBase, RowStride, ImageStride;
+        Uint32 SwapGroup;
+        Uint32 Pad0;
+    };
+    MGP_ASSERT_POD(MGPReadbackToBuffer, 104);
+
     // ---------------------------------------------------------------------------------
     // Commands
     // ---------------------------------------------------------------------------------

@@ -173,6 +173,10 @@ namespace MobileGL::MG_Remote::Server {
                           Wire::ReplySink* replies) override;
         Bool OnGetTextureImage(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
                                Wire::ReplySink* replies) override;
+        // P9 (CONTRACT-P9.md §1): the pack-buffer halves. Nothing is answered; the tight pixels
+        // land in record.Dst through the applier's buffer-write gate.
+        Bool OnReadPixelsToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) override;
+        Bool OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) override;
         Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
                        const MG_Pipe::MGHostSpan* userIndices,
                        const MG_Pipe::MGPDrawIndirect* indirect) override;
@@ -247,6 +251,10 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 Presents() const { return m_presents; }
         Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
         Uint64 ReadbackBytes() const { return m_readbackBytes; }
+        // P9: pack-buffer readbacks that landed in their buffer (both ops), and the buffer-write
+        // records they took. Readbacks() above counts only the reply-slot form.
+        Uint64 BufferReadbacks() const { return m_bufferReadbacks; }
+        Uint64 BufferReadbackWrites() const { return m_bufferReadbackWrites; }
         // ---- P5b package i1's tallies. R-16: a probe may not arm against a stub, and on a
         // split build "the scenario passed" is also what a scenario that never left the
         // monolith path looks like - so the lane asserts the number that only this sink can
@@ -294,6 +302,18 @@ namespace MobileGL::MG_Remote::Server {
     private:
         const MG_Backend::GlobalBackendFunctionsTable* Table(const char* verb) const;
 
+        // read_pixels' read, shared by the reply form and the pack-buffer form: the bound read
+        // framebuffer, NEUTRAL pack state (ID-49), `tight` bytes into m_readbackScratch. False
+        // when this server has no GL.ReadPixels - the caller owns what that means.
+        Bool ReadBoundFramebufferTight(const MG_Pipe::MGPReadbackInfo& info, Uint64 tight);
+        // get_texture_image's read, shared the same way: the whole level into `bytes`.
+        Bool ReadTextureImageTight(const MG_Pipe::MGPReadbackInfo& image, Vector<Uint8>& bytes);
+        // P9: `tight` holds Src's pixels, tightly packed; land them in record.Dst at the
+        // record's layout through MGPipeApplyResourceSubData, one write per contiguous run.
+        // `call` names the op in a refusal.
+        Bool LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight,
+                                  Uint64 bytesPerPixel, const char* call);
+
         struct FenceEntry {
             Uint32 Gen = 0;
             Bool Live = false;
@@ -321,6 +341,8 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_presents = 0;
         Uint64 m_lastPresentSerial = 0;
         Uint64 m_readbackBytes = 0;
+        Uint64 m_bufferReadbacks = 0;
+        Uint64 m_bufferReadbackWrites = 0;
         Uint64 m_imageBinds = 0;
         Uint64 m_dispatches = 0;
         Uint64 m_memoryBarriers = 0;

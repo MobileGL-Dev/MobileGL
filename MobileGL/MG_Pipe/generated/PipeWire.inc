@@ -151,7 +151,9 @@ enum class MGPWireOp : Uint16 {
     SetContextValues = 79,
     SetProgramBindings = 80,
     DeleteStreamOutput = 81,
-    kOpCount = 82,
+    ReadPixelsToBuffer = 82,
+    GetTextureImageToBuffer = 83,
+    kOpCount = 84,
 };
 
 // THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
@@ -254,6 +256,8 @@ inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)
     /* 79 SetContextValues        */ static_cast<Uint32>(kNone),
     /* 80 SetProgramBindings      */ static_cast<Uint32>(kVarTail | kHostSpan),
     /* 81 DeleteStreamOutput      */ static_cast<Uint32>(kNone),
+    /* 82 ReadPixelsToBuffer      */ static_cast<Uint32>(kNone),
+    /* 83 GetTextureImageToBuffer */ static_cast<Uint32>(kNone),
 };
 static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -355,6 +359,8 @@ inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 79 SetContextValues        */ static_cast<Uint8>(kCtxState),
     /* 80 SetProgramBindings      */ static_cast<Uint8>(kCtxState),
     /* 81 DeleteStreamOutput      */ static_cast<Uint8>(kCtxVerb),
+    /* 82 ReadPixelsToBuffer      */ static_cast<Uint8>(kCtxVerb),
+    /* 83 GetTextureImageToBuffer */ static_cast<Uint8>(kCtxObject),
 };
 static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -460,6 +466,8 @@ inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 79 SetContextValues        */ static_cast<Uint8>(kWaitNone),
     /* 80 SetProgramBindings      */ static_cast<Uint8>(kWaitNone),
     /* 81 DeleteStreamOutput      */ static_cast<Uint8>(kWaitNone),
+    /* 82 ReadPixelsToBuffer      */ static_cast<Uint8>(kWaitNone),
+    /* 83 GetTextureImageToBuffer */ static_cast<Uint8>(kWaitNone),
 };
 static_assert(sizeof(kMGPipeWaitClasses) / sizeof(kMGPipeWaitClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -1174,6 +1182,22 @@ static_assert(sizeof(MGPWireRec_DeleteStreamOutput) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPStreamOutputBind) + 7u) & ~SizeT(7u)),
               "MGPWireRec_DeleteStreamOutput gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_ReadPixelsToBuffer {
+    MGPWireRecHeader Header;
+    MGPReadbackToBuffer Payload;
+};
+static_assert(sizeof(MGPWireRec_ReadPixelsToBuffer) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPReadbackToBuffer) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_ReadPixelsToBuffer gained padding; the wire format moved");
+
+struct alignas(8) MGPWireRec_GetTextureImageToBuffer {
+    MGPWireRecHeader Header;
+    MGPReadbackToBuffer Payload;
+};
+static_assert(sizeof(MGPWireRec_GetTextureImageToBuffer) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPReadbackToBuffer) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_GetTextureImageToBuffer gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -1465,6 +1489,12 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         break;
     case MGPWireOp::DeleteStreamOutput:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_DeleteStreamOutput, "DeleteStreamOutput");
+        break;
+    case MGPWireOp::ReadPixelsToBuffer:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_ReadPixelsToBuffer, "ReadPixelsToBuffer");
+        break;
+    case MGPWireOp::GetTextureImageToBuffer:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_GetTextureImageToBuffer, "GetTextureImageToBuffer");
         break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:

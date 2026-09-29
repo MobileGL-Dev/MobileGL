@@ -119,6 +119,17 @@ namespace MGITest {
         unsigned long long cmdWrapPads = 0;
         unsigned long long cmdBytesWritten = 0;
         unsigned long long stageReclaimWaits = 0;
+
+        // ---- P9 (W1, CONTRACT-P9.md §1): the pack-buffer readback's two proofs -------------
+        //
+        // replyPostings: records this client published on a row that carries a reply slot
+        // (ClientSession::ReplyPostings, always counted - it is the create window's clock, not a
+        // stats counter). A read into a pack buffer that moves it went through the reply form.
+        // packBufferReadbackMarks: GpuWritePending's row-4 producer count - the buffers a pack
+        // read marked GPU-written. The reply form marks nothing, so the pair tells the two forms
+        // apart from both sides.
+        unsigned long long replyPostings = 0;
+        unsigned long long packBufferReadbackMarks = 0;
     };
 
     SplitRuntimeState PeekSplitRuntime();

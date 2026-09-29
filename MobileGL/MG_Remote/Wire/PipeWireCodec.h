@@ -543,6 +543,10 @@ namespace MobileGL::MG_Remote::Wire {
         virtual Bool OnGetTextureImage(const MG_Pipe::MGPReadbackInfo&, Uint64, ReplySink*) {
             return false;
         }
+        // P9 (CONTRACT-P9.md §1): the same two reads with a pack buffer as the destination. No
+        // seq and no sink - nothing is answered; the rows land in `Dst` on this side.
+        virtual Bool OnReadPixelsToBuffer(const MG_Pipe::MGPReadbackToBuffer&) { return false; }
+        virtual Bool OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer&) { return false; }
         // `ranges` is info.NumDraws entries. `userIndices` is null unless the record set
         // kDrawHasUserIndices; `indirect` is null unless it set kDrawIsIndirect (P5b d1,
         // CONTRACT-P5B.md). The layout refuses a record that sets both, so at most one of the

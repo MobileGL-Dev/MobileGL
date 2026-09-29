@@ -41,6 +41,18 @@
 // call sites below are declarations only, exactly as the frontend's mutators are.
 #include <MG_Pipe/PipeMutation.h>
 
+// P9 (W1, MG_Remote/CONTRACT-P9.md §1): AN UNPACK SOURCE IS READ FROM THE BUFFER'S CLIENT SHADOW,
+// and under a transport a GPU write into that buffer - a read_pixels_to_buffer, which is how a
+// glReadPixels into a pack buffer now crosses, or a shader store - reaches the shadow only through
+// SyncGpuWrites, exactly as glMapBufferRange and glGetBufferSubData already do. Monolith keeps its
+// read as it was: its ReadPixels maps the driver PBO back into the shadow inside the call, and the
+// pull build compiles this to nothing (G1).
+#if MOBILEGL_BUILD_DISAGGREGATED
+#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                             do {                                                                                                     if (MG_Config::Transport != MG_Config::TransportMode::Monolith) (buffer)->SyncGpuWrites();       } while (0)
+#else
+#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer) ((void)0)
+#endif
+
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
     static UnorderedMap<Uint, Bool> g_autoGenerateMipmapByTextureId;
@@ -1773,6 +1785,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& unpackBuffer =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (!unpackBuffer) return data;
+        MGL_SYNC_PIXEL_UNPACK_SOURCE(unpackBuffer);
         return reinterpret_cast<const char*>(unpackBuffer->MappedData()) + reinterpret_cast<SizeT>(data);
     }
 
@@ -1819,6 +1832,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -1941,6 +1955,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("TexSubImage2D_State: Using Pixel Unpack Buffer Object ID: %u",
                     pixelUnpackBufferObject->GetExternalIndex());
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -2030,6 +2045,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -2535,6 +2551,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -2682,6 +2699,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pixelUnpackBufferObject) {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -2800,6 +2818,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }
@@ -6262,6 +6281,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& pixelUnpackBufferObject =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
+            MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
             originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
                              reinterpret_cast<SizeT>(pixels);
         }

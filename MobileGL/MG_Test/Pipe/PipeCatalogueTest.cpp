@@ -152,11 +152,12 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 19u);
-    EXPECT_EQ(ClassCount<kCtxObject>(), 10u);
+    // + P9's get_texture_image_to_buffer (MG_Remote/CONTRACT-P9.md §1), beside get_texture_image.
+    EXPECT_EQ(ClassCount<kCtxObject>(), 11u);
     // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
-    // copy_framebuffer_to_texture.
-    EXPECT_EQ(ClassCount<kCtxVerb>(), 19u);
+    // copy_framebuffer_to_texture; + delete_stream_output; + P9's read_pixels_to_buffer.
+    EXPECT_EQ(ClassCount<kCtxVerb>(), 20u);
 }
 
 // A row nobody has migrated is null - which is exactly what "this subsystem has not been
@@ -639,7 +640,14 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // exactly as set_shader_buffers has sat catalogued-and-dead since P4a.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetProgramBindings), 80);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::DeleteStreamOutput), 81);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 82);
+    // P9 (MG_Remote/CONTRACT-P9.md §1) appended the two pack-buffer readbacks, by the same rule:
+    // opcodes 82..83, one payload, no flag at all - no reply slot, no blob, no tail.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ReadPixelsToBuffer), 82);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetTextureImageToBuffer), 83);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 84);
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ReadPixelsToBuffer), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::GetTextureImageToBuffer), static_cast<Uint32>(kNone));
+    EXPECT_EQ(sizeof(MGPReadbackToBuffer), 104u);
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetProgramBindings),
               static_cast<Uint32>(kVarTail | kHostSpan));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
@@ -792,6 +800,8 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
         MGPWireOp::SetProgramBindings, MGPWireOp::SetShaderBuffers,
         MGPWireOp::SetVertexBuffers, MGPWireOp::SetFramebufferState,
         MGPWireOp::CreateShaderState, MGPWireOp::SetDrawProgram,
+        // P9: the pack-buffer readbacks - the point of the two rows is that nothing waits.
+        MGPWireOp::ReadPixelsToBuffer, MGPWireOp::GetTextureImageToBuffer,
     };
     for (const MGPWireOp op : noneRows) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitNone) << WireOpNameForDiag(op);
@@ -1025,8 +1035,9 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // the two TAIL ELEMENT types beside it, MGPProgramSamplerUnit and MGPProgramStorageOverride
     // (MG_Remote/CONTRACT-P5E.md §1) - the tails are listed for the same reason MGPBufferRange
     // and MGPVertexAttribWire are: the comparator has to see INTO an element whose members
-    // include an MGHostSpan and a pad word, or it would memcmp the padding: 82.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 82u);
+    // include an MGHostSpan and a pad word, or it would memcmp the padding: 82. P9 appended the
+    // pack-buffer readbacks' one payload, MGPReadbackToBuffer (CONTRACT-P9.md §1): 83.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 83u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);

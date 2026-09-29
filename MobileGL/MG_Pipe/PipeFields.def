@@ -230,6 +230,10 @@
 #define MGP_FIELDS_MGPReadbackInfo(F) \
     F(Res) F(Box) F(Format) F(Type) F(Target) F(Level) F(DstOffset) F(DstSize)
 
+// P9 (CONTRACT-P9.md §1): the pack-buffer readback. Src is one field, as MGPSubData's box is.
+#define MGP_FIELDS_MGPReadbackToBuffer(F) \
+    F(Src) F(Dst) F(DstBase) F(RowStride) F(ImageStride) F(SwapGroup)
+
 #define MGP_FIELDS_MGPDrawInfo(F) \
     F(Mode) F(IndexSize) F(Flags) F(InstanceCount) F(StartInstance) F(RestartIndex) F(DrawIdOffset) \
     F(IndexResource) F(MinIndex) F(MaxIndex) F(XfbCpuCapturedVertices) F(NumDraws)
@@ -412,7 +416,8 @@
     P(MGPStreamOutputTargets) P(MGPGlobalConstants) P(MGPAttribValue) P(MGPVertexAttribDefaults) \
     P(MGPPixelPackState) P(MGPPatchState) P(ResidualValueBlock) P(MGPResidualValueState) \
     P(MGPSubRegion) P(MGPSubData) P(MGPSubDataComplete) P(MGPFlushRange) P(MGPReadback) \
-    P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPDrawInfo) \
+    P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPReadbackToBuffer) \
+    P(MGPDrawInfo) \
     P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
     P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
     P(MGPSurfaceInfo) \

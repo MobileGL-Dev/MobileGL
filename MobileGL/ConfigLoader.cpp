@@ -421,6 +421,8 @@ namespace MobileGL::MG_ConfigLoader {
         // cap of 4 (see WireTables.cpp's kCreateWindowMax). WireTables.cpp's static_assert and
         // StreamLink's crossing log are the checks on this number.
         ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 10, 1, 12);
+        // P9 W1: the pack-buffer readback's A/B and red-once control (Config.h says both).
+        ipc.PboReadbackSync = QueryEnvUint32("MOBILEGL_IPC_PBO_READBACK_SYNC", 0, 0, 1);
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the
@@ -522,11 +524,11 @@ namespace MobileGL::MG_ConfigLoader {
         // changes the wall clock by seconds (the P12 sweep: 28.3 s at 1 down to 10.8 s at 6) a
         // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
-                "persistent-block=%uKiB create-window=%u "
+                "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u "
                 "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
-                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.AdoptTier,
+                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.AdoptTier,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),

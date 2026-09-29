@@ -95,6 +95,7 @@ inline Bool MGPipeVerify(const MGPBlit& a, const MGPBlit& b, const char** outFie
 inline Bool MGPipeVerify(const MGPClear& a, const MGPClear& b, const char** outField);
 inline Bool MGPipeVerify(const MGPMipPlan& a, const MGPMipPlan& b, const char** outField);
 inline Bool MGPipeVerify(const MGPReadbackInfo& a, const MGPReadbackInfo& b, const char** outField);
+inline Bool MGPipeVerify(const MGPReadbackToBuffer& a, const MGPReadbackToBuffer& b, const char** outField);
 inline Bool MGPipeVerify(const MGPDrawInfo& a, const MGPDrawInfo& b, const char** outField);
 inline Bool MGPipeVerify(const MGPDrawRange& a, const MGPDrawRange& b, const char** outField);
 inline Bool MGPipeVerify(const MGPDrawIndirect& a, const MGPDrawIndirect& b, const char** outField);
@@ -229,6 +230,8 @@ template <>
 struct MGPipeHasFieldVerifier<MGPMipPlan> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPReadbackInfo> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPReadbackToBuffer> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPDrawInfo> : std::true_type {};
 template <>
@@ -592,6 +595,11 @@ inline Bool MGPipeVerify(const MGPReadbackInfo& a, const MGPReadbackInfo& b, con
     return true;
 }
 
+inline Bool MGPipeVerify(const MGPReadbackToBuffer& a, const MGPReadbackToBuffer& b, const char** outField) {
+    MGP_FIELDS_MGPReadbackToBuffer(MGP_VERIFY_FIELD)
+    return true;
+}
+
 inline Bool MGPipeVerify(const MGPDrawInfo& a, const MGPDrawInfo& b, const char** outField) {
     MGP_FIELDS_MGPDrawInfo(MGP_VERIFY_FIELD)
     return true;
@@ -749,4 +757,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 82;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 83;

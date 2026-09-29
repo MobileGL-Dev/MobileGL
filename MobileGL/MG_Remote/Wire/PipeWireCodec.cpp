@@ -261,7 +261,9 @@ namespace MobileGL::MG_Remote::Wire {
     X(ObjectDeath, MGPHandleOnly)                                                              \
     X(SetContextValues, MGPContextValues)                                                      \
     X(SetProgramBindings, MGPProgramBindings)                                                  \
-    X(DeleteStreamOutput, MGPStreamOutputBind)
+    X(DeleteStreamOutput, MGPStreamOutputBind)                                                 \
+    X(ReadPixelsToBuffer, MGPReadbackToBuffer)                                                 \
+    X(GetTextureImageToBuffer, MGPReadbackToBuffer)
 
     namespace {
 
@@ -2460,6 +2462,17 @@ namespace MobileGL::MG_Remote::Wire {
                    m_verbs->OnBindStreamOutput(*static_cast<const MGPStreamOutputBind*>(payload));
         case MGPWireOp::DeleteStreamOutput:
             return m_verbs && m_verbs->OnDeleteStreamOutput(*static_cast<const MGPStreamOutputBind*>(payload));
+
+        // P9 (CONTRACT-P9.md §1): the pack-buffer readbacks. No reply sink on purpose - the
+        // destination is a resource handle and nothing is answered - so a sink that wanted
+        // one could only be reading the wrong row.
+        case MGPWireOp::ReadPixelsToBuffer:
+            return m_verbs != nullptr &&
+                   m_verbs->OnReadPixelsToBuffer(*static_cast<const MGPReadbackToBuffer*>(payload));
+
+        case MGPWireOp::GetTextureImageToBuffer:
+            return m_verbs != nullptr &&
+                   m_verbs->OnGetTextureImageToBuffer(*static_cast<const MGPReadbackToBuffer*>(payload));
 
         case MGPWireOp::SetStorageBlockBinding: {
             // The block name is the ONE string on the wire (CONTRACT-P5B.md i1): a kHasBlob
