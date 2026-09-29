@@ -345,6 +345,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             pVulkanRenderer.reset();
             ClearProgramResourceCaches();
         }
+        // And the swap interval it asked for (DirectVulkan.h).
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            ForgetRequestedSwapInterval();
+        }
     }
 #else
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() = default;

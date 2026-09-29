@@ -1756,4 +1756,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Optional<Int> GetRequestedSwapInterval() {
         return g_requestedSwapInterval;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    void ForgetRequestedSwapInterval() {
+        g_requestedSwapInterval.reset();
+    }
+#endif
 } // namespace MobileGL::MG_Backend::DirectVulkan
