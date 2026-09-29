@@ -36,8 +36,10 @@
 #include <Config.h> // MG_Config::SplitTransportRequestedByConfig
 #include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeServerArm, D1c's role predicate
 #include <MG_State/GLState/Core.h>
+#include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <algorithm>
 #include <atomic>
 
 namespace MobileGL::MG_Remote::Client {
@@ -66,6 +68,36 @@ namespace MobileGL::MG_Remote::Client {
                     "beat the handshake",
                     what);
         }
+
+        // P10 B: GL_KHR_parallel_shader_compile IS THE CLIENT'S EXTENSION, SO THE CLIENT DECIDES
+        // IT. Both backends put it in their list when THEIR process compiles asynchronously
+        // (BackendObject_DirectGLES.cpp / BackendObject_DirectVulkan.cpp, "MobileGL's own
+        // capability"), but under split the process that compiles is this one: the pool, its
+        // threads, glMaxShaderCompilerThreadsKHR and GL_MAX_SHADER_COMPILER_THREADS_KHR
+        // (GL_Getter.cpp) all live in the frontend, and the server only ever sees the archive.
+        // Taking the server's word advertised the string from the SERVER's configuration -
+        // under inproc and spawn the server inherits this process's environment and the two
+        // agree by accident; a tcp server is started on its own and they need not. Measured:
+        // AsyncCompileScenario.ExtensionStringMatchesTheConfiguration with
+        // MOBILEGL_ASYNC_SHADER_COMPILE=0 on the client and a default (async-on) tcp server
+        // read the string advertised and the thread count 0, on both backends. So the entry is
+        // re-derived here from this process's switch, on every adoption.
+        void ReconcileClientCompileExtensions(RendererInfo& renderer) {
+            Vector<GLExtension>& extensions = renderer.RendererGLInfo.Extensions;
+            const auto found =
+                std::find(extensions.begin(), extensions.end(), E_GL_KHR_parallel_shader_compile);
+            const Bool advertised = found != extensions.end();
+            const Bool compilesAsync = MG_Util::Async::AsyncShaderCompileEnabled();
+            if (advertised == compilesAsync) return;
+            if (compilesAsync) {
+                extensions.push_back(E_GL_KHR_parallel_shader_compile);
+            } else {
+                extensions.erase(found);
+            }
+            MGLOG_D("MG_Remote client: GL_KHR_parallel_shader_compile %s - the server's list said the "
+                    "opposite, and the compile pool it describes is this process's",
+                    compilesAsync ? "advertised" : "withdrawn");
+        }
     } // namespace
 
     void CapsMirror::Adopt(const MG_Pipe::MGPCaps& caps, const MG_Backend::FormatCapabilityCache& formats,
@@ -80,6 +112,7 @@ namespace MobileGL::MG_Remote::Client {
         m_caps.RendererInfo = MG_Pipe::MGPBlobRef{};
         m_formats = formats;
         m_renderer = renderer;
+        ReconcileClientCompileExtensions(m_renderer);
         m_apiVersion = apiVersion;
         m_backend = backend;
         ++m_generation;
