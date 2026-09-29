@@ -1376,8 +1376,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
                                            Uint32 depthSlice, const VkClearValue& clearValue,
                                            VkImageLayout finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        // Records the texture's queued clears. By default the texture is synced first, which
+        // uploads any pending texels BEFORE the clear - right only for texels written before it.
+        // `uploadPendingTexels = false` leaves them pending (OrderPendingUploadAfterRecording).
         Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
-                                               MG_State::GLState::ITextureObject& texture);
+                                               MG_State::GLState::ITextureObject& texture,
+                                               Bool uploadPendingTexels = true);
+        // Texture uploads run in a batch submitted ahead of the frame's recording, so the upload
+        // the next sync of `texture` records would land BEFORE a write already recorded into the
+        // same image (a render, clear, blit or copy), and before a clear still queued for it (such
+        // a clear predates the texels: SettleTexelsBeforeQueuedClear). When either holds, this
+        // records the queued clear without the texels and submits the recording, so the upload
+        // follows both. An image the recording only READ keeps the old trade: no submit, and its
+        // earlier reads see the newer texels. It may end the render pass and replace
+        // frame.commandBuffer (recording again on return), so call it only where the caller holds
+        // no render-pass or command-buffer state across it. Returns whether it submitted.
+        Bool OrderPendingUploadAfterRecording(FrameContext::FrameData& frame,
+                                              MG_State::GLState::ITextureObject& texture);
+        // Called for each texture a glClear/glClearBuffer* is about to queue a clear on: uploads
+        // whatever texels are still pending (and mints the image if there is none), so that any
+        // texel pending when the clear is materialized was written after it.
+        void SettleTexelsBeforeQueuedClear(const MG_State::GLState::FramebufferObject& framebuffer,
+                                           const MG_State::GLState::FramebufferAttachmentObject& attachment);
         // The multisample arm of the above. Split out rather than branched inline because it
         // shares none of the transfer path: a multisample image carries no TRANSFER_DST usage, so
         // neither the TRANSFER_DST transition nor vkCmdClearColorImage is legal on one.

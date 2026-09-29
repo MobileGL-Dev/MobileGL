@@ -1293,6 +1293,42 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    VkTextureManager::TextureResource* VkTextureManager::FindTextureResource(
+        MG_State::GLState::ITextureObject& textureOrView) {
+        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
+        return it != m_textureResources.end() ? &it->second : nullptr;
+    }
+
+    Bool VkTextureManager::HasLiveImage(MG_State::GLState::ITextureObject& textureOrView) const {
+        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
+        return it != m_textureResources.end() && it->second.image != VK_NULL_HANDLE;
+    }
+
+    Bool VkTextureManager::HasPendingTexelUpload(MG_State::GLState::ITextureObject& textureOrView) const {
+        auto& storage = StorageTextureOf(textureOrView);
+        auto it = m_textureResources.find(MakeTextureIdentity(&storage));
+        if (it == m_textureResources.end() || it->second.image == VK_NULL_HANDLE) {
+            return false;
+        }
+        return it->second.syncedShapeVersion == storage.GetShapeVersion() &&
+               it->second.syncedContentVersion != storage.GetContentVersion();
+    }
+
+    Bool VkTextureManager::WasTextureWrittenThisRecording(MG_State::GLState::ITextureObject& textureOrView) const {
+        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(textureOrView)));
+        return it != m_textureResources.end() && it->second.lastRecordingWriteGeneration == m_recordingGeneration;
+    }
+
+    void VkTextureManager::StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture) {
+        if (texture == nullptr) {
+            return;
+        }
+        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(*texture)));
+        if (it != m_textureResources.end()) {
+            StampResourceRecordingWrite(it->second);
+        }
+    }
+
     void VkTextureManager::UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout) {
         MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayout: texture is null");
         auto it = m_textureResources.find(MakeTextureIdentity(texture));
@@ -1321,7 +1357,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d mipLevel=%u out of range %u",
                         texture->GetExternalIndex(), writtenMipLevel, resource.mipLevels);
         // Pre-pass stream bookkeeping: the render pass that just ended wrote this image.
-        StampResourceRecordingUse(resource);
+        StampResourceRecordingWrite(resource);
 
         if (resource.layout != newLayout && resource.mipLevels > 1) {
             VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -1435,8 +1471,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                               resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionTextureForStorageImage: transition failed for textureId=%d",
                         texture.GetExternalIndex());
-        // Pre-pass stream bookkeeping: a command referencing the image was recorded.
-        StampResourceRecordingUse(*resource);
+        // Pre-pass stream bookkeeping: a command referencing the image was recorded, and an
+        // image unit may store to it.
+        StampResourceRecordingWrite(*resource);
         return ok;
     }
 

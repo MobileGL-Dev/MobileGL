@@ -89,6 +89,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/NonCoreImageFormatScenario.cpp
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/ImageBindableRemintScenario.cpp
+    Scenarios/PartialUploadOverGpuContentScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/IoBlockNameCollisionScenario.cpp
