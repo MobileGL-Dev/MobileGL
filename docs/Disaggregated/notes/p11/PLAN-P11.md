@@ -30,7 +30,7 @@
 
 **消费者（用户 2026-09-29）**：从 Termux 之类的其他 app 里启动的 GL 程序，连同一台设备上的 render server。这类 client 是另一个 app（另一个 uid、另一组 SELinux 类别），今天只能走 TCP loopback——Stream 数据面，T0 在上面不可能；render server 的 `@abstract` / 文件路径 unix 端点按其注释"只有本 app 能连"（`ServerControlActivity.java`）。所以 B 先要一条跨 app、能传 fd 的通道，数据面才能换成共享内存：
 
-- **B0（设备探针，先做）**：用另一个 MobileGL APK（不同包名 = 不同 uid）代替 Termux，测 ① 跨 app 连 render server 的 abstract unix 套接字并用 `SCM_RIGHTS` 传 fd（MLS 类别下预计被拒，要实测）；② 不通时的 Binder 引导（Termux:X11 的做法：`app_process` 起的 Java 入口经广播把 Binder 交给另一个 app，再用 `ParcelFileDescriptor` 传 socketpair 的一端）；③ 经这条通道传 AHardwareBuffer 并导入（接 A3）。
+- **B0（设备探针，先做）**：跨 app 的 client 用 **retrace client + server app** 实现（用户 2026-09-29；不走 Termux 的路子）——trace APK 里的 retrace client 是一个 app，render server 跑在另一个包名的 APK 里（不同 uid、不同 SELinux 类别）。测 ① retrace client 能否连上 server app 的 abstract unix 套接字并用 `SCM_RIGHTS` 传 fd（MLS 类别下预计被拒，要实测）；② 不通时由两个 app 自己的 Java 侧引导：server app 暴露一个 bound Service，返回 socketpair 一端的 `ParcelFileDescriptor`，client app 绑定后交给原生 client；③ 经这条通道传 AHardwareBuffer 并导入（接 A3）。
 - **B1（跨 app 共享内存数据面）**：控制面走 B0 选出的通道、数据面 `SharedSegments`（memfd 经 fd 传）——P10 设备实测同一 rd12 在 tcp loopback 51 fps、spawn+shm 120 fps（`notes/p10/C-MEASUREMENTS.md` §2），这一步本身就是外部 client 最大的收益，与 T0 无关。
 - **B2（T0）**：在 B1 的通道上做 AHB 导入，形状如下。
 
