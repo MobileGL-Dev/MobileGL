@@ -90,6 +90,10 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
             GTest::gtest_main
             ${LINK_LIBRARIES}
     )
+    if (test STREQUAL "ServerSpawnTest")
+        # P11 B1: reads the broker's PairBind templates out of android-plugin/.../PairBindFrames.java.
+        target_compile_definitions(${test} PRIVATE MOBILEGL_SOURCE_ROOT="${MGL_ROOT}")
+    endif ()
 
     if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR
         test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "AdoptTierStreamTest")

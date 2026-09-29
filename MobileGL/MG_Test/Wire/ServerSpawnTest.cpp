@@ -65,6 +65,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <MG_Remote/Transport/Framing.h>
 #include <MG_Remote/Transport/PairBind.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -1388,7 +1389,134 @@ namespace {
         return "fd:" + std::to_string(control) + "," + std::to_string(aux);
     }
 
+    // ---- ID-P11-12: the broker's hand-off PairBinds, byte for byte ---------------------------------
+    //
+    // The server app's broker (Java) writes the PairBind pair itself, from two prefixes in
+    // PairBindFrames.java. These read them out of that source file, so the tests below send exactly
+    // what the broker sends - and the template test pins them to the native encoder.
+    std::string ReadJavaHexConstant(const std::string& source, const char* name) {
+        const auto at = source.find(std::string(name) + " =");
+        if (at == std::string::npos) return {};
+        const auto open = source.find('"', at);
+        const auto close = open == std::string::npos ? open : source.find('"', open + 1);
+        if (close == std::string::npos) return {};
+        return source.substr(open + 1, close - open - 1);
+    }
+
+    std::vector<std::uint8_t> HexBytes(const std::string& hex) {
+        std::vector<std::uint8_t> out;
+        for (std::size_t i = 0; i + 1 < hex.size(); i += 2) {
+            out.push_back(static_cast<std::uint8_t>(std::stoul(hex.substr(i, 2), nullptr, 16)));
+        }
+        return out;
+    }
+
+    struct BrokerTemplates {
+        std::vector<std::uint8_t> control;
+        std::vector<std::uint8_t> aux;
+    };
+
+    BrokerTemplates LoadBrokerTemplates() {
+        const std::string path = std::string(MOBILEGL_SOURCE_ROOT) +
+                                 "/android-plugin/app/src/main/java/top/mobilegl/plugin/PairBindFrames.java";
+        std::ifstream file(path);
+        const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        return {HexBytes(ReadJavaHexConstant(source, "CONTROL_PREFIX_HEX")),
+                HexBytes(ReadJavaHexConstant(source, "AUX_PREFIX_HEX"))};
+    }
+
+    // PairBindFrames.frame(nonce, aux), in C++: header (magic, length) + prefix + nonce.
+    std::vector<std::uint8_t> BrokerFrame(const BrokerTemplates& templates, const std::uint8_t (&nonce)[16], bool aux) {
+        const auto& prefix = aux ? templates.aux : templates.control;
+        std::vector<std::uint8_t> payload(prefix);
+        payload.insert(payload.end(), nonce, nonce + 16);
+        std::vector<std::uint8_t> framed;
+        (void)Transport::AppendFrame(framed, payload.data(), payload.size());
+        return framed;
+    }
+
+    bool WriteAll(int fd, const std::vector<std::uint8_t>& bytes) {
+        std::size_t done = 0;
+        while (done < bytes.size()) {
+            const ssize_t n = ::send(fd, bytes.data() + done, bytes.size() - done, MSG_NOSIGNAL);
+            if (n <= 0) return false;
+            done += static_cast<std::size_t>(n);
+        }
+        return true;
+    }
+
 } // namespace
+
+TEST(ServerSpawnTest, TheBrokersPairBindTemplatesAreTheEncoders) {
+    // The broker cannot link the flatbuffers encoder; its bytes are the encoder's up to the nonce, and
+    // this is what keeps them so. A schema change that moves one byte of a PairBind turns this red.
+    const auto templates = LoadBrokerTemplates();
+    ASSERT_FALSE(templates.control.empty()) << "CONTROL_PREFIX_HEX not found in PairBindFrames.java";
+    ASSERT_FALSE(templates.aux.empty()) << "AUX_PREFIX_HEX not found in PairBindFrames.java";
+    std::uint8_t nonce[Transport::kPairNonceBytes];
+    for (int round = 0; round < 32; ++round) {
+        ASSERT_EQ(Transport::SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
+        for (const bool aux : {false, true}) {
+            const auto encoded = Transport::EncodePairBind(nonce, aux);
+            std::vector<std::uint8_t> expected;
+            ASSERT_EQ(Transport::AppendFrame(expected, encoded.data(), encoded.size()), MOBILEGL_OK);
+            EXPECT_EQ(BrokerFrame(templates, nonce, aux), expected) << (aux ? "aux" : "control") << " round " << round;
+        }
+    }
+}
+
+TEST(ServerSpawnTest, APairTheBrokerPresentedAtHandoffWaitsForAHelloThatComesSecondsLater) {
+    // ID-P11-12 end to end: the broker connects AND presents the PairBind pair at hand-off; the
+    // program it was for starts slowly (assets first) and says Hello five seconds later - past the
+    // 2000 ms pairing budget, which the broker's PairBinds already met. The paired session waits for that
+    // Hello (until EOF, ServerMain.cpp kPairedUnixHelloWaitMs) and comes up; the program, told by the
+    // helper's MOBILEGL_IPC_FD_PAIRED=1, does not present a second pair.
+    const auto templates = LoadBrokerTemplates();
+    ASSERT_FALSE(templates.control.empty());
+    const std::string endpoint = Endpoint("handoff");
+    Session session;
+    ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
+    ScopedSessionCleanup cleanup{session};
+    int control = -1, aux = -1;
+    ASSERT_TRUE(BrokerConnectsTwice(endpoint, &control, &aux)) << "the server never listened on " << endpoint;
+    std::uint8_t nonce[Transport::kPairNonceBytes];
+    ASSERT_EQ(Transport::SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
+    ASSERT_TRUE(WriteAll(control, BrokerFrame(templates, nonce, false)));
+    ASSERT_TRUE(WriteAll(aux, BrokerFrame(templates, nonce, true)));
+    std::this_thread::sleep_for(std::chrono::seconds(5)); // the program loading its assets
+    const ScopedEnvironment paired("MOBILEGL_IPC_FD_PAIRED", "1");
+    const ScopedIpcEndpoint configured(FdSpec(control, aux), "auto");
+    ASSERT_EQ(Client::ClientSessionInstance().StartSpawned(), MOBILEGL_OK)
+        << "a pair presented at hand-off did not become a session when its Hello came 5 s later";
+    EXPECT_TRUE(Client::ClientSession::Active() != nullptr);
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0);
+    session.server.pid = -1;
+}
+
+TEST(ServerSpawnTest, APairPresentedOnlyWhenTheProgramStartsIsRefusedByNameOnceThePairingBudgetIsGone) {
+    // Why the broker presents the pair: the flow before ID-P11-12's follow-up - the broker connects and
+    // writes nothing, the program presents the PairBinds only when it reaches its first EGL call - is
+    // refused by the server's PairAcceptor once 2000 ms have passed since the connect, and the program
+    // hears it by name rather than hanging.
+    const std::string endpoint = Endpoint("latepair");
+    Session session;
+    ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
+    ScopedSessionCleanup cleanup{session};
+    int control = -1, aux = -1;
+    ASSERT_TRUE(BrokerConnectsTwice(endpoint, &control, &aux));
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    const ScopedIpcEndpoint configured(FdSpec(control, aux), "auto");
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_NE(Client::ClientSessionInstance().StartSpawned(), MOBILEGL_OK)
+        << "a pair presented after the pairing budget became a session";
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
+              4000)
+        << "the refusal must be answered, not waited out";
+    EXPECT_TRUE(Client::ClientSession::Active() == nullptr);
+}
 
 TEST(ServerSpawnTest, AnFdPairTheBrokerConnectedBringsASharedSegmentSessionUp) {
     // THE B1 CLIENT PATH END TO END against a real server process: the pair was connected by
