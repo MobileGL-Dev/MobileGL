@@ -239,16 +239,31 @@ namespace {
     // ---- 2. the logger ------------------------------------------------------------------------
 
     // One log base for the whole binary: the file sinks latch their path on first use, and gtest
-    // may run every case in one process.
+    // may run every case in one process. A green run leaves nothing in /tmp (the environment below);
+    // a red one keeps both role files for the triage.
+    bool g_logBaseMade = false;
     const std::string& LogBase() {
         static const std::string base = [] {
             const std::string path = "/tmp/mgl-logforward-" + std::to_string(::getpid()) + ".log";
             ::setenv("MOBILEGL_LOG_FILE_PATH", path.c_str(), 1);
             Debug::TruncateRoleLogs(path.c_str());
+            g_logBaseMade = true;
             return path;
         }();
         return base;
     }
+
+    class RemoveRoleLogsIfGreen final : public ::testing::Environment {
+    public:
+        void TearDown() override {
+            if (!g_logBaseMade || !::testing::UnitTest::GetInstance()->Passed()) return;
+            for (const auto role : {Debug::LogRole::Client, Debug::LogRole::Server}) {
+                ::unlink(Debug::RoleLogPath(LogBase().c_str(), role).c_str());
+            }
+        }
+    };
+    [[maybe_unused]] ::testing::Environment* const g_removeRoleLogs =
+        ::testing::AddGlobalTestEnvironment(new RemoveRoleLogsIfGreen);
 
     std::string ReadWhole(const std::string& path) {
         std::string all;
