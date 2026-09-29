@@ -2039,10 +2039,16 @@ set(MGL_ITEST_SPLIT_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
 # only by ConfigLoader's Espryt feature block, so on DirectVulkan it would be a parsed-and-
 # ignored name, and tier 2's informational Magma replay of these registrations wants the two
 # backends' arms to differ only where the product differs.
+#
+# P11 B2: MOBILEGL_ITEST_REQUIRE_GPU=1 IS PINNED here and on the SPAWN list below, as the Magma
+# split/spawn lists and the Espryt TCP list already pin it. Without it a handshake-time Fatal in
+# the harness's forked pre-flight turns every case into a SKIP, which ctest counts as a pass in
+# `-L integration-split` / `-L integration-spawn` (only the gate's integration-gpu passes, which
+# export it job-wide, caught one - and entries without that label were never covered at all).
 mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
     "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
-    "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
+    "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
 # The two counting lanes, one per transport, and they are a PAIR: exit gate E3(c) asks that the
@@ -2114,7 +2120,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_join_environment(MGL_ITEST_GLES_SPAWN_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
-        "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
+        "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
     # A single supervisor serves one session at a time. Fixture teardown also reaps a
@@ -2593,7 +2599,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_magma_arm_shape(${mglItestDsArm})
         string(TOLOWER "${mglItestDsArm}" mglItestDsArmLower)
         mgl_itest_join_environment(mglItestDsEnvironment
-            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1"
             ${mglItestArmTransportEnv} ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
         gtest_discover_tests(MobileGLIntegrationTest
@@ -2792,7 +2798,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MultiDrawScenario.*:IndexedDrawFamilyScenario.MultiDraw*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
     foreach(mglItestMultiDrawTier IN LISTS MGL_SPLIT_MULTIDRAW_TIERS)
         mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT
-            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
             "MOBILEGL_ESPRYT_MULTIDRAW_MODE=${mglItestMultiDrawTier}"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
@@ -3065,7 +3071,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             set(mglD2Locks "${mglD2LogName}\;mobilegl-tcp")
         endif()
         mgl_itest_join_environment(MGL_D2_TUS_ENV_${mglD2Arm}
-            "MOBILEGL_BACKEND_TYPE=DirectGLES" ${mglD2Transport} "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_BACKEND_TYPE=DirectGLES" ${mglD2Transport} "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1" "MOBILEGL_PIPE_PUSH=0x1fff"
             "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
             "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
@@ -3193,7 +3199,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # lane's number. pmap == 0 here means MGPipeApplyMapPersistent handed back a pointer, which is
     # exit gate E3(d) failing, and under inproc that failure is invisible in pixels.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MGITEST_PMAP_LANE=1" "MGITEST_PERSISTENT_MAP_ARM=emulated"
         "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
@@ -3230,7 +3236,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # small ring, not that the small ring bit. The gap is named in t1-v1.md's debts rather than
     # left for someone to discover from a green.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MGITEST_SMALL_RING_LANE=1" "MOBILEGL_IPC_RING_MB=1" "MOBILEGL_IPC_STAGE_MB=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
@@ -3277,7 +3283,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # An entry that cannot fail for the reason it exists is worse than none (R-16), so this lane
     # names the arm it is for in its own prefix. The F1. lane sets the same precedent.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MOBILEGL_IPC_STRICT_ERRORS=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
@@ -4466,7 +4472,7 @@ endif()
 # disaggregated section above, so keeping this one textually apart lets all three merge cleanly.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MGITEST_STRICT_ARMING_LANE=1"
         "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
@@ -4525,7 +4531,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE
         Scenarios/DualBlockScenario.cpp Harness/DualBlockPeek.cpp)
     mgl_itest_join_environment(MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MOBILEGL_IPC_RUN_AHEAD=0"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
@@ -4563,7 +4569,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             set(p5f_rsp_label "${mglItestMagmaLabels}")
         endif()
         mgl_itest_join_environment(p5f_rsp_environment
-            "MOBILEGL_BACKEND_TYPE=${backend}" "MGITEST_SPLIT_LANE=1"
+            "MOBILEGL_BACKEND_TYPE=${backend}" "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             "MGITEST_P5F_RSP_LANE=1" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}${mglItestArmLogTag}.log"
             ${MGL_ITEST_CAPABILITY_ENV} ${p5f_rsp_base_env} ${mglItestArmTransportEnv})
