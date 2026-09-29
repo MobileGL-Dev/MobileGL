@@ -215,6 +215,8 @@
 
   15 / 16 格 shm ≥ tcp；Magma openra 路线 b 按合并中位数差 0.5%（逐次配对 shm 赢 6 / 8，区间完全重叠）：该负载两个数据面都受 server 端限制，shm 不增益。拒绝（token-wrong a/b、token-missing、server-not-running a/b 与强停后、server-no-token）都按名、退出码对、无会话。同 app spawn+shm / inproc 的 rd12 p50 与 A4 相同（策略对 Forked / InProcess 不变，日志 `mask 0xc0`）。
 
+- 重定基后的设备复测（`df826f42` 的 APK，两 app "无限制"，默认环境；`evidence/b1/m-pass2.summary.md`、`m-openra3.summary.md`）：rd12 八格 ssim 全过；shm / tcp 中位数（3 次交错）路线 a Espryt 119.3 / 53.2、Magma 36.4 / 20.3，路线 b Espryt 118.7 / 39.8、Magma 32.5 / 20.4；22 个 shm 运行全部"交接时配对"。Magma openra 在干净设备上重测：路线 a 296.4 / 284.4、路线 b 292.7 / 281.6（都 1.04×）——首轮门那一格的 5 次补测与一个失控的采样子进程（root `tr`，占满一个核约 65 分钟）同时跑过，不作数。慢启动：helper exec 一个先睡 10 s 的包装再 exec retrace，broker 交接后 10.2 s 才 Hello，两后端会话都起、ssim 过。plugin 口味（`.b1p`，界面上 Generate token + Start server）：helper 路线 openra ssim 1.0、rd12 0.99988，HyperOS 省电策略页显示四个选项。
+
 ### 不变量
 
 - G1：原生改动全在 `MG_Remote`（`MOBILEGL_BUILD_DISAGGREGATED` 下）；pull 构建符号增 0 减 0。
