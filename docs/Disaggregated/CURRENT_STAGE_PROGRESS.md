@@ -26,18 +26,18 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 | spawn+shm | 178 fps（+36%） | 89 fps（−12%） |
 | spawn+tcp localhost | 21–23 fps | 77 fps（−24%） |
 | tcp localhost + `SPIN_US=2000` | 63.6 fps（2.9×） | — |
-| tcp over Wi-Fi | hang，0 有效帧 | — |
+| tcp over Wi-Fi（WSL → 手机） | 17.4 fps（带宽约束） | 4.2 fps（RTT 约束） |
 
 - inproc / shm 重负载比 monolith 快（run-ahead 并行 + 探针更少）；轻负载只付固定握手成本。
 - tcp 慢的主因：present credit=1 串行等待 ~74% + futex 唤醒税；不是带宽。
-- **跨主机 TCP 在 `eglMakeCurrent`（控制面 seq 3）100% 挂死**（源码 bug，疑控制面帧重组 / 双 reader 竞态）——验收 B 的直接阻塞项；修好后 Wi-Fi 吞吐 19–22 MiB/s 仍使 rd12 上限 ~40–45 fps。
+- 原先记录的「跨主机 TCP 在 `eglMakeCurrent` 挂死」**不是源码 bug**：WSL 流量被主机 v2rayN 的 `xray_tun` 终结后中继卡住。绕开后 rd12 / openra 都跑通；跨机测试前先跑 `tools/device_bench/disagg/tcp_path_check.sh`。
+- 直连 Wi-Fi 吞吐 14–20 MiB/s，所以 rd12 经 Wi-Fi 的上限 ~18–26 fps。
 
 ## 下一步
 
-1. 修跨主机控制面 hang（`RunSession` 控制泵 / `ControlInbox` 读状态机；脚本 `tools/device_bench/disagg/wifi_hang_repro.sh` 等）。
-2. 打验收 B（另一台机器经 TCP 入世界）与验收 A（FCL 同机 spawn、双后端、杀 server 报 device-lost）。
-3. 收尾：写 `MG_Remote/CONTRACT-P12.md`、修门脚本误导的一行输出、收官审查。
-4. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
-5. 之后按 [`ROADMAP.md`](ROADMAP.md)：P8；P9 → P10 → P11。
+1. 打验收 B（另一台机器经 TCP 入世界；先过 `tcp_path_check.sh`）与验收 A（FCL 同机 spawn、双后端、杀 server 报 device-lost）。
+2. 收尾：写 `MG_Remote/CONTRACT-P12.md`、修门脚本误导的一行输出、收官审查。
+3. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
+4. 之后按 [`ROADMAP.md`](ROADMAP.md)：P8；P9 → P10 → P11。
 
 **阻塞**：没有需要决策的事项。
