@@ -214,6 +214,9 @@ namespace MobileGL::MG_Remote::Server {
         // found signaled. Posted and published at once - a client may be polling on it right now.
         // Dropped with the same loud line as PostGlError before Accept.
         void PostFenceSignaled(MG_Pipe::MGPipeHandle fence);
+        // True when SEG_EVENT is not latched full: an optional post (a fence report) goes
+        // there without parking the apply thread. False before Accept.
+        Bool EventRingHasRoom() const;
         Transport::ITransport* Control_Plane();
 
         // ---- PH-6 (ID-P7-2): THE REVERSE CHANNEL IS FORFEITED, NOT FATAL -------------------

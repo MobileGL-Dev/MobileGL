@@ -1144,6 +1144,11 @@ namespace MobileGL::MG_Remote::Server {
         PublishEvents();
     }
 
+    Bool ServerSession::EventRingHasRoom() const {
+        if (!m_accepted || m_link == nullptr) return false;
+        return m_link->Signals().EventRingFull->load(std::memory_order_acquire) == 0;
+    }
+
     // PH-6 (ID-P7-2). THE FIRST DROP, AND THE LATCH IT RAISES.
     //
     // Logged ONCE, by name, with everything a triage needs: which event, how big, what the

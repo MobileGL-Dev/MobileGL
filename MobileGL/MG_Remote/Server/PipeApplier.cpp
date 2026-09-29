@@ -425,6 +425,11 @@ namespace MobileGL::MG_Remote::Server {
         // swap and not the record's apply. It advances presentAckSerial AND rings the client's
         // bell - a client parked in WaitForPresentAck(kWaitForever) needs the pair.
         if (ServerSession* session = ServerSession::Active()) {
+            // P10 (CONTRACT-P10.md §1): the fences finished by now are reported BEFORE the credit
+            // goes back - a client released by the credit polls or waits on the fence of a frame
+            // or two ago at once, and a report posted only after this batch would race it. A
+            // status query, no submit: the swap has just submitted.
+            if (session->EventRingHasRoom()) ReportSignaledFences(/*flush=*/false);
             session->ReturnPresentCredit(m_lastPresentSerial);
         }
         return true;
