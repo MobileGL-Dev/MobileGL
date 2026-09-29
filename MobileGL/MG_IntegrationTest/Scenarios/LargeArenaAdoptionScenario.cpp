@@ -322,6 +322,44 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_LT(px[0], 50) << "the draw still shows the previous frame's bytes";
     }
 
+    // P11 B2: THE SAME REWRITE WITH NO READBACK BETWEEN THE TWO DRAWS. The case above reads
+    // pixels after the first draw, which retires it before the SubData, so a store that took the
+    // write IN PLACE (straight into pages the GPU reads - a T0 import is the client's
+    // AHardwareBuffer, an adopted store is a coherent map) would still pass it. Here the first
+    // draw is only queued when the arena is rewritten: it must still fetch the bytes it was
+    // issued against (red, left half) and the second draw the new ones (green, right half).
+    TEST_F(LargeArenaAdoptionScenario, ADrawQueuedBeforeASubDataKeepsItsOwnBytes) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLint w = Gl().Width();
+        const GLint h = Gl().Height();
+        UploadQuad(1.f, 0.f, 0.f);
+        glViewport(0, 0, w, h);
+        glClearColor(0.f, 0.f, 0.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(m_program);
+        glBindVertexArray(m_vao);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, w / 2, h);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        UploadQuad(0.f, 1.f, 0.f);
+        glScissor(w / 2, 0, w - w / 2, h);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDisable(GL_SCISSOR_TEST);
+
+        std::array<unsigned char, 4> left = {0, 0, 0, 0};
+        std::array<unsigned char, 4> right = {0, 0, 0, 0};
+        glReadPixels(w / 4, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, left.data());
+        glReadPixels(w / 2 + w / 4, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, right.data());
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_GT(left[0], 200) << "the draw queued BEFORE the rewrite lost its bytes: the SubData reached "
+                                   "pages that draw had not read yet (a write that landed in place instead "
+                                   "of GPU-ordered)";
+        EXPECT_LT(left[1], 50) << "the draw queued before the rewrite fetched the rewritten bytes";
+        EXPECT_GT(right[1], 200) << "the draw after the rewrite did not see the new bytes";
+        EXPECT_LT(right[0], 50) << "the draw after the rewrite still fetched the old bytes";
+    }
+
     // Respecifying a frontend buffer preserves its VAO attachments even when the
     // backend replaces the adopted store's GL name. Keep every attribute binding
     // unchanged so a stale backend VAO cannot be repaired by a frontend rebind.
@@ -368,6 +406,44 @@ void main() { word = 0xC0FFEEu; }
             }
         }
         glDeleteVertexArrays(1, &otherVao);
+    }
+
+    // P11 B2: A RESPECIFY WHILE A DRAW OF THE OLD STORE IS STILL QUEUED. The case above reads pixels
+    // before every respecify, so the old store is retired by then and a server that freed it at
+    // once would still pass. Here the first draw is only queued when the arena is redefined: the
+    // old store (a T0 import: the client's AHardwareBuffer, which the client lets go of at this
+    // very respecify) must outlive it, and the draw must show the bytes it was issued against.
+    TEST_F(LargeArenaAdoptionScenario, ARespecifyWithADrawQueuedKeepsThatDrawsStore) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLint w = Gl().Width();
+        const GLint h = Gl().Height();
+        UploadQuad(1.f, 0.f, 0.f);
+        glViewport(0, 0, w, h);
+        glClearColor(0.f, 0.f, 0.f, 1.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(m_program);
+        glBindVertexArray(m_vao);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, w / 2, h);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindBuffer(GL_ARRAY_BUFFER, m_arena);
+        glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
+        UploadQuad(0.f, 1.f, 0.f);
+        glScissor(w / 2, 0, w - w / 2, h);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glDisable(GL_SCISSOR_TEST);
+
+        std::array<unsigned char, 4> left = {0, 0, 0, 0};
+        std::array<unsigned char, 4> right = {0, 0, 0, 0};
+        glReadPixels(w / 4, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, left.data());
+        glReadPixels(w / 2 + w / 4, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, right.data());
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_GT(left[0], 200) << "the draw queued before the respecify lost the store it was issued "
+                                   "against (freed before that draw ran)";
+        EXPECT_LT(left[1], 50) << "the draw queued before the respecify fetched the new store's bytes";
+        EXPECT_GT(right[1], 200) << "the draw after the respecify did not fetch the new store";
+        EXPECT_LT(right[0], 50) << "the draw after the respecify still fetched the old store";
     }
 
     TEST_F(LargeArenaAdoptionScenario, RespecifiedIndexArenaKeepsVaoBinding) {
