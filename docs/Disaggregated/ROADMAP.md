@@ -36,7 +36,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [P8](notes/p8/README.md) | 把剩余的仿真路径挪到正确的一侧，补齐协议 | 待排 |
 | [**P9**](notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `MG_Remote/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
-| [P11](notes/p11/README.md) | 同机大缓冲零拷贝共享 | 待排 |
+| [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | 进行中（09-29）：已合并 dev；采纳档位在握手时定、落档断言三臂登记；T0 在 app 域两后端 GO；B（同机外部 client 的共享内存 + T0）已排期，B0 探针在跑 |
 | [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
 
 ## 另见

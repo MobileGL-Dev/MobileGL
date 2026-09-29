@@ -1,6 +1,8 @@
-# P11 — persistent map 与 ≥16 MiB 采纳（待排，同机臂专属）
+# P11 — persistent map 与 ≥16 MiB 采纳（进行中）
 
-> 尚未开工。本页保存该阶段在路线图上的完整范围与出口门（2026-09-24 从 [`ROADMAP.md`](../../ROADMAP.md) 阶段表移入，原文照录）；阶段开工后，计划、裁定与报告都放在本目录。
+> **2026-09-29 开工**。计划与范围重划 [`PLAN-P11.md`](PLAN-P11.md)（B 已排期：消费者是同机从其他 app 启动的 GL 程序）；裁定 [`INTEGRATOR-DECISIONS-P11.md`](INTEGRATOR-DECISIONS-P11.md)；真机测量 [`A-DEVICE.md`](A-DEVICE.md)；协议 `MobileGL/MG_Remote/CONTRACT-P11.md`。已落地：合并 dev、A1 / A2（档位在握手时定、断言落档、三臂登记）、A3（T0 在 app 域两后端 GO）、A4（基线重测）。进行中：B0。
+>
+> 下面是该阶段在路线图上的原始范围与出口门（2026-09-24 从 [`ROADMAP.md`](../../ROADMAP.md) 阶段表移入，原文照录）。
 
 ## 摘要
 
