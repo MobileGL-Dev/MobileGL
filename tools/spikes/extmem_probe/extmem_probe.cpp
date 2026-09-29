@@ -91,6 +91,35 @@
 #include <string>
 #include <vector>
 
+// bionic declares memfd_create only from API 30; the trace APK (MOBILEGL_BUILD_EXTMEM_PROBE)
+// builds at the project's API 26, where the syscall itself exists.
+#if defined(__ANDROID__) && __ANDROID_API__ < 30
+#  include <sys/syscall.h>
+static int memfd_create(const char* name, unsigned int flags) {
+    return (int)syscall(__NR_memfd_create, name, flags);
+}
+#endif
+
+// The NDK's libvulkan stub exports Vulkan 1.1 entry points only from API 28; below that
+// (the API-26 trace APK) the two 1.1 calls the probe makes go through the instance.
+static VkInstance gVk11ShimInstance = VK_NULL_HANDLE;
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+static void probeGetPhysicalDeviceProperties2(VkPhysicalDevice pd, VkPhysicalDeviceProperties2* out) {
+    auto fn = (PFN_vkGetPhysicalDeviceProperties2)vkGetInstanceProcAddr(gVk11ShimInstance,
+                                                                         "vkGetPhysicalDeviceProperties2");
+    if (fn) fn(pd, out);
+}
+static void probeGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice pd,
+                                                           const VkPhysicalDeviceExternalBufferInfo* info,
+                                                           VkExternalBufferProperties* out) {
+    auto fn = (PFN_vkGetPhysicalDeviceExternalBufferProperties)vkGetInstanceProcAddr(
+        gVk11ShimInstance, "vkGetPhysicalDeviceExternalBufferProperties");
+    if (fn) fn(pd, info, out);
+}
+#  define vkGetPhysicalDeviceProperties2 probeGetPhysicalDeviceProperties2
+#  define vkGetPhysicalDeviceExternalBufferProperties probeGetPhysicalDeviceExternalBufferProperties
+#endif
+
 // ---------------------------------------------------------------------------
 // tiny logging / result table
 // ---------------------------------------------------------------------------
@@ -557,6 +586,7 @@ static bool vkCtxInit(VkCtx& c, bool verbose) {
         pr("vkCreateInstance failed: %s", vkStr(r).c_str());
         return false;
     }
+    gVk11ShimInstance = c.instance;
 
     uint32_t n = 0;
     vkEnumeratePhysicalDevices(c.instance, &n, nullptr);
