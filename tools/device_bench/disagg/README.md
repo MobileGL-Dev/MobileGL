@@ -76,6 +76,14 @@ server hang at eglMakeCurrent. Exit 0 = end to end, 1 = middlebox,
 2 = filtered. Fix: `ip route replace <phone>/32 via <LAN gateway> dev eth0`
 as root in WSL (temporary; delete it afterwards).
 
+## fcl_accept.sh — P12 exit gate (a)
+
+FCL's Minecraft renders into the Render Server's on-screen window on the same phone, then
+`fcl_accept.sh <backend> kill` kills the server and checks the client latches DEVICE LOST and FCL
+survives. Needs the FCL fork's version setting "keepRunningInBackground" ON in `config.json`
+(FCL pauses the game the moment its Activity leaves the foreground). The server is started through
+the Render Server screen's documented extras. Results: `docs/Disaggregated/notes/p12/FCL-ACCEPTANCE.md`.
+
 ## crosshost_accept.sh + crosshost_report.py — P12 exit gate (b)
 
 A WSL client replays the openra and rd12 traces against the phone's render server over
