@@ -76,7 +76,18 @@ server hang at eglMakeCurrent. Exit 0 = end to end, 1 = middlebox,
 2 = filtered. Fix: `ip route replace <phone>/32 via <LAN gateway> dev eth0`
 as root in WSL (temporary; delete it afterwards).
 
+## crosshost_accept.sh + crosshost_report.py — P12 exit gate (b)
+
+A WSL client replays the openra and rd12 traces against the phone's render server over
+TCP + stream (ssim gate, then `PRESENT_CREDIT` 1/2/3 benchmarks). Adds a temporary /32 route
+around the host's TUN proxy, checks the path with `tcp_path_check.sh`, and removes the route and
+stops the server on exit. `crosshost_report.py` reduces the output to a table. Results and the
+P6.5 link numbers: `docs/Disaggregated/notes/p12/CROSSHOST-ACCEPTANCE.md`.
+
 ## netbench.sh — Wi-Fi TCP throughput baseline
+
+**Understates the link**: the `toybox nc` sink capped at 18-22 MiB/s while the render server
+read 52 MB/s on the same Wi-Fi. Use the server's `P65ServerFrame` read rate as the throughput number.
 
 WSL -> phone bulk transfer over `toybox nc` sink, 3 reps; refuses to run
 unless `tcp_path_check.sh` passes. The `nc` listener must keep stdin open or it
