@@ -66,6 +66,16 @@ public final class TraceReplayActivity extends Activity {
             return;
         }
 
+        // P11 B1 (gate tooling): run an argv as a CHILD OF THIS APP - this uid, this untrusted_app
+        // domain - and stay in front while it runs. The B1 device gate's route (b): a GL client in
+        // another app than the server, launched through the app_process helper, with its app in the
+        // foreground and the server app behind it on its foreground service.
+        String[] execArgv = intent.getStringArrayExtra(EXTRA_EXEC_ARGV);
+        if (execArgv != null) {
+            runExternalClient(execArgv, intent.getStringExtra(EXTRA_EXEC_ENV), intent.getStringExtra(EXTRA_EXEC_LOG));
+            return;
+        }
+
         @SuppressWarnings("unchecked")
         TraceReplaySession<TraceReplayResult> retained =
                 (TraceReplaySession<TraceReplayResult>) getLastNonConfigurationInstance();
@@ -255,6 +265,58 @@ public final class TraceReplayActivity extends Activity {
     }
 
     private static native String nativeRunSpawnSpike(String serverPath, String markerPath);
+
+    // ---------------------------------------------------------------------------
+    // P11 B1 (gate tooling): an external GL client started from THIS app's process.
+    //
+    //   --esa mobilegl_exec_argv <argv...>   the child's argv (typically /system/bin/app_process /
+    //                                        top.mobilegl.plugin.ExternalClientHelper -- <program> ...)
+    //   --es  mobilegl_exec_env  "K=V;K"     added to (K=V) / removed from (bare K) its environment -
+    //                                        CLASSPATH and MOBILEGL_IPC_TOKEN travel here, not in argv
+    //   --es  mobilegl_exec_log  <file>      its stdout+stderr, then one "exit=<code>" line
+    //
+    // Runtime.exec forks the child in this app's uid and SELinux domain (no transition), which is
+    // what the route stands for. Unlike the P11 hspike launch this Activity STAYS IN FRONT until the
+    // child exits: a backgrounded app is confined to the little cores and frozen by HyperOS, which is
+    // not the topology a user runs a GL program in.
+    // ---------------------------------------------------------------------------
+    private static final String EXTRA_EXEC_ARGV = "mobilegl_exec_argv";
+    private static final String EXTRA_EXEC_ENV = "mobilegl_exec_env";
+    private static final String EXTRA_EXEC_LOG = "mobilegl_exec_log";
+
+    private void runExternalClient(String[] argv, String envOverrides, String logPath) {
+        statusView.setText("External client running\n" + String.join(" ", argv));
+        new Thread(() -> {
+            String outcome;
+            try {
+                ProcessBuilder builder = new ProcessBuilder(argv);
+                builder.redirectErrorStream(true);
+                if (logPath != null) {
+                    File log = new File(logPath);
+                    File parent = log.getParentFile();
+                    if (parent != null) parent.mkdirs();
+                    builder.redirectOutput(ProcessBuilder.Redirect.appendTo(log));
+                }
+                top.mobilegl.plugin.ServerEnvironment.apply(builder.environment(), envOverrides);
+                Log.i(TAG, "external client: exec " + java.util.Arrays.toString(argv));
+                Process child = builder.start();
+                int code = child.waitFor();
+                outcome = "exit=" + code;
+            } catch (Exception error) {
+                outcome = "exit=launch-failed " + error;
+                Log.e(TAG, "external client launch failed", error);
+            }
+            Log.i(TAG, "external client: " + outcome);
+            if (logPath != null) {
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(logPath, true)) {
+                    out.write((outcome + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception ignored) {
+                }
+            }
+            final String shown = outcome;
+            runOnUiThread(() -> statusView.setText("External client finished: " + shown));
+        }, "MobileGLExternalClient").start();
+    }
 
     private static final class TraceReplayRequest {
         final String tracePath;

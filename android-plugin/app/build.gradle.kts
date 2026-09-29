@@ -189,6 +189,15 @@ android {
             // Debuggable dev APK: adb (tcp_device_server.py, the CI TCP lane) starts the
             // server components directly by explicit component name.
             manifestPlaceholders["serverComponentsExported"] = "true"
+            // P11 B1 (gate tooling): -Pmobilegl.packageRetraceExe=ON packages the adb-shell retrace CLI
+            // (tools/trace_replay) as nativeLibraryDir/libMobileGLRetrace.so, so an app - the external
+            // client of the B1 device gate - can exec it (targetSdk 34 forbids exec anywhere else).
+            val packageRetraceExe = (findProperty("mobilegl.packageRetraceExe") ?: "OFF").toString()
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DMOBILEGL_PACKAGE_RETRACE_EXE=$packageRetraceExe"
+                }
+            }
         }
     }
 
