@@ -309,10 +309,10 @@ namespace MobileGL::MG_Remote::Server {
         // get_texture_image's read, shared the same way: the whole level into `bytes`.
         Bool ReadTextureImageTight(const MG_Pipe::MGPReadbackInfo& image, Vector<Uint8>& bytes);
         // P9: `tight` holds Src's pixels, tightly packed; land them in record.Dst at the
-        // record's layout through MGPipeApplyResourceSubData, one write per contiguous run.
-        // `call` names the op in a refusal.
+        // record's layout through MGPipeApplyResourceSubData, one write per contiguous run. The
+        // layout was checked before the read (PipeApplier.cpp ReadbackToBufferLayoutFault).
         Bool LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight,
-                                  Uint64 bytesPerPixel, const char* call);
+                                  Uint64 bytesPerPixel);
 
         struct FenceEntry {
             Uint32 Gen = 0;

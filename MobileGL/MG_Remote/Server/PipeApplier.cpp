@@ -553,28 +553,43 @@ namespace MobileGL::MG_Remote::Server {
     // bytes is the same silently wrong answer. So the refusal latches here, under the same family
     // words.
 
+    // Every number here is the peer's, and they are checked BEFORE the read, so a corrupt record
+    // costs no GPU work - and completely enough that LandReadbackInBuffer cannot meet a range it
+    // would have to refuse: every run it writes starts at or before the LAST row's offset and is
+    // no wider than the tight extent, and both are bounded here by what one MGPSubData can name
+    // (MGPipeSetSubDataBufferRange: an offset up to 2^31-1, a width up to 2^32-1). Whether the
+    // range fits the buffer is the applier's own gate, the one every buffer write meets.
+    static const char* ReadbackToBufferLayoutFault(const MG_Pipe::MGPReadbackToBuffer& record,
+                                                   Uint64 bytesPerPixel) {
+        const MG_Pipe::MGPBox& box = record.Src.Box;
+        const Uint64 rowBytes = static_cast<Uint64>(box.W) * bytesPerPixel;
+        const Uint64 tightBytes = rowBytes * box.H * box.D; // the caller proved this fits
+        if (record.RowStride < rowBytes) return "the row stride is narrower than a tight row";
+        if (box.D > 1 && record.ImageStride < record.RowStride) return "the image stride is narrower than a row";
+        if (record.SwapGroup != 0 && record.SwapGroup != 2 && record.SwapGroup != 4 && record.SwapGroup != 8)
+            return "the swap group is not a byte group GL_PACK_SWAP_BYTES reverses (2, 4 or 8)";
+        constexpr Uint64 kMaxOffset = 0x7FFFFFFFull;
+        const Uint64 lastImage = box.D - 1;
+        const Uint64 lastRow = box.H - 1;
+        if (record.DstBase > kMaxOffset) return "the first row starts past 2^31-1";
+        if (lastImage != 0 && record.ImageStride > (kMaxOffset - record.DstBase) / lastImage)
+            return "the last image starts past 2^31-1";
+        const Uint64 imageBase = record.DstBase + lastImage * record.ImageStride;
+        if (lastRow != 0 && record.RowStride > (kMaxOffset - imageBase) / lastRow)
+            return "the last row starts past 2^31-1";
+        if (tightBytes > 0xFFFFFFFFull) return "the read is wider than one buffer write can name";
+        return nullptr;
+    }
+
     Bool ServerVerbSink::LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight,
-                                              Uint64 bytesPerPixel, const char* call) {
+                                              Uint64 bytesPerPixel) {
         const MG_Pipe::MGPBox& box = record.Src.Box;
         const Uint64 rowBytes = static_cast<Uint64>(box.W) * bytesPerPixel;
         const Uint64 rows = box.H;
         const Uint64 images = box.D;
-        const Uint64 tightBytes = rowBytes * rows * images; // the caller proved this fits
-        if (record.RowStride < rowBytes || (images > 1 && record.ImageStride < record.RowStride)) {
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.layout\"} row stride %llu "
-                    "is narrower than a tight row (%llu) or image stride %llu narrower than a row; the "
-                    "client's ReadbackLayout never produces either",
-                    call, static_cast<unsigned long long>(record.RowStride),
-                    static_cast<unsigned long long>(rowBytes),
-                    static_cast<unsigned long long>(record.ImageStride));
-        }
+        const Uint64 tightBytes = rowBytes * rows * images;
         if (record.SwapGroup != 0) {
             const Uint64 group = record.SwapGroup;
-            if (group != 2 && group != 4 && group != 8) {
-                return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.SwapGroup\"} %llu is "
-                        "not a byte group GL_PACK_SWAP_BYTES can reverse (2, 4 or 8)",
-                        call, static_cast<unsigned long long>(group));
-            }
             for (Uint64 at = 0; at + group <= tightBytes; at += group) {
                 for (Uint64 i = 0; i < group / 2; ++i) std::swap(tight[at + i], tight[at + group - 1 - i]);
             }
@@ -589,31 +604,19 @@ namespace MobileGL::MG_Remote::Server {
         const Uint64 runBytes = rowsTight ? (imagesTight ? tightBytes : rowBytes * rows) : rowBytes;
         const Uint64 runsPerImage = rowsTight ? 1 : rows;
         const Uint64 imageRuns = rowsTight && imagesTight ? 1 : images;
-        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
         for (Uint64 z = 0; z < imageRuns; ++z) {
             for (Uint64 r = 0; r < runsPerImage; ++r) {
-                // DstBase + z * ImageStride + r * RowStride, checked: a peer can write any
-                // three numbers, and a wrapped offset would name bytes the range gate below
-                // then accepts.
-                if ((z != 0 && record.ImageStride > (kUint64Max - record.DstBase) / z) ||
-                    (r != 0 && record.RowStride > kUint64Max / r)) {
-                    return Wire::WireProtocolLatch(call, "destination offset overflows");
-                }
-                const Uint64 imageBase = record.DstBase + z * record.ImageStride;
-                if (r * record.RowStride > kUint64Max - imageBase) {
-                    return Wire::WireProtocolLatch(call, "destination offset overflows");
-                }
-                const Uint64 offset = imageBase + r * record.RowStride;
+                // No overflow and no refusal below: ReadbackToBufferLayoutFault bounded the last
+                // offset and the widest run before the read.
+                const Uint64 offset = record.DstBase + z * record.ImageStride + r * record.RowStride;
                 MG_Pipe::MGPSubData write{};
                 write.Res = record.Dst;
                 write.Target = MG_Pipe::kMGPipeResourceTargetBuffer;
                 // HasLiveHostWrites stays 0 and that is the client's fact, not a default: the
-                // client takes this form only for a pack buffer it does not map (EmitTables.cpp,
-                // PackBufferReadbackIsAsync), so "no live host writer" is what a glBufferSubData
-                // of the same bytes would have said.
-                if (!MG_Pipe::MGPipeSetSubDataBufferRange(write, offset, runBytes)) {
-                    return Wire::WireProtocolLatchAt(call, offset, 0x7FFFFFFFull);
-                }
+                // client takes this form only for a pack buffer it does not map
+                // (TextureReadbackEmit.inc, PackBufferReadbackTarget), so "no live host writer" is
+                // what a glBufferSubData of the same bytes would have said.
+                if (!MG_Pipe::MGPipeSetSubDataBufferRange(write, offset, runBytes)) return false;
                 const Uint8* bytes = tight + (z * runsPerImage + r) * runBytes;
                 ++m_bufferReadbackWrites;
                 // The acceptance is the applier's (a dead handle is a counted no-op, a range
@@ -630,35 +633,40 @@ namespace MobileGL::MG_Remote::Server {
         const Uint64 bpp = static_cast<Uint64>(MG_Util::GetInputBytesPerPixel(
             MG_Util::ConvertGLEnumToTextureInputFormat(static_cast<GLenum>(info.Format)),
             MG_Util::ConvertGLEnumToTexturePixelDataType(static_cast<GLenum>(info.Type))));
-        // The reply form's shape checks, and its PH-3 bound: the scratch is sized from the
-        // record, so the SERVER's own maxReplyBytes caps it exactly as it caps an answer - the
-        // client bands this form by the same number (PlanReadbackBands), so no correct client
-        // is refused by it.
+        // The reply form's shape checks and its PH-3 bound: the scratch is sized from the record,
+        // so the SERVER's own maxReplyBytes caps it exactly as it caps an answer - the client bands
+        // this form by the same number (PlanReadbackBands), so no correct client is refused by it.
+        // ONE latch site for every shape fault (PeerLatchTest's row names it once).
+        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
+        const char* fault = nullptr;
+        Uint64 tight = 0;
         if (bpp == 0 || info.Box.W == 0 || info.Box.H == 0 || info.Box.D != 1 ||
             info.Box.W > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
             info.Box.H > static_cast<Uint32>(std::numeric_limits<GLsizei>::max())) {
-            return Wire::WireProtocolLatch("ReadPixelsToBuffer.extent", "invalid read box or format");
+            fault = "the read box or its format is invalid";
+        } else if (static_cast<Uint64>(info.Box.W) > kUint64Max / info.Box.H ||
+                   static_cast<Uint64>(info.Box.W) * info.Box.H > kUint64Max / bpp) {
+            fault = "the tight extent overflows";
+        } else {
+            tight = static_cast<Uint64>(info.Box.W) * info.Box.H * bpp;
+            if (m_maxReplyBytes == 0 || tight > m_maxReplyBytes ||
+                tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+                fault = "the tight extent is past this server's maxReplyBytes (PH-3)";
+            } else if (info.DstOffset != 0 || info.DstSize != tight) {
+                fault = "Src.DstOffset / Src.DstSize are not 0 / the tight extent";
+            } else {
+                fault = ReadbackToBufferLayoutFault(record, bpp);
+            }
         }
-        constexpr Uint64 kUint64Max = std::numeric_limits<Uint64>::max();
-        const Uint64 width = info.Box.W;
-        const Uint64 height = info.Box.H;
-        if (width > kUint64Max / height || width * height > kUint64Max / bpp) {
-            return Wire::WireProtocolLatch("ReadPixelsToBuffer.extent", "tight extent overflows");
-        }
-        const Uint64 tight = width * height * bpp;
-        if (m_maxReplyBytes == 0 || tight > m_maxReplyBytes ||
-            tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
-            return Wire::WireProtocolLatchAt("ReadPixelsToBuffer.extent", tight, m_maxReplyBytes);
-        }
-        if (info.DstOffset != 0 || info.DstSize != tight) {
-            return Wire::WireProtocolLatchAt("ReadPixelsToBuffer.Src.DstSize", info.DstSize, tight);
+        if (fault != nullptr) {
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ReadPixelsToBuffer.shape\"} %s", fault);
         }
         if (!ReadBoundFramebufferTight(info, tight)) {
             return SessionLatch(MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"ReadPixelsToBuffer\"} - the server "
                     "has no GL.ReadPixels; the pack buffer would keep bytes the application is "
                     "about to read as pixels, and there is no reply to carry the decline");
         }
-        return LandReadbackInBuffer(record, m_readbackScratch.data(), bpp, "ReadPixelsToBuffer");
+        return LandReadbackInBuffer(record, m_readbackScratch.data(), bpp);
     }
 
     Bool ServerVerbSink::OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) {
@@ -666,15 +674,22 @@ namespace MobileGL::MG_Remote::Server {
         const Uint64 bpp = static_cast<Uint64>(MG_Util::GetInputBytesPerPixel(
             MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
             MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)));
+        const char* fault = nullptr;
+        Uint64 tight = 0;
         if (!bpp || !info.Box.W || !info.Box.H || !info.Box.D || info.Box.X || info.Box.Y || info.Box.Z) {
-            return Wire::WireProtocolLatch("GetTextureImageToBuffer.extent", "invalid tight image extent");
+            fault = "the image extent is not a whole level's";
+        } else {
+            tight = static_cast<Uint64>(info.Box.W) * info.Box.H * info.Box.D * bpp;
+            if (tight / bpp / info.Box.W / info.Box.H != info.Box.D) {
+                fault = "the tight extent overflows";
+            } else if (info.DstOffset != 0 || info.DstSize != tight) {
+                fault = "Src.DstOffset / Src.DstSize are not 0 / the tight extent";
+            } else {
+                fault = ReadbackToBufferLayoutFault(record, bpp);
+            }
         }
-        const Uint64 tight = static_cast<Uint64>(info.Box.W) * info.Box.H * info.Box.D * bpp;
-        if (tight / bpp / info.Box.W / info.Box.H != info.Box.D) {
-            return Wire::WireProtocolLatch("GetTextureImageToBuffer.extent", "tight extent overflows");
-        }
-        if (info.DstOffset != 0 || info.DstSize != tight) {
-            return Wire::WireProtocolLatchAt("GetTextureImageToBuffer.Src.DstSize", info.DstSize, tight);
+        if (fault != nullptr) {
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"GetTextureImageToBuffer.shape\"} %s", fault);
         }
         Vector<Uint8> bytes;
         if (!ReadTextureImageTight(info, bytes) || bytes.size() != tight) {
@@ -684,7 +699,7 @@ namespace MobileGL::MG_Remote::Server {
                     static_cast<unsigned long long>(bytes.size()),
                     static_cast<unsigned long long>(tight));
         }
-        return LandReadbackInBuffer(record, bytes.data(), bpp, "GetTextureImageToBuffer");
+        return LandReadbackInBuffer(record, bytes.data(), bpp);
     }
 
     // P5b's server-side stub shape (CONTRACT-P5B.md): the same line the client's class-C table

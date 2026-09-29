@@ -73,6 +73,11 @@ UNREACHABLE = [
     ("ServerLoop.cpp", '"surfaceDestroyed"',
      "raised by the server's own display (surfaceDestroyed -> ServerDisplay::Detach), never by the "
      "peer's bytes; ServerLoopTest's lost-window case is its negative control"),
+    # P9 (CONTRACT-P9.md §1): the pack-buffer read's decline. The reply form's twin answers
+    # DECLINED for the same case and has no row either.
+    ("PipeApplier.cpp", 'Fatal{ReadbackDeclined, "ReadPixelsToBuffer"}',
+     "both server backends install GL.ReadPixels; no record bytes can take the slot away, so the "
+     "arm exists only for a backend that never had one"),
 ]
 
 REMOTE = ROOT / "MobileGL" / "MG_Remote"

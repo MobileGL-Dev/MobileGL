@@ -328,11 +328,18 @@ def build_admitted(accessors, ownership, phase, verbs, verb_ops, waits, verb_cla
 
     Disjunct (1) survives as its own term because it is a stronger claim about the same pair: it
     says the client waits for the record STATICALLY, which is what lets a row whose phase IS this
-    one (GetFramebufferBindingSlot@ReadPixels, GetTextureUnitObject@CopyTexImage2D) still be
-    admitted. Without (1) those two would fail the lane; without (2)
-    GetTransformFeedbackProgram@DrawArrays would fail it, and CONTRACT-P5E §5.7 rules transform
-    feedback out of this phase entirely - so the lane would be red on a row no package here is
-    allowed to touch.
+    one (GetTextureUnitObject@CopyTexImage2D) still be admitted. Without (1) it would fail the
+    lane; without (2) GetTransformFeedbackProgram@DrawArrays would fail it, and CONTRACT-P5E §5.7
+    rules transform feedback out of this phase entirely - so the lane would be red on a row no
+    package here is allowed to touch.
+
+    (1) IS A STATEMENT ABOUT EVERY OP THAT STAMPS THE VERB (P9, CONTRACT-P9.md §1). The mask is
+    per verb and the server stamps the same verb for each op in MGP_VERB_OP_LIST that names it, so
+    one op that publishes without a wait makes the verb's pull torn for THAT op's records.
+    read_pixels_to_buffer stamps ReadPixels and waits for nothing, which is why
+    GetFramebufferBindingSlot@ReadPixels - admitted by (1) until P9 - no longer is. The first
+    version of this function kept the LAST op per verb, so the answer depended on the order of the
+    stamp list.
 
     A verb with no stamp row still admits NOTHING under (1): the server stamps only the ops
     MGP_VERB_OP_LIST names. Under (2) it admits its non-P5e debts, which is correct for the same
@@ -340,16 +347,17 @@ def build_admitted(accessors, ownership, phase, verbs, verb_ops, waits, verb_cla
 
     Returns (per-verb (word0, word1), the sorted <field>@<verb> pairs)."""
     field_index = {name: i for i, name in enumerate(accessors)}
-    op_for_verb = {}
+    ops_for_verb = {}
     for op, verb in verb_ops:
-        op_for_verb[verb] = op
+        ops_for_verb.setdefault(verb, []).append(op)
 
     masks = []
     pairs = []
     for verb in verbs:
         words = [0, 0]
-        op = op_for_verb.get(verb)
-        barriered = op is not None and waits.get(op) not in (None, "kWaitNone")
+        ops = ops_for_verb.get(verb)
+        op = ops[0] if ops else None
+        barriered = bool(ops) and all(waits.get(o) not in (None, "kWaitNone") for o in ops)
         # A VERB WITH NO STAMP ROW ADMITS NOTHING UNDER EITHER DISJUNCT, and that is not an
         # omission - it is the precondition both disjuncts are stated under. This table is read
         # only from CountBarrierPull, which is reachable only after MGPipeServerStampVerbBoundary,
@@ -1026,8 +1034,12 @@ def self_test():
         derivation.append((name, bool(condition)))
 
     # ---- ID-125's six survivors, each by the disjunct that carries it --------------------
-    expect("GetFramebufferBindingSlot@ReadPixels is admitted by disjunct 1 (read_pixels waits)",
-           "GetFramebufferBindingSlot@ReadPixels" in derived)
+    # P9 moved the first of them: read_pixels_to_buffer stamps ReadPixels and waits for nothing,
+    # so ReadPixels is no longer statically barriered and its P5e-owed pair leaves (the P9
+    # controls below put it back by barriering that op, and take it away again from the other op).
+    expect("GetFramebufferBindingSlot@ReadPixels is REJECTED since P9 (read_pixels_to_buffer "
+           "stamps ReadPixels without a wait)",
+           "GetFramebufferBindingSlot@ReadPixels" not in derived)
     expect("GetTextureUnitObject@CopyTexImage2D is admitted by disjunct 1",
            "GetTextureUnitObject@CopyTexImage2D" in derived)
     # Disjunct 2's three. Each is a debt some LATER phase owes, on a verb this phase does not
@@ -1053,17 +1065,27 @@ def self_test():
     # "did the text change" guard would call its own control broken while it was working
     # perfectly - and once item 5 moves that op, the same guard would start passing for a
     # different reason. What has to hold is that the row was FOUND.
-    def unbarrier(op):
+    def set_wait(op, wait_class, text=None):
         edited, count = re.subn(
             r"(/\*\s*\d+\s+" + op + r"\s*\*/\s*static_cast<Uint8>\()kWait\w+(\))",
-            r"\1kWaitNone\2", wire_inc, count=1)
+            r"\g<1>" + wait_class + r"\2", wire_inc if text is None else text, count=1)
         if count != 1:
-            sys.exit("gen_pipe_field_ownership: self-test: could not unbarrier %s - the control's "
-                     "own edit no longer matches generated/PipeWire.inc" % op)
+            sys.exit("gen_pipe_field_ownership: self-test: could not set %s's wait class - the "
+                     "control's own edit no longer matches generated/PipeWire.inc" % op)
         return edited
 
-    unwaited = unbarrier("ReadPixels")
-    expect("unbarriering ReadPixels' op drops its P5e-owed pair "
+    def unbarrier(op, text=None):
+        return set_wait(op, "kWaitNone", text)
+
+    # P9: EVERY OP THAT STAMPS THE VERB. Barrier read_pixels_to_buffer as well and ReadPixels is
+    # statically barriered again, so its P5e-owed pair comes back by disjunct 1 - which proves the
+    # pair left above because of THAT op and not for some other reason.
+    rewaited = set_wait("ReadPixelsToBuffer", "kWaitApplied")
+    expect("barriering read_pixels_to_buffer too brings GetFramebufferBindingSlot@ReadPixels back "
+           "(disjunct 1 needs every op that stamps the verb to wait)",
+           "GetFramebufferBindingSlot@ReadPixels" in admitted_pairs_for(wire_text=rewaited))
+    unwaited = unbarrier("ReadPixels", rewaited)
+    expect("unbarriering ReadPixels' own op drops the pair again "
            "(GetFramebufferBindingSlot@ReadPixels) and keeps the later phases' pairs",
            "GetFramebufferBindingSlot@ReadPixels" not in admitted_pairs_for(wire_text=unwaited)
            and "GetTextureObject@ReadPixels" in admitted_pairs_for(wire_text=unwaited))
@@ -1102,12 +1124,16 @@ def self_test():
     # AND THE RULE OVER THE WHOLE TABLE, not just its six named rows: nothing THIS PHASE owes is
     # ever admitted on a verb no barriered op stamps. If this goes false the allowlist has
     # started forgiving the debt P5e exists to retire.
-    op_for_verb = {verb: op for op, verb in parse_ownership(ownership_text)[3]}
+    # A verb is unbarriered when ANY op that stamps it publishes without a wait (P9) - the same
+    # rule build_admitted states, restated here so that the two cannot drift together.
+    ops_for_verb = {}
+    for op, verb in parse_ownership(ownership_text)[3]:
+        ops_for_verb.setdefault(verb, []).append(op)
     ownership_now, phase_now = run()[0], run()[1]
     unbarriered_p5e = sorted(
         pair for pair in derived
-        if (lambda f, v: (op_for_verb.get(v) is None
-                          or waits_real.get(op_for_verb[v]) in (None, "kWaitNone"))
+        if (lambda f, v: (not ops_for_verb.get(v)
+                          or any(waits_real.get(o) in (None, "kWaitNone") for o in ops_for_verb[v]))
                          and phase_is_owed_by_this_phase(phase_now[f]))(*pair.split("@", 1)))
     expect("no pair this phase owes is admitted on an unbarriered verb: "
            + (", ".join(unbarriered_p5e) or "none"),

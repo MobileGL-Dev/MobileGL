@@ -1238,6 +1238,50 @@ namespace {
              death.Kind = 999;
              return Forge(c, r, P::MGPWireOp::ObjectDeath, Bytes(death));
          }},
+        // P9 (CONTRACT-P9.md §1): the pack-buffer readbacks. Each sink has ONE shape site, fed by
+        // every check (box, extent, PH-3 bound, Src.DstSize, the layout), so one row per sink
+        // covers them; the texture sink's unreadable-level site is the third.
+        {"ReadPixelsToBufferShape", "PipeApplier.cpp", "ReadPixelsToBuffer.shape", Outcome::Latched,
+         "Fatal{ProtocolCorruption, \"ReadPixelsToBuffer.shape\"} the read box or its format is invalid", false,
+         [](Client::ClientSession& c, PeerReport& r) {
+             P::MGPReadbackToBuffer rec{};
+             rec.Src.Box = P::MGPBox{0, 0, 0, 0, 4, 1};
+             rec.Src.Format = GL_RGBA;
+             rec.Src.Type = GL_UNSIGNED_BYTE;
+             rec.Dst = {5u, 1u};
+             rec.RowStride = 16;
+             return Forge(c, r, P::MGPWireOp::ReadPixelsToBuffer, Bytes(rec));
+         }},
+        {"GetTextureImageToBufferShape", "PipeApplier.cpp", "GetTextureImageToBuffer.shape", Outcome::Latched,
+         "Fatal{ProtocolCorruption, \"GetTextureImageToBuffer.shape\"} the image extent is not a whole level's", false,
+         [](Client::ClientSession& c, PeerReport& r) {
+             P::MGPReadbackToBuffer rec{};
+             rec.Src.Res = {7u, 1u};
+             rec.Src.Box = P::MGPBox{0, 0, 0, 4, 4, 0};
+             rec.Src.Format = GL_RGBA;
+             rec.Src.Type = GL_UNSIGNED_BYTE;
+             rec.Src.Target = GL_TEXTURE_2D;
+             rec.Dst = {5u, 1u};
+             rec.RowStride = 16;
+             return Forge(c, r, P::MGPWireOp::GetTextureImageToBuffer, Bytes(rec));
+         }},
+        // A well-shaped record naming a texture the server never created: the level cannot be
+        // read, and with no reply to answer ERROR in, the session latches under the reply form's
+        // family word.
+        {"GetTextureImageToBufferUnreadable", "PipeApplier.cpp", "GetTextureImageToBuffer", Outcome::Latched,
+         "Fatal{ReplyError, \"GetTextureImageToBuffer\"}", true,
+         [](Client::ClientSession& c, PeerReport& r) {
+             P::MGPReadbackToBuffer rec{};
+             rec.Src.Res = {77u, 1u};
+             rec.Src.Box = P::MGPBox{0, 0, 0, 4, 4, 1};
+             rec.Src.Format = GL_RGBA;
+             rec.Src.Type = GL_UNSIGNED_BYTE;
+             rec.Src.Target = GL_TEXTURE_2D;
+             rec.Src.DstSize = 4u * 4u * 4u;
+             rec.Dst = {5u, 1u};
+             rec.RowStride = 16;
+             return Forge(c, r, P::MGPWireOp::GetTextureImageToBuffer, Bytes(rec));
+         }},
         // ===== ServerLoop.cpp: DrainRing
         {"RingRecordHeaderCorrupt", "ServerLoop.cpp", "SEG_CMD record header", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"SEG_CMD record header\"}", false,
