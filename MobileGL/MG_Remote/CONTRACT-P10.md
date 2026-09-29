@@ -4,7 +4,7 @@
 
 ## 范围
 
-fence 轮询不再是往返（§1）。路线图原文里已做完或前提已变的项（client 铸造 query handle、present 1:1、credit 默认 1、无 present 负载的 `SEG_STAGE` 饥饿）见计划 §1。
+fence 轮询不再是往返（§1）；最后一个 class-C 与 split 覆盖（§2）；credit 与往返的测量记录（§3）。路线图原文里已做完或前提已变的项（client 铸造 query handle、present 1:1、credit 默认 1、无 present 负载的 `SEG_STAGE` 饥饿）见计划 §1。
 
 ## 1. fence 轮询从 server 的报告作答（A）
 
@@ -36,7 +36,17 @@ fence 轮询不再是往返（§1）。路线图原文里已做完或前提已�
 
 ### 测量
 
-`PacedFrameFenceWaitsBench`（手动开启，不设门）的配对结果在 [`A-FENCE-POLL.md`](../../docs/Disaggregated/notes/p10/A-FENCE-POLL.md)：Magma 走 tcp 时每帧耗时降 37%、fence 往返为 0；Espryt 在主机 llvmpipe 上没有收益，因为只有阻塞等待才能让 fence 可见。
+`PacedFrameFenceWaitsBench`（手动开启，不设门）的配对结果在 [`A-FENCE-POLL.md`](../../docs/Disaggregated/notes/p10/A-FENCE-POLL.md)：Magma 走 tcp 时每帧耗时降 37%、fence 往返为 0；Espryt 在主机 llvmpipe 上没有收益，因为只有阻塞等待才能让 fence 可见。在 Adreno 830 上两后端都是 0 次往返、598 / 598 次本地作答（[`C-MEASUREMENTS.md`](../../docs/Disaggregated/notes/p10/C-MEASUREMENTS.md) §1）。
+
+## 2. 最后一个 class-C 与 split 覆盖（B）
+
+- 发射表的 `SetSwapInterval` 槽 = server 转发器（与 `eglSwapInterval` 经 `SurfaceControlOp::SetSwapInterval` 的同一路）；`SetSwapInterval_Unmigrated` 与 `BackendObject_Remote` 的覆盖删除。class C 为空：69 已实现 / 0 未迁移。单元控制：`ServerLoopTest.TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame`（经表调用，恰好一个控制帧到达）。
+- caps mirror 采纳 server 快照时，`GL_KHR_parallel_shader_compile` 按 **client** 的 `MOBILEGL_ASYNC_SHADER_COMPILE` 重算：编译池与 `GL_MAX_SHADER_COMPILER_THREADS_KHR` 都在 client。red-once：去掉重算 → 两后端 Tcp 的 `AsyncOff` 扩展串用例红。
+- 登记（全部进门）：`AsyncCompileScenario`（`AsyncOn.` / `AsyncOff.` / `OptimisticShaderStatus.`）与 `XfbPrimitiveQueryScenario` × 两后端 × Split / Spawn / Tcp；`PrimitivesGeneratedNoXfbScenario` 只在 Magma（`PrimGen.` 三臂，`PrimGenReroute.` 仅 Split / Spawn：tcp 的共享 server 读不到改道开关）。red-once：client 查询结果加一 → 101 条里 49 条红（全部 XfbQuery / PrimGen / PrimGenReroute），同名 monolith 条目仍绿。
+
+## 3. 测量（只记录）
+
+见 [`C-MEASUREMENTS.md`](../../docs/Disaggregated/notes/p10/C-MEASUREMENTS.md)，包括真机 fence bench、设备上 TCP loopback 的 `PRESENT_CREDIT` 1/2/3、以及主机 retrace 往返普查。在 loopback 上 credit 没有噪声以外的影响（rd12 51.4 / 51.6 / 52.4 fps），默认值保持 1。
 
 ## 不变量
 

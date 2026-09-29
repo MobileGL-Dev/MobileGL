@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-09-29**：P0 到 P7、P12、**P9** 已完成（P9：读进 PBO 的回读不再等回复、server 日志按级别转发不阻塞、纹理重铸不需要拉取协议，两条故障注入，契约 `MG_Remote/CONTRACT-P9.md`，G1 成立）；下一阶段 **P10**（IPC 跑道）与 **P8**（monolith 跑道）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
+> **2026-09-29**：P0 到 P7、P12、P9、**P10** 已完成（P10：fence 轮询不再往返——server 报告完成的 fence、client 本地作答，真机两后端 0 次往返；最后一个 class-C 清零；credit 1/2/3 在设备 loopback 上量过、默认保持 1；契约 `MG_Remote/CONTRACT-P10.md`，G1 成立）；下一阶段 **P11**（IPC 跑道）与 **P8**（monolith 跑道）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
 
 ## 目标
 
@@ -9,7 +9,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 ## 两条路线
 
 - **单进程路线**：先把接口建起来，让单进程版本也受益（后端拥有自己的状态、可以挪到渲染线程）。P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → P13。
-- **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → **P9** → P10 → P11。
+- **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → **P10** → P11。
 
 ## 阶段一览
 
@@ -35,7 +35,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [**P12**](notes/p12/README.md) | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约 `MG_Remote/CONTRACT-P12.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [P8](notes/p8/README.md) | 把剩余的仿真路径挪到正确的一侧，补齐协议 | 待排 |
 | [**P9**](notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `MG_Remote/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](notes/DEBTS.md) |
-| [P10](notes/p10/README.md) | 同步对象、查询与帧节奏 | 待排 |
+| [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [P11](notes/p11/README.md) | 同机大缓冲零拷贝共享 | 待排 |
 | [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
 

@@ -1,11 +1,14 @@
 # 仍开放的债务（跨阶段）
 
-> 路线图只列"有债务、看这里"。每条写明去向；已关闭的历史债与当时的完整债务表见 [`p5b/README.md`](p5b/README.md) 末节。开放问题另见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)。更新：2026-09-29。
+> 路线图只列"有债务、看这里"。每条写明去向；已关闭的历史债与当时的完整债务表见 [`p5b/README.md`](p5b/README.md) 末节。开放问题另见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)。更新：2026-09-29（P10 收官）。
 
 | 债务 | 去向 |
 |---|---|
 | 未接入内容分块的 record 类型：program archive 与 `draw_vbo` range 尾 | P6.5 sl 与 P8 共用的分片（开放问题 11） |
-| class-C 余项与仿真路径：`SetSwapInterval`（P10）；multi-draw client indices、RGB CPU mip 等具名拒绝 | P8 / P10 |
+| 仿真路径的具名拒绝：multi-draw client indices、RGB CPU mip 等（class C 已于 P10 清零） | P8 |
+| P10 转出：`GL_ARB_gpu_shader_fp64` 按 server 的 `MOBILEGL_ADVERTISE_FP64` 宣告，fp64 收窄却在 client 的编译里；tcp 下 server 环境不同时两者不一致（与已修的 `GL_KHR_parallel_shader_compile` 同类，挂点 `CapsMirror::Adopt`，ID-P10-10） | 小修，无触发报告 |
+| P10 转出（性能）：设备上 tcp loopback 的 rd12 每帧 19.4 ms 中 ~11.2 ms 是生产者在 stream 传输里的停车（发送 + 环 / stage / ack 等待），credit 等待只有 ~0.2 ms（`notes/p10/C-MEASUREMENTS.md` §2，ID-P10-13） | 路线图推完后的性能工作 |
+| P10 转出：Magma 没有注册 `SetSwapInterval`，monolith 与 split 下 `eglSwapInterval` 都是空操作（ID-P10-10） | dev（独立任务） |
 | `GetCaps` 的两个 blobref | 一旦运输，必须有 server → client 的 carrier rule，不能套 `SEG_STAGE` |
 | E1 对照的重定义（ID-122） | 无主（开放问题 24） |
 | `MOBILEGL_IPC_IDLE_EXIT_S` 未解析；`CONTRACT-P6.md` 仍把 `DynamicBackendParameters` 定宽记在 P7 名下（已由 P6.5 wf 落地） | 文档 / 小修 |

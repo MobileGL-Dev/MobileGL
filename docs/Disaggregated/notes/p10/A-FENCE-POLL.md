@@ -4,7 +4,7 @@
 
 ## 负载
 
-`FencePollScenario.PacedFrameFenceWaitsBench`（`MGITEST_FENCE_PACE_BENCH=1`）：每帧 clear + `glFenceSync` + 交换，再对 N 帧前（`MGITEST_FENCE_PACE_LAG`，默认 2）的 fence 做 `glClientWaitSync(FLUSH, 1 s)`；600 帧。也就是 Minecraft 的形状，回放语料里没有 trace 带它。A/B = `MOBILEGL_IPC_POLL_ESCALATE=0`（每次都往返，P10 之前的行为）对默认 64。
+`FencePollScenario.PacedFrameFenceWaitsBench`（`MGITEST_FENCE_PACE_BENCH=1`）：每帧 clear + `glFenceSync` + 交换，再对 N 帧前（`MGITEST_FENCE_PACE_LAG`，默认 2）的 fence 做 `glClientWaitSync(FLUSH, 1 s)`；600 帧。也就是 Minecraft 的形状，这里单独拿出来测（回放语料里只有 `improved-transparency-minecraft-26.3` 带 timed wait，见 [`C-MEASUREMENTS.md`](C-MEASUREMENTS.md) §3）。A/B = `MOBILEGL_IPC_POLL_ESCALATE=0`（每次都往返，P10 之前的行为）对默认 64。
 
 ## 结果（3 轮，ms/帧 与 600 帧里的 fence 往返次数）
 
@@ -34,4 +34,4 @@ Espryt 的 timed wait 几乎全部过线，这**不是**报告晚到：
 
 结论：在这台主机的 mesa llvmpipe（ES 3.2）上，`glGetSynciv(GL_SYNC_STATUS)` 与零超时 `glClientWaitSync` 看不到早已完成的 fence，只有真正阻塞的等待才能让它变成 signaled。这是宿主驱动的行为，与传输无关。A 在这里只是**没有收益**，并没有错：过线的等待语义不变，esc=64 与 esc=0 持平。探针都已撤掉，`ReportSignaledFences` 保持门禁通过时的原样。
 
-**真机上的答案归 C**：红米（Adreno 830、Espryt）FCL + Minecraft，esc 0/64 配对，读 `fence-local / round-trips` 计数。
+**真机上的答案（C，[`C-MEASUREMENTS.md`](C-MEASUREMENTS.md) §1）**：在红米（Adreno 830）上同一个 bench，Espryt esc=64 时 0 次往返、598 / 598 次本地作答，与 Magma 相同。上面的现象只出现在 llvmpipe 上。

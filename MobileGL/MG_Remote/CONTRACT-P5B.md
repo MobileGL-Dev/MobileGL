@@ -431,7 +431,8 @@ The wave-3 tail no P5b package owns, by name, so nobody discovers it by grep: `B
 `GetSyncStatus`, `BeginTimeElapsedQuery`, `EndTimeElapsedQuery`, `QueryCounterTimestamp`,
 `IsQueryResultAvailable`, `GetQueryResult64`, `DeleteBackendQuery`, `BeginOcclusionQuery`,
 `EndOcclusionQuery`, `BeginXfbPrimitivesQuery`, `EndXfbPrimitivesQuery`, `GetGpuTimestampNs`,
-`SetSwapInterval` - P9 (readbacks), P10 (queries, syncs, swap interval).
+`SetSwapInterval` - P9 (readbacks), P10 (queries, syncs, swap interval). (2026-09-29: all are
+emitted now; the last one, `SetSwapInterval`, went in P10 - `CONTRACT-P10.md` §2.)
 
 ---
 

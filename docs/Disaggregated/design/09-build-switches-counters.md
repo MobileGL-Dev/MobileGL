@@ -53,6 +53,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_RUN_AHEAD` | 1 | P5e run-ahead；只是合取式的一半（server 须发布 `kCapRunAheadApply`）；`0` 是 A/B 对照 |
 | `MOBILEGL_IPC_VERB_BARRIER` | 1 | `0` 只作阴性对照，且同时关掉 run-ahead |
 | `MOBILEGL_IPC_PRESENT_CREDIT` | 1 | 1..8，§14 |
+| `MOBILEGL_IPC_POLL_ESCALATE` | 64 | 未报告 fence 的零超时轮询本地答"未完成"，同一 fence 连续第 N 次才往返（P10，`CONTRACT-P10.md` §1）；`0` = 每次轮询都往返，是 A/B 对照 |
 | `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 强制 0 |
 | `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
 | `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | Magma wire 臂延迟回收的水位线；`0` 是 M2 阴性对照 |
@@ -62,7 +63,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_SPIN_US` / `MOBILEGL_IPC_SERVER_AFFINITY` | 50 / `auto` | park 前自旋预算 / apply 线程亲和（Redmi 内核忽略） |
 | `MOBILEGL_IPC_RESPAWN` | — | 具名拒绝：没有阶段实现 server 重启后的全量重推 |
 
-显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`。计划中未接线：`MOBILEGL_IPC_POLL_ESCALATE`（P10）、`MOBILEGL_IPC_IDLE_EXIT_S`（未解析）。
+显式不设立：`MOBILEGL_IPC_PROGRAM`（没有 relink 档）、`MOBILEGL_IPC_VALIDATE_SERVER`。计划中未接线：`MOBILEGL_IPC_IDLE_EXIT_S`（未解析）。
 
 ## 附 B：边界计数器（`MobileGL/MG_Util/Metrics/PipeStats.h`）
 

@@ -659,6 +659,8 @@ Negative controls, each run red once:
 7. **"The 511 class-C entries" in §11** is the P5-joint census
    (`docs/Disaggregated/notes/p6/census-classC.md`). At this head the `MGR_UNMIGRATED_*` lists are
    empty; `SetSwapInterval` (P10) and `DeleteTransformFeedback` (P9) are the two that remain.
+   (2026-09-29: both are gone. P10 made the `SetSwapInterval` slot the server forwarder, so class C
+   is empty - `CONTRACT-P10.md` §2.)
 
 ---
 
