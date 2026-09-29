@@ -1446,4 +1446,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Optional<Int> GetRequestedSwapInterval() {
         return g_requestedSwapInterval;
     }
+
+    DescriptorPoolCensus GetDescriptorPoolCensus() {
+        return pVulkanRenderer ? pVulkanRenderer->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

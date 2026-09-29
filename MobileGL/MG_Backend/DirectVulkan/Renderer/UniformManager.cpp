@@ -303,6 +303,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_samplerResolveMemoHighWater = 0;
         m_setsPerFrame = setsPerFrame;
         m_peakDescriptorSetsObserved = 0;
+        m_trimQuietEpochs = MG_Config::Features.MagmaDescriptorTrimFrames;
+        // The renderer records its first frame into slot 0 before any BeginFrame runs.
+        m_epochSlot = 0;
+        m_epochOpen = true;
+        m_descriptorSlotTrims = 0;
         m_textureManager = textureManager;
         m_samplerManager = samplerManager;
 
@@ -312,6 +317,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.activeDescriptorPoolIndex = 0;
             frame.allocatedSetsThisFrame = 0;
             frame.peakAllocatedSetsThisFrame = 0;
+            frame.capacitySets = m_setsPerFrame;
+            frame.quietEpochs = 0;
             frame.descriptorPools.clear();
 
             VkDescriptorPool initialPool = VK_NULL_HANDLE;
@@ -361,8 +368,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.activeDescriptorPoolIndex = 0;
             frame.allocatedSetsThisFrame = 0;
             frame.peakAllocatedSetsThisFrame = 0;
+            frame.capacitySets = 0;
+            frame.quietEpochs = 0;
         }
         m_frames.clear();
+        m_epochSlot = 0;
+        m_epochOpen = false;
 
         m_bufferManager = nullptr;
         m_programFactory = nullptr;
@@ -396,6 +407,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 "UniformDescriptorBinder: new descriptor set peak observed=%u (base setsPerFrame=%u, frame=%u, pools=%zu)",
                 m_peakDescriptorSetsObserved, m_setsPerFrame, frameIndex, frame.descriptorPools.size());
         }
+        // The epoch that just ended is the one of the slot begun last - this slot again on the
+        // drain path, the previous frame's slot on the Present path. Its peak is still unreset.
+        if (m_epochOpen && m_epochSlot < m_frames.size()) {
+            NoteEndedEpochForTrim(m_frames[m_epochSlot].peakAllocatedSetsThisFrame);
+        }
+        m_epochSlot = frameIndex;
+        m_epochOpen = true;
+        // No pending command buffer references this slot's sets here (see TrimFrameDescriptorPools
+        // for why that holds at both of BeginFrame's call sites), so a quiet grown slot can be
+        // handed back whole.
+        if (m_trimQuietEpochs != 0 && frame.descriptorPools.size() > 1 &&
+            frame.capacitySets >= kDescriptorTrimMinCapacity && frame.quietEpochs >= m_trimQuietEpochs) {
+            TrimFrameDescriptorPools(frame, frameIndex);
+        }
         frame.activeDescriptorPoolIndex = 0;
         frame.allocatedSetsThisFrame = 0;
         frame.peakAllocatedSetsThisFrame = 0;
@@ -404,11 +429,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // The frame's descriptor sets are recycled above, so last frame's reuse targets
         // are gone: start the per-draw descriptor-reuse cache fresh this frame.
-        for (auto& entry : m_descriptorReuseMemo) {
-            entry.valid = false;
-        }
-        m_fastRebindMemo.valid = false;
-        m_lastBindValid = false;
+        InvalidateDescriptorSetMemos();
         // Re-fingerprint the bound sampler set fresh this frame so any GL object address
         // reuse cannot outlive a single frame (see SamplerResolveMemo). Only the entries a
         // resolve has actually written can be valid, so the high-water mark bounds the
@@ -420,6 +441,68 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_samplerResolveMemo[binding].valid = false;
             m_samplerResolveMemo[binding].infoValid = false;
         }
+    }
+
+    void UniformManager::InvalidateDescriptorSetMemos() {
+        // Every VkDescriptorSet handle held outside the per-layout caches - in this backend they all
+        // live in this class. A trim can hand a destroyed set's handle value to a fresh allocation,
+        // so the bind-dedup shadow must drop too, not only the two reuse memos.
+        for (auto& entry : m_descriptorReuseMemo) {
+            entry.valid = false;
+        }
+        m_fastRebindMemo.valid = false;
+        m_lastBindValid = false;
+    }
+
+    void UniformManager::NoteEndedEpochForTrim(Uint32 epochPeakSets) {
+        for (auto& slot : m_frames) {
+            if (static_cast<Uint64>(epochPeakSets) * kDescriptorTrimHeadroom > slot.capacitySets) {
+                slot.quietEpochs = 0;
+            } else if (slot.quietEpochs < std::numeric_limits<Uint32>::max()) {
+                ++slot.quietEpochs;
+            }
+        }
+    }
+
+    void UniformManager::TrimFrameDescriptorPools(FrameResources& frame, Uint32 frameIndex) {
+        const SizeT poolsBefore = frame.descriptorPools.size();
+        const Uint64 capacityBefore = frame.capacitySets;
+        // Holders first: the per-layout cache and every memo that may name one of these sets.
+        frame.descriptorSetCacheByLayout.clear();
+        InvalidateDescriptorSetMemos();
+        for (SizeT i = 1; i < frame.descriptorPools.size(); ++i) {
+            if (frame.descriptorPools[i].handle != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(m_device, frame.descriptorPools[i].handle, nullptr);
+            }
+        }
+        frame.descriptorPools.resize(1);
+        auto& base = frame.descriptorPools[0];
+        // Frees every set allocated from it; the spec defines no failure for vkResetDescriptorPool.
+        vkResetDescriptorPool(m_device, base.handle, 0);
+        base.allocatedSets = 0;
+        frame.activeDescriptorPoolIndex = 0;
+        frame.capacitySets = base.maxSets;
+        frame.quietEpochs = 0;
+        ++m_descriptorSlotTrims;
+        MGLOG_D("UniformDescriptorBinder: frame %u trimmed its descriptor pools (%zu pools / %llu sets -> 1 / %u)",
+                frameIndex, poolsBefore, static_cast<unsigned long long>(capacityBefore), base.maxSets);
+    }
+
+    DescriptorPoolCensus UniformManager::GetDescriptorPoolCensus() const {
+        DescriptorPoolCensus census;
+        census.available = true;
+        census.frameSlots = static_cast<uint32_t>(m_frames.size());
+        for (const auto& frame : m_frames) {
+            const auto poolCount = static_cast<uint32_t>(frame.descriptorPools.size());
+            census.pools += poolCount;
+            census.maxPoolsInOneSlot = std::max(census.maxPoolsInOneSlot, poolCount);
+            census.capacitySets += frame.capacitySets;
+            for (const auto& cacheEntryPair : frame.descriptorSetCacheByLayout) {
+                census.cachedSets += cacheEntryPair.second.sets.size();
+            }
+        }
+        census.slotTrims = m_descriptorSlotTrims;
+        return census;
     }
 
     void UniformManager::OnDescriptorSetLayoutDestroyed(VkDescriptorSetLayout descriptorSetLayout) {
@@ -2174,6 +2257,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         frame.descriptorPools.push_back({grownPool, grownMaxSets, 0, updateAfterBind});
         frame.activeDescriptorPoolIndex = static_cast<Uint32>(frame.descriptorPools.size() - 1);
+        frame.capacitySets += grownMaxSets;
+        // Growing is the opposite of quiet: a trim must wait a full quiet run from here.
+        frame.quietEpochs = 0;
         MGLOG_D("UniformDescriptorBinder: frame %u descriptor pool exhausted, grew a %u-set pool (updateAfterBind=%d), "
                 "poolCount=%zu",
                 frameIndex, grownMaxSets, updateAfterBind ? 1 : 0, frame.descriptorPools.size());

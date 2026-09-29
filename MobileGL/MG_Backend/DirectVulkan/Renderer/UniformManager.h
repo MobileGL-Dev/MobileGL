@@ -12,6 +12,7 @@
 #include "VkBufferManager.h"
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
+#include "../DescriptorPoolCensus.h"
 #include "../VkIncludes.h"
 #include <Includes.h>
 
@@ -63,9 +64,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // FREE_DESCRIPTOR_SET_BIT) and the pool accounting is credited, so program
         // churn recycles pool capacity instead of abandoning it. GPU-safe: the layout
         // only dies after >1024 idle frame boundaries, so no in-flight command buffer
-        // references its sets. This is the only eviction path for the per-layout
-        // caches - a live layout's entry must never be purged (its sets would be
-        // unreachable pool slots), so there is deliberately no age-based sweep here.
+        // references its sets. This is the only PER-LAYOUT eviction path for the
+        // caches - a live layout's entry must never be purged on its own (its sets would be
+        // unreachable pool slots), so there is deliberately no age-based sweep here. The
+        // other path, TrimFrameDescriptorPools, drops a slot's whole cache together with
+        // the pools behind it.
         void OnDescriptorSetLayoutDestroyed(VkDescriptorSetLayout descriptorSetLayout);
         // One record per visited CombinedImageSampler DESCRIPTOR (post fallback substitution,
         // in binding order, and within a binding in array-element order): the resolved texture
@@ -155,6 +158,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // smallest one, and doubling IT made every grown pool the same size.
         static Uint32 NextDescriptorPoolMaxSets(const Vector<DescriptorPoolBucket>& pools, Bool updateAfterBind,
                                                 Uint32 initialMaxSets);
+        // Trim policy (see TrimFrameDescriptorPools). A slot is "quiet" in an epoch whose peak set
+        // count times kDescriptorTrimHeadroom still fits its capacity; a slot that has been quiet for
+        // MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES consecutive epochs, and holds at least
+        // kDescriptorTrimMinCapacity sets, is trimmed. The headroom is what keeps the trim from
+        // thrashing: geometric growth leaves a re-grown slot at least a third full (its pools sum to
+        // under twice the largest, and the largest is under twice the need that added it), so the
+        // epoch that grew a slot is never quiet for it. The floor keeps a slot sized for ordinary
+        // frames from being trimmed at all - the trim exists to give back a burst.
+        static constexpr Uint32 kDescriptorTrimHeadroom = 4;
+        static constexpr Uint32 kDescriptorTrimMinCapacity = 1024;
+        // For tests (DescriptorPoolCensus.h): pools, capacity, cached sets and trims over every slot.
+        DescriptorPoolCensus GetDescriptorPoolCensus() const;
 
     private:
 
@@ -171,6 +186,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 cursor = 0;
         };
 
+        // descriptorSetCacheByLayout is the per-frame set cache: BeginFrame rewinds every cursor, so
+        // a slot re-writes the sets it allocated in earlier frames instead of allocating new ones, and
+        // the cache only ever grows - except through TrimFrameDescriptorPools, which gives a slot's
+        // whole burst back at once (and OnDescriptorSetLayoutDestroyed, one dead layout at a time).
         struct FrameResources {
             Vector<DescriptorPoolBucket> descriptorPools;
             UnorderedMap<VkDescriptorSetLayout, DescriptorSetCacheEntry> descriptorSetCacheByLayout;
@@ -178,6 +197,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 activeDescriptorPoolIndex = 0;
             Uint32 allocatedSetsThisFrame = 0;
             Uint32 peakAllocatedSetsThisFrame = 0;
+            // Sum of maxSets over descriptorPools, kept in step by Initialize, Grow and Trim.
+            Uint64 capacitySets = 0;
+            // Consecutive epochs (see NoteEndedEpochForTrim) that were quiet for THIS slot's capacity.
+            Uint32 quietEpochs = 0;
         };
 
         static Bool ResolveSamplerTexture(const MG_State::GLState::ProgramObject& program,
@@ -303,6 +326,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                       const Vector<Uint32>& dynamicOffsets);
         Bool CreateDescriptorPool(Uint32 maxSets, Bool updateAfterBind, VkDescriptorPool& outPool) const;
         Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex, Bool updateAfterBind);
+        // An epoch is the stretch between two BeginFrame calls: one frame, or the part of one between
+        // two drains (VulkanRenderer::TryDrainFrameTransients). Called by BeginFrame with the epoch
+        // that just ended, it updates every slot's quiet count - a burst in any slot counts against
+        // all of them, so bursts that land in the other slots still hold a slot's trim off.
+        void NoteEndedEpochForTrim(Uint32 epochPeakSets);
+        // Gives a slot's whole descriptor burst back: clears its per-layout cache, destroys every
+        // grown pool and resets the base pool, so the slot re-grows geometrically from setsPerFrame.
+        // Whole-slot rather than per-set: vkFreeDescriptorSets fragments a pool and can never empty
+        // a grown one. Called only from BeginFrame, which runs only when no pending command buffer
+        // references the slot's sets:
+        //   - Present path (VulkanRenderer::Present, after WaitAndAcquireNextImage): the slot's
+        //     imageInFlightFence has been waited. That fence rides the slot's LAST submission - the
+        //     Present submit - and every mid-frame submission of the slot (FlushPendingCommands,
+        //     SplitOversizedRecording, readbacks) went to the same queue earlier, so the fence's
+        //     signal covers them (vkQueueSubmit's fence scope includes all earlier submissions).
+        //   - Drain path (VulkanRenderer::TryDrainFrameTransients): every submission has been
+        //     observed complete and no recording is open.
+        // Sets are per slot: a slot's sets are only ever bound into recordings made while it is the
+        // current slot, so trimming one slot never touches another slot's in-flight work.
+        void TrimFrameDescriptorPools(FrameResources& frame, Uint32 frameIndex);
+        // Drops every handle this class holds to a descriptor set outside the per-layout caches.
+        void InvalidateDescriptorSetMemos();
         VkResult AllocateDescriptorSetsFromActivePool(
             Uint32 frameIndex, const ProgramFactory::VkProgramObject& programObj, VkDescriptorSet& outDescriptorSet);
         VkResult AcquireDescriptorSet(Uint32 frameIndex,
@@ -320,6 +365,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_maxBindings = 0;
         Uint32 m_setsPerFrame = 0;
         Uint32 m_peakDescriptorSetsObserved = 0;
+        // MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES, latched at Initialize (0 = never trim).
+        Uint32 m_trimQuietEpochs = 0;
+        // The slot whose epoch is open (the last one BeginFrame was called for); valid once
+        // m_epochOpen is set. Its peak is the ended epoch's peak at the next BeginFrame.
+        Uint32 m_epochSlot = 0;
+        Bool m_epochOpen = false;
+        Uint64 m_descriptorSlotTrims = 0;
         VkTextureManager* m_textureManager = nullptr;
         VkSamplerManager* m_samplerManager = nullptr;
         mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2D;

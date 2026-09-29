@@ -285,6 +285,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // signal as soon as the GPU actually finishes, which MC 1.21.5's
         // fence-paced ring buffers rely on to recycle their space.
         Uint64 GetSyncPointSubmitIndex() const;
+        // For tests: the per-frame descriptor pools (see DescriptorPoolCensus.h).
+        DescriptorPoolCensus GetDescriptorPoolCensus() const {
+            return m_uniformManager ? m_uniformManager->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
+        }
         // Non-blocking: polls outstanding submission fences and reports
         // whether every submission up to `submitIndex` has completed.
         Bool IsSubmitIndexComplete(Uint64 submitIndex);
