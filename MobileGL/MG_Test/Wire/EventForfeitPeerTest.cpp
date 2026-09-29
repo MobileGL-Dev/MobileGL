@@ -148,8 +148,16 @@ namespace {
     // instead of the server: this host's tcp_rmem lets a receive buffer autotune to 32 MiB, and a
     // peer whose socket takes the whole flood is not a peer that stopped reading.
     constexpr int kStalledReceiveBufferBytes = 16 * 1024;
-    // How long the apply thread gets to log the whole flood with nobody reading it. It needs well
-    // under a second; the budget is for a loaded runner.
+    // How long the apply thread gets to log the whole flood with nobody reading it: it needs about
+    // half a second here. THE CEILING IS NOT SLACK, IT IS THE KERNEL'S. SocketTransport sets
+    // TCP_USER_TIMEOUT to 5000 ms on every TCP connection (SocketTransport.cpp), so a peer that keeps
+    // a zero window for 5 s has its control connection aborted (ETIMEDOUT) - which ends ANY stall,
+    // including a forward that held the apply thread in a socket write the whole time (the red-once
+    // run: the flood "completed" at 5.4 s, after the abort released it). So "the flood got through
+    // while nobody read" only means "the apply thread was not held" if it happened well inside those
+    // 5 s, on a live connection.
+    constexpr std::uint32_t kFloodWithinMs = 4000;
+    // The overall budget for the undrained arm's forfeit and reap, which do not race the kernel.
     constexpr std::uint32_t kFloodBudgetMs = 15000;
     // The longest one forward may take a logging thread (the summary's max-offer-us). The channel
     // spends a lock and a copy; a forward that waited on the peer would spend the whole stall.
@@ -977,8 +985,15 @@ namespace {
             const int code = WaitChild(peer, std::chrono::milliseconds(5000));
             releasePeer.pid = -1;
             ::close(synced[0]);
-            FAIL() << "the flood peer did not get its records out (child exit " << code << ")\n"
-                   << ServerLog(logBase).substr(0, 20000);
+            // In the undrained arm the peer's ResourceCreate / Respecify / SubData WAIT behind the
+            // flood (exit 14..16): the apply thread has to get through 400 flooding records to answer
+            // them, so a forward that holds it shows up here first.
+            FAIL() << "the flood peer did not get its records out (child exit " << code
+                   << (code >= kBufferCreate && code <= kBufferContent
+                           ? ": its wait behind the flood was never answered - the apply thread was held"
+                           : "")
+                   << ")\n"
+                   << LineWith(ServerLog(logBase), "log forwarding ended");
         }
         const auto every = std::chrono::milliseconds(200);
 
@@ -987,12 +1002,17 @@ namespace {
             // own log must reach the flood's last record: every one of the kFloodRecords records is
             // applied (and logs its ERROR line) while the control connection takes no byte. A forward
             // that waits on the socket stalls the apply thread a few MiB in, and this never arrives.
-            const long long reachedMs =
-                WaitForLog(logBase, kFloodErrorNeedle, kFloodRecords, std::chrono::milliseconds(kFloodBudgetMs), every);
+            const long long reachedMs = WaitForLog(logBase, kFloodErrorNeedle, kFloodRecords,
+                                                   std::chrono::milliseconds(kFloodWithinMs),
+                                                   std::chrono::milliseconds(50));
             ASSERT_GE(reachedMs, 0) << "the apply thread did not get through the flood while its client was not "
                                        "reading control - it was held by logging ("
                                     << Count(ServerLog(logBase), kFloodErrorNeedle) << " of " << kFloodRecords
-                                    << " records' ERROR lines logged after " << kFloodBudgetMs << " ms)";
+                                    << " records' ERROR lines logged after " << kFloodWithinMs << " ms)";
+            // ...and on a LIVE connection: not released by the kernel aborting a zero-window socket.
+            ASSERT_EQ(ServerLog(logBase).find("recv failed"), std::string::npos)
+                << "the flood finished only after the control connection died - the stall was ended by "
+                   "TCP_USER_TIMEOUT, not survived";
             // (2) The peer reads again and synchronises its log.
             const char go = 1;
             ASSERT_EQ(::write(release[1], &go, 1), 1);

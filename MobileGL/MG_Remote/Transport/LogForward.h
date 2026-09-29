@@ -43,8 +43,10 @@
 //   * FATAL is ERROR plus a wait: the logging thread is about to abort, and a line still in the
 //     queue when it does is a line the client never gets - the one it most needs. So a FATAL
 //     Offer waits until the sender has written everything up to and including it, for at most
-//     fatalFlushMs, and then returns whether or not the peer took it. (Log.cpp hands a FATAL line
-//     over outside the log mutex, so that wait holds nobody else's line.)
+//     fatalFlushMs, and then returns whether or not the peer took it - and once such a wait has run
+//     out, later FATAL lines do not wait again until the sender has written something (MGLOG_F also
+//     marks survivable conditions, several in a row). (Log.cpp hands a FATAL line over outside the
+//     log mutex, so that wait holds nobody else's line.)
 //   * A LogFlush acknowledgement (OfferControlFrame) is queued BEHIND every line offered before
 //     it, which is what makes MGPipeSyncPeerLog's promise ("every line before the flush is in the
 //     file when the ack arrives") still true now that a line is not on the wire when MGLOG returns.
@@ -176,6 +178,9 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t m_errorBytes = 0;
         std::uint64_t m_nextSeq = 1;
         std::uint64_t m_writtenSeq = 0; // the seq of the last item the sender finished with
+        // m_writtenSeq when a FATAL wait last ran out; while it has not moved since, the next FATAL
+        // does not wait again (Offer). ~0 = no wait has run out.
+        std::uint64_t m_fatalGaveUpAtWritten = ~0ull;
         std::uint64_t m_urgent = 0;     // FATAL lines and control frames queued: do not pace
         // A gap not yet marked in the stream, per class.
         std::uint64_t m_gapLossyLines = 0;

@@ -189,10 +189,22 @@ namespace MobileGL::MG_Remote::Transport {
             return;
         }
         // FATAL: wait - bounded - until the sender has written this line and everything before it.
+        //
+        // ONCE PER STALL, NOT ONCE PER LINE. MGLOG_F is not only the last word before an abort: the
+        // tree also uses it for survivable conditions (the EGL loader's "Failed to load EGL function"
+        // lines, several in a row). If an earlier FATAL wait already ran out and the sender has not
+        // written a single item since, the peer is still not reading and a second wait would only
+        // spend another fatalFlushMs of this thread's time on the same answer - so it is counted as
+        // a timeout at once. The line itself is queued either way.
+        if (m_fatalGaveUpAtWritten == m_writtenSeq) {
+            ++m_counters.fatalFlushTimeouts;
+            return;
+        }
         const auto deadline = started + std::chrono::milliseconds(m_limits.fatalFlushMs);
         if (!m_cv.wait_until(lock, deadline,
                              [this, seq] { return m_writtenSeq >= seq || m_counters.transportFailed; })) {
             ++m_counters.fatalFlushTimeouts;
+            m_fatalGaveUpAtWritten = m_writtenSeq;
         }
     }
 

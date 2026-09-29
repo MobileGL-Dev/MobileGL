@@ -315,6 +315,35 @@ namespace {
         EXPECT_EQ(CapturedLevelOf("w3-logger-marker client-side"), -1);
     }
 
+    // The other kind: the in-process display server's SESSION-scoped forwarder (SetSessionLogForwarder),
+    // which forwards only from the thread that installed it and threads that opted in, OUTSIDE the
+    // log mutex. Same levels, including FATAL.
+    TEST(LogForwardLogger, TheSessionScopedForwarderGetsEachLevelToo) {
+        (void)LogBase();
+        std::thread session([] {
+            Debug::SetThreadLogRole(Debug::LogRole::Server);
+            Debug::SetSessionLogForwarder(&Capture, nullptr);
+            MGLOG_I("w3-session-marker info");
+            MGLOG_W("w3-session-marker warn");
+            MGLOG_E("w3-session-marker error");
+            MGLOG_F("w3-session-marker fatal");
+            // A server-role thread that did NOT opt in is not this session's: it forwards nothing.
+            std::thread other([] {
+                Debug::SetThreadLogRole(Debug::LogRole::Server);
+                MGLOG_E("w3-session-marker not-opted-in");
+            });
+            other.join();
+            Debug::SetLogForwarder(nullptr, nullptr);
+            Debug::SetThreadForwardsLogToPeer(false);
+        });
+        session.join();
+        EXPECT_EQ(CapturedLevelOf("w3-session-marker info"), MOBILEGL_LOG_LEVEL_INFO);
+        EXPECT_EQ(CapturedLevelOf("w3-session-marker warn"), MOBILEGL_LOG_LEVEL_WARN);
+        EXPECT_EQ(CapturedLevelOf("w3-session-marker error"), MOBILEGL_LOG_LEVEL_ERROR);
+        EXPECT_EQ(CapturedLevelOf("w3-session-marker fatal"), MOBILEGL_LOG_LEVEL_FATAL);
+        EXPECT_EQ(CapturedLevelOf("w3-session-marker not-opted-in"), -1);
+    }
+
     TEST(LogForwardLogger, APeerLineIsFiledUnderTheLevelTheWireCarried) {
         const std::string serverLog = Debug::RoleLogPath(LogBase().c_str(), Debug::LogRole::Server);
         // A line the server formatted is written as it came - its header already names its level.
@@ -532,6 +561,13 @@ namespace {
             EXPECT_GE(waited, 250);
             EXPECT_LT(waited, 3000);
             EXPECT_EQ(channel.Counters().fatalFlushTimeouts, 1u);
+            // A second FATAL while nothing has been written since: the stall is known, the line is
+            // queued and the Offer does not spend another bound on the same answer (MGLOG_F also
+            // marks survivable conditions, and they come in runs).
+            const auto again = Clock::now();
+            channel.Offer(MOBILEGL_LOG_LEVEL_FATAL, "fatal held again\n");
+            EXPECT_LT(MillisecondsSince(again), 150) << "a second FATAL waited out the bound again on a known stall";
+            EXPECT_EQ(channel.Counters().fatalFlushTimeouts, 2u);
         }
     }
 
