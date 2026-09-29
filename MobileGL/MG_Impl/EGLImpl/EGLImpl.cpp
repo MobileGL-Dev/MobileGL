@@ -146,11 +146,34 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_NO_SURFACE;
         }
 
+        Uint32 requestedWidth = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0));
+        Uint32 requestedHeight = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0));
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+        // P12: A GAME'S OWN WINDOW SIZE IS THE SIZE OF THE FRAMES IT RENDERS, and a server-owned
+        // window has to take that size or clip. SDL (Minecraft's Android backend) creates the EGL
+        // window surface with no EGL_WIDTH / EGL_HEIGHT, so the request went out as 0x0 - "use the
+        // server window's own size" - and a landscape 2620x1280 game drawn into a portrait 1280x2620
+        // server window came out clipped to its bottom-left 1280x1280 corner (Espryt and Magma
+        // alike; the same game in a landscape window was right). The native window it handed us
+        // knows the size the game believes it has: ask for THAT, and the server fixes its window
+        // buffer to it and aspect-fits the view (MobileGLDisplayActivity), letterboxed.
+        if (serverOwnedWindow && requestedWidth == 0 && requestedHeight == 0 && !IsNullNativeHandle(window)) {
+            auto* native = reinterpret_cast<ANativeWindow*>(ToVoidHandle(window));
+            const int32_t nativeWidth = ANativeWindow_getWidth(native);
+            const int32_t nativeHeight = ANativeWindow_getHeight(native);
+            if (nativeWidth > 0 && nativeHeight > 0) {
+                requestedWidth = static_cast<Uint32>(nativeWidth);
+                requestedHeight = static_cast<Uint32>(nativeHeight);
+                MGLOG_I("eglCreateWindowSurface: no EGL_WIDTH/EGL_HEIGHT; the server-owned window is asked for the "
+                        "native window's %dx%d", nativeWidth, nativeHeight);
+            }
+        }
+#endif
         const MG_Backend::WindowHandle windowHandle = {
             .Backend = DetectWindowBackend(),
             .Handle = ToVoidHandle(window),
-            .Width = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_WIDTH, 0), 0)),
-            .Height = static_cast<Uint32>(std::max<EGLint>(GetAttribValue(attrib_list, EGL_HEIGHT, 0), 0)),
+            .Width = requestedWidth,
+            .Height = requestedHeight,
         };
 
 #if MOBILEGL_BUILD_DISAGGREGATED
