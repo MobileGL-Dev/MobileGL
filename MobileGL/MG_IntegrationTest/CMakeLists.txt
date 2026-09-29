@@ -124,6 +124,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/RelinkStageSetScenario.cpp
     Scenarios/GuiBatchScenario.cpp
     Scenarios/UnboundImageDescriptorScenario.cpp
+    Scenarios/UnboundUniformBlockScenario.cpp
     Scenarios/IntegerBorderColorScenario.cpp
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
     Scenarios/RenderbufferBlendFormatScenario.cpp
