@@ -128,6 +128,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
     Scenarios/RenderbufferBlendFormatScenario.cpp
     Scenarios/DualSourceBlendScenario.cpp
+    Scenarios/OversizedRecordingSplitScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -376,6 +377,12 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/primgen-query-reroute.log"
     ${MGL_ITEST_VULKAN_ENV})
+# The command-buffer draw budget pinned far below one frame's draws, with the log path for the
+# split's latched MGLOG_I - the same arming reasoning as the two entries above.
+mgl_itest_join_environment(MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/oversized-recording-split.log"
+    ${MGL_ITEST_VULKAN_ENV})
 # The point-size demotion pinned on, per backend, with a per-lane log file for the arming
 # assertion - the same MOBILEGL_LOG_FILE_PATH reasoning as the UnlocatedIoBlocks lane above.
 # Two lanes because the demotion runs in the SHARED phase-B chain and each backend then
@@ -586,6 +593,22 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT}"
+)
+
+# OversizedRecordingSplitScenario with the command-buffer draw budget PINNED to 64. The ambient
+# registrations run its 1024-draw frame under the default budget, which never splits it; this
+# entry splits it 15 times, so the pixels prove a split loses nothing, and the arming assertion
+# (the renderer's latched MGLOG_I) proves the split happened at all - on a renderer that records
+# the whole frame into one command buffer, it is the assertion that goes red. DirectVulkan only:
+# the budget steers nothing on DirectGLES, whose driver flushes on its own.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.SplitRecording."
+    TEST_FILTER "OversizedRecordingSplitScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT}"
 )
 
 # The packed16 copy scenarios again, with the 8-bit storage widening PINNED ON. The ambient
