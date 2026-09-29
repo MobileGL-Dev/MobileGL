@@ -43,7 +43,9 @@ import java.util.Map;
  * that enforces it there breaks this route; CONTRACT-P11 B1), and waits for the broker's answer.
  * Two connected sockets: it clears their close-on-exec flag and {@code execve}s the program with
  * {@code MOBILEGL_TRANSPORT=spawn}, {@code MOBILEGL_IPC_CONTROL=fd:<control>,<aux>},
- * {@code MOBILEGL_IPC_DATA=shm} and {@code MOBILEGL_IPC_TOKEN} (the session's Hello carries it too).
+ * {@code MOBILEGL_IPC_DATA=shm} and {@code MOBILEGL_IPC_TOKEN} (the session's Hello carries it too), plus
+ * {@code MOBILEGL_IPC_FD_PAIRED=1} when the broker already presented the PairBind pair at hand-off
+ * (ID-P11-12) - the program may then take as long as it likes to reach its first EGL call.
  * When the broker names a cpu core the server reserves for the session's apply thread, the program is
  * exec'd through {@code taskset} on every other core (see {@link #clientMask}; {@code --keep-affinity}
  * opts out). A refusal: it prints the broker's name for it and exits with that refusal's code. No
@@ -147,15 +149,18 @@ public final class ExternalClientHelper {
                     ParcelFileDescriptor control = ParcelFileDescriptor.CREATOR.createFromParcel(data);
                     ParcelFileDescriptor aux = ParcelFileDescriptor.CREATOR.createFromParcel(data);
                     long applyCore = data.dataAvail() >= 8 ? data.readLong() : 0;
+                    int replyFlags = data.dataAvail() >= 4 ? data.readInt() : 0;
+                    boolean paired = (replyFlags & ExternalClientBroker.FLAG_PAIRED_AT_HANDOFF) != 0;
                     int controlFd = inheritable(control);
                     int auxFd = inheritable(aux);
                     long mask = keepAffinity ? 0 : clientMask(applyCore);
                     say("broker v" + version + " handed over fd:" + controlFd + "," + auxFd
+                            + (paired ? " paired at hand-off" : " unpaired")
                             + (mask != 0 ? "; the server's apply core 0x" + Long.toHexString(applyCore)
                                     + " reserved, the program runs on cpu mask 0x" + Long.toHexString(mask)
                                     : "; no cpu mask applied")
                             + "; exec " + programPath);
-                    exec(programPath, argv, controlFd, auxFd, presented, mask);
+                    exec(programPath, argv, controlFd, auxFd, presented, mask, paired);
                 } catch (Throwable error) {
                     say("could not exec " + programPath + ": " + error);
                     finish(EXIT_EXEC_FAILED);
@@ -267,8 +272,8 @@ public final class ExternalClientHelper {
         return pfd.detachFd();
     }
 
-    private static void exec(String path, List<String> argv, int control, int aux, String token, long cpuMask)
-            throws Exception {
+    private static void exec(String path, List<String> argv, int control, int aux, String token, long cpuMask,
+                             boolean pairedAtHandoff) throws Exception {
         Map<String, String> env = new LinkedHashMap<>();
         String[] inherited = Os.environ();
         if (inherited != null) {
@@ -283,6 +288,9 @@ public final class ExternalClientHelper {
         env.put("MOBILEGL_IPC_CONTROL", "fd:" + control + "," + aux);
         env.put("MOBILEGL_IPC_DATA", "shm");
         env.put("MOBILEGL_IPC_TOKEN", token);
+        // ID-P11-12: the broker presented the PairBind pair; the program's fd: endpoint must not add one.
+        if (pairedAtHandoff) env.put("MOBILEGL_IPC_FD_PAIRED", "1");
+        else env.remove("MOBILEGL_IPC_FD_PAIRED");
         List<String> envp = new ArrayList<>();
         for (Map.Entry<String, String> entry : env.entrySet()) envp.add(entry.getKey() + "=" + entry.getValue());
         if (cpuMask != 0 && new File(TASKSET).canExecute()) {

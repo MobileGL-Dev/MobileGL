@@ -25,8 +25,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * receiver checks the token against the running server's own ({@code MOBILEGL_IPC_TOKEN}), connects
  * TWICE to the server's unix endpoint - or, when the server listens on TCP only, to the private
  * abstract listener {@link MobileGLServerService} runs beside it for this - and hands both client
- * ends back as {@link ParcelFileDescriptor}s. It writes nothing on them: the client presents its own
- * PairBind pair ({@code MOBILEGL_IPC_CONTROL=fd:<control>,<aux>}).
+ * ends back as {@link ParcelFileDescriptor}s. Ruling ID-P11-12: whoever opens the connections presents
+ * the pair's identity, so it writes one {@code PairBind} pair on them at once ({@link PairBindFrames}:
+ * a fresh nonce, control then aux) and says so in its answer; the helper tells the program
+ * ({@code MOBILEGL_IPC_FD_PAIRED=1}) not to present a second one. The server pairs the connections
+ * now, not when the program - which may spend many seconds loading first - reaches its first EGL call.
  *
  * <p>EVERY request is answered on the callback - the two descriptors, or a refusal with its name -
  * so a helper never has to time out to learn it was refused. The refusals: {@code bad-request},
@@ -47,13 +50,17 @@ public final class ExternalClientBroker extends BroadcastReceiver {
     public static final String KEY_CALLBACK = "callback";
     public static final String KEY_TOKEN = "token";
     public static final String KEY_VERSION = "version";
-    public static final int PROTOCOL_VERSION = 1;
+    /** 2: the answer carries the paired-at-hand-off flag (a v1 helper would add a second PairBind pair). */
+    public static final int PROTOCOL_VERSION = 2;
 
     /**
-     * The broker's answer: int version, the control and aux descriptors, then long applyCore - the cpu
-     * mask the server's `auto` policy reserves for this session's apply thread (0 = none).
+     * The broker's answer: int version, the control and aux descriptors, long applyCore - the cpu mask
+     * the running supervisor announced it reserves for this session's apply thread (0 = none) - and
+     * int flags ({@link #FLAG_PAIRED_AT_HANDOFF}).
      */
     public static final int REPLY_FDS = IBinder.FIRST_CALL_TRANSACTION;
+    /** The broker already wrote the PairBind pair on the two connections. */
+    public static final int FLAG_PAIRED_AT_HANDOFF = 1;
     /** The broker's refusal: String code, String message. */
     public static final int REPLY_REFUSED = IBinder.FIRST_CALL_TRANSACTION + 1;
 
@@ -160,21 +167,42 @@ public final class ExternalClientBroker extends BroadcastReceiver {
                     + ": " + failure[0]);
             return;
         }
+        // ID-P11-12: the pair's identity, presented by whoever opened the connections - here, now. The
+        // server's PairAcceptor pairs them within its 2000 ms budget however long the program the helper
+        // execs takes to reach its Hello (the paired session then waits for that Hello until EOF).
+        try {
+            byte[] nonce = new byte[PairBindFrames.NONCE_BYTES];
+            new java.security.SecureRandom().nextBytes(nonce);
+            java.io.OutputStream controlOut = sockets[0].getOutputStream();
+            controlOut.write(PairBindFrames.frame(nonce, false));
+            controlOut.flush();
+            java.io.OutputStream auxOut = sockets[1].getOutputStream();
+            auxOut.write(PairBindFrames.frame(nonce, true));
+            auxOut.flush();
+        } catch (Exception error) {
+            closeQuietly(sockets[0]);
+            closeQuietly(sockets[1]);
+            refuse(callback, REFUSE_CONNECT_FAILED, "could not present the PairBind pair on " + target.endpoint
+                    + ": " + error);
+            return;
+        }
         ParcelFileDescriptor control = null;
         ParcelFileDescriptor aux = null;
         Parcel data = Parcel.obtain();
+        long applyCore = Math.max(0, target.applyCore.get()); // -1: not announced yet -> no mask
         try {
             control = ParcelFileDescriptor.dup(sockets[0].getFileDescriptor());
             aux = ParcelFileDescriptor.dup(sockets[1].getFileDescriptor());
             data.writeInt(PROTOCOL_VERSION);
             control.writeToParcel(data, 0);
             aux.writeToParcel(data, 0);
-            // The core the server reserves for this session's apply thread (0 = none): the helper keeps
-            // the client off it. Appended after the descriptors; a reader that stops before it is fine.
-            data.writeLong(target.applyCore);
+            // The core the running supervisor announced it reserves for this session's apply thread
+            // (0 = none): the helper keeps the client off it.
+            data.writeLong(applyCore);
+            data.writeInt(FLAG_PAIRED_AT_HANDOFF);
             boolean delivered = callback.transact(REPLY_FDS, data, null, IBinder.FLAG_ONEWAY);
-            Log.i(TAG, "brokered a connection pair to " + target.endpoint + " for a client (delivered="
-                    + delivered + ", apply core 0x" + Long.toHexString(target.applyCore) + ")");
+            Log.i(TAG, "brokered a connection pair to " + target.endpoint + " for a client, paired at hand-off "
+                    + "(delivered=" + delivered + ", apply core 0x" + Long.toHexString(applyCore) + ")");
         } catch (Exception error) {
             Log.e(TAG, "could not hand the connection pair to the client", error);
         } finally {

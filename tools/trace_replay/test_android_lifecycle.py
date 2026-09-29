@@ -71,6 +71,9 @@ def main():
         (trace, "top.mobilegl.plugin.trace", "TraceReplaySession", "TraceReplaySessionTest"),
         (trace, "top.mobilegl.plugin.trace", "SpawnServerPath", "SpawnServerPathTest"),
         (main_src, "top.mobilegl.plugin", "ServerEnvironment", "ServerEnvironmentTest"),
+        # P11 B1: the broker's hand-off PairBinds (their bytes are pinned to the native encoder by
+        # ServerSpawnTest.TheBrokersPairBindTemplatesAreTheEncoders).
+        (main_src, "top.mobilegl.plugin", "PairBindFrames", "PairBindFramesTest"),
     ]
     with tempfile.TemporaryDirectory(prefix="mobilegl-replay-lifecycle-") as output:
         sources = []

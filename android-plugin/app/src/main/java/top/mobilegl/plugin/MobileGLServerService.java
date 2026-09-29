@@ -17,6 +17,7 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Entry point for the offscreen TCP supervisor; EGL belongs to its session children. */
 public final class MobileGLServerService extends Service {
@@ -40,32 +41,17 @@ public final class MobileGLServerService extends Service {
         final String endpoint;
         final String token;
         final Process process;
-        // The core the server's `auto` policy gives a dialled-in shared-segment client's apply thread
-        // (ServerEnvironment.reservedApplyCore); the broker hands it to the helper, which keeps the
-        // client off it. 0 = none reserved.
-        final long applyCore;
+        // The core THIS supervisor reserves for a dialled-in shared-segment client's apply thread, as it
+        // announced on stdout at start-up (ServerEnvironment.parseReservedApplyCore); the broker hands
+        // it to the helper, which keeps the client off it. -1 until the line is read, 0 = none.
+        final AtomicLong applyCore;
 
-        BrokerTarget(String endpoint, String token, Process process, long applyCore) {
+        BrokerTarget(String endpoint, String token, Process process, AtomicLong applyCore) {
             this.endpoint = endpoint;
             this.token = token;
             this.process = process;
             this.applyCore = applyCore;
         }
-    }
-
-    /** cpuinfo_max_freq of every cpu this process can count (0 where unreadable). */
-    private static long[] cpuMaxFrequenciesKHz() {
-        int count = Math.min(64, Math.max(1, Runtime.getRuntime().availableProcessors()));
-        long[] frequencies = new long[count];
-        for (int cpu = 0; cpu < count; cpu++) {
-            File file = new File("/sys/devices/system/cpu/cpu" + cpu + "/cpufreq/cpuinfo_max_freq");
-            try (BufferedReader reader = new BufferedReader(new java.io.FileReader(file))) {
-                frequencies[cpu] = Long.parseLong(reader.readLine().trim());
-            } catch (Exception unreadable) {
-                frequencies[cpu] = 0;
-            }
-        }
-        return frequencies;
     }
 
     // Set when a supervisor the broker can reach is running, cleared when it stops. The broker runs
@@ -155,30 +141,26 @@ public final class MobileGLServerService extends Service {
         if (endpoint == null) endpoint = "tcp://127.0.0.1:40613";
         final String envExtra = intent == null ? null : intent.getStringExtra("env");
         final String token = intent == null ? null : intent.getStringExtra("token");
-        java.util.Map<String, String> requested = new java.util.HashMap<>();
-        ServerEnvironment.apply(requested, envExtra);
-        final long applyCore = ServerEnvironment.reservedApplyCore(cpuMaxFrequenciesKHz(),
-                requested.get("MOBILEGL_IPC_SERVER_AFFINITY"));
+        final AtomicLong primaryCore = new AtomicLong(-1);
         try {
-            supervisor = startSupervisor(endpoint, envExtra, token, "mgl-supervisor-log", startId, true);
+            supervisor = startSupervisor(endpoint, envExtra, token, "mgl-supervisor-log", startId, true, primaryCore);
             // P11 B1: the broker's target. A unix endpoint is reachable by this app as it is (a
             // relative path resolves against filesDir, the supervisor's working directory); a TCP
             // one gets a private abstract listener of its own (BrokerTarget).
             if (endpoint.startsWith("tcp://")) {
                 String privateName = "@" + getPackageName() + ".broker." + Long.toHexString(
                         new java.security.SecureRandom().nextLong() & 0xffffffffL);
+                final AtomicLong brokerCore = new AtomicLong(-1);
                 brokerSupervisor = startSupervisor(privateName, envExtra, token, "mgl-broker-supervisor-log",
-                        startId, false);
-                brokerTarget = new BrokerTarget(privateName, token, brokerSupervisor, applyCore);
+                        startId, false, brokerCore);
+                brokerTarget = new BrokerTarget(privateName, token, brokerSupervisor, brokerCore);
                 Log.i(TAG, "same-device external clients: broker listener " + privateName
-                        + " beside the TCP-only supervisor on " + endpoint + "; apply core reserved for them 0x"
-                        + Long.toHexString(applyCore));
+                        + " beside the TCP-only supervisor on " + endpoint);
             } else {
                 String unix = endpoint.startsWith("@") || endpoint.startsWith("/") ? endpoint
                         : new File(getFilesDir(), endpoint).getAbsolutePath();
-                brokerTarget = new BrokerTarget(unix, token, supervisor, applyCore);
-                Log.i(TAG, "same-device external clients: the broker connects to " + unix
-                        + "; apply core reserved for them 0x" + Long.toHexString(applyCore));
+                brokerTarget = new BrokerTarget(unix, token, supervisor, primaryCore);
+                Log.i(TAG, "same-device external clients: the broker connects to " + unix);
             }
         } catch (Exception error) {
             Log.e(TAG, "cannot start TCP supervisor", error);
@@ -190,10 +172,11 @@ public final class MobileGLServerService extends Service {
 
     /**
      * Execs one {@code libMobileGLServer.so <endpoint> --serve} with the server role's environment and
-     * logs its output. When {@code primary}, its exit stops the service.
+     * logs its output. When {@code primary}, its exit stops the service. {@code reservedCore} receives the
+     * apply core the supervisor announces at start-up (P11 B1).
      */
     private Process startSupervisor(String endpoint, String envExtra, String token, String logThreadName,
-                                    int startId, boolean primary) throws java.io.IOException {
+                                    int startId, boolean primary, AtomicLong reservedCore) throws java.io.IOException {
         File executable = new File(getApplicationInfo().nativeLibraryDir, "libMobileGLServer.so");
         ProcessBuilder builder = new ProcessBuilder(executable.getAbsolutePath(), endpoint, "--serve");
         builder.directory(getFilesDir()).redirectErrorStream(true);
@@ -207,7 +190,11 @@ public final class MobileGLServerService extends Service {
         new Thread(() -> {
             try (BufferedReader output = new BufferedReader(new InputStreamReader(child.getInputStream()))) {
                 String line;
-                while ((line = output.readLine()) != null) Log.i(TAG, line);
+                while ((line = output.readLine()) != null) {
+                    Log.i(TAG, line);
+                    long announced = ServerEnvironment.parseReservedApplyCore(line);
+                    if (announced != -1) reservedCore.set(announced); // one core, so never all 64 bits
+                }
                 Log.i(TAG, (primary ? "supervisor" : "broker supervisor") + " exited " + child.waitFor());
             } catch (java.io.InterruptedIOException stopped) {
                 // onDestroy's Process.destroy() closes this stream under the read: the service

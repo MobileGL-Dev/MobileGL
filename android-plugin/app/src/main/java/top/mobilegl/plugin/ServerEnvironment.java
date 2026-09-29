@@ -81,32 +81,25 @@ public final class ServerEnvironment {
         return edits;
     }
 
+    /** The supervisor's start-up announcement (MG_Remote/Server/ServerMain.cpp), up to the mask. */
+    static final String RESERVED_CORE_ANNOUNCEMENT =
+            "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x";
+
     /**
-     * P11 B1 (CONTRACT-P11 B1): the core the server's `auto` policy reserves for the apply thread of a
-     * dialled-in shared-segment client - MG_Remote/Server/ApplyThreadPolicy.h ReservedApplyCore over
-     * ServerLoop.cpp's DetectBigCoreMask, mirrored here so the broker can tell the helper which core to
-     * keep the client off. {@code maxFreqKHz[i]} is cpu i's cpuinfo_max_freq (0 = unreadable, which
-     * like the native probe gives no answer). A cpu is big when its ceiling is within 15% of the peak;
-     * the reserved core is the LOWEST big one, and only when the big set is a strict subset of at least
-     * two. 0 = none. {@code affinityOverride} is the server's MOBILEGL_IPC_SERVER_AFFINITY: anything
-     * but unset / empty / {@code auto} is an operator's own placement, and then nothing is reserved.
+     * P11 B1 (CONTRACT-P11 B1): the core the running supervisor reserves for a dialled-in shared-segment
+     * client's apply thread, read off the line it prints on stdout at start-up (the native policy,
+     * ApplyThreadPolicy.h ReservedApplyCoreForConfig, is the one source of it; nothing here re-derives
+     * it). The mask, or -1 when {@code line} is not that announcement.
      */
-    public static long reservedApplyCore(long[] maxFreqKHz, String affinityOverride) {
-        if (affinityOverride != null && !affinityOverride.isEmpty() && !affinityOverride.equals("auto")) return 0;
-        int count = Math.min(64, maxFreqKHz.length);
-        long peak = 0;
-        for (int cpu = 0; cpu < count; cpu++) {
-            if (maxFreqKHz[cpu] <= 0) return 0;
-            peak = Math.max(peak, maxFreqKHz[cpu]);
-        }
-        if (count == 0 || peak == 0) return 0;
-        long big = 0;
-        for (int cpu = 0; cpu < count; cpu++) {
-            if (maxFreqKHz[cpu] >= peak * 85 / 100) big |= 1L << cpu;
-        }
-        long online = count >= 64 ? ~0L : (1L << count) - 1;
-        if ((big & online) == online || Long.bitCount(big) < 2) return 0;
-        return Long.lowestOneBit(big);
+    public static long parseReservedApplyCore(String line) {
+        if (line == null) return -1;
+        int at = line.indexOf(RESERVED_CORE_ANNOUNCEMENT);
+        if (at < 0) return -1;
+        int start = at + RESERVED_CORE_ANNOUNCEMENT.length();
+        int end = start;
+        while (end < line.length() && Character.digit(line.charAt(end), 16) >= 0) end++;
+        if (end == start || end - start > 16) return -1;
+        return Long.parseUnsignedLong(line.substring(start, end), 16);
     }
 
     /**
