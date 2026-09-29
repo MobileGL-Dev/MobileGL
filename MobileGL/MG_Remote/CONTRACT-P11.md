@@ -316,7 +316,7 @@ client 与 server 每会话：导入 store 数、字节、拒绝数（I `T0 stor
 | 变异（只改一次性源码拷贝） | 载具 / 用例 | Espryt | Magma |
 |---|---|---|---|
 | M1 resident 写就地落（client 把 T0 store 的 SubData 直接写进 AHB） | `ADrawQueuedBeforeASubDataKeepsItsOwnBytes` | 红 | 红 |
-| M2 respecify 时立即释放导入 | `ARespecifyWithADrawQueuedKeepsThatDrawsStore` | **绿**：GL 导入自持内存引用，早放我们的 AHB 引用不释放页 | 红（先排队的绘制读到被释放的存储） |
+| M2 respecify 时立即释放导入 | `ARespecifyWithADrawQueuedKeepsThatDrawsStore` | **绿**：与"GL 导入自持内存引用、早放我们的 AHB 引用不释放页"一致，未直接验证；扩展不保证这一引用，栅栏后释放保留 | 红（先排队的绘制读到被释放的存储） |
 | M3 不发布 `kCapAdoptT0` | `TheArenaLandsInTheTierItsLaneDeclares` | 红（emulated） | 红 |
 | M4 CPU 读不做回读往返 | `ReadbackSeesTheLatestCpuWrite`、`GpuWriteIntoTheArenaIsReadBack` | 红 | 红 |
 
