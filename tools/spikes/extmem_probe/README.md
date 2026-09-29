@@ -128,12 +128,16 @@ the domain it actually got in the run-context header and repeats the caveat in
 the summary; record it with the results.
 
 To answer the question for the real domain, the same binary has to be executed
-from an app process. That is **not implemented here**: the intended vehicle is
-the trace app's spike hook from the spike-A package — ship `extmem_probe` as a
-`jniLib`/asset, exec it from the app's own uid with its stdout redirected to
-`/sdcard/MG/extmem-probe.log`, and compare the summary table with the `adb
-shell` one. Any row that differs between the two is an SELinux/domain finding,
-not a driver finding.
+from an app process. The vehicle is the trace app's spike hook from the spike-A
+package: build the trace APK with `-Pmobilegl.buildExtmemProbe=ON` (packages the
+probe as `libMobileGLExtmemProbe.so`), put the options in
+`<output_dir>/spike-spawn.txt.args` (via `run-as`), then
+`am start ... --es output_dir <dir> --es mobilegl_spike_spawn libMobileGLExtmemProbe.so`.
+The hook execs `<lib> <marker>`; the probe takes the positional argument as the
+marker, reads `<marker>.args`, prints to `<marker>.stdout`, and writes a one-line
+verdict to the marker. Compare the summary table with the `adb shell` one (run the
+same `.so` from `/data/local/tmp`). Any row that differs between the two is an
+SELinux/domain finding, not a driver finding.
 
 ## Build and run
 
@@ -167,4 +171,12 @@ only on the devices.
 
 Options: `--size=BYTES` (default 65536; the payload is split into 4 KiB regions,
 one per writer — A payload, B/C/D importer writes, E GPU fill, F in-process GL
-write), `--only-t0` / `--only-t1` / `--only-t3` / `--only-gles`, `--no-gles`.
+write), `--only-t0` / `--only-t1` / `--only-t3` / `--only-gles`, `--no-gles`,
+`--regions-at-end` (put the A..F window in the last 32 KiB of `--size`, so a large
+size proves the far end is mapped), `--sustained-lock[=ROUNDS]` (default 8) /
+`--only-sustained`: the **T0S** rows — the client locks the AHB once and never
+unlocks while, per round, it CPU-writes REG_A, the server's GPU reads it (Vulkan
+copy; GL compute on the `glBufferStorageExternalEXT` buffer) and fills REG_E / REG_F,
+and the client reads both fills through the still-held pointer; after the last
+round it unlocks and relocks once more (`after unlock+relock`), which separates
+"GPU writes never landed" from "the held mapping kept stale lines".

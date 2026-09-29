@@ -238,17 +238,24 @@ static int64_t checkPattern(const void* p, uint64_t bytes, uint32_t seed) {
     return -1;
 }
 
+// Byte offset of region 0 inside the shared allocation. 0 by default; --regions-at-end
+// moves the whole A..F window to the last kRegionCount*kRegion bytes, so a large --size
+// proves the far end of the allocation is mapped and GPU-reachable, not only its first
+// pages. The parent hands the value to every child with --region-base=.
+static uint64_t gRegionBase = 0;
+static uint64_t regOff(int region) { return gRegionBase + (uint64_t)region * kRegion; }
+
 static void writeRegion(void* base, int region, uint32_t seed) {
-    fillPattern((uint8_t*)base + region * kRegion, kRegion, seed);
+    fillPattern((uint8_t*)base + regOff(region), kRegion, seed);
 }
 static int64_t checkRegion(const void* base, int region, uint32_t seed) {
-    return checkPattern((const uint8_t*)base + region * kRegion, kRegion, seed);
+    return checkPattern((const uint8_t*)base + regOff(region), kRegion, seed);
 }
 
 // vkCmdFillBuffer writes a repeating 32-bit word; -1 on match, else the first
 // mismatching word index * 4
 static int64_t checkFillWord(const void* base, int region, uint32_t word) {
-    const uint32_t* w = (const uint32_t*)((const uint8_t*)base + region * kRegion);
+    const uint32_t* w = (const uint32_t*)((const uint8_t*)base + regOff(region));
     for (uint64_t i = 0; i < kRegion / 4; ++i)
         if (w[i] != word) return (int64_t)(i * 4);
     return -1;
@@ -321,6 +328,12 @@ enum MsgTag : uint32_t {
     MSG_T3C_READY = 12,
     MSG_T3C_VERIFY = 13,
     MSG_T3C_RESULT = 14,
+    MSG_T0S_REQUEST = 15,
+    MSG_T0S_ALLOC = 16,
+    MSG_T0S_ROUND = 17,
+    MSG_T0S_GPUDONE = 18,
+    MSG_T0S_CHECK = 19,
+    MSG_T0S_DONE = 20,
     MSG_BYE = 99,
 };
 
@@ -778,11 +791,11 @@ static GpuTouch gpuTouch(VkCtx& c, VkBuffer buf, int readRegion, uint32_t readSe
                          nullptr);
 
     VkBufferCopy copy{};
-    copy.srcOffset = (VkDeviceSize)(readRegion * kRegion);
+    copy.srcOffset = (VkDeviceSize)regOff(readRegion);
     copy.dstOffset = 0;
     copy.size = kRegion;
     vkCmdCopyBuffer(cmd, buf, staging, 1, &copy);
-    vkCmdFillBuffer(cmd, buf, (VkDeviceSize)(fillRegion * kRegion), (VkDeviceSize)kRegion, fillWord);
+    vkCmdFillBuffer(cmd, buf, (VkDeviceSize)regOff(fillRegion), (VkDeviceSize)kRegion, fillWord);
 
     // device writes must be made visible to the host explicitly
     VkMemoryBarrier post{};
@@ -1321,11 +1334,13 @@ static pid_t spawnChild(const char* route, int* parentSock) {
         }
         char arg[64];
         snprintf(arg, sizeof(arg), "--child=%s", route);
+        char base[64];
+        snprintf(base, sizeof(base), "--region-base=%llu", (unsigned long long)gRegionBase);
         char self[512];
         ssize_t n = readlink("/proc/self/exe", self, sizeof(self) - 1);
         if (n <= 0) _exit(90);
         self[n] = 0;
-        char* argv[] = {self, arg, nullptr};
+        char* argv[] = {self, arg, base, nullptr};
         execv(self, argv);
         _exit(91);
     }
@@ -1449,6 +1464,43 @@ struct T0Result {
     int64_t mismatchD;
     int64_t mismatchE;
     char note[192];
+};
+
+// T0S (sustained lock): the client locks the AHB once and never unlocks it while the
+// server's GPU reads what the client's CPU wrote and writes back, round after round.
+struct T0SRequest {
+    uint64_t size;
+    uint32_t rounds;
+    uint32_t seedBase;
+};
+
+struct T0SRound {
+    uint32_t round;
+    uint32_t seedA;  // the client CPU wrote REG_A with this pattern through its held lock
+};
+
+struct T0SGpuDone {
+    uint32_t round;
+    uint32_t vkWord;  // the server's Vulkan GPU filled REG_E with this word
+    uint32_t glWord;  // the server's GL compute dispatch filled REG_F with this word
+    uint32_t mask;    // bit0 = vk fill ran, bit1 = gl fill ran
+};
+
+struct T0SCheck {
+    uint32_t round;
+    int32_t pad;
+    int64_t mismatchE;  // through the client's still-held lock pointer, -2 = not checked
+    int64_t mismatchF;
+};
+
+struct T0SDone {
+    int32_t lockRc;
+    int32_t unlockRc;
+    int32_t relockRc;
+    int32_t pad;
+    int64_t relockMismatchE;  // after unlock + a fresh lock: the last GPU writes, -2 = not checked
+    int64_t relockMismatchF;
+    char note[160];
 };
 
 struct T3Offer {
@@ -2690,6 +2742,409 @@ static void runT0Parent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
     close(sock);
 }
 
+// ---------------------------------------------------------------------------
+// T0S: sustained lock. The T0 row above locks, writes, unlocks, and only then lets
+// the GPU in - the one ordering AHardwareBuffer_lock/unlock is specified for. A
+// persistent map is the opposite shape: the client keeps its pointer (= the lock)
+// for the life of the store and writes through it while the server's GPU reads and
+// writes the same pages. So here the client locks ONCE, never unlocks while the
+// rounds run, and per round: CPU-writes REG_A, the server's GPU reads REG_A (Vulkan
+// vkCmdCopyBuffer and a GL compute dispatch on the glBufferStorageExternalEXT
+// buffer) and fills REG_E (Vulkan) / REG_F (GL), and the client reads both fills
+// back through the still-held pointer. Only after the last round does it unlock and
+// lock again, which separates "the GPU writes never landed" from "the held CPU
+// mapping kept stale lines".
+// ---------------------------------------------------------------------------
+
+static int childT0Sustained(int sock) {
+    setRecvTimeout(sock, 60);
+    T0SRequest rq{};
+    uint32_t tag = 0;
+    size_t got = 0;
+    if (!recvMsg(sock, &tag, &rq, sizeof(rq), &got, nullptr) || tag != MSG_T0S_REQUEST) {
+        pr("child: bad T0S request errno=%d", errno);
+        return 2;
+    }
+    AHardwareBuffer_Desc desc{};
+    desc.width = (uint32_t)rq.size;
+    desc.height = 1;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_BLOB;
+    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
+                 AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+    AHardwareBuffer* ahb = nullptr;
+    int rc = AHardwareBuffer_allocate(&desc, &ahb);
+    T0Alloc alloc{};
+    alloc.allocOk = (rc == 0 && ahb) ? 1 : 0;
+    alloc.allocErr = rc;
+    alloc.size = rq.size;
+    if (!alloc.allocOk) {
+        snprintf(alloc.note, sizeof(alloc.note), "AHardwareBuffer_allocate rc=%d errno=%d", rc, errno);
+        sendMsg(sock, MSG_T0S_ALLOC, &alloc, sizeof(alloc), -1);
+        return 3;
+    }
+    AHardwareBuffer_Desc back{};
+    AHardwareBuffer_describe(ahb, &back);
+    alloc.stride = back.stride;
+    void* p = nullptr;
+    const int lockRc = AHardwareBuffer_lock(
+        ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &p);
+    snprintf(alloc.note, sizeof(alloc.note), "desc w=%u usage=0x%llx held-lock rc=%d ptr=%p", back.width,
+             (unsigned long long)back.usage, lockRc, p);
+    if (lockRc != 0 || !p) {
+        alloc.allocOk = 2;
+        sendMsg(sock, MSG_T0S_ALLOC, &alloc, sizeof(alloc), -1);
+        AHardwareBuffer_release(ahb);
+        return 4;
+    }
+    memset(p, 0, (size_t)rq.size);
+    if (!sendMsg(sock, MSG_T0S_ALLOC, &alloc, sizeof(alloc), -1)) return 5;
+    int sendRc = AHardwareBuffer_sendHandleToUnixSocket(ahb, sock);
+    pr("child: T0S held lock ptr=%p, sendHandle rc=%d", p, sendRc);
+    if (sendRc != 0) return 6;
+
+    uint32_t lastVk = 0, lastGl = 0, lastMask = 0;
+    for (uint32_t i = 0; i < rq.rounds; ++i) {
+        T0SRound r{};
+        r.round = i;
+        r.seedA = rq.seedBase + i * 0x01010101u;
+        writeRegion(p, REG_A, r.seedA);  // through the held lock, no unlock
+        if (!sendMsg(sock, MSG_T0S_ROUND, &r, sizeof(r), -1)) return 7;
+        T0SGpuDone gd{};
+        if (!recvMsg(sock, &tag, &gd, sizeof(gd), &got, nullptr) || tag != MSG_T0S_GPUDONE) {
+            pr("child: T0S no gpu-done in round %u errno=%d", i, errno);
+            return 8;
+        }
+        T0SCheck ck{};
+        ck.round = i;
+        ck.mismatchE = (gd.mask & 1) ? checkFillWord(p, REG_E, gd.vkWord) : -2;
+        ck.mismatchF = (gd.mask & 2) ? checkFillWord(p, REG_F, gd.glWord) : -2;
+        lastVk = gd.vkWord;
+        lastGl = gd.glWord;
+        lastMask = gd.mask;
+        if (!sendMsg(sock, MSG_T0S_CHECK, &ck, sizeof(ck), -1)) return 9;
+    }
+    T0SDone dn{};
+    dn.lockRc = lockRc;
+    dn.unlockRc = AHardwareBuffer_unlock(ahb, nullptr);
+    void* q = nullptr;
+    dn.relockRc = AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &q);
+    dn.relockMismatchE = dn.relockMismatchF = -2;
+    if (dn.relockRc == 0 && q) {
+        if (lastMask & 1) dn.relockMismatchE = checkFillWord(q, REG_E, lastVk);
+        if (lastMask & 2) dn.relockMismatchF = checkFillWord(q, REG_F, lastGl);
+        AHardwareBuffer_unlock(ahb, nullptr);
+    }
+    snprintf(dn.note, sizeof(dn.note), "held ptr=%p relock ptr=%p", p, q);
+    sendMsg(sock, MSG_T0S_DONE, &dn, sizeof(dn), -1);
+    recvMsg(sock, &tag, nullptr, 0, &got, nullptr);  // BYE
+    AHardwareBuffer_release(ahb);
+    return 0;
+}
+
+// A GL compute pass over the imported buffer: copies `readWord`.. (1024 words) into
+// `out` and fills `fillWord`.. with `fill`. Word offsets are relative to the bound range.
+static const char* kT0SComputeSrc =
+    "#version 310 es\n"
+    "layout(local_size_x = 64) in;\n"
+    "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+    "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+    "uniform uint uRead;\n"
+    "uniform uint uFillAt;\n"
+    "uniform uint uFill;\n"
+    "void main() {\n"
+    "  uint i = gl_GlobalInvocationID.x;\n"
+    "  outb.w[i] = ext.w[uRead + i];\n"
+    "  ext.w[uFillAt + i] = uFill;\n"
+    "}\n";
+
+static GLuint buildT0SCompute(std::string* fail) {
+    GLuint sh = glCreateShader(GL_COMPUTE_SHADER);
+    glShaderSource(sh, 1, &kT0SComputeSrc, nullptr);
+    glCompileShader(sh);
+    GLint ok = 0;
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[512] = {0};
+        glGetShaderInfoLog(sh, sizeof(log) - 1, nullptr, log);
+        *fail = std::string("compute compile failed: ") + log;
+        glDeleteShader(sh);
+        return 0;
+    }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, sh);
+    glLinkProgram(prog);
+    glDeleteShader(sh);
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512] = {0};
+        glGetProgramInfoLog(prog, sizeof(log) - 1, nullptr, log);
+        *fail = std::string("compute link failed: ") + log;
+        glDeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+
+static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, uint32_t rounds) {
+    const uint32_t seedBase = 0x5A000001u;
+    int sock = -1;
+    pid_t pid = spawnChild("t0s", &sock);
+    if (pid < 0) {
+        record("T0S-sustained-lock", "FAIL", "spawnChild failed");
+        return;
+    }
+    T0SRequest rq{};
+    rq.size = size;
+    rq.rounds = rounds;
+    rq.seedBase = seedBase;
+    T0Alloc alloc{};
+    uint32_t tag = 0;
+    size_t got = 0;
+    if (!sendMsg(sock, MSG_T0S_REQUEST, &rq, sizeof(rq), -1) ||
+        !recvMsg(sock, &tag, &alloc, sizeof(alloc), &got, nullptr) || tag != MSG_T0S_ALLOC || alloc.allocOk != 1) {
+        record("T0S-sustained-lock", "FAIL",
+               fmt("client alloc/held lock failed: ok=%d rc=%d %s errno=%d", alloc.allocOk, alloc.allocErr, alloc.note,
+                   errno));
+        close(sock);
+        reapChild(pid);
+        return;
+    }
+    pr("T0S child allocated and holds its lock: %s", alloc.note);
+    AHardwareBuffer* ahb = nullptr;
+    int rc = AHardwareBuffer_recvHandleFromUnixSocket(sock, &ahb);
+    if (rc != 0 || !ahb) {
+        record("T0S-sustained-lock", "FAIL", fmt("recvHandleFromUnixSocket rc=%d errno=%d", rc, errno));
+        close(sock);
+        reapChild(pid);
+        return;
+    }
+
+    // --- Vulkan import of the (still client-locked) AHB ---
+    VkBuffer vbuf = VK_NULL_HANDLE;
+    VkDeviceMemory vmem = VK_NULL_HANDLE;
+    void* vhost = nullptr;
+    std::string vkFail;
+    if (!c.hasAhb || !c.pGetAhbProps) {
+        vkFail = "VK_ANDROID_external_memory_android_hardware_buffer absent";
+    } else {
+        VkAndroidHardwareBufferPropertiesANDROID props{};
+        props.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+        VkResult r = c.pGetAhbProps(c.device, ahb, &props);
+        VkExternalMemoryBufferCreateInfo ext{};
+        ext.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+        ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.pNext = &ext;
+        bci.size = size;
+        bci.usage = kProbeBufferUsage;
+        if (r != VK_SUCCESS) {
+            vkFail = "vkGetAndroidHardwareBufferPropertiesANDROID=" + vkStr(r);
+        } else if ((r = vkCreateBuffer(c.device, &bci, nullptr, &vbuf)) != VK_SUCCESS) {
+            vkFail = "vkCreateBuffer(AHB external)=" + vkStr(r);
+            vbuf = VK_NULL_HANDLE;
+        } else {
+            int typeIdx = pickMemType(c.memProps, props.memoryTypeBits,
+                                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            if (typeIdx < 0) typeIdx = pickMemType(c.memProps, props.memoryTypeBits, 0);
+            VkImportAndroidHardwareBufferInfoANDROID imp{};
+            imp.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+            imp.buffer = ahb;
+            VkMemoryDedicatedAllocateInfo ded{};
+            ded.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            ded.buffer = vbuf;
+            imp.pNext = &ded;
+            VkMemoryAllocateInfo mai{};
+            mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            mai.pNext = &imp;
+            mai.allocationSize = props.allocationSize;
+            mai.memoryTypeIndex = (uint32_t)(typeIdx < 0 ? 0 : typeIdx);
+            if ((r = vkAllocateMemory(c.device, &mai, nullptr, &vmem)) != VK_SUCCESS) {
+                vkFail = "vkAllocateMemory(import AHB)=" + vkStr(r);
+                vmem = VK_NULL_HANDLE;
+            } else if ((r = vkBindBufferMemory(c.device, vbuf, vmem, 0)) != VK_SUCCESS) {
+                vkFail = "vkBindBufferMemory=" + vkStr(r);
+            } else {
+                // informational: the server's own host view of the same pages
+                if (vkMapMemory(c.device, vmem, 0, VK_WHOLE_SIZE, 0, &vhost) != VK_SUCCESS) vhost = nullptr;
+            }
+        }
+    }
+    const bool vkReady = vkFail.empty() && vbuf != VK_NULL_HANDLE && vmem != VK_NULL_HANDLE;
+
+    // --- GL import + compute program ---
+    std::string glFail;
+    GLuint gbuf = 0, gout = 0, prog = 0;
+    GLint locRead = -1, locFillAt = -1, locFill = -1;
+    if (!glOk) {
+        glFail = "no GL context";
+    } else if (!g.hasGl("GL_EXT_external_buffer") || !g.pBufferStorageExternal || !g.pGetNativeClientBuffer) {
+        glFail = "GL_EXT_external_buffer / eglGetNativeClientBufferANDROID absent";
+    } else {
+        EGLClientBuffer cb = g.pGetNativeClientBuffer(ahb);
+        if (!cb) {
+            glFail = fmt("eglGetNativeClientBufferANDROID=NULL egl=0x%04x", eglGetError());
+        } else {
+            glDrain();
+            glGenBuffers(1, &gbuf);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, gbuf);
+            g.pBufferStorageExternal(GL_SHADER_STORAGE_BUFFER, 0, (GLsizeiptr)size, cb,
+                                     GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
+                                         GL_MAP_COHERENT_BIT_EXT | GL_DYNAMIC_STORAGE_BIT_EXT);
+            GLenum e = glDrain();
+            if (e != GL_NO_ERROR) {
+                glFail = "glBufferStorageExternalEXT -> " + glErrStr(e);
+            } else {
+                glGenBuffers(1, &gout);
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, gout);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, (GLsizeiptr)kRegion, nullptr, GL_DYNAMIC_READ);
+                prog = buildT0SCompute(&glFail);
+                if (prog) {
+                    locRead = glGetUniformLocation(prog, "uRead");
+                    locFillAt = glGetUniformLocation(prog, "uFillAt");
+                    locFill = glGetUniformLocation(prog, "uFill");
+                }
+                e = glDrain();
+                if (glFail.empty() && e != GL_NO_ERROR) glFail = "GL setup -> " + glErrStr(e);
+            }
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        }
+    }
+    const bool glReady = glFail.empty() && prog != 0;
+
+    uint32_t vkRead = 0, vkWrite = 0, glRead = 0, glWrite = 0, vkHostRead = 0, roundsRun = 0;
+    std::string vkFirst, glFirst, hostFirst;
+    uint32_t lastVk = 0, lastGl = 0;
+    for (uint32_t i = 0; i < rounds; ++i) {
+        T0SRound r{};
+        if (!recvMsg(sock, &tag, &r, sizeof(r), &got, nullptr) || tag != MSG_T0S_ROUND) {
+            if (vkFirst.empty()) vkFirst = fmt("round %u: no client round message errno=%d", i, errno);
+            break;
+        }
+        T0SGpuDone gd{};
+        gd.round = i;
+        gd.vkWord = 0x7E000000u + i;
+        gd.glWord = 0x6C000000u + i;
+        lastVk = gd.vkWord;
+        lastGl = gd.glWord;
+        if (vhost) {
+            int64_t h = checkRegion(vhost, REG_A, r.seedA);
+            if (h == -1)
+                ++vkHostRead;
+            else if (hostFirst.empty())
+                hostFirst = fmt("round %u host mismatch at %lld", i, (long long)h);
+        }
+        if (vkReady) {
+            GpuTouch gt = gpuTouch(c, vbuf, REG_A, r.seedA, REG_E, gd.vkWord);
+            if (gt.ran) gd.mask |= 1;
+            if (gt.ran && gt.readMismatch == -1)
+                ++vkRead;
+            else if (vkFirst.empty())
+                vkFirst = fmt("round %u GPU read: %s", i, gt.fail.c_str());
+        }
+        if (glReady) {
+            glUseProgram(prog);
+            glUniform1ui(locRead, (GLuint)(REG_A * kRegion / 4));
+            glUniform1ui(locFillAt, (GLuint)(REG_F * kRegion / 4));
+            glUniform1ui(locFill, gd.glWord);
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, gbuf, (GLintptr)gRegionBase,
+                              (GLsizeiptr)(kRegionCount * kRegion));
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gout);
+            glDispatchCompute((GLuint)(kRegion / 4 / 64), 1, 1);
+            glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
+            glFinish();
+            GLenum e = glDrain();
+            if (e == GL_NO_ERROR) gd.mask |= 2;
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, gout);
+            void* m = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, (GLsizeiptr)kRegion, GL_MAP_READ_BIT);
+            int64_t mm = m ? checkPattern(m, kRegion, r.seedA) : -3;
+            if (m) glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+            if (e == GL_NO_ERROR && mm == -1)
+                ++glRead;
+            else if (glFirst.empty())
+                glFirst = fmt("round %u GL compute read: err=%s mismatch=%lld", i, glErrStr(e).c_str(), (long long)mm);
+        }
+        if (!sendMsg(sock, MSG_T0S_GPUDONE, &gd, sizeof(gd), -1)) break;
+        T0SCheck ck{};
+        if (!recvMsg(sock, &tag, &ck, sizeof(ck), &got, nullptr) || tag != MSG_T0S_CHECK) break;
+        ++roundsRun;
+        if (ck.mismatchE == -1)
+            ++vkWrite;
+        else if ((gd.mask & 1) && vkFirst.empty())
+            vkFirst = fmt("round %u: GPU fill not seen through the client's held lock (mismatch=%lld)", i,
+                          (long long)ck.mismatchE);
+        if (ck.mismatchF == -1)
+            ++glWrite;
+        else if ((gd.mask & 2) && glFirst.empty())
+            glFirst = fmt("round %u: GL compute fill not seen through the client's held lock (mismatch=%lld)", i,
+                          (long long)ck.mismatchF);
+    }
+    T0SDone dn{};
+    dn.relockMismatchE = dn.relockMismatchF = -3;
+    bool gotDone = recvMsg(sock, &tag, &dn, sizeof(dn), &got, nullptr) && tag == MSG_T0S_DONE;
+    sendMsg(sock, MSG_BYE, nullptr, 0, -1);
+    std::string reap = reapChild(pid);
+
+    auto rowStatus = [&](bool ready, uint32_t rd, uint32_t wr) -> const char* {
+        if (!ready) return "FAIL";
+        if (rd == rounds && wr == rounds && roundsRun == rounds) return "OK";
+        if (rd > 0 || wr > 0) return "PARTIAL";
+        return "FAIL";
+    };
+    record("T0S-sustained-lock-vulkan", rowStatus(vkReady, vkRead, vkWrite),
+           fmt("rounds=%u/%u gpuReadOfHeldCpuWrite=%u gpuFillSeenByHeldLock=%u serverHostMapRead=%u%s | after "
+               "unlock+relock: fill=%lld | %s%s",
+               roundsRun, rounds, vkRead, vkWrite, vkHostRead, vhost ? "" : "(no host map)",
+               (long long)dn.relockMismatchE, vkReady ? vkFirst.c_str() : vkFail.c_str(),
+               hostFirst.empty() ? "" : (" | " + hostFirst).c_str()));
+    record("T0S-sustained-lock-gles", rowStatus(glReady, glRead, glWrite),
+           fmt("rounds=%u/%u computeReadOfHeldCpuWrite=%u computeFillSeenByHeldLock=%u | after unlock+relock: "
+               "fill=%lld | %s",
+               roundsRun, rounds, glRead, glWrite, (long long)dn.relockMismatchF,
+               glReady ? glFirst.c_str() : glFail.c_str()));
+    std::vector<Leg> legs;
+    {
+        Leg l;
+        l.name = "vk-gpu";
+        l.decisive = true;
+        l.attempted = vkReady && roundsRun > 0;
+        l.readOk = vkReady && vkRead == rounds;
+        l.writeOk = vkReady && vkWrite == rounds;
+        l.fail = vkReady ? vkFirst : vkFail;
+        legs.push_back(l);
+    }
+    {
+        Leg l;
+        l.name = "gl-gpu";
+        l.decisive = true;
+        l.attempted = glReady && roundsRun > 0;
+        l.readOk = glReady && glRead == rounds;
+        l.writeOk = glReady && glWrite == rounds;
+        l.fail = glReady ? glFirst : glFail;
+        legs.push_back(l);
+    }
+    std::string why;
+    const char* status = legVerdict(legs, &why);
+    record("T0S-sustained-lock", status,
+           fmt("%s | size=%llu regionBase=%llu rounds=%u client lock rc=%d, unlock rc=%d, relock rc=%d (%s) %s | %s",
+               legTrace(legs).c_str(), (unsigned long long)size, (unsigned long long)gRegionBase, rounds,
+               gotDone ? dn.lockRc : -99, gotDone ? dn.unlockRc : -99, gotDone ? dn.relockRc : -99,
+               gotDone ? dn.note : "no done message", reap.c_str(), why.c_str()));
+
+    if (prog) glDeleteProgram(prog);
+    if (gout) glDeleteBuffers(1, &gout);
+    if (gbuf) glDeleteBuffers(1, &gbuf);
+    if (vhost) vkUnmapMemory(c.device, vmem);
+    if (vmem) vkFreeMemory(c.device, vmem, nullptr);
+    if (vbuf) vkDestroyBuffer(c.device, vbuf, nullptr);
+    AHardwareBuffer_release(ahb);
+    close(sock);
+    (void)lastVk;
+    (void)lastGl;
+}
+
 #else  // !PROBE_HAVE_AHB
 
 static int childT0(int) {
@@ -2698,6 +3153,13 @@ static int childT0(int) {
 }
 static void runT0Parent(VkCtx&, GlCtx&, bool, uint64_t) {
     record("T0-ahb-blob-transfer", "SKIP", "AHardwareBuffer is Android-only; host build cannot run T0");
+}
+static int childT0Sustained(int) {
+    pr("T0S is Android-only");
+    return 1;
+}
+static void runT0SustainedParent(VkCtx&, GlCtx&, bool, uint64_t, uint32_t) {
+    record("T0S-sustained-lock", "SKIP", "AHardwareBuffer is Android-only; host build cannot run T0S");
 }
 
 #endif  // PROBE_HAVE_AHB
@@ -3183,31 +3645,79 @@ static void printSummary() {
     fflush(stdout);
 }
 
+// The trace APK's exec hook (spawn_spike.cpp) runs `<lib> <markerPath>` from the app
+// process and cannot pass options. So a positional argument is taken as that marker
+// path: options are read from `<markerPath>.args` (whitespace-separated, optional), and
+// at the end a one-line verdict is written to the marker so the hook's report reads OK.
+static std::vector<std::string> readArgsFile(const std::string& path) {
+    std::vector<std::string> out;
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return out;
+    char tok[256];
+    while (fscanf(f, "%255s", tok) == 1) out.push_back(tok);
+    fclose(f);
+    return out;
+}
+
 int main(int argc, char** argv) {
     uint64_t size = kDefaultSize;
     const char* childRoute = nullptr;
     bool doT1 = true, doT0 = true, doT3 = true, doGles = true;
+    bool regionsAtEnd = false;
+    uint32_t sustainedRounds = 0;
+    std::string markerPath;
+    std::vector<std::string> args;
     for (int i = 1; i < argc; ++i) {
-        if (!strncmp(argv[i], "--child=", 8)) {
-            childRoute = argv[i] + 8;
-        } else if (!strncmp(argv[i], "--size=", 7)) {
-            size = strtoull(argv[i] + 7, nullptr, 0);
-        } else if (!strcmp(argv[i], "--only-t1")) {
+        if (argv[i][0] != '-' && markerPath.empty()) {
+            markerPath = argv[i];
+        } else {
+            args.push_back(argv[i]);
+        }
+    }
+    std::vector<std::string> fileArgs;
+    if (!markerPath.empty()) {
+        fileArgs = readArgsFile(markerPath + ".args");
+        args.insert(args.end(), fileArgs.begin(), fileArgs.end());
+    }
+    for (const std::string& s : args) {
+        const char* a = s.c_str();
+        if (!strncmp(a, "--child=", 8)) {
+            static std::string route;  // outlives `args`
+            route = a + 8;
+            childRoute = route.c_str();
+        } else if (!strncmp(a, "--size=", 7)) {
+            size = strtoull(a + 7, nullptr, 0);
+        } else if (!strncmp(a, "--region-base=", 14)) {
+            gRegionBase = strtoull(a + 14, nullptr, 0);
+        } else if (!strcmp(a, "--regions-at-end")) {
+            regionsAtEnd = true;
+        } else if (!strncmp(a, "--sustained-lock=", 17)) {
+            sustainedRounds = (uint32_t)strtoul(a + 17, nullptr, 0);
+        } else if (!strcmp(a, "--sustained-lock")) {
+            sustainedRounds = 8;
+        } else if (!strcmp(a, "--only-t1")) {
             doT0 = doT3 = false;
-        } else if (!strcmp(argv[i], "--only-t0")) {
+        } else if (!strcmp(a, "--only-t0")) {
             doT1 = doT3 = doGles = false;
-        } else if (!strcmp(argv[i], "--only-t3")) {
+        } else if (!strcmp(a, "--only-sustained")) {
+            doT1 = doT0 = doT3 = doGles = false;
+            if (!sustainedRounds) sustainedRounds = 8;
+        } else if (!strcmp(a, "--only-t3")) {
             doT1 = doT0 = doGles = false;
-        } else if (!strcmp(argv[i], "--only-gles")) {
+        } else if (!strcmp(a, "--only-gles")) {
             doT1 = doT0 = doT3 = false;
-        } else if (!strcmp(argv[i], "--no-gles")) {
+        } else if (!strcmp(a, "--no-gles")) {
             doGles = false;
-        } else if (!strcmp(argv[i], "--help")) {
-            printf("usage: extmem_probe [--size=BYTES] [--only-t0|--only-t1|--only-t3|--only-gles] [--no-gles]\n");
+        } else if (!strcmp(a, "--help")) {
+            printf("usage: extmem_probe [markerPath] [--size=BYTES] [--regions-at-end] [--sustained-lock[=ROUNDS]]\n"
+                   "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained] [--no-gles]\n"
+                   "  markerPath: exec-hook mode; options are also read from <markerPath>.args\n");
             return 0;
         }
     }
     if (size < kRegionCount * kRegion) size = kRegionCount * kRegion;
+    size = (size + kRegion - 1) / kRegion * kRegion;
+    if (regionsAtEnd && !childRoute) gRegionBase = size - kRegionCount * kRegion;
 
     // A peer that has already exited must not take this process down with it.
     signal(SIGPIPE, SIG_IGN);
@@ -3220,13 +3730,19 @@ int main(int argc, char** argv) {
         if (!strcmp(childRoute, "t1")) return childT1(sock);
         if (!strcmp(childRoute, "t1gl")) return childT1Gl(sock);
         if (!strcmp(childRoute, "t0")) return childT0(sock);
+        if (!strcmp(childRoute, "t0s")) return childT0Sustained(sock);
         if (!strcmp(childRoute, "t3")) return childT3(sock);
         if (!strcmp(childRoute, "t3c")) return childT3Client(sock);
         pr("unknown child route %s", childRoute);
         return 1;
     }
 
-    pr("extmem_probe: MobileGL disaggregation spike B, size=%llu bytes", (unsigned long long)size);
+    std::string joined;
+    for (const std::string& s : args) joined += " " + s;
+    pr("extmem_probe: MobileGL disaggregation spike B, size=%llu bytes regionBase=%llu sustainedRounds=%u "
+       "marker=%s args=[%s ]",
+       (unsigned long long)size, (unsigned long long)gRegionBase, sustainedRounds,
+       markerPath.empty() ? "-" : markerPath.c_str(), joined.c_str());
     printRunContext();
 
     VkCtx c;
@@ -3250,6 +3766,8 @@ int main(int argc, char** argv) {
     if (doGles) runT1GlesParent(c, g, glOk, size);
     pr("=== phase T0: client-allocated AHardwareBuffer BLOB ===");
     if (doT0) runT0Parent(c, g, glOk, size);
+    pr("=== phase T0S: client-allocated AHardwareBuffer, lock held across GPU rounds ===");
+    if (sustainedRounds) runT0SustainedParent(c, g, glOk, size, sustainedRounds);
     pr("=== phase T3: VK_EXT_external_memory_host ===");
     if (doT3) {
         runT3Parent(c, size);
@@ -3259,5 +3777,22 @@ int main(int argc, char** argv) {
     glCtxDestroy(g);
     vkCtxDestroy(c);
     printSummary();
+    if (!markerPath.empty()) {
+        int ok = 0, partial = 0, fail = 0, unsup = 0, skip = 0;
+        for (const RouteResult& r : gResults) {
+            if (r.status == "OK") ++ok;
+            else if (r.status == "PARTIAL") ++partial;
+            else if (r.status == "FAIL") ++fail;
+            else if (r.status == "UNSUPPORTED") ++unsup;
+            else ++skip;
+        }
+        FILE* m = fopen(markerPath.c_str(), "w");
+        if (m) {
+            fprintf(m, "extmem_probe done selinux=%s rows=%zu OK=%d PARTIAL=%d FAIL=%d UNSUPPORTED=%d SKIP=%d\n",
+                    readSmallFile("/proc/self/attr/current").c_str(), gResults.size(), ok, partial, fail, unsup,
+                    skip);
+            fclose(m);
+        }
+    }
     return 0;
 }
