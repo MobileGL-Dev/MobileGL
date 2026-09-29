@@ -150,11 +150,11 @@ namespace MGITest {
         }
 
         // P10 A's PAIRED RECORD - a measurement, not a gate: it skips unless
-        // MGITEST_FENCE_PACE_BENCH=1. Minecraft's shape, which no trace in the replay corpus
-        // carries: every frame queues work and a fence, swaps, and waits - with a timeout - on the
-        // fence it made two frames earlier. The same entry run with MOBILEGL_IPC_POLL_ESCALATE=0
-        // and with the default is the A/B; it prints frames, wall time, reply-slot records and the
-        // fence counters.
+        // MGITEST_FENCE_PACE_BENCH=1. Minecraft's shape, isolated (in the replay corpus only
+        // improved-transparency-minecraft-26.3 carries timed fence waits): every frame queues work
+        // and a fence, swaps, and waits - with a timeout - on the fence it made two frames earlier.
+        // The same entry run with MOBILEGL_IPC_POLL_ESCALATE=0 and with the default is the A/B; it
+        // prints frames, wall time, reply-slot records and the fence counters.
         TEST_F(FencePollScenario, PacedFrameFenceWaitsBench) {
             if (!Ready()) return;
             const char* bench = std::getenv("MGITEST_FENCE_PACE_BENCH");
