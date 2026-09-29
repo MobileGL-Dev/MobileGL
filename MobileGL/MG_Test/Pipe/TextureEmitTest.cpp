@@ -214,6 +214,7 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero)                        \
     X(TextureEmit, AWholeLevelUploadCarriesZeroStrides)                                            \
     X(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint)                         \
+    X(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero)                     \
     X(TextureEmit, ASinglePartialWriteCarriesItsBoxAsOneRegion)                                    \
     X(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs)                                   \
     X(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner)                                      \
@@ -607,6 +608,35 @@ TEST(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint) {
                     regions[i].W == box.W && regions[i].H == box.H && regions[i].D == box.D)
             << "region " << i << " is not footprint box " << i;
     }
+}
+
+// P11 M2: THE NAME IS P4a's AND IT STAYS TRUE, ONE LEVEL UP. The case it named - more writes than
+// the rect list keeps - now crosses as the exact footprint (the case above). What still collapses
+// is a footprint larger than one record may carry (kMGPipeMaxPendingUploadRegions): the emitter
+// falls back to the storage's rect list, which covers the writes - so, as before, the storage's own
+// answer is the oracle, read BEFORE the drain clears the level, and 0 means "the union box is the
+// whole story". 16,384 one-texel writes two texels apart are that many disjoint boxes.
+TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(91, 256);
+    for (Int y = 0; y < 256; y += 2) {
+        for (Int x = 0; x < 256; x += 2) {
+            texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0},
+                                            IntVec3{1, 1, 1});
+        }
+    }
+    Vector<MipmapDirtyRegion> footprint;
+    texture->GetStorageDirtyFootprint(TextureUploadTarget::Texture2D, 0, footprint);
+    ASSERT_GT(footprint.size(), static_cast<SizeT>(kMGPipeMaxPendingUploadRegions))
+        << "the writes must outgrow one record, or this case pins the footprint path instead";
+    MipmapDirtyRegion oracle[MipmapStorage::kMaxDirtyRects];
+    const SizeT oracleCount = texture->GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, oracle,
+                                                            MipmapStorage::kMaxDirtyRects);
+    EXPECT_LE(oracleCount, MipmapStorage::kMaxDirtyRects);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(oracleCount))
+        << "the emitted region count is not the storage's own answer";
+    EXPECT_EQ(Textures().LastRegions().size(), oracleCount);
 }
 
 // P11 M2: A SINGLE PARTIAL BOX CARRIES ITSELF AS ONE REGION. "0 regions" is the whole-level
