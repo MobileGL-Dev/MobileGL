@@ -130,13 +130,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool ProgramSamplesOnlySingleLevelTextures(const MG_State::GLState::ProgramObject& program,
                                                           const ProgramFactory::VkProgramObject& programObj);
 
-    private:
+        // ---- per-frame descriptor pools ----------------------------------------------------
+        // Each frame slot owns a list of pools. The first is the base pool (non-update-after-bind,
+        // setsPerFrame sets) and is never destroyed while the manager lives; every later one was
+        // added by GrowFrameDescriptorPool when an allocation found no room. A pool serves one
+        // updateAfterBind flavour, because a set can only come from a pool created with the flag
+        // its layout was.
         struct DescriptorPoolBucket {
             VkDescriptorPool handle = VK_NULL_HANDLE;
             Uint32 maxSets = 0;
             Uint32 allocatedSets = 0;
             Bool updateAfterBind = false;
         };
+        // One pool's maxSets never exceeds this. It bounds one pool's driver memory: CreateDescriptorPool
+        // declares 8 descriptors of each of 6 types per set, so a 4096-set pool asks for 196,608
+        // descriptors - about 12 MiB at 64 bytes each on a driver that backs every declared one.
+        static constexpr Uint32 kMaxDescriptorPoolSets = 4096;
+        // The growth policy, pure so the host tests can drive it: the size of the next pool a slot
+        // adds for `updateAfterBind` layouts, given the slot's existing pools. Twice the LARGEST pool
+        // of that flavour, capped at kMaxDescriptorPoolSets; `initialMaxSets` when the slot has no
+        // pool of that flavour yet. So a frame that needs N sets adds O(log N) pools while N stays
+        // under the cap, and one more pool per kMaxDescriptorPoolSets sets beyond it. Taking the
+        // largest (not the first) pool is the point: the first same-flavour pool is the oldest,
+        // smallest one, and doubling IT made every grown pool the same size.
+        static Uint32 NextDescriptorPoolMaxSets(const Vector<DescriptorPoolBucket>& pools, Bool updateAfterBind,
+                                                Uint32 initialMaxSets);
+
+    private:
 
         // A cached descriptor set together with the pool it was allocated from, so a
         // layout-destroyed purge can vkFreeDescriptorSets it back and credit the
