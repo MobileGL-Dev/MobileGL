@@ -538,13 +538,14 @@ TEST_F(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheReques
     EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
 }
 
-// R-6's tier gate in P11 A1's shape (CONTRACT-P11 §1). T2 is the only implemented tier, and 0 / 1
-// are SETTLED AT THE HANDSHAKE by the data plane rather than discovered at the first
-// map_persistent: a stream refuses them by name and runs T2 on either side, a client over shared
-// segments dies there by name, a server over shared segments serves T2. The at-use check trusts a
-// settled session and still dies by name for a map_persistent no handshake settled. The session
-// halves are RemoteClientControls.AdoptTier*OverSharedSegments* and AdoptTierStreamTest.
-TEST_F(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) {
+// The tier gate in P11 B2's shape (CONTRACT-P11 §1 and B2). 0 / 1 are SETTLED AT THE HANDSHAKE by
+// the data plane rather than discovered at the first map_persistent: a stream refuses them by name
+// and runs T2 on either side; over shared segments a client with 0 ASKS T0 (0), with 1 is refused
+// by name and asks T2, and a server serves by the client's ask (its own knob answers 2). None of
+// them dies any more (ID-P11-14). The at-use check trusts a settled session and still dies by
+// name for a map_persistent no handshake settled. The session halves are RemoteClientAdoptT0.*
+// and AdoptTierStreamTest.
+TEST_F(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) {
     namespace Tier = MG_Remote::Transport;
     EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
     for (const Uint32 tier : {0u, 1u}) {
@@ -552,8 +553,11 @@ TEST_F(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) {
         MG_Config::Ipc.AdoptTier = tier;
         Tier::ForgetAdoptTierSettlementForTest();
         EXPECT_DEATH(MG_Remote::Client::AdoptTierIsEmulate(), "UnimplementedAdoptTier.*no handshake settled");
-        EXPECT_DEATH(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Client),
-                     "UnimplementedAdoptTier.*refused at the handshake over shared segments");
+        Tier::ForgetAdoptTierSettlementForTest();
+        EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Client), tier == 0 ? 0u : 2u);
+        EXPECT_EQ(Tier::AdoptTierAskFor(false), tier == 0 ? 0u : 2u);
+        EXPECT_EQ(Tier::AdoptTierAskFor(true), 2u);
+        EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
         for (const auto side : {Tier::AdoptTierSide::Client, Tier::AdoptTierSide::Server}) {
             Tier::ForgetAdoptTierSettlementForTest();
             EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(true, side), 2u);
@@ -777,7 +781,7 @@ TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) { MGL_SPLIT_ONLY
 TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, OnlyAdoptTierTwoIsImplemented) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmentAndItsEdges) {
     MGL_SPLIT_ONLY_OR_SKIP();

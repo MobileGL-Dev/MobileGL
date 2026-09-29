@@ -324,54 +324,9 @@ TEST(RemoteClientControls, MapPersistentErrorIsNotADecline) {
     ExpectNamedAbort(child, "Fatal{ReplyError, \"map_persistent\"}");
 }
 
-// P11 A1 (CONTRACT-P11 §1): MOBILEGL_IPC_ADOPT_TIER=0/1 OVER SHARED SEGMENTS DIES AT THE
-// HANDSHAKE, before any record. inproc is shared segments by construction, and this is the real
-// Start (the same StartOverTransportPair the lanes run). The child writes 'S' once Start returns
-// and 'M' once its map_persistent went out, so "died before the first map_persistent" is a fact
-// the parent reads rather than infers from the log. The stream half is AdoptTierStreamTest.
-//
-// RED-ONCE: move the check back to use (drop the client's SessionFail in
-// Transport::SettleAdoptTierAtHandshake and make Client::AdoptTierIsEmulate abort on 0/1 again)
-// -> the session comes up ('S'), the map_persistent goes out, and the child dies only when the
-// server's codec asks the tier.
-namespace {
-    void ExpectDeathAtTheSharedSegmentHandshake(Uint32 tier) {
-        int marks[2] = {-1, -1};
-        ASSERT_EQ(::pipe(marks), 0);
-        const auto child = RunInChild([&marks, tier] {
-            ::close(marks[0]);
-            MG_Config::Ipc.AdoptTier = tier;
-            StartControlSession();
-            const char started = 'S';
-            (void)!::write(marks[1], &started, 1);
-            MGPHandleOnly handle{};
-            handle.Kind = static_cast<Uint32>(MGPipeKind::Buffer);
-            (void)MGPipeRouteMapPersistent(handle, 64, nullptr);
-            const char sent = 'M';
-            (void)!::write(marks[1], &sent, 1);
-        });
-        ::close(marks[1]);
-        std::string seen;
-        char c = 0;
-        while (::read(marks[0], &c, 1) == 1) seen.push_back(c);
-        ::close(marks[0]);
-        const std::string word = "Fatal{UnimplementedAdoptTier, \"T" + std::to_string(tier) + "\"}";
-        ExpectNamedAbort(child, word.c_str());
-        EXPECT_EQ(seen, "") << "'S' = the session came up, 'M' = a map_persistent went out, both before "
-                               "the death; T" << tier << " over shared segments must die at the handshake\n"
-                            << child.Log;
-        EXPECT_NE(child.Log.find("refused at the handshake over shared segments"), std::string::npos)
-            << child.Log;
-    }
-} // namespace
-
-TEST(RemoteClientControls, AdoptTierZeroOverSharedSegmentsDiesAtTheHandshakeBeforeAnyMapPersistent) {
-    ExpectDeathAtTheSharedSegmentHandshake(0u);
-}
-
-TEST(RemoteClientControls, AdoptTierOneOverSharedSegmentsDiesAtTheHandshakeBeforeAnyMapPersistent) {
-    ExpectDeathAtTheSharedSegmentHandshake(1u);
-}
+// P11 A1's two handshake-Fatal cases (AdoptTier{Zero,One}OverSharedSegmentsDiesAtTheHandshake...)
+// are rewritten for B2's fallback semantics in RemoteClientAdoptT0.inc (ID-P11-14: a T0 this
+// session cannot use is T2 plus one named line, never a Fatal).
 
 TEST(RemoteClientControls, AnIdenticalRepeatedMakeCurrentRepublishesNothing) {
     const auto child = RunInChild([] {

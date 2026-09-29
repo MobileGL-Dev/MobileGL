@@ -36,6 +36,10 @@ if (NOT WIN32)
     # P11 PAIR: the unix supervisors' pairing of a client's control and aux connections by the
     # nonce each presents first (Server/PairAcceptor), over real unix and TCP listeners.
     list(APPEND MOBILEGL_WIRE_TESTS PairAcceptorTest)
+    # P11 B2: T0's Offers matched to their map_persistent records by seq (Server/AdoptInbox) over
+    # the in-process queue and a real SCM_RIGHTS socket pair: in order, out of order, late, stale,
+    # missing (bounded), not-an-Offer.
+    list(APPEND MOBILEGL_WIRE_TESTS AdoptInboxTest)
     # P9 W3: the graded log forward - the level mapping both ways, the logger's level reaching the
     # forwarder, and the channel against a transport whose writes can be held (and a real socket
     # pair nobody reads). POSIX for the socket pair.

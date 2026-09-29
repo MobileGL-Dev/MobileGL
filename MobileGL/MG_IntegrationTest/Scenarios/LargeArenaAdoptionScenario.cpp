@@ -99,6 +99,9 @@ void main() { word = 0xC0FFEEu; }
         // P11 A1: set (to the tier the lane names, "T0") only by the `.AdoptTier0.` tcp entries,
         // which also set MOBILEGL_IPC_ADOPT_TIER=0; a harness marker, never read by the library.
         constexpr const char* kAdoptTierRefusalMarker = "MGITEST_ADOPT_TIER_REFUSAL";
+        // P11 B2: set by the shared-segment `.AdoptTier0.` / `.AdoptT0Disallowed.` entries to the reason word the
+        // server gives for not granting T0 ("no AHardwareBuffer" on a host, "disallowed" with its allow switch off).
+        constexpr const char* kAdoptT0FallbackMarker = "MGITEST_ADOPT_T0_FALLBACK";
         // Draws issued against the arena inside the counted window. One definition, many draws:
         // "one per definition" (1) and "one per draw" (kDrawsInTheWindow) have to be different
         // numbers or the assertion cannot tell them apart.
@@ -617,6 +620,54 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_EQ(count, 1u) << "the client names MOBILEGL_IPC_ADOPT_TIER on a stream exactly once, at "
                                 "its handshake (" << line << "), in " << PipeStatsWindow::LibraryLogPath();
         EXPECT_EQ(log.find("Fatal{UnimplementedAdoptTier"), std::string::npos) << log;
+    }
+
+    // P11 B2 (MG_Remote/CONTRACT-P11.md B2): A SHARED-SEGMENT SESSION THAT ASKS T0 AND CANNOT RUN IT.
+    // MOBILEGL_IPC_ADOPT_TIER=0 over shared segments asks T0 in the Hello (A1 made it die at the
+    // handshake; ruling ID-P11-14 made it this). The lane's server cannot grant it - a host has no
+    // AHardwareBuffer, or `.AdoptT0Disallowed.` turned its allow switch off - so it refuses by name
+    // at its first native bind, publishes no kCapAdoptT0, and the client falls back to T2 with ONE
+    // named line at its first map_persistent. Never a Fatal; the other cases in the lane are green
+    // and the arena is emulated. Everywhere else it skips.
+    TEST_F(LargeArenaAdoptionScenario, ASessionThatCannotRunT0FallsBackToT2OnceByName) {
+        if (!Ready() || IsSkipped()) return;
+        const char* why = std::getenv(kAdoptT0FallbackMarker);
+        if (why == nullptr || why[0] == '\0') {
+            GTEST_SKIP() << "runs only in the shared-segment `.AdoptTier0.` / `.AdoptT0Disallowed.` entries, "
+                            "which set MOBILEGL_IPC_ADOPT_TIER=0 and " << kAdoptT0FallbackMarker;
+        }
+        if (PipeStatsWindow::LibraryLogPath().empty()) {
+            GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the two logs are where the "
+                            "fallback is written";
+        }
+        // A frame of the arena's work first: the fallback is only worth reading from a session that
+        // then ran on T2 - and the client decides at its first map_persistent, which SetUp's
+        // definition of the arena has already made.
+        UploadQuad(0.f, 1.f, 0.f);
+        DrawQuad();
+        EXPECT_GT(CenterPixel()[1], 200) << "the session that fell back to T2 did not render";
+        EXPECT_EQ(FirstGLError(), 0u);
+        Gl().EndFrame();
+
+        const auto countOf = [](const std::string& text, const std::string& needle) {
+            std::size_t n = 0;
+            for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) ++n;
+            return n;
+        };
+        const std::string client = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::LibraryLogPath());
+        const std::string server = PipeStatsWindow::ReadServerLogSince(PipeStatsWindow::LogMark{});
+        const std::string clientLine = "Refuse{AdoptT0Unavailable, \"no kCapAdoptT0\"}";
+        const std::string serverLine = std::string("Refuse{AdoptT0Unavailable, \"") + why + "\"}";
+        RecordProperty("t0_client_fallbacks", static_cast<int>(countOf(client, clientLine)));
+        RecordProperty("t0_server_refusals", static_cast<int>(countOf(server, serverLine)));
+        EXPECT_EQ(countOf(client, clientLine), 1u)
+            << "the client names a T0 it asked for and cannot run exactly once, at its first map_persistent ("
+            << clientLine << "), in " << PipeStatsWindow::LibraryLogPath();
+        EXPECT_EQ(countOf(server, serverLine), 1u)
+            << "the server names why it did not grant T0 exactly once, at its first native bind (" << serverLine
+            << "), in " << PipeStatsWindow::ServerLibraryLogPath();
+        EXPECT_EQ(client.find("Fatal{"), std::string::npos) << client;
+        EXPECT_EQ(server.find("Fatal{"), std::string::npos) << server;
     }
 
 } // namespace MGITest

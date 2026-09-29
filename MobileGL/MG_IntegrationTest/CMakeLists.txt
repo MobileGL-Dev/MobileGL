@@ -2483,6 +2483,41 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     )
     list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
     math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+    # P11 B2 (CONTRACT-P11 B2): THE SHARED-SEGMENT ARMS WITH MOBILEGL_IPC_ADOPT_TIER=0, which A1 made
+    # die at the handshake and B2 turned into an ASK. A host has no AHardwareBuffer, so the server
+    # refuses T0 by name at its first native bind, publishes no kCapAdoptT0, and the client falls
+    # back to T2 with one named line at its first map_persistent: every case green, the arena
+    # emulated (SplitLogPaths declares it), ASessionThatCannotRunT0FallsBackToT2OnceByName reading
+    # the two lines. `.AdoptT0Disallowed.` is the same on the spawn arm with the server's allow switch
+    # off - which also proves MOBILEGL_IPC_ALLOW_ADOPT_T0 survives ServerSpawn's environment scrub.
+    foreach(mglT0Arm IN ITEMS Split Spawn)
+        string(TOUPPER "${mglT0Arm}" mglT0ArmUpper)
+        string(TOLOWER "${mglT0Arm}" mglT0ArmLower)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.${mglT0Arm}.AdoptTier0."
+            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+            TEST_FILTER "LargeArenaAdoptionScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu\;integration-${mglT0ArmLower}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_${mglT0ArmUpper}_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_T0_FALLBACK=no AHardwareBuffer"
+        )
+        list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+        math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+    endforeach()
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Spawn.AdoptT0Disallowed."
+        TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+        TEST_FILTER "LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName:LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-spawn"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_SPAWN_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MOBILEGL_IPC_ALLOW_ADOPT_T0=0\;MGITEST_ADOPT_T0_FALLBACK=disallowed"
+    )
+    list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+    math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
 
     # ---- P3b/P4b espryt D1 slice 1: THE ORPHANED XFB CAPTURE TARGET -------------------------
     #
@@ -3864,21 +3899,27 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
-        # P11 A1 (CONTRACT-P11 §1): the tcp arm with MOBILEGL_IPC_ADOPT_TIER=0 - refused by name at
-        # the client's handshake, T2, the scenario green. TCP ONLY by construction (over shared
-        # segments the knob dies at the handshake); spawn_lane_parity.py names the tail in
-        # MAGMA_TCP_ONLY.
+        # P11 A1 + B2 (CONTRACT-P11 §1, B2): MOBILEGL_IPC_ADOPT_TIER=0 on every arm, one case set.
+        # On tcp a stream refuses the tier by name at the client's handshake (A1, the stream case
+        # reads the line); over shared segments (split, spawn) the knob ASKS T0, a host has no
+        # AHardwareBuffer, and the session falls back to T2 by name (B2, the fallback case reads
+        # both lines). Each arm's marker makes the other arm's case skip, so the three arms carry
+        # the same names and spawn_lane_parity.py compares them like any other lane.
         if(mglItestArm STREQUAL "Tcp")
-            foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS AStreamSessionRefusesTheAdoptTierOnceByName)
-                gtest_discover_tests(MobileGLIntegrationTest
-                    TEST_PREFIX "DirectVulkan.Tcp.AdoptTier0."
-                    TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
-                    DISCOVERY_TIMEOUT 30
-                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                        ${mglItestArmProperties}
-                        ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_TIER_REFUSAL=T0\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0-tcp-${arenaCase}.log")
-            endforeach()
+            set(mglItestAdoptTier0Env "MGITEST_ADOPT_TIER_REFUSAL=T0")
+        else()
+            set(mglItestAdoptTier0Env "MGITEST_ADOPT_T0_FALLBACK=no AHardwareBuffer")
         endif()
+        foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS AStreamSessionRefusesTheAdoptTierOnceByName
+                                                         ASessionThatCannotRunT0FallsBackToT2OnceByName)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.AdoptTier0."
+                TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;${mglItestAdoptTier0Env}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0${mglItestArmLogTag}-${arenaCase}.log")
+        endforeach()
     endforeach()
 endif()
 

@@ -1721,6 +1721,7 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
 }
 
 #include "RemoteClientControls.inc"
+#include "RemoteClientAdoptT0.inc"
 #include <MG_Impl/Pipe/FramebufferEmit.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_State/GLState/TextureState/TextureObject2D.h>

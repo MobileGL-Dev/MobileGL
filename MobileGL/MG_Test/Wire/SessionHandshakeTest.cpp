@@ -261,6 +261,66 @@ TEST(SessionHandshakeTest, WireLayoutMismatchReturnsNamedRefuseWithoutAborting) 
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint() ^ 1, BuildFingerprint(),
                    ::MobileGL::Wire::DialMode::No, ::MobileGL::Wire::RefuseCode::WireFingerprint);
 }
+// P11 B2 (CONTRACT-P11 B2): CONTROL REVISION 5. A peer built at revision 4 - before
+// LinkTerms.adoptTier - carries the fingerprint its revision mixed, and is refused by name
+// (Refuse{WireFingerprint}), never read as a revision-5 Hello that happens to ask T2. The same shape
+// PAIR's 3 -> 4 had. RED ONCE by leaving MOBILEGL_PROTOCOL_CONTROL_REVISION at 4 with the schema
+// change: the two fingerprints are then equal and the Welcome goes out.
+TEST(SessionHandshakeTest, ARevisionFourPeerIsRefusedByNameAtRevisionFive) {
+    static_assert(MOBILEGL_PROTOCOL_CONTROL_REVISION == 5, "B2 bumped the control revision 4 -> 5");
+    auto inputs = CapsAbiFingerprintInputs();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    inputs.ControlSchemaRevision = (static_cast<Uint64>(4) << 32) | MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
+#else
+    inputs.ControlSchemaRevision = 4;
+#endif
+    const Uint64 revisionFour = Transport::MixAbiFingerprint(inputs);
+    ASSERT_NE(revisionFour, WireFingerprint());
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, revisionFour, BuildFingerprint(), ::MobileGL::Wire::DialMode::Connect,
+                   ::MobileGL::Wire::RefuseCode::WireFingerprint);
+}
+
+// P11 B2: the Hello's adoptTier is an ASK of 2 or (shared segments) 0 - T1 is closed and never sent,
+// and anything else is not an ask this revision knows. Refuse{LinkTerms} by name; the echo of a
+// legal ask is the Welcome's.
+TEST(SessionHandshakeTest, AHelloAskingAnAdoptTierThatIsNotAnAskIsRefusedByName) {
+    using namespace ::MobileGL::Wire;
+    for (const Uint8 ask : {Uint8{0}, Uint8{1}, Uint8{2}, Uint8{7}}) {
+        SCOPED_TRACE(static_cast<int>(ask));
+        std::unique_ptr<Transport::InProcessTransport> client, server;
+        Transport::InProcessTransport::CreatePair(client, server);
+        ::flatbuffers::FlatBufferBuilder builder(512);
+        auto terms = CreateLinkTerms(builder, DataPlane::SharedSegments, WireForm::StructImage, 0, 0, 0, 0, ask);
+        auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
+                                       BuildFingerprint(), 0, 1, nullptr, WireFingerprint(), WireFingerprint(),
+                                       terms, nullptr, DialMode::No);
+        auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
+        FinishCtrlEnvelopeBuffer(builder, root);
+        std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
+        Server::ServerSession session;
+        Transport::SessionSegmentSizes sizes;
+        sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
+        sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+        session.SetSegmentSizes(sizes);
+        const Bool legal = ask == 0 || ask == 2;
+        EXPECT_EQ(session.Accept(*server, &first), legal ? MOBILEGL_OK : MOBILEGL_ERR_PROTOCOL_MISMATCH);
+        const auto reply = ReadHandshakeFrame(*client);
+        ASSERT_FALSE(reply.empty());
+        const auto* envelope = GetCtrlEnvelope(reply.data());
+        if (legal) {
+            ASSERT_NE(envelope->msg_as_Welcome(), nullptr);
+            ASSERT_NE(envelope->msg_as_Welcome()->linkTerms(), nullptr);
+            EXPECT_EQ(envelope->msg_as_Welcome()->linkTerms()->adoptTier(), ask) << "the Welcome echoes the ask";
+            EXPECT_EQ(session.AdoptT0Asked(), ask == 0);
+            EXPECT_FALSE(session.AdoptT0()) << "no grant before the first native bind";
+        } else {
+            ASSERT_NE(envelope->msg_as_Refuse(), nullptr);
+            EXPECT_EQ(envelope->msg_as_Refuse()->code(), RefuseCode::LinkTerms);
+        }
+        session.Close();
+    }
+}
+
 TEST(SessionHandshakeTest, ConnectAcceptsDifferentBuildWithIdenticalWire) {
     ScopedHandshakeEnvironment required("MOBILEGL_IPC_REQUIRE_SAME_BUILD", "0");
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",

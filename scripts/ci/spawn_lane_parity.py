@@ -141,14 +141,12 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
     f".SplitRecording64.OversizedRecordingSplitScenario.{case}" for case in SPLIT_RECORDING_CASES)
 
 
-# P11 A1: THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. `.AdoptTier0.` runs
-# LargeArenaAdoptionScenario with MOBILEGL_IPC_ADOPT_TIER=0 on the CLIENT: a stream data plane
-# refuses that tier by name and runs T2 (the scenario is green there), while over shared segments -
-# the split and spawn arms - the same knob dies at the handshake by design (CONTRACT-P11 §1), so a
-# split or spawn copy could only ever be a death. Each tail must match at least one tcp entry, or
-# the exception names nothing. (The DirectGLES `.AdoptTier0.` twins need no entry: the Espryt
-# CASE pattern does not parse a middle segment, so they never enter that comparison.)
-MAGMA_TCP_ONLY = (".AdoptTier0.",)
+# THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. Each tail must match at least
+# one tcp entry, or the exception names nothing. P11 A1 put `.AdoptTier0.` here (over shared segments
+# MOBILEGL_IPC_ADOPT_TIER=0 died at the handshake); P11 B2 made that knob an ASK that falls back to T2
+# by name, so the Magma `.AdoptTier0.` lane now runs on all three arms with one case set and is
+# compared like any other. The mechanism stays for the next tcp-only lane.
+MAGMA_TCP_ONLY = ()
 
 
 def lane_names(build_dir, label):
