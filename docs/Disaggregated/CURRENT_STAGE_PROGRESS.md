@@ -1,6 +1,6 @@
 # 当前阶段：P12 — server 自己开窗口上屏
 
-> **更新 2026-09-28**（含五臂传输性能对比，见 [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md)）。这一页只有摘要；带裁定编号的明细、余项清单、证据位置在 [`notes/p12/README.md`](notes/p12/README.md)（计划与交接 [`PLAN-P12.md`](notes/p12/PLAN-P12.md)）。P12 审查后的定向主机与真机复测已完成；验收 B 已于 2026-09-28 通过，验收 A 仍未打。上一阶段 P7 已于 2026-09-23 完成。
+> **更新 2026-09-28**（含五臂传输性能对比，见 [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md)）。这一页只有摘要；带裁定编号的明细、余项清单、证据位置在 [`notes/p12/README.md`](notes/p12/README.md)（计划与交接 [`PLAN-P12.md`](notes/p12/PLAN-P12.md)）。P12 审查后的定向主机与真机复测已完成；验收 A、B 都已通过（B 于 2026-09-28，A 于 2026-09-29）。上一阶段 P7 已于 2026-09-23 完成。
 
 ## 目标
 
@@ -14,7 +14,7 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 | 代码审查发现的 10 个问题 | ✅ 已修 |
 | 主机门与单进程构建二进制不变（G1） | ✅ 原主机门 / G1 见 ID-P12-14/15；审查后 P12 定向 CTest **46/46**（`1fb18d9e`） |
 | 真机 7 项检查（两个后端上屏、排队与拒绝、窗口丢失、离屏不受影响……） | ✅ 审查后在 Redmi `2f7cbe2e` 复测通过（`1fb18d9e`）；明细见 [`notes/p12/README.md`](notes/p12/README.md) |
-| 验收 A：同一台手机上用 FCL 以两个后端进游戏，杀掉 server 后干净报"设备丢失" | ❌ 未做 |
+| 验收 A：同一台手机上用 FCL 以两个后端进游戏，杀掉 server 后干净报"设备丢失" | ✅ 2026-09-29：Render Server 屏 + FCL（新增版本设置「游戏退到后台时不暂停」），双后端入世界，杀 server 后 33–54 ms 闩住 device-lost，FCL 不崩；[`notes/p12/FCL-ACCEPTANCE.md`](notes/p12/FCL-ACCEPTANCE.md)。Magma 竖屏窗口画面位置不对，未查 |
 | 验收 B：另一台电脑经 TCP 连手机进游戏，并记录链路数据 | ✅ 2026-09-28：WSL client 经 Wi-Fi 重放 rd12 世界内 trace，ssim 0.999883、251/251 帧；必测数见 [`notes/p12/CROSSHOST-ACCEPTANCE.md`](notes/p12/CROSSHOST-ACCEPTANCE.md)（client 是 trace 重放器，不是活的 Minecraft） |
 
 ## 性能现状（2026-09-28，Redmi 未定频交错 A/B）
@@ -35,9 +35,8 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 
 ## 下一步
 
-1. 打验收 A（FCL 同机 spawn、双后端、杀 server 报 device-lost）。
-2. 收尾：写 `MG_Remote/CONTRACT-P12.md`、修门脚本误导的一行输出、收官审查。
-3. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
-4. 之后按 [`ROADMAP.md`](ROADMAP.md)：P8；P9 → P10 → P11。
+1. 收尾：写 `MG_Remote/CONTRACT-P12.md`、修门脚本误导的一行输出、收官审查。
+2. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
+3. 之后按 [`ROADMAP.md`](ROADMAP.md)：P8；P9 → P10 → P11。
 
 **阻塞**：没有需要决策的事项。
