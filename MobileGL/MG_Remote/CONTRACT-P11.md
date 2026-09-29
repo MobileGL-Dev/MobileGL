@@ -51,4 +51,48 @@
 ## 不变量
 
 - G1：新代码全在 `MOBILEGL_BUILD_DISAGGREGATED` 下（`MG_Remote`）。
-- 线上格式与控制协议修订号不变（3）。
+- 线上格式与控制协议修订号不变（3）。（A 包；PAIR 包把修订号升到 4，见下节。）
+
+## PAIR：socket client 的两条连接按身份配对（B0 F2）
+
+依据 [`B0-CROSS-APP.md`](../../docs/Disaggregated/notes/p11/B0-CROSS-APP.md) F2：server 按到达顺序配对（`AcceptPair`，"先到是控制、后到是 aux"），设备上 server app 的就绪探测（一次空 `connect()` + `close()`）成了下一个真 client 的控制连接，会话读到探测的套接字后退出（`control peer closed before sending a first frame`），client `no Welcome … (rc=6)`；两个 client 同时连也会互换半边。
+
+### 线上格式
+
+- `protocol.fbs` 追加 `table PairBind { nonce: [ubyte]; aux: bool; }` 与 `CtrlMsg` 末尾的 `PairBind`。**控制协议修订号 3 → 4**（`mg_protocol_base.h`，`protocol_revision_pins.json` 已钉），`wireFingerprint` 随之变。
+- `SocketTransport::ConnectTo`（`unix:` 与 fork spawn 两条 client 路径都走它；`tcp://` 上只有测试用）：CSPRNG 取 16 字节 nonce，控制、aux 两条连接各以一帧 `PairBind{nonce, aux}` 开头；控制连接上 Hello 在它之后。编解码在 `Transport/PairBind.h`。
+- TCP 产品路径不变：`ConnectControl` 单连接，数据连接凭 server 发的 `Welcome.dataNonce` 绑定（`DataBind`，PH-7 (4)），`TcpSupervisor` 的预认证门本来就丢探测。
+
+### 规则（`Server/PairAcceptor.{h,cpp}`，取代已删的 `SocketTransport::AcceptPair`）
+
+| 连接的首帧 / 状态 | 处置 |
+|---|---|
+| 一字节未发就关（就绪探测） | 关闭，D 级日志 |
+| `PairBind`，另一角色同 nonce 已在等 | 成对交出（控制作流、aux 作描述符通道） |
+| `PairBind`，同 nonce 同角色已在等 | `Refuse{Authentication}`，关新来者 |
+| `Hello`（修订号 < 4 的 client） | 按 `RunSession` 的顺序问：token → 线上格式；旧 client 得 `Refuse{WireFingerprint}`，都过的仍 `Refuse{MalformedHello}`；从不配对 |
+| `DataBind` / 其它 | `Refuse{Authentication}` "data connection names no live session" / `Refuse{MalformedHello}` + 形状细节 |
+| 自 accept 起 2000 ms 内未发 `PairBind`，或伙伴未到 | 控制与未识别者 `Refuse{Authentication}` 后关；aux 直接关（其 client 在那里只收描述符）；W 日志 |
+| 同时未配对的超过 16 条 | 丢最老的未识别者（没有则最老者），`Refuse{Busy}` |
+
+- 从不读过 `PairBind` 一个字节（`FirstFrameAssembler`）：控制连接后面的 Hello 归会话读，aux 后面是 `SCM_RIGHTS`。
+- 有状态：A-control、B-control、B-aux、A-aux 时先交出 B，A-control 留给下一次 `Accept`。`Accept(timeoutMs)` 超时返回 `TIMEOUT`，未配对的留着。
+- 调用点：`UnixInProcessSupervisor`（成员）与 `mobilegl_server_main` 的 unix 分支。`--serve` 的会话子进程 `CloseInForkedChild`（只 `close`，不 `shutdown`）；单会话形状配对后即析构，其余等待者得 `Refuse{Busy}`。`RefuseBusy` 不变（Hello 仍在套接字里）。
+
+### 版本互通
+
+| | 修订 3 server | 修订 4 server |
+|---|---|---|
+| 修订 3 client | — | `PairAcceptor` 代答 `Refuse{WireFingerprint}`，从不配对 |
+| 修订 4 client | 旧 server 按顺序配对后首帧是 `PairBind` → `Refuse{MalformedHello}` "first control frame is not a verifiable Hello"；旧会话退出若抢在 client 发 Hello 之前，client 只见发送失败 | 正常 |
+
+### 门
+
+- 单元 `Endpoints/PairAcceptorTest.*/{unix,tcp}`（8 例）：(1) 探测后紧跟 client；(2) 四条交错；(3) 孤儿 aux 过预算被关、下一个 client 成对；(4) Hello 先到的旧 client 具名拒绝。每例用 `ServesExactly` 证身份（控制双向各一帧 + 该 client 的 aux 字节是 server aux 上的头几个字节）。
+- 端到端 `ServerSpawnTest.AStrayConnectionAheadOfTheClientDoesNotTakeItsSession`：单会话 unix server，探测之后真 client 握手成功、server 退出 0。
+- red-once：`PairAcceptor::Accept` 换回到达顺序配对（仍读掉首帧，只差配对规则）→ 单元 8/8 红（(1) 控制连接是已关的探测；(2) aux 读到的不是本 client 的字节），端到端握手 rc=6（与设备上 `no Welcome … (rc=6)` 同）；对照 `StartsAServerProcessAndHandshakesAcrossIt` 仍绿。拷回原文件、`cmp` 字节相同后复绿。
+
+### 不变量
+
+- G1：新代码全在 `MG_Remote`（`MOBILEGL_BUILD_DISAGGREGATED` 下）。
+- 未改：`TcpSupervisor`、预认证门、`DataBind`、会话读 Hello 的路径。
