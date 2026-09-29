@@ -22,10 +22,10 @@
 | 合并 dev（M2） | ✅ KGSL 分段提交、零散写入按矩形（补齐 split 半边）、描述符池 |
 | B1 同机外部 client 走共享内存 | ✅ `fd:` 端点 + 令牌 broker + helper + 启动命令 + 外部 client 的 apply 线程策略；rd12 Espryt 约 119 vs tcp 40–53 fps |
 | B2 T0 零拷贝导入（可开关，`ADOPT_TIER` 0；默认 2 = 共享内存推送） | 下一步 |
-| 主机门（集成头） | ✅ 全绿，数字见 ID-P11-9 |
+| 主机门（集成头） | ✅ 全绿，数字见 ID-P11-16（B1）与 ID-P11-15（M2） |
 
 ## 下一步
 
-B2：T0 导入（两后端，经 B1 的通道；第一项真机检查是 AHardwareBuffer 的 dma-buf fd 跨 app 传递），保留开关。转出的 dev 缺陷（Espryt 零散写入并集框、Magma 单进程 rd12 映射耗尽）已开独立任务，见 [`notes/DEBTS.md`](notes/DEBTS.md)。
+B2：T0 导入（两后端，经 B1 的通道；第一项真机检查是 AHardwareBuffer 的 dma-buf fd 跨 app 传递），保留开关。本阶段转出的两个 dev 缺陷（Espryt 零散写入、Magma rd12 映射耗尽）已在 dev 修好并经 M2 合入；其余转出项见 [`notes/DEBTS.md`](notes/DEBTS.md)。
 
 **阻塞**：没有需要决策的事项。
