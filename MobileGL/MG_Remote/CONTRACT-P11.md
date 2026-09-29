@@ -107,10 +107,10 @@
 |---|---|---|
 | 1 | 用户 | `MOBILEGL_IPC_TOKEN=<令牌> CLASSPATH=<server APK> app_process / top.mobilegl.plugin.ExternalClientHelper [--server <包名>] [--timeout-ms <n>] [--keep-affinity] -- <程序> [参数…]`（server 界面给出可复制的整行：APK 路径取 `getApplicationInfo().sourceDir`，不靠 `pm path`——包可见性会过滤 app uid 的查询） |
 | 2 | helper（`app_process`，client 自己的 uid） | 令牌取自 `MOBILEGL_IPC_TOKEN`，否则取 `MOBILEGL_IPC_TOKEN_FILE` 指的文件；**从不取 argv**（`--token` 具名拒绝）。`--server` 缺省为 `BuildConfig.APPLICATION_ID`（加载它的那个 APK 的包名） |
-| 3 | helper | 经隐藏的 `IActivityManager.broadcastIntentWithFeature`（null caller，参数按类型填，末位 int = user id）发显式广播：组件 `<包名>/top.mobilegl.plugin.ExternalClientBroker`，action `top.mobilegl.plugin.EXTERNAL_CLIENT_CONNECT`，`FLAG_RECEIVER_FOREGROUND \| FLAG_INCLUDE_STOPPED_PACKAGES`，extra `mobilegl_broker` = Bundle{`callback`: helper 自建的 Binder，`token`，`version`=1} |
-| 4 | broker（导出的 receiver，两个口味都有，跑在 `:mglsrv`） | 按下表逐条检查；通过则连两次 server 的 unix 端点（`@name` 或路径；相对路径按 `filesDir` 解析）。server 只听 `tcp://` 时，`MobileGLServerService` 在旁边多起一个 supervisor，听私有抽象名 `@<包名>.broker.<8 位 hex>`（同一二进制、同一环境与令牌），broker 连它。broker 在两条连接上**一个字节都不写** |
-| 5 | broker → helper | **每个请求都回话**，单向 `transact`：`FIRST_CALL_TRANSACTION` = int version + 控制 PFD + 辅助 PFD + long applyCore（server 为本会话 apply 线程保留的核，0 = 无）；`FIRST_CALL_TRANSACTION+1` = String 拒绝名 + String 说明 |
-| 6 | helper | 两个 fd 清 `FD_CLOEXEC`，`execve` 程序（applyCore ≠ 0 且没给 `--keep-affinity` 时经 `/system/bin/taskset <在线 & ~applyCore>`）；环境 = 原环境 − `CLASSPATH` + `MOBILEGL_TRANSPORT=spawn`、`MOBILEGL_IPC_CONTROL=fd:<控制>,<辅助>`、`MOBILEGL_IPC_DATA=shm`、`MOBILEGL_IPC_TOKEN=<令牌>` |
+| 3 | helper | 经隐藏的 `IActivityManager.broadcastIntentWithFeature`（null caller，参数按类型填，末位 int = user id）发显式广播：组件 `<包名>/top.mobilegl.plugin.ExternalClientBroker`，action `top.mobilegl.plugin.EXTERNAL_CLIENT_CONNECT`，`FLAG_RECEIVER_FOREGROUND \| FLAG_INCLUDE_STOPPED_PACKAGES`，extra `mobilegl_broker` = Bundle{`callback`: helper 自建的 Binder，`token`，`version`=2} |
+| 4 | broker（导出的 receiver，两个口味都有，跑在 `:mglsrv`） | 按下表逐条检查；通过则连两次 server 的 unix 端点（`@name` 或路径；相对路径按 `filesDir` 解析）。server 只听 `tcp://` 时，`MobileGLServerService` 在旁边多起一个 supervisor，听私有抽象名 `@<包名>.broker.<8 位 hex>`（同一二进制、同一环境与令牌），broker 连它。连上后**立即写 PairBind 对**（ID-P11-12：谁开连接谁出示；新 nonce，控制 `aux=false`、辅助 `aux=true`；字节见下「交接时配对」） |
+| 5 | broker → helper | **每个请求都回话**，单向 `transact`：`FIRST_CALL_TRANSACTION` = int version（2）+ 控制 PFD + 辅助 PFD + long applyCore（在跑的 supervisor 启动时宣布的保留核，0 = 无）+ int flags（bit 0 = 已在交接时配对）；`FIRST_CALL_TRANSACTION+1` = String 拒绝名 + String 说明 |
+| 6 | helper | 两个 fd 清 `FD_CLOEXEC`，`execve` 程序（applyCore ≠ 0 且没给 `--keep-affinity` 时经 `/system/bin/taskset <在线 & ~applyCore>`）；环境 = 原环境 − `CLASSPATH` + `MOBILEGL_TRANSPORT=spawn`、`MOBILEGL_IPC_CONTROL=fd:<控制>,<辅助>`、`MOBILEGL_IPC_DATA=shm`、`MOBILEGL_IPC_TOKEN=<令牌>`，flags bit 0 时再加 `MOBILEGL_IPC_FD_PAIRED=1` |
 | 7 | client（`fd:` 端点） | 见下；之后与 `unix:` 完全相同：Hello（dial = Connect）、Welcome、7 个 fd 经 `SCM_RIGHTS`、SharedSegments |
 
 ### `fd:<控制>,<辅助>` 端点（`ClientSession::StartSpawned`，`SocketTransport::AdoptConnectedPair`）
@@ -118,9 +118,14 @@
 - 文本严格：两个十进制数、一个逗号，别的都不收；`MOBILEGL_IPC_DATA` 只收 `auto` / `shm`。违者 `Refuse{ProtocolMismatch}` 具名、`MOBILEGL_ERR_UNSUPPORTED`。
 - 两个描述符必须互不相同、在本进程打开、是 `AF_UNIX` + `SOCK_STREAM`、已连接（`getpeername`）；否则 `Refuse{ProtocolMismatch}` 说明哪一条，`MOBILEGL_ERR_INVALID_ARGUMENT`，**一个字节不写**。TCP 套接字被拒（没有描述符通道，用 `tcp://`）。
 - 收养后两个 fd 设 `FD_CLOEXEC`（程序自己的子进程不继承）。
-- **client 自己出示 PairBind 对**：CSPRNG 取 16 字节 nonce，控制连接 `PairBind{nonce, aux=false}`、辅助连接 `PairBind{nonce, aux=true}`，然后才是 Hello——与 `ConnectTo` 同（PAIR）。broker 不写，所以 server 的 `PairAcceptor` 按 client 的 nonce 配对。
-- 时限：`PairAcceptor` 从 accept（即 broker 的 connect）起 2000 ms 内要见到 PairBind。实测 retrace client 从 broker 连上到会话就绪 0.17 s（路线 b，`m-probe3`）。程序若在 exec 后 2 s 还没初始化 EGL，server 拒绝（`Refuse{Authentication}`），client 读到后具名失败，重跑 helper 即可。
+- `MOBILEGL_IPC_FD_PAIRED=1`（helper 按 broker 的 flags 设）：PairBind 已由 broker 在交接时出示，本端点**不再写**（`SocketTransport.cpp:492`），直接 Hello。没有这个标记时本端点自己出示一对（CSPRNG 16 字节 nonce，控制 `aux=false`、辅助 `aux=true`，然后 Hello——与 `ConnectTo` 同），供裸连接交来的 fd（测试、旧 broker）。
+- 自己出示时发送失败（server 已拒绝并关掉这一对）：两个 fd 留给调用方，client 读控制连接上待读的拒绝帧并具名报出（如 `peer Refuse{Authentication} no PairBind within the pairing budget`），不只是一个发送错误。
 - 一对 fd 只够一个会话：会话结束（或同一进程再起会话）时 fd 已关，第二次收养具名失败。
+
+### 交接时配对与等 Hello 的时限（ID-P11-12）
+
+- broker 连上两条连接后立即写 PairBind 对（`PairBindFrames.java`：帧头 magic `0x464C474D` + 长度，小端；负载是原生 `EncodePairBind` 的输出，16 字节 nonce 在最后）。两个前缀是编码器的字节；`ServerSpawnTest.TheBrokersPairBindTemplatesAreTheEncoders` 从 Java 源文件读出前缀、对 32 个随机 nonce 与 `AppendFrame(EncodePairBind(…))` 逐字节比较，`protocol.fbs` 一改就红。`PairAcceptor` 的 2000 ms 配对预算（`PairAcceptor.h:63`）因此在 broker 手里满足，不再等程序跑到第一个 EGL 调用。
+- **配对之后等 Hello：没有时限，靠 EOF。** 之前是 10 s（`RunSession` 的 `helloWaitMs`，`ServerMain.cpp:385` 的读）；现在 unix 端点的 `--serve` 会话子进程与单会话形状都用 `kPairedUnixHelloWaitMs = kWaitForever`（`ServerMain.cpp:136`，调用点 `:1537`、`:1562`）。理由：配对时身份已定（nonce），unix 端点只有本用户 / 本 app 能连（Android 上 SELinux，路径上 0600），而一个先加载资源的程序要多久没有上界；程序退出或关掉描述符 → EOF → `control peer closed before sending a first frame`，会话子进程干净退出。代价：程序活着但迟迟不 Hello 时，它占着唯一的会话槽，别的 client 得 `Refuse{Busy}`（与一个正在渲染的会话相同）。TCP 保留预认证时限（`PreAuthKnobs`）；进程内显示 server（`:mglwin`，`ServerMain.cpp:1395`）保留 10 s（它停止时要等会话线程）。
 
 ### 令牌
 
@@ -133,13 +138,13 @@
 
 | 名 | 条件 | helper 退出码 |
 |---|---|---|
-| `bad-request` | 没有 `mobilegl_broker` Bundle / callback（只能记日志）或 version ≠ 1 | 64 |
+| `bad-request` | 没有 `mobilegl_broker` Bundle / callback（只能记日志）或 version ≠ 2 | 64 |
 | `token-missing` | 未出示令牌 | 65 |
 | `token-wrong` | 令牌不符；不连、不给 fd | 66 |
 | `server-no-token` | server 令牌 < 16 字节 | 67 |
 | `server-not-running` | `:mglsrv` 里没有在跑的 server（广播可以把 `:mglsrv` 进程拉起来——server app 被强停后也一样，设备实测——但 Android 12+ 不许后台 receiver 起前台服务，所以答"先在 MobileGL 的 server 界面启动 server"，不挂起）。只认离屏服务；`:mglwin` 显示 server 在跑时也答它 | 68 |
 | `broker-busy` | 另一个请求正在 broker 里连接，或 server 的监听 3000 ms 内没接受两条连接 | 69 |
-| `connect-failed` | server 在跑但它的端点拒绝连接 | 70 |
+| `connect-failed` | server 在跑但它的端点拒绝连接，或 PairBind 写不进去 | 70 |
 | （helper 本地）无应答 | `--timeout-ms`（缺省 10000）内 broker 没回话：包没装，或系统没把停止的 app 拉起来（自启动管控） | 71 |
 | （helper 本地）广播发不出 | 反射拿不到 `IActivityManager` / 调用抛异常（见"依赖 ROM"） | 72 |
 | （helper 本地）exec 失败 | | 73 |
@@ -154,11 +159,11 @@
 | in-process（inproc，dial No） | — | 全部大核、配置的自旋（不变） |
 | forked（同 app fork spawn，dial Fork） | 共享段 | 同上（不变） |
 | connected（dial Connect：`tcp://` / `unix:` / `fd:`） | stream | 同上（不变：io 线程喂 apply 线程，B0 实测 apply 7.9 ms/帧 vs shm 26.8） |
-| connected | 共享段 | **最低编号的一个大核**（大核集是在线 cpu 的真子集且 ≥ 2 个时；否则不设亲和），自旋 `kConnectedPeerSpinUs` = 50 µs（`MOBILEGL_IPC_SPIN_US` 显式设了则用它） |
+| connected | 共享段 | 一个核，`ReservedApplyCore(big, prime, online)`（`ApplyThreadPolicy.h:120`）：≥ 2 个 prime 核（峰值主频）→ 最低编号的 prime 核；只有 1 个 prime 核 → 它旁边最低编号的其他大核；只有 1 个 prime 核且无其他大核 → 不设亲和；无非对称（全是大核或读不到拓扑）→ 不设亲和。**从不把唯一的 prime 核给自旋的 apply 线程**。自旋 `kConnectedPeerSpinUs` = 50 µs（`MOBILEGL_IPC_SPIN_US` 显式设了则用它） |
 
-- `ReservedApplyCore(big, online)` 是这个核；`MobileGLServerService` 用同一规则（`ServerEnvironment.reservedApplyCore`，同一 85% 大核阈值读 `cpuinfo_max_freq`）算出它，broker 在 FDS 答复末尾附上（`long applyCore`，0 = 无），helper 经 `/system/bin/taskset <在线 & ~applyCore>` exec 程序（亲和跨 exec 继承）；`--keep-affinity` 不设。代价：整个程序少用一个核（8 个里的 1 个）。server 的 `MOBILEGL_IPC_SERVER_AFFINITY` 显式设了则不保留核、helper 不设掩码。
+- **一个来源**：保留核只由原生规则算。supervisor 启动时（`ServerMain.cpp:1485`）按本机拓扑与 `MOBILEGL_IPC_SERVER_AFFINITY`（显式掩码 / `off` → 0）算出 `ReservedApplyCoreForThisProcess`（`ServerLoop.cpp:210`），在 stdout 打印 `MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x40 (<规则>)`；`MobileGLServerService` 逐行读 supervisor 输出（`ServerEnvironment.parseReservedApplyCore`），broker 把它放进答复；helper 经 `/system/bin/taskset <在线 & ~applyCore>` exec 程序（亲和跨 exec 继承）；`--keep-affinity` 不设。Java 不再重算规则。代价：整个程序少用一个核。
 - 显式掩码或 `off` 对所有 peer 生效（与以前相同）；`MOBILEGL_IPC_SPIN_US` 设了就用设的值。
-- 启动日志 `mgl-srv-apply started … RESOLVED mask 0x…, spin N us; peer <in-process|forked|connected> on <shared segments|stream>, policy <规则>`。
+- 启动日志 `mgl-srv-apply started … RESOLVED mask 0x…, spin N us; peer <in-process|forked|connected> on <shared segments|stream>, policy <规则>`，规则名写明是哪一种（最低 prime / 唯一 prime 旁的大核 / 唯一 prime 留给 client 而不设亲和 / 无非对称）。
 - P12 的进程内显示 server（`:mglwin`）的 client 也是 dial Connect：它们走 stream 时不变，走 unix 共享段时得到本规则。
 
 选择依据（红米，rd12 稳态 fps，helper 路线，默认落位、定频；`evidence/b1/m-policy.tables.md`）：
@@ -198,6 +203,7 @@
 
 - 单元：`ApplyThreadPolicy.*`（8 例：每个 peer × 数据面的 `auto`、最低大核与非连续大核集、对称 / 单大核 / 读不到拓扑、显式掩码 / `off` / 显式自旋、认不出的文本）；`ServerSpawnTest.AnFdPairTheBrokerConnectedBringsASharedSegmentSessionUp`（真 server 进程，两次裸连接交给 `fd:`，会话起、fd 为 CLOEXEC、server 退出 0）、`…AnAdoptedFdPairPresentsOnePairBindPairBeforeAnythingElse`（在 server 侧读：每条连接恰一帧 PairBind，同 nonce，aux 标志正确）、`…AnFdEndpointThatIsNotAConnectedUnixPairIsRefusedByNameAndWritesNothing`（管道、同一 fd 两次、未打开、未连接、八种坏文本、`stream`，都具名拒绝且一字节不写）；Java 镜像 `ServerEnvironmentTest`（`reservedApplyCore` 7 条，`test_android_lifecycle.py`）。
 - red-once：`AdoptConnectedPair` 不写 PairBind → 端到端例红，client 日志 `peer Refuse{MalformedHello} the control connection's first frame is a Hello, not a PairBind (control revision 4 pairs by nonce)`，PairBind 例红（控制连接上无帧）；保留核取最高大核（设备否决的规则）→ 3 例红；策略不看数据面 → stream 例红。每次拷回原文件、`cmp` 相同后复绿。
+- 跟进（交接时配对、唯一 prime 核、单一来源）：`ServerSpawnTest.TheBrokersPairBindTemplatesAreTheEncoders`（Java 前缀 = 编码器字节，32 个随机 nonce × 两个角色）、`…APairTheBrokerPresentedAtHandoffWaitsForAHelloThatComesSecondsLater`（broker 的字节在交接时写出，Hello 5 s 后才来，会话起）、`…APairPresentedOnlyWhenTheProgramStartsIsRefusedByNameOnceThePairingBudgetIsGone`（旧流程：3 s 后才出示 → client 日志 `peer Refuse{Authentication} no PairBind within the pairing budget`）；`ApplyThreadPolicy.*` 10 例（加唯一 prime 核旁有 / 无其他大核、无非对称、`ReservedApplyCoreForConfig`）；Java `PairBindFramesTest`、`ServerEnvironmentTest`（宣布行解析 5 条）。red-once：交接步骤拿掉（今天的 client 侧配对）→ 交接例红，`Refuse{Authentication} no PairBind within the pairing budget`；Hello 时限改回有限的 3 s → 红，`Refuse{Authentication} no authenticated first frame within the pre-auth deadline`；client 不看标记、再出示一对 → 红，`Refuse{MalformedHello} first control frame is not a verifiable Hello`；保留核不看 prime 集 → 唯一 prime 的两例红；Java 前缀改一个字节 → 模板例红。每次拷回、`cmp` 相同后复绿（`~/w7/logs/p11/b1/redonce4.out`）。
 - 设备门（红米 `2f7cbe2e`，HEAD `3519a21b` 的 APK，两 app "无限制"，默认环境：不手工定核、无解冻守护；CPU 定频并回读只为可重复，`evidence/b1/m-gate.summary.md`）：16 个 ssim 格全过（rd12 0.99988 / 0.999884，openra 1.0）；shm（helper）对 tcp 的稳态 fps 中位数：
 
 | 路线 | 后端 | rd12 shm / tcp | openra shm / tcp |
