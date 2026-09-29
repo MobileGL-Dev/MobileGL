@@ -483,7 +483,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
             if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
                 auto* resource = BufferImpl::FindBufferResourceForHandle(handle);
-                const Uint8* const base = resource ? resource->hostBytes : nullptr;
+                const Uint8* const base = resource ? BufferImpl::SplitHostBytes(*resource) : nullptr;
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
                 if (base == nullptr) {
                     MGLOG_E_ONCE("%s skipped: the verb's indirect buffer {%u, %u} has no staged "
@@ -1284,6 +1284,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             ProcessDeferredBufferReleases();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            ProcessDeferredT0Retires(); // P11 B2
+#endif
 
             // All buffers we need are:
             //   1.VBO 2.IBO (if needed) 3.UBO 4.IndirectBuffer (if needed)
@@ -1531,6 +1534,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             ProcessDeferredBufferReleases();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            ProcessDeferredT0Retires(); // P11 B2
+#endif
             // THE COMPUTE PATH IS THE ONE THAT NEEDS THE FRONTEND-INDEXED UNIFORM PASS, and it
             // is why the uniform class is emitted at all: compute does NOT go through the
             // per-program block remap in BindCurrentProgramWithResources, so these are the
@@ -9215,7 +9221,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The staged shadow is the source of truth for CPU reads on this side: a
                 // persistent map's blocks and a shader write's writeback were consumed by the
                 // applier before this verb ran.
-                const Uint8* hostBytes = elementResource ? elementResource->hostBytes : nullptr;
+                const Uint8* hostBytes = elementResource ? BufferImpl::SplitHostBytes(*elementResource) : nullptr;
                 if (hostBytes == nullptr) {
                     MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART with restart index %u needs a CPU-readable copy of "
                                  "the bound element array buffer and none is available.",
@@ -9532,8 +9538,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
             auto* paramResource =
                 BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
-            const Uint8* const drawBytes = drawResource ? drawResource->hostBytes : nullptr;
-            const Uint8* const parameterBytes = paramResource ? paramResource->hostBytes : nullptr;
+            const Uint8* const drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
+            const Uint8* const parameterBytes = paramResource ? BufferImpl::SplitHostBytes(*paramResource) : nullptr;
             if (commandBytes > BufferImpl::ResourceWidthForHandle(applierState.VerbIndirectBuffer)) {
                 MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
                 return;
@@ -9686,8 +9692,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
             auto* paramResource =
                 BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
-            const Uint8* const drawBytes = drawResource ? drawResource->hostBytes : nullptr;
-            const Uint8* const parameterBytes = paramResource ? paramResource->hostBytes : nullptr;
+            const Uint8* const drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
+            const Uint8* const parameterBytes = paramResource ? BufferImpl::SplitHostBytes(*paramResource) : nullptr;
             if (commandBytes > BufferImpl::ResourceWidthForHandle(applierState.VerbIndirectBuffer)) {
                 MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
                 return;

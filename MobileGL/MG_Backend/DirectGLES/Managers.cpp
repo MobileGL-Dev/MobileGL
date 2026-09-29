@@ -30,6 +30,12 @@
 // emits the record through the client's emit helper instead of hopping a stack struct to the
 // apply thread.
 #include <MG_Remote/Client/WireTables.h>
+// P11 B2 (T0): the client's AHardwareBuffer store - its reference counting and, on Android, the
+// allocation the POST self-test makes.
+#include <MG_Remote/Transport/AdoptT0.h>
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#endif
 #endif
 
 #include "Utils.h"
@@ -1231,6 +1237,77 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
                 }
             }
+
+            // -------------------------------------------------------------------------------
+            // P11 B2 (T0) - WHEN AN IMPORTED STORE'S AHardwareBuffer MAY BE LET GO.
+            //
+            // A T0 store is the client's AHardwareBuffer imported with glBufferStorageExternalEXT
+            // (Ops_H_ImportExternal below). The twin holds its own reference, and every path that
+            // ends the store - a respecify, a destroy, a re-import - deletes the GL id and then
+            // RETIRES the reference here: a fence is inserted after the delete, and the reference is
+            // released only once that fence has signalled, i.e. once every command that could still
+            // read or write the pages has completed on this context's GPU. The client's own
+            // reference ends independently (it releases on respecify/destroy); the pages live until
+            // the last of the two. No link watermark is involved (F-L2): the fence is this server's.
+            //
+            // Swept (non-blocking) at every import, every deferred-release drain and every ensure;
+            // a context loss releases the lot, because the GPU work those fences named ended with
+            // the context. Apply thread only, like every GL call here.
+            // -------------------------------------------------------------------------------
+            struct T0RetiredImport {
+                GLsync fence = nullptr;
+                void* ahb = nullptr;
+                Uint generation = 0;
+            };
+            Vector<T0RetiredImport> g_t0Retired;
+            // T0 twins whose destroy found no current context: Ops_OnDestroy queued them on the
+            // deferred-release list and keeps a second reference here, so the reference is
+            // retired only after that drain deleted the id (ProcessDeferredT0Retires). Guarded by
+            // g_deferredBufferReleasesMutex, like the list it shadows.
+            Vector<SharedPtr<BackendBufferResource>> g_t0DeferredDestroys;
+            std::atomic<Bool> g_hasT0DeferredDestroys{false};
+            Uint64 g_t0ImportsLive = 0;
+
+            void SweepT0Retired(Bool contextGone) {
+                for (SizeT i = 0; i < g_t0Retired.size();) {
+                    T0RetiredImport& retired = g_t0Retired[i];
+                    const Bool sameContext = !contextGone && retired.generation == g_bufferContextGeneration &&
+                                             CanTouchGLNow();
+                    Bool done = contextGone || retired.generation != g_bufferContextGeneration ||
+                                retired.fence == nullptr;
+                    if (!done && sameContext && g_GLESFuncs.glClientWaitSync) {
+                        const GLenum status = g_GLESFuncs.glClientWaitSync(retired.fence, 0, 0);
+                        done = status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED ||
+                               status == GL_WAIT_FAILED;
+                    }
+                    if (!done) {
+                        ++i;
+                        continue;
+                    }
+                    if (retired.fence != nullptr && sameContext && g_GLESFuncs.glDeleteSync)
+                        g_GLESFuncs.glDeleteSync(retired.fence);
+                    MG_Remote::Transport::AdoptT0::ReleaseImported(retired.ahb);
+                    retired = g_t0Retired.back();
+                    g_t0Retired.pop_back();
+                }
+            }
+
+            // Call AFTER the store's GL id is deleted (or known dead): the fence then follows every
+            // command that used it. Clears the twin's reference whatever the context state.
+            void RetireT0Import(GLESBufferResource& resource) {
+                if (resource.externalAhb == nullptr) return;
+                T0RetiredImport retired;
+                retired.ahb = resource.externalAhb;
+                retired.generation = resource.contextGeneration;
+                if (CanTouchGLNow() && resource.contextGeneration == g_bufferContextGeneration &&
+                    g_GLESFuncs.glFenceSync) {
+                    retired.fence = g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+                }
+                resource.externalAhb = nullptr;
+                if (g_t0ImportsLive > 0) --g_t0ImportsLive;
+                g_t0Retired.push_back(retired);
+                SweepT0Retired(false);
+            }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 
 // The four hostBytes sites read the same in both builds. The non-split expansion is the
@@ -2075,6 +2152,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
                 if (glesResource->contextGeneration != g_bufferContextGeneration) {
                     glesResource->id = 0; // id belonged to a destroyed context
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    RetireT0Import(*glesResource); // P11 B2: its GL store died with that context
+#endif
                     return;
                 }
                 if (CanTouchGLNow()) {
@@ -2090,9 +2170,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glDeleteBuffers(1, &glesResource->id);
                         glesResource->id = 0;
                     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // P11 B2: a T0 store's AHardwareBuffer goes only after a fence behind the delete.
+                    RetireT0Import(*glesResource);
+#endif
                     return;
                 }
                 const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                if (glesResource->externalAhb != nullptr) { // P11 B2: retired after the drain deletes it
+                    g_t0DeferredDestroys.push_back(resource);
+                    g_hasT0DeferredDestroys.store(true, std::memory_order_release);
+                }
+#endif
                 g_deferredBufferReleases.push_back(std::move(resource));
                 g_hasDeferredBufferReleases.store(true, std::memory_order_release);
             }
@@ -2232,6 +2322,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         resource->id = 0;
                         resource->immutableStorage = false;
                     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // P11 B2: a respecified T0 store ends here on the server's side too. Its
+                    // AHardwareBuffer is released only after a fence behind the delete (or at once
+                    // when the store's context is already gone) - never under a frame in flight,
+                    // however the client's own release (at this respecify) raced it.
+                    RetireT0Import(*resource);
+#endif
                     resource->storageInitialized = false;
                     resource->storageSize = 0;
                     resource->pendingRespecify = true;
@@ -2282,6 +2379,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 #endif
                 if (!resource) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P11 B2: A T0 STORE TAKES A SERVER-ORIGINATED WRITE GPU-ORDERED. Its pages are the
+                // client's AHardwareBuffer, so there is no staged copy to refresh and the adopted
+                // early return below ("the coherent map already has the bytes") is false for bytes
+                // the SERVER produced - P9 W1's pack-buffer landing (PipeApplier.cpp
+                // LandReadbackInBuffer) is the one producer, and it would lose its pixels there. They
+                // are queued exactly as a resident SubData is (Ops_H_ResidentSubData): landed after
+                // every command already recorded, before the next one that reads the store.
+                if (resource->externalAhb != nullptr && bytes != nullptr && size != 0) {
+                    {
+                        const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                        auto& write = resource->pendingResidentWrites.emplace_back();
+                        write.offset = offset;
+                        const auto* source = static_cast<const Uint8*>(bytes);
+                        write.bytes.assign(source, source + size);
+                    }
+                    resource->syncedChangeSerial = ResourceSerialOf(res);
+                    return;
+                }
+#endif
                 // M-2: UNDER pendingMutex, because this line runs BEFORE the CanTouchGLNow()
                 // test below - i.e. on the arm D-A2 deliberately keeps reachable off the render
                 // thread - while every reader of hostBytes (Ops_H_Readback's drain, the
@@ -2656,6 +2773,319 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return result;
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+            // ---- P11 B2: T0 - THE CLIENT'S AHardwareBuffer AS A STORE'S RESIDENT TWIN ------------
+            //
+            // The split twin of Ops_H_MapPersistent: where a monolith map_persistent mints a
+            // coherent persistent store (glBufferStorageEXT) and hands its pointer to the frontend,
+            // a T0 map_persistent IMPORTS the pages the client already holds and maps -
+            // glBufferStorageExternalEXT on eglGetNativeClientBufferANDROID(ahb) - and the result
+            // is the SAME resource shape (immutable, persistentMapped, persistentPtr = this
+            // server's coherent map of those pages), so every adopted-store path in this file
+            // applies unchanged: draws bind it with nothing to upload, resident SubData lands
+            // GPU-ordered (DrainResidentWritesNow), a readback drains and waits and posts no
+            // bytes. The R-11 staged copy is dropped: the pages are the client's.
+            //
+            // THE ENTRY POINTS ARE OPTIONAL: neither is in the loader's tables (an EGL function
+            // missing there is MGLOG_F), and eglGetProcAddress hands back live-looking stubs, so
+            // the extension strings decide and the pointers are only then taken.
+            using T0GetNativeClientBufferFn = EGLClientBuffer (*)(const struct AHardwareBuffer*);
+            using T0BufferStorageExternalFn = void (*)(GLenum, GLintptr, GLsizeiptr, EGLClientBuffer, GLbitfield);
+            T0GetNativeClientBufferFn g_t0GetNativeClientBuffer = nullptr;
+            T0BufferStorageExternalFn g_t0BufferStorageExternal = nullptr;
+            constexpr GLbitfield kT0MapReadBit = 0x0001;
+            constexpr GLbitfield kT0MapWriteBit = 0x0002;
+            constexpr GLbitfield kT0StorageFlags =
+                kT0MapReadBit | kT0MapWriteBit | kMapPersistentBit | kMapCoherentBit | kDynamicStorageBit;
+            constexpr GLbitfield kT0MapFlags = kT0MapReadBit | kT0MapWriteBit | kMapPersistentBit | kMapCoherentBit;
+
+            Bool HasExtensionWord(const char* list, const char* word) {
+                if (list == nullptr) return false;
+                const SizeT n = std::strlen(word);
+                for (const char* at = std::strstr(list, word); at != nullptr; at = std::strstr(at + 1, word)) {
+                    const Bool startOk = at == list || at[-1] == ' ';
+                    const Bool endOk = at[n] == '\0' || at[n] == ' ';
+                    if (startOk && endOk) return true;
+                }
+                return false;
+            }
+
+            Bool ResolveT0EntryPoints(String& why) {
+                if (g_t0GetNativeClientBuffer != nullptr && g_t0BufferStorageExternal != nullptr) return true;
+                if (!g_EGLFuncs.eglGetProcAddress || !g_EGLFuncs.eglQueryString || !g_EGLFuncs.eglGetCurrentDisplay ||
+                    !g_GLESFuncs.glGetString || !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glGenBuffers) {
+                    why = "the loader has no eglGetProcAddress/eglQueryString/glGetString/glMapBufferRange";
+                    return false;
+                }
+                const char* egl = g_EGLFuncs.eglQueryString(g_EGLFuncs.eglGetCurrentDisplay(), EGL_EXTENSIONS);
+                const char* gl = reinterpret_cast<const char*>(g_GLESFuncs.glGetString(GL_EXTENSIONS));
+                if (!HasExtensionWord(egl, "EGL_ANDROID_get_native_client_buffer")) {
+                    why = "EGL_ANDROID_get_native_client_buffer is not advertised";
+                    return false;
+                }
+                if (!HasExtensionWord(gl, "GL_EXT_external_buffer") || !HasExtensionWord(gl, "GL_EXT_buffer_storage")) {
+                    why = "GL_EXT_external_buffer / GL_EXT_buffer_storage is not advertised";
+                    return false;
+                }
+                g_t0GetNativeClientBuffer = reinterpret_cast<T0GetNativeClientBufferFn>(
+                    g_EGLFuncs.eglGetProcAddress("eglGetNativeClientBufferANDROID"));
+                g_t0BufferStorageExternal = reinterpret_cast<T0BufferStorageExternalFn>(
+                    g_EGLFuncs.eglGetProcAddress("glBufferStorageExternalEXT"));
+                if (g_t0GetNativeClientBuffer == nullptr || g_t0BufferStorageExternal == nullptr) {
+                    why = "eglGetProcAddress gave no eglGetNativeClientBufferANDROID / glBufferStorageExternalEXT";
+                    g_t0GetNativeClientBuffer = nullptr;
+                    g_t0BufferStorageExternal = nullptr;
+                    return false;
+                }
+                return true;
+            }
+
+            void DrainGLErrors() {
+                if (!g_GLESFuncs.glGetError) return;
+                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {
+                }
+            }
+
+            // A fresh GL buffer whose storage IS `ahb`, mapped persistent + coherent. 0 on failure
+            // (with `why`); nothing on the resource is touched here. `throwaway` = the POST's own
+            // context is current: bind raw and keep Espryt's binding caches (which describe the
+            // session's context, whose name space this is not) out of it.
+            Uint ImportAhbAsBuffer(void* ahb, Uint64 size, void** outPtr, String& why, Bool throwaway = false) {
+                *outPtr = nullptr;
+                const EGLClientBuffer clientBuffer =
+                    g_t0GetNativeClientBuffer(static_cast<const struct AHardwareBuffer*>(ahb));
+                if (clientBuffer == nullptr) {
+                    why = "eglGetNativeClientBufferANDROID returned null";
+                    return 0;
+                }
+                Uint id = 0;
+                g_GLESFuncs.glGenBuffers(1, &id);
+                if (id == 0) {
+                    why = "glGenBuffers gave no name";
+                    return 0;
+                }
+                DrainGLErrors();
+                if (throwaway) g_GLESFuncs.glBindBuffer(TempBufferTarget, id);
+                else BindBufferId(TempBufferTarget, id);
+                g_t0BufferStorageExternal(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), clientBuffer,
+                                          kT0StorageFlags);
+                const GLenum stored = g_GLESFuncs.glGetError ? g_GLESFuncs.glGetError() : GL_NO_ERROR;
+                void* ptr = stored == GL_NO_ERROR
+                    ? g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), kT0MapFlags)
+                    : nullptr;
+                if (ptr == nullptr) {
+                    char text[160];
+                    std::snprintf(text, sizeof(text), "glBufferStorageExternalEXT -> 0x%04x, map %s", stored,
+                                  stored == GL_NO_ERROR ? "failed" : "not attempted");
+                    why = text;
+                    if (!throwaway) {
+                        NoteBufferIdDeleted(id);
+                        ++g_bufferBackendIdGeneration;
+                    }
+                    g_GLESFuncs.glDeleteBuffers(1, &id);
+                    return 0;
+                }
+                *outPtr = ptr;
+                return id;
+            }
+
+            Bool T0Answer(char* out, Uint64 outBytes, Bool ok, const char* fmt, ...) {
+                va_list args;
+                va_start(args, fmt);
+                std::vsnprintf(out, static_cast<SizeT>(outBytes), fmt, args);
+                va_end(args);
+                return ok;
+            }
+
+            // Installs an imported store on the twin. The caller has retired whatever was there.
+            void InstallT0Store(GLESBufferResource& resource, Uint id, void* ptr, Uint64 size) {
+                resource.id = id;
+                resource.immutableStorage = true;
+                resource.persistentPtr = ptr;
+                resource.persistentMapped = true;
+                resource.storageSize = static_cast<SizeT>(size);
+                resource.storageInitialized = true;
+                resource.pendingRespecify = false;
+                resource.contextGeneration = g_bufferContextGeneration;
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                resource.pendingRanges.clear();
+                resource.pendingResidentWrites.clear();
+            }
+
+            Bool Ops_H_ImportExternal(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) {
+                SweepT0Retired(false);
+                if (!CanTouchGLNow() || size == 0 || ahb == nullptr) return false;
+                String why;
+                if (!ResolveT0EntryPoints(why)) {
+                    MGLOG_W_ONCE("Espryt T0: no import on this context - %s", why.c_str());
+                    return false;
+                }
+                auto* resource = GetOrCreateBufferResourceForHandle(res);
+                if (resource == nullptr) return false;
+                // IMPORT FIRST, retire second: a refused import leaves the T2 store (and its staged
+                // copy) exactly as it was, so the DECLINED the client gets leaves nothing to repair.
+                void* ptr = nullptr;
+                const Uint id = ImportAhbAsBuffer(ahb, size, &ptr, why);
+                if (id == 0) {
+                    MGLOG_W("Espryt T0: store {slot=%u, gen=%u} (%llu bytes) not imported - %s", res.Slot, res.Gen,
+                            static_cast<unsigned long long>(size), why.c_str());
+                    return false;
+                }
+                if (resource->contextGeneration == g_bufferContextGeneration && resource->id != 0) {
+                    NoteBufferIdDeleted(resource->id);
+                    // Driver VAOs may have the old id baked into bindings keyed on versions this
+                    // replacement does not move (the Ops_H_MapPersistent re-mint's rule).
+                    ++g_bufferBackendIdGeneration;
+                    g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                }
+                resource->id = 0;
+                RetireT0Import(*resource); // a previous import of this handle, fenced
+                InstallT0Store(*resource, id, ptr, size);
+                MG_Remote::Transport::AdoptT0::AcquireImported(ahb);
+                resource->externalAhb = ahb;
+                ++g_t0ImportsLive;
+                // The bytes are the client's pages now; R-11's copy would answer a later drain
+                // with pre-import content.
+                MGL_SERVER_STAGED_DROP(*resource);
+                resource->hostBytes = nullptr;
+                resource->syncedChangeSerial = ResourceSerialOf(res);
+                MGLOG_D("Espryt T0: imported {slot=%u, gen=%u} as buffer %u (%llu bytes); %llu live imports",
+                        res.Slot, res.Gen, id, static_cast<unsigned long long>(size),
+                        static_cast<unsigned long long>(g_t0ImportsLive));
+                return true;
+            }
+
+            Bool Ops_H_ImportExternalTracked(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) {
+                const Bool imported = Ops_H_ImportExternal(res, ahb, size);
+                BumpBufferMutationEpoch();
+                return imported;
+            }
+
+            // THE POST (B2, the standing rule: decide by probe, never by driver name). The AHB API
+            // promises CPU coherence only across an unlock/lock; T0 keeps the client's lock for the
+            // store's life, so the pattern it depends on is exactly what this exercises, on this
+            // context's own driver, before kCapAdoptT0 may be published:
+            //   hold  - a 64 KiB BLOB allocated and locked by this test, never unlocked while it runs;
+            //   read  - this server's own host map of the import reads the pattern the CPU wrote
+            //           through the held pointer (every hostBytes fallback reads persistentPtr);
+            //   gpu   - a compute dispatch copies that pattern out of the import (the GPU read) and
+            //           fills another region of it (the GPU write);
+            //   back  - after glFinish the fill is read through the HELD pointer and the copy is
+            //           read back from the dispatch's output.
+            // In a throwaway ES 3.1 pbuffer context, so none of this context's state or Espryt's
+            // binding caches is disturbed; the caller's bind is restored before returning.
+            Bool Ops_H_SelfTestExternal(char* whyOut, Uint64 whyBytes) {
+                const auto answer = [&](Bool ok, const char* text, const char* arg = "") {
+                    return T0Answer(whyOut, whyBytes, ok, text, arg);
+                };
+                String why;
+                if (!ResolveT0EntryPoints(why)) return answer(false, "%s", why.c_str());
+                if (!g_EGLFuncs.eglChooseConfig || !g_EGLFuncs.eglCreateContext || !g_EGLFuncs.eglMakeCurrent ||
+                    !g_EGLFuncs.eglCreatePbufferSurface || !g_GLESFuncs.glCreateShaderProgramv ||
+                    !g_GLESFuncs.glDispatchCompute || !g_GLESFuncs.glMemoryBarrier || !g_GLESFuncs.glFinish)
+                    return answer(false, "the loader lacks the EGL/GLES 3.1 entry points the test needs");
+                const EGLDisplay display = g_EGLFuncs.eglGetCurrentDisplay();
+                const EGLContext savedContext = g_EGLFuncs.eglGetCurrentContext();
+                const EGLSurface savedDraw = g_EGLFuncs.eglGetCurrentSurface(EGL_DRAW);
+                const EGLSurface savedRead = g_EGLFuncs.eglGetCurrentSurface(EGL_READ);
+                const EGLint configAttribs[] = {EGL_RENDERABLE_TYPE, 0x0040 /*EGL_OPENGL_ES3_BIT*/, EGL_SURFACE_TYPE,
+                                                EGL_PBUFFER_BIT, EGL_NONE};
+                EGLConfig config = nullptr;
+                EGLint configs = 0;
+                if (!g_EGLFuncs.eglChooseConfig(display, configAttribs, &config, 1, &configs) || configs < 1)
+                    return answer(false, "no ES3 pbuffer config for the throwaway context");
+                const EGLint surfaceAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+                const EGLSurface surface = g_EGLFuncs.eglCreatePbufferSurface(display, config, surfaceAttribs);
+                const EGLint contextAttribs[] = {0x3098 /*EGL_CONTEXT_MAJOR_VERSION*/, 3, 0x30FB /*MINOR*/, 1, EGL_NONE};
+                const EGLContext context = surface != EGL_NO_SURFACE
+                    ? g_EGLFuncs.eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs)
+                    : EGL_NO_CONTEXT;
+                const auto restore = [&] {
+                    g_EGLFuncs.eglMakeCurrent(display, savedDraw, savedRead, savedContext);
+                    if (context != EGL_NO_CONTEXT) g_EGLFuncs.eglDestroyContext(display, context);
+                    if (surface != EGL_NO_SURFACE) g_EGLFuncs.eglDestroySurface(display, surface);
+                };
+                if (context == EGL_NO_CONTEXT || !g_EGLFuncs.eglMakeCurrent(display, surface, surface, context)) {
+                    restore();
+                    return answer(false, "the throwaway ES 3.1 context could not be made current");
+                }
+
+                constexpr Uint64 kBytes = 64 * 1024;
+                constexpr Uint32 kWords = 1024;          // one 4 KiB region
+                constexpr Uint32 kFillAtWord = 4 * kWords; // region 4
+                MG_Remote::Transport::AdoptT0::HeldStore held;
+                Vector<Uint32> pattern(kBytes / 4);
+                for (SizeT i = 0; i < pattern.size(); ++i) pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
+                if (!MG_Remote::Transport::AdoptT0::AllocateHeld(kBytes, pattern.data(), held, why)) {
+                    restore();
+                    return answer(false, "hold: %s", why.c_str());
+                }
+                Bool ok = false;
+                GLuint out = 0, program = 0;
+                void* hostMap = nullptr;
+                const GLuint imported = ImportAhbAsBuffer(held.ahb, kBytes, &hostMap, why, /*throwaway=*/true);
+                char detail[256] = {};
+                if (imported == 0) {
+                    std::snprintf(detail, sizeof(detail), "import: %s", why.c_str());
+                } else if (std::memcmp(hostMap, pattern.data(), kWords * 4) != 0) {
+                    std::snprintf(detail, sizeof(detail), "read: the server's host map of the import does not "
+                                                          "hold the CPU's pattern");
+                } else {
+                    static const char* kSource =
+                        "#version 310 es\n"
+                        "layout(local_size_x = 64) in;\n"
+                        "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+                        "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+                        "void main() {\n"
+                        "  uint i = gl_GlobalInvocationID.x;\n"
+                        "  outb.w[i] = ext.w[i];\n"
+                        "  ext.w[4096u + i] = 0x6C0FFEE0u ^ i;\n"
+                        "}\n";
+                    program = g_GLESFuncs.glCreateShaderProgramv(GL_COMPUTE_SHADER, 1, &kSource);
+                    GLint linked = 0;
+                    if (program != 0) g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                    g_GLESFuncs.glGenBuffers(1, &out);
+                    g_GLESFuncs.glBindBuffer(GL_SHADER_STORAGE_BUFFER, out);
+                    g_GLESFuncs.glBufferData(GL_SHADER_STORAGE_BUFFER, kWords * 4, nullptr, GL_DYNAMIC_READ);
+                    if (!linked) {
+                        std::snprintf(detail, sizeof(detail), "gpu: the test's compute program did not link");
+                    } else {
+                        g_GLESFuncs.glUseProgram(program);
+                        g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, imported);
+                        g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, out);
+                        g_GLESFuncs.glDispatchCompute(kWords / 64, 1, 1);
+                        g_GLESFuncs.glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT |
+                                                    0x00004000 /*GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT_EXT*/);
+                        g_GLESFuncs.glFinish();
+                        Uint32 gpuRead = 0, heldSaw = 0;
+                        const auto* heldWords = static_cast<const Uint32*>(held.ptr);
+                        for (Uint32 i = 0; i < kWords; ++i)
+                            if (heldWords[kFillAtWord + i] == (0x6C0FFEE0u ^ i)) ++heldSaw;
+                        g_GLESFuncs.glBindBuffer(GL_SHADER_STORAGE_BUFFER, out);
+                        const auto* copied = static_cast<const Uint32*>(g_GLESFuncs.glMapBufferRange(
+                            GL_SHADER_STORAGE_BUFFER, 0, kWords * 4, GL_MAP_READ_BIT));
+                        if (copied != nullptr) {
+                            for (Uint32 i = 0; i < kWords; ++i)
+                                if (copied[i] == pattern[i]) ++gpuRead;
+                            g_GLESFuncs.glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+                        }
+                        ok = gpuRead == kWords && heldSaw == kWords;
+                        std::snprintf(detail, sizeof(detail),
+                                      "64 KiB AHB, lock held throughout: host map read ok, GPU read %u/%u words of "
+                                      "the CPU's pattern, GPU write seen through the held lock %u/%u words",
+                                      gpuRead, kWords, heldSaw, kWords);
+                    }
+                }
+                if (program != 0) g_GLESFuncs.glDeleteProgram(program);
+                if (out != 0) g_GLESFuncs.glDeleteBuffers(1, &out);
+                if (imported != 0) g_GLESFuncs.glDeleteBuffers(1, &imported);
+                g_GLESFuncs.glFinish();
+                restore();
+                MG_Remote::Transport::AdoptT0::ReleaseHeld(held);
+                return answer(ok, "%s", detail);
+            }
+#endif // MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__
+
 #if MOBILEGL_BUILD_DISAGGREGATED
             // ---- P5c (tx): the TEXTURE half of the resource family, staged server-side --------
             //
@@ -2823,6 +3253,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .TextureSubData = Ops_H_TextureSubData,
                 .TextureRespecify = Ops_H_TextureRespecify,
                 .TextureDestroy = Ops_H_TextureDestroy,
+#if defined(__ANDROID__)
+                // P11 B2 (T0). Android only: nowhere else is there an AHardwareBuffer to import.
+                .ImportExternal = Ops_H_ImportExternalTracked,
+                .SelfTestExternal = Ops_H_SelfTestExternal,
+#endif
 #endif
             };
 #endif // MOBILEGL_PIPE_PUSH
@@ -3253,6 +3688,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // but with the same recycled-identity failure mode: a new context's allocator may
             // hand out a {slot, gen} the old one's store still answers for.
             MG_Remote::Server::ServerStagedTexture().DropAll();
+            // P11 B2: every retired T0 import's fence named work on the context that just ended,
+            // so all of them let go now. LIVE imports keep their reference: the next ensure
+            // imports them again on the new context (EnsureBufferResourceForHandle).
+            ProcessDeferredT0Retires();
+            SweepT0Retired(/*contextGone=*/true);
 #endif
 #endif
         }
@@ -3288,6 +3728,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P11 B2: the T0 half of the deferred-release drain, run right after it at both sync
+        // points (ProcessDeferredBufferReleases itself moves verbatim, G5). Retired imports whose
+        // fence signalled let go of their AHardwareBuffer; a deferred T0 destroy is retired once
+        // the drain deleted its id (the fence then follows the delete) or its context is gone.
+        void ProcessDeferredT0Retires() {
+            if (!g_t0Retired.empty()) SweepT0Retired(false);
+            if (!g_hasT0DeferredDestroys.load(std::memory_order_acquire)) return;
+            Vector<SharedPtr<BackendBufferResource>> ready;
+            {
+                const std::lock_guard<std::mutex> lock(g_deferredBufferReleasesMutex);
+                for (SizeT i = 0; i < g_t0DeferredDestroys.size();) {
+                    auto* r = static_cast<GLESBufferResource*>(g_t0DeferredDestroys[i].get());
+                    if (r->id == 0 || r->contextGeneration != g_bufferContextGeneration) {
+                        ready.push_back(std::move(g_t0DeferredDestroys[i]));
+                        g_t0DeferredDestroys[i] = std::move(g_t0DeferredDestroys.back());
+                        g_t0DeferredDestroys.pop_back();
+                    } else {
+                        ++i;
+                    }
+                }
+                g_hasT0DeferredDestroys.store(!g_t0DeferredDestroys.empty(), std::memory_order_release);
+            }
+            for (auto& resource : ready) RetireT0Import(*static_cast<GLESBufferResource*>(resource.get()));
+        }
+#endif
 
         GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject) {
             if (!bufferObject) return nullptr;
@@ -3466,6 +3933,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
+#if defined(__ANDROID__)
+                // P11 B2: A T0 STORE OUTLIVES ITS CONTEXT. Its pages are the client's
+                // AHardwareBuffer, which this twin still holds, so the store is imported again on
+                // the new context - the client keeps writing through the same pointer and nothing
+                // has to be re-sent. A refusal here leaves the twin without a store and says so.
+                if (resource->externalAhb != nullptr) {
+                    String why;
+                    void* ptr = nullptr;
+                    const Uint64 size = ResourceWidthOf(res);
+                    const Uint id = ResolveT0EntryPoints(why) ? ImportAhbAsBuffer(resource->externalAhb, size, &ptr, why)
+                                                              : 0;
+                    if (id != 0) {
+                        InstallT0Store(*resource, id, ptr, size);
+                        MGLOG_I("Espryt T0: store {slot=%u, gen=%u} re-imported on the new context (%llu bytes)",
+                                res.Slot, res.Gen, static_cast<unsigned long long>(size));
+                    } else {
+                        MGLOG_E("Espryt T0: store {slot=%u, gen=%u} could not be re-imported after a context loss - "
+                                "%s; the store has no GPU backing",
+                                res.Slot, res.Gen, why.c_str());
+                        RetireT0Import(*resource);
+                    }
+                }
+#endif
 #endif
             }
 

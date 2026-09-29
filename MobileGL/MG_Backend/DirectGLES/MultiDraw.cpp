@@ -199,7 +199,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                     auto* resource = BufferImpl::FindBufferResourceForHandle(res);
                     if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
                     view.Size = BufferImpl::ResourceWidthForHandle(res);
-                    view.HostBytes = resource->hostBytes;
+                    view.HostBytes = BufferImpl::SplitHostBytes(*resource);
                     if (view.HostBytes != nullptr && IndexBufferRecordHasDefinedContent(st, res)) {
                         BufferImpl::RequireStagedCoverage(*resource, view.HostBytes, 0, view.Size,
                                                           "multidraw_index_rebase");

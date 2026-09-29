@@ -1043,6 +1043,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // in P3a is the readback flush and the fp64 narrowing.
             const Uint8* hostBytes = nullptr;
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P11 B2 (T0): the client's AHardwareBuffer this store IS - imported with
+            // glBufferStorageExternalEXT, so `id` is immutable, persistentMapped and
+            // persistentPtr is this server's own coherent map of the client's pages. The
+            // reference is this twin's own, released only after a fence that follows the
+            // store's last use has signalled (RetireT0Import). Survives an ES context loss:
+            // the next ensure re-imports it. Null for every store T0 did not adopt.
+            void* externalAhb = nullptr;
+#endif
         };
 
 #if MOBILEGL_PIPE_PUSH
@@ -1103,6 +1112,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resolver. A no-op for a base that is not this resource's server shadow.
         void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
                                    SizeT end, const char* site);
+
+        // P11 B2: THE CPU-READABLE BYTES OF A SPLIT SERVER'S BUFFER TWIN, for the handle-arm
+        // readers that have no frontend object (indirect commands, primitive-restart
+        // substitution, the multi-draw index rebase): the R-11 staged copy, or - for a T0 store,
+        // which has none - this server's own coherent map of the client's AHardwareBuffer, read
+        // exactly as the monolith arm reads the adopted map through MappedData().
+        inline const Uint8* SplitHostBytes(const GLESBufferResource& resource) {
+            if (resource.hostBytes != nullptr) return resource.hostBytes;
+            return resource.externalAhb != nullptr ? static_cast<const Uint8*>(resource.persistentPtr) : nullptr;
+        }
 
         // M-3's WHOLE-STORE predicate, and the GUARD every caller of RequireStagedCoverage over
         // a whole-store read has to carry: true when the application DECLARED the store's
@@ -1267,6 +1286,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P11 B2: the T0 half of that drain - run right after it (retired AHardwareBuffers).
+        void ProcessDeferredT0Retires();
+#endif
 
         // glBindBuffer with a redundant-bind cache for GL_ARRAY_BUFFER.
         void BindBufferId(GLenum target, Uint id);
