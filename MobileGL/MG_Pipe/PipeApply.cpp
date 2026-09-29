@@ -902,8 +902,12 @@ namespace MobileGL::MG_Pipe {
                 if (entry.UploadTarget != record.Target || entry.Level != record.Level) continue;
                 entry.UnionBox = UnionOfBoxes(entry.UnionBox, record.UnionBox);
                 if (record.RegionCount == 0 || entry.Regions.empty()) {
-                    // A whole-level contribution (the emitter's only box-only spelling since P11
-                    // M2) owns every texel of the level, so the entry is that box, exactly.
+                    // A whole-level contribution (the emitter's box-only spelling since P11 M2)
+                    // owns every texel of the level, so the entry is that box, exactly. The one
+                    // other box-only record is the emitter's oversize fallback (a footprint past
+                    // kMGPipeMaxPendingUploadRegions goes out as the storage's cover, which it
+                    // withholds as 0 at 3/4 of the box), a partial box spanning gaps - already
+                    // inexact, and logged once where it is emitted (TextureEmit.h).
                     entry.Regions.clear();
                     return true;
                 }

@@ -1479,11 +1479,15 @@ namespace MobileGL::MG_Pipe {
             // hold GPU writes (and otherwise it re-applies the storage's box-or-rects choice
             // itself, so the Mali job count is the server's call as before).
             //
-            // 0 IS NOW THE WHOLE-LEVEL SPELLING ONLY: a footprint that is the whole level. Every
-            // other write carries its boxes, a single one included, so that the applier's
-            // accumulation (boxes union, lists concatenate, "0 regions" makes the entry box only)
-            // never widens two exact contributions into their union box. A footprint larger than
-            // one record may carry falls back to the storage's rect list - a COVER, stated once.
+            // 0 IS NOW THE WHOLE-LEVEL SPELLING - a footprint that is the whole level - with one
+            // exception (below). Every other write carries its boxes, a single one included, so the
+            // applier's accumulation (boxes union, lists concatenate, "0 regions" makes the entry
+            // box only) never widens two exact contributions into their union box. THE EXCEPTION:
+            // a footprint larger than one record may carry (kMGPipeMaxPendingUploadRegions) falls
+            // back to the storage's rect list - a COVER, stated once in the log - and when that list
+            // is withheld (0: its rects fill 3/4 of the union box) this 0 is a PARTIAL, INEXACT
+            // box. A reader that takes "box only" as "the client owns every texel of the box"
+            // (AdoptDriverLevelIntoShadow's covering-box rule) is exact everywhere but here.
             //
             // READ AS BOXES, ONCE, because both shapes below want them in that form: the
             // whole-level record converts each one straight back through MGPipeBuildSubRegion,
