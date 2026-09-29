@@ -20,6 +20,8 @@
 | SharedSegments（inproc、fork / unix spawn） | client | `Fatal{UnimplementedAdoptTier, "T<n>"}`，握手期、任何记录之前 |
 | SharedSegments | server | 一行 W（档位由 client 定），T2 |
 
+- **B2 起，SharedSegments 两行被 B2 的档位表取代**（0 = 问 T0、1 = 具名拒绝后 T2，都不再 Fatal），见 B2 节。
+
 - 调用点：client `StartOverTransportPair`（Welcome 校验后）与 `StartOverSocket`（link terms 定下 `stream` 后、开数据连接前）；server `ServerSession::Accept`（后端检查后、Welcome 前）。
 - 使用处 `Client::AdoptTierIsEmulate`（`PipeApply.cpp`、`PipeWireCodec.cpp` 仍问它）：旋钮 2 → true；本进程已有握手定档 → true，不再打印；没有握手定过档的调用者 → 仍 `Fatal{UnimplementedAdoptTier}`（"no handshake settled"）。旋钮 > 2（解析器不收）→ Fatal。
 - `ServerSpawn` 从它拉起的子进程环境剔除 `MOBILEGL_IPC_*`（五个 server 自有旋钮除外），所以 fork / unix spawn 的 server 看不到 client 的旋钮；tcp 的 server 读自己的环境。
@@ -51,7 +53,7 @@
 ## 不变量
 
 - G1：新代码全在 `MOBILEGL_BUILD_DISAGGREGATED` 下（`MG_Remote`）。
-- 线上格式与控制协议修订号不变（3）。（A 包；PAIR 包把修订号升到 4，见下节。）
+- 线上格式与控制协议修订号不变（3）。（A 包；PAIR 包把修订号升到 4，见下节；B2 升到 5。）
 
 ## PAIR：socket client 的两条连接按身份配对（B0 F2）
 
@@ -221,3 +223,109 @@
 
 - G1：原生改动全在 `MG_Remote`（`MOBILEGL_BUILD_DISAGGREGATED` 下）；pull 构建符号增 0 减 0。
 - 线上格式与控制协议修订号不变（4）。
+
+## B2：T0——client 的 AHardwareBuffer 作 persistent map 的存储
+
+依据 [`PLAN-P11.md`](../../docs/Disaggregated/notes/p11/PLAN-P11.md) §2 B、`design/07`。证据根 `~/w7/notes/p11/evidence/b2/`，报告 `~/w7/notes/p11/b2-report.md`。T0 只换**存储**：采纳门（≥ 16 MiB 的 NULL 定义、persistent 写映射等，与 monolith 同一组门）问到的那个 store 由 client 分配的 AHB 承载，server 导入它；GPU 有序的写（`glBufferSubData` 进已采纳 store = resident subdata）仍走 SEG_STAGE——**T0 不减少 MC 26.3 每帧的 stage 字节**：红米实测 SEG_STAGE 1071 → 1052 KiB/帧（只少了 T2 的 persistent-map 推送 19.4 KiB/帧），省的是 client shadow 与 server 暂存副本（内存）。monolith 不变。
+
+### 档位（取代 §1 表里 SharedSegments 的 client 行）
+
+| 数据面 | `MOBILEGL_IPC_ADOPT_TIER` | client | server |
+|---|---|---|---|
+| 任意 | 2（缺省） | 今天的 T2，逐字节不变；Hello 的 `adoptTier` = 2 | 不变 |
+| Stream | 0 / 1 | A1 不变：一行 W `Refuse{AdoptTierOnStream, "T<n>"}`，T2 | A1 不变 |
+| SharedSegments | 1 | 一行 W `Refuse{AdoptTierClosed, "T1"}`，问 2，T2 | — |
+| SharedSegments | 0 | Hello 问 T0。第一次 `map_persistent` 时档 = min(旋钮, caps, 数据面)：有 `kCapAdoptT0` → T0（I 行）；没有 → 一行 W `Refuse{AdoptT0Unavailable, "no kCapAdoptT0"}`，本会话 T2 | 第一次原生 bind 时定（`ServerSession::SettleAdoptT0AtBind`，`ServerSession.cpp:1076`）：允许开关 → 平台有 AHB → 后端登记了导入 op → POST（进程内缓存）。授予：I `T0 granted`，post-bind 的 caps 快照带 `kCapAdoptT0`；否则一行 W `Refuse{AdoptT0Unavailable, "disallowed" \| "no AHardwareBuffer" \| "POST"}`，不发布 |
+| 任意 | > 2 | 解析器不收 → Fatal（不变） | 同 |
+
+- **行为变化（A1 → B2）**：SharedSegments + 0 / 1 不再在握手期 `Fatal{UnimplementedAdoptTier}`。A1 的两个死亡用例改写为 `RemoteClientAdoptT0.*` 的具名回退用例。从不 Fatal：T0 不可用 → T2 + 具名行。
+- server 允许开关 `MOBILEGL_IPC_ALLOW_ADOPT_T0`（缺省 1；0 = 从不授予），进 `ServerSpawn` 的 server 自有名单（环境剔除后仍在），Config 行 `allow-t0=`。
+- 单个 store 的拒绝（server 已授予，这一条没导入）→ 该 store DECLINED = T2，client W 行，会话继续：Offer 未到（E `Refuse{AdoptT0NoStore, "record N"}`）、client 分配失败（Offer flags 0）、hop 读不出、后端导入失败；client 建不了 hop → W `Refuse{AdoptT0NoStore, "hop"}`、不发记录。
+- refusal 词 4 → 7（`AdoptTierClosed`、`AdoptT0Unavailable`、`AdoptT0NoStore` 进 `LOCAL_REFUSAL_WORDS`）；abort 站点仍 79、family 仍 45。
+
+### 线上格式（控制协议修订 4 → 5）
+
+- `LinkTerms` 末尾追加 `adoptTier: ubyte = 2`：Hello 里是 client 的问，Welcome 里 server 回显。server 收到既非 2、也非（共享段上的）0 的问 → `Refuse{LinkTerms}`；client 见回显 ≠ 问 → `Refuse{LinkTerms}`。
+- 修订号 5（`mg_protocol_base.h`，`protocol_revision_pins.json` 第 5 行 `f83f4c5b…`）；`wireFingerprint` 含修订号，修订 4 的对端得 `Refuse{WireFingerprint}`，从不配对。
+- `kCapAdoptT0` = `MGPCapBit` 1 << 11（`MGPipeTypes.h`），只在 post-bind 的 `CapsSnapshot.callMask` 里（POST 在第一次原生 bind 之后才能跑；client 在 make-current 返回前采用 post-bind caps）。
+- `map_persistent` 记录与回复不变：OK = 已导入、client 采纳 AHB 映射；DECLINED = 该 store T2；ERROR → `Fatal{ReplyError}`；OK 而 client 没给 AHB → `Fatal{UnexpectedMapAccept}`。
+- **Offer**（aux 套接字，`SCM_RIGHTS`，`Transport/AdoptT0.h:36`）：32 字节旁带 {magic `'MGT0'` = `0x3054474D`，version 1，seq = 该 `map_persistent` 记录序号，size，flags bit 0 = HasBuffer} + 一个 fd = **hop**：client 建的 socketpair 一端，client 已在另一端 `AHardwareBuffer_sendHandleToUnixSocket`；server `recvHandleFromUnixSocket`（校验 BLOB 宽 = size）。hop 的理由：AHB 自带的 fd 集不定长，aux 上一条消息只带一个 fd。
+
+### 顺序、线程、为什么不死锁
+
+- client（app 的 GL 线程，`ClientSession::AdoptPersistentT0`，`ClientSession.cpp:2739`）：分配 AHB（BLOB，CPU_READ/WRITE_OFTEN \| GPU_DATA_BUFFER）、lock（整个 store 生命期持有）、用 shadow 播种、建 hop → 编码 `map_persistent` → pre-publish 钩子在 `EncodeRecord` 与 `PublishAndNotify` 之间把 Offer 排上 aux → 发布 → 阻塞等回复。
+- server：**apply 线程**（`mgl-srv-apply`）在应用该记录时取 Offer：codec 的 `MapPersistent` 分支先问 `WireVerbSink::OnMapPersistent`（`PipeWireCodec.cpp:1834`）→ `ServerSession::AdoptStoreT0`（`:1118`）→ `AdoptInbox::Take(seq, 2000 ms)`。
+- 不死锁：(1) fd 在记录可见之前已进内核队列；(2) 握手后只有 apply 线程读 server 的 aux；(3) 每会话至多一条 T0 `map_persistent` 在飞（client 阻塞等回复），aux 队列里至多一个有效 Offer，排不满；(4) 等待有界（`kOfferWaitMs` = 2000）→ 具名 DECLINED，不挂。晚到 / 乱序：按 seq 暂存（`AdoptInbox`）；seq 小于当前的旧 Offer 关闭并计数；畸形的跳过并计数。
+
+### POST（`kCapAdoptT0` 的前提）
+
+持续持锁形状：分配 64 KiB AHB，**整个测试期间 CPU lock 不放**，导入，GPU 读 CPU 写的图案、GPU 写一段，经持有的指针读回比较。
+- Espryt（`Ops_H_SelfTestExternal`）：一次性 ES 3.1 pbuffer 上下文（不碰 Espryt 的绑定缓存），`glBufferStorageExternalEXT` + 持久 coherent 映射，映射读一遍，compute shader 把 region 0 拷到输出、在 word 4096 起写 `0x6C0FFEE0 ^ i`。
+- Magma（`VkBufferManager::SelfTestWireImport`，`VkBufferManager.cpp:768`）：renderer 的设备，`vkCmdCopyBuffer` region 0 → staging、`vkCmdFillBuffer` region 4，栅栏等 2 s。
+- 结果一行 I `T0 POST (<后端>, sustained-lock pattern) PASSED|FAILED - …`。红米（Adreno 830）两后端 PASSED。
+
+### server 端存储
+
+- Espryt：`Ops_H_ImportExternal` → `ImportAhbAsBuffer`（`eglGetNativeClientBufferANDROID` + `glBufferStorageExternalEXT`，flags READ \| WRITE \| PERSISTENT \| COHERENT \| DYNAMIC_STORAGE，持久 coherent 映射）；**先导入、再退役旧存储**（导入失败则 T2 存储原样）；孪生体 = adopted 形状（`InstallT0Store`：immutable、persistentMapped、无 pendingRanges、无 hostBytes → 不进 buffer pool、不走 R-11 暂存）。上下文丢失后下一次 ensure 在新上下文重导入。
+- Magma：`VkBufferManager::ImportWireBuffer`（`:714`）经 `VK_ANDROID_external_memory_android_hardware_buffer`（Android 线路设备上有就启用，连同 `VK_EXT_queue_family_foreign`）：要求 host-visible，优先 coherent，dedicated 导入；`VkBufferObject` 外部模式；`stagedCoverage` = 整个 store（`:742`）。
+
+暂存副本（R-11 的 server shadow）读者审计——T0 孪生体没有暂存副本：
+
+| 读者 | T0 下 |
+|---|---|
+| CPU 回读 `Ops_H_Readback`（Espryt `Managers.cpp:2540`） | persistentMapped 分支：`DrainResidentWritesNow` + `glFinish`，不回字节 |
+| CPU 回读 `ReadbackWireBuffer`（Magma `:560`） | imported：只 `WaitForWireBufferHostAccess`，不回字节 |
+| P9 W1 pack-buffer 落地（`PipeApplier.cpp:648` → `Ops_H_SubData`） | imported 分支排进 `pendingResidentWrites`（`Managers.cpp:2378`，GPU 有序）；B2 前 adopted 的提前返回会丢这批像素 |
+| GPU 写跟踪 | client 自有（`m_gpuWritePending`）；XFB 捕获回读跳过 persistentMapped（`DirectGLES.cpp:1806`） |
+| R-11 排水（`FlushPendingRangesFrom`、`MGL_SERVER_STAGED_REQUIRE_PENDING`） | 不可达：T0 孪生体无 pendingRanges |
+| handle 臂的 CPU 读者（间接命令、primitive restart 替换、multi-draw 索引重定基：`DirectGLES.cpp:486`、`:9224`、`:9541-9542`、`:9695-9696`、`MultiDraw.cpp:202`） | `SplitHostBytes`（`Managers.h:1121`）→ 导入的 coherent 映射，同 monolith 读 adopted 映射 |
+| Magma `WriteWireBuffer`（`:329`） | 不变：store 忙 → staged copy（GPU 有序），闲 → host 写进导入内存 |
+
+### 生命周期
+
+- client：从采纳到 respecify / destroy（`WireTables.cpp:214`、`:907` → `ReleaseT0Store`）或会话结束（`ResetT0`）持有 AHB 与 lock；之后 unlock + release。
+- server 在自己的栅栏之后放手，不依赖 link watermark，不需要 `completedFrameSerial` 的生产者：
+  - Espryt：导入时 `AcquireImported`；`glDeleteBuffers` 之后 `RetireT0Import` 插栅栏，栅栏 signal 后才 release（`SweepT0Retired`：每次导入、ensure、以及两个同步点在延迟释放排水之后的 `ProcessDeferredT0Retires`）；无上下文时的 destroy 进延迟列表并留第二个引用，排水删 id 后再退役；上下文丢失 → 全部释放。`ProcessDeferredBufferReleases` 逐字不动（G5）。
+  - Magma：respecify / destroy 一律 `DeferWireRelease(T0ReleaseSerial(lastUse))`，按 serial 回收、从不"立即"；外部 `VkBufferObject::Destroy` 释放 buffer / memory 后 `ReleaseImported`。
+
+### CPU 读
+
+client `BufferObject::SyncGpuWrites` 的 T0 分支：发 `ResourceReadback` 往返（"完成、无字节"），清标记，读持有的映射；server 先落地排队的 resident 写、等 GPU（Espryt `glFinish`，Magma host-access 等待）再答。
+
+### 计数与日志
+
+client 与 server 每会话：导入 store 数、字节、拒绝数（I `T0 store {…} adopted - N bytes` / `T0 imported store {…} - N bytes (record R); session total S stores / B bytes`；会话结束 I `T0 session totals - …`）。
+
+### 门
+
+主机（`~/w7/notes/p11/evidence/b2/redonce-host*`；每次拷回原文件、`cmp` 相同、touch 后复绿）：
+
+| 门 | 用例 | red-once（变异 → 红） |
+|---|---|---|
+| 旋钮 2 = 今天的 T2 | `RemoteClientAdoptT0.KnobTwoIsTodaysT2WithNoT0Line`；全门禁缺省旋钮全绿 | Hello 不看旋钮一律问 0 → 红（client `Refuse{LinkTerms}` 回显 ≠ 问） |
+| 旋钮 0、主机无 AHB → T2 + 具名行 | `RemoteClientAdoptT0.{KnobZero…,NoAhardwareBuffer…}`、`DirectGLES.{Split,Spawn}.AdoptTier0.*`、`DirectVulkan.{Split,Spawn,Tcp}.AdoptTier0.*`（`ASessionThatCannotRunT0FallsBackToT2OnceByName` 读两行） | 恢复 A1 的握手 Fatal → 单元 2 例 + 集成例红（集成例须 `MOBILEGL_ITEST_REQUIRE_GPU=1`，门禁的 integration-gpu 两遍就是这样跑的；否则预检 abort 被判 SKIP）；删 client 的具名行 → 单元 1 例 + 两臂集成例红 |
+| 允许开关关 → T2 + 具名行 | `…TheServersAllowSwitchOffIsT2AndANamedLine`、`DirectGLES.Spawn.AdoptT0Disallowed.*` | 开关不进 `ServerSpawn` 白名单 → spawn 例红（server 说 "no AHardwareBuffer" 不是 "disallowed"） |
+| 修订不符 → 具名拒绝 | `SessionHandshakeTest.ARevisionFourPeerIsRefusedByNameAtRevisionFive`、`protocol_revision_pin.py` | 修订号留 4 → 编译期 `static_assert` 红；去掉它 → 运行期该例红（两指纹相等，Welcome 发出） |
+| Stream + 0 → A1 行不变 | `{DirectGLES,DirectVulkan}.Tcp.AdoptTier0.*` | stream 上也问 0 → 19 / 21 例在 bring-up abort（握手不成，client 随后 `Fatal{CapsBeforeFirstSnapshot}`） |
+| 授予 + 存储落地 | `…AGrantedStoreLandsWithTheClientsBytes`（替身平台：memfd 当 AHB） | 不发布 `kCapAdoptT0` → 3 例红 |
+| Offer 按 seq 配对 | `Channels/AdoptInboxTest.*`（6 例 × inprocess / socket） | 按到达顺序配对 → 4 例红 |
+| Offer 晚到 / 不到 | `…AnOfferThatArrivesAfterItsRecordStillLands`（晚 300 ms）、`…AnOfferThatNeverArrivesIsANamedDeclineNotAHang`、`AdoptInboxTest.AnOfferThatNeverComesTimesOutWithinItsBound` | 等待不设界 → 3 例红（2 例超时 90 s） |
+
+设备（红米 `2f7cbe2e`，Adreno 830；Android 集成测试静态 peek 载具 inproc 臂，每个用例一个进程，同主机 ctest；`evidence/b2/itest/`）：对照载具旋钮 0 两后端 arena 落 T0（`arena_arm = adopted`，18 次导入），旋钮 2 落 T2（`emulated`），11 例（8 过、3 条车道专属跳过）全绿。
+
+| 变异（只改一次性源码拷贝） | 载具 / 用例 | Espryt | Magma |
+|---|---|---|---|
+| M1 resident 写就地落（client 把 T0 store 的 SubData 直接写进 AHB） | `ADrawQueuedBeforeASubDataKeepsItsOwnBytes` | 红 | 红 |
+| M2 respecify 时立即释放导入 | `ARespecifyWithADrawQueuedKeepsThatDrawsStore` | **绿**：GL 导入自持内存引用，早放我们的 AHB 引用不释放页 | 红（先排队的绘制读到被释放的存储） |
+| M3 不发布 `kCapAdoptT0` | `TheArenaLandsInTheTierItsLaneDeclares` | 红（emulated） | 红 |
+| M4 CPU 读不做回读往返 | `ReadbackSeesTheLatestCpuWrite`、`GpuWriteIntoTheArenaIsReadBack` | 红 | 红 |
+
+brief 点名的 `SubDataAfterAnInFlightDrawReachesTheNextDraw`（M1）与 `RespecifiedVertexArenaKeepsVaoBindings`（M2）在变异下**仍绿**：两者在每次写 / respecify 前都 `glReadPixels`，GPU 已退役，就地写与早释放都看不出来；所以加了上表两个"两次绘制之间不回读"的用例（主机各车道全绿）。
+
+MC 26.3（同 app，spawn+shm 与 inproc × 两后端 × 旋钮 0 / 2）ssim 全过、旋钮 0 时 8 个 store（441.5 MiB）全部 T0；create-instancing 1 个 16 MiB store T0、ssim 过；B1 外部路线 b（helper）旋钮 0 同样导入。内存与帧时间见报告。
+
+### 不变量
+
+- G1：pull 构建符号增 0 减 0，`.text` 不变；原生改动在 `MG_Remote` 与两后端的线路路径（`MOBILEGL_BUILD_DISAGGREGATED` 下）；Espryt 的 T0 导入只在 `__ANDROID__`。
+- G5：`ProcessDeferredBufferReleases` 等 P3a / P4a 名单上的函数逐字不动（T0 退役放在它之后的 `ProcessDeferredT0Retires`）。
+- 线上格式：控制协议修订 5（`LinkTerms.adoptTier`）；Offer 走 aux 描述符通道，不是新帧。
