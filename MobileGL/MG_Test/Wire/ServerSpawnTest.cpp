@@ -65,6 +65,9 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <MG_Remote/Transport/PairBind.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -1343,6 +1346,158 @@ TEST(ServerSpawnTest, ADescriptorCrossesBetweenTheTwoProcesses) {
     ::close(pipeFds[1]);
     int exitCode = -1;
     CloseAndReap(session, &exitCode);
+}
+
+// ---- P11 B1: the fd:<control>,<aux> endpoint (CONTRACT-P11 B1) ------------------------------
+//
+// A client in another app may not connect() to the server app's endpoint (SELinux `connectto`,
+// B0-CROSS-APP.md), so the server app's broker connects twice FOR it and an app_process helper
+// hands the two client ends in across its execve. These cases do the broker's part by hand - two
+// bare connects that write nothing, exactly what the broker's LocalSocket connects do - and hand
+// the ends to the real client through MOBILEGL_IPC_CONTROL=fd:<control>,<aux>.
+
+namespace {
+
+    // MG_Config::Ipc's control/data pair for one case, restored however the case ends.
+    struct ScopedIpcEndpoint {
+        decltype(MobileGL::MG_Config::Ipc.Control) savedControl = MobileGL::MG_Config::Ipc.Control;
+        decltype(MobileGL::MG_Config::Ipc.Data) savedData = MobileGL::MG_Config::Ipc.Data;
+        ScopedIpcEndpoint(const std::string& control, const char* data) {
+            MobileGL::MG_Config::Ipc.Control = control.c_str();
+            MobileGL::MG_Config::Ipc.Data = data;
+        }
+        ~ScopedIpcEndpoint() {
+            MobileGL::MG_Config::Ipc.Control = savedControl;
+            MobileGL::MG_Config::Ipc.Data = savedData;
+        }
+    };
+
+    // The broker's two connects: bare, nothing written. Retried while the server is still binding.
+    bool BrokerConnectsTwice(const std::string& endpoint, int* outControl, int* outAux) {
+        *outControl = *outAux = -1;
+        for (int attempt = 0; attempt < 400 && *outControl < 0; ++attempt) {
+            *outControl = BareConnect(endpoint);
+            if (*outControl < 0) std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        if (*outControl < 0) return false;
+        *outAux = BareConnect(endpoint);
+        return *outAux >= 0;
+    }
+
+    std::string FdSpec(int control, int aux) {
+        return "fd:" + std::to_string(control) + "," + std::to_string(aux);
+    }
+
+} // namespace
+
+TEST(ServerSpawnTest, AnFdPairTheBrokerConnectedBringsASharedSegmentSessionUp) {
+    // THE B1 CLIENT PATH END TO END against a real server process: the pair was connected by
+    // somebody else, the client adopts it, presents its own PairBind pair (the server's
+    // PairAcceptor refuses a pair that does not), says Hello and maps the four segments that
+    // arrive over the aux socket.
+    const std::string endpoint = Endpoint("fdpair");
+    Session session;
+    ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
+    ScopedSessionCleanup cleanup{session};
+    int control = -1, aux = -1;
+    ASSERT_TRUE(BrokerConnectsTwice(endpoint, &control, &aux)) << "the server never listened on " << endpoint;
+    const ScopedIpcEndpoint configured(FdSpec(control, aux), "auto");
+    const auto start = std::chrono::steady_clock::now();
+    ASSERT_EQ(Client::ClientSessionInstance().StartSpawned(), MOBILEGL_OK)
+        << "the handed-over pair did not become a session (a pair without the client's PairBinds is refused "
+           "by the server's PairAcceptor)";
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
+              4000);
+    EXPECT_TRUE(Client::ClientSession::Active() != nullptr);
+    EXPECT_TRUE(Client::ClientSessionInstance().ConnectDial()) << "an fd: pair is a dialled-in (Connect) session";
+    EXPECT_NE(::fcntl(control, F_GETFD) & FD_CLOEXEC, 0) << "an adopted descriptor must not leak into children";
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0) << "the server must end the session on the client's EOF";
+    session.server.pid = -1;
+}
+
+TEST(ServerSpawnTest, AnAdoptedFdPairPresentsOnePairBindPairBeforeAnythingElse) {
+    // The identity half, read off the server side of the sockets directly: exactly one framed
+    // PairBind on each connection, the same nonce, control says aux=false and aux says aux=true.
+    const std::string endpoint = Endpoint("fdbind");
+    int listener = -1;
+    ASSERT_EQ(Transport::SocketTransport::Listen(endpoint, &listener), MOBILEGL_OK);
+    int control = BareConnect(endpoint);
+    int aux = BareConnect(endpoint);
+    ASSERT_GE(control, 0);
+    ASSERT_GE(aux, 0);
+    const int serverControl = ::accept(listener, nullptr, nullptr);
+    const int serverAux = ::accept(listener, nullptr, nullptr);
+    ASSERT_GE(serverControl, 0);
+    ASSERT_GE(serverAux, 0);
+
+    std::unique_ptr<Transport::SocketTransport> client;
+    ASSERT_EQ(Transport::SocketTransport::AdoptConnectedPair(control, aux, client), MOBILEGL_OK);
+    ASSERT_TRUE(client);
+
+    std::uint8_t controlNonce[Transport::kPairNonceBytes] = {};
+    std::uint8_t auxNonce[Transport::kPairNonceBytes] = {};
+    bool controlIsAux = true, auxIsAux = false;
+    std::vector<std::uint8_t> frame;
+    ASSERT_EQ(Transport::SocketTransport::ReceiveOneFrame(serverControl, 2000, 4096, &frame), MOBILEGL_OK)
+        << "no frame on the control connection: the client did not present a PairBind";
+    ASSERT_TRUE(Transport::DecodePairBind(frame, controlNonce, &controlIsAux)) << "the first frame is not a PairBind";
+    ASSERT_EQ(Transport::SocketTransport::ReceiveOneFrame(serverAux, 2000, 4096, &frame), MOBILEGL_OK)
+        << "no frame on the aux connection: the client did not present a PairBind";
+    ASSERT_TRUE(Transport::DecodePairBind(frame, auxNonce, &auxIsAux)) << "the first frame is not a PairBind";
+    EXPECT_FALSE(controlIsAux);
+    EXPECT_TRUE(auxIsAux);
+    EXPECT_EQ(std::memcmp(controlNonce, auxNonce, sizeof(controlNonce)), 0) << "the two halves name different pairs";
+
+    client.reset();
+    ::close(serverControl);
+    ::close(serverAux);
+    ::close(listener);
+    ::unlink(endpoint.c_str());
+}
+
+TEST(ServerSpawnTest, AnFdEndpointThatIsNotAConnectedUnixPairIsRefusedByNameAndWritesNothing) {
+    // Every way the fd: text or its descriptors can be wrong is a named refusal before a byte is
+    // written - never a PairBind into something that is not the server.
+    std::unique_ptr<Transport::SocketTransport> client;
+    int pipeFds[2] = {-1, -1};
+    ASSERT_EQ(::pipe(pipeFds), 0);
+    EXPECT_EQ(Transport::SocketTransport::AdoptConnectedPair(pipeFds[0], pipeFds[1], client),
+              MOBILEGL_ERR_INVALID_ARGUMENT)
+        << "a pipe is not a socket";
+    int pair[2] = {-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, pair), 0);
+    EXPECT_EQ(Transport::SocketTransport::AdoptConnectedPair(pair[0], pair[0], client), MOBILEGL_ERR_INVALID_ARGUMENT)
+        << "one descriptor named twice";
+    EXPECT_EQ(Transport::SocketTransport::AdoptConnectedPair(pair[0], 1000000, client), MOBILEGL_ERR_INVALID_ARGUMENT)
+        << "a descriptor that is not open";
+    const int unconnected = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(unconnected, 0);
+    EXPECT_EQ(Transport::SocketTransport::AdoptConnectedPair(pair[0], unconnected, client),
+              MOBILEGL_ERR_INVALID_ARGUMENT)
+        << "a socket nobody connected";
+    EXPECT_FALSE(client);
+    // Nothing was written on the good half of the socketpair.
+    pollfd readable{pair[1], POLLIN, 0};
+    EXPECT_EQ(::poll(&readable, 1, 0), 0) << "a refused adoption wrote on a descriptor";
+
+    for (const char* text : {"fd:", "fd:3", "fd:3,", "fd:,4", "fd:a,b", "fd:-1,4", "fd:3,4,5", "fd: 3,4"}) {
+        const ScopedIpcEndpoint configured(text, "auto");
+        EXPECT_EQ(Client::ClientSessionInstance().StartSpawned(), MOBILEGL_ERR_UNSUPPORTED) << text;
+    }
+    {
+        const ScopedIpcEndpoint configured(FdSpec(pair[0], pair[1]), "stream");
+        EXPECT_EQ(Client::ClientSessionInstance().StartSpawned(), MOBILEGL_ERR_UNSUPPORTED)
+            << "an fd: pair carries shared segments only";
+    }
+    EXPECT_EQ(::poll(&readable, 1, 0), 0) << "a refused fd: endpoint wrote on a descriptor";
+    ::close(pipeFds[0]);
+    ::close(pipeFds[1]);
+    ::close(pair[0]);
+    ::close(pair[1]);
+    ::close(unconnected);
 }
 
 #endif // !_WIN32
