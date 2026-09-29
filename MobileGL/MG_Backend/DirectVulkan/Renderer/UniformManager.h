@@ -162,9 +162,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // count times kDescriptorTrimHeadroom still fits its capacity; a slot that has been quiet for
         // MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES consecutive epochs, and holds at least
         // kDescriptorTrimMinCapacity sets, is trimmed. The headroom is what keeps the trim from
-        // thrashing: geometric growth leaves a re-grown slot at least a third full (its pools sum to
-        // under twice the largest, and the largest is under twice the need that added it), so the
-        // epoch that grew a slot is never quiet for it. The floor keeps a slot sized for ordinary
+        // thrashing: geometric growth leaves a re-grown slot at least a third full (the pool a growth
+        // adds is at most twice the largest before it, so at most twice everything the slot held, and
+        // the epoch that grew it needed more than that), so the epoch that grew a slot is never quiet
+        // for it. The floor keeps a slot sized for ordinary
         // frames from being trimmed at all - the trim exists to give back a burst.
         static constexpr Uint32 kDescriptorTrimHeadroom = 4;
         static constexpr Uint32 kDescriptorTrimMinCapacity = 1024;
