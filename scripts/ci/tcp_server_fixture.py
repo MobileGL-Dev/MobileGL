@@ -50,8 +50,9 @@ def start(args):
         raise ValueError('the local fixture requires a numeric loopback TCP endpoint')
     family = socket.AF_INET6 if ':' in endpoint.hostname else socket.AF_INET
     address = (endpoint.hostname, endpoint.port)
-    # Do not connect as a readiness probe: it would consume the first half of
-    # AcceptPair, so the next real client would be paired with the probe.
+    # Do not connect as a readiness probe: a server that is not under --serve takes
+    # the first connection it accepts as control, so the probe would end it. (Unix
+    # endpoints pair by the PairBind nonce since P11 and ignore such probes.)
     with socket.socket(family) as probe:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probe.bind(address)

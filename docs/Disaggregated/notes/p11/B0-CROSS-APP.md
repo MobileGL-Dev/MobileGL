@@ -38,6 +38,6 @@
 ## 顺带查出
 
 - **F1 HyperOS 熄屏冻结整个 server uid**（`frozen uid = … reason=screen off`），FGS 进程、supervisor 与会话子进程同一 cgroup，在飞的会话 120 s 后 `Fatal{BarrierTimeout}`。FCL 的同机用法也会碰到。
-- **F2 `AcceptPair` 按到达顺序配对**（`SocketTransport.cpp:373-420`，TCP 与 unix 共用）：`ServerControlActivity` 的就绪探测是一次空的 `connect()`+`close()`，2 s 内会与下一个真 client 的控制连接配成一对，会话读到探测的套接字后退出；两个 client 同时连也会交错。
+- **F2 `AcceptPair` 按到达顺序配对**（`SocketTransport.cpp:373-420`；产品的 TCP 路径本来就按身份配对——一条控制连接、数据连接按 nonce 绑定——受影响的是 unix 端点与非 `--serve` 的一次性 TCP server；**已修**，P11 PAIR，ID-P11-12）：`ServerControlActivity` 的就绪探测是一次空的 `connect()`+`close()`，2 s 内会与下一个真 client 的控制连接配成一对，会话读到探测的套接字后退出；两个 client 同时连也会交错。
 - 构建：`-Pmobilegl.apkSuffix` 只改文件名；包名由 `-Pmobilegl.applicationIdSuffix` 决定。
 - 工具提交 `72926a88`（`p11/b0`）：`tools/device_bench/disagg/fdrelay.c`，root 的字节 + `SCM_RIGHTS` 中继，B1 broker 的替身。
