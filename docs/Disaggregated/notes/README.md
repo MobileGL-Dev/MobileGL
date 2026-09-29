@@ -22,7 +22,7 @@
 | P6.5 两轴传输 + 跨机 | [`p65/`](p65/README.md) | `evidence-index.md`、`validation-status.md`、`code-review-findings.md` |
 | P3b / P4b Espryt 深化 | [`p34b/`](p34b/README.md) | `espryt-d1.md` … `espryt-d3.md` |
 | P7 Magma 全量迁移（含 Ph） | [`p7/`](p7/README.md) | `PLAN-PH-P34B-P7.md`、`INTEGRATOR-DECISIONS-P7.md`（ID-P7-1..63）、`HANDOFF-2026-09-23.md`、`device-window-*/`；审查稿在 [`handoff/`](handoff/) |
-| **P12**（当前）server 自有屏幕窗口 | [`p12/`](p12/README.md) | `PLAN-P12.md`、`INTEGRATOR-DECISIONS-P12.md`、`device/` |
+| **P12**（已收官）server 自有屏幕窗口 | [`p12/`](p12/README.md) | `PLAN-P12.md`、`INTEGRATOR-DECISIONS-P12.md`、`device/` |
 | P8 / P9 / P10 / P11 / P13（待排） | [`p8/`](p8/README.md)、[`p9/`](p9/README.md)、[`p10/`](p10/README.md)、[`p11/`](p11/README.md)、[`p13/`](p13/README.md) | 目前只有路线图上的完整范围与出口门 |
 
 跨阶段：[`DEBTS.md`](DEBTS.md)（仍开放的债务与去向）、[`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)（开放问题全文，编号稳定）；[`handoff/`](handoff/)（P7 的集成者审查稿，路径被 P7 交接文档引用，保持原位）；[`recovered/`](recovered/)（从失败的 workflow 运行里捞回的 P0–P2 期材料，`wf1` 设计定稿前的计划草案、`wf2` P0、`wf3` P0.5、`wf4` P1、`wf5` P2；与阶段目录逐字节重复的副本已于 2026-09-24 删除，只留独有的）；[`perf-five-arm-20260928/`](perf-five-arm-20260928/README.md)（非阶段的五臂传输性能对比与瓶颈归因，2026-09-28）。

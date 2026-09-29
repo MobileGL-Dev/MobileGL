@@ -67,45 +67,31 @@
 
 审查后主机 **P12 定向 CTest 46/46 通过**：`ServerDisplayTest`、`ServerLoopTest`、`InProcessServer`、`SupervisorChildren`、`ServerOwnedSurface`。这组定向测试不等于完整主机门。证据在测试机 `/home/swung/w7/logs/p12-verify-1fb18d9e/`；日志、APK 和截图按证据数据规则未入仓库。当前 `0fe01588` 相对验证 head 只有文档整理及文档检查配置更新。
 
-## 3. 还没做（P12 未收官）
+## 3. 收官处置（2026-09-29）
 
-按 [`../ROADMAP.md`](../../ROADMAP.md) P12 行的两个出口门，以及本包任务书列出的改小后的条目：
+两个出口门都过了（(b) [`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)、(a) [`FCL-ACCEPTANCE.md`](FCL-ACCEPTANCE.md)），`MG_Remote/CONTRACT-P12.md` 已写，`gate.sh` 的 G1 已改。ROADMAP P12 行与任务书里原先"未落地"的每一项，处置如下：
 
-1. **出口门 (a) 未达成。** 要求 FCL 同机 spawn、双后端**入世界**、杀 server 产生干净 device-lost latch。
-   今天验证到的是：trace_replay（**不是 FCL**）经 `--window-surface` + `MOBILEGL_IPC_SURFACE=server` 在屏上重放 OpenRA，
-   双后端都 1.0；device-lost 是**按 HOME（surfaceDestroyed）**触发的，**不是杀 server**。
-2. **出口门 (b) 完全未做。** 要求另一台机器上的 client 经 TCP 在 Redmi 入世界并记录 P6.5 的必测数。
-   本轮的 client 是 `adb forward` 后的 `tcp://127.0.0.1:40613` **环路**（`android/dev.sh:7-8` 写得很清楚），
-   **不是跨机**。
-3. **ROADMAP P12 行里仍未落地的条目**（交接时在树上核过）：
-   - `unix:` 监听（in-process server 只做了 tcp；`grep 'unix:' ServerMain.cpp` 为 0）；
-   - DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局（`DirectGLES.cpp` 仍有 40 处）；
-   - cached-app freezer 的"完整处理"（树上 0 处提及）；文档从未定义它是什么，`SPAWN-PLAN.md` §8.2 只说了它是 P12 的；
-   - 多 context（契约 §11）；
-   - FCL env 与 plugin APK 开关表接线；
-   - **`AndroidNativeWindow@P12` / `MetalLayer@P12` 的 D8 白名单**（拒 X11 / Win32Hwnd / None）——`map-docs-contract.md` §5.3 记它
-     **没落地**，且当时 `SetWindowHandle` 在 client 侧**无条件发**；本轮把 ServerOwned 模式下的
-     `SetWindowHandle` 变成了具名拒绝，但 D8 本身（X11/Win32 白名单）仍是独立跟进项。
-4. **文档债**（`map-docs-contract.md` §4 列的"落地时要记录的东西"）：
-   - **没有 `MG_Remote/CONTRACT-P12.md`**（前几个阶段都有；本页与 `BRIEF-onscreen.md` 不是契约）；
-   - 没有 `INTEGRATOR-DECISIONS-P12.md` 式的逐条裁定；
-   - `ARCHITECTURE.md:526` 仍写着被删掉的 Surface → AIDL → `ANativeWindow_fromSurface` 旧路径，`protocol.fbs:258`
-     仍写「Android transfers the window out of band」，`ARCHITECTURE.md:533` 仍描述 RESPAWN / IDLE_EXIT 可用；
-   - `CURRENT_STAGE_PROGRESS.md:244` 仍把 P12 描述成"real windows cross processes"，与 Rule H 冲突；
-   - IPC 顺序（`ROADMAP.md:19` 的 P6.5 → Ph → **P12** → P9 与 `CURRENT_STAGE_STATUS.md` / HANDOFF 的
-     P9 → P10 → P11 → P12）两处说法仍不一致；
-   - a6 行 A8-3…A8-15 的处置、CONTRACT-P6 §7.2 D8 的处置都还没写；
-   - 阶段收尾该有一次 Codex 审查（`ROADMAP.md:17` 的惯例）。
-5. **`MG_Test/SanityTest.cpp` 在本包里被改动过**——它属于 pull 构建之外的测试目标，但要确认它与 G1 的关系已在门里测到（门已绿，此处只是点名）。
+| 项 | 处置 |
+|---|---|
+| in-process server 的 `unix:` 监听 | ✅ 已做（`c16fb5a8a`） |
+| FCL env 与 plugin APK 开关表接线 | ✅ FCL 走 `/sdcard/FCL/mg_env.txt`；plugin / trace 两个 APK 都带 Render Server 屏与二进制（`1987bdff5`）；FCL fork 新增版本设置「游戏退到后台时不暂停」（FCL 仓库，未提交） |
+| DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局 | 不做：每进程一个会话时不需要 → [`DEBTS.md`](../DEBTS.md) |
+| cached-app freezer 的完整处理 | 不做：文档从未定义它；FCL 后台暂停的实测答案见契约 → DEBTS |
+| 多 context | 不做（同上）→ DEBTS |
+| D8 窗口种类白名单（拒 X11 / Win32Hwnd / None） | 不做：仍接受并把 token 强转为指针 → DEBTS（无主，等 Windows / X11 client） |
+| TLS | 仍开放 → DEBTS |
+| 逐条裁定日志 | ✅ `INTEGRATOR-DECISIONS-P12.md`（ID-P12-1..15） |
+| 文档债（`ARCHITECTURE.md:526` 旧路径、`protocol.fbs` 旧注释、`CURRENT_STAGE_PROGRESS` 的"real windows cross processes"） | ✅ 已清（设计文本已迁到 `design/`，`design/08-runtime-and-platform.md` 记上屏路径与几何） |
+| IPC 顺序两处说法不一致 | ✅ ROADMAP 现为 P5 … P6.5 → Ph → P12 → P9 → P10 → P11 |
+| `IterationRPProgram203Scenario` | ID-P12-12：按"既有、环境敏感"读，不阻塞 |
+| a6 行 A8-3…A8-15 与 CONTRACT-P6 §7.2 D8 的逐行处置 | 由契约与裁定日志覆盖，**没有逐行列出** |
+| 收官审查 | 用户裁定（2026-09-29）不派 agent / Codex 审查；由本人核对契约断言（发现两处措辞错误已改）并跑 G1 |
+| G1 | G1（Arch，clang++，pull 构建，`6e35ea2c`）：`.text` `0xa52203` = 基线，符号增 0 减 0 |
 
-## 4. 立刻可做的收尾
+## 4. 收官前立刻做过的
 
-1. 把 `~/w7/notes/p12/gate.sh` 的 G1 符号比较改成与基准同源（`nm --defined-only … | awk '{print $3}'`），
-   否则下一个跑门的人还会看到 `added=N removed=N` 而误判。
-2. 决定 `IterationRPProgram203Scenario` 在 P12 的处置：既然 ID-P7-22 已判"环境敏感"，把它在门里的
-   出现方式（钉 ICD 即可绿 / 记为已知偶发）写成一句结论，别再一次次口头带过。
-3. 若要真正收官 P12：先补跨机 TCP（出口门 b），再补 FCL + 杀 server 的 device-lost（出口门 a）,
-   最后写 `CONTRACT-P12.md` 并按惯例做一次收官审查。
+1. `gate.sh` 的 G1 只在同机同编译器的基线上比较，否则说"未比较"并给做法，不再印无意义的 `added / removed`。
+2. `notes/p7/INTEGRATOR-DECISIONS-P7.md` 里一条指向已缩成索引的 `ARCHITECTURE.md:531` 的引用改到 `design/08-runtime-and-platform.md:7`（文档引用门原先在 HEAD 上红）。
 
 ## 5. 工装在哪
 

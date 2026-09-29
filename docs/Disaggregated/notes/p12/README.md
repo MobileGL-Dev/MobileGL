@@ -8,12 +8,12 @@
 - 形状：server APK 自建 `ANativeWindow`（`MobileGLDisplayActivity` 的 SurfaceView，进程内 TCP server，会话串行）把渲染流**上屏**；离屏路径保留、同一时刻一条活跃；client 以 `WindowKind::ServerOwned`（控制修订 3）**完全无头**接入，几何由 server 回传；失窗 → `Fatal{ServerWindowLost}` → 干净 device-lost。
 - 进展：15 个 `(P12)` 提交 + 审查轮修复（10 个问题，ID-P12-5..11）已并入 `feat/disaggregated`；主机门绿（ID-P12-14）、G1 成立（ID-P12-15）；审查后在 `1fb18d9e` 上完成 P12 定向 CTest 46/46 和 Redmi 真机七项复测。当前分支 `0fe01588` 后续提交只改了文档、文档检查范围和基准脚本说明文字，未改 P12 实现。
 - **2026-09-25 追加（会话交接 §4/§5.1）**：**device-lost 的 DECLINED 回复容忍**与**纹理上传的等待粒度**已落地，各有自己的 red-once 门（前者就是进世界后 `Fatal{ProtocolCorruption, "Fence.reply"}` 那条崩溃；后者让单条纯上传的回包等待 1 → 0）。真机端到端（进世界不崩、那一帧墙钟）与 G1 本机复核仍待做，见 [`DEVICELOST-AND-UPLOAD-WAITS.md`](DEVICELOST-AND-UPLOAD-WAITS.md)。
-- 出口门 (b) 已于 2026-09-28、(a) 已于 2026-09-29 通过（[`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)、[`FCL-ACCEPTANCE.md`](FCL-ACCEPTANCE.md)）。未完成：`CONTRACT-P12.md`；阶段表行里的其余条目（`unix:` 监听、DirectGLES 去全局、freezer、多 context、FCL 开关接线、D8 白名单）。
+- 出口门 (b) 已于 2026-09-28、(a) 已于 2026-09-29 通过（[`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)、[`FCL-ACCEPTANCE.md`](FCL-ACCEPTANCE.md)）；契约 `MG_Remote/CONTRACT-P12.md` 已写。未做的（DirectGLES 去全局、freezer、多 context、D8 白名单、TLS）已转入 [`DEBTS.md`](../DEBTS.md)。
 
 ## 阶段表行（原 `ROADMAP.md`）
 
 - **阶段**：**P12** Android 生产窗口路径
-- **状态**：**子集已实现、未收官（2026-09-25）**：上屏 server 窗口、`WindowKind::ServerOwned`、无头 client、失窗 device-lost 已落地；审查轮 10 个问题已修（两个大项：批内失窗、会话间 Espryt 单元影子悬空；裁定 [`INTEGRATOR-DECISIONS-P12.md`](INTEGRATOR-DECISIONS-P12.md) ID-P12-5–11）。审查后 P12 定向 CTest 46/46、真机七项复测通过；出口门 (a) FCL + 杀 server 与 (b) 跨机 TCP 仍未完成（见 [`PLAN-P12.md`](PLAN-P12.md) §3）。
+- **状态**：**已收官（2026-09-29）**——两个出口门都过（[`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)、[`FCL-ACCEPTANCE.md`](FCL-ACCEPTANCE.md)），契约 `MG_Remote/CONTRACT-P12.md` 已写，余项处置见 [`PLAN-P12.md`](PLAN-P12.md) §3。以下是 09-25 的进展记录：**子集已实现（2026-09-25）**：上屏 server 窗口、`WindowKind::ServerOwned`、无头 client、失窗 device-lost 已落地；审查轮 10 个问题已修（两个大项：批内失窗、会话间 Espryt 单元影子悬空；裁定 [`INTEGRATOR-DECISIONS-P12.md`](INTEGRATOR-DECISIONS-P12.md) ID-P12-5–11）。审查后 P12 定向 CTest 46/46、真机七项复测通过；出口门 (a) FCL + 杀 server 与 (b) 跨机 TCP 仍未完成（见 [`PLAN-P12.md`](PLAN-P12.md) §3）。
 - **落地什么 / 范围**：**按重审 §6 改小**：~~Service 收 Java `Surface`~~ 删掉 Surface 传递那一半——server app 拥有自己的 SurfaceView，client 根本没有窗口，于是 minSdk 26 没有扁平化 `ANativeWindow` 的 NDK API 这条约束不再成立；`WindowKind::ServerOwned`；两个后端各一条 `CreateEGLWindowSurface` 臂；`m_windowHandle` 四处写点 + `sameHandle` 去重键（a6 §6）；DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局；`kEventSurfaceChanged` 的 Width / Height 缺口（Espryt 只发布格式，server 拥有显示时 client 默认 FBO 会停在 512×512 占位值）；client 侧不再无条件发 `SetWindowHandle`（`BackendObject_Remote.cpp:215`——今天 FCL 里开 spawn，第一次 `eglCreateWindowSurface` 就在 server 进程 abort）；server app 监听 `unix:` 与 `tcp://`（后者 Ph 之后）；server 生命周期绑 Activity；cached-app freezer（SPAWN-PLAN §8.2）；多 context（契约 §11）；FCL env 与 plugin APK 开关表接线
 - **验收门 / 证据**：两个门：(a) Minecraft 经 FCL **同机 spawn** 在 Adreno 830 双后端入世界，杀 server 产生干净 device-lost latch；(b) **另一台机器上的 client 经 TCP** 在 Redmi 上进世界（数据面 stream），并记录 P6.5 的必测数
 
@@ -81,10 +81,9 @@ Android 上的 server 自建窗口（自己的 SurfaceView）把 IPC 渲染流**
 
 ### 5. 下一步
 
-1. **出口门**：(a) [`FCL-ACCEPTANCE.md`](FCL-ACCEPTANCE.md) 与 (b) [`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md) 都已通过；剩 `CONTRACT-P12.md`、门脚本误导输出、收官审查。
-2. **收尾**：写 `MG_Remote/CONTRACT-P12.md`；修 `notes/p12/gate.sh` 的 G1 符号比较（与基准不同源，会印出误导的 `added=N removed=N`）；按惯例做一次收官审查。
-3. **阶段表行里的余项**（交接时在树上核过，均未做）：in-process server 的 `unix:` 监听、DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局、cached-app freezer、多 context、FCL env 与 plugin 开关表接线、D8 窗口种类白名单。
-4. 其后按 [`ROADMAP.md`](../../ROADMAP.md)：monolith 跑道 P8；IPC 跑道 P9 → P10 → P11；P6.5 残余（39 例 device 矩阵 + 必测数）与 P3b/P4b 余项并行；`CONTRACT-P7.md` §12 的记录债按阶段认领。
+P12 已收官（2026-09-29）：出口门 (a)(b) 通过、契约已写、`gate.sh` 的 G1 已改、余项已处置（[`PLAN-P12.md`](PLAN-P12.md) §3）。
+
+1. 其后按 [`ROADMAP.md`](../../ROADMAP.md)：monolith 跑道 P8；IPC 跑道 P9 → P10 → P11；P6.5 残余（39 例 device 矩阵 + 必测数）与 P3b/P4b 余项并行；`CONTRACT-P7.md` §12 的记录债按阶段认领。
 
 ### 6. 阻塞 / 需要人
 

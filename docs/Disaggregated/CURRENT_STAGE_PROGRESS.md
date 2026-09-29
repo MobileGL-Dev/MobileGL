@@ -1,4 +1,4 @@
-# 当前阶段：P12 — server 自己开窗口上屏
+# 当前阶段：P12 已收官（2026-09-29）；下一阶段 P9 / P8 待排
 
 > **更新 2026-09-28**（含五臂传输性能对比，见 [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md)）。这一页只有摘要；带裁定编号的明细、余项清单、证据位置在 [`notes/p12/README.md`](notes/p12/README.md)（计划与交接 [`PLAN-P12.md`](notes/p12/PLAN-P12.md)）。P12 审查后的定向主机与真机复测已完成；验收 A、B 都已通过（B 于 2026-09-28，A 于 2026-09-29）。上一阶段 P7 已于 2026-09-23 完成。
 
@@ -33,10 +33,16 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 - 原先记录的「跨主机 TCP 在 `eglMakeCurrent` 挂死」**不是源码 bug**：WSL 流量被主机 v2rayN 的 `xray_tun` 终结后中继卡住。绕开后 rd12 / openra 都跑通；跨机测试前先跑 `tools/device_bench/disagg/tcp_path_check.sh`。
 - Wi-Fi 上加载帧（2.7 GB）受带宽约束（server 实测 52 MB/s 持续），稳态不受（20–24 MB/s，受往返延迟）；`PRESENT_CREDIT` 1→2 稳态 +26%，2→3 +4%。此前的「带宽上限 18–26 fps」结论已撤回（`toybox nc` 汇点低估了链路）。
 
+## 收官（2026-09-29）
+
+- 出口门 A、B 都过；契约 [`MG_Remote/CONTRACT-P12.md`](../../MobileGL/MG_Remote/CONTRACT-P12.md) 已写；`gate.sh` 的 G1 只在同机基线上比较；G1 在 Arch 上成立（pull 构建 `.text` 与基线同为 `0xa52203`，符号增 0 减 0）。
+- 没做、转入 [`notes/DEBTS.md`](notes/DEBTS.md)：DirectGLES 去全局、freezer、多 context、D8 窗口种类白名单、TLS。
+- 收官审查：用户裁定不派 agent / Codex；契约断言由本人对照代码核过。
+- FCL fork 的「游戏退到后台时不暂停」改动在 FCL 仓库，**未提交**（父仓库在合并冲突中）。
+
 ## 下一步
 
-1. 收尾：写 `MG_Remote/CONTRACT-P12.md`、修门脚本误导的一行输出、收官审查。
-2. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
-3. 之后按 [`ROADMAP.md`](ROADMAP.md)：P8；P9 → P10 → P11。
+1. 零代码 knob A/B：`PRESENT_CREDIT=2`、shm 臂 server `SPIN_US` 降到 20–35、`SERVER_AFFINITY`；代码级：client doorbell 换 futex/eventfd、applier 自适应 spin、sendmsg 跨 Flush 合批。
+2. 之后按 [`ROADMAP.md`](ROADMAP.md)：P9 → P10 → P11（IPC 跑道）；P8（monolith 跑道）；P6.5 残余（39 例 device 矩阵）与 P3b/P4b 余项并行。
 
 **阻塞**：没有需要决策的事项。
