@@ -44,10 +44,12 @@
 // G and G3 were Fatal{ResourceUnavailable, "image-promotion-readback"} on Espryt's split arms
 // until W2-a: the promotion read a level the driver never allocated.
 //
-// ARMS. Both backends on the monolith arm and on Split / Spawn / Tcp. ONE NAMED SKIP: the
-// monolith DirectGLES arm replays the client's shadow over texels the GPU wrote (B, C, D, E, F,
-// F2, H) - a known dev defect, not P9's (W2-REMINT.md §6), whose fix moves the pull build's .text
-// (G1). Its other cases run and pass there.
+// ARMS. Both backends on the monolith arm and on Split / Spawn / Tcp, every case. The monolith
+// DirectGLES arm used to be skipped for B, C, D, E, F, F2 and H: its re-mint replayed the client's
+// shadow over texels the GPU wrote (W2-REMINT.md §6, the half of ID-P9-8 left to dev). Dev's
+// 568090f0 made it read the GPU level back first (AdoptDriverLevelIntoShadow), P11 M merged it,
+// and the skip is retired; E is also what holds the push builds' monolith arm to merging the
+// applier's pending boxes, which the frontend's dirty model no longer names there.
 //
 // W2-d's COUNTER. `trp=` (TextureRemintPulls) counts a re-mint of storage the backend already
 // held on BOTH Espryt arms now. The peek is process-wide, so it sees the server's count only
@@ -181,16 +183,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
                 FirstGLError();
             }
 
-            // The one named skip (see the header): the monolith DirectGLES re-mint replays the
-            // client's shadow, which never saw what the GPU wrote. Empty when the arm is a subject.
-            std::string MonolithEsprytShadowReplaySkip() const {
-                if (!m_espryt || m_wire) return {};
-                return "the monolith DirectGLES re-mint (RequireImageBindableStorage) replays the client's "
-                       "shadow over texels the GPU wrote - a known dev defect filed separately "
-                       "(notes/p9/W2-REMINT.md §6), whose fix moves the pull build's .text (G1). The split "
-                       "arms and both Magma arms are this case's subject.";
-            }
-
             GLuint NewTexture() {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
@@ -310,8 +302,13 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
                                     << Gl().BackendName() << ", " << (m_wire ? "split" : "monolith") << ")";
             }
 
-            // W2-d: where the peek can see the server's count (monolith, inproc).
-            bool RemintCountVisible() const { return m_espryt && (!m_wire || m_inproc); }
+            // W2-d: where the peek can see the server's count (monolith, inproc) - and only on a
+            // push build, which is where PipeStats exists; the pull build's peek answers false (P11
+            // M: the skip retired above now runs H there too, and A always did).
+            bool RemintCountVisible() const {
+                unsigned long long ignored = 0;
+                return m_espryt && (!m_wire || m_inproc) && PeekPipeStatsTextureRemintPulls(&ignored);
+            }
             unsigned long long RemintCount() {
                 unsigned long long count = 0;
                 EXPECT_TRUE(PeekPipeStatsTextureRemintPulls(&count));
@@ -360,7 +357,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, AGpuClearAfterTheUploadSurvivesTheImageBind) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const GLuint texture = NewTexture();
             const auto pattern = Pattern(kEdge, 0x40);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -375,7 +371,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, AnImmutableTexturesGpuClearSurvivesTheImageBind) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const bool counted = RemintCountVisible() && m_inproc;
             const unsigned long long before = counted ? RemintCount() : 0;
             const GLuint texture = NewTexture();
@@ -398,7 +393,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, ANullDefinedTextureWrittenOnlyByTheGpuSurvivesTheImageBind) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const GLuint texture = NewTexture();
             glBindTexture(GL_TEXTURE_2D, texture);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kEdge, kEdge, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -412,7 +406,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, APendingPartialUploadMergesOverGpuWrittenTexels) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const GLuint texture = NewTexture();
             const auto pattern = Pattern(kEdge, 0x40);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -440,7 +433,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, AGeneratedMipLevelSurvivesTheImageBind) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const GLuint texture = NewTexture();
             const auto solid = Solid(kEdge, 200, 100, 50, 255);
             glBindTexture(GL_TEXTURE_2D, texture);
@@ -456,7 +448,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, AGpuClearedMipLevelSurvivesTheImageBind) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const GLuint texture = NewTexture();
             const auto level0 = Solid(kEdge, 200, 100, 50, 255);
             const auto level1 = Solid(kEdge / 2, 10, 20, 30, 255);
@@ -529,7 +520,6 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
 
         TEST_F(TextureRemintPullScenario, AWidenedFormatsGpuClearSurvivesTheCarrierRemint) {
             if (!Ready()) return;
-            if (const std::string skip = MonolithEsprytShadowReplaySkip(); !skip.empty()) GTEST_SKIP() << skip;
             const bool counted = RemintCountVisible();
             const unsigned long long before = counted ? RemintCount() : 0;
             const GLuint texture = NewTexture();

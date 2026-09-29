@@ -259,6 +259,67 @@ void main() {
                 ExpectClearAroundBox(rgb, kEdge, kEdge, kBoxAt, kBoxAt, kBoxEdge, kBoxEdge);
             }
 
+            // P11 M: TWO SCATTERED WRITES INTO ONE LEVEL, so the level carries a rect list (their
+            // area is well under 3/4 of their union box) and not just a box. Under a transport
+            // (and on the push builds' monolith arm) the list crosses in the client's record,
+            // whose regions state their source pitch and offset in the CLIENT's layout; a level
+            // whose upload is converted is cut from the conversion's wider buffer, so those
+            // numbers must not address it (Managers.cpp, carriedLayoutApplies). The whole level
+            // is uploaded green first, so every texel the union box spans outside the two boxes
+            // is green in the shadow too: this case is about WHERE the boxes land, not about GPU
+            // content between them. Green everywhere but the two blue boxes.
+            void Run2DScatter(const Format& f) {
+                constexpr int kFirstAt = 1, kSecondAt = 5;
+                const GLuint t = NewTexture(GL_TEXTURE_2D);
+                const bool integer = f.encoding == Encoding::Uint8;
+                const char* sampler = integer ? "usampler2D" : "sampler2D";
+                const auto green = Fill(f, kEdge * kEdge, 0.0f, 1.0f, 0.0f);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(f.internalFormat), kEdge, kEdge, 0, f.clientFormat,
+                             f.clientType, green.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                ASSERT_EQ(FirstGLError(), 0u) << "definition";
+                SyncBySampling(GL_TEXTURE_2D, t, sampler, "ivec2(0)");
+                if (!Attach(t, -1)) {
+                    Detach();
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                    GTEST_SKIP() << "the format does not attach on backend " << Gl().BackendName();
+                }
+                Detach();
+                const auto blue = Fill(f, kBoxEdge * kBoxEdge, 0.0f, 0.0f, 1.0f);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, kFirstAt, kFirstAt, kBoxEdge, kBoxEdge, f.clientFormat, f.clientType,
+                                blue.data());
+                glTexSubImage2D(GL_TEXTURE_2D, 0, kSecondAt, kSecondAt, kBoxEdge, kBoxEdge, f.clientFormat,
+                                f.clientType, blue.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                SyncBySampling(GL_TEXTURE_2D, t, sampler, "ivec2(0)");
+                ASSERT_TRUE(Attach(t, -1));
+                const auto rgb = ReadRgb(f, kEdge, kEdge);
+                Detach();
+                int bad = 0;
+                std::ostringstream first;
+                for (int y = 0; y < kEdge; ++y)
+                    for (int x = 0; x < kEdge; ++x) {
+                        const auto inBox = [&](int at) {
+                            return x >= at && x < at + kBoxEdge && y >= at && y < at + kBoxEdge;
+                        };
+                        const bool blueHere = inBox(kFirstAt) || inBox(kSecondAt);
+                        const float want[3] = {0.0f, blueHere ? 0.0f : 1.0f, blueHere ? 1.0f : 0.0f};
+                        const float* got = &rgb[static_cast<std::size_t>(y * kEdge + x) * 3u];
+                        bool texelBad = false;
+                        for (int c = 0; c < 3; ++c) texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
+                        if (texelBad && bad++ == 0) {
+                            first << "(" << x << "," << y << ") got " << got[0] << "," << got[1] << "," << got[2]
+                                  << " want " << want[0] << "," << want[1] << "," << want[2];
+                        }
+                    }
+                EXPECT_EQ(bad, 0) << bad << " of " << kEdge * kEdge << " texels wrong; first " << first.str()
+                                  << " (a box read at the wrong pitch or offset lands the wrong bytes)";
+            }
+
             // Building blocks of the RGBA8 ordering cases: the same texels, issued in the orders
             // a backend that defers work may get wrong.
             static Format Rgba8() { return {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4, Encoding::Unorm8}; }
@@ -346,6 +407,24 @@ void main() {
         TEST_F(PartialUploadOverGpuContentScenario, Rgb8uiSubImageKeepsTheGpuClear) {
             if (!Ready()) return;
             Run2D({GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, 3, Encoding::Uint8});
+        }
+
+        // P11 M: the rect-list shape of the same upload (Run2DScatter). RGBA8 is the control whose
+        // record pitch does address the uploaded bytes; the other two are stored four-channel on
+        // llvmpipe and on every ES driver, so their boxes are cut from the conversion's buffer.
+        TEST_F(PartialUploadOverGpuContentScenario, Rgba8ScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, 4, Encoding::Unorm8});
+        }
+
+        TEST_F(PartialUploadOverGpuContentScenario, Srgb8ScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_SRGB8, GL_RGB, GL_UNSIGNED_BYTE, 3, Encoding::Unorm8});
+        }
+
+        TEST_F(PartialUploadOverGpuContentScenario, Rgb8uiScatteredSubImagesLandWhereWritten) {
+            if (!Ready()) return;
+            Run2DScatter({GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE, 3, Encoding::Uint8});
         }
 
         // A 1D array's ES image is a 2D array one texel high with the layers in depth, so the

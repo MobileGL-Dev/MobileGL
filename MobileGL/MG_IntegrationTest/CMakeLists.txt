@@ -2788,6 +2788,18 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         endforeach()
     endforeach()
 
+    # ---- P11 M: DEV'S TWO GPU-CONTENT SCENARIOS ON THE SPLIT ARMS ----------------------------
+    #
+    # Merged from dev@c60639db with their monolith entries. ImageBindableRemintScenario is the
+    # monolith twin of TextureRemintPullScenario above (568090f0 made Espryt's frontend re-mint
+    # read the GPU level back as the server's already did); PartialUploadOverGpuContentScenario is
+    # 8966d5c2's sub-rect upload over converted/reshaped levels (the server's handle arm cuts the
+    # region from the conversion's buffer too) plus b1d60523's Magma ordering cases, which are
+    # plain GL and run here on Espryt as well. The Magma arms are laid by hand in the
+    # `DirectVulkan.<arm>.GpuContent.` block, where the gated Magma flavour lives.
+    mgl_itest_register_split_arms("ImageBindableRemintScenario.*" "")
+    mgl_itest_register_split_arms("PartialUploadOverGpuContentScenario.*" "")
+
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
     # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
@@ -3774,6 +3786,31 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
+# P11 M: DEV'S TWO GPU-CONTENT SCENARIOS ON MAGMA, all three arms, GATED, in the band flavour -
+# ImageBindableRemintScenario (Magma is its control backend: a storage upgrade copies image to
+# image) and PartialUploadOverGpuContentScenario (8966d5c2's RGB->RGBA region cut and b1d60523's
+# upload-after-clear/draw ordering, both of which run in the server's renderer on these arms).
+# One entry per scenario and arm; every entry gets a private log through MGL_SPLIT_ARM_TEST_LISTS.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaGpuContentEnvironment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(mglItestGpuContentScenario ImageBindableRemintScenario PartialUploadOverGpuContentScenario)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.GpuContent."
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "${mglItestGpuContentScenario}.*"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaGpuContentEnvironment}")
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
     endforeach()
 endif()
