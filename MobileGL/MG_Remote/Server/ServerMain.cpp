@@ -9,6 +9,7 @@
 #include "../Handshake.h"
 #include "../FatalFunnel.h"
 #include "InProcessServer.h"
+#include "PairAcceptor.h"
 #include "PreAuthGate.h"
 #include "ServerDisplay.h"
 #include "ServerLoop.h"
@@ -340,7 +341,7 @@ void DelaySessionHandshakeForTest() {
 
 // Called only after fork (or, in the single-session shape, instead of it): the supervisor never
 // creates a backend or EGL context. `dataSource` is set on TCP (PH-7 (4)) and empty on a unix
-// endpoint, whose second connection is the SCM_RIGHTS socket AcceptPair already paired.
+// endpoint, whose second connection is the SCM_RIGHTS socket PairAcceptor already paired.
 // `sourceFd` is the descriptor that source reads from - the child's end of the hand-off
 // socketpair under --serve, the listener itself in the single-session shape - and -1 when there
 // is none; it is let go of the moment Accept returns, and on every exit before that
@@ -1308,16 +1309,17 @@ private:
 };
 
 // THE UNIX SHAPE OF THE IN-PROCESS DISPLAY SERVER (P12 D5 extended to unix endpoints). The
-// endpoint is an @abstract name or a filesystem path. A client's control AND data connections
-// pair by arrival order (AcceptPair) and the shm segments' descriptors cross by SCM_RIGHTS, so
-// there is no DataBind to route and no pre-auth gate - both are TCP exposure machinery, and a
-// unix peer is local by construction (the forked unix supervisor runs without either). Sessions
-// take the TCP in-process shape's thread hand-off: one at a time, Busy for a second client, the
-// latch reset between sessions, stop by g_inProcessStop.
+// endpoint is an @abstract name or a filesystem path. A client's control AND aux connections
+// pair by the nonce each presents first (PairAcceptor, P11 PAIR - never by arrival order) and the
+// shm segments' descriptors cross by SCM_RIGHTS, so there is no DataBind to route and no pre-auth
+// gate - both are TCP exposure machinery, and a unix peer is local by construction (the forked
+// unix supervisor runs without either). Sessions take the TCP in-process shape's thread hand-off:
+// one at a time, Busy for a second client, the latch reset between sessions, stop by
+// g_inProcessStop.
 class UnixInProcessSupervisor {
 public:
     UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted)
-        : m_listener(listener), m_sessionsFaulted(sessionsFaulted) {}
+        : m_listener(listener), m_pairs(listener), m_sessionsFaulted(sessionsFaulted) {}
 
     ~UnixInProcessSupervisor() {
         // Run() only returns with the session thread joined; a listener failure (73) is the
@@ -1330,7 +1332,7 @@ public:
             if (g_inProcessStop.load(std::memory_order_acquire)) return StopServing();
             Reap();
             std::unique_ptr<SocketTransport> control;
-            const auto accepted = SocketTransport::AcceptPair(m_listener, 250, control);
+            const auto accepted = m_pairs.Accept(250, control);
             if (accepted == MOBILEGL_ERR_TIMEOUT) continue;
             if (accepted != MOBILEGL_OK) {
                 WireLogError("MG_Remote server: the in-process unix listener failed (rc=%d)",
@@ -1401,6 +1403,8 @@ private:
     }
 
     int m_listener;
+    // The connections that have not been paired yet live here between Accept calls.
+    Server::PairAcceptor m_pairs;
     unsigned long& m_sessionsFaulted;
     std::thread m_sessionThread;
     std::atomic<bool> m_sessionDone{false};
@@ -1472,6 +1476,10 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     // From here: the unix endpoint (--serve or not), and the single-session TCP shape.
     pid_t active = -1;
     const auto reap = [&]() { return ReapActiveSession(active, sessionsFaulted); };
+    // P11 PAIR: a unix client's two connections, paired by the nonce each presents first. The
+    // connections not yet paired stay in it between calls.
+    std::unique_ptr<Server::PairAcceptor> pairs;
+    if (!tcpEndpoint) pairs = std::make_unique<Server::PairAcceptor>(listener);
     for (;;) {
         reap();
         std::unique_ptr<SocketTransport> control;
@@ -1481,11 +1489,14 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             accepted = SocketTransport::AcceptOne(listener, 30000, &fd);
             if (accepted == MOBILEGL_OK) control = std::make_unique<SocketTransport>(fd, -1, TransportRole::Server);
         } else {
-            accepted = SocketTransport::AcceptPair(listener, serve ? 250 : 30000, control);
+            accepted = pairs->Accept(serve ? 250 : 30000, control);
         }
         if (accepted == MOBILEGL_ERR_TIMEOUT && serve) continue;
-        if (accepted != MOBILEGL_OK) { LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
+        if (accepted != MOBILEGL_OK) { pairs.reset(); LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
         if (!serve) {
+            // The process IS this one session: whatever else is waiting to be paired is let go of by
+            // name now, not held for the session's lifetime.
+            pairs.reset();
             if (tcpEndpoint) {
                 // The listener stays open until this session's data connection has arrived on
                 // it; RunSession closes it the moment Accept returns. The process IS the session,
@@ -1518,6 +1529,10 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             // P12 (D8): the unix `--serve` child dies with its supervisor too.
             DieWithSupervisor(supervisor);
             ::close(listener);
+            // Every other waiting connection is the supervisor's: closed here without a word, or the
+            // supervisor's refusal of one would not end it while this session lives (TcpSupervisor's
+            // fork does the same with its pending peers).
+            if (pairs) pairs->CloseInForkedChild();
             ExitSessionProcess(RunSession(std::move(control), {}, {}, -1, DataSource::None, 10000));
         }
         if (child < 0) {

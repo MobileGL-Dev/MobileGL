@@ -11,6 +11,7 @@
 #include "AuthToken.h"
 #include "Doorbell.h" // kWaitForever
 #include "FdPassing.h"
+#include "PairBind.h" // P11 PAIR: ConnectTo's first frame on each connection
 #include "WireLog.h"
 
 #include <cerrno>
@@ -315,6 +316,31 @@ namespace MobileGL::MG_Remote::Transport {
                 ::usleep(5000);
             }
         }
+
+        // One more connection to `path` whose first bytes are `payload`, framed: a DataBind
+        // (ConnectDataConnection) or a PairBind (ConnectTo). `what` names the frame in the log.
+        MobileGLResult ConnectPresenting(const std::string& path, std::uint32_t timeoutMs, const void* payload,
+                                         std::uint64_t size, const char* what, int* outFd) {
+            *outFd = -1;
+            std::vector<std::uint8_t> framed;
+            const MobileGLResult appended = AppendFrame(framed, payload, size);
+            if (appended != MOBILEGL_OK) return appended;
+            int fd = -1;
+            const MobileGLResult connected = ConnectOne(path, timeoutMs, &fd);
+            if (connected != MOBILEGL_OK) return connected;
+            std::size_t written = 0;
+            while (written < framed.size()) {
+                const ssize_t n = ::send(fd, framed.data() + written, framed.size() - written, MSG_NOSIGNAL);
+                if (n > 0) { written += static_cast<std::size_t>(n); continue; }
+                if (n < 0 && errno == EINTR) continue;
+                WireLogError("MG_Remote SocketTransport: the %s could not be sent (%zu of %zu bytes): %s", what,
+                             written, framed.size(), std::strerror(errno));
+                ::close(fd);
+                return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            *outFd = fd;
+            return MOBILEGL_OK;
+        }
     } // namespace
 
     MobileGLResult SocketTransport::Listen(const std::string& path, int* outListenFd) {
@@ -370,68 +396,30 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
-    MobileGLResult SocketTransport::AcceptPair(int listenFd, std::uint32_t timeoutMs,
-                                               std::unique_ptr<SocketTransport>& outServer) {
-        outServer.reset();
-        if (listenFd < 0) {
-            return MOBILEGL_ERR_INVALID_ARGUMENT;
-        }
-        int accepted[2] = {-1, -1};
-        for (int index = 0; index < 2; ++index) {
-            const std::uint32_t budget = index == 0 ? timeoutMs : 2000;
-            for (;;) {
-                const int ready = WaitReadable(listenFd, budget);
-                if (ready <= 0) {
-                    for (int fd : accepted) {
-                        if (fd >= 0) ::close(fd);
-                    }
-                    // Half a client is not a client. Both connections or neither, so
-                    // a peer that died between the two cannot leave a session that
-                    // looks up but has no way to receive a descriptor.
-                    if (index != 0 || ready < 0) WireLogError("MG_Remote SocketTransport: only %d of 2 connections arrived within "
-                                 "%u ms", index, timeoutMs);
-                    return ready == 0 ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
-                }
-                accepted[index] = ::accept(listenFd, nullptr, nullptr);
-                if (accepted[index] >= 0) break;
-                // EINTR (this process reaps SIGCHLD by construction) and ECONNABORTED
-                // (the peer reset between poll() and accept()) are not transport
-                // failures: the listener is still good. Re-poll within the budget
-                // rather than returning TRANSPORT_CLOSED, which the --serve
-                // supervisor turns into a full server exit (return 73).
-                if (errno == EINTR || errno == ECONNABORTED) continue;
-                for (int fd : accepted) {
-                    if (fd >= 0) ::close(fd);
-                }
-                WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(errno));
-                return MOBILEGL_ERR_TRANSPORT_CLOSED;
-            }
-            ::fcntl(accepted[index], F_SETFD, FD_CLOEXEC);
-            if (TcpSocket(accepted[index]) && !ConfigureTcp(accepted[index])) {
-                for (int fd : accepted) if (fd >= 0) ::close(fd);
-                return MOBILEGL_ERR_UNSUPPORTED;
-            }
-        }
-        // First connection is control, second is aux. The order IS the protocol;
-        // it is stated here and in ConnectTo and nowhere else.
-        outServer = std::make_unique<SocketTransport>(accepted[0], accepted[1],
-                                                      TransportRole::Server);
-        return MOBILEGL_OK;
-    }
-
     MobileGLResult SocketTransport::ConnectTo(const std::string& path, std::uint32_t timeoutMs,
                                               std::unique_ptr<SocketTransport>& outClient) {
         outClient.reset();
+        // P11 PAIR. Both connections present the same nonce as their first frame, each saying
+        // which half it is; the server pairs them by it (Server/PairAcceptor.h), so neither the
+        // order they arrive in nor anybody else's connection in between decides the pairing.
+        std::uint8_t nonce[kPairNonceBytes];
+        const MobileGLResult minted = MintNonce(nonce, sizeof(nonce));
+        if (minted != MOBILEGL_OK) return minted;
+        const auto controlBind = EncodePairBind(nonce, false);
         int control = -1;
-        const MobileGLResult first = ConnectOne(path, timeoutMs, &control);
+        const MobileGLResult first =
+            ConnectPresenting(path, timeoutMs, controlBind.data(), controlBind.size(), "control connection's PairBind",
+                              &control);
         if (first != MOBILEGL_OK) {
             return first;
         }
+        const auto auxBind = EncodePairBind(nonce, true);
         int aux = -1;
         // The second connect has a SHORT budget: the server is provably up - we
         // just connected to it - so a slow second connection means something is
         // wrong rather than something is starting.
-        const MobileGLResult second = ConnectOne(path, 2000, &aux);
+        const MobileGLResult second =
+            ConnectPresenting(path, 2000, auxBind.data(), auxBind.size(), "aux connection's PairBind", &aux);
         if (second != MOBILEGL_OK) {
             ::close(control);
             return second;
@@ -455,24 +443,8 @@ namespace MobileGL::MG_Remote::Transport {
                                                           MobileGLByteSpan firstFrame, int* outFd) {
         if (outFd == nullptr || !TcpName(path)) return MOBILEGL_ERR_INVALID_ARGUMENT;
         *outFd = -1;
-        std::vector<std::uint8_t> framed;
-        const MobileGLResult appended = AppendFrame(framed, firstFrame.data, firstFrame.size);
-        if (appended != MOBILEGL_OK) return appended;
-        int fd = -1;
-        const MobileGLResult connected = ConnectOne(path, timeoutMs, &fd);
-        if (connected != MOBILEGL_OK) return connected;
-        std::size_t written = 0;
-        while (written < framed.size()) {
-            const ssize_t n = ::send(fd, framed.data() + written, framed.size() - written, MSG_NOSIGNAL);
-            if (n > 0) { written += static_cast<std::size_t>(n); continue; }
-            if (n < 0 && errno == EINTR) continue;
-            WireLogError("MG_Remote SocketTransport: the data connection's DataBind could not be "
-                         "sent (%zu of %zu bytes): %s", written, framed.size(), std::strerror(errno));
-            ::close(fd);
-            return MOBILEGL_ERR_TRANSPORT_CLOSED;
-        }
-        *outFd = fd;
-        return MOBILEGL_OK;
+        return ConnectPresenting(path, timeoutMs, firstFrame.data, firstFrame.size, "data connection's DataBind",
+                                 outFd);
     }
 
     MobileGLResult SocketTransport::AcceptOne(int listenFd, std::uint32_t timeoutMs, int* outFd) {
@@ -484,7 +456,9 @@ namespace MobileGL::MG_Remote::Transport {
             if (ready < 0) return MOBILEGL_ERR_TRANSPORT_CLOSED;
             const int fd = ::accept(listenFd, nullptr, nullptr);
             if (fd < 0) {
-                // The same two non-failures AcceptPair re-polls on.
+                // EINTR (this process reaps SIGCHLD by construction) and ECONNABORTED (the peer
+                // reset between poll() and accept()) are not listener failures: re-poll rather
+                // than return TRANSPORT_CLOSED, which a supervisor turns into a full server exit (73).
                 if (errno == EINTR || errno == ECONNABORTED) continue;
                 const int error = errno;
                 WireLogError("MG_Remote SocketTransport: accept failed: %s", std::strerror(error));

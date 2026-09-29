@@ -656,6 +656,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/PipeApplier.cpp
         MobileGL/MG_Remote/Server/ServerLoop.cpp
         MobileGL/MG_Remote/Server/ServerMain.cpp
+        # P11 PAIR: a socket client's control and aux connections paired by the nonce each
+        # presents first (PairBind), not by arrival order - both unix supervisors take pairs here.
+        MobileGL/MG_Remote/Server/PairAcceptor.cpp
         MobileGL/MG_Remote/Server/ServerSpawn.cpp
         # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).

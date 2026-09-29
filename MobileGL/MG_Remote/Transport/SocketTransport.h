@@ -78,10 +78,16 @@ namespace MobileGL::MG_Remote::Transport {
         // offer is a sendmsg whose ancillary data rides with specific BYTES, and
         // interleaving those bytes with the framed control stream would make the
         // frame reassembler and the descriptor receiver race for the same bytes.
-        // So the client connects twice to the same listening path - first
-        // connection is control, second is aux - and the server accepts them in
-        // that order. One name, no extra configuration, and FdPassing keeps the
-        // dedicated socket it was written for.
+        // So the client connects twice to the same listening path - control, then
+        // aux - and each connection's first frame is a PairBind carrying one nonce
+        // and which half it is. One name, no extra configuration, and FdPassing
+        // keeps the dedicated socket it was written for.
+        //
+        // P11 PAIR: THE SERVER PAIRS THEM BY THAT NONCE, NOT BY ARRIVAL ORDER
+        // (Server/PairAcceptor.h). "First is control, second is aux" was a protocol
+        // only while nothing else could reach the listener: a readiness probe's
+        // lone connect() + close() became the next client's control connection, and
+        // two clients connecting at once could swap halves (B0-CROSS-APP.md F2).
         //
         // `path` is a filesystem AF_UNIX path. ARCHITECTURE.md §15.1 ruled
         // against one for the FORK shape, where the fds were inherited and a
@@ -92,27 +98,26 @@ namespace MobileGL::MG_Remote::Transport {
         // the machine.
         static MobileGLResult Listen(const std::string& path, int* outListenFd);
 
-        // Accepts one client's TWO connections, in order.
-        static MobileGLResult AcceptPair(int listenFd, std::uint32_t timeoutMs,
-                                         std::unique_ptr<SocketTransport>& outServer);
-
-        // The client's half: connects twice to `path`.
+        // The client's half: connects twice to `path`, each connection presenting a PairBind
+        // (the same fresh nonce; control, then aux) as its first frame. The server's half is
+        // Server::PairAcceptor.
         static MobileGLResult ConnectTo(const std::string& path, std::uint32_t timeoutMs,
                                         std::unique_ptr<SocketTransport>& outClient);
 
         // ---- PH-7 (4), ID-P7-3: a TCP data connection is BOUND, not paired --------
         //
-        // AcceptPair/ConnectTo pair a session's two connections by ARRIVAL ORDER inside a
-        // window: first is control, second is data. That is a protocol only while nothing sits
-        // between the two processes. Over a Windows `adb forward` the two arrive reordered, the
-        // data connection is read as control, and every session child exits 67 waiting for a
+        // The server used to pair a session's two connections by ARRIVAL ORDER inside a window
+        // (AcceptPair): first is control, second is data. That is a protocol only while nothing
+        // sits between the two processes. Over a Windows `adb forward` the two arrive reordered,
+        // the data connection is read as control, and every session child exits 67 waiting for a
         // Hello that went down the other socket - and anybody who can reach the port can race a
         // connection into the gap and become somebody else's data plane. So on TCP the session
         // is ONE connection until it is authenticated; the server mints `Welcome.dataNonce`,
         // and the client then opens its data connection and presents the nonce as that
         // connection's first frame (DataBind). The server matches the value, not the order.
-        // Unix endpoints keep AcceptPair: their second connection is the SCM_RIGHTS socket of a
-        // same-user rendezvous, not a data plane anybody else can reach.
+        // Unix endpoints keep their two connections from the start (the second is the SCM_RIGHTS
+        // socket the Welcome's descriptors cross), and since P11 PAIR they too are matched by a
+        // value - the client's PairBind nonce - not by order.
 
         // Connects the control connection only on `tcp://`; identical to ConnectTo otherwise.
         static MobileGLResult ConnectControl(const std::string& path, std::uint32_t timeoutMs,
@@ -122,7 +127,8 @@ namespace MobileGL::MG_Remote::Transport {
         // StreamLink to.
         static MobileGLResult ConnectDataConnection(const std::string& path, std::uint32_t timeoutMs,
                                                     MobileGLByteSpan firstFrame, int* outFd);
-        // Accepts ONE connection (TCP options applied, CLOEXEC). MOBILEGL_ERR_TIMEOUT when none.
+        // Accepts ONE connection (TCP options applied, CLOEXEC; EINTR and ECONNABORTED re-polled -
+        // the listener is still good). MOBILEGL_ERR_TIMEOUT when none.
         // MOBILEGL_ERR_OUT_OF_MEMORY when accept(2) ran out of descriptors or memory (EMFILE,
         // ENFILE, ENOBUFS, ENOMEM): the connection stays in the backlog and the listener is fine,
         // so a caller that serves many peers can wait and try again (the TCP supervisor does);
