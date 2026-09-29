@@ -229,12 +229,18 @@ namespace MobileGL::MG_Pipe {
     // unbounded growth a corrupt Uint16 would otherwise buy.
     inline constexpr Uint32 kMGPipeMaxPendingUploads = 256;
 
-    // The rect list behind one pending entry. The frontend keeps at most MipmapStorage's
-    // kMaxDirtyRects = 96 per level and answers "0 rects" for everything it cannot describe
-    // that way, which is the model this mirrors: an accumulation that would exceed this
-    // collapses to BOX ONLY - the same answer, with the same meaning, and never a dropped
-    // region. 256 is that bound with room for several emissions accumulating behind a bail.
-    inline constexpr Uint32 kMGPipeMaxPendingUploadRegions = 256;
+    // The rect list behind one pending entry, and the most regions one record may carry. The
+    // list is the level's EXACT dirty footprint since P11 M2 (TextureEmit.h, dev 9524c688): one
+    // box per disjoint piece of the writes, however many, where it used to be MipmapStorage's
+    // bounded cover (kMaxDirtyRects = 96, "0 rects" past it). An accumulation that would exceed
+    // this still collapses to BOX ONLY - never a dropped region, since the box covers every
+    // texel the list named - but a box is no longer the same answer: it spans the gaps between
+    // the writes, and a server whose image may hold GPU writes there uploads the stale shadow
+    // over them. So the bound is set far above what a frame's writes to one level come to (a
+    // hundred atlas sprites is ~100), and the collapse is the rare case it was before rather
+    // than the ordinary one. 4096 regions of 40 bytes is a 160 KiB tail, a small fraction of
+    // the half of SEG_CMD one record may take.
+    inline constexpr Uint32 kMGPipeMaxPendingUploadRegions = 4096;
 
     // The default uniform block's image, the one allocation P4a adds per program. The size
     // comes from the program's own MGPProgramDesc::GlobalUboSize, so it is checked ONCE at

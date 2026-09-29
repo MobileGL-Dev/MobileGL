@@ -213,7 +213,8 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels)                               \
     X(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero)                        \
     X(TextureEmit, AWholeLevelUploadCarriesZeroStrides)                                            \
-    X(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero)                     \
+    X(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint)                         \
+    X(TextureEmit, ASinglePartialWriteCarriesItsBoxAsOneRegion)                                    \
     X(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs)                                   \
     X(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner)                                      \
     X(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso)                                    \
@@ -575,27 +576,58 @@ TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
     EXPECT_EQ(whole.SrcOffset, 0u);
 }
 
-TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
+// P11 M2 (dev 9524c688): THE REGIONS ARE THE EXACT FOOTPRINT, NOT THE STORAGE'S RECT LIST. This
+// case used to pin the list - "more writes than kMaxDirtyRects collapse to the box, RegionCount 0"
+// - and that collapse is the shape that put the stale shadow over GPU-written texels on the far
+// side. Far more overlapping writes than the list keeps: the storage's footprint is the oracle,
+// read BEFORE the drain clears the level, and every box of it must cross, in order, with nothing
+// invented and nothing truncated.
+TEST(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint) {
     TextureScope scope;
     const auto texture = MakeTexture2D(7, 128);
-    // Far more writes than the rect cap. The storage MERGES rather than truncates - a dropped
-    // rect is a dropped write - and degrades toward the union box; what the emitter must never
-    // do is invent or truncate. So the storage's own answer is the oracle, read BEFORE the drain
-    // clears the level, and 0 means "the union box is the whole story".
     for (Int i = 0; i < 4 * static_cast<Int>(MipmapStorage::kMaxDirtyRects); ++i) {
         const Int x = (i * 7) % 120;
         const Int y = (i * 11) % 120;
         texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0},
                                         IntVec3{2, 2, 1});
     }
-    MipmapDirtyRegion oracle[MipmapStorage::kMaxDirtyRects];
-    const SizeT oracleCount = texture->GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, oracle,
-                                                            MipmapStorage::kMaxDirtyRects);
-    EXPECT_LE(oracleCount, MipmapStorage::kMaxDirtyRects);
+    Vector<MipmapDirtyRegion> oracle;
+    texture->GetStorageDirtyFootprint(TextureUploadTarget::Texture2D, 0, oracle);
+    ASSERT_GT(oracle.size(), MipmapStorage::kMaxDirtyRects)
+        << "the writes must outgrow the rect list, or this case pins nothing the list did not";
+    ASSERT_LE(oracle.size(), static_cast<SizeT>(kMGPipeMaxPendingUploadRegions));
     Textures().DrainTextureSubData(Ctx());
-    EXPECT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(oracleCount))
-        << "the emitted region count is not the storage's own answer";
-    EXPECT_EQ(Textures().LastRegions().size(), oracleCount);
+    ASSERT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(oracle.size()))
+        << "the emitted region count is not the storage's footprint";
+    const Vector<MGPSubRegion> regions = Textures().LastRegions();
+    ASSERT_EQ(regions.size(), oracle.size());
+    for (SizeT i = 0; i < oracle.size(); ++i) {
+        const MGPBox box = MGPipeBoxOfDirtyRegion(oracle[i]);
+        EXPECT_TRUE(regions[i].X == box.X && regions[i].Y == box.Y && regions[i].Z == box.Z &&
+                    regions[i].W == box.W && regions[i].H == box.H && regions[i].D == box.D)
+            << "region " << i << " is not footprint box " << i;
+    }
+}
+
+// P11 M2: A SINGLE PARTIAL BOX CARRIES ITSELF AS ONE REGION. "0 regions" is the whole-level
+// spelling only, so the applier's accumulation - which makes an entry box-only the moment one
+// contribution carries no list - cannot widen two exact contributions into their union box.
+TEST(TextureEmit, ASinglePartialWriteCarriesItsBoxAsOneRegion) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(90, 64);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{3, 5, 0}, IntVec3{4, 2, 1});
+    Textures().DrainTextureSubData(Ctx());
+    const MGPSubData record = Textures().LastSubData();
+    ASSERT_EQ(record.RegionCount, 1u);
+    const Vector<MGPSubRegion> regions = Textures().LastRegions();
+    ASSERT_EQ(regions.size(), 1u);
+    EXPECT_EQ(regions[0].X, 3);
+    EXPECT_EQ(regions[0].Y, 5);
+    EXPECT_EQ(regions[0].W, 4u);
+    EXPECT_EQ(regions[0].H, 2u);
+    EXPECT_EQ(record.UnionBox.X, 3);
+    EXPECT_EQ(record.UnionBox.W, 4u);
+    EXPECT_EQ(regions[0].SrcRowStride, 64u * 4u) << "a partial box carries the level's pitch";
 }
 
 // ==================== fix A2: the stage-chunk slab split ====================

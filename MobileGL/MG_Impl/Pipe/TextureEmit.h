@@ -1469,21 +1469,49 @@ namespace MobileGL::MG_Pipe {
             const MGPBox unionBox = MGPipeBoxOfDirtyRegion(mipmap->GetStorageDirtyRegion(uploadTarget, level));
             if (unionBox.W == 0 || unionBox.H == 0 || unionBox.D == 0) return false;
 
-            // THE REGION LIST BEHIND THE BOX. 0 is legal and means "the union box is the whole
-            // story" - it covers a single rect (identical to the box by construction), more
-            // rects than the cap, and a summed area so close to the box's that one big upload
-            // beats many small ones. The invariant that makes the server's choice safe is that
-            // the two describe the SAME texels: every rect lies inside the box, and their union
-            // is the box.
+            // THE REGION LIST BEHIND THE BOX IS THE LEVEL'S EXACT DIRTY FOOTPRINT (P11 M2, dev
+            // 9524c688): disjoint boxes holding every texel written since the level was last
+            // clean and no other. The storage's rect list this used to carry only COVERS the
+            // writes - it merges touching rects into their bounding box, folds when full and is
+            // withheld (0) past 3/4 of the union box - and once the far side's image may hold GPU
+            // writes, whatever it uploads beyond the writes goes up over them. Both servers read
+            // the list as the texels to upload: Magma always, Espryt once its driver texture may
+            // hold GPU writes (and otherwise it re-applies the storage's box-or-rects choice
+            // itself, so the Mali job count is the server's call as before).
+            //
+            // 0 IS NOW THE WHOLE-LEVEL SPELLING ONLY: a footprint that is the whole level. Every
+            // other write carries its boxes, a single one included, so that the applier's
+            // accumulation (boxes union, lists concatenate, "0 regions" makes the entry box only)
+            // never widens two exact contributions into their union box. A footprint larger than
+            // one record may carry falls back to the storage's rect list - a COVER, stated once.
             //
             // READ AS BOXES, ONCE, because both shapes below want them in that form: the
             // whole-level record converts each one straight back through MGPipeBuildSubRegion,
             // and a piece clips each one to its own slab.
-            MG_State::GLState::MipmapDirtyRegion rects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
-            const SizeT rectCount = mipmap->GetStorageDirtyRects(
-                uploadTarget, level, rects, MG_State::GLState::MipmapStorage::kMaxDirtyRects);
-            MGPBox rectBoxes[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
-            for (SizeT i = 0; i < rectCount; ++i) rectBoxes[i] = MGPipeBoxOfDirtyRegion(rects[i]);
+            mipmap->GetStorageDirtyFootprint(uploadTarget, level, m_footprint);
+            m_rectBoxes.clear();
+            const Bool wholeLevelWrite =
+                m_footprint.size() == 1 && m_footprint.front().lo.x() <= 0 && m_footprint.front().lo.y() <= 0 &&
+                m_footprint.front().lo.z() <= 0 && m_footprint.front().hi.x() >= levelSize.x() &&
+                m_footprint.front().hi.y() >= levelSize.y() &&
+                m_footprint.front().hi.z() >= std::max<Int>(levelSize.z(), 1);
+            if (wholeLevelWrite) {
+                // The box is the story.
+            } else if (m_footprint.size() <= static_cast<SizeT>(kMGPipeMaxPendingUploadRegions)) {
+                for (const auto& box : m_footprint) m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(box));
+            } else {
+                MGLOG_W_ONCE("MGPipe: texture {slot=%u, gen=%u} level %u has %zu disjoint dirty boxes, more than one "
+                             "record carries (%u); it goes out as the storage's rect list, which covers the writes "
+                             "but not exactly",
+                             pending.Handle.Slot, pending.Handle.Gen, static_cast<Uint>(level), m_footprint.size(),
+                             kMGPipeMaxPendingUploadRegions);
+                MG_State::GLState::MipmapDirtyRegion rects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                const SizeT coverCount = mipmap->GetStorageDirtyRects(
+                    uploadTarget, level, rects, MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                for (SizeT i = 0; i < coverCount; ++i) m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(rects[i]));
+            }
+            const SizeT rectCount = m_rectBoxes.size();
+            const MGPBox* rectBoxes = m_rectBoxes.data();
 
             Bool dispatched = false;
             Bool accepted = true;
@@ -1623,6 +1651,10 @@ namespace MobileGL::MG_Pipe {
         Vector<Entry> m_renderbuffers;
         Vector<DrainEntry> m_drain;
         Vector<MGPSubRegion> m_regions;
+        // EmitOneLevel's scratch, kept for its capacity: the level's exact footprint and the
+        // boxes the record's regions are built from.
+        Vector<MG_State::GLState::MipmapDirtyRegion> m_footprint;
+        Vector<MGPBox> m_rectBoxes;
         Bool m_draining = false;
 
         MGPResourceDesc m_lastDesc{};

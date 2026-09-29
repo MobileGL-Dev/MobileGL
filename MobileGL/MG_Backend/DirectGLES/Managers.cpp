@@ -9038,9 +9038,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     // whole story" (D-D3), which is the same statement the
                                     // frontend's GetStorageDirtyRects makes by returning 0 - so
                                     // both arms reach the box branch below by the same route.
-                                    dirtyRectCount =
-                                        std::min<SizeT>(pendingUpload->Regions.size(),
-                                                        MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                                    //
+                                    // P11 M2: the record's list is the level's EXACT footprint now
+                                    // (TextureEmit.h), which the storage's own rect list only
+                                    // covered, and the storage withheld that list - "0 rects" - when
+                                    // it held more rects than it keeps or when they added up to 3/4
+                                    // of the union box (one driver call on nearly the same bytes).
+                                    // Both cut-offs are this side's to apply now, so the box-or-rects
+                                    // choice on a texture the GPU has not written is what it was.
+                                    // (Once the GPU may have written it, the footprint below uploads
+                                    // every region exactly, whatever this chose.) Never a partial
+                                    // list: a truncated list is dropped writes.
+                                    SizeT summedTexels = 0;
+                                    for (const auto& region : pendingUpload->Regions) {
+                                        summedTexels += static_cast<SizeT>(region.W) * static_cast<SizeT>(region.H) *
+                                                        static_cast<SizeT>(std::max<Uint32>(region.D, 1));
+                                    }
+                                    const Bool listWithheld =
+                                        pendingUpload->Regions.size() < 2 ||
+                                        pendingUpload->Regions.size() > MG_State::GLState::MipmapStorage::kMaxDirtyRects ||
+                                        summedTexels * 4 >= dirtyRegion.TexelCount() * 3;
+                                    dirtyRectCount = listWithheld ? 0 : pendingUpload->Regions.size();
                                     for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                         const auto& region = pendingUpload->Regions[r];
                                         dirtyRects[r] = MG_State::GLState::MipmapDirtyRegion{

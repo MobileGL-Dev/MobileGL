@@ -901,9 +901,18 @@ namespace MobileGL::MG_Pipe {
             for (MGPipeResourceRecord::PendingUpload& entry : stored.PendingUploads) {
                 if (entry.UploadTarget != record.Target || entry.Level != record.Level) continue;
                 entry.UnionBox = UnionOfBoxes(entry.UnionBox, record.UnionBox);
-                if (record.RegionCount == 0 || entry.Regions.empty() ||
-                    static_cast<Uint64>(entry.Regions.size()) + record.RegionCount >
-                        kMGPipeMaxPendingUploadRegions) {
+                if (record.RegionCount == 0 || entry.Regions.empty()) {
+                    // A whole-level contribution (the emitter's only box-only spelling since P11
+                    // M2) owns every texel of the level, so the entry is that box, exactly.
+                    entry.Regions.clear();
+                    return true;
+                }
+                if (static_cast<Uint64>(entry.Regions.size()) + record.RegionCount > kMGPipeMaxPendingUploadRegions) {
+                    // The one lossy answer left: the box covers every texel the list named, and
+                    // also the gaps between them (see kMGPipeMaxPendingUploadRegions).
+                    MGLOG_W_ONCE("MGPipe: a texture level's pending upload outgrew %u regions and becomes its union "
+                                 "box, which spans the gaps between the writes",
+                                 kMGPipeMaxPendingUploadRegions);
                     entry.Regions.clear();
                     return true;
                 }
