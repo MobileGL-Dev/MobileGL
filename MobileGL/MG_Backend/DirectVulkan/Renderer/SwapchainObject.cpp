@@ -8,6 +8,8 @@
 
 #include "SwapchainObject.h"
 
+#include <span>
+
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
 
@@ -135,12 +137,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkPresentModeKHR SwapchainObject::ChooseSwapchainPresentMode(
-        const Vector<VkPresentModeKHR>& availablePresentModes) {
-        for (auto desiredPresentMode : s_desiredPresentModes) {
-            for (const auto& presentMode : availablePresentModes) {
-                if (presentMode == desiredPresentMode) {
-                    return presentMode;
-                }
+        const Vector<VkPresentModeKHR>& availablePresentModes, Optional<Int> swapInterval) {
+        static constexpr VkPresentModeKHR s_unthrottledPresentModes[]{
+            VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR};
+        static constexpr VkPresentModeKHR s_vsyncPresentModes[]{VK_PRESENT_MODE_FIFO_KHR};
+        static constexpr VkPresentModeKHR s_adaptiveVsyncPresentModes[]{VK_PRESENT_MODE_FIFO_RELAXED_KHR,
+                                                                         VK_PRESENT_MODE_FIFO_KHR};
+        std::span<const VkPresentModeKHR> ranked = s_desiredPresentModes;
+        if (swapInterval) {
+            if (*swapInterval == 0) {
+                ranked = s_unthrottledPresentModes;
+            } else if (*swapInterval > 0) {
+                ranked = s_vsyncPresentModes;
+            } else {
+                ranked = s_adaptiveVsyncPresentModes;
+            }
+        }
+        for (auto desiredPresentMode : ranked) {
+            if (std::find(availablePresentModes.begin(), availablePresentModes.end(), desiredPresentMode) !=
+                availablePresentModes.end()) {
+                return desiredPresentMode;
             }
         }
 
@@ -148,9 +164,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return availablePresentModes[0];
     }
 
+    const char* SwapchainObject::GetPresentModeName(VkPresentModeKHR presentMode) {
+        return string_VkPresentModeKHR(presentMode);
+    }
+
     void SwapchainObject::Create(VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface,
                                  Uint32 graphicsQueueFamily, Uint32 presentQueueFamily, Uint32 minImageCountHint,
-                                 VkExtent2D desiredExtent) {
+                                 VkExtent2D desiredExtent, Optional<Int> swapInterval) {
         const auto swapchainCapabilities = GetSwapchainCapabilities(physicalDevice, surface);
         MOBILEGL_ASSERT(swapchainCapabilities.IsComplete(),
                         "SwapchainObject::Create failed: incomplete swapchain capabilities");
@@ -169,8 +189,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_D("    %s", string_VkPresentModeKHR(pm));
         }
 
-        const auto presentMode = ChooseSwapchainPresentMode(swapchainCapabilities.presentModes);
+        const auto presentMode = ChooseSwapchainPresentMode(swapchainCapabilities.presentModes, swapInterval);
         MGLOG_I("Picked present mode: %s", string_VkPresentModeKHR(presentMode));
+        m_presentMode = presentMode;
+        m_supportedPresentModes = swapchainCapabilities.presentModes;
 
         const auto& swapchainCaps = swapchainCapabilities.capabilities;
         Uint32 targetImageCount = std::max<Uint32>(minImageCountHint, swapchainCaps.minImageCount);

@@ -2980,7 +2980,10 @@ void main() {
     }
 
     VulkanRenderer::VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg)
-        : m_window(window), m_config(cfg) {
+        : m_window(window), m_config(cfg), m_presentsToAppWindow(window != NativeWindowType{}) {
+        if (!m_presentsToAppWindow) {
+            m_config.SwapInterval.reset();
+        }
         // Initialize();
     }
 
@@ -12957,8 +12960,22 @@ void main() {
         if (!m_swapchainResizeRequested && SwapchainIsOutOfDate()) {
             m_swapchainResizeRequested = true;
         }
+        // A new eglSwapInterval lands here too, between frames: this one is on screen and the
+        // next has recorded nothing. Only a different present mode is worth the rebuild (it
+        // drops every pipeline); otherwise the live swapchain already paces as asked.
+        if (m_config.SwapInterval != m_swapchainSwapInterval) {
+            if (SwapchainObject::ChooseSwapchainPresentMode(m_swapchainObject.GetSupportedPresentModes(),
+                                                            m_config.SwapInterval) !=
+                m_swapchainObject.GetPresentMode()) {
+                m_swapchainResizeRequested = true;
+            } else {
+                MGLOG_D("DirectVulkan: swap interval %d -> %s", *m_config.SwapInterval,
+                        SwapchainObject::GetPresentModeName(m_swapchainObject.GetPresentMode()));
+                m_swapchainSwapInterval = m_config.SwapInterval;
+            }
+        }
         if (m_swapchainResizeRequested) {
-            MGLOG_D("Present, processing requested swapchain resize");
+            MGLOG_D("Present, processing requested swapchain rebuild (resize or swap interval)");
             if (!RecreateSwapchain()) {
                 m_presentSuspended = true;
                 m_swapchainResizeRequested = false;
@@ -14442,7 +14459,12 @@ void main() {
         m_swapchainObject.Create(m_device, m_physicalDevice.handle, m_surface,
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily),
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.presentFamily),
-                                 m_config.MaxFramesInFlight, desiredExtent);
+                                 m_config.MaxFramesInFlight, desiredExtent, m_config.SwapInterval);
+        if (m_config.SwapInterval && m_config.SwapInterval != m_swapchainSwapInterval) {
+            MGLOG_D("DirectVulkan: swap interval %d -> %s", *m_config.SwapInterval,
+                    SwapchainObject::GetPresentModeName(m_swapchainObject.GetPresentMode()));
+        }
+        m_swapchainSwapInterval = m_config.SwapInterval;
         // The FragCoordYFlip variants bake this height in; it is the only input to a shader
         // module that lives outside the GL program, so the factory has to learn it here (and on
         // every recreation, which is the only way it can change).
@@ -14884,6 +14906,12 @@ void main() {
         m_config.SurfaceWidth = width;
         m_config.SurfaceHeight = height;
         m_swapchainResizeRequested = true;
+    }
+
+    void VulkanRenderer::SetSwapInterval(Int interval) {
+        if (m_presentsToAppWindow) {
+            m_config.SwapInterval = interval;
+        }
     }
 
     VkInstance VulkanRenderer::GetInstance() const {

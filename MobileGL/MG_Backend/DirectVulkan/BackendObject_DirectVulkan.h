@@ -34,6 +34,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
+        void SetEGLSwapInterval(Int interval) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 

@@ -1431,4 +1431,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Present called with null VulkanRenderer");
         pVulkanRenderer->Present();
     }
+
+    namespace {
+        Optional<Int> g_requestedSwapInterval;
+    } // namespace
+
+    void SetSwapInterval(Int interval) {
+        g_requestedSwapInterval = interval;
+        if (pVulkanRenderer) {
+            pVulkanRenderer->SetSwapInterval(interval);
+        }
+    }
+
+    Optional<Int> GetRequestedSwapInterval() {
+        return g_requestedSwapInterval;
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan
