@@ -125,7 +125,7 @@
 ### 交接时配对与等 Hello 的时限（ID-P11-12）
 
 - broker 连上两条连接后立即写 PairBind 对（`PairBindFrames.java`：帧头 magic `0x464C474D` + 长度，小端；负载是原生 `EncodePairBind` 的输出，16 字节 nonce 在最后）。两个前缀是编码器的字节；`ServerSpawnTest.TheBrokersPairBindTemplatesAreTheEncoders` 从 Java 源文件读出前缀、对 32 个随机 nonce 与 `AppendFrame(EncodePairBind(…))` 逐字节比较，`protocol.fbs` 一改就红。`PairAcceptor` 的 2000 ms 配对预算（`PairAcceptor.h:63`）因此在 broker 手里满足，不再等程序跑到第一个 EGL 调用。
-- **配对之后等 Hello：没有时限，靠 EOF。** 之前是 10 s（`RunSession` 的 `helloWaitMs`，`ServerMain.cpp:385` 的读）；现在 unix 端点的 `--serve` 会话子进程与单会话形状都用 `kPairedUnixHelloWaitMs = kWaitForever`（`ServerMain.cpp:136`，调用点 `:1537`、`:1562`）。理由：配对时身份已定（nonce），unix 端点只有本用户 / 本 app 能连（Android 上 SELinux，路径上 0600），而一个先加载资源的程序要多久没有上界；程序退出或关掉描述符 → EOF → `control peer closed before sending a first frame`，会话子进程干净退出。代价：程序活着但迟迟不 Hello 时，它占着唯一的会话槽，别的 client 得 `Refuse{Busy}`（与一个正在渲染的会话相同）。TCP 保留预认证时限（`PreAuthKnobs`）；进程内显示 server（`:mglwin`，`ServerMain.cpp:1395`）保留 10 s（它停止时要等会话线程）。
+- **配对之后等 Hello：没有时限，靠 EOF。** 之前是 10 s（`RunSession` 的 `helloWaitMs`，`ServerMain.cpp:385` 的读）；现在 unix 端点的 `--serve` 会话子进程与单会话形状都用 `kPairedUnixHelloWaitMs = kWaitForever`（`ServerMain.cpp:136`，调用点 `:1537`、`:1562`）。理由：配对时身份已定（nonce），unix 端点只有本用户 / 本 app 能连（Android 上 SELinux，路径上 0600；开发机 Linux 上一个 `@abstract` 名同一 network namespace 内谁都能连——这是产品设备上的论证），而一个先加载资源的程序要多久没有上界；程序退出或关掉描述符 → EOF → `control peer closed before sending a first frame`，会话子进程干净退出。代价：程序活着但迟迟不 Hello 时，它占着唯一的会话槽（与一个正在渲染的会话相同）：别的 client 在配对后 2 s 内说 Hello 时得 `Refuse{Busy}`；更慢的那个只见到 Hello 发送失败——`RefuseBusy` 写完 Busy 就关了连接，而 Hello 发送失败的路径不读待读的拒绝帧（`AdoptConnectedPair` 那条路径会读）；未修，见 B1 报告附录。TCP 保留预认证时限（`PreAuthKnobs`）；进程内显示 server（`:mglwin`，`ServerMain.cpp:1395`）保留 10 s（它停止时要等会话线程）。
 
 ### 令牌
 
