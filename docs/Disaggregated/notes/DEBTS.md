@@ -11,6 +11,9 @@
 | P11 转出（性能）：设备上 MC 26.3，split T2 相对单进程采纳的 p99 Espryt +37–42%、Magma 约 2.5×，RSS 1.4–2×；其中一部分是线程落位——server apply 线程钉在 6–7 核，client GL 线程多半落到慢核，每帧 CPU 约 2.3×（`notes/p11/A-DEVICE.md`） | 路线图推完后的性能工作；RSS 由 B（T0）处理 |
 | P11 转出：client 与 server 共用日志前缀时，client 以 `"w"` 打开 `<base>.server.log` 写转发来的 server 日志，会截断 server 自己的文件（依赖 server 日志行的 P12 装置测试可能受影响） | 小修 |
 | P11 转出（B0 F1）：HyperOS 熄屏时冻结 server app 的整个 uid（FGS 进程、supervisor、会话子进程同一 cgroup），在飞会话 120 s 后 `Fatal{BarrierTimeout}`；FCL 同机用法同样受影响（`notes/p11/B0-CROSS-APP.md`） | B1 的防冻结一项；FCL 侧另议 |
+| P11 转出（B1）：会话位被一个慢启动程序占着时，第二个 client 若 2 s 内发 Hello 得具名 `Refuse{Busy}`，更慢的只见发送失败（那条路径不读待发的拒绝）；已写进契约 | 小修 |
+| P11 转出（B1）：会话启动失败后 client 还多报一个误导性的 `Fatal{CapsBeforeFirstSnapshot}`（早于 B1，helper 用户每次被拒都会看到） | 小修 |
+| P11 转出（B1）：外部 client 的 apply 线程策略只在红米一台（两大核）上量过；Magma openra 两个数据面都卡在 server（约 285 fps），共享内存无收益 | 需要第二种拓扑的设备时再量 |
 | P11 转出（M2）：上传仍有两种有损形状，各记一次日志——一层的精确写入框超过 4096 个时按存储的矩形表覆盖发出；applier 一个条目累计超过 4096 个区域时并成并集框。纹理带 GPU 写时两者都会把影子盖进空隙 | 小修，无触发报告 |
 | P11 转出（M2）：超过 stage 分块预算的大层按分片发出，没有写入框覆盖的分片仍带自己的整框（server 要靠它拼层图），server 会把这片的影子盖到 GPU 写过的地方；修法要一个两个 server 都跳过的「只定位」区域写法（split 专属，早于 P11） | 待排 |
 | P11 转出（M2，性能）：split server 上纹理无 GPU 写时，Espryt 改为自己按存储的阈值取舍精确写入框，非 ring 路径上可能多发几个小框；设备上未量 | 记录 |

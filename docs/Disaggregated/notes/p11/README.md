@@ -1,6 +1,6 @@
 # P11 — persistent map 与 ≥16 MiB 采纳（进行中）
 
-> **2026-09-29 开工**。计划与范围重划 [`PLAN-P11.md`](PLAN-P11.md)（B 已排期：消费者是同机从其他 app 启动的 GL 程序）；裁定 [`INTEGRATOR-DECISIONS-P11.md`](INTEGRATOR-DECISIONS-P11.md)；真机测量 [`A-DEVICE.md`](A-DEVICE.md)；协议 `MobileGL/MG_Remote/CONTRACT-P11.md`。已落地：合并 dev、A1 / A2（档位在握手时定、断言落档、三臂登记）、A3（T0 在 app 域两后端 GO）、A4（基线重测）。进行中：B0。
+> **2026-09-29 开工**。计划与范围重划 [`PLAN-P11.md`](PLAN-P11.md)（B 已排期：消费者是同机从其他 app 启动的 GL 程序）；裁定 [`INTEGRATOR-DECISIONS-P11.md`](INTEGRATOR-DECISIONS-P11.md)；真机测量 [`A-DEVICE.md`](A-DEVICE.md)；协议 `MobileGL/MG_Remote/CONTRACT-P11.md`。已落地：合并 dev（两次）、A1 / A2、A3（T0 在 app 域两后端 GO）、A4（基线重测）、B0 / HSPIKE（跨 app 通道）、PAIR（连接按 nonce 配对，修订 4）、B1（同机外部 client 经 helper 与令牌 broker 走共享内存）。下一步：B2（T0，可开关）。
 >
 > 下面是该阶段在路线图上的原始范围与出口门（2026-09-24 从 [`ROADMAP.md`](../../ROADMAP.md) 阶段表移入，原文照录）。
 

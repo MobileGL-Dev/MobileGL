@@ -16,12 +16,16 @@
 | A2 断言 arena 落在哪一档、三臂登记 | ✅ 两后端 |
 | A3 T0 在 app 域 | ✅ 两后端 GO（含 128 MiB 与持续锁定） |
 | A4 采纳基线（Adreno 830） | ✅ 采纳省 RSS 360–480 MB、不改帧时；split T2 在 MC 26.3 上 RSS 1.4–2×、p99 Espryt +37–42% / Magma 约 2.5×（`notes/p11/A-DEVICE.md`） |
-| B0 跨 app client 探针 | 进行中（shell 里的 retrace 可执行文件 → 另一个 app 里的 server；再在 app 域复核） |
-| B1 外部 client 的共享内存数据面 / B2 T0 | 待 B0 |
+| B0 跨 app client 探针 | ✅ SELinux 挡连接，连上后共享段可用（`notes/p11/B0-CROSS-APP.md`） |
+| PAIR 连接按 nonce 配对 | ✅ 控制协议修订 3 → 4 |
+| helper 可行性探针 | ✅ 无 Context 的 `app_process` helper 经 Binder 拿到连接（依赖 ROM，`HSPIKE.md`） |
+| 合并 dev（M2） | ✅ KGSL 分段提交、零散写入按矩形（补齐 split 半边）、描述符池 |
+| B1 同机外部 client 走共享内存 | ✅ `fd:` 端点 + 令牌 broker + helper + 启动命令 + 外部 client 的 apply 线程策略；rd12 Espryt 约 119 vs tcp 40–53 fps |
+| B2 T0 零拷贝导入（可开关，`ADOPT_TIER` 0；默认 2 = 共享内存推送） | 下一步 |
 | 主机门（集成头） | ✅ 全绿，数字见 ID-P11-9 |
 
 ## 下一步
 
-B0 结果 → B1（通道 + 共享内存数据面）→ B2（T0 导入，两后端）。转出的 dev 缺陷（Espryt 零散写入并集框、Magma 单进程 rd12 映射耗尽）已开独立任务，见 [`notes/DEBTS.md`](notes/DEBTS.md)。
+B2：T0 导入（两后端，经 B1 的通道；第一项真机检查是 AHardwareBuffer 的 dma-buf fd 跨 app 传递），保留开关。转出的 dev 缺陷（Espryt 零散写入并集框、Magma 单进程 rd12 映射耗尽）已开独立任务，见 [`notes/DEBTS.md`](notes/DEBTS.md)。
 
 **阻塞**：没有需要决策的事项。
