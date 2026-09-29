@@ -317,17 +317,13 @@ namespace MobileGL::MG_Remote::Transport {
             }
         }
 
-        // One more connection to `path` whose first bytes are `payload`, framed: a DataBind
-        // (ConnectDataConnection) or a PairBind (ConnectTo). `what` names the frame in the log.
-        MobileGLResult ConnectPresenting(const std::string& path, std::uint32_t timeoutMs, const void* payload,
-                                         std::uint64_t size, const char* what, int* outFd) {
-            *outFd = -1;
+        // `payload`, framed, as the first bytes on the connected socket `fd`: a DataBind or a
+        // PairBind. `what` names the frame in the log. The descriptor is left open either way; the
+        // caller owns it.
+        MobileGLResult SendFirstFrame(int fd, const void* payload, std::uint64_t size, const char* what) {
             std::vector<std::uint8_t> framed;
             const MobileGLResult appended = AppendFrame(framed, payload, size);
             if (appended != MOBILEGL_OK) return appended;
-            int fd = -1;
-            const MobileGLResult connected = ConnectOne(path, timeoutMs, &fd);
-            if (connected != MOBILEGL_OK) return connected;
             std::size_t written = 0;
             while (written < framed.size()) {
                 const ssize_t n = ::send(fd, framed.data() + written, framed.size() - written, MSG_NOSIGNAL);
@@ -335,11 +331,46 @@ namespace MobileGL::MG_Remote::Transport {
                 if (n < 0 && errno == EINTR) continue;
                 WireLogError("MG_Remote SocketTransport: the %s could not be sent (%zu of %zu bytes): %s", what,
                              written, framed.size(), std::strerror(errno));
-                ::close(fd);
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            }
+            return MOBILEGL_OK;
+        }
+
+        // One more connection to `path` whose first bytes are `payload`, framed: a DataBind
+        // (ConnectDataConnection) or a PairBind (ConnectTo). `what` names the frame in the log.
+        MobileGLResult ConnectPresenting(const std::string& path, std::uint32_t timeoutMs, const void* payload,
+                                         std::uint64_t size, const char* what, int* outFd) {
+            *outFd = -1;
+            int fd = -1;
+            const MobileGLResult connected = ConnectOne(path, timeoutMs, &fd);
+            if (connected != MOBILEGL_OK) return connected;
+            const MobileGLResult sent = SendFirstFrame(fd, payload, size, what);
+            if (sent != MOBILEGL_OK) {
+                ::close(fd);
+                return sent;
             }
             *outFd = fd;
             return MOBILEGL_OK;
+        }
+
+        // P11 B1: what an adopted descriptor must be for the `fd:` endpoint - open, a connected
+        // AF_UNIX stream socket. Returns null when it is, otherwise the reason, for the log line.
+        const char* AdoptableUnixStreamProblem(int fd) {
+            if (fd < 0) return "is negative";
+            if (::fcntl(fd, F_GETFD) < 0) return "is not an open descriptor in this process";
+            int type = 0;
+            socklen_t typeSize = sizeof(type);
+            if (::getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &typeSize) != 0) return "is not a socket";
+            if (type != SOCK_STREAM) return "is not a stream socket";
+            sockaddr_storage local{};
+            socklen_t localSize = sizeof(local);
+            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localSize) != 0 ||
+                local.ss_family != AF_UNIX)
+                return "is not an AF_UNIX socket (a TCP pair has no descriptor channel; use tcp:// instead)";
+            sockaddr_storage peer{};
+            socklen_t peerSize = sizeof(peer);
+            if (::getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &peerSize) != 0) return "is not connected";
+            return nullptr;
         }
     } // namespace
 
@@ -425,6 +456,52 @@ namespace MobileGL::MG_Remote::Transport {
             return second;
         }
         outClient = std::make_unique<SocketTransport>(control, aux, TransportRole::Client);
+        return MOBILEGL_OK;
+    }
+
+    MobileGLResult SocketTransport::AdoptConnectedPair(int controlFd, int auxFd,
+                                                       std::unique_ptr<SocketTransport>& outClient) {
+        outClient.reset();
+        // Checked before a byte is written, so a stale or mistyped `fd:` names what it points at
+        // instead of writing a PairBind into something that is not the server.
+        if (controlFd == auxFd) {
+            WireLogError("MG_Remote: Refuse{ProtocolMismatch} fd: endpoint names descriptor %d twice; the control "
+                         "and aux connections are two sockets", controlFd);
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        const int fds[2] = {controlFd, auxFd};
+        const char* names[2] = {"control", "aux"};
+        for (int index = 0; index < 2; ++index) {
+            if (const char* problem = AdoptableUnixStreamProblem(fds[index])) {
+                WireLogError("MG_Remote: Refuse{ProtocolMismatch} fd: endpoint's %s descriptor %d %s", names[index],
+                             fds[index], problem);
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
+            }
+        }
+        // They arrived inheritable (the helper cleared FD_CLOEXEC so they would survive its execve);
+        // from here they are this session's, and a program's own children must not inherit them.
+        ::fcntl(controlFd, F_SETFD, FD_CLOEXEC);
+        ::fcntl(auxFd, F_SETFD, FD_CLOEXEC);
+        // P11 PAIR: whoever opened the two connections, the CLIENT presents the pair's identity -
+        // one fresh nonce, control then aux - exactly as ConnectTo does, before the Hello. The
+        // broker that connected them wrote nothing on them.
+        std::uint8_t nonce[kPairNonceBytes];
+        MobileGLResult result = MintNonce(nonce, sizeof(nonce));
+        if (result == MOBILEGL_OK) {
+            const auto controlBind = EncodePairBind(nonce, false);
+            result = SendFirstFrame(controlFd, controlBind.data(), controlBind.size(),
+                                    "fd: control connection's PairBind");
+        }
+        if (result == MOBILEGL_OK) {
+            const auto auxBind = EncodePairBind(nonce, true);
+            result = SendFirstFrame(auxFd, auxBind.data(), auxBind.size(), "fd: aux connection's PairBind");
+        }
+        if (result != MOBILEGL_OK) {
+            ::close(controlFd);
+            ::close(auxFd);
+            return result;
+        }
+        outClient = std::make_unique<SocketTransport>(controlFd, auxFd, TransportRole::Client);
         return MOBILEGL_OK;
     }
 
@@ -813,6 +890,12 @@ namespace MobileGL::MG_Remote::Transport {
                                                std::unique_ptr<SocketTransport>&) {
         WireLogError("MG_Remote SocketTransport: unsupported on this platform - P6 lands POSIX "
                      "only (CONTRACT-P6 §2.6); `unix:` and `pipe:` stay named refusals");
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
+
+    MobileGLResult SocketTransport::AdoptConnectedPair(int, int, std::unique_ptr<SocketTransport>& outClient) {
+        outClient.reset();
+        WireLogError("MG_Remote SocketTransport: the fd: endpoint is POSIX only (CONTRACT-P11 B1)");
         return MOBILEGL_ERR_UNSUPPORTED;
     }
 

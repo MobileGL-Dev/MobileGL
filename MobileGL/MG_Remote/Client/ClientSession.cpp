@@ -67,6 +67,21 @@ namespace MobileGL::MG_Remote::Client {
             return static_cast<std::uint32_t>(::getpid());
 #endif
         }
+
+        // P11 B1: `fd:<control>,<aux>` - two decimal descriptor numbers, one comma, nothing else.
+        // Strict on purpose: a stray space or sign is an operator's typo, and a typo that parsed
+        // would name some other descriptor of this process.
+        bool ParseFdEndpoint(const std::string& spec, int* outControl, int* outAux) {
+            const auto comma = spec.find(',');
+            if (comma == std::string::npos || spec.find(',', comma + 1) != std::string::npos) return false;
+            const auto number = [](const std::string& text, int* out) {
+                if (text.empty() || text.size() > 9 || text.find_first_not_of("0123456789") != std::string::npos)
+                    return false;
+                *out = std::atoi(text.c_str());
+                return true;
+            };
+            return number(spec.substr(0, comma), outControl) && number(spec.substr(comma + 1), outAux);
+        }
     } // namespace
 
 #define MGP5_C0_STUB(what)                                                                                             \
@@ -843,6 +858,41 @@ namespace MobileGL::MG_Remote::Client {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         const std::string configured(MG_Config::Ipc.Control.c_str());
+        // P11 B1 (CONTRACT-P11 B1): a PRE-CONNECTED PAIR, fd:<control>,<aux>. A client in another
+        // app (or the shell) may not connect() to the server app's endpoint - SELinux `connectto`
+        // (B0-CROSS-APP.md) - so the server app's broker connected both sockets and an app_process
+        // helper passed the client ends in, inherited across its execve. This process only ADOPTS
+        // them: it presents its own PairBind pair (the broker wrote nothing) and says Hello. Connect
+        // dial, and no data endpoint - the aux socket carries the Welcome's descriptors, so the plane
+        // is shared segments exactly as for `unix:`.
+        if (configured.compare(0, 3, "fd:") == 0) {
+            const std::string data(MG_Config::Ipc.Data.c_str());
+            int control = -1;
+            int aux = -1;
+            if (!ParseFdEndpoint(configured.substr(3), &control, &aux)) {
+                MGLOG_E("MG_Remote: Refuse{ProtocolMismatch} MOBILEGL_IPC_CONTROL='%s' is not fd:<control>,<aux> "
+                        "(two descriptor numbers and one comma)",
+                        configured.c_str());
+                return MOBILEGL_ERR_UNSUPPORTED;
+            }
+            if (data != "auto" && data != "shm") {
+                MGLOG_E("MG_Remote: Refuse{ProtocolMismatch} unsupported control/data pair %s/%s - an fd: pair is "
+                        "a unix connection and carries shared segments only",
+                        configured.c_str(), data.c_str());
+                return MOBILEGL_ERR_UNSUPPORTED;
+            }
+            m_connectDial = true;
+            m_dataEndpoint.clear();
+            std::unique_ptr<Transport::SocketTransport> socket;
+            const auto adopted = Transport::SocketTransport::AdoptConnectedPair(control, aux, socket);
+            if (adopted != MOBILEGL_OK) return adopted;
+            const auto started = StartOverSocket(std::move(socket));
+            if (started == MOBILEGL_OK) {
+                MGLOG_I("MG_Remote client: control=fd data=shm server=fd:%d,%d pid=%u dial=connect", control, aux,
+                        m_peerServerPid);
+            }
+            return started;
+        }
         if (configured != "fork") {
             const bool tcp = configured.compare(0, 6, "tcp://") == 0;
             const bool unixSocket = configured.compare(0, 5, "unix:") == 0;
