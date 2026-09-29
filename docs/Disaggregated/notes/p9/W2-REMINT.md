@@ -19,7 +19,7 @@
 
 | 包 | 内容 |
 |---|---|
-| W2-a | 回读前问驱动这一层在不在、尺寸对不对（`NativeTextureLevelHasExtent`，`WireTextureReadback.inc:288`，`glGetTexLevelParameteriv`）。不在：store 覆盖就重放 store，否则跳过（GL 定义为未定义内容）。修的是：在最后一次 sync 之后才定义（空数据，或空数据 + 局部上传）的层，旧代码去读它 → FBO 不完整 → `Fatal{ResourceUnavailable, "image-promotion-readback"}`，合法 GL 让会话死掉 |
+| W2-a | 回读前问驱动这一层在不在、尺寸对不对（`NativeTextureLevelHasExtent`，`DirectGLES/WireTextureReadback.inc:290`，`glGetTexLevelParameteriv`）。不在：store 覆盖就重放 store，否则跳过（GL 定义为未定义内容）。修的是：在最后一次 sync 之后才定义（空数据，或空数据 + 局部上传）的层，旧代码去读它 → FBO 不完整 → `Fatal{ResourceUnavailable, "image-promotion-readback"}`，合法 GL 让会话死掉 |
 | W2-b | 驱动拒绝回读（设备上 SNORM / 16 位 norm / 无 `EXT_color_buffer_float` 的浮点不可渲染）而 store 覆盖该层 → 重放 store（= monolith 的答案），`MGLOG_W_ONCE` 带 `remint-readback-fallback`；store 也不覆盖才保留原 Fatal。测试旋钮 `MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE`（server 读） |
 | W2-c | 删两处 `texture-remint-pull` 标记（transport 专用的提前标记块 + 循环内标记）；`PipeCatalogue.EveryUnmigratedEmulationIsNamedOnce` 5 → 4；「remint stall class」注释改写 |
 | W2-d | `TextureRemintPulls`（`trp=`）在 server 路径也计：ByHandle 重铸已有存储时 +1（keep 不计），名字不改 |
@@ -73,6 +73,8 @@
 Magma 的 7,093 条是冗余的：transport 臂每次 draw / dispatch 对每个可写 SSBO / texel buffer / XFB 目标发一条 whole-buffer `OnGpuWritten`（`VkBufferManager.cpp` 的 `MarkWireBufferGpuWritten`），而 client 早已按同一组绑定自标保守集（`MG_Remote/Client/GpuWritePending.h`）；Espryt 的同名生产者 P5e fb 已在 transport 下删掉。**裁定：没有阻塞、没有丢弃 = 没有实测需求，不做。** 以后要做，改动是「transport 下只保留 server 簿记、不发事件」。今天没有逐 EventKind 的计数器，`eventDropped` 也不进 stats 行。
 
 ## 6. dev 缺陷：monolith Espryt 重铸重放过期影子（不在 P9 修，单独立项）
+
+> **2026-09-29 已修**：dev `568090f0`（重铸前先把驱动上的各层读回影子，immutable 且无需加宽的分配直接保留），P11 合并进本线（`notes/p11/INTEGRATOR-DECISIONS-P11.md` ID-P11-6）；`TextureRemintPullScenario` 对 monolith DirectGLES 的 7 例 skip 已撤，iris-derivative 的 monolith SSIM 0.996196817 → 0.996376498，与 split 各臂相同。下文是当时的记录。
 
 - **一句话原因**：前端臂 `RequireImageBindableStorage`（`Managers.cpp:6459`）把每个已定义层标脏、从 client `MipmapStorage` 重放进新 carrier，而影子从没见过 GPU 写的内容（渲染目标、clear、`glGenerateMipmap` 的层、`imageStore`）；immutable RGBA8 也走这条（monolith 没有 split 的 keep）。
 - **复现**：本场景的 B、C、D、E、F、F2、H 在 `DirectGLES.TextureRemintPullScenario.*`（monolith）和 pull 构建（`build-linux`）逐例同错（B：读到上传的图案而不是 clear 的绿；D、F：读到零）。Magma 两臂全对。场景对 monolith DirectGLES 这 7 例按名 skip，理由指向本节。
