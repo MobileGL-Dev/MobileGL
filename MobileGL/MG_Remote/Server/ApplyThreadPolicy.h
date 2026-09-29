@@ -23,16 +23,16 @@
 //   in-process (No)                 every big core, the configured spin             - unchanged
 //   forked (Fork)                   every big core, the configured spin             - unchanged
 //   dialled in (Connect), stream    every big core, the configured spin             - unchanged
-//   dialled in, shared segments     ONE prime core - the LOWEST-numbered big core, and only when the
-//                                   big set is a strict subset of at least two - and
-//                                   kConnectedPeerSpinUs unless MOBILEGL_IPC_SPIN_US was set
+//   dialled in, shared segments     ONE core, ReservedApplyCore's: the lowest of several prime cores,
+//                                   a big core beside a lone prime core, or none - never the only
+//                                   prime core - and kConnectedPeerSpinUs unless MOBILEGL_IPC_SPIN_US
 //
-// The lowest, not the highest, by measurement (CONTRACT-P11 B1): the scheduler puts a foreground
-// app's hot GL thread on the HIGHEST prime core (cpu7 in 43 of 44 samples); pinning the apply
-// thread there shared that core with it (rd12 6.5 fps), pinning it to the lowest gave 120. A client
-// launched through ExternalClientHelper is also kept off the reserved core (the broker hands the
-// helper this same core as its avoid mask), so a client the scheduler would otherwise place on it -
-// an adb-shell one - is not starved either.
+// The lowest prime core, not the highest, by measurement (CONTRACT-P11 B1): the scheduler puts a
+// foreground app's hot GL thread on the HIGHEST prime core (cpu7 in 43 of 44 samples); pinning the
+// apply thread there shared that core with it (rd12 6.5 fps), pinning it to the lowest gave 120. A
+// client launched through ExternalClientHelper is also kept off the reserved core (the supervisor
+// announces it, the broker hands it to the helper), so a client the scheduler would otherwise place
+// on it - an adb-shell one - is not starved either.
 //
 // An explicit mask or `off` wins for every peer, exactly as before: the operator's word is the
 // policy. A pure function, so the unit suite can hold every row without a thread or a cpufreq tree.
@@ -82,23 +82,70 @@ namespace MobileGL::MG_Remote::Server {
         return count;
     }
 
-    // The core `auto` reserves for a dialled-in shared-segment peer's apply thread: the lowest big
-    // core when the big set is a strict subset of the online cpus with at least two members, else 0
-    // (no prime pair to split). ExternalClientBroker.java mirrors this rule for the helper's avoid mask.
-    inline Uint64 ReservedApplyCore(Uint64 bigCoreMask, Uint64 onlineMask) {
-        const Bool asymmetric = bigCoreMask != 0 && (bigCoreMask & onlineMask) != onlineMask;
-        if (!asymmetric || PopCount64(bigCoreMask) < 2) return 0;
-        return bigCoreMask & (~bigCoreMask + 1); // the lowest set bit
+    inline Uint64 LowestBit64(Uint64 mask) { return mask & (~mask + 1); }
+
+    // Why ReservedApplyCore answered what it did - the log line names it.
+    enum class ReservedCoreReason : Uint8 {
+        LowestOfSeveralPrimeCores = 0, // two or more cores at the peak clock: the lowest of them
+        BigCoreBesideTheOnlyPrime = 1, // one core at the peak clock: the lowest OTHER big core
+        OnlyPrimeCoreLeftAlone = 2,    // one core at the peak clock and no other big core: none
+        NoAsymmetry = 3,               // every cpu is big, or the topology was unreadable: none
+    };
+
+    inline const char* ReservedCoreReasonText(ReservedCoreReason reason) {
+        switch (reason) {
+        case ReservedCoreReason::LowestOfSeveralPrimeCores:
+            return "auto: the lowest of the prime cores, the rest left to the dialled-in shared-segment client";
+        case ReservedCoreReason::BigCoreBesideTheOnlyPrime:
+            return "auto: a big core beside the only prime core, which is left to the dialled-in shared-segment client";
+        case ReservedCoreReason::OnlyPrimeCoreLeftAlone:
+            return "auto: unpinned - the only prime core is left to the dialled-in shared-segment client and there "
+                   "is no other big core";
+        case ReservedCoreReason::NoAsymmetry:
+            return "auto: unpinned - no asymmetric big/prime topology to split";
+        }
+        return "";
+    }
+
+    // The core `auto` reserves for a dialled-in shared-segment peer's apply thread, which spins there.
+    // `bigCoreMask` = cpus within 15% of the peak clock, `primeMask` = cpus AT the peak clock (both
+    // DetectCoreTopology's), `onlineMask` = one bit per cpu counted. The rule never hands the spinning
+    // apply thread the ONLY prime core - a foreground client's GL thread wants it:
+    //   several prime cores                 -> the lowest prime core (the client takes a higher one)
+    //   one prime core, other big cores     -> the lowest of those other big cores
+    //   one prime core and nothing else big -> none (unpinned)
+    //   no asymmetry (every cpu big, or 0)  -> none (unpinned)
+    // The supervisor logs the answer at start-up and the broker hands it to the helper (the core the
+    // client is kept off), so this function is the one source of that core.
+    inline Uint64 ReservedApplyCore(Uint64 bigCoreMask, Uint64 primeMask, Uint64 onlineMask,
+                                    ReservedCoreReason* outReason = nullptr) {
+        ReservedCoreReason reason = ReservedCoreReason::NoAsymmetry;
+        Uint64 core = 0;
+        primeMask &= bigCoreMask;
+        const Bool asymmetric = bigCoreMask != 0 && (bigCoreMask & onlineMask) != onlineMask && primeMask != 0;
+        if (asymmetric) {
+            if (PopCount64(primeMask) >= 2) {
+                core = LowestBit64(primeMask);
+                reason = ReservedCoreReason::LowestOfSeveralPrimeCores;
+            } else if ((bigCoreMask & ~primeMask) != 0) {
+                core = LowestBit64(bigCoreMask & ~primeMask);
+                reason = ReservedCoreReason::BigCoreBesideTheOnlyPrime;
+            } else {
+                reason = ReservedCoreReason::OnlyPrimeCoreLeftAlone;
+            }
+        }
+        if (outReason != nullptr) *outReason = reason;
+        return core;
     }
 
     // `affinity` is MOBILEGL_IPC_SERVER_AFFINITY's raw text (null or empty = `auto`); `spinExplicit`
     // says MOBILEGL_IPC_SPIN_US was set in this process's environment and `configuredSpinUs` is its
     // value (ConfigLoader's, 50 when unset); `sharedSegments` is the session's data plane (false =
-    // stream); `bigCoreMask` is DetectBigCoreMask()'s answer (0 when the topology is unreadable) and
-    // `onlineMask` one bit per cpu the process could see.
+    // stream); `bigCoreMask` / `primeMask` are DetectCoreTopology()'s answer (0 when the topology is
+    // unreadable) and `onlineMask` one bit per cpu the process could see.
     inline ApplyThreadPolicy SelectApplyThreadPolicy(const char* affinity, Bool spinExplicit, Uint32 configuredSpinUs,
                                                      ApplyPeer peer, Bool sharedSegments, Uint64 bigCoreMask,
-                                                     Uint64 onlineMask) {
+                                                     Uint64 primeMask, Uint64 onlineMask) {
         ApplyThreadPolicy policy;
         policy.spinUs = configuredSpinUs;
         const Bool automatic = affinity == nullptr || affinity[0] == '\0' || std::strcmp(affinity, "auto") == 0;
@@ -131,11 +178,23 @@ namespace MobileGL::MG_Remote::Server {
             return policy;
         }
         policy.spinUs = spinExplicit ? configuredSpinUs : kConnectedPeerSpinUs;
-        policy.requestedMask = ReservedApplyCore(bigCoreMask, onlineMask);
-        policy.rule = policy.requestedMask != 0
-                          ? "auto: the lowest prime core, the rest left to the dialled-in shared-segment client"
-                          : "auto: no affinity for a dialled-in shared-segment client (no prime pair to split)";
+        ReservedCoreReason reason = ReservedCoreReason::NoAsymmetry;
+        policy.requestedMask = ReservedApplyCore(bigCoreMask, primeMask, onlineMask, &reason);
+        policy.rule = ReservedCoreReasonText(reason);
         return policy;
+    }
+
+    // What the supervisor announces at start-up and the broker relays to the helper: the core this
+    // process's configuration reserves for a dialled-in shared-segment peer's apply thread. An operator's
+    // affinity (a mask or `off`) reserves nothing - the client is then not kept off any core.
+    inline Uint64 ReservedApplyCoreForConfig(const char* affinity, Uint64 bigCoreMask, Uint64 primeMask,
+                                             Uint64 onlineMask, ReservedCoreReason* outReason = nullptr) {
+        const Bool automatic = affinity == nullptr || affinity[0] == '\0' || std::strcmp(affinity, "auto") == 0;
+        if (!automatic) {
+            if (outReason != nullptr) *outReason = ReservedCoreReason::NoAsymmetry;
+            return 0;
+        }
+        return ReservedApplyCore(bigCoreMask, primeMask, onlineMask, outReason);
     }
 
 } // namespace MobileGL::MG_Remote::Server

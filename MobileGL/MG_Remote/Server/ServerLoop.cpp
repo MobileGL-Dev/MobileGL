@@ -66,25 +66,27 @@ namespace MobileGL::MG_Remote::Server {
         // the topology cannot be read - Windows, macOS, a container that hides the cpufreq
         // tree, or a partially readable one - because with no asymmetry information the honest
         // answer is "do not pin", not "pin to a guess".
-        Uint64 DetectBigCoreMask() {
+        // P11 B1: and the PRIME set beside it - the cpus AT the peak ceiling - which the dialled-in
+        // shared-segment rule needs so it never hands the spinning apply thread the only prime core.
+        void DetectCoreTopology(Uint64* outBig, Uint64* outPrime) {
+            *outBig = *outPrime = 0;
             const Uint cpuCount = std::min(64u, std::max(1u, std::thread::hardware_concurrency()));
             Uint64 frequencies[64] = {};
             for (Uint cpu = 0; cpu < cpuCount; ++cpu) {
                 frequencies[cpu] = ReadCpuMaxFrequencyKHz(cpu);
-                if (frequencies[cpu] == 0) return 0;
+                if (frequencies[cpu] == 0) return;
             }
             Uint64 peak = 0;
             for (Uint cpu = 0; cpu < cpuCount; ++cpu) peak = std::max(peak, frequencies[cpu]);
-            if (peak == 0) return 0;
+            if (peak == 0) return;
             const Uint64 threshold = peak * kBigCoreFrequencyPercent / 100;
-            Uint64 mask = 0;
             for (Uint cpu = 0; cpu < cpuCount; ++cpu) {
-                if (frequencies[cpu] >= threshold) mask |= (1ull << cpu);
+                if (frequencies[cpu] >= threshold) *outBig |= (1ull << cpu);
+                if (frequencies[cpu] == peak) *outPrime |= (1ull << cpu);
             }
-            return mask;
         }
 
-        // One bit per cpu the process can count, the same count DetectBigCoreMask walks - what
+        // One bit per cpu the process can count, the same count DetectCoreTopology walks - what
         // lets ApplyThreadPolicy tell a real prime set from a symmetric machine's "every cpu".
         Uint64 OnlineCpuMask() {
             const Uint cpuCount = std::min(64u, std::max(1u, std::thread::hardware_concurrency()));
@@ -200,6 +202,20 @@ namespace MobileGL::MG_Remote::Server {
         }
 
     } // namespace
+
+    // P11 B1: the one place the reserved core is computed for anybody outside the apply thread - the
+    // supervisor announces it at start-up and the server app's broker relays it to the helper. The
+    // supervisor has not loaded MG_Config (its session children do), so the knob is read from the
+    // environment the children inherit.
+    Uint64 ReservedApplyCoreForThisProcess(const char** outRule) {
+        Uint64 big = 0, prime = 0;
+        DetectCoreTopology(&big, &prime);
+        ReservedCoreReason reason = ReservedCoreReason::NoAsymmetry;
+        const Uint64 core = ReservedApplyCoreForConfig(std::getenv("MOBILEGL_IPC_SERVER_AFFINITY"), big, prime,
+                                                       OnlineCpuMask(), &reason);
+        if (outRule != nullptr) *outRule = ReservedCoreReasonText(reason);
+        return core;
+    }
 
     // ---------------------------------------------------------------------------------
     // The private backend object
@@ -413,10 +429,11 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession& session = *m_session;
         const char* raw = AffinityStringFromConfig();
         const Bool automatic = raw == nullptr || raw[0] == '\0' || std::strcmp(raw, "auto") == 0;
+        Uint64 bigCores = 0, primeCores = 0;
+        if (automatic) DetectCoreTopology(&bigCores, &primeCores);
         const ApplyThreadPolicy policy =
             SelectApplyThreadPolicy(raw, SpinSetExplicitly(), SpinUsFromConfig(), session.Peer(),
-                                    session.PeerSharedSegments(), automatic ? DetectBigCoreMask() : 0,
-                                    OnlineCpuMask());
+                                    session.PeerSharedSegments(), bigCores, primeCores, OnlineCpuMask());
         const Bool recognised = policy.recognised;
         const Uint64 requested = policy.requestedMask;
         m_affinityMask = ApplyAffinity(requested);

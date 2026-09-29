@@ -1462,6 +1462,19 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     int listener = -1;
     if (SocketTransport::Listen(endpoint, &listener) != MOBILEGL_OK) return 72;
     WireLogError("MG_Remote server: pid=%d listening on %s", static_cast<int>(::getpid()), endpoint.c_str());
+    {
+        // P11 B1 (CONTRACT-P11 B1): the one announcement of the core a dialled-in shared-segment client's
+        // apply thread will take, on stdout, which the server app reads line by line
+        // (MobileGLServerService) and its broker hands to the helper - so the helper keeps the client
+        // off the core THIS server picks rather than a Java re-derivation of the rule.
+        const char* rule = "";
+        const auto reserved = static_cast<unsigned long long>(Server::ReservedApplyCoreForThisProcess(&rule));
+        std::fprintf(stdout, "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x%llx (%s)\n",
+                     reserved, rule);
+        std::fflush(stdout);
+        WireLogError("MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x%llx (%s)",
+                     reserved, rule);
+    }
     unsigned long sessionsFaulted = 0;
     const bool tcpEndpoint = endpoint.compare(0, 6, "tcp://") == 0;
     const auto knobs = Server::PreAuthKnobs::FromEnvironment();

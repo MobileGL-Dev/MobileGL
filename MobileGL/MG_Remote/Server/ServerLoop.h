@@ -597,6 +597,12 @@ namespace MobileGL::MG_Remote::Server {
                                          EGLSurface curRead, EGLContext curCtx, EGLDisplay dpy,
                                          EGLSurface draw, EGLSurface read, EGLContext ctx);
 
+    // P11 B1 (CONTRACT-P11 B1): the cpu core this process's `auto` policy reserves for a dialled-in
+    // shared-segment client's apply thread (ApplyThreadPolicy.h ReservedApplyCoreForConfig over this
+    // machine's topology and MOBILEGL_IPC_SERVER_AFFINITY), 0 when none; `outRule` receives the reason.
+    // The supervisor announces it at start-up; the server app's broker relays it to the helper.
+    Uint64 ReservedApplyCoreForThisProcess(const char** outRule);
+
     // ---------------------------------------------------------------------------------
     // THE EGL OWNERSHIP MOVE - the part that can sink the phase, expressed as twelve calls
     // ---------------------------------------------------------------------------------
