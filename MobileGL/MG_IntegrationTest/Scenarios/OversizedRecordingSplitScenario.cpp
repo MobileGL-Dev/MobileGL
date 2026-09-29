@@ -41,6 +41,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -123,29 +124,21 @@ void main() { o_color = vec4(1.0); }
             return (end != nullptr && *end == '\0') ? parsed : 0;
         }
 
-        // The library log, for the arming assertion. Same machinery and reasoning as
-        // UnlocatedIoBlockScenario: MOBILEGL_LOG_FILE_PATH is read at log-init, every process in
-        // the lane appends to the file, and only bytes appended after the snapshot count.
-        std::filesystem::path LibraryLogPath() {
-            const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
-            return (path != nullptr && *path != '\0') ? std::filesystem::path(path) : std::filesystem::path();
-        }
+        // The library log, for the arming assertion. MOBILEGL_LOG_FILE_PATH is read at log-init,
+        // every process in the lane appends to it, and only bytes appended after the snapshot
+        // count. P11 M2: ON A SPLIT BUILD IT IS A BASE NAME - the library writes one file per role
+        // (PipeStatsWindow.h) - and the latched line comes from the RENDERER, which under a
+        // transport is the server role: the apply thread under inproc, the spawned server process
+        // under spawn (it inherits this entry's environment, budget and log base included). So the
+        // mark and the read cover both roles, as PrimitivesGeneratedNoXfbScenario's arming does; a
+        // read of the literal base found no file and reported an unsplit renderer. In the pull
+        // build the client role is the whole log.
+        std::string LibraryLogPath() { return PipeStatsWindow::LibraryLogPath(); }
 
-        std::uintmax_t LibraryLogSize() {
-            std::error_code ec;
-            const std::filesystem::path path = LibraryLogPath();
-            if (path.empty()) return 0;
-            const std::uintmax_t size = std::filesystem::file_size(path, ec);
-            return ec ? 0 : size;
-        }
+        PipeStatsWindow::LogMark LibraryLogSize() { return PipeStatsWindow::MarkLaneLog(); }
 
-        std::string LibraryLogSince(std::uintmax_t offset) {
-            const std::filesystem::path path = LibraryLogPath();
-            if (path.empty()) return {};
-            std::ifstream file(path, std::ios::binary);
-            if (!file.good()) return {};
-            file.seekg(static_cast<std::streamoff>(offset));
-            return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::string LibraryLogSince(const PipeStatsWindow::LogMark& mark) {
+            return PipeStatsWindow::ReadLaneLogSince(mark);
         }
 
         std::string Describe(const Rgba8& c) {
@@ -338,7 +331,7 @@ void main() { o_color = vec4(1.0); }
                 return ReadPixels(kSide, kSide);
             }
 
-            std::uintmax_t m_logBefore = 0;
+            PipeStatsWindow::LogMark m_logBefore{};
             GLuint m_vao = 0;
             GLuint m_vbo = 0;
             GLuint m_rectProgram = 0;

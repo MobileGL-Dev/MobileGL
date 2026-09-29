@@ -36,6 +36,7 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
+#include "../Harness/SplitRuntimePeek.h"
 
 #if !defined(__ANDROID__)
 #include <MG_Backend/DirectVulkan/DescriptorPoolCensus.h>
@@ -95,6 +96,20 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
             char* end = nullptr;
             const unsigned long parsed = std::strtoul(value, &end, 10);
             return (end != nullptr && *end == '\0') ? parsed : fallback;
+        }
+
+        // P11 M2: HOW MANY OF THE BURST'S SETS ONE FRAME SLOT HOLDS AT ONCE. All kDraws of them on
+        // the monolith arm. Under a split transport the server draws through the WIRE arm, which
+        // rewinds a slot's set cursors every UniformManager::kWireDescriptorSetBudget (2048) sets once
+        // it has proved the GPU done with them (VulkanRenderer::RewindWireDescriptorSetsIfDue), so its
+        // cache holds the burst 2048 sets at a time: the burst still needs a set per draw, grows the
+        // slot geometrically to that and is given back by the same trim, only the census counts the
+        // sets held rather than the draws. (The census itself is in-process - inproc it is read on the
+        // server's apply thread; spawn and tcp answer unavailable - see GetDescriptorPoolCensus.)
+        constexpr std::uint64_t kWireDescriptorSetBudget = 2048;
+        std::uint64_t BurstSetsHeldAtOnce() {
+            const std::uint64_t draws = static_cast<std::uint64_t>(kDraws);
+            return PeekSplitRuntime().transportResolved ? std::min(draws, kWireDescriptorSetBudget) : draws;
         }
 
         // Pools a geometric policy adds for n sets from an empty flavour: 64, 128, ... up to the cap,
@@ -269,15 +284,16 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
         if (!IsVulkan() || !after.available) return;
         // Falsifiability first: had the renderer's memos collapsed the draws onto shared sets, the
         // slot would never have needed to grow and the bound below would pass on any policy.
-        ASSERT_GE(after.cachedSets, before.cachedSets + kDraws)
+        const std::uint64_t held = BurstSetsHeldAtOnce();
+        ASSERT_GE(after.cachedSets, before.cachedSets + held)
             << "the frame did not allocate one descriptor set per draw, so it does not exercise growth. Before: "
             << Describe(before) << "; after: " << Describe(after);
         const std::uint64_t added = after.pools - before.pools;
         RecordProperty("census_before", Describe(before));
         RecordProperty("census_after", Describe(after));
-        EXPECT_LE(added, GeometricPoolBound(kDraws + 1))
-            << "a frame needing " << kDraws << " descriptor sets added " << added << " pools; doubling the slot's "
-            << "largest pool needs at most " << GeometricPoolBound(kDraws + 1) << ". Before: " << Describe(before)
+        EXPECT_LE(added, GeometricPoolBound(held + 1))
+            << "a frame needing " << held << " descriptor sets at once added " << added << " pools; doubling the "
+            << "slot's largest pool needs at most " << GeometricPoolBound(held + 1) << ". Before: " << Describe(before)
             << "; after: " << Describe(after);
     }
 
@@ -327,19 +343,20 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
         RecordProperty("quiet_frames", std::to_string(quietFrames));
         RecordProperty("census_after_quiet", Describe(afterQuiet));
         RecordProperty("census_after_second_burst", Describe(afterSecondBurst));
-        ASSERT_GE(afterBurst.cachedSets, static_cast<std::uint64_t>(kDraws))
+        const std::uint64_t held = BurstSetsHeldAtOnce();
+        ASSERT_GE(afterBurst.cachedSets, held)
             << "the burst did not allocate one descriptor set per draw: " << Describe(afterBurst);
         EXPECT_GT(afterQuiet.slotTrims, afterBurst.slotTrims)
             << quietFrames << " frames of one draw each followed a " << kDraws << "-set frame, but no frame slot was "
             << "trimmed (MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES=" << trimFrames << "). After the burst: "
             << Describe(afterBurst) << "; after the quiet frames: " << Describe(afterQuiet);
-        EXPECT_LE(afterQuiet.cachedSets + kDraws / 2, afterBurst.cachedSets)
+        EXPECT_LE(afterQuiet.cachedSets + held / 2, afterBurst.cachedSets)
             << "the trim did not give the burst's sets back. After the burst: " << Describe(afterBurst)
             << "; after the quiet frames: " << Describe(afterQuiet);
         EXPECT_LT(afterQuiet.pools, afterBurst.pools)
             << "the trim did not give the burst's pools back. After the burst: " << Describe(afterBurst)
             << "; after the quiet frames: " << Describe(afterQuiet);
-        EXPECT_GE(afterSecondBurst.cachedSets, afterQuiet.cachedSets + kDraws)
+        EXPECT_GE(afterSecondBurst.cachedSets, afterQuiet.cachedSets + held)
             << "the second burst was not served by freshly allocated sets: " << Describe(afterSecondBurst);
     }
 

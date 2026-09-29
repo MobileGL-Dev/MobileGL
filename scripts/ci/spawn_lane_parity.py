@@ -58,7 +58,13 @@ FIXTURE_ENTRIES = {"TcpServer.Start", "TcpServer.Stop"}
 #                          the server's own view/attachment identity out of this process.
 # A cross-process hold and a cross-process cache peek are server-side knobs neither exists yet;
 # until they do, naming the two scenarios here keeps the tolerance from widening for anything else.
-MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
+#   DescriptorPoolGrowthScenario (P11 M2, the `.DescPool.` entry): both cases read the renderer's
+#                          pool census (DirectVulkan::GetDescriptorPoolCensus), an in-process read -
+#                          on spawn and tcp the pools live in the server process and the census
+#                          answers unavailable, so a copy there checks pixels under a name claiming
+#                          the pools. The pixels do run on every arm: the Espryt entries and the
+#                          Magma informational and full-suite tiers.
+MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "DescriptorPoolGrowthScenario.")
 
 # P7 wave 2-B2: THE SANCTIONED ASYMMETRY THAT IS NOT INPROC-ONLY - these exist on split AND
 # spawn and cannot exist on tcp. Every MGITEST_MAGMA_FORCE_* knob is read BY THE SERVER
@@ -101,6 +107,18 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # SERVER's VulkanRenderer reads to pin the GL_PRIMITIVES_GENERATED reroute on - the knob-free
 # `.PrimGen.` copies (the bring-up probe's Auto verdict) keep their tcp entries. Eight cases, eight
 # tails.
+# P11 M2: the `.SplitRecording64.` entries set MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64, which
+# the SERVER's VulkanRenderer reads (SplitOversizedRecording), and assert the line it latches - the
+# knob-free `.Oversized.` copies (the default budget, dev's control) keep their tcp entries. Eight
+# cases, eight tails.
+SPLIT_RECORDING_CASES = ("EveryDrawOfTheFrameLandsAcrossCommandBufferSplits",
+                         "ADepthOccluderDrawnBeforeTheSplitHidesADrawAfterIt",
+                         "AStencilMarkMadeBeforeTheSplitGatesADrawAfterIt",
+                         "BlendingAccumulatesOntoPixelsWrittenBeforeTheSplit",
+                         "AMultisampleTargetKeepsItsSamplesAcrossTheSplit",
+                         "OcclusionQueriesOpenAcrossTheSplitCountBothSides",
+                         "APrimitivesGeneratedQueryOpenAcrossTheSplitCountsBothSides",
+                         "ATransformFeedbackCaptureActiveAcrossTheSplitAppendsEveryDraw")
 PRIMGEN_REROUTE_CASES = ("CountsADrawMadeWithNoCaptureSpan",
                          "CountsUnderRasterizerDiscardWithNoCaptureSpan",
                          "CountsATessellatedPatchWithNoCaptureSpan",
@@ -119,7 +137,8 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",
                                 ".Reclaim.MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle",
                                 ".Reclaim.MagmaWireReclaimScenario.DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires") + tuple(
-    f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES)
+    f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES) + tuple(
+    f".SplitRecording64.OversizedRecordingSplitScenario.{case}" for case in SPLIT_RECORDING_CASES)
 
 
 # P11 A1: THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. `.AdoptTier0.` runs

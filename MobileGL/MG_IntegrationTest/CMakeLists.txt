@@ -1068,6 +1068,11 @@ gtest_discover_tests(MobileGLIntegrationTest
 # renderer's latched MGLOG_I) proves the split happened at all - on a renderer that records the
 # whole frame into one command buffer, it is the assertion that goes red. DirectVulkan only:
 # the budget steers nothing on DirectGLES, whose driver flushes on its own.
+#
+# P11 M2: RESOURCE_LOCK, for the UnlocatedIoBlocks lane's reason above - EVERY case here reads the
+# lane's one log back, and the library truncates it at each process's start, so under `ctest -j` a
+# sibling case wipes the line a reading case is looking for (measured on this tree: 5 of 8 red at
+# -j 6, a different five on the monolith and inproc runs).
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectVulkan.SplitRecording."
     TEST_FILTER "OversizedRecordingSplitScenario.*"
@@ -1075,6 +1080,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK oversized-recording-split.log
         ENVIRONMENT "${MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT}"
 )
 
@@ -2870,6 +2876,18 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("ImageBindableRemintScenario.*" "")
     mgl_itest_register_split_arms("PartialUploadOverGpuContentScenario.*" "")
 
+    # ---- P11 M2: DEV'S TWO MAGMA SCENARIOS ON THE SPLIT ARMS ---------------------------------
+    #
+    # Merged from dev@c14283ee with their monolith entries. Both are plain GL and check pixels on
+    # every backend: OversizedRecordingSplitScenario draws frames whose state spans a command-buffer
+    # split (d20c2d01), DescriptorPoolGrowthScenario draws a 4096-distinct-set frame and gives it
+    # back (c2de6576/53fa16c2). On Espryt neither has anything else to check - the draw budget and
+    # the pool census are Magma's - so every case runs on all three arms. The Magma arms are laid by
+    # hand below (`DirectVulkan.<arm>.Oversized.`, `.SplitRecording64.`, `DirectVulkan.Split.DescPool.`),
+    # where the gated flavour and the per-arm exceptions live.
+    mgl_itest_register_split_arms("OversizedRecordingSplitScenario.*" "")
+    mgl_itest_register_split_arms("DescriptorPoolGrowthScenario.*" "")
+
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
     # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
@@ -3920,6 +3938,80 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
+    endforeach()
+endif()
+
+# P11 M2: DEV'S TWO MAGMA SCENARIOS ON MAGMA'S ARMS, GATED, in the band flavour. Every entry gets a
+# private log through MGL_SPLIT_ARM_TEST_LISTS.
+#
+#   Oversized.  OversizedRecordingSplitScenario under the default draw budget (16384), all three
+#       arms: every case's pixels, unsplit - dev's control. Its arming is not checked here (no
+#       budget pinned).
+#   SplitRecording64.  The same cases with MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64, so every
+#       case splits (d20c2d01's SplitOversizedRecording, which runs ahead of the wire arm's draw and
+#       dispatch too) and asserts the renderer's latched MGLOG_I. SPLIT AND SPAWN ONLY, one entry per
+#       case. The budget and the log line are the SERVER renderer's - the apply thread inproc, the
+#       spawned server (which copies this entry's environment, log base included) under spawn - and
+#       the scenario reads both role logs of its base (PipeStatsWindow). The tcp arm's server is
+#       the lane fixture, which no per-entry property reaches: a tcp copy would run the default
+#       budget under a name claiming 64 and its arming would find nothing (spawn_lane_parity.py,
+#       MAGMA_SERVER_ENV_KNOB_NO_TCP). The line is latched once per process, hence one per case.
+#   DescPool.  DescriptorPoolGrowthScenario, SPLIT ONLY. Both cases read the pool census
+#       (DirectVulkan::GetDescriptorPoolCensus), which is in-process: inproc it is taken on the
+#       apply thread (the test probe, between drain batches); on spawn and tcp the pools live in the
+#       server process and the census answers unavailable, so a copy there would check pixels
+#       under a name claiming the pools (spawn_lane_parity.py, MAGMA_INPROC_ONLY). Those pixels run
+#       on every arm in the Espryt entries above and in the Magma informational and full-suite tiers.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    set(MGL_ITEST_OVERSIZED_CASES
+        EveryDrawOfTheFrameLandsAcrossCommandBufferSplits
+        ADepthOccluderDrawnBeforeTheSplitHidesADrawAfterIt
+        AStencilMarkMadeBeforeTheSplitGatesADrawAfterIt
+        BlendingAccumulatesOntoPixelsWrittenBeforeTheSplit
+        AMultisampleTargetKeepsItsSamplesAcrossTheSplit
+        OcclusionQueriesOpenAcrossTheSplitCountBothSides
+        APrimitivesGeneratedQueryOpenAcrossTheSplitCountsBothSides
+        ATransformFeedbackCaptureActiveAcrossTheSplitAppendsEveryDraw)
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaM2Environment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Oversized."
+            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+            TEST_FILTER "OversizedRecordingSplitScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${mglItestMagmaM2Environment}")
+        list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+        math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+        if(NOT mglItestArm STREQUAL "Tcp")
+            foreach(mglItestOversizedCase IN LISTS MGL_ITEST_OVERSIZED_CASES)
+                gtest_discover_tests(MobileGLIntegrationTest
+                    TEST_PREFIX "DirectVulkan.${mglItestArm}.SplitRecording64."
+                    TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                    TEST_FILTER "OversizedRecordingSplitScenario.${mglItestOversizedCase}"
+                    DISCOVERY_TIMEOUT 30
+                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                        ${mglItestArmProperties}
+                        ENVIRONMENT "${mglItestMagmaM2Environment}\;MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64")
+                list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+                math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+            endforeach()
+        endif()
+        if(mglItestArm STREQUAL "Split")
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.Split.DescPool."
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "DescriptorPoolGrowthScenario.*"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaM2Environment}")
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+        endif()
     endforeach()
 endif()
 
