@@ -9,10 +9,12 @@
 | P10 转出：`GL_ARB_gpu_shader_fp64` 按 server 的 `MOBILEGL_ADVERTISE_FP64` 宣告，fp64 收窄却在 client 的编译里；tcp 下 server 环境不同时两者不一致（与已修的 `GL_KHR_parallel_shader_compile` 同类，挂点 `CapsMirror::Adopt`，ID-P10-10） | 小修，无触发报告 |
 | P10 转出（性能）：设备上 tcp loopback 的 rd12 每帧 19.4 ms 中 ~11.2 ms 是生产者在 stream 传输里的停车（发送 + 环 / stage / ack 等待），credit 等待只有 ~0.2 ms（`notes/p10/C-MEASUREMENTS.md` §2，ID-P10-13） | 路线图推完后的性能工作 |
 | P11 转出（性能）：设备上 MC 26.3，split T2 相对单进程采纳的 p99 Espryt +37–42%、Magma 约 2.5×，RSS 1.4–2×；其中一部分是线程落位——server apply 线程钉在 6–7 核，client GL 线程多半落到慢核，每帧 CPU 约 2.3×（`notes/p11/A-DEVICE.md`） | 路线图推完后的性能工作；RSS 由 B（T0）处理 |
-| P11 转出：Espryt 对零散写入按并集框上传，把影子里的旧纹素盖到框内 GPU 写过的空隙上（8×8 探针 41 个错，pull 与全部 Espryt 臂；Magma 对）；dev `568090f0` 的 `AdoptDriverLevelIntoShadow` 有同样的并集框近似（读代码） | **dev 已修**（`9524c688` + 测试 `21c7e8cd`），下次合并 dev 带进本线 |
-| P11 转出：Magma 单进程重放 rd12 在加载帧耗尽 `vm.max_map_count`（65530，其中 57–60k 是 `/dev/kgsl-3d0` 映射）而 abort；split 的 Magma 与 Espryt 都正常 | **dev 已修**（`d20c2d01`：根因是 rd12 的首帧——trace 里第一次交换前 98 万次 draw、没有任何 flush / fence——全录进一个命令缓冲，Adreno 按 16 KiB 分块映射；改为每 16384 次 draw 提交一次并限流；测试 `4d3d677a`、`9c32d9fa`；真机峰值 kgsl 映射约 60k → 4.8k，报告 `~/w7/notes/kgsl/report.md`），下次合并 dev 带进本线 |
 | P11 转出：client 与 server 共用日志前缀时，client 以 `"w"` 打开 `<base>.server.log` 写转发来的 server 日志，会截断 server 自己的文件（依赖 server 日志行的 P12 装置测试可能受影响） | 小修 |
 | P11 转出（B0 F1）：HyperOS 熄屏时冻结 server app 的整个 uid（FGS 进程、supervisor、会话子进程同一 cgroup），在飞会话 120 s 后 `Fatal{BarrierTimeout}`；FCL 同机用法同样受影响（`notes/p11/B0-CROSS-APP.md`） | B1 的防冻结一项；FCL 侧另议 |
+| P11 转出（M2）：上传仍有两种有损形状，各记一次日志——一层的精确写入框超过 4096 个时按存储的矩形表覆盖发出；applier 一个条目累计超过 4096 个区域时并成并集框。纹理带 GPU 写时两者都会把影子盖进空隙 | 小修，无触发报告 |
+| P11 转出（M2）：超过 stage 分块预算的大层按分片发出，没有写入框覆盖的分片仍带自己的整框（server 要靠它拼层图），server 会把这片的影子盖到 GPU 写过的地方；修法要一个两个 server 都跳过的「只定位」区域写法（split 专属，早于 P11） | 待排 |
+| P11 转出（M2，性能）：split server 上纹理无 GPU 写时，Espryt 改为自己按存储的阈值取舍精确写入框，非 ring 路径上可能多发几个小框；设备上未量 | 记录 |
+| P11 转出（M2，给 dev）：dev 的 `DirectVulkan.SplitRecording.` 车道没有 `RESOURCE_LOCK`、其用例读字面日志路径——`-j` 下可能互相截断；P11 线的副本已修 | 下次向 dev 回流时带上 |
 | P11 转出：pull 构建没有任何门跑集成测试（`TextureRemintPullScenario` 在 pull 上自 P9 起就是红的，P11 M 修） | CI / 门的覆盖，需裁定 |
 | `GetCaps` 的两个 blobref | 一旦运输，必须有 server → client 的 carrier rule，不能套 `SEG_STAGE` |
 | E1 对照的重定义（ID-122） | 无主（开放问题 24） |
