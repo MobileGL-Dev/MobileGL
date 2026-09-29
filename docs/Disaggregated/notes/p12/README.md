@@ -8,7 +8,7 @@
 - 形状：server APK 自建 `ANativeWindow`（`MobileGLDisplayActivity` 的 SurfaceView，进程内 TCP server，会话串行）把渲染流**上屏**；离屏路径保留、同一时刻一条活跃；client 以 `WindowKind::ServerOwned`（控制修订 3）**完全无头**接入，几何由 server 回传；失窗 → `Fatal{ServerWindowLost}` → 干净 device-lost。
 - 进展：15 个 `(P12)` 提交 + 审查轮修复（10 个问题，ID-P12-5..11）已并入 `feat/disaggregated`；主机门绿（ID-P12-14）、G1 成立（ID-P12-15）；审查后在 `1fb18d9e` 上完成 P12 定向 CTest 46/46 和 Redmi 真机七项复测。当前分支 `0fe01588` 后续提交只改了文档、文档检查范围和基准脚本说明文字，未改 P12 实现。
 - **2026-09-25 追加（会话交接 §4/§5.1）**：**device-lost 的 DECLINED 回复容忍**与**纹理上传的等待粒度**已落地，各有自己的 red-once 门（前者就是进世界后 `Fatal{ProtocolCorruption, "Fence.reply"}` 那条崩溃；后者让单条纯上传的回包等待 1 → 0）。真机端到端（进世界不崩、那一帧墙钟）与 G1 本机复核仍待做，见 [`DEVICELOST-AND-UPLOAD-WAITS.md`](DEVICELOST-AND-UPLOAD-WAITS.md)。
-- 未完成：出口门 (a) FCL 同机 spawn + 杀 server 的 device-lost、(b) 跨机 TCP 入世界 + P6.5 必测数；`CONTRACT-P12.md`；阶段表行里的其余条目（`unix:` 监听、DirectGLES 去全局、freezer、多 context、FCL 开关接线、D8 白名单）。
+- 出口门 (b) 已于 2026-09-28 通过（[`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)）。未完成：出口门 (a) FCL 同机 spawn + 杀 server 的 device-lost；`CONTRACT-P12.md`；阶段表行里的其余条目（`unix:` 监听、DirectGLES 去全局、freezer、多 context、FCL 开关接线、D8 白名单）。
 
 ## 阶段表行（原 `ROADMAP.md`）
 
@@ -73,7 +73,7 @@ Android 上的 server 自建窗口（自己的 SurfaceView）把 IPC 渲染流**
 | 主机门 | ✅ unit 2605/2605，spawn / tcp 与三条 Magma 双进程车道全绿；剩余红全部归容器的 CMake/CTest 版本 | ID-P12-14 |
 | 真机七项检查（Redmi `2f7cbe2e`） | ✅ 审查轮之前（`29b7b284`）及审查后（`1fb18d9e`）；审查后详细结果见上方复测补记 | PLAN-P12 §2、ID-P12-13 |
 | 出口门 (a) | ❌ FCL 同机 spawn、双后端入世界、**杀 server** 产生干净 device-lost（本轮的驱动是 trace_replay，device-lost 由按 HOME 触发） | PLAN-P12 §3 |
-| 出口门 (b) | ❌ **另一台机器**的 client 经 TCP 在 Redmi 入世界，并记录 P6.5 必测数（本轮 client 是 `adb forward` 环路） | PLAN-P12 §3 |
+| 出口门 (b) | ✅ 2026-09-28：WSL 里的 client 经 Wi-Fi TCP 重放 Minecraft 世界内 trace，rd12 ssim 0.999883、openra 1.0，251/251 与 128/128 帧，必测数已记录；client 是 trace 重放器，不是活的 Minecraft | [`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md) |
 
 ### 4. 在跑
 
@@ -81,7 +81,7 @@ Android 上的 server 自建窗口（自己的 SurfaceView）把 IPC 渲染流**
 
 ### 5. 下一步
 
-1. **出口门**：先 (b) 跨机 TCP 入世界 + P6.5 必测数，再 (a) FCL + 杀 server。
+1. **出口门**：(b) 已过（[`CROSSHOST-ACCEPTANCE.md`](CROSSHOST-ACCEPTANCE.md)）；剩 (a) FCL + 杀 server。
 2. **收尾**：写 `MG_Remote/CONTRACT-P12.md`；修 `notes/p12/gate.sh` 的 G1 符号比较（与基准不同源，会印出误导的 `added=N removed=N`）；按惯例做一次收官审查。
 3. **阶段表行里的余项**（交接时在树上核过，均未做）：in-process server 的 `unix:` 监听、DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局、cached-app freezer、多 context、FCL env 与 plugin 开关表接线、D8 窗口种类白名单。
 4. 其后按 [`ROADMAP.md`](../../ROADMAP.md)：monolith 跑道 P8；IPC 跑道 P9 → P10 → P11；P6.5 残余（39 例 device 矩阵 + 必测数）与 P3b/P4b 余项并行；`CONTRACT-P7.md` §12 的记录债按阶段认领。

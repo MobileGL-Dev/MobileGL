@@ -22,7 +22,7 @@
 | spawn+shm | 178.3 | 5.61 | 5.26 | **快 36%**；与 inproc 打平（历史门 8 同结论） |
 | spawn+tcp localhost | 21.0–23.1 | 43.3–48.3 | 45–49 | **比 shm 慢 ~8 倍** |
 | spawn+tcp localhost + `SPIN_US=2000` | 63.6 | 15.7 | — | 单 knob A/B，**2.9×** |
-| tcp over Wi-Fi（WSL → 手机，绕开 xray） | 17.4 | 57.4 | — | 单次；251/251 帧、rc=0；Wi-Fi RTT 4.6–110 ms（均值 30） |
+| tcp over Wi-Fi（WSL → 手机，绕开 xray） | 稳态 16.9–22.1（credit 1–3） | — | 43.6–63.7 | 三次；251/251 帧；含 51–53 s 加载帧的整段均值 13.3–16.5；详见 [`p12/CROSSHOST-ACCEPTANCE.md`](../p12/CROSSHOST-ACCEPTANCE.md) |
 
 ### openra（轻负载，128 帧；28 draws/帧、199 记录/帧）
 
@@ -33,7 +33,7 @@
 | spawn+shm | 88.8 | 11.27 | −12%，纯跨进程固定成本 |
 | spawn+tcp localhost | 76.9 | 13.00 | −24% |
 | spawn+tcp 同机 wlan0 IP（Wi-Fi 替代拓扑，不过空口） | 74.2–76.3 | 13.1–13.5 | ≈ tcp localhost，符合预期 |
-| tcp over Wi-Fi（WSL → 手机，绕开 xray） | 4.2 | 239.3 | 单次；128/128 帧；被 RTT × 同步点主导 |
+| tcp over Wi-Fi（WSL → 手机，绕开 xray） | 稳态 104.6–133.5（credit 1–3） | 7.6–9.6（中位） | 三次；128/128 帧。早先记的 4.2 fps 是均值被首帧拉低的读法，不是稳态 |
 
 ## 结论
 
@@ -65,13 +65,12 @@
    | seq 3 挂死 | 控制面帧重组 / 双 reader 竞态 | 主机 `xray_tun` 终结 TCP 后中继卡住 | 同一对二进制：经 xray 挂死 13/13，每次前送日志都停在同一字节（1093 B）；绕开后 openra 与 rd12 都 rc=0 |
    | 「client 字节已被 ACK」 | 手机内核 ACK | xray 本地 ACK | client 侧 `ss` 的 RTT 0.07–0.3 ms、PMTU 9000；手机看到的对端是 `192.168.31.183` |
    | 「server 卡在 MakeCurrent」 | apply 线程卡死 | server 已空闲 | 手机本地 `mgl.server.log` 走完了整个 backend 初始化，只有**前送**的日志停在第 7 条扩展；控制 / 数据两个 socket 的收发队列都是 0 |
-   | Wi-Fi RTT | avg 0.78 ms | 4.6–110 ms（均值 30，省电模式） | 绕开 xray 后 `ping` 20 次 |
-   | Wi-Fi 吞吐 | 19–22 MiB/s | 14.3–19.9 MiB/s（3 次） | 绕开 xray 后 `nb.py` 128 MiB，链路 11ax 5.8 GHz 1441 Mbps |
+   | Wi-Fi RTT | avg 0.78 ms | 3.3–110 ms，两次均值 19 / 30 | 绕开 xray 后两次 `ping` |
+   | Wi-Fi 吞吐 | 19–22 MiB/s 是上限 | **`toybox nc` 汇点低估了**：同期 server 自己读到 52.4 MB/s 持续 51 s（2,696 MB）；同一 rd12 加载帧第一次跑 235 s、之后 52 s，吞吐随时刻差 4 倍 | server 侧 `P65ServerFrame`；`nc` 18–22 MiB/s |
 
-   rd12 满速需要 ~49 MB/s。按中位 816 KB/帧算，**Wi-Fi 臂上限只有 ~18–26 fps**（原文的 40–45 算错了）。
-   实测 17.4 fps ≈ 14.2 MB/s，已经贴着带宽。
-   openra 每帧都有同步点：239 ms/帧 ≈ 8 × 平均 RTT。
-   要提速，得减流量（压缩 / 去重）并加深 credit 来摊薄 RTT。
+   **原来的两个 Wi-Fi 上限结论都撤回**：rd12 经 Wi-Fi 稳态 17–22 fps（每帧均值 1.5 MB、20–24 MB/s），低于实测 52 MB/s，所以稳态不是带宽约束，而是往返延迟；
+   openra 稳态 105–133 fps，并没有被 RTT 卡住。加载帧（2.7 GB）才是带宽约束。
+   `PRESENT_CREDIT` 1 → 2 让 rd12 稳态 +26%，2 → 3 只再 +4%。
    **P6.5（09-22）与 P12（09-26）里 WSL → 手机的链路数也都经过 xray**（`xray_tun` 自 09-21 起在线）：通过 / 失败的结论不受影响，但其中的链路 RTT / 吞吐需要带这个前提来读。
 
 ## 优化建议（按优先级）
