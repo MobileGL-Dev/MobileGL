@@ -17,6 +17,9 @@ set(MOBILEGL_WIRE_TESTS
         # P12 (on-screen server window): the server's own window holder, driven with a fake
         # window handle (no GL, no process, no platform window).
         ServerDisplayTest
+        # P11 B1: the apply thread's affinity / spin chosen per session from the peer's dial mode
+        # (Server/ApplyThreadPolicy.h, a pure function).
+        ApplyThreadPolicyTest
 )
 
 if (NOT WIN32)
