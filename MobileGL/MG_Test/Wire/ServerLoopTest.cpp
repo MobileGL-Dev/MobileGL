@@ -45,6 +45,7 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/CapsCodec.h>
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_Remote/Protocol/SurfaceOpCodec.h>
@@ -1195,6 +1196,32 @@ TEST(ServerLoopTest, AVoidForwarderCrossesAsOneDispatchedFrame) {
     EXPECT_EQ(loop.ControlFramesDispatched(), 1u)
         << "ServerSetEGLSwapInterval did not dispatch exactly one control frame; the forwarder "
            "reached the backend (or did nothing) without crossing the frame channel";
+
+    fixture.Stop();
+}
+
+// P10 B: THE EMIT TABLE'S SetSwapInterval SLOT REACHES THE SERVER. It was the last class-C slot
+// (Fatal{UnmigratedVerb, "SetSwapInterval"}) and is now the forwarder above, which is what
+// BackendObject::SetEGLSwapInterval calls for every eglSwapInterval on the client. The case goes
+// through the TABLE, not the forwarder by name, and requires the frame to have crossed: the same
+// dispatch counter as the case above. Red once by pointing the slot at a no-op lambda in
+// BuildRemoteEmitTable - the counter stays 0 - and with the P5 stub restored the call aborts
+// with Fatal{UnmigratedVerb, "SetSwapInterval"}.
+TEST(ServerLoopTest, TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame) {
+    ServerFixture fixture;
+    ASSERT_TRUE(fixture.Handshake());
+    ASSERT_TRUE(fixture.StartLoop());
+    Server::ServerLoop& loop = Server::ServerLoopInstance();
+    ASSERT_TRUE(fixture.WaitUntilTrulyParked());
+    ASSERT_EQ(loop.ControlFramesDispatched(), 0u);
+
+    const auto slot = MobileGL::MG_Remote::Client::RemoteEmitTable().SetSwapInterval;
+    ASSERT_NE(slot, nullptr);
+    slot(1);
+
+    EXPECT_EQ(loop.ControlFramesDispatched(), 1u)
+        << "the emit table's SetSwapInterval slot did not put exactly one control frame on the "
+           "server's channel; eglSwapInterval under split would not reach the server";
 
     fixture.Stop();
 }

@@ -40,11 +40,11 @@
 // function-pointer mailbox before it), and then lets the
 // base class keep the client-side books.
 //
-// SetEGLSwapInterval IS THE ONE THAT MUST NOT REACH THE TABLE. The base implementation
-// null-checks GetBackendFunctions().SetSwapInterval (BackendObject.cpp:402) - one of the 41
-// null checks R-4 turns into "always supported" - and SetSwapInterval is class C, so the base
-// implementation would Fatal on every eglSwapInterval. It is overridden to forward instead,
-// which is the caps-mirror-read rule's shape for a slot whose answer is "ask the server".
+// SetEGLSwapInterval IS NOT OVERRIDDEN (P10 B). It used to be, because the base implementation
+// calls GetBackendFunctions().SetSwapInterval (BackendObject.cpp:402) and that slot was the last
+// class-C Fatal in the emit table. The slot is now the forwarder the override called
+// (Server::ServerSetEGLSwapInterval, EmitTables.cpp), so the base's route IS the forward and a
+// second spelling of it here would only be a second place for the two to drift apart.
 
 #pragma once
 #include <Includes.h>
@@ -68,14 +68,13 @@ namespace MobileGL::MG_Remote::Client {
         const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override;
         BackendType GetBackendType() const override;
 
-        // ---- the nine EGL lifecycle virtuals ---------------------------------------------
+        // ---- the EGL lifecycle virtuals (SetEGLSwapInterval is the base's: see above) -----
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
         Bool CreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle) override;
         Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
-        void SetEGLSwapInterval(Int interval) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 

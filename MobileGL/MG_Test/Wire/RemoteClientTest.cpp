@@ -192,10 +192,11 @@ namespace {
 // =====================================================================================
 
 TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
-    // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots.
+    // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots, ... and since P10 B the
+    // swap interval: class C is EMPTY, every slot but the two local answers reaches the server.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 68u);
-    EXPECT_EQ(UnmigratedSlotCount(), 1u);
+    EXPECT_EQ(ImplementedVerbCount(), 69u);
+    EXPECT_EQ(UnmigratedSlotCount(), 0u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
               kRemoteEmitSlotCount);
 }
@@ -333,27 +334,32 @@ TEST(RemoteEmitTable, TheFiveEmittersAreTheOnesTheCensusMeasured) {
 }
 
 #if MGTEST_HAVE_FORK
-TEST(RemoteEmitTable, AnUnmigratedSlotAbortsAndNamesItself) {
+TEST(RemoteEmitTable, AnUnmigratedShapeRefusalAbortsAndNamesItself) {
     // THE DEATH TEST ON THE UnmigratedVerbFatal ARM. It asserts the exact wording, not merely
     // that the child died: a control that trips on any abort is satisfied by the wrong abort,
     // which is one of the three shapes R-16 was written after.
-    // GetTexImage is the wave-3 tail (CONTRACT-P5B.md §7): no P5b package flips it, so this
-    // case keeps its subject across the four P5b landings. (It was DrawElements until d1 made
-    // that a class-B emitter.)
-    const ChildResult r = RunInChild([] { RemoteEmitTable().SetSwapInterval(1); });
+    // NO SLOT IS CLASS C ANY MORE: P10 B retired SetSwapInterval, the last one and this case's
+    // subject until then. The funnel is still the named refusal of a class-B emitter's
+    // unrepresentable SHAPE (RefuseDrawByName, EmitF1Clear's default arm), and every refusal
+    // left on it is spelled "<slot>+<QUALIFIER>" - so that is what is driven here, through the
+    // funnel itself, because every emitter that reaches it needs a session and a context first.
+    const ChildResult r =
+        RunInChild([] { UnmigratedVerbFatal("MultiDrawElementsBaseVertex+CLIENT_INDICES"); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"MultiDrawElementsBaseVertex+CLIENT_INDICES\"}"),
+              std::string::npos)
+        << r.Log;
 }
 
-TEST(RemoteEmitTable, EachUnmigratedSlotNamesItsOwnSlot) {
+TEST(RemoteEmitTable, EachUnmigratedShapeRefusalNamesItsOwnShape) {
     // The half the case above cannot state on its own: that the name in the message is the
-    // slot's and not a constant. Two different slots, two different names - both from the
-    // wave-3 tail, for the reason the case above gives.
-    const ChildResult r = RunInChild([] { RemoteEmitTable().SetSwapInterval(1); });
+    // caller's and not a constant. Two different shapes, two different names.
+    const ChildResult r = RunInChild([] { UnmigratedVerbFatal("DrawArraysIndirect+CLIENT_COMMANDS"); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
-    EXPECT_EQ(r.Log.find("GetTexImage"), std::string::npos)
-        << "the Fatal message names a slot other than the one that was called:\n"
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DrawArraysIndirect+CLIENT_COMMANDS\"}"), std::string::npos)
+        << r.Log;
+    EXPECT_EQ(r.Log.find("MultiDrawElementsBaseVertex"), std::string::npos)
+        << "the Fatal message names a shape other than the one that was refused:\n"
         << r.Log;
 }
 
@@ -373,13 +379,20 @@ TEST(RemoteEmitTable, AFlippedDrawSlotDemandsASessionRatherThanNamingItselfUnmig
         << r.Log;
 }
 
-TEST(RemoteEmitTable, SetSwapIntervalIsClassCAndSaysSo) {
+TEST(RemoteEmitTable, SetSwapIntervalIsTheServerForwarderAndNotAFatal) {
     // The slot the verb census found by NOT mirroring GLImpl: SetSwapInterval has zero MG_Impl
-    // call sites and is reached only through the EGL path, so a table built from the 89 GLImpl
-    // sites would have left it null.
+    // call sites and is reached only through the EGL path (BackendObject::SetEGLSwapInterval),
+    // so a table built from the 89 GLImpl sites would have left it null. It was the last class-C
+    // slot; since P10 B it IS the control-frame forwarder the old BackendObject_Remote override
+    // called. With no apply loop in this child the forwarder answers NOT_INITIALIZED and returns
+    // (ServerLoop.cpp, PostSurfaceControlFrameWithCallerLock), so the child EXITS - the P5 stub
+    // died Fatal{UnmigratedVerb, "SetSwapInterval"} right here. That the frame then reaches a
+    // running server is ServerLoopTest's TheEmitTableSwapIntervalSlotCrossesAsOneDispatchedFrame.
+    EXPECT_EQ(reinterpret_cast<const void*>(RemoteEmitTable().SetSwapInterval),
+              reinterpret_cast<const void*>(&MobileGL::MG_Remote::Server::ServerSetEGLSwapInterval));
     const ChildResult r = RunInChild([] { RemoteEmitTable().SetSwapInterval(1); });
-    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"SetSwapInterval\"}"), std::string::npos) << r.Log;
+    ASSERT_TRUE(WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == 0) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos) << r.Log;
 }
 
 #endif // MGTEST_HAVE_FORK
@@ -389,13 +402,11 @@ TEST(RemoteEmitTable, SetSwapIntervalIsClassCAndSaysSo) {
 TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
     // The census's five measured slots plus the two companions that share their rows. Named
     // rather than counted, so a table that flipped a DIFFERENT seven is red here and not only
-    // in the arithmetic. The comparison is against a slot that is still class C: a flipped slot
-    // and an unflipped one cannot be the same pointer, which is what a forgotten class-B
-    // assignment would look like (class C is assigned FIRST in BuildRemoteEmitTable precisely so
-    // that the mistake is loud rather than null).
+    // in the arithmetic. This case used to compare each slot against a slot that was still
+    // class C; since P10 B there is none left to compare against, so the class is decided
+    // behaviourally by EachI1SlotReachesRequireSessionUnderItsOwnName below and this case keeps
+    // the pointer facts that need no fork.
     const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
-    const void* fatal = reinterpret_cast<const void*>(table.SetSwapInterval);
-    ASSERT_NE(fatal, nullptr);
     const void* const i1[] = {
         reinterpret_cast<const void*>(table.GL.BindImageTexture),
         reinterpret_cast<const void*>(table.GL.DispatchCompute),
@@ -411,9 +422,6 @@ TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
                                          "ShaderStorageBlockBinding"};
     for (SizeT i = 0; i < sizeof(i1) / sizeof(i1[0]); ++i) {
         EXPECT_NE(i1[i], nullptr) << kNames[i] << " is null";
-        EXPECT_NE(i1[i], fatal) << kNames[i]
-                                << " still points at an UnmigratedVerbFatal thunk; i1 flipped it "
-                                   "to class B";
     }
     // The two barrier slots and the two dispatch slots share a WIRE ROW but not an emitter: the
     // discriminant (ByRegion / IsIndirect) is set by the emitter, so one thunk for both would

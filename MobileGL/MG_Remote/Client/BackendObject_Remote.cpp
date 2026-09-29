@@ -32,7 +32,8 @@ namespace MobileGL::MG_Remote::Client {
 
         // ---- the EGL seam ------------------------------------------------------------------
         //
-        // THE NINE EGL VIRTUALS CALL v1's TWELVE FORWARDERS AND NOTHING ELSE. c1 round 1 built
+        // THE EGL VIRTUALS CALL v1's TWELVE FORWARDERS AND NOTHING ELSE (the swap interval's
+        // since P10 through the emit table's slot, not an override here). c1 round 1 built
         // its own trampolines over ServerLoop's control channel and ServerLoop::Backend(),
         // which ran the right driver call on the right thread and was still wrong, because
         // three of the twelve do MORE than forward:
@@ -403,15 +404,8 @@ namespace MobileGL::MG_Remote::Client {
         return MG_Backend::BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
-    void BackendObject_Remote::SetEGLSwapInterval(Int interval) {
-        // OVERRIDDEN BECAUSE THE BASE WOULD FATAL. BackendObject.cpp:402 null-checks
-        // GetBackendFunctions().SetSwapInterval and calls it when non-null - one of the 41
-        // null checks R-4 turns into "always supported" - and SetSwapInterval is class C, so
-        // the base implementation would abort on every eglSwapInterval. The answer is the
-        // caps-mirror-read rule's general shape: the question "can the presentation path take
-        // an interval" belongs to the server, so it is asked of the server.
-        Server::ServerSetEGLSwapInterval(interval);
-    }
+    // No SetEGLSwapInterval here any more (P10 B): the base class calls the emit table's slot,
+    // which is now Server::ServerSetEGLSwapInterval itself (EmitTables.cpp).
 
     void BackendObject_Remote::ReleaseEGLSurface(EGLSurface surface) {
         // P12: a released server-owned surface stops taking the server window's geometry.

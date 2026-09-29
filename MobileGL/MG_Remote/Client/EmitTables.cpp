@@ -34,6 +34,8 @@
 #include "GpuWritePending.h"
 #include "PersistentMapTracker.h"
 
+#include "../Server/ServerLoop.h"
+
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
@@ -1807,8 +1809,8 @@ namespace MobileGL::MG_Remote::Client {
         // per-package ownership assertions below then still hold, the totals stay arithmetic,
         // and a slot that changes class without changing the arithmetic is a build break. The
         // X-macro shape is kept so the DEFINITION and the ASSIGNMENT cannot drift apart. Three
-        // slots carry a body the macro cannot (DispatchCompute, DispatchComputeIndirect,
-        // SetSwapInterval) and are written out by hand below.
+        // slots carried a body the macro cannot (DispatchCompute, DispatchComputeIndirect,
+        // SetSwapInterval) and were written out by hand below; all three are class B now.
         //
         //   d1   indexed / instanced / multi-draw / indirect draws -> draw_vbo (59), its
         //        kDrawIsIndirect tail and its kDrawHasUserIndices span
@@ -1849,7 +1851,8 @@ namespace MobileGL::MG_Remote::Client {
 
 #define MGR_UNMIGRATED_F1_SLOTS(X)
 
-        // The wave-3 tail. SetSwapInterval is hand-written below (it is not a GL.* slot).
+        // The wave-3 tail. Empty since P10 B retired SetSwapInterval (it was not a GL.* slot and
+        // was never a row here).
 #define MGR_UNMIGRATED_TAIL_SLOTS(X)
 
         // The non-void ones, kept apart only because the macro body differs: a [[noreturn]]
@@ -1880,8 +1883,13 @@ namespace MobileGL::MG_Remote::Client {
         // hook before their Fatal so that the package flipping them would inherit a call site
         // that was already correct, and EmitDispatchCompute / EmitDispatchComputeIndirect above
         // are that inheritance - same two calls, same order, the record where the Fatal was.
-
-        void SetSwapInterval_Unmigrated(Int) { UnmigratedVerbFatal("SetSwapInterval"); }
+        //
+        // THE LAST HAND-WRITTEN STUB, SetSwapInterval_Unmigrated, IS GONE TOO (P10 B), and class C
+        // is empty. It was never reachable: eglSwapInterval reaches the table only through
+        // BackendObject::SetEGLSwapInterval, and BackendObject_Remote overrode that to call
+        // Server::ServerSetEGLSwapInterval - a SurfaceControlFrame on the control channel, which
+        // crosses processes. The slot now IS that forwarder (assigned in the class-B block), the
+        // override is deleted, and there is one route from eglSwapInterval to the server.
 
         // The counts, as arithmetic. MGR_COUNT_ONE expands to `+ 1` per row.
 #define MGR_COUNT_ONE(Name, Ret, Sig) +1
@@ -1890,9 +1898,8 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kUnmigratedI1 = 0 MGR_UNMIGRATED_I1_SLOTS(MGR_COUNT_ONE);
         constexpr Uint32 kUnmigratedT2 = 0 MGR_UNMIGRATED_T2_SLOTS(MGR_COUNT_ONE);
         constexpr Uint32 kUnmigratedF1 = 0 MGR_UNMIGRATED_F1_SLOTS(MGR_COUNT_ONE);
-        // + SetSwapInterval, written out by hand.
         constexpr Uint32 kUnmigratedTail =
-            0 MGR_UNMIGRATED_TAIL_SLOTS(MGR_COUNT_ONE) MGR_UNMIGRATED_TAIL_VALUE_SLOTS(MGR_COUNT_ONE) + 1;
+            0 MGR_UNMIGRATED_TAIL_SLOTS(MGR_COUNT_ONE) MGR_UNMIGRATED_TAIL_VALUE_SLOTS(MGR_COUNT_ONE);
 #undef MGR_COUNT_ONE
         constexpr Uint32 kUnmigratedSlots =
             kUnmigratedD1 + kUnmigratedI1 + kUnmigratedT2 + kUnmigratedF1 + kUnmigratedTail;
@@ -1903,7 +1910,9 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsI1 = 7;
         constexpr Uint32 kEmittedSlotsT2 = 7;
         constexpr Uint32 kEmittedSlotsF1 = 11;
-        constexpr Uint32 kEmittedSlotsTail = 3; // BlitNamedFramebuffer, both texture readbacks
+        // BlitNamedFramebuffer, both texture readbacks, and SetSwapInterval (P10 B) - the one
+        // class-B slot that crosses as a surface control frame rather than a SEG_CMD record.
+        constexpr Uint32 kEmittedSlotsTail = 4;
         constexpr Uint32 kEmittedSlotsSync = 5;
         constexpr Uint32 kEmittedSlotsQueries = 11;
         constexpr Uint32 kEmittedSlots =
@@ -1938,7 +1947,6 @@ namespace MobileGL::MG_Remote::Client {
             MGR_UNMIGRATED_GL_SLOTS(MGR_ASSIGN_UNMIGRATED)
             MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_ASSIGN_UNMIGRATED)
 #undef MGR_ASSIGN_UNMIGRATED
-            table.SetSwapInterval = &SetSwapInterval_Unmigrated;
 
             table.GL.FenceSync = &EmitFenceSync;
             table.GL.ClientWaitSync = &EmitClientWaitSync;
@@ -1996,6 +2004,11 @@ namespace MobileGL::MG_Remote::Client {
             table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
             table.GL.BlitNamedFramebuffer = &EmitBlitNamedFramebuffer;
             table.Present = &EmitPresent;
+            // P10 B: the swap interval is the server's presentation-path question, so the slot
+            // forwards it there as a SurfaceControlFrame (ServerLoop.cpp's SetSwapInterval arm),
+            // across processes on spawn and tcp - the forwarder BackendObject_Remote's deleted
+            // SetEGLSwapInterval override used to call.
+            table.SetSwapInterval = &Server::ServerSetEGLSwapInterval;
             // ---- class B, P5b t2. Assigned AFTER the class-C block above, which is what makes
             // the flip a single-line change per slot: the Fatal thunk is overwritten, and a slot
             // whose row is removed from MGR_UNMIGRATED_T2_SLOTS but not assigned here would be

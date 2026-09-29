@@ -38,7 +38,10 @@
 //      Present has ZERO MG_Impl call sites: it is reached through EGLImpl.cpp:178 ->
 //      BackendObject.cpp:396, so mirroring GLImpl will not find it.
 //   C. Fatal{UnmigratedVerb} - the remaining 64, SetSwapInterval and GetGpuTimestampNs among
-//      them.
+//      them. (That was P5's partition. P5b..P10 moved every one of them to B; the last,
+//      SetSwapInterval, is a forward to the server's control channel since P10, and class C is
+//      empty. UnmigratedVerbFatal below remains the named refusal of a class-B emitter's
+//      unrepresentable SHAPE - "<slot>+<QUALIFIER>".)
 //
 // AND THE RULE R-4 WOULD OTHERWISE BREAK. 41 of the 69 slots are null-checked at their call
 // site, and several of those checks are CAPABILITY PROBES, not safety checks - BeginOcclusionQuery
