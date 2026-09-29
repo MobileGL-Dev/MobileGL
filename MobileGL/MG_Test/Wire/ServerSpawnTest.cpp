@@ -58,6 +58,7 @@
 #include <iterator>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
@@ -65,6 +66,7 @@
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #endif
 
@@ -212,6 +214,19 @@ namespace {
             }
         }
     };
+
+    // P11 PAIR: one bare connection to a filesystem endpoint and nothing written on it - what the
+    // server app's readiness probe opens. -1 while nobody listens there yet.
+    int BareConnect(const std::string& path) {
+        const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        sockaddr_un address{};
+        address.sun_family = AF_UNIX;
+        std::strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+        if (::connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) return fd;
+        ::close(fd);
+        return -1;
+    }
 
     // The two halves a real deployment does separately: start a process, then
     // connect to it. The bounded connect retry is the CLIENT's, not the
@@ -928,6 +943,31 @@ TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
     EXPECT_EQ(exitCode, 0) << "the server must exit cleanly on EOF, not be killed";
     EXPECT_EQ(Server::CountOwnChildren(), before) << "a zombie would still be counted here";
+}
+
+TEST(ServerSpawnTest, AStrayConnectionAheadOfTheClientDoesNotTakeItsSession) {
+    // P11 PAIR, B0-CROSS-APP.md F2 as it happened on the device: the server app's readiness probe -
+    // a connect() and a close() - reached the listener just before the real client. Paired by
+    // arrival order, the probe became the client's control connection, the session read it and ended
+    // ("control peer closed before sending a first frame") and the client got no Welcome. Paired by
+    // the PairBind nonce, the probe is dropped and the client's session comes up.
+    const std::string endpoint = Endpoint("stray");
+    Session session;
+    ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
+    ScopedSessionCleanup cleanup{session};
+    int stray = -1;
+    for (int attempt = 0; attempt < 400 && stray < 0; ++attempt) {
+        stray = BareConnect(endpoint);
+        if (stray < 0) std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    ASSERT_GE(stray, 0) << "the server never listened on " << endpoint;
+    ::close(stray);
+    ASSERT_EQ(Transport::SocketTransport::ConnectTo(endpoint, 10000, session.client), MOBILEGL_OK);
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK) << "the probe took the client's place";
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
+    EXPECT_EQ(exitCode, 0);
 }
 
 TEST(ServerSpawnTest, AnEglControlOpCrossesToTheOtherProcessAndAnswers) {
