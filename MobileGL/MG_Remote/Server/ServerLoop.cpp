@@ -476,11 +476,24 @@ namespace MobileGL::MG_Remote::Server {
             return signals.CmdHead->load(std::memory_order_acquire) != ring.LocalTail();
         };
 
+        // P10 (CONTRACT-P10.md §1): the client answers a fence poll from what this thread reports,
+        // so a fence the GPU finishes must be reported whether or not another record ever arrives.
+        // After every drain batch the pending fences are asked (a status query, no submit); a
+        // thread about to go idle submits first and, while any fence is still pending, parks for
+        // at most kFenceIdlePollMs rather than for ever. Never on a full SEG_EVENT: posting there
+        // would park this thread inside the post, and the ring test below already says "not now".
+        ServerVerbSink& verbs = session.Applier().Verbs();
+        constexpr Uint32 kFenceIdlePollMs = 1;
+        const auto eventRingHasRoom = [signals] {
+            return signals.EventRingFull->load(std::memory_order_acquire) == 0;
+        };
+
         for (;;) {
             PumpControlRequest();
             if (stopOrForfeit()) break;
-            if (signals.EventRingFull->load(std::memory_order_acquire) == 0) DrainRing();
+            if (eventRingHasRoom()) DrainRing();
             if (stopOrForfeit()) break;
+            if (eventRingHasRoom() && !SessionLatched()) verbs.ReportSignaledFences(/*flush=*/false);
             // PH-1 (3): a latched session applies nothing more, so this thread leaves the loop
             // (and does not spin on a ring whose head is still ahead of a tail DrainRing will no
             // longer move). The exit path below tears the backend down as for a Stop; the
@@ -493,6 +506,12 @@ namespace MobileGL::MG_Remote::Server {
                 break;
             }
             if (ready()) continue;
+            // P10: going idle with a client fence still pending - submit what the driver holds and
+            // ask again, once, before the park.
+            if (verbs.HasUnreportedFences() && eventRingHasRoom()) {
+                verbs.ReportSignaledFences(/*flush=*/true);
+                if (ready()) continue;
+            }
 
             const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
             // THE WAIT LEDGER'S SERVER HALF (P5d round 3, package T item 4). The client may not
@@ -519,18 +538,21 @@ namespace MobileGL::MG_Remote::Server {
             }
             // Flush-on-idle publishes the last reply record even below the batch threshold.
             session.FlushDataProgress();
+            const Bool fencePending = verbs.HasUnreportedFences();
             const bool woke = bell.Wait(*signals.ConsumerParked, ready, spinUs,
-                                        Transport::kWaitForever, &m_parkBlocks);
+                                        fencePending ? kFenceIdlePollMs : Transport::kWaitForever,
+                                        &m_parkBlocks);
             if (!woke) {
-                // Wait returns false only on a dead bell or an expired deadline, and this park
-                // has no deadline. A dead bell IS the shutdown signal (table 3's teardown step
-                // 2); treating it as anything else would spin at full clock for ever, since
-                // parking on a dead bell no longer blocks.
+                // Wait returns false only on a dead bell or an expired deadline. A dead bell IS the
+                // shutdown signal (table 3's teardown step 2); treating it as anything else would
+                // spin at full clock for ever, since parking on a dead bell no longer blocks.
                 if (bell.Dead()) {
                     MGLOG_D("MG_Remote server: the consumer doorbell is dead; mgl-srv-apply is "
                             "shutting down");
                     break;
                 }
+                // P10: the deadline is the fence re-check, and the only park that has one.
+                if (fencePending) continue;
                 MGLOG_E("MG_Remote server: Doorbell::Wait(kWaitForever) returned false on a live "
                         "bell - that is impossible by Doorbell::Wait's park loop (the only "
                         "false returns are the Dead() arm and an expired deadline) and means "

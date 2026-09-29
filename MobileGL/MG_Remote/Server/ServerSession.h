@@ -210,6 +210,10 @@ namespace MobileGL::MG_Remote::Server {
         // ruling (§1), not a check. A session that has not accepted drops the error with a
         // loud line, exactly as RecordError's own no-live-context arm does.
         void PostGlError(Uint32 code, const char* message);
+        // P10 (CONTRACT-P10.md §1): one kEventFenceSignaled for a client fence the apply thread
+        // found signaled. Posted and published at once - a client may be polling on it right now.
+        // Dropped with the same loud line as PostGlError before Accept.
+        void PostFenceSignaled(MG_Pipe::MGPipeHandle fence);
         Transport::ITransport* Control_Plane();
 
         // ---- PH-6 (ID-P7-2): THE REVERSE CHANNEL IS FORFEITED, NOT FATAL -------------------

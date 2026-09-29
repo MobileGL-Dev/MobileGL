@@ -1128,6 +1128,22 @@ namespace MobileGL::MG_Remote::Server {
         PublishEvents();
     }
 
+    void ServerSession::PostFenceSignaled(MG_Pipe::MGPipeHandle fence) {
+        if (!m_accepted) {
+            MGLOG_E_ONCE("MG_Remote server: PostFenceSignaled {%u, %u} before Accept - dropped, "
+                         "there is no SEG_EVENT to carry it on",
+                         fence.Slot, fence.Gen);
+            return;
+        }
+        void* slot = ReserveEventOrBlock(*this, Transport::kEventFenceSignaled, "kEventFenceSignaled",
+                                         sizeof(Transport::EventFenceSignaledHead));
+        Transport::EventFenceSignaledHead head{};
+        head.Fence.Slot = fence.Slot;
+        head.Fence.Gen = fence.Gen;
+        std::memcpy(slot, &head, sizeof(head));
+        PublishEvents();
+    }
+
     // PH-6 (ID-P7-2). THE FIRST DROP, AND THE LATCH IT RAISES.
     //
     // Logged ONCE, by name, with everything a triage needs: which event, how big, what the

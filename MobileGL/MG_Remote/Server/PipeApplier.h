@@ -46,6 +46,8 @@
 #include "../Transport/Ring.h"
 #include "../Wire/PipeWireCodec.h"
 
+#include <deque>
+
 namespace MobileGL::MG_Remote::Server {
 
     // P5e (gl, ID-111): DOES THIS SERVER PUBLISH kCapRunAheadApply? Asked of the server's OWN
@@ -157,6 +159,15 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnFenceWait(const MG_Pipe::MGPFenceWait&, Uint32&) override;
         Bool OnFenceWaitServer(const MG_Pipe::MGPFenceWait&) override;
         void ReleaseFences();
+        // P10 (CONTRACT-P10.md §1): post kEventFenceSignaled for each client fence, in creation
+        // order, that the GPU has finished, up to the first one still pending. `flush` = the
+        // apply thread is going idle: submit what the driver holds first. Apply thread only.
+        Uint32 ReportSignaledFences(Bool flush);
+        // True while a created fence has not been reported: the loop then parks with a deadline
+        // instead of for ever, so a fence that finishes while no record arrives is still seen.
+        Bool HasUnreportedFences() const { return !m_unreportedFences.empty(); }
+        Uint64 FencesReported() const { return m_fencesReported; }
+        Uint64 FenceIdleFlushes() const { return m_fenceIdleFlushes; }
         Bool OnQueryCreate(const MG_Pipe::MGPQueryDesc&) override;
         Bool OnQueryBegin(const MG_Pipe::MGPQueryDesc&) override;
         Bool OnQueryEnd(const MG_Pipe::MGPQueryDesc&) override;
@@ -321,6 +332,10 @@ namespace MobileGL::MG_Remote::Server {
         };
         FenceEntry& FindFence(MG_Pipe::MGPipeHandle handle);
         UnorderedMap<Uint32, FenceEntry> m_fences;
+        // P10: created and not yet reported signaled, oldest first.
+        std::deque<MG_Pipe::MGPipeHandle> m_unreportedFences;
+        Uint64 m_fencesReported = 0;
+        Uint64 m_fenceIdleFlushes = 0;
         struct QueryEntry {
             Uint32 Gen = 0;
             Uint32 Kind = 0;

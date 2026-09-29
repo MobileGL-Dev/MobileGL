@@ -87,6 +87,8 @@ add_executable(MobileGLIntegrationTest
     # P9 (W1): reads into a pixel pack buffer answered by nothing. Ordinary GL cases too, plus
     # one wire case that skips where there is no wire.
     Scenarios/PackBufferReadbackScenario.cpp
+    # P10 (A): fence polls answered from the server's reports.
+    Scenarios/FencePollScenario.cpp
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClientVertexArrayScenario.cpp
@@ -2458,6 +2460,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # reply-slot record, one mark per read). The Magma arms are the `Pbo.` block after the Band
     # block below.
     mgl_itest_register_split_arms("PackBufferReadbackScenario.*" "")
+    # P10 (A, MG_Remote/CONTRACT-P10.md §1): fence polls answered from kEventFenceSignaled - the
+    # idiom's poll loops end (with and without the flush bit), a signaled fence's polls cross
+    # nothing, and an idle server still reports a fence that finishes. The Magma arms are the
+    # `Fence.` block beside the `Pbo.` block below.
+    mgl_itest_register_split_arms("FencePollScenario.*" "")
 
     # DepthStencilReadbackMatrixScenario GETS ITS OWN BLOCK, because it needs a variable the
     # registration macro cannot carry: MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1.
@@ -3643,6 +3650,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-pbo${mglItestArmLogTag}-${pboCase}.log")
+        endforeach()
+        # P10 (A): the fence polls on Magma. The server half is backend-neutral (the backend
+        # table's FenceSync / GetSyncStatus / ClientWaitSync), so the same three cases.
+        foreach(fenceCase ZeroTimeoutPollLoopsEndInBoundedTime
+                          PollsOfASignaledFenceCrossNothing
+                          AFenceThatFinishesWhileTheClientOnlyPollsIsReported)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fence."
+                TEST_FILTER "FencePollScenario.${fenceCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
         endforeach()
     endforeach()
 endif()

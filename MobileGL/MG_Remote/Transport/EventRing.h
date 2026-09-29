@@ -50,6 +50,7 @@ namespace MobileGL::MG_Remote::Transport {
         kEventGpuWritten = 2,      // MGPipeCallbacks::OnGpuWritten
         kEventSurfaceChanged = 3,  // MGPipeCallbacks::OnSurfaceChanged
         kEventGlError = 4,         // PipeInputs::RecordError, posted by the server session
+        kEventFenceSignaled = 5,   // P10: a client fence the server saw signaled (CONTRACT-P10 §1)
     };
 
     // The 8-byte {slot, gen} pair, mirrored (MGPipeHandles.h:54-65).
@@ -110,6 +111,14 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint32_t MessageBytes; // strlen + 1, the NUL included
     };
     static_assert(sizeof(EventGlErrorHead) == 8, "wire shape");
+    // P10 (CONTRACT-P10.md §1): the fence the server's apply thread found signaled, once per
+    // fence. The client keeps the answer and gives it to every later glClientWaitSync /
+    // glGetSynciv(GL_SYNC_STATUS) on that fence without a round trip.
+    struct EventFenceSignaledHead {
+        EventHandle Fence;
+    };
+    static_assert(sizeof(EventFenceSignaledHead) == 8, "wire shape");
+
     inline constexpr std::uint32_t kEventGlErrorMaxMessageBytes = 1024;
     static_assert(kEventGlErrorMaxMessageBytes == 1024,
                   "CONTRACT-P5C §1 caps an inline GL-error message at 1024 bytes, NUL included");

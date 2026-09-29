@@ -22,6 +22,7 @@
 #include "../Transport/FdPassing.h"
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
+#include "EmitTables.h"
 
 #include <MGGitHash.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
@@ -482,9 +483,22 @@ namespace MobileGL::MG_Remote::Client {
                     ++delivered;
                     break;
                 }
+                case Transport::kEventFenceSignaled: {
+                    // P10 (CONTRACT-P10.md §1): remembered for every later poll of that fence.
+                    if (view.payloadSize < sizeof(Transport::EventFenceSignaledHead)) {
+                        SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"kEventFenceSignaled\"} - "
+                                "a %llu-byte record is shorter than the fence handle it carries",
+                                static_cast<unsigned long long>(view.payloadSize));
+                    }
+                    const auto* head =
+                        static_cast<const Transport::EventFenceSignaledHead*>(view.payload);
+                    NoteFenceSignaledByServer(MG_Pipe::MGPipeHandle{head->Fence.Slot, head->Fence.Gen});
+                    ++delivered;
+                    break;
+                }
                 default:
-                    MGLOG_W("MG_Remote client: reverse-channel record kind %u is not consumed in "
-                            "P5c (four of the ten callbacks are armed; the rest are P9's)",
+                    MGLOG_W("MG_Remote client: reverse-channel record kind %u is not one this "
+                            "build consumes",
                             static_cast<unsigned>(view.kind));
                     break;
                 }
@@ -2233,6 +2247,12 @@ namespace MobileGL::MG_Remote::Client {
                         "MGPipe: Fatal{ProtocolCorruption, link flush} published commands were not delivered (rc=%d)",
                         static_cast<int>(result));
         }
+    }
+
+    void ClientSession::PollEntry() {
+        if (!m_started || m_events == nullptr || DeviceLost()) return;
+        Flush();
+        DrainEventRing(*m_events);
     }
 
     void ClientSession::Finish() {

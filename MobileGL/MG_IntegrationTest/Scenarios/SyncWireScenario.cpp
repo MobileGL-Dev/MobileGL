@@ -30,7 +30,9 @@ TEST_F(SyncWireScenario, FenceWaitStatusAndDeletionCrossAndPreserveRenderedPixel
     glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
     glDeleteSync(sync);
     EXPECT_FALSE(glIsSync(sync));
-    EXPECT_GE(PeekSplitRuntime().emitSeq, before + 5);
+    // Create, the server-side wait and the delete always cross; since P10 the two polls may be
+    // answered from the server's fence report instead (FencePollScenario), so they are not counted.
+    EXPECT_GE(PeekSplitRuntime().emitSeq, before + 3);
     GLubyte pixel[4]{};
     glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
     const int expected[4] = {64, 128, 191, 255};

@@ -284,4 +284,23 @@ namespace MobileGL::MG_Remote::Client {
                                               GLsizei drawCount, GLsizei stride,
                                               GLintptr parameterOffset, Bool hasParameterBuffer);
 
+    // ---- P10 (CONTRACT-P10.md §1): fence polls answered from the reverse channel ----------
+    //
+    // The event drain's half: the server reported `fence` signaled (kEventFenceSignaled). Every
+    // later glClientWaitSync / glGetSynciv(GL_SYNC_STATUS) on it answers without a round trip.
+    void NoteFenceSignaledByServer(MG_Pipe::MGPipeHandle fence);
+
+    // What the fence polls cost, for the lanes. `LocalAnswers` = polls answered with no record
+    // (signaled or not); `Escalations` = zero-timeout polls that had gone unanswered
+    // MOBILEGL_IPC_POLL_ESCALATE times in a row and took a round trip; `RoundTrips` = every
+    // fence answer that crossed (escalations, non-zero timeouts, POLL_ESCALATE=0);
+    // `ServerReports` = kEventFenceSignaled records consumed.
+    struct FencePollCounters {
+        Uint64 LocalAnswers = 0;
+        Uint64 Escalations = 0;
+        Uint64 RoundTrips = 0;
+        Uint64 ServerReports = 0;
+    };
+    FencePollCounters ReadFencePollCounters();
+
 } // namespace MobileGL::MG_Remote::Client

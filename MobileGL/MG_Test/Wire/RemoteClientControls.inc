@@ -789,6 +789,9 @@ struct DecliningSyncPeer : Codec::WireVerbSink {
 
 TEST(RemoteClientControls, DeclinedFenceReplyAnswersSignaledInsteadOfAborting) {
     const auto child = RunInChild([] {
+        // The ROUND-TRIP arm is the subject: since P10 a zero-timeout poll of a fence the server
+        // has not reported is answered "not yet" locally, and would never reach the reply.
+        MG_Config::Ipc.PollEscalate = 0;
         StartControlSession();
         DecliningSyncPeer peer;
         peer.Install();
@@ -831,6 +834,7 @@ TEST(RemoteClientControls, ErrorFenceReplyStillRefusesByName) {
     // THE TOLERANCE IS NOT BLANKET. An ERROR is a transport fault or a server-side refusal,
     // never "the server said no" (R-5/M4), and it keeps the named Fatal it always had.
     const auto child = RunInChild([] {
+        MG_Config::Ipc.PollEscalate = 0; // the round-trip arm, as above
         StartControlSession();
         // The rows still decline (so the fence is never handed to a backend that cannot
         // create one) and EVERY answer that is posted says ERROR instead.
@@ -843,6 +847,60 @@ TEST(RemoteClientControls, ErrorFenceReplyStillRefusesByName) {
         (void)RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0);
     });
     ExpectNamedAbort(child, "Fatal{ProtocolCorruption, \"Fence.reply\"}");
+}
+
+// =====================================================================================
+// P10 A (CONTRACT-P10.md §1): the escalation bound, counted at the record
+// =====================================================================================
+//
+// A peer that never reports the fence and answers every FenceWait record TIMEOUT_EXPIRED: with
+// MOBILEGL_IPC_POLL_ESCALATE = 4 the first three zero-timeout polls are answered locally and
+// cross nothing, the fourth crosses, and the count starts again. A peer that DOES report (here:
+// the reply of a wait that saw it signaled) is answered locally from then on, with no record.
+struct CountingFencePeer : Codec::WireVerbSink {
+    std::atomic<Uint32> waits{0};
+    std::atomic<Bool> signaled{false};
+    Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override { return true; }
+    Bool OnFenceWait(const MGPFenceWait&, Uint32& result) override {
+        waits.fetch_add(1);
+        result = signaled.load() ? GL_ALREADY_SIGNALED : GL_TIMEOUT_EXPIRED;
+        return true;
+    }
+    void Install() {
+        const auto rc = Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
+            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+            decoder.SetVerbSink(static_cast<CountingFencePeer*>(self));
+            return MOBILEGL_OK;
+        }, this);
+        if (rc != MOBILEGL_OK) ::_exit(160);
+    }
+};
+
+TEST(RemoteClientControls, AnUnreportedFencePollCrossesOnlyEveryPollEscalateTimes) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.PollEscalate = 4;
+        StartControlSession();
+        CountingFencePeer peer;
+        peer.Install();
+        auto* sync = RemoteEmitTable().GL.FenceSync();
+        if (sync == nullptr) ::_exit(161);
+        for (int i = 0; i < 3; ++i)
+            if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_TIMEOUT_EXPIRED) ::_exit(162);
+        ClientSessionInstance().WaitForApplyToCatchUp("P10 control");
+        if (peer.waits.load() != 0) ::_exit(163); // three local answers, no record
+        if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_TIMEOUT_EXPIRED) ::_exit(164);
+        if (peer.waits.load() != 1) ::_exit(165); // the fourth crossed
+        peer.signaled.store(true);
+        for (int i = 0; i < 3; ++i) (void)RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0);
+        if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_ALREADY_SIGNALED) ::_exit(166);
+        if (peer.waits.load() != 2) ::_exit(167); // the next escalation learned it
+        for (int i = 0; i < 10; ++i)
+            if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_ALREADY_SIGNALED) ::_exit(168);
+        if (peer.waits.load() != 2) ::_exit(169); // known signaled: answered locally for good
+        RemoteEmitTable().GL.DeleteSync(sync);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
 }
 
 TEST(RemoteClientControls, DeviceLostRespecifyDoesNotDieOfTheUncarriedBytesCheck) {

@@ -155,6 +155,8 @@ namespace MobileGL::MG_Remote::Server {
         entry.Live = true;
         // GL_Sync.cpp treats an absent slot or a null creation result as always signaled.
         entry.Native = table->GL.FenceSync == nullptr ? nullptr : table->GL.FenceSync();
+        // P10: in creation order, for ReportSignaledFences - the order the GPU finishes them in.
+        m_unreportedFences.push_back(handle);
         return true;
     }
 
@@ -216,6 +218,58 @@ namespace MobileGL::MG_Remote::Server {
             }
         }
         m_fences.clear();
+        m_unreportedFences.clear();
+    }
+
+    // P10 (CONTRACT-P10.md §1): WHICH OF THE CLIENT'S FENCES HAS THE GPU FINISHED.
+    //
+    // The client answers a poll of a fence it knows is signaled without asking - that is the
+    // whole of package A - and it learns what is signaled only from here. Walked in CREATION
+    // order and stopped at the first one still pending: one context's GPU work completes in
+    // the order it was submitted, so a later fence cannot be done while an earlier one is not,
+    // and the steady-state cost is one status query per drain batch. (Were a backend ever to
+    // finish them out of order, the later fence would only be reported late - an answer the
+    // client then gets by its own round trip - never early.)
+    //
+    // `flush`: the apply thread is about to go idle. A fence whose commands the driver still
+    // holds never signals on its own, and an idle server submits nothing more, so the first
+    // pending fence is asked through ClientWaitSync(GL_SYNC_FLUSH_COMMANDS_BIT, 0) - the one
+    // backend-neutral way both backends take to submit what they hold - instead of the plain
+    // status query. Only when idle: mid-stream the next records flush soon enough, and a
+    // submit per batch would cost Magma its command-buffer batching.
+    Uint32 ServerVerbSink::ReportSignaledFences(Bool flush) {
+        if (m_unreportedFences.empty()) return 0;
+        ServerSession* session = ServerSession::Active();
+        if (session == nullptr || m_backend == nullptr) return 0;
+        const MG_Backend::GLFunctionsTable& gl = m_backend->GetBackendFunctions().GL;
+        Uint32 reported = 0;
+        while (!m_unreportedFences.empty()) {
+            const MG_Pipe::MGPipeHandle handle = m_unreportedFences.front();
+            const auto it = m_fences.find(handle.Slot);
+            if (it == m_fences.end() || !it->second.Live || it->second.Gen != handle.Gen) {
+                // Deleted before it was seen signaled: nobody can poll it any more.
+                m_unreportedFences.pop_front();
+                continue;
+            }
+            const FenceEntry& entry = it->second;
+            Bool signaled = entry.Native == nullptr;
+            if (!signaled) {
+                if (flush && gl.ClientWaitSync != nullptr) {
+                    const GLenum status = gl.ClientWaitSync(entry.Native, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+                    signaled = status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED;
+                    flush = false; // one submit is all an idle server owes
+                    ++m_fenceIdleFlushes;
+                } else {
+                    signaled = gl.GetSyncStatus == nullptr || gl.GetSyncStatus(entry.Native);
+                }
+            }
+            if (!signaled) break;
+            m_unreportedFences.pop_front();
+            session->PostFenceSignaled(handle);
+            ++reported;
+        }
+        m_fencesReported += reported;
+        return reported;
     }
 
 #include "QueryServer.inc"

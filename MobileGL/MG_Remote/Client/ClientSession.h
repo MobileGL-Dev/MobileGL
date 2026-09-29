@@ -281,6 +281,12 @@ namespace MobileGL::MG_Remote::Client {
         // true while a run-ahead queue still holds them, so under run-ahead glFinish becomes
         // exactly WaitForApplyToCatchUp + the drain that comes with it.
         void Finish();
+        // P10 (CONTRACT-P10.md §1): a polling entry point (glClientWaitSync, glGetSynciv(
+        // GL_SYNC_STATUS)) is a doorbell point. Everything published so far - the polled fence's
+        // own create record above all - is flushed to the server, and the reverse channel is
+        // drained, so a fence the server has since reported is known before the poll answers.
+        // Publishes nothing and waits for nothing.
+        void PollEntry();
         // Submit published commands without waiting for application. This is
         // glFlush's contract and the frame-submit boundary for Present.
         void Flush();

@@ -603,6 +603,13 @@ namespace MobileGL::MG_Config {
         // red-once of the wait-count gate (PackBufferReadbackScenario): it must show a reply
         // wait per read.
         Uint32 PboReadbackSync = 0;
+        // MOBILEGL_IPC_POLL_ESCALATE (P10, MG_Remote/CONTRACT-P10.md §1): a glClientWaitSync with a
+        // zero timeout or a glGetSynciv(GL_SYNC_STATUS) is answered by the client from what the
+        // server reported (kEventFenceSignaled) - "signaled" when it has been, "not yet" otherwise
+        // - and only the Nth "not yet" in a row on one fence crosses as a real round trip, so a
+        // poll loop cannot outlive a late report. 0 = every poll crosses, as before P10: the A/B
+        // arm and the red-once of the no-reply gate (FencePollScenario).
+        Uint32 PollEscalate = 64;
         // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (client keeps the shadow and pushes), which
         // is the only tier P5 implements and the reason persistent-map-push can be non-zero
         // at all (R-6). 0 and 1 parse and are Fatal at use with "P11"; they exist now so the

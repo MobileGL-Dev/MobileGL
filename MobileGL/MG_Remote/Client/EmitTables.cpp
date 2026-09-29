@@ -1592,15 +1592,87 @@ namespace MobileGL::MG_Remote::Client {
         // =============================================================================
         // The frontend sees a local opaque token; neither this address nor the driver's
         // BackendSyncHandle is serialized. The Fence-kind slot allocator supplies wire identity.
-        struct RemoteFenceProxy { MG_Pipe::MGPipeHandle Handle; };
+        struct RemoteFenceProxy {
+            MG_Pipe::MGPipeHandle Handle;
+            // P10: zero-timeout polls answered "not yet" in a row since the last escalation.
+            Uint32 Unanswered = 0;
+        };
         std::mutex g_fenceMutex;
         UnorderedMap<MG_Backend::BackendSyncHandle, UniquePtr<RemoteFenceProxy>> g_fenceProxies;
 
-        MG_Pipe::MGPipeHandle FenceHandle(MG_Backend::BackendSyncHandle proxy) {
+        RemoteFenceProxy& FenceProxy(MG_Backend::BackendSyncHandle proxy) {
             const auto it = g_fenceProxies.find(proxy);
             if (it == g_fenceProxies.end())
                 Wire::WireProtocolFatal("Fence.proxy", "unknown client fence proxy");
-            return it->second->Handle;
+            return *it->second;
+        }
+
+        MG_Pipe::MGPipeHandle FenceHandle(MG_Backend::BackendSyncHandle proxy) { return FenceProxy(proxy).Handle; }
+
+        // ---- P10 (CONTRACT-P10.md §1): WHAT THE SERVER HAS SAID IS SIGNALED -----------------
+        //
+        // {slot -> gen} of every fence a kEventFenceSignaled named, or a round trip answered
+        // signaled. ITS OWN MUTEX, NOT g_fenceMutex: the report arrives in the event drain, and
+        // the drain runs INSIDE the emitters below while they hold g_fenceMutex (EmitAndWait and
+        // PollEntry both drain), so taking g_fenceMutex there would deadlock the GL thread on
+        // itself. A report for a fence already deleted leaves a {slot, old gen} entry that no live
+        // handle matches; the slot's next occupant overwrites it.
+        std::mutex g_signaledFenceMutex;
+        UnorderedMap<Uint32, Uint32> g_signaledFences;
+        std::atomic<Uint64> g_fenceLocalAnswers{0};
+        std::atomic<Uint64> g_fenceEscalations{0};
+        std::atomic<Uint64> g_fenceRoundTrips{0};
+        std::atomic<Uint64> g_fenceServerReports{0};
+
+        Bool FenceKnownSignaled(MG_Pipe::MGPipeHandle handle) {
+            const std::lock_guard<std::mutex> lock(g_signaledFenceMutex);
+            const auto it = g_signaledFences.find(handle.Slot);
+            return it != g_signaledFences.end() && it->second == handle.Gen;
+        }
+
+        void RememberFenceSignaled(MG_Pipe::MGPipeHandle handle) {
+            const std::lock_guard<std::mutex> lock(g_signaledFenceMutex);
+            g_signaledFences[handle.Slot] = handle.Gen;
+        }
+
+        void ForgetFence(MG_Pipe::MGPipeHandle handle) {
+            const std::lock_guard<std::mutex> lock(g_signaledFenceMutex);
+            const auto it = g_signaledFences.find(handle.Slot);
+            if (it != g_signaledFences.end() && it->second == handle.Gen) g_signaledFences.erase(it);
+        }
+
+        // MOBILEGL_IPC_POLL_ESCALATE=0 is the A/B control: every poll crosses, as before P10. A lost
+        // device takes the round-trip arm too, whose DECLINED answer is the no-op a dead fence gets.
+        Bool FencePollsAnswerLocally() {
+            return MG_Config::Ipc.PollEscalate != 0 && !ClientSession::DeviceLost();
+        }
+
+        // THE LOCAL ANSWER, OR "CROSS". A poll is a doorbell point first (PollEntry: flush what is
+        // published, drain the reverse channel), so the fence's own create record has reached the
+        // server and every report it has posted is in. Known signaled -> answered here. Not known
+        // and the call may not wait (a zero timeout, glGetSynciv) -> answered "not yet" here,
+        // unless this fence has had POLL_ESCALATE such answers in a row, in which case the poll
+        // takes one real round trip: the server's own reports are what make a local "not yet"
+        // eventually true, and the escalation is the bound that holds even if one is late. A call
+        // that may wait (a non-zero timeout) is never answered "not yet" here - it crosses and
+        // waits on the server, as the GL call asks.
+        enum class FencePollAnswer { Signaled, NotYet, Cross };
+        FencePollAnswer AnswerFencePollLocally(ClientSession& session, RemoteFenceProxy& fence, Bool mayWait) {
+            if (!FencePollsAnswerLocally()) return FencePollAnswer::Cross;
+            session.PollEntry();
+            if (FenceKnownSignaled(fence.Handle)) {
+                fence.Unanswered = 0;
+                g_fenceLocalAnswers.fetch_add(1, std::memory_order_relaxed);
+                return FencePollAnswer::Signaled;
+            }
+            if (mayWait) return FencePollAnswer::Cross;
+            if (++fence.Unanswered < MG_Config::Ipc.PollEscalate) {
+                g_fenceLocalAnswers.fetch_add(1, std::memory_order_relaxed);
+                return FencePollAnswer::NotYet;
+            }
+            fence.Unanswered = 0;
+            g_fenceEscalations.fetch_add(1, std::memory_order_relaxed);
+            return FencePollAnswer::Cross;
         }
 
         MG_Backend::BackendSyncHandle EmitFenceSync() {
@@ -1669,16 +1741,33 @@ namespace MobileGL::MG_Remote::Client {
         GLenum EmitClientWaitSync(MG_Backend::BackendSyncHandle proxy, GLbitfield flags, GLuint64 timeout) {
             ClientSession& session = RequireSession("ClientWaitSync");
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
-            const MG_Pipe::MGPFenceWait request{FenceHandle(proxy), timeout, flags, 0};
-            return ReadFenceReply(session, MG_Pipe::MGPWireOp::FenceWait, &request, sizeof(request));
+            RemoteFenceProxy& fence = FenceProxy(proxy);
+            switch (AnswerFencePollLocally(session, fence, /*mayWait=*/timeout != 0)) {
+            case FencePollAnswer::Signaled: return GL_ALREADY_SIGNALED;
+            case FencePollAnswer::NotYet: return GL_TIMEOUT_EXPIRED;
+            case FencePollAnswer::Cross: break;
+            }
+            g_fenceRoundTrips.fetch_add(1, std::memory_order_relaxed);
+            const MG_Pipe::MGPFenceWait request{fence.Handle, timeout, flags, 0};
+            const Uint32 result = ReadFenceReply(session, MG_Pipe::MGPWireOp::FenceWait, &request, sizeof(request));
+            if (result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED) RememberFenceSignaled(fence.Handle);
+            return result;
         }
 
         Bool EmitGetSyncStatus(MG_Backend::BackendSyncHandle proxy) {
             ClientSession& session = RequireSession("GetSyncStatus");
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
-            const MG_Pipe::MGPHandleOnly desc{FenceHandle(proxy), static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
+            RemoteFenceProxy& fence = FenceProxy(proxy);
+            switch (AnswerFencePollLocally(session, fence, /*mayWait=*/false)) {
+            case FencePollAnswer::Signaled: return true;
+            case FencePollAnswer::NotYet: return false;
+            case FencePollAnswer::Cross: break;
+            }
+            g_fenceRoundTrips.fetch_add(1, std::memory_order_relaxed);
+            const MG_Pipe::MGPHandleOnly desc{fence.Handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
             const Uint32 result = ReadFenceReply(session, MG_Pipe::MGPWireOp::FenceStatus, &desc, sizeof(desc));
             if (result > 1) Wire::WireProtocolFatal("FenceStatus.reply", "status must be boolean");
+            if (result != 0) RememberFenceSignaled(fence.Handle);
             return result != 0;
         }
 
@@ -1701,6 +1790,7 @@ namespace MobileGL::MG_Remote::Client {
                                      nullptr, 0, nullptr, 0, nullptr);
             }
             MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Fence, handle);
+            ForgetFence(handle);
             g_fenceProxies.erase(proxy);
         }
 
@@ -1945,6 +2035,20 @@ namespace MobileGL::MG_Remote::Client {
         }
 
     } // namespace
+
+    void NoteFenceSignaledByServer(MG_Pipe::MGPipeHandle fence) {
+        RememberFenceSignaled(fence);
+        g_fenceServerReports.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    FencePollCounters ReadFencePollCounters() {
+        FencePollCounters counters;
+        counters.LocalAnswers = g_fenceLocalAnswers.load(std::memory_order_relaxed);
+        counters.Escalations = g_fenceEscalations.load(std::memory_order_relaxed);
+        counters.RoundTrips = g_fenceRoundTrips.load(std::memory_order_relaxed);
+        counters.ServerReports = g_fenceServerReports.load(std::memory_order_relaxed);
+        return counters;
+    }
 
     const MG_Backend::GlobalBackendFunctionsTable& RemoteEmitTable() {
         // Leaked at exit like every other MG_Remote singleton (ID-8): MG_Backend::Init()

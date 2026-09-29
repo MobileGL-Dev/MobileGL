@@ -130,6 +130,15 @@ namespace MGITest {
         // apart from both sides.
         unsigned long long replyPostings = 0;
         unsigned long long packBufferReadbackMarks = 0;
+
+        // ---- P10 (CONTRACT-P10.md §1): what the fence polls cost ----------------------------
+        // EmitTables.h FencePollCounters, verbatim: polls answered with no record, zero-timeout
+        // polls escalated to a round trip, every fence answer that crossed, and the server's
+        // kEventFenceSignaled reports consumed.
+        unsigned long long fenceLocalAnswers = 0;
+        unsigned long long fenceEscalations = 0;
+        unsigned long long fenceRoundTrips = 0;
+        unsigned long long fenceServerReports = 0;
     };
 
     SplitRuntimeState PeekSplitRuntime();
