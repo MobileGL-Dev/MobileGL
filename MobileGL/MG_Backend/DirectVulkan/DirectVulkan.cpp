@@ -1762,4 +1762,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         g_requestedSwapInterval.reset();
     }
 #endif
+
+    DescriptorPoolCensus GetDescriptorPoolCensus() {
+        return pVulkanRenderer ? pVulkanRenderer->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
+    }
 } // namespace MobileGL::MG_Backend::DirectVulkan

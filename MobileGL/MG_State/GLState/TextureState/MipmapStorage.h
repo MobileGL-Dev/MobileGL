@@ -80,6 +80,15 @@ namespace MobileGL {
                 // area so close to the union box's that one big upload beats many small
                 // ones (fewer driver calls wins when the bytes are nearly equal).
                 SizeT GetDirtyRects(Uint level, MipmapDirtyRegion* outRects, SizeT maxRects) const;
+                // The level's pending writes EXACTLY: pairwise-disjoint boxes holding every texel
+                // written since the level was last clean and no other, however many there are and
+                // however much of the union box they fill. Empty while the level is clean. The
+                // rect list above only COVERS the writes - a merge replaces two touching rects by
+                // their bounding box and a full list folds - which is harmless while the texels
+                // outside the writes are the same in the shadow and in the backend's copy, and
+                // wrong once the backend's copy may hold texels the GPU wrote: the shadow is stale
+                // there, and anything uploaded beyond the writes goes up over them.
+                void GetDirtyFootprint(Uint level, Vector<MipmapDirtyRegion>& outRects) const;
 
                 // The bytes an application handed to glCompressedTexImage*, kept verbatim beside the
                 // (uncompressed) texel shadow rather than in place of it. GL 4.6 core 8.11 requires
@@ -112,6 +121,10 @@ namespace MobileGL {
                 // Insert one clamped, non-empty write box, keeping the list disjoint
                 // and bounded (see kMaxDirtyRects).
                 void InsertDirtyRect(Uint level, MipmapDirtyRegion incoming);
+                // Starts the level's footprint log (see m_footprintWrites) the moment the rect list
+                // is about to stop being exact. `pending` is the write being inserted, merged with
+                // the rects it has absorbed so far - still exact, and no longer in the list.
+                void EnterFootprintLog(Uint level, const MipmapDirtyRegion& pending);
 
                 Vector<IntVec3> m_texelSizes;
                 Vector<Vector<Uint8>> m_data;
@@ -125,6 +138,14 @@ namespace MobileGL {
                 // already-dirty level seeds the list from the union box accumulated so
                 // far and refines from there.
                 Vector<Vector<MipmapDirtyRegion>> m_dirtyRects;
+                // Per level, the boxes whose union is exactly the pending writes' footprint, as they
+                // came (overlaps and all; GetDirtyFootprint cuts them apart). EMPTY is the resting
+                // state and means the rect list (or, while that is empty, the union box) is itself
+                // exact; the log starts only at the first inexact merge or fold, from the list as it
+                // stood just before, and then takes every write verbatim until the level is clean or
+                // respecified - one box per write, so its cost follows the writes and never the
+                // level's size. clear() keeps the capacity, like the rect list's.
+                Vector<Vector<MipmapDirtyRegion>> m_footprintWrites;
                 Vector<Vector<Uint8>> m_compressedData;
                 Vector<GLenum> m_compressedFormats;
                 Vector<GLenum> m_requestedCompressedFormats;

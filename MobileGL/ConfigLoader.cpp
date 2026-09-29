@@ -230,6 +230,9 @@ namespace MobileGL::MG_ConfigLoader {
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+        features.MagmaMaxDrawsPerCommandBuffer =
+            QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);
+        features.MagmaDescriptorTrimFrames = QueryEnvUint32("MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES", 120, 0, 1u << 20);
         features.EsprytAvoidSamplerMipmapMinFilter =
             QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
         features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");

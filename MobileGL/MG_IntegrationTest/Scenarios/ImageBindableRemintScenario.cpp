@@ -29,6 +29,7 @@
 // the last sync, and a pending client write that has to land on top of GPU content. Magma never
 // re-mints from a shadow (it copies image to image) and is the control backend.
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <sstream>
@@ -248,6 +249,35 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
                 EXPECT_EQ(bad, 0) << bad << " of " << edge * edge << " texels differ; first " << first.str();
             }
 
+            // One glTexSubImage of opaque blue per {x, y, w, h} box, left pending.
+            static void WriteBlueBoxes(GLuint tex, const std::vector<std::array<int, 4>>& boxes) {
+                glBindTexture(GL_TEXTURE_2D, tex);
+                for (const auto& b : boxes) {
+                    std::vector<GLubyte> blue(static_cast<std::size_t>(b[2] * b[3]) * 4u, 0);
+                    for (std::size_t i = 0; i < blue.size(); i += 4) {
+                        blue[i + 2] = 255;
+                        blue[i + 3] = 255;
+                    }
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, b[0], b[1], b[2], b[3], GL_RGBA, GL_UNSIGNED_BYTE, blue.data());
+                }
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+
+            // kEdge x kEdge green, blue inside the boxes.
+            static std::vector<GLubyte> GreenWithBlueBoxes(const std::vector<std::array<int, 4>>& boxes) {
+                auto want = Solid(kEdge, 0, 255, 0, 255);
+                for (const auto& b : boxes)
+                    for (int y = b[1]; y < b[1] + b[3]; ++y)
+                        for (int x = b[0]; x < b[0] + b[2]; ++x) {
+                            const std::size_t at = static_cast<std::size_t>((y * kEdge + x) * 4);
+                            want[at] = 0;
+                            want[at + 1] = 0;
+                            want[at + 2] = 255;
+                            want[at + 3] = 255;
+                        }
+                return want;
+            }
+
             GLuint m_sampleProgram = 0, m_vao = 0, m_fbo = 0;
             ColorFbo m_scratch{};
             std::vector<GLuint> m_textures;
@@ -332,6 +362,43 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
                     want[at + 3] = 255;
                 }
             ExpectImage(ImageCopy(t, 0, GL_RGBA8, "rgba8"), kEdge, want);
+        }
+
+        // Several pending writes: only their texels land on the GPU's clear, never the gaps between
+        // them. The re-mint merged the union box of the shadow over the readback whenever the rect
+        // list was withheld, and kept the shadow outright when that box spanned the level.
+
+        // Two 3x7 columns with a one-texel gap: 42 of their union's 49 texels, past the 3/4 at which
+        // the storage withholds its rect list.
+        TEST_F(ImageBindableRemintScenario, PendingSubImagesFillingThreeQuartersOfTheirUnionLandOnTheGpuClear) {
+            if (!Ready()) return;
+            const std::vector<std::array<int, 4>> boxes = {{0, 0, 3, 7}, {4, 0, 3, 7}};
+            const GLuint t = NewTexture();
+            const auto p = Pattern(kEdge, 0x40);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kEdge, kEdge, 0, GL_RGBA, GL_UNSIGNED_BYTE, p.data());
+            Nearest(GL_TEXTURE_2D, t, 0);
+            SyncBySampling(t);
+            GpuClear(t, 0, kGreen);
+            SyncBySampling(t);
+            WriteBlueBoxes(t, boxes);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA8, "rgba8"), kEdge, GreenWithBlueBoxes(boxes));
+        }
+
+        // Three quadrants: the union box is the whole level; the fourth quadrant is the GPU's.
+        TEST_F(ImageBindableRemintScenario, PendingSubImagesWhoseUnionSpansTheLevelLandOnTheGpuClear) {
+            if (!Ready()) return;
+            const std::vector<std::array<int, 4>> boxes = {{0, 0, 4, 4}, {4, 0, 4, 4}, {0, 4, 4, 4}};
+            const GLuint t = NewTexture();
+            const auto p = Pattern(kEdge, 0x40);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kEdge, kEdge, 0, GL_RGBA, GL_UNSIGNED_BYTE, p.data());
+            Nearest(GL_TEXTURE_2D, t, 0);
+            SyncBySampling(t);
+            GpuClear(t, 0, kGreen);
+            SyncBySampling(t);
+            WriteBlueBoxes(t, boxes);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA8, "rgba8"), kEdge, GreenWithBlueBoxes(boxes));
         }
 
         TEST_F(ImageBindableRemintScenario, GeneratedMipLevelSurvives) {

@@ -327,6 +327,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // signal as soon as the GPU actually finishes, which MC 1.21.5's
         // fence-paced ring buffers rely on to recycle their space.
         Uint64 GetSyncPointSubmitIndex() const;
+        // For tests: the per-frame descriptor pools (see DescriptorPoolCensus.h).
+        DescriptorPoolCensus GetDescriptorPoolCensus() const {
+            return m_uniformManager ? m_uniformManager->GetDescriptorPoolCensus() : DescriptorPoolCensus{};
+        }
         // Non-blocking: polls outstanding submission fences and reports
         // whether every submission up to `submitIndex` has completed.
         Bool IsSubmitIndexComplete(Uint64 submitIndex);
@@ -736,6 +740,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // only), so the presenting path's frames-in-flight pipelining is
         // untouched. Returns true when the drain ran.
         Bool TryDrainFrameTransients();
+        // Bounded recording: called at the top of every GL draw and dispatch, before anything
+        // of that call is recorded. Once the open frame command buffer holds
+        // MagmaMaxDrawsPerCommandBuffer draws/dispatches, submits it (FlushPendingCommands) so
+        // the call continues on a fresh one, then waits until at most frames-in-flight + 1
+        // submissions are outstanding. A driver backs a command buffer with GPU memory it only
+        // returns when the buffer is freed (Adreno: one 16 KiB mapping per chunk), so a frame
+        // that is never split grows it without bound - rd12's loading frame records ~1M draws
+        // into one buffer and runs the process out of vm.max_map_count.
+        void SplitOversizedRecording();
 
         Vector<SubmitRecord> m_inFlightSubmits;
         Vector<VkFence> m_freeSubmitFences;
@@ -747,6 +760,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // aging clocks, while present-less loops still cross a boundary every few
         // iterations. Reset in Present.
         Uint32 m_drainsSinceLastPresent = 0;
+        // GL draws/dispatches recorded into the open frame command buffer; reset whenever a
+        // recording begins (OnFrameCommandRecordingBegan). See SplitOversizedRecording.
+        Uint32 m_drawsInRecording = 0;
+        Uint64 m_oversizedRecordingSplits = 0;
 
         NativeWindowType m_window = 0;
         void* m_platformDisplay = nullptr;

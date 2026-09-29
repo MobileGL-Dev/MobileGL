@@ -4121,11 +4121,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             IntVec3 regionLo = {0, 0, 0};
             IntVec3 regionSize = {0, 0, 0};
             SizeT texelBytes = 0;
-            // Scatter refinement of the single dirty box: when the storage's rect
-            // list reports the writes' true footprint (~100 sprites whose union box
-            // spans the whole atlas), each rect is staged tightly and copied with
-            // its own VkBufferImageCopy in ONE vkCmdCopyBufferToImage. Empty means
-            // "stage the one box above". Only set while subRegion.
+            // The writes' exact footprint when it is more than one box (~100 sprites
+            // whose union box spans the whole atlas): each rect is staged tightly and
+            // copied with its own VkBufferImageCopy in ONE vkCmdCopyBufferToImage.
+            // Empty means "stage the one box above". Only set while subRegion.
             Vector<MG_State::GLState::MipmapDirtyRegion> rects;
         };
 
@@ -4137,6 +4136,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             targets.push_back(uploadTarget);
         }
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(mipmapTexture.GetFormat());
+        Vector<MG_State::GLState::MipmapDirtyRegion> dirtyFootprint;
 
         VkDeviceSize stagingSize = 0;
         for (const TextureUploadTarget target : targets) {
@@ -4198,8 +4198,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
                                              static_cast<SizeT>(texelSize.y()) *
                                              static_cast<SizeT>(std::max(texelSize.z(), 1));
-                    if (!region.Empty() && !region.CoversWholeLevel(texelSize) && texelCount > 0 &&
-                        levelBytes % texelCount == 0) {
+                    // Exactly the texels the client wrote, never their union box or the storage's
+                    // rect list (which merges touching writes into their bounding box, folds when
+                    // full and is withheld past 3/4 of the box): the image may hold what the GPU
+                    // drew or cleared anywhere else, and the shadow is stale there. Each box is one
+                    // more VkBufferImageCopy in the same vkCmdCopyBufferToImage, which costs next
+                    // to nothing, so there is no cheaper shape worth being wrong for. A union box
+                    // that spans the level with gaps in it is not a whole-level write either.
+                    mipmapTexture.GetStorageDirtyFootprint(target, level, dirtyFootprint);
+                    if (!region.Empty() && (dirtyFootprint.size() >= 2 || !region.CoversWholeLevel(texelSize)) &&
+                        texelCount > 0 && levelBytes % texelCount == 0) {
                         uploadItem.subRegion = true;
                         uploadItem.regionLo = region.lo;
                         uploadItem.regionSize = {region.hi.x() - region.lo.x(), region.hi.y() - region.lo.y(),
@@ -4209,17 +4217,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                     static_cast<SizeT>(uploadItem.regionSize.y()) *
                                                     static_cast<SizeT>(uploadItem.regionSize.z()) *
                                                     uploadItem.texelBytes;
-                        // Scatter refinement: the storage only hands out its rect list
-                        // when the rects' summed area is materially smaller than the
-                        // union box (0 otherwise), so taking it always stages fewer
-                        // bytes than the box - the very amplification this path exists
-                        // to avoid paying twice.
-                        MG_State::GLState::MipmapDirtyRegion
-                            dirtyRects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
-                        const SizeT dirtyRectCount = mipmapTexture.GetStorageDirtyRects(
-                            target, level, dirtyRects, MG_State::GLState::MipmapStorage::kMaxDirtyRects);
-                        if (dirtyRectCount >= 2) {
-                            uploadItem.rects.assign(dirtyRects, dirtyRects + dirtyRectCount);
+                        // Several boxes: each is staged tightly and copied on its own. One box is
+                        // the union box above.
+                        if (dirtyFootprint.size() >= 2) {
+                            uploadItem.rects.assign(dirtyFootprint.begin(), dirtyFootprint.end());
                             SizeT rectTexels = 0;
                             for (const auto& rect : uploadItem.rects) {
                                 rectTexels += rect.TexelCount();
@@ -4479,6 +4480,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool depthSelectsArrayLayer = outResource.viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
                                             outResource.viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY ||
                                             outResource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        Vector<VkBufferImageCopy> rectCopies;
         for (const auto& item : uploadItems) {
             if (!item.rects.empty()) {
                 // Multi-rect item: one VkBufferImageCopy per rect, all submitted in a
@@ -4486,7 +4488,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // construction, so no two copies write the same texels. Multi-rect
                 // implies subRegion, which implies a plain color aspect - the combined
                 // depth-stencil split below can never see one of these.
-                VkBufferImageCopy rectCopies[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                rectCopies.resize(item.rects.size());
                 Uint32 rectCopyCount = 0;
                 VkDeviceSize runningOffset = item.offset;
                 for (const auto& rect : item.rects) {
@@ -4517,7 +4519,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     runningOffset += static_cast<VkDeviceSize>(rect.TexelCount() * item.texelBytes);
                 }
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
-                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rectCopyCount, rectCopies);
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rectCopyCount, rectCopies.data());
                 continue;
             }
             const Uint32 depthOrLayers = item.texelSize.z() > 0 ? static_cast<Uint32>(item.texelSize.z()) : 1u;

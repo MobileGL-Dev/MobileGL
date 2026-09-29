@@ -82,6 +82,8 @@ namespace MobileGL::MG_State::GLState {
         void MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel, IntVec3 offset,
                                     IntVec3 size) override;
         MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        void GetStorageDirtyFootprint(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                      Vector<MipmapDirtyRegion>& outRects) const override;
         void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
                                       const void* data, SizeT size) override;
         GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;

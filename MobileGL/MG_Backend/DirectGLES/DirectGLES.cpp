@@ -4345,12 +4345,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const auto textureFormat = static_cast<TextureInternalFormat>(resource->Desc.InternalFormat);
             const TextureTarget textureTarget = PipeTextureTargetForHandle(view.Res);
+            const GLenum access = GLAccessForImageView(view);
+            // Before the sync, for the frontend arm's reason: the note may adopt a twin, and
+            // `backendTexture` below is a reference into the same registry.
+            if (access != GL_READ_ONLY) {
+                NoteDriverSideTextureWriteByHandle(view.Res);
+            }
             auto& backendTexture = SyncTextureToBackendByHandle(view.Res, /*imageBindableStorageRequired=*/true);
             if (!backendTexture) return;
             IssueImageTextureBind(unit, *backendTexture, textureTarget, textureFormat,
                                   static_cast<GLenum>(view.InternalFormat), static_cast<GLint>(view.Level),
-                                  view.Layered != 0, static_cast<GLint>(view.Layer),
-                                  GLAccessForImageView(view));
+                                  view.Layered != 0, static_cast<GLint>(view.Layer), access);
         }
 #endif // MOBILEGL_PIPE_PUSH
 
@@ -4375,6 +4380,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            // Before the sync: `backendTexture` below is a reference into the registry, which the
+            // lookup inside the note may reshuffle.
+            if (imageBinding.Access != GL_READ_ONLY) {
+                NoteDriverSideTextureWrite(imageBinding.Texture);
+            }
             auto& backendTexture = SyncTextureObjectToBackend(imageBinding.Texture, true);
             if (!backendTexture) return;
             IssueImageTextureBind(unit, *backendTexture, imageBinding.Texture->GetTarget(),
@@ -10929,6 +10939,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 continue;
             }
 
+            TextureImpl::NoteDriverSideTextureWrite(destinationTexture);
             auto backendSource = TextureImpl::SyncTextureObjectToBackend(sourceTexture);
             auto backendDestination = TextureImpl::SyncTextureObjectToBackend(destinationTexture);
             if (!backendSource || !backendDestination) continue;
@@ -12591,6 +12602,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // touched unit happened to sync it as a side effect. The named narrowing (P5e-5) says
             // the union that still covers every texture includes "the waited texture ops", and
             // this is one of them: it syncs its own endpoint by handle.
+            TextureImpl::NoteDriverSideTextureWriteByHandle(dstHandle);
             auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(dstHandle);
             if (!backendTexture || dstRecord == nullptr) {
                 MGLOG_E_ONCE("CopyTexImage2D: the verb's destination texture {%u, %u} has no twin "
@@ -12606,6 +12618,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& textureObject = MGB_CTX->GetTextureUnitObject((Int)activeTextureUnit)
                                             .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                             .GetBoundObject();
+            if (textureObject) TextureImpl::NoteDriverSideTextureWrite(textureObject);
             auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
             if (!backendTextureSlot || !*backendTextureSlot) {
                 MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
@@ -12708,6 +12721,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
             // P5e (tx2): synced by handle - see CopyTexImage2D's note. A copy destination is not
             // in the sampler-view window, so nothing else on this path would build its twin.
+            TextureImpl::NoteDriverSideTextureWriteByHandle(dstHandle);
             auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(dstHandle);
             if (!backendTexture) {
                 MGLOG_E_ONCE("CopyTexSubImage2D: the verb's destination texture {%u, %u} has no "
@@ -12722,6 +12736,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& textureObject = MGB_CTX->GetTextureUnitObject(activeTextureUnit)
                                             .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                             .GetBoundObject();
+            if (textureObject) TextureImpl::NoteDriverSideTextureWrite(textureObject);
             auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
             if (!backendTextureSlot || !*backendTextureSlot) {
                 MGLOG_E_ONCE("CopyTexSubImage2D: No backend texture found for texture %u.",
@@ -12943,6 +12958,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for GenerateMipmap move to kWaitNone.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             const auto mipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
+            // Every arm GenerateMipmapByRecord takes writes the levels above the base on the
+            // driver only (its CPU filter is unmigrated and aborts), so the note is unconditional.
+            TextureImpl::NoteDriverSideTextureWriteByHandle(mipRes);
             auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(mipRes);
             const auto* record = PipeTextureRecordForHandle(mipRes);
             if (!backendTexture || record == nullptr) {
@@ -12970,6 +12988,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             TextureImpl::SyncTextureObjectToBackend(texture);
             return;
         }
+        // Every path below writes the levels above the base on the driver only.
+        TextureImpl::NoteDriverSideTextureWrite(texture);
         auto& backendTexture = TextureImpl::SyncTextureObjectToBackend(texture);
 
         // Asked for before the format arms below, which are 2D-only emulations of the same
@@ -13316,6 +13336,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // dereference. The frontend validator is what keeps this unreachable and what reports
         // the error the application is owed; declining is only how a future gap up there stops
         // being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
+        if (!dstEndpoint.IsRenderbuffer() && dstEndpoint.Texture) {
+            TextureImpl::NoteDriverSideTextureWrite(dstEndpoint.Texture);
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The handle arm's endpoint names its texture by handle, and the server has no frontend
+        // object to note.
+        if (!dstEndpoint.IsRenderbuffer() && !MG_Pipe::MGPipeHandleIsNull(dstEndpoint.TextureHandle)) {
+            TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
+        }
+#endif
         if (!MakeGLESCopyImageEndpoint(srcEndpoint, srcTarget, srcX, srcY, srcZ, src) ||
             !MakeGLESCopyImageEndpoint(dstEndpoint, dstTarget, dstX, dstY, dstZ, dst)) {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);

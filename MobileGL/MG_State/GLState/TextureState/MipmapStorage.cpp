@@ -8,6 +8,9 @@
 
 #include "MipmapStorage.h"
 
+#include <bit>
+#include <utility>
+
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
 #include <MG_Remote/Server/ServerLoop.h>
@@ -104,6 +107,135 @@ namespace MobileGL {
                             IntVec3{std::max(a.hi.x(), b.hi.x()), std::max(a.hi.y(), b.hi.y()),
                                     std::max(a.hi.z(), b.hi.z())}};
                 }
+
+                MipmapDirtyRegion RegionIntersection(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
+                    return {IntVec3{std::max(a.lo.x(), b.lo.x()), std::max(a.lo.y(), b.lo.y()),
+                                    std::max(a.lo.z(), b.lo.z())},
+                            IntVec3{std::min(a.hi.x(), b.hi.x()), std::min(a.hi.y(), b.hi.y()),
+                                    std::min(a.hi.z(), b.hi.z())}};
+                }
+
+                // For two boxes of written texels: whether their bounding box holds no texel
+                // outside them, i.e. whether merging them keeps the rect list exact.
+                Bool UnionIsExact(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
+                    return RegionUnion(a, b).TexelCount() ==
+                           a.TexelCount() + b.TexelCount() - RegionIntersection(a, b).TexelCount();
+                }
+
+                Bool SameFootprintXY(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
+                    return a.lo.x() == b.lo.x() && a.hi.x() == b.hi.x() && a.lo.y() == b.lo.y() &&
+                           a.hi.y() == b.hi.y();
+                }
+
+                Bool FootprintXYLess(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
+                    if (a.lo.y() != b.lo.y()) return a.lo.y() < b.lo.y();
+                    if (a.lo.x() != b.lo.x()) return a.lo.x() < b.lo.x();
+                    if (a.hi.y() != b.hi.y()) return a.hi.y() < b.hi.y();
+                    return a.hi.x() < b.hi.x();
+                }
+
+                // Cuts the union of a set of (possibly overlapping) write boxes into disjoint boxes
+                // holding exactly its texels, at a cost set by the rows written, not by the level.
+                // Every box is split into row runs, the runs of each row are sorted and merged, and
+                // a sweep down each slice lets a row's run continue the box above it when it spans
+                // the same columns on the very next row; a slice's box then continues the previous
+                // slice's when that slice is the one before and the box covers the same rows and
+                // columns.
+                void DecomposeFootprintWrites(const Vector<MipmapDirtyRegion>& writes, Vector<MipmapDirtyRegion>& out) {
+                    struct Run {
+                        Int z, y, x0, x1;
+                    };
+                    Vector<Run> runs;
+                    for (const auto& box : writes) {
+                        for (Int z = box.lo.z(); z < box.hi.z(); ++z)
+                            for (Int y = box.lo.y(); y < box.hi.y(); ++y) runs.push_back({z, y, box.lo.x(), box.hi.x()});
+                    }
+                    std::sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) {
+                        if (a.z != b.z) return a.z < b.z;
+                        if (a.y != b.y) return a.y < b.y;
+                        return a.x0 < b.x0;
+                    });
+                    SizeT merged = 0;
+                    for (const Run& run : runs) {
+                        Run* last = merged > 0 ? &runs[merged - 1] : nullptr;
+                        if (last && last->z == run.z && last->y == run.y && run.x0 <= last->x1) {
+                            last->x1 = std::max(last->x1, run.x1);
+                        } else {
+                            runs[merged++] = run;
+                        }
+                    }
+                    runs.resize(merged);
+
+                    Vector<MipmapDirtyRegion> open, next, slice;
+                    Vector<SizeT> previousSlice, currentSlice; // indices into `out`, in FootprintXYLess order
+                    Int sliceZ = 0, previousZ = 0, rowY = 0;
+                    Bool haveSlice = false;
+                    // Ends every open box below row `rowY` and folds the slice into `out`.
+                    const auto closeSlice = [&]() {
+                        for (auto& box : open) {
+                            box.hi = {box.hi.x(), rowY + 1, sliceZ + 1};
+                            slice.push_back(box);
+                        }
+                        open.clear();
+                        std::sort(slice.begin(), slice.end(), FootprintXYLess);
+                        if (previousZ + 1 != sliceZ) previousSlice.clear();
+                        currentSlice.clear();
+                        SizeT p = 0;
+                        for (const auto& box : slice) {
+                            while (p < previousSlice.size() && FootprintXYLess(out[previousSlice[p]], box)) ++p;
+                            if (p < previousSlice.size() && SameFootprintXY(out[previousSlice[p]], box)) {
+                                out[previousSlice[p]].hi = {box.hi.x(), box.hi.y(), sliceZ + 1};
+                                currentSlice.push_back(previousSlice[p++]);
+                            } else {
+                                currentSlice.push_back(out.size());
+                                out.push_back(box);
+                            }
+                        }
+                        std::swap(previousSlice, currentSlice);
+                        slice.clear();
+                        previousZ = sliceZ;
+                    };
+                    for (SizeT i = 0; i < runs.size();) {
+                        const Int z = runs[i].z;
+                        const Int y = runs[i].y;
+                        if (haveSlice && z != sliceZ) {
+                            closeSlice();
+                        } else if (haveSlice && y != rowY + 1) {
+                            // A row with no runs in between: nothing open continues across it.
+                            for (auto& box : open) {
+                                box.hi = {box.hi.x(), rowY + 1, sliceZ + 1};
+                                slice.push_back(box);
+                            }
+                            open.clear();
+                        }
+                        haveSlice = true;
+                        sliceZ = z;
+                        next.clear();
+                        SizeT o = 0;
+                        for (; i < runs.size() && runs[i].z == z && runs[i].y == y; ++i) {
+                            const Int x0 = runs[i].x0;
+                            const Int x1 = runs[i].x1;
+                            // `open` is sorted by x and disjoint: every box left of this run that
+                            // it cannot continue ends on the row above.
+                            while (o < open.size() && open[o].lo.x() < x0) {
+                                open[o].hi = {open[o].hi.x(), y, z + 1};
+                                slice.push_back(open[o++]);
+                            }
+                            if (o < open.size() && open[o].lo.x() == x0 && open[o].hi.x() == x1) {
+                                next.push_back(open[o++]);
+                            } else {
+                                next.push_back({IntVec3{x0, y, z}, IntVec3{x1, y + 1, z + 1}});
+                            }
+                        }
+                        for (; o < open.size(); ++o) {
+                            open[o].hi = {open[o].hi.x(), y, z + 1};
+                            slice.push_back(open[o]);
+                        }
+                        std::swap(open, next);
+                        rowY = y;
+                    }
+                    if (haveSlice) closeSlice();
+                }
             } // namespace
 
             SizeT MipmapStorage::GetLevelCount() const {
@@ -130,6 +262,7 @@ namespace MobileGL {
                     m_isDirty.resize(requiredLevelCount, false);
                     m_dirtyRegions.resize(requiredLevelCount);
                     m_dirtyRects.resize(requiredLevelCount);
+                    m_footprintWrites.resize(requiredLevelCount);
                     m_compressedData.resize(requiredLevelCount);
                     m_compressedFormats.resize(requiredLevelCount, GL_NONE);
                     m_requestedCompressedFormats.resize(requiredLevelCount, GL_NONE);
@@ -151,6 +284,9 @@ namespace MobileGL {
                 // pending measured the OLD extents. Empty list = union box tells all.
                 if (level < m_dirtyRects.size()) {
                     m_dirtyRects[level].clear();
+                }
+                if (level < m_footprintWrites.size()) {
+                    m_footprintWrites[level].clear();
                 }
                 auto& data = m_data[level];
                 data.resize(input.byteSize, 0);
@@ -231,6 +367,7 @@ namespace MobileGL {
                 m_isDirty.resize(levelCount);
                 m_dirtyRegions.resize(levelCount);
                 m_dirtyRects.resize(levelCount);
+                m_footprintWrites.resize(levelCount);
                 m_compressedData.resize(levelCount);
                 m_compressedFormats.resize(levelCount);
                 m_requestedCompressedFormats.resize(levelCount);
@@ -302,6 +439,9 @@ namespace MobileGL {
                 if (level < m_dirtyRects.size()) {
                     m_dirtyRects[level].clear();
                 }
+                if (level < m_footprintWrites.size()) {
+                    m_footprintWrites[level].clear();
+                }
             }
 
             bool MipmapStorage::IsDirty(Uint level) const {
@@ -332,11 +472,17 @@ namespace MobileGL {
                     auto& rects = m_dirtyRects[level];
                     if (!m_isDirty[level]) {
                         rects.clear(); // stale-safety; MarkDirty(false) already cleared it
+                        m_footprintWrites[level].clear();
                     } else if (rects.empty() && level < m_dirtyRegions.size() &&
                                !m_dirtyRegions[level].Empty()) {
                         rects.push_back(m_dirtyRegions[level]);
                     }
+                    // Entering the log inside the insert already recorded this write.
+                    const Bool logged = !m_footprintWrites[level].empty();
                     InsertDirtyRect(level, incoming);
+                    if (logged) {
+                        m_footprintWrites[level].push_back(incoming);
+                    }
                 }
                 if (level < m_dirtyRegions.size()) {
                     MipmapDirtyRegion& region = m_dirtyRegions[level];
@@ -368,6 +514,9 @@ namespace MobileGL {
                     merged = false;
                     for (SizeT i = 0; i < rects.size(); ++i) {
                         if (RegionsTouch(rects[i], incoming)) {
+                            if (!UnionIsExact(rects[i], incoming)) {
+                                EnterFootprintLog(level, incoming);
+                            }
                             incoming = RegionUnion(rects[i], incoming);
                             rects[i] = rects.back();
                             rects.pop_back();
@@ -380,6 +529,7 @@ namespace MobileGL {
                     rects.push_back(incoming);
                     return;
                 }
+                EnterFootprintLog(level, incoming);
                 // Full: fold the incoming rect into the neighbour whose box grows least
                 // (least new area dragged into the upload), then re-insert the grown
                 // box - it may now touch others. The removal above guarantees the
@@ -435,6 +585,33 @@ namespace MobileGL {
                     outRects[i] = rects[i];
                 }
                 return rects.size();
+            }
+
+            void MipmapStorage::EnterFootprintLog(Uint level, const MipmapDirtyRegion& pending) {
+                auto& log = m_footprintWrites[level];
+                if (!log.empty()) return;
+                log.assign(m_dirtyRects[level].begin(), m_dirtyRects[level].end());
+                log.push_back(pending);
+            }
+
+            void MipmapStorage::GetDirtyFootprint(Uint level, Vector<MipmapDirtyRegion>& outRects) const {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                RefuseLegacyTextureArmFromApplyThread("GetStorageDirtyFootprint");
+#endif
+                outRects.clear();
+                if (level >= m_isDirty.size() || !m_isDirty[level] || level >= m_dirtyRegions.size()) return;
+                if (level < m_footprintWrites.size() && !m_footprintWrites[level].empty()) {
+                    DecomposeFootprintWrites(m_footprintWrites[level], outRects);
+                    return;
+                }
+                // No log: every merge so far was exact and nothing folded, so the list is the
+                // footprint - and an empty list leaves the union box, which is then a whole-level
+                // write (MarkDirty, a respecify) or the single box one write left.
+                if (level < m_dirtyRects.size() && !m_dirtyRects[level].empty()) {
+                    outRects.assign(m_dirtyRects[level].begin(), m_dirtyRects[level].end());
+                } else if (!m_dirtyRegions[level].Empty()) {
+                    outRects.push_back(m_dirtyRegions[level]);
+                }
             }
         } // namespace GLState
     } // namespace MG_State

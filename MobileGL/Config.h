@@ -132,6 +132,18 @@ namespace MobileGL::MG_Config {
         Bool MagmaR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
+        // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into
+        // one command buffer before it submits it and continues on a fresh one. 0 = unbounded.
+        // Drivers back a command buffer with GPU memory that is only returned when the buffer is
+        // freed; Adreno maps it into the process in 16 KiB chunks, so one ~1M-draw loading frame
+        // exhausts vm.max_map_count. See VulkanRenderer::SplitOversizedRecording.
+        Uint32 MagmaMaxDrawsPerCommandBuffer = 16384;
+        // MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES: how many consecutive frames (strictly, BeginFrame
+        // epochs) a frame slot's descriptor pools must stay under a quarter full before Magma
+        // hands the slot's whole set cache back and lets it re-grow. 0 = never trim. A loading
+        // frame otherwise keeps its burst of sets (rd12: ~15k, where steady frames use a few dozen)
+        // for the life of the process. See UniformManager::TrimFrameDescriptorPools.
+        Uint32 MagmaDescriptorTrimFrames = 120;
         // MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
         Bool EsprytAvoidSamplerMipmapMinFilter = false;

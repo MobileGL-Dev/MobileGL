@@ -3444,6 +3444,100 @@ TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMi
     EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 4, GL_WRITE_ONLY));
 }
 
+// Magma's per-frame descriptor pools (UniformManager::NextDescriptorPoolMaxSets). The old rule
+// doubled the FIRST pool of the flavour, which is always the slot's oldest and smallest one, so
+// every grown pool came out the same size: rd12's loading frame (15,016 sets) grew one frame slot
+// to 59 update-after-bind pools of 256 sets. The policy must double the LARGEST pool of the
+// flavour, up to the cap.
+namespace {
+    using MobileGL::MG_Backend::DirectVulkan::UniformManager;
+    constexpr MobileGL::Uint32 kBaseSets = 64; // VulkanRenderer's kDescriptorSetsPerFrame
+
+    // A frame slot as GrowFrameDescriptorPool leaves it after a frame needing `needed` sets of one
+    // flavour: the base pool (non-update-after-bind, never usable by the other flavour) plus the
+    // policy's next pool, added until the flavour's pools hold `needed` sets.
+    std::vector<UniformManager::DescriptorPoolBucket> GrowSlotUntil(MobileGL::Uint64 needed, bool updateAfterBind) {
+        std::vector<UniformManager::DescriptorPoolBucket> pools{{VK_NULL_HANDLE, kBaseSets, 0, false}};
+        const auto flavourCapacity = [&]() {
+            MobileGL::Uint64 sum = 0;
+            for (const auto& pool : pools) {
+                if (pool.updateAfterBind == updateAfterBind) sum += pool.maxSets;
+            }
+            return sum;
+        };
+        while (flavourCapacity() < needed && pools.size() < 100000) {
+            pools.push_back({VK_NULL_HANDLE, UniformManager::NextDescriptorPoolMaxSets(pools, updateAfterBind, kBaseSets),
+                             0, updateAfterBind});
+        }
+        return pools;
+    }
+
+    // Pools a geometric policy needs for n sets: 64, 128, ... up to the cap, then one per cap.
+    MobileGL::Uint64 GeometricPoolBound(MobileGL::Uint64 n) {
+        MobileGL::Uint64 pools = 0, capacity = 0, size = kBaseSets;
+        while (capacity < n) {
+            capacity += size;
+            ++pools;
+            size = std::min<MobileGL::Uint64>(size * 2, UniformManager::kMaxDescriptorPoolSets);
+        }
+        return pools;
+    }
+} // namespace
+
+TEST(DirectVulkanSanity, DescriptorPoolGrowthIsGeometricInTheSetsAFrameNeeds) {
+    for (const bool updateAfterBind : {false, true}) {
+        for (const MobileGL::Uint64 needed : {65ull, 1000ull, 4096ull, 8128ull, 15016ull, 40000ull}) {
+            const auto pools = GrowSlotUntil(needed, updateAfterBind);
+            MobileGL::Uint64 flavourPools = 0, capacity = 0;
+            MobileGL::Uint32 previous = 0;
+            for (const auto& pool : pools) {
+                if (pool.updateAfterBind != updateAfterBind) continue;
+                ++flavourPools;
+                capacity += pool.maxSets;
+                EXPECT_LE(pool.maxSets, UniformManager::kMaxDescriptorPoolSets) << "one pool past the cap";
+                EXPECT_GE(pool.maxSets, previous) << "a later pool is smaller than an earlier one";
+                previous = pool.maxSets;
+            }
+            // O(log N) under the cap (8128 = 64 + ... + 4096 is where the cap is reached), then one
+            // pool per 4096 sets. The first-match rule needed ~N/128 here: 118 pools for 15,016.
+            EXPECT_LE(flavourPools, GeometricPoolBound(needed))
+                << needed << " sets (updateAfterBind=" << updateAfterBind << ") took " << flavourPools << " pools";
+            EXPECT_GE(capacity, needed);
+            // The slot does not over-reserve by more than the last pool it had to add.
+            EXPECT_LT(capacity - needed, static_cast<MobileGL::Uint64>(previous));
+        }
+    }
+    // rd12's loading frame, the case that motivated this: 9 pools in the slot, not 59.
+    const auto rd12 = GrowSlotUntil(15016, true);
+    EXPECT_EQ(rd12.size(), 1u + 9u);
+}
+
+TEST(DirectVulkanSanity, DescriptorPoolGrowthDoublesTheLargestPoolOfTheSameFlavour) {
+    using Bucket = UniformManager::DescriptorPoolBucket;
+    // The largest pool decides, wherever it sits in the list - a trim or a flavour switch can
+    // leave a small pool after a large one.
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets(
+                  {{VK_NULL_HANDLE, 64, 0, false}, {VK_NULL_HANDLE, 512, 0, false}, {VK_NULL_HANDLE, 128, 0, false}},
+                  false, kBaseSets),
+              1024u);
+    // Flavours never size each other: the base pool is non-update-after-bind, so the first
+    // update-after-bind pool starts at the base size however large the other flavour grew.
+    const std::vector<Bucket> mixed{{VK_NULL_HANDLE, 64, 0, false},
+                                    {VK_NULL_HANDLE, 2048, 0, false},
+                                    {VK_NULL_HANDLE, 64, 0, true},
+                                    {VK_NULL_HANDLE, 128, 0, true}};
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets(mixed, true, kBaseSets), 256u);
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets(mixed, false, kBaseSets), 4096u);
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets({{VK_NULL_HANDLE, 64, 0, false}}, true, kBaseSets), 64u);
+    // The cap holds, and the base size is a floor.
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets({{VK_NULL_HANDLE, 4096, 0, false}}, false, kBaseSets),
+              UniformManager::kMaxDescriptorPoolSets);
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets({{VK_NULL_HANDLE, 3000, 0, false}}, false, kBaseSets),
+              UniformManager::kMaxDescriptorPoolSets);
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets({{VK_NULL_HANDLE, 16, 0, false}}, false, kBaseSets), 64u);
+    EXPECT_EQ(UniformManager::NextDescriptorPoolMaxSets({}, false, kBaseSets), 64u);
+}
+
 // GL_MAX_COMBINED_*_UNIFORM_COMPONENTS is components + blocks * (blockSize / 4). The product was
 // formed in signed 32-bit, and a Vulkan host that reports a large VkPhysicalDeviceLimits::
 // maxUniformBufferRange (a Mali driver answers 0xFFFFFFFF, which the loader saturates to

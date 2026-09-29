@@ -7083,6 +7083,10 @@ void main() {
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                                    const DrawCmdParam& drawParams,
                                    const IndexBufferView* pIndexBufferView) {
+        // First, before anything of this draw is recorded or resolved - on the wire arm too: a
+        // split server records every draw its client sends into the same frame command buffer, so
+        // the same loading frame grows it the same way there.
+        SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             RewindWireDescriptorSetsIfDue();
@@ -7718,6 +7722,8 @@ void main() {
     }
 
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
+        // Before the wire branch, for SetupDraw's reason.
+        SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             RewindWireDescriptorSetsIfDue();
@@ -7779,6 +7785,7 @@ void main() {
     }
 
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
+        SplitOversizedRecording();
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // See DispatchCompute: the dispatch accessor, not the draw one.
@@ -14198,6 +14205,54 @@ void main() {
         return FlushPendingCommands();
     }
 
+    void VulkanRenderer::SplitOversizedRecording() {
+        const Uint32 maxDraws = MG_Config::Features.MagmaMaxDrawsPerCommandBuffer;
+        if (maxDraws == 0) {
+            return;
+        }
+        // Counted before the check, so a buffer carries at most maxDraws calls before the one
+        // that splits it. OnFrameCommandRecordingBegan resets the count on every new recording.
+        if (++m_drawsInRecording <= maxDraws || !HasPendingRecordedWork()) {
+            return;
+        }
+        // Nothing of the current call is recorded yet, so the split falls between two GL calls,
+        // exactly where a glFlush would put it: the render pass ends with STORE, the next draw
+        // re-begins it with LOAD, and queries and transform feedback are bracketed per draw.
+        if (!FlushPendingCommands()) {
+            return;
+        }
+        // Fresh command buffer: the same reset every other mid-frame flush site applies.
+        m_lastSampledSetValid = false;
+        ++m_oversizedRecordingSplits;
+        MGLOG_I_ONCE("DirectVulkan: a frame recorded more than %u draws into one command buffer; submitting it and "
+                     "continuing on a fresh one (MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER, 0 = unbounded)",
+                     maxDraws);
+        MGLOG_D("DirectVulkan: split an oversized recording (%llu so far, submit index %llu)",
+                static_cast<unsigned long long>(m_oversizedRecordingSplits),
+                static_cast<unsigned long long>(m_submitCounter));
+
+        // Splitting only bounds the driver's command memory if the submitted buffers are freed
+        // as fast as they are produced. A GPU that falls behind would park them all on the
+        // retired list, which is the same growth spread over more buffers - so hold the queue
+        // to frames-in-flight + 1 outstanding submissions, the steady state of a pipelined
+        // frame plus this split. Wait on the fence directly rather than through
+        // WaitForSubmitIndex: its opportunistic TryDrainFrameTransients may rewind the transient
+        // arena, and this runs at the start of a draw whose caller may already hold slices of it.
+        const SizeT maxOutstanding = static_cast<SizeT>(m_frameContext.GetFrameCount()) + 1;
+        while (m_inFlightSubmits.size() > maxOutstanding) {
+            const SubmitRecord oldest = m_inFlightSubmits.front();
+            if (oldest.fence == VK_NULL_HANDLE) {
+                break;
+            }
+            const VkResult waitResult = vkWaitForFences(m_device, 1, &oldest.fence, VK_TRUE, UINT64_MAX);
+            if (waitResult != VK_SUCCESS) {
+                MGLOG_E_ONCE("SplitOversizedRecording: vkWaitForFences returned %d", waitResult);
+                break;
+            }
+            OnSubmitsCompletedUpTo(oldest.submitIndex);
+        }
+    }
+
     Bool VulkanRenderer::WaitForSubmitIndex(Uint64 submitIndex, Uint64 timeoutNs, Bool flushIfPending) {
         if (IsSubmitIndexComplete(submitIndex)) {
             return true;
@@ -14243,6 +14298,7 @@ void main() {
     }
 
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
+        m_drawsInRecording = 0;
         // Dynamic state does not survive a command-buffer boundary.
         ResetDynamicStateShadow();
         InvalidateSetupDrawSnapshots();

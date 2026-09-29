@@ -30,6 +30,15 @@
 // earlier clear or draw landed over it: the box read back green. Each order is covered - the
 // clear already recorded, still queued, synced by a draw or by the readback, the reverse order
 // in which the clear must win, and a draw instead of a clear.
+//
+// The last part is about SCATTER: several boxes written between two syncs, with the GPU's clear in
+// the gaps between them. Everything a backend has to go on is the union box and the storage's
+// rect list, and both describe more than the writes - the box spans the gaps, the list merges
+// touching rects into their bounding box, folds once it holds 96, and is withheld once its rects
+// fill 3/4 of the box; a box spanning the level went up as the whole level. Espryt also uploaded
+// the union box whenever its unpack ring was in use. Each case below reaches one of those: two
+// distant boxes, a hundred of them, boxes filling more than 3/4 of their union, and boxes whose
+// union spans the level.
 
 #include <cmath>
 #include <cstdint>
@@ -377,6 +386,60 @@ void main() {
                 ExpectClearAroundBox(rgb, kEdge, kEdge, kBoxAt, kBoxAt, boxWins ? kBoxEdge : 0, boxWins ? kBoxEdge : 0);
             }
 
+            struct Box {
+                int x, y, w, h;
+            };
+
+            // An edge x edge RGBA8 level uploaded red, cleared green on the GPU, then written blue in
+            // every box by one glTexSubImage each, with no sync in between; read back after a sync.
+            // Blue inside the boxes, green everywhere else.
+            void RunScatteredWrites(int edge, const std::vector<Box>& boxes) {
+                const GLuint t = NewTexture(GL_TEXTURE_2D);
+                const auto red = Fill(Rgba8(), edge * edge, 1.0f, 0.0f, 0.0f);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, edge, edge, 0, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                ASSERT_EQ(FirstGLError(), 0u) << "definition";
+                SampleRgba8(t);
+                ClearRgba8Green(t);
+                SampleRgba8(t);
+                glBindTexture(GL_TEXTURE_2D, t);
+                for (const Box& box : boxes) {
+                    const auto blue = Fill(Rgba8(), box.w * box.h, 0.0f, 0.0f, 1.0f);
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, box.x, box.y, box.w, box.h, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    blue.data());
+                }
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                ASSERT_EQ(FirstGLError(), 0u) << "writes";
+                SampleRgba8(t);
+                ASSERT_TRUE(Attach(t, -1));
+                const auto rgb = ReadRgb(Rgba8(), edge, edge);
+                Detach();
+                int bad = 0, stale = 0;
+                std::ostringstream first;
+                for (int y = 0; y < edge; ++y)
+                    for (int x = 0; x < edge; ++x) {
+                        bool inBox = false;
+                        for (const Box& box : boxes)
+                            inBox |= x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h;
+                        const float want[3] = {0.0f, inBox ? 0.0f : 1.0f, inBox ? 1.0f : 0.0f};
+                        const float* got = &rgb[static_cast<std::size_t>(y * edge + x) * 3u];
+                        bool texelBad = false;
+                        for (int c = 0; c < 3; ++c) texelBad |= std::fabs(got[c] - want[c]) > 0.02f;
+                        if (!texelBad) continue;
+                        stale += got[0] > 0.5f;
+                        if (bad++ == 0) {
+                            first << "(" << x << "," << y << ") got " << got[0] << "," << got[1] << "," << got[2]
+                                  << " want " << want[0] << "," << want[1] << "," << want[2];
+                        }
+                    }
+                EXPECT_EQ(bad, 0) << bad << " of " << edge * edge << " texels wrong, " << stale
+                                  << " of them red - the stale shadow went up outside the writes; first "
+                                  << first.str();
+            }
+
             GLuint m_vao = 0, m_fbo = 0;
             ColorFbo m_scratch{};
             std::vector<GLuint> m_programs;
@@ -502,6 +565,36 @@ void main() {
             WriteRgba8BlueBox(t);
             SampleRgba8(t);
             ExpectRgba8(t, true);
+        }
+
+        // Two boxes in opposite corners: their union box is 7x7, of which the writes are 8 texels.
+        TEST_F(PartialUploadOverGpuContentScenario, TwoDistantSubImagesKeepTheGpuClearBetweenThem) {
+            if (!Ready()) return;
+            RunScatteredWrites(kEdge, {{0, 0, 2, 2}, {5, 5, 2, 2}});
+        }
+
+        // A hundred 2x2 boxes two texels apart: more than the 96 rects the storage keeps, so its
+        // list folds neighbours together, gaps and all.
+        TEST_F(PartialUploadOverGpuContentScenario, AHundredSubImagesKeepTheGpuClearBetweenThem) {
+            if (!Ready()) return;
+            std::vector<Box> boxes;
+            for (int j = 0; j < 10; ++j)
+                for (int i = 0; i < 10; ++i) boxes.push_back({4 * i + 1, 4 * j + 1, 2, 2});
+            RunScatteredWrites(40, boxes);
+        }
+
+        // Four 4x4 boxes around a one-texel cross: 64 of their union's 81 texels, past the 3/4 at
+        // which the storage stops handing its rect list out.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImagesFillingThreeQuartersOfTheirUnionKeepTheGpuClearBetweenThem) {
+            if (!Ready()) return;
+            RunScatteredWrites(16, {{2, 2, 4, 4}, {7, 2, 4, 4}, {2, 7, 4, 4}, {7, 7, 4, 4}});
+        }
+
+        // Three quadrants: the union box is the whole level, and the list merges the touching
+        // boxes into it; the fourth quadrant is still the GPU's.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImagesWhoseUnionSpansTheLevelKeepTheGpuClearInTheGap) {
+            if (!Ready()) return;
+            RunScatteredWrites(kEdge, {{0, 0, 4, 4}, {4, 0, 4, 4}, {0, 4, 4, 4}});
         }
     } // namespace
 } // namespace MGITest

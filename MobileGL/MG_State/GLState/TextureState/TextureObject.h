@@ -325,6 +325,18 @@ namespace MobileGL::MG_State::GLState {
             (void)maxRects;
             return 0;
         }
+        // Exactly the texels written since the level was last clean, as disjoint boxes - not a
+        // cover of them like the rects above, and never withheld. See MipmapStorage::
+        // GetDirtyFootprint for why a backend whose copy of the level may hold GPU-written texels
+        // uploads these and nothing else. The base fallback answers the whole-level box its
+        // MarkStorageDirtyRegion recorded.
+        virtual void GetStorageDirtyFootprint(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                              Vector<MipmapDirtyRegion>& outRects) const {
+            outRects.clear();
+            if (IsStorageDirty(uploadTarget, mipmapLevel)) {
+                outRects.push_back(GetStorageDirtyRegion(uploadTarget, mipmapLevel));
+            }
+        }
 
         // The compressed image a glCompressedTexImage* call shadowed for this level, kept verbatim
         // next to the texel data rather than instead of it - see MipmapStorage. The texel shadow
@@ -407,6 +419,8 @@ namespace MobileGL::MG_State::GLState {
         MipmapDirtyRegion GetStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
         SizeT GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapDirtyRegion* outRects,
                                    SizeT maxRects) const override;
+        void GetStorageDirtyFootprint(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                      Vector<MipmapDirtyRegion>& outRects) const override;
         void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
                                       const void* data, SizeT size) override;
         GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;

@@ -334,6 +334,15 @@ namespace MobileGL::MG_State::GLState {
         return m_ownerMipmap->GetStorageDirtyRegion(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel));
     }
 
+    // In the owner's texel space, like GetStorageDirtyRegion.
+    void TextureObjectView::GetStorageDirtyFootprint(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                     Vector<MipmapDirtyRegion>& outRects) const {
+        outRects.clear();
+        if (m_ownerMipmap == nullptr) return;
+        m_ownerMipmap->GetStorageDirtyFootprint(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel),
+                                                outRects);
+    }
+
     void TextureObjectView::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                      GLenum internalFormat, const void* data, SizeT size) {
         if (m_ownerMipmap == nullptr) return;
