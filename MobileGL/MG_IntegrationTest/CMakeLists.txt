@@ -146,6 +146,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/LayeredTextureReadbackScenario.cpp
     Scenarios/AtomicCounterScenario.cpp
     Scenarios/LargeArenaAdoptionScenario.cpp
+    Scenarios/DeletedBoundBufferScenario.cpp
     Scenarios/SsboArrayDynamicIndexScenario.cpp
     Scenarios/StorageBufferRegrowScenario.cpp
     Scenarios/SpirvShaderBinaryScenario.cpp
@@ -2470,6 +2471,37 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # adopt-tier-refusal cases skip here for want of their lane markers. The Magma arms are the
     # gated `Arena.` block beside `Pbo.` / `Fence.` below, plus the Buffers lane.
     mgl_itest_register_split_arms("LargeArenaAdoptionScenario.*" "")
+    # P11 B2 addendum: A BUFFER DELETED WHILE BOUND TO AN INDEXED POINT (storage, uniform, atomic
+    # counter, transform feedback), then its slot reused at a newer generation and a draw and a
+    # dispatch that declare the point. The monolith half is the ambient DirectGLES./DirectVulkan.
+    # entries; Magma's three arms are the `DeletedBound.` block beside `Arena.` below.
+    mgl_itest_register_split_arms("DeletedBoundBufferScenario.*" "")
+    # ...and the repro it came from, kept as a regression: the two arena cases in ONE process (the
+    # harness has one context per process, so the first case's storage binding outlives it). ctest
+    # runs one case per process everywhere else, which is how this stayed hidden; add_test because
+    # gtest_discover_tests registers cases one at a time. A PLAIN list for add_test: the joined
+    # environments are escaped for gtest_discover_tests' PROPERTIES (see SpawnLane.EventForfeitPeer).
+    foreach(mglItestPairArm IN ITEMS Split Spawn Tcp)
+        string(TOLOWER "${mglItestPairArm}" mglItestPairArmLower)
+        string(TOUPPER "${mglItestPairArm}" mglItestPairArmUpper)
+        set(mglItestPairProperties)
+        if(mglItestPairArm STREQUAL "Tcp")
+            set(mglItestPairProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
+        endif()
+        string(REPLACE "\\;" ";" mglItestPairEnv "${MGL_ITEST_GLES_${mglItestPairArmUpper}_ENVIRONMENT}")
+        list(APPEND mglItestPairEnv "MGITEST_PERSISTENT_MAP_ARM=emulated"
+             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/split-logs/DirectGLES.${mglItestPairArm}.ArenaPairInOneProcess.log")
+        set(mglItestPairName "DirectGLES.${mglItestPairArm}.LargeArenaAdoptionScenario.GpuWriteThenTheTierCaseInOneProcess")
+        add_test(NAME "${mglItestPairName}"
+            COMMAND MobileGLIntegrationTest
+                "--gtest_filter=LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack:LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties("${mglItestPairName}" PROPERTIES
+            LABELS "integration-gpu;integration-${mglItestPairArmLower}"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${mglItestPairEnv}"
+            ${mglItestPairProperties})
+    endforeach()
     # P11 A1 (CONTRACT-P11 §1): the tcp arm with MOBILEGL_IPC_ADOPT_TIER=0. A stream refuses the
     # tier by name at the client's handshake and runs T2, so the whole scenario is green here and
     # AStreamSessionRefusesTheAdoptTierOnceByName reads exactly one refusal line. TCP ONLY by
@@ -3905,6 +3937,36 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
+        # P11 B2 addendum: DeletedBoundBufferScenario on Magma's three arms, same flavour (the
+        # Espryt arms come from mgl_itest_register_split_arms). Before the frontend fix Magma did
+        # not die: the stale handle resolved to no wire buffer and the draw / dispatch declaring
+        # the point was dropped - which these cases' markers catch.
+        foreach(deletedCase AStorageBufferDeletedWhileBoundLeavesNoStaleBinding
+                            AUniformBufferDeletedWhileBoundLeavesNoStaleBinding
+                            AnAtomicCounterBufferDeletedWhileBoundLeavesNoStaleBinding
+                            ATransformFeedbackBufferDeletedWhileBoundLeavesNoStaleBinding)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.DeletedBound."
+                TEST_FILTER "DeletedBoundBufferScenario.${deletedCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-deleted-bound${mglItestArmLogTag}-${deletedCase}.log")
+        endforeach()
+        # ...and the one-process arena pair (the Espryt half is beside mgl_itest_register_split_arms).
+        string(REPLACE "\\;" ";" mglItestPairEnv "${mglItestMagmaBandEnvironment}")
+        list(APPEND mglItestPairEnv "MGITEST_PERSISTENT_MAP_ARM=emulated"
+             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena-pair${mglItestArmLogTag}.log")
+        string(REPLACE "\\;" ";" mglItestPairLabels "${mglItestMagmaLabels}")
+        set(mglItestPairName "DirectVulkan.${mglItestArm}.Arena.LargeArenaAdoptionScenario.GpuWriteThenTheTierCaseInOneProcess")
+        add_test(NAME "${mglItestPairName}"
+            COMMAND MobileGLIntegrationTest
+                "--gtest_filter=LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack:LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+        set_tests_properties("${mglItestPairName}" PROPERTIES
+            LABELS "${mglItestPairLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${mglItestPairEnv}"
+            ${mglItestArmProperties})
         # P11 A1 + B2 (CONTRACT-P11 §1, B2): MOBILEGL_IPC_ADOPT_TIER=0 on every arm, one case set.
         # On tcp a stream refuses the tier by name at the client's handshake (A1, the stream case
         # reads the line); over shared segments (split, spawn) the knob ASKS T0, a host has no
