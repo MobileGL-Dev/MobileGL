@@ -12,6 +12,7 @@
 | P11 转出：Espryt 对零散写入按并集框上传，把影子里的旧纹素盖到框内 GPU 写过的空隙上（8×8 探针 41 个错，pull 与全部 Espryt 臂；Magma 对）；dev `568090f0` 的 `AdoptDriverLevelIntoShadow` 有同样的并集框近似（读代码） | dev（独立任务） |
 | P11 转出：Magma 单进程重放 rd12 在加载帧耗尽 `vm.max_map_count`（65530，其中 57–60k 是 `/dev/kgsl-3d0` 映射）而 abort；split 的 Magma 与 Espryt 都正常 | dev（独立任务） |
 | P11 转出：client 与 server 共用日志前缀时，client 以 `"w"` 打开 `<base>.server.log` 写转发来的 server 日志，会截断 server 自己的文件（依赖 server 日志行的 P12 装置测试可能受影响） | 小修 |
+| P11 转出（B0 F1）：HyperOS 熄屏时冻结 server app 的整个 uid（FGS 进程、supervisor、会话子进程同一 cgroup），在飞会话 120 s 后 `Fatal{BarrierTimeout}`；FCL 同机用法同样受影响（`notes/p11/B0-CROSS-APP.md`） | B1 的防冻结一项；FCL 侧另议 |
 | P11 转出：pull 构建没有任何门跑集成测试（`TextureRemintPullScenario` 在 pull 上自 P9 起就是红的，P11 M 修） | CI / 门的覆盖，需裁定 |
 | `GetCaps` 的两个 blobref | 一旦运输，必须有 server → client 的 carrier rule，不能套 `SEG_STAGE` |
 | E1 对照的重定义（ID-122） | 无主（开放问题 24） |
