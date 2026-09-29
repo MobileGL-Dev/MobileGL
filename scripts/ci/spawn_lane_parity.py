@@ -97,6 +97,18 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.")
 # unit-private placeholder for an invalid image unit instead of a null descriptor - the
 # knob-free `.ImageUnitWindow.` copies of the same two cases keep their tcp entries. Two cases, so two
 # tails (one case each), as for `.Reclaim.`.
+# P10 B: the `.PrimGenReroute.` entries set MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1, which the
+# SERVER's VulkanRenderer reads to pin the GL_PRIMITIVES_GENERATED reroute on - the knob-free
+# `.PrimGen.` copies (the bring-up probe's Auto verdict) keep their tcp entries. Eight cases, eight
+# tails.
+PRIMGEN_REROUTE_CASES = ("CountsADrawMadeWithNoCaptureSpan",
+                         "CountsUnderRasterizerDiscardWithNoCaptureSpan",
+                         "CountsATessellatedPatchWithNoCaptureSpan",
+                         "ASpanMixingActiveAndInactiveDrawsAccumulatesBoth",
+                         "APausedSpanCountsACpuPricedDrawExactlyOnce",
+                         "APausedSpanCountsATessellatedPatchExactlyOnce",
+                         "APausedSpanCountsAnInstancedDrawExactlyOnce",
+                         "TheRerouteIsActuallyArmedWhenTheEnvironmentPinsItOn")
 MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
                                 ".MsResolveBug.", ".MsFlipBug.", ".MsResolveElide.",
@@ -106,7 +118,8 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".Reclaim.MagmaWireReclaimScenario.RespecifyAndDrawEachStoreInOneFrameStaysWithinTheDeferredBudget",
                                 ".Reclaim.MagmaWireReclaimScenario.ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling",
                                 ".Reclaim.MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle",
-                                ".Reclaim.MagmaWireReclaimScenario.DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires")
+                                ".Reclaim.MagmaWireReclaimScenario.DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires") + tuple(
+    f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES)
 
 
 def lane_names(build_dir, label):

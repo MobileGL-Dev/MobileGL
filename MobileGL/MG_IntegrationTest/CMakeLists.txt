@@ -2500,6 +2500,62 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     endforeach()
 
+    # ---- P10 B: AsyncCompileScenario ON THE SPLIT ARMS, IN ITS THREE PINNED CONFIGURATIONS ----
+    #
+    # ITS OWN BLOCK, for the ForcedDs block's reason: every case needs a whole-process compiler
+    # configuration (MOBILEGL_ASYNC_SHADER_COMPILE, MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS) and
+    # the registration macro hands every arm the shared environment. The three monolith entries
+    # near the top of this file - AsyncOn. (the whole scenario), AsyncOff. (the one case that
+    # has anything to say with compilation inline) and OptimisticShaderStatus. (the Iris shape)
+    # - are mirrored per arm, with one filter change: AsyncOn. leaves out the Iris case, which
+    # skips without MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS and runs in its own entry, so every
+    # entry here runs its case. The AMBIENT configuration is not registered here, for the
+    # monolith block's own reason: it runs whatever the shipped default is, and the day that
+    # flips it would stop covering the asynchronous half with nothing red.
+    #
+    # WHAT THE SPLIT ARM ADDS: the artifacts a worker built are shipped as program archives and
+    # linked and drawn by the SERVER's backend, so a worker-built archive the server mis-binds is
+    # a wrong quadrant here and nowhere in the monolith entries.
+    #
+    # THE SWITCH IS THE CLIENT'S ON ALL THREE ARMS, THE TCP ONE INCLUDED. The pool, its threads,
+    # glMaxShaderCompilerThreadsKHR and GL_MAX_SHADER_COMPILER_THREADS_KHR are frontend state,
+    # and the advertised GL_KHR_parallel_shader_compile is re-derived on the client from the same
+    # switch (CapsMirror.cpp, ReconcileClientCompileExtensions). So unlike an MGITEST_MAGMA_FORCE_*
+    # knob, the tcp fixture server not seeing the variable is exactly what that arm tests. Red
+    # before that fix: AsyncOff.ExtensionStringMatchesTheConfiguration on the Tcp arm, both
+    # backends - the string came from the default (async-on) fixture server.
+    foreach(mglItestAsyncArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestAsyncArm})
+        string(TOUPPER "${mglItestAsyncArm}" mglItestAsyncArmUpper)
+        foreach(mglItestAsyncShape AsyncOn AsyncOff OptimisticShaderStatus)
+            if(mglItestAsyncShape STREQUAL "AsyncOn")
+                set(mglItestAsyncFilter
+                    "AsyncCompileScenario.*-AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly")
+                set(mglItestAsyncKnobs "MOBILEGL_ASYNC_SHADER_COMPILE=1")
+            elseif(mglItestAsyncShape STREQUAL "AsyncOff")
+                set(mglItestAsyncFilter "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration")
+                set(mglItestAsyncKnobs "MOBILEGL_ASYNC_SHADER_COMPILE=0")
+            else()
+                set(mglItestAsyncFilter "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly")
+                set(mglItestAsyncKnobs
+                    "MOBILEGL_ASYNC_SHADER_COMPILE=1\;MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1")
+            endif()
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestAsyncArm}.${mglItestAsyncShape}."
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "${mglItestAsyncFilter}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-gpu\;integration-${mglItestArmLower}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestAsyncArmUpper}_ENVIRONMENT}\;${mglItestAsyncKnobs}"
+                    ${mglItestArmProperties}
+            )
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+        endforeach()
+    endforeach()
+
 
     # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
     #
@@ -2758,6 +2814,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # not here. A DirectVulkan arm of this lane would be red for a reason t2 cannot fix.
     mgl_itest_register_split_arms("TessellationXfbCaptureScenario.*" "")
     mgl_itest_register_split_arms("XfbCaptureBufferReuseScenario.*" "")
+
+    # ---- P10 B: THE TWO XFB QUERY TARGETS ON ONE SPAN ---------------------------------------
+    #
+    # XfbPrimitiveQueryScenario asks GL_PRIMITIVES_GENERATED and GL_TRANSFORM_FEEDBACK_PRIMITIVES_
+    # WRITTEN about one vertex-only capture, once with room for every point and once overflowing
+    # (4 generated, 3 written), and reads the captured records back. Under a transport both
+    # answers are query replies from the server and the records a readback of the server's
+    # capture, so a WRITTEN that crossed as the GENERATED count, or a result read before the
+    # span's end record was applied, is a wrong number here. The Magma arms are the
+    # `DirectVulkan.<arm>.XfbQuery.` block after the Remint block.
+    #
+    # PrimitivesGeneratedNoXfbScenario IS NOT REGISTERED ON THESE ARMS, by name: every case in it
+    # skips in SetUp on DirectGLES ("the stream-query defect and its reroute are DirectVulkan's"),
+    # because ES has no GENERATED counter for a draw with no capture span and Espryt's CPU
+    # accounting is a different mechanism. Three arms of guaranteed skips would be a green that
+    # ran nothing. Its Magma arms are the `PrimGen.` / `PrimGenReroute.` entries in the same
+    # block as the XfbQuery. ones.
+    mgl_itest_register_split_arms("XfbPrimitiveQueryScenario.*" "")
 
     # ---- P5e package vi (MG_Remote/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
     #
@@ -3698,6 +3772,71 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
+# P10 B: ASYNC COMPILATION, THE XFB QUERY PAIR AND GL_PRIMITIVES_GENERATED ON MAGMA, all three
+# arms, GATED, in the band flavour (role-split state, strict errors, run-ahead). The DirectGLES
+# half of the first two is registered beside the other Espryt arms; the third is Magma's alone.
+# One registration per arm and shape, and every entry gets a private log through
+# MGL_SPLIT_ARM_TEST_LISTS (no name there matches a lane marker SplitLogPaths arms).
+#
+#   AsyncOn. / AsyncOff. / OptimisticShaderStatus.  AsyncCompileScenario, the monolith entries'
+#       three configurations (AsyncOn. without the Iris case, which has its own entry), for the
+#       reason the Espryt block states - including why the tcp arm keeps all three: the switch is
+#       the client's, and so is the extension since this package.
+#   XfbQuery.  XfbPrimitiveQueryScenario, both cases.
+#   PrimGen.  PrimitivesGeneratedNoXfbScenario under the bring-up probe's Auto verdict, minus the
+#       arming case, which skips unless the reroute is pinned (a guaranteed skip is not coverage).
+#   PrimGenReroute.  The same scenario with MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1, arming case
+#       included. SPLIT AND SPAWN ONLY: the renderer reads the knob on the SERVER, and the tcp
+#       arm's server is the lane fixture, which no per-entry property reaches - a tcp copy would
+#       run the Auto verdict under a name claiming the pin (spawn_lane_parity.py,
+#       MAGMA_SERVER_ENV_KNOB_NO_TCP). One entry per case, as ctest runs every discovered case:
+#       the arming line is LATCHED once per process, so a process that ran an earlier rerouted
+#       case first reads nothing new (measured, running the scenario as one process).
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaP10bEnvironment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        set(mglItestP10bShapes AsyncOn AsyncOff OptimisticShaderStatus XfbQuery PrimGen)
+        if(NOT mglItestArm STREQUAL "Tcp")
+            list(APPEND mglItestP10bShapes PrimGenReroute)
+        endif()
+        foreach(mglItestP10bShape IN LISTS mglItestP10bShapes)
+            set(mglItestP10bKnobs "")
+            if(mglItestP10bShape STREQUAL "AsyncOn")
+                set(mglItestP10bFilter
+                    "AsyncCompileScenario.*-AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly")
+                set(mglItestP10bKnobs "\;MOBILEGL_ASYNC_SHADER_COMPILE=1")
+            elseif(mglItestP10bShape STREQUAL "AsyncOff")
+                set(mglItestP10bFilter "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration")
+                set(mglItestP10bKnobs "\;MOBILEGL_ASYNC_SHADER_COMPILE=0")
+            elseif(mglItestP10bShape STREQUAL "OptimisticShaderStatus")
+                set(mglItestP10bFilter "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly")
+                set(mglItestP10bKnobs
+                    "\;MOBILEGL_ASYNC_SHADER_COMPILE=1\;MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1")
+            elseif(mglItestP10bShape STREQUAL "XfbQuery")
+                set(mglItestP10bFilter "XfbPrimitiveQueryScenario.*")
+            elseif(mglItestP10bShape STREQUAL "PrimGen")
+                set(mglItestP10bFilter
+                    "PrimitivesGeneratedNoXfbScenario.*-PrimitivesGeneratedNoXfbScenario.TheRerouteIsActuallyArmedWhenTheEnvironmentPinsItOn")
+            else()
+                set(mglItestP10bFilter "PrimitivesGeneratedNoXfbScenario.*")
+                set(mglItestP10bKnobs "\;MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1")
+            endif()
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.${mglItestP10bShape}."
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "${mglItestP10bFilter}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaP10bEnvironment}${mglItestP10bKnobs}")
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
     endforeach()
 endif()
