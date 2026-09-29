@@ -38,7 +38,7 @@ Android 上的 server 应用自己开一个全屏窗口，把收到的渲染流�
 - 出口门 A、B 都过；契约 [`MG_Remote/CONTRACT-P12.md`](../../MobileGL/MG_Remote/CONTRACT-P12.md) 已写；`gate.sh` 的 G1 只在同机基线上比较；G1 在 Arch 上成立（pull 构建 `.text` 与基线同为 `0xa52203`，符号增 0 减 0）。
 - 没做、转入 [`notes/DEBTS.md`](notes/DEBTS.md)：DirectGLES 去全局、freezer、多 context、D8 窗口种类白名单、TLS。
 - 收官审查：用户裁定不派 agent / Codex；契约断言由本人对照代码核过。
-- FCL fork 的「游戏退到后台时不暂停」改动在 FCL 仓库，**未提交**（父仓库在合并冲突中）。
+- FCL fork 的「游戏退到后台时不暂停」在 FCL 仓库，已提交并推送（`Swung0x48/FoldCraftLauncher` 的 `merge-upstream-surfaceview`，`241471515`）。
 
 ## 下一步
 

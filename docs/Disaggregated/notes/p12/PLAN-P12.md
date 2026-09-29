@@ -74,7 +74,7 @@
 | 项 | 处置 |
 |---|---|
 | in-process server 的 `unix:` 监听 | ✅ 已做（`c16fb5a8a`） |
-| FCL env 与 plugin APK 开关表接线 | ✅ FCL 走 `/sdcard/FCL/mg_env.txt`；plugin / trace 两个 APK 都带 Render Server 屏与二进制（`1987bdff5`）；FCL fork 新增版本设置「游戏退到后台时不暂停」（FCL 仓库，未提交） |
+| FCL env 与 plugin APK 开关表接线 | ✅ FCL 走 `/sdcard/FCL/mg_env.txt`；plugin / trace 两个 APK 都带 Render Server 屏与二进制（`1987bdff5`）；FCL fork 新增版本设置「游戏退到后台时不暂停」（FCL 仓库，已提交 `241471515`） |
 | DirectGLES `g_Display` / `g_Surface` / `g_Context` 去全局 | 不做：每进程一个会话时不需要 → [`DEBTS.md`](../DEBTS.md) |
 | cached-app freezer 的完整处理 | 不做：文档从未定义它；FCL 后台暂停的实测答案见契约 → DEBTS |
 | 多 context | 不做（同上）→ DEBTS |

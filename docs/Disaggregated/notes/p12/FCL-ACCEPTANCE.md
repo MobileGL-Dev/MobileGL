@@ -20,7 +20,7 @@
 1. **FCL 一退后台游戏就暂停。** FCL 的界面离开前台时，SDL 被切到 PAUSED，GLFW 的 focused / visible 也被撤销，渲染线程停住；而 server 窗口要在屏幕上就必须把 FCL 切到后台。
    FCL fork 里新增版本设置 **「游戏退到后台时不暂停」**（`keepRunningInBackground`，默认关，在版本设置的渲染组里）：开启后强制用 TextureView 并让系统别销毁它的 SurfaceTexture
    （SurfaceView 在界面不可见时会被销毁，游戏拿着失效窗口会报 `Failed to create backend OpenGL/Vulkan`），界面离开前台时不通知 SDL 暂停、不撤销 GLFW 焦点。
-   改动在 FCL 仓库（`JVMActivity`、`VersionSetting`、`VersionSettingAdapter`、`LauncherHelper`、三份 strings），**尚未提交**（父仓库处于合并冲突状态）。
+   改动在 FCL 仓库（`JVMActivity`、`VersionSetting`、`VersionSettingAdapter`、`LauncherHelper`、三份 strings），已提交并推送（FCL 仓库 `merge-upstream-surfaceview`，`241471515`）。
 2. **FCL 的默认 spawn（游戏进程派生 server 子进程）走不通，只能接外部 render server。** FCL 把自己的窗口指针发给 server，server 按 P12 设计具名拒绝
    （`Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`），client 随即 device-lost。
 3. **修了一个日志洪水。** device-lost 之后每个被 DECLINED 的 verb 都打一行 ERROR（`…woke on a dead doorbell; the server is gone`），FCL 里 48 秒 113,080 行、几千行/秒。
