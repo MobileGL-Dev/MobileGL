@@ -26,9 +26,15 @@
 - **A3**（设备）：extmem_probe 打包成 `lib*.so`，经 exec 钩子在 app 进程里跑，逐行对照 shell 域；补两条腿：持续 lock 下 GPU 读 / CPU 写交替、128 MiB。任何一行与 shell 域不同 → 对应后端的 B 判 no-go。
 - **A4**（设备，只记录）：同一 APK、同一会话、Redmi 定频、各臂交错：monolith 采纳 / monolith + `MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION=1` / spawn+shm T2 / inproc T2 × 两后端 × {26.3、create-instancing、rd12}；逐线程 CPU p50、wall p99、峰值 RSS（split = client + server VmHWM − 共享，monolith = VmHWM；外部 adb 采样即可）。产出 B 的 go / no-go 表。
 
-### B — T0（条件包，两后端；A3 过、A4 显示 split T2 有实质代价、且有同机臂的出货消费者，三者同时成立才开）
+### B — 同机外部 client（Termux 一类）走共享内存，再上 T0（两后端）
 
-控制 op `AdoptStore` 经 unix 套接字传 AHB（Stream 上 A1 拒绝）；Espryt `glBufferStorageExternalEXT`、Magma `VK_ANDROID_external_memory_android_hardware_buffer` 导入；server 起角色时自测、发布 `kCapAdoptT0`；client 取 min(旋钮, caps, 数据面规则)；释放由 server 本地 fence 门控；CPU 读前 server 排空常驻写并等 GPU。主机只能验协议与回退（Linux 没有 AHB），GPU 正确性靠设备门。控制协议修订 3 → 4。预期：T0 省的是 RSS 与 Create 类持久映射推送，不减少 26.3 的 stage 字节。
+**消费者（用户 2026-09-29）**：从 Termux 之类的其他 app 里启动的 GL 程序，连同一台设备上的 render server。这类 client 是另一个 app（另一个 uid、另一组 SELinux 类别），今天只能走 TCP loopback——Stream 数据面，T0 在上面不可能；render server 的 `@abstract` / 文件路径 unix 端点按其注释"只有本 app 能连"（`ServerControlActivity.java`）。所以 B 先要一条跨 app、能传 fd 的通道，数据面才能换成共享内存：
+
+- **B0（设备探针，先做）**：用另一个 MobileGL APK（不同包名 = 不同 uid）代替 Termux，测 ① 跨 app 连 render server 的 abstract unix 套接字并用 `SCM_RIGHTS` 传 fd（MLS 类别下预计被拒，要实测）；② 不通时的 Binder 引导（Termux:X11 的做法：`app_process` 起的 Java 入口经广播把 Binder 交给另一个 app，再用 `ParcelFileDescriptor` 传 socketpair 的一端）；③ 经这条通道传 AHardwareBuffer 并导入（接 A3）。
+- **B1（跨 app 共享内存数据面）**：控制面走 B0 选出的通道、数据面 `SharedSegments`（memfd 经 fd 传）——P10 设备实测同一 rd12 在 tcp loopback 51 fps、spawn+shm 120 fps（`notes/p10/C-MEASUREMENTS.md` §2），这一步本身就是外部 client 最大的收益，与 T0 无关。
+- **B2（T0）**：在 B1 的通道上做 AHB 导入，形状如下。
+
+B2 的形状：控制 op `AdoptStore` 经 unix 套接字传 AHB（Stream 上 A1 拒绝）；Espryt `glBufferStorageExternalEXT`、Magma `VK_ANDROID_external_memory_android_hardware_buffer` 导入；server 起角色时自测、发布 `kCapAdoptT0`；client 取 min(旋钮, caps, 数据面规则)；释放由 server 本地 fence 门控；CPU 读前 server 排空常驻写并等 GPU。主机只能验协议与回退（Linux 没有 AHB），GPU 正确性靠设备门。控制协议修订 3 → 4。预期：T0 省的是 RSS 与 Create 类持久映射推送，不减少 26.3 的 stage 字节。
 
 ### C — 只改文档
 
@@ -38,8 +44,8 @@
 
 | 事项 | 建议 |
 |---|---|
-| B 是否排期 | 暂不排：同机 shm 臂没有出货消费者（FCL 同机走 tcp + stream，终局是跨机 TCP）。A3 / A4 之后再议 |
-| inproc 的 `local` 档（替代 B） | inproc 是单进程渲染线程的交付物；Espryt 已有铸造路径。作为 B 的替代选项，随 A4 的数据再议 |
+| B 是否排期 | **排**（用户 2026-09-29：Termux 一类的外部 GL 程序）。顺序 B0 → B1 → B2；B0 的结果决定通道形状，A3 决定 B2 在 app 域是否可行 |
+| inproc 的 `local` 档 | 与外部 client 无关；随 A4 的数据再议 |
 | 门的口径 | 性能与 RSS 只记录（`MEASUREMENTS.md` 规矩）；正确性门照常 |
 
 ## 4. 门与规矩
