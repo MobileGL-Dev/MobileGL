@@ -303,7 +303,7 @@ client 与 server 每会话：导入 store 数、字节、拒绝数（I `T0 stor
 | 门 | 用例 | red-once（变异 → 红） |
 |---|---|---|
 | 旋钮 2 = 今天的 T2 | `RemoteClientAdoptT0.KnobTwoIsTodaysT2WithNoT0Line`；全门禁缺省旋钮全绿 | Hello 不看旋钮一律问 0 → 红（client `Refuse{LinkTerms}` 回显 ≠ 问） |
-| 旋钮 0、主机无 AHB → T2 + 具名行 | `RemoteClientAdoptT0.{KnobZero…,NoAhardwareBuffer…}`、`DirectGLES.{Split,Spawn}.AdoptTier0.*`、`DirectVulkan.{Split,Spawn,Tcp}.AdoptTier0.*`（`ASessionThatCannotRunT0FallsBackToT2OnceByName` 读两行） | 恢复 A1 的握手 Fatal → 单元 2 例 + 集成例红（集成例须 `MOBILEGL_ITEST_REQUIRE_GPU=1`，门禁的 integration-gpu 两遍就是这样跑的；否则预检 abort 被判 SKIP）；删 client 的具名行 → 单元 1 例 + 两臂集成例红 |
+| 旋钮 0、主机无 AHB → T2 + 具名行 | `RemoteClientAdoptT0.{KnobZero…,NoAhardwareBuffer…}`、`DirectGLES.{Split,Spawn}.AdoptTier0.*`、`DirectVulkan.{Split,Spawn,Tcp}.AdoptTier0.*`（`ASessionThatCannotRunT0FallsBackToT2OnceByName` 读两行） | 恢复 A1 的握手 Fatal → 单元 2 例 + 集成例红（`e869d18c` 起 Espryt split / spawn 各条目的 ENVIRONMENT 自带 `MOBILEGL_ITEST_REQUIRE_GPU=1`，预检 abort 是失败而不是被 ctest 算作通过的 SKIP；之前只有门禁的 integration-gpu 两遍能抓到）；删 client 的具名行 → 单元 1 例 + 两臂集成例红 |
 | 允许开关关 → T2 + 具名行 | `…TheServersAllowSwitchOffIsT2AndANamedLine`、`DirectGLES.Spawn.AdoptT0Disallowed.*` | 开关不进 `ServerSpawn` 白名单 → spawn 例红（server 说 "no AHardwareBuffer" 不是 "disallowed"） |
 | 修订不符 → 具名拒绝 | `SessionHandshakeTest.ARevisionFourPeerIsRefusedByNameAtRevisionFive`、`protocol_revision_pin.py` | 修订号留 4 → 编译期 `static_assert` 红；去掉它 → 运行期该例红（两指纹相等，Welcome 发出） |
 | Stream + 0 → A1 行不变 | `{DirectGLES,DirectVulkan}.Tcp.AdoptTier0.*` | stream 上也问 0 → 19 / 21 例在 bring-up abort（握手不成，client 随后 `Fatal{CapsBeforeFirstSnapshot}`） |
