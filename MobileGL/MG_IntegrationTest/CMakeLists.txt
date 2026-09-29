@@ -129,6 +129,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/RenderbufferBlendFormatScenario.cpp
     Scenarios/DualSourceBlendScenario.cpp
     Scenarios/OversizedRecordingSplitScenario.cpp
+    Scenarios/DescriptorPoolGrowthScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
