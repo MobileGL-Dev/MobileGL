@@ -2786,13 +2786,119 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_backendTextureId;
         }
 
+        // Replaces one level's shadow bytes with what the driver texture holds for it, then copies
+        // back the client writes the driver has not been sent yet (the level's pending rects, the
+        // same boxes a plain sync would upload over the driver's copy). Returns false, leaving the
+        // shadow untouched, when the driver's copy cannot stand in for the shadow: the client owns
+        // every byte of the level, the level is stored compressed, the driver has no image at this
+        // level and extent (defined after the last sync), or the readback cannot be served (a
+        // multisample image, a format the driver will not attach to a framebuffer).
+        static Bool AdoptDriverLevelIntoShadow(GLuint backendTextureId, BackendTextureObject& backendTexture,
+                                               const MG_State::GLState::ITextureObject& stateTextureObject,
+                                               MG_State::GLState::TextureObjectMipmap& mipmapObject,
+                                               TextureUploadTarget uploadTarget, Uint level) {
+            const IntVec3 texelSize = mipmapObject.GetMipmapTexelSize(uploadTarget, level);
+            const IntVec3 extent{texelSize.x(), texelSize.y(), std::max(texelSize.z(), 1)};
+            const Bool dirty = mipmapObject.IsStorageDirty(uploadTarget, level);
+            const MG_State::GLState::MipmapDirtyRegion dirtyRegion =
+                dirty ? mipmapObject.GetStorageDirtyRegion(uploadTarget, level)
+                      : MG_State::GLState::MipmapDirtyRegion{};
+            if (dirty && dirtyRegion.CoversWholeLevel(extent)) return false;
+            if (mipmapObject.GetMipmapCompressedFormat(uploadTarget, level) != GL_NONE) return false;
+            if (!g_GLESFuncs.glGetTexLevelParameteriv) return false;
+
+            const TextureTarget target = stateTextureObject.GetTarget();
+            const GLenum nativeTarget = ConvertTextureTargetToBackendGLEnum(target);
+            const GLenum faceTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
+            const IntVec3 backendExtent = GetBackendUploadSize(target, texelSize);
+            GLint driverWidth = 0, driverHeight = 0, driverDepth = 0;
+            backendTexture.Bind(nativeTarget);
+            g_GLESFuncs.glGetTexLevelParameteriv(faceTarget, static_cast<GLint>(level), GL_TEXTURE_WIDTH, &driverWidth);
+            g_GLESFuncs.glGetTexLevelParameteriv(faceTarget, static_cast<GLint>(level), GL_TEXTURE_HEIGHT,
+                                                 &driverHeight);
+            g_GLESFuncs.glGetTexLevelParameteriv(faceTarget, static_cast<GLint>(level), GL_TEXTURE_DEPTH, &driverDepth);
+            if (driverWidth != backendExtent.x() || driverHeight != backendExtent.y() ||
+                std::max(driverDepth, 1) != std::max(backendExtent.z(), 1)) {
+                return false;
+            }
+
+            const TextureInternalFormat format = stateTextureObject.GetFormat();
+            GLenum shadowFormat = GL_NONE, shadowType = GL_NONE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(MG_Util::ConvertTextureInternalFormatToGLEnum(format),
+                                                                  {}, nullptr, &shadowFormat, &shadowType);
+            Vector<Uint8> snapshot;
+            if (!ReadTextureLevelTight(backendTextureId, target, uploadTarget, format, static_cast<GLint>(level),
+                                       texelSize, /*sourceUsesImageCarrier=*/false, shadowFormat, shadowType,
+                                       snapshot)) {
+                return false;
+            }
+            const SizeT shadowBytes = mipmapObject.GetMipmapByteSize(uploadTarget, level);
+            const SizeT texelCount =
+                static_cast<SizeT>(extent.x()) * static_cast<SizeT>(extent.y()) * static_cast<SizeT>(extent.z());
+            auto* shadow = static_cast<Uint8*>(mipmapObject.MapMipmapData(uploadTarget, level));
+            if (shadow == nullptr || snapshot.size() != shadowBytes || texelCount == 0 || shadowBytes % texelCount) {
+                return false;
+            }
+
+            if (dirty) {
+                // The rects index the SHADOW's texel grid (a 1D array's layers are its rows), which
+                // is also the snapshot's byte order.
+                const SizeT bpp = shadowBytes / texelCount;
+                const SizeT rowBytes = static_cast<SizeT>(extent.x()) * bpp;
+                const SizeT sliceBytes = static_cast<SizeT>(extent.y()) * rowBytes;
+                constexpr SizeT kMaxPending = MG_State::GLState::MipmapStorage::kMaxDirtyRects;
+                MG_State::GLState::MipmapDirtyRegion pending[kMaxPending];
+                SizeT pendingCount = mipmapObject.GetStorageDirtyRects(uploadTarget, level, pending, kMaxPending);
+                if (pendingCount == 0) {
+                    pending[0] = dirtyRegion;
+                    pendingCount = 1;
+                }
+                for (SizeT i = 0; i < pendingCount; ++i) {
+                    const auto& box = pending[i];
+                    if (box.Empty()) continue;
+                    const SizeT spanBytes = static_cast<SizeT>(box.hi.x() - box.lo.x()) * bpp;
+                    for (Int z = box.lo.z(); z < box.hi.z(); ++z) {
+                        for (Int y = box.lo.y(); y < box.hi.y(); ++y) {
+                            const SizeT offset = static_cast<SizeT>(z) * sliceBytes + static_cast<SizeT>(y) * rowBytes +
+                                                 static_cast<SizeT>(box.lo.x()) * bpp;
+                            Memcpy(snapshot.data() + offset, shadow + offset, spanBytes);
+                        }
+                    }
+                }
+            }
+            Memcpy(shadow, snapshot.data(), shadowBytes);
+            return true;
+        }
+
         void BackendTextureObject::RequireImageBindableStorage(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (m_imageBindableStorageRequired) {
                 return;
             }
+            // Read before the two flags below schedule the re-mint: whether the driver texture
+            // already holds this object's levels, and so may hold texels the shadow never saw.
+            const Bool hadBackendStorage = m_isInitialized && m_backendTextureId != 0 &&
+                                           m_contextGeneration == g_backendContextGeneration;
             m_imageBindableStorageRequired = true;
+            // ES only needs the storage to be immutable, so an immutable allocation that needs no
+            // channel widening is already the one a re-mint would produce: keep it, and with it
+            // every texel the GPU wrote. Pending uploads and real redefinitions still go through
+            // the normal shape and dirty checks of the next sync.
+            if (hadBackendStorage && m_backendStorageImmutable && !stateTextureObject->IsTextureView() &&
+                !IsMultisampleTextureTarget(stateTextureObject->GetTarget()) &&
+                !GetImageBindableStorageWidening(stateTextureObject->GetFormat())) {
+                m_forceTextureParamsResync = true;
+                return;
+            }
             m_isInitialized = false;
+            // A view owns no levels. Its sync hands the requirement to the storage texture
+            // (SyncTextureViewToBackend), whose own transition below re-mints and replays them; a
+            // re-dirty issued here, through the view, would reach that texture first and claim
+            // every level for the shadow before the driver's copy could be read back.
+            if (stateTextureObject->IsTextureView()) {
+                m_forceTextureParamsResync = true;
+                return;
+            }
             // Every level this object has ALREADY uploaded has to be replayed, because the
             // regeneration this transition schedules re-mints the storage in the image carrier and
             // only uploads levels the shadow still calls dirty - which, for a texture that was
@@ -2803,6 +2909,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the image loads are wrong. Reached whenever anything syncs the texture first - a
             // glGetTexImage, a draw that samples it, an FBO attach - which is why it survived so
             // long: the scenario that binds the image immediately after uploading never sees it.
+            //
+            // And the shadow is only the CLIENT's copy. Whatever the GPU wrote into a level - a
+            // render or clear into it, a copy, a glGenerateMipmap - lives in the driver texture
+            // alone, so replaying the shadow as it stands put the pre-render bytes (or the zeroes
+            // of a null-data definition) into the new storage. The driver's levels are therefore
+            // read back into the shadow first, with the client writes still pending merged over
+            // them, while the old storage still exists; a level the driver cannot hand back keeps
+            // the shadow, which is all this used to replay.
             if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
                 const auto levelCount = mipmapObject->GetMipmapLevelCount();
                 for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
@@ -2810,6 +2924,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
                         if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
                         if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
+                        if (hadBackendStorage &&
+                            !AdoptDriverLevelIntoShadow(m_backendTextureId, *this, *stateTextureObject,
+                                                        *mipmapObject, uploadTarget, level)) {
+                            MGLOG_D("Texture %u level %u: re-minting from the shadow, the driver's copy is not "
+                                    "readable here",
+                                    stateTextureObject->GetExternalIndex(), level);
+                        }
                         mipmapObject->MarkStorageDirty(uploadTarget, level, true);
                     }
                 }
