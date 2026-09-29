@@ -2497,6 +2497,30 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool MGPipeApplyAdoptExternal(const MGPHandleOnly& handle, void* ahb, Uint64 size) {
+        // The same kind verdict unmap_persistent gives: a store is the buffer family's.
+        if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " adopt_external {slot=%u, gen=%u}: a T0 store is the buffer family's "
+                                 "and the handle names another kind (%u)",
+                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            return false;
+        }
+        MGPipeResourceRecord* record = ResolveResource("adopt_external", handle.Handle);
+        if (record == nullptr) return false;
+        // The store the AHB replaces is the record's whole extent; a handle whose width moved
+        // (a respecify the client has not caught up with) is not this store any more.
+        if (size == 0 || size != record->Desc.Width) return false;
+        // The same pin map_persistent takes: adoption is where a producer of live host writes
+        // would attach, and T0 attaches none - the client writes the AHB through its lock, as a
+        // monolith client writes its adopted map, and the applier is told nothing either way.
+        PinNoLiveHostWrites(*record, handle.Handle, "adopt_external");
+        if (g_resourceOps == nullptr || g_resourceOps->ImportExternal == nullptr) return false;
+        return g_resourceOps->ImportExternal(handle.Handle, ahb, size);
+    }
+#endif
+
     // ================================================================================
     // P3a: the five vertex-input entry points (D-G, D-H, D-I).
     //

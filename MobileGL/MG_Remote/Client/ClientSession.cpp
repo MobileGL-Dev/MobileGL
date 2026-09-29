@@ -721,7 +721,11 @@ namespace MobileGL::MG_Remote::Client {
         {
             ::flatbuffers::FlatBufferBuilder builder(512);
             auto stamp = builder.CreateString(BuildFingerprint());
-            auto terms = ::MobileGL::Wire::CreateLinkTerms(builder, dataPlane);
+            // P11 B2: the adopt-tier ask rides the proposal (LinkTerms.adoptTier, append-only).
+            auto terms = ::MobileGL::Wire::CreateLinkTerms(
+                builder, dataPlane, ::MobileGL::Wire::WireForm::StructImage, 0, 0, 0, 0,
+                static_cast<std::uint8_t>(Transport::AdoptTierAskFor(
+                    dataPlane == ::MobileGL::Wire::DataPlane::Stream)));
             const char* tokenText = std::getenv("MOBILEGL_IPC_TOKEN");
             auto token = builder.CreateString(tokenText == nullptr ? "" : tokenText);
             auto hello = ::MobileGL::Wire::CreateHello(
@@ -809,8 +813,17 @@ namespace MobileGL::MG_Remote::Client {
             // P11 A1: the adopt tier, settled by the side that holds the knob once the link terms
             // say which plane this is (inproc is shared segments by construction), before any
             // record. T0/T1 over shared segments die here by name (Transport/AdoptTier.h).
-            (void)Transport::SettleAdoptTierAtHandshake(
+            // P11 B2: 0 = this client asked T0 in its Hello; the Welcome echoes the ask it recorded.
+            const std::uint32_t adoptAsk = Transport::SettleAdoptTierAtHandshake(
                 terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream, Transport::AdoptTierSide::Client);
+            if (terms->adoptTier() != adoptAsk) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                    "the server's adoptTier echo is not this client's ask", adoptAsk, terms->adoptTier());
+                Stop();
+                return result;
+            }
+            ResetT0(false);
+            m_adoptT0Asked = adoptAsk == 0;
             // The four SegmentRefs are what a spawn client MAPS (P6). Under inproc the mapping
             // already exists, so what they are good for here is the cross-check that the two
             // sides agree about the geometry at all - which is the assertion that would
@@ -1013,7 +1026,11 @@ namespace MobileGL::MG_Remote::Client {
         {
             ::flatbuffers::FlatBufferBuilder builder(512);
             auto stamp = builder.CreateString(BuildFingerprint());
-            auto terms = ::MobileGL::Wire::CreateLinkTerms(builder, dataPlane);
+            // P11 B2: the adopt-tier ask rides the proposal (LinkTerms.adoptTier, append-only).
+            auto terms = ::MobileGL::Wire::CreateLinkTerms(
+                builder, dataPlane, ::MobileGL::Wire::WireForm::StructImage, 0, 0, 0, 0,
+                static_cast<std::uint8_t>(Transport::AdoptTierAskFor(
+                    dataPlane == ::MobileGL::Wire::DataPlane::Stream)));
             const char* tokenText = std::getenv("MOBILEGL_IPC_TOKEN");
             auto token = builder.CreateString(tokenText == nullptr ? "" : tokenText);
             auto hello = ::MobileGL::Wire::CreateHello(
@@ -1101,7 +1118,16 @@ namespace MobileGL::MG_Remote::Client {
             // P11 A1: as in StartOverTransportPair - the knob against the plane the link terms
             // settled, before the data connection and before any record. A stream refuses T0/T1
             // by name and runs T2; shared segments die here by name (Transport/AdoptTier.h).
-            (void)Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Client);
+            const std::uint32_t adoptAsk =
+                Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Client);
+            if (terms->adoptTier() != adoptAsk) {
+                const auto result = RefuseHandshake(*m_transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                    "the server's adoptTier echo is not this client's ask", adoptAsk, terms->adoptTier());
+                Stop();
+                return result;
+            }
+            ResetT0(false);
+            m_adoptT0Asked = adoptAsk == 0;
             if (stream) {
                 // PH-7 (4). A Stream Welcome without a nonce of exactly the minted width names no
                 // data connection this client could open; refused rather than guessed at.
@@ -1803,6 +1829,9 @@ namespace MobileGL::MG_Remote::Client {
         // 4. and ONLY NOW may anything an emitter owns be released: a var-tail still
         //    referenced by an unapplied record is a use-after-free the join is what prevents.
         LogMemory("teardown");
+        // P11 B2: the T0 arm's proof for this session, and the client's references to its stores
+        // (the server's imports held their own and are gone with the server's backend).
+        ResetT0(true);
         LogWireLedger();
         Transport::LinkMetricsEnd();
         m_producer.Detach();
@@ -1999,6 +2028,14 @@ namespace MobileGL::MG_Remote::Client {
         // and the window does not defer on them (see ClientSession::LinkRetainsReplies).
         if (rowCarriesReplySlot && willReadReply && m_link != nullptr)
             m_link->DeclareReplyRead(seq);
+        // P11 B2: T0's Offer is queued HERE - the seq exists and the record is not yet visible,
+        // so the server's inbox finds the descriptor already queued when it decodes the record
+        // (Server/AdoptInbox.h). One-shot: AdoptPersistentT0 sets it for its own record only.
+        if (m_prePublish) {
+            std::function<void(Uint64)> hook = std::move(m_prePublish);
+            m_prePublish = nullptr;
+            hook(seq);
+        }
         m_producer.PublishAndNotify(seq);
         if (op == MG_Pipe::MGPWireOp::Present) {
             // A credit is permission to run ahead, not permission to retain the
@@ -2665,6 +2702,174 @@ namespace MobileGL::MG_Remote::Client {
     Transport::SessionSegments& ClientSession::Shm() { return m_link->Memory(); }
 
     Transport::ITransport* ClientSession::Control_Plane() { return m_transport; }
+
+    // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) --------------------------------------------
+
+    namespace {
+        Uint64 T0Key(MG_Pipe::MGPipeHandle handle) {
+            return (static_cast<Uint64>(handle.Gen) << 32) | handle.Slot;
+        }
+        // 0 = queue each Offer in order; > 0 = queue it that many ms AFTER its record is published
+        // (from another thread); < 0 = never queue it. Test seam only (SetT0OfferFaultForTest).
+        std::atomic<Int32> g_t0OfferFault{0};
+    } // namespace
+
+    void ClientSession::SetT0OfferFaultForTest(Int32 delayMs) {
+        g_t0OfferFault.store(delayMs, std::memory_order_release);
+    }
+
+    Bool ClientSession::AdoptT0() {
+        if (!m_adoptT0Asked) return false;
+        if (m_adoptT0Decision >= 0) return m_adoptT0Decision == 1;
+        if (Caps().HasCap(MG_Pipe::kCapAdoptT0)) {
+            m_adoptT0Decision = 1;
+            MGLOG_I("MG_Remote client: T0 - the server published kCapAdoptT0 (its POST self-test of the "
+                    "sustained-lock pattern passed), so this session adopts persistent stores as "
+                    "AHardwareBuffers the server imports");
+        } else {
+            m_adoptT0Decision = 0;
+            MGLOG_W("MG_Remote client: Refuse{AdoptT0Unavailable, \"no kCapAdoptT0\"} - "
+                    "MOBILEGL_IPC_ADOPT_TIER=0 asked for T0 and the server did not publish kCapAdoptT0 (its "
+                    "log names why: its allow switch, no AHardwareBuffer, or its POST self-test); the "
+                    "session runs T2 (emulate: the client keeps the shadow and pushes)");
+        }
+        return m_adoptT0Decision == 1;
+    }
+
+    void* ClientSession::AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size,
+                                           const void* seed) {
+        using namespace Transport::AdoptT0;
+        // Everything that can fail runs BEFORE the record is encoded, so the record never waits on
+        // a step that has not happened: either the Offer carries the handle or it says it does not.
+        HeldStore store;
+        std::string why;
+        const Bool held = AllocateHeld(size, seed, store, why);
+        if (!held) {
+            MGLOG_W("MG_Remote client: T0 store {slot=%u, gen=%u} (%llu bytes) could not be allocated (%s); "
+                    "the server is told (an Offer without a handle) and this store runs T2",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(size), why.c_str());
+        }
+        std::string hopWhy;
+        const int hop = MakeHop(held ? &store : nullptr, hopWhy);
+        if (hop < 0) {
+            // No descriptor at all, not even an empty hop. NO RECORD IS EMITTED: a map_persistent
+            // the server would wait on without an Offer is exactly what the protocol never sends.
+            // The store stays on its shadow (T2) - the same answer a DECLINED would have given -
+            // and the server, having seen no record, has nothing to answer.
+            MGLOG_W("MG_Remote client: Refuse{AdoptT0NoStore, \"hop\"} - no hop socket for the T0 store "
+                    "{slot=%u, gen=%u} (%s); no map_persistent is sent and the store runs T2",
+                    handle.Handle.Slot, handle.Handle.Gen, hopWhy.c_str());
+            ReleaseHeld(store);
+            ++m_t0Declined;
+            return nullptr;
+        }
+        MobileGLResult shared = MOBILEGL_ERR_NOT_INITIALIZED;
+        m_prePublish = [&](Uint64 seq) {
+            Offer offer{};
+            offer.magic = kOfferMagic;
+            offer.version = kOfferVersion;
+            offer.seq = seq;
+            offer.size = size;
+            offer.flags = held ? kOfferHasBuffer : 0u;
+            const Int32 fault = g_t0OfferFault.load(std::memory_order_acquire);
+            if (fault < 0) {
+                shared = MOBILEGL_OK; // the test's lost Offer: the server's bounded wait answers
+                return;
+            }
+#if !defined(_WIN32)
+            if (fault > 0 && m_transport != nullptr) {
+                // The test's LATE Offer: the record goes out now, the descriptor `fault` ms later.
+                const int copy = ::dup(hop);
+                Transport::ITransport* transport = m_transport;
+                std::thread([transport, copy, offer, fault] {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(fault));
+                    Transport::AdoptT0::Offer late = offer;
+                    (void)transport->ShareFd(copy, MobileGLByteSpan{&late, sizeof(late)});
+                    ::close(copy);
+                }).detach();
+                shared = copy >= 0 ? MOBILEGL_OK : MOBILEGL_ERR_TRANSPORT_CLOSED;
+                return;
+            }
+#endif
+            shared = m_transport != nullptr
+                ? m_transport->ShareFd(hop, MobileGLByteSpan{&offer, sizeof(offer)})
+                : MOBILEGL_ERR_NOT_INITIALIZED;
+        };
+        Int32 status = Wire::ReplySink::kStatusError;
+        EmitAndWait(MG_Pipe::MGPWireOp::MapPersistent, &handle, sizeof(handle), nullptr, 0, nullptr, 0, &status);
+        m_prePublish = nullptr; // a cancelled encode never ran it
+#if !defined(_WIN32)
+        ::close(hop);
+#endif
+        if (shared != MOBILEGL_OK) {
+            MGLOG_E("MG_Remote client: the T0 store {slot=%u, gen=%u} could not be queued on the aux socket "
+                    "(rc=%d); its record is answered by the server's bounded wait",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<int>(shared));
+        }
+        if (status == Wire::ReplySink::kStatusError) {
+            ReleaseHeld(store);
+            SessionFail(MGFatalFamily::ReplyError,
+                        "MGPipe: Fatal{ReplyError, \"map_persistent\"} - the T0 row answered ERROR, which is "
+                        "not an acceptance answer");
+        }
+        if (status == Wire::ReplySink::kStatusOk) {
+            if (!held) {
+                SessionFail(MGFatalFamily::UnexpectedMapAccept,
+                            "MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server accepted a T0 "
+                            "store whose Offer carried no AHardwareBuffer");
+            }
+            ++m_t0Imported;
+            m_t0Bytes += size;
+            void* ptr = store.ptr;
+            // A handle is one store at a time; a stale entry (never released) would leak a lock.
+            const Uint64 key = T0Key(handle.Handle);
+            if (auto it = m_t0Stores.find(key); it != m_t0Stores.end()) {
+                ReleaseHeld(it->second);
+                ++m_t0Released;
+            }
+            m_t0Stores[key] = store;
+            MGLOG_I("MG_Remote client: T0 store {slot=%u, gen=%u} adopted - %llu bytes, the server imported "
+                    "this AHardwareBuffer; session total %llu stores / %llu bytes",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(size),
+                    static_cast<unsigned long long>(m_t0Imported), static_cast<unsigned long long>(m_t0Bytes));
+            return ptr;
+        }
+        ++m_t0Declined;
+        if (held) {
+            MGLOG_W("MG_Remote client: T0 store {slot=%u, gen=%u} (%llu bytes) DECLINED by the server (its log "
+                    "names why); the store runs T2",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(size));
+        }
+        ReleaseHeld(store);
+        return nullptr;
+    }
+
+    void ClientSession::ReleaseT0Store(MG_Pipe::MGPipeHandle handle) {
+        auto it = m_t0Stores.find(T0Key(handle));
+        if (it == m_t0Stores.end()) return;
+        Transport::AdoptT0::ReleaseHeld(it->second);
+        m_t0Stores.erase(it);
+        ++m_t0Released;
+    }
+
+    void ClientSession::ResetT0(Bool releaseStores) {
+        if (m_adoptT0Asked) {
+            MGLOG_I("MG_Remote client: T0 session totals - %s; stores imported %llu, bytes %llu, declined %llu, "
+                    "released %llu, held at teardown %zu",
+                    m_adoptT0Decision == 1 ? "ran T0" : m_adoptT0Decision == 0 ? "fell back to T2" : "never decided",
+                    static_cast<unsigned long long>(m_t0Imported), static_cast<unsigned long long>(m_t0Bytes),
+                    static_cast<unsigned long long>(m_t0Declined), static_cast<unsigned long long>(m_t0Released),
+                    m_t0Stores.size());
+        }
+        if (releaseStores) {
+            for (auto& [key, store] : m_t0Stores) Transport::AdoptT0::ReleaseHeld(store);
+        }
+        m_t0Stores.clear();
+        m_adoptT0Asked = false;
+        m_adoptT0Decision = -1;
+        m_t0Imported = m_t0Bytes = m_t0Declined = m_t0Released = 0;
+        m_prePublish = nullptr;
+    }
 
     Transport::RoleMemorySample ClientSession::SampleMemory() const {
         return Transport::SampleRoleMemory(Transport::MemoryRole::Client);

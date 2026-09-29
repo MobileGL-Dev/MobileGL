@@ -198,6 +198,17 @@ LOCAL_REFUSAL_WORDS = {
     "AdoptTierOnStream":
         "Transport/AdoptTier.cpp (P11 A1) - either side refusing its OWN MOBILEGL_IPC_ADOPT_TIER=0/1 "
         "on a stream data plane and running T2; the session goes on, so no Refuse frame is sent",
+    "AdoptTierClosed":
+        "Transport/AdoptTier.cpp (P11 B2) - the CLIENT refusing its own MOBILEGL_IPC_ADOPT_TIER=1 (T1 "
+        "was closed, ID-P11-1) and asking T2; the session goes on, so no Refuse frame is sent",
+    "AdoptT0Unavailable":
+        "ServerSession.cpp / ClientSession.cpp (P11 B2) - a session that asked T0 and cannot run it "
+        "(the server's allow switch, no AHardwareBuffer, a failed POST, no kCapAdoptT0) runs T2; one "
+        "line on each side, and the session goes on",
+    "AdoptT0NoStore":
+        "ServerSession.cpp / ClientSession.cpp (P11 B2) - one T0 map_persistent answered DECLINED "
+        "because its store never reached the server (the Offer's bounded wait, or no hop socket on "
+        "the client); that store runs T2 and the session goes on",
 }
 
 

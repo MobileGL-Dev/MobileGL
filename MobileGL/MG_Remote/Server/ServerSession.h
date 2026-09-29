@@ -57,6 +57,7 @@
 #include "../Transport/RoleMemory.h"
 #include "../Transport/SessionRings.h"
 #include "../Wire/PipeWireCodec.h"
+#include "AdoptInbox.h"
 #include "ApplyThreadPolicy.h"
 #include "PipeApplier.h"
 
@@ -290,6 +291,32 @@ namespace MobileGL::MG_Remote::Server {
         Transport::RoleMemorySample SampleMemory() const;
         void LogMemory(const char* phase) const;
 
+        // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) --------------------------------------
+        //
+        // The client's Hello asked T0 (LinkTerms.adoptTier = 0 over shared segments).
+        Bool AdoptT0Asked() const { return m_adoptT0Asked; }
+        // This session runs T0 (asked, and granted at the first native bind).
+        Bool AdoptT0() const { return m_adoptT0; }
+        // THE GRANT, once per session, on the apply thread right after the first native bind and
+        // BEFORE the caps that bind republishes: asked, the allow switch
+        // (MOBILEGL_IPC_ALLOW_ADOPT_T0, default 1), AHardwareBuffer on this platform, a backend that
+        // registers ImportExternal + SelfTestExternal, and that backend's POST self-test of the
+        // sustained-lock pattern (run once per process on its live context, the verdict cached).
+        // Granted sets kCapAdoptT0 in every later CapsSnapshot; not granted is one named line and
+        // T2. A session that did not ask does nothing here (knob 2 is today's session byte for byte).
+        void SettleAdoptT0AtBind();
+        // T0's map_persistent, from the codec's arm through the verb sink, on the apply thread:
+        // take the Offer for record `seq` from the aux socket (Server/AdoptInbox.h - bounded, never a
+        // hang), read the AHB off its hop, and import it as `handle`'s store. False = this session is
+        // not T0 (the codec's T2 decline answers); true = handled and `status` is the answer (OK, or
+        // DECLINED with a named line).
+        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status);
+        // The arm's proof for this session (B2): stores imported and their bytes, declined.
+        Uint64 T0StoresImported() const { return m_t0Stores; }
+        Uint64 T0BytesImported() const { return m_t0Bytes; }
+        Uint64 T0Declined() const { return m_t0Declined; }
+        AdoptInbox& T0Inbox() { return m_adoptInbox; }
+
     private:
         MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link,
                                           const Uint8* nonce);
@@ -325,6 +352,15 @@ namespace MobileGL::MG_Remote::Server {
         // the apply thread's event wait.
         std::atomic<Bool> m_applyStopRequested{false};
         std::atomic<Bool> m_controlStreamEnded{false};
+        // P11 B2 (T0). Set by Accept from the Hello, by SettleAdoptT0AtBind on the apply thread;
+        // the inbox and the counters are the apply thread's.
+        Bool m_adoptT0Asked = false;
+        Bool m_adoptT0Settled = false;
+        Bool m_adoptT0 = false;
+        AdoptInbox m_adoptInbox;
+        Uint64 m_t0Stores = 0;
+        Uint64 m_t0Bytes = 0;
+        Uint64 m_t0Declined = 0;
     };
 
     // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may

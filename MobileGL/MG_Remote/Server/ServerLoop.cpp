@@ -1409,6 +1409,11 @@ namespace MobileGL::MG_Remote::Server {
             // bind: the ID-67 control's different tuple reads 1 republish where 2 are required.
             ServerSession* session = ServerSession::Active();
             if (session != nullptr && session->Accepted()) {
+                // P11 B2: THE T0 GRANT, HERE AND NOWHERE EARLIER - the first moment this session has
+                // a live context (Magma: a device) to run the POST self-test on, and before the
+                // snapshot below, which is the one the client's make-current adopts. Once per
+                // session; a session that did not ask T0 does nothing.
+                session->SettleAdoptT0AtBind();
                 const MobileGLResult published = session->PublishCapsSnapshot();
                 if (published == MOBILEGL_OK) NoteMakeCurrentRepublished();
                 if (published != MOBILEGL_OK) {
@@ -1483,6 +1488,7 @@ namespace MobileGL::MG_Remote::Server {
             if (frame.ok) {
                 ServerSession* session = ServerSession::Active();
                 if (session != nullptr && session->Accepted()) {
+                    session->SettleAdoptT0AtBind(); // P11 B2: idempotent; the bind has usually settled it
                     (void)session->PublishCapsSnapshot();
                 }
             }

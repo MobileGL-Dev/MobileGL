@@ -505,6 +505,13 @@ namespace MobileGL::MG_Remote::Wire {
     class WireVerbSink {
     public:
         virtual ~WireVerbSink() = default;
+        // P11 B2 (CONTRACT-P11.md B2): map_persistent in a session that runs T0. True = the sink
+        // handled it and `status` is the answer (OK: the client's AHardwareBuffer is now the
+        // store; DECLINED: the store runs T2); false = not a T0 session, and the codec gives
+        // today's constant decline. `seq` is the record's, which is what the store's Offer names.
+        virtual Bool OnMapPersistent(const MG_Pipe::MGPHandleOnly&, Uint64 /*seq*/, Int32& /*status*/) {
+            return false;
+        }
         virtual Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) { return false; }
         virtual Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) { return false; }
         virtual Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) { return false; }

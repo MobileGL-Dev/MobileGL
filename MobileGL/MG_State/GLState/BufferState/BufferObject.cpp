@@ -589,6 +589,18 @@ namespace MobileGL::MG_State::GLState {
         // illegal until P8/P9 make it mean "fully narrowed - nothing is dirty".
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
 #if MOBILEGL_PIPE_PUSH
+            if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled() && m_resource.IsGpuResident()) {
+                // P11 B2: A T0 STORE IS READ WHERE IT IS. Under split a store is resident only
+                // when T0 adopted it - its pages ARE the client's AHardwareBuffer - so no bytes
+                // need to come back: the readback's round trip is "done, no bytes". The server
+                // lands every resident write it queued (GPU-ordered), waits for its GPU, answers,
+                // and only then does this read the held mapping (monolith's adopted-store readback,
+                // Managers.cpp's persistentMapped arm, by the same rule). The flag clears here
+                // because no writeback will arrive to clear it (WritebackFromBackend).
+                MG_Pipe::MGPipeEmitResourceReadback(*this);
+                m_gpuWritePending = false;
+                return;
+            }
             if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 const SizeT sliceBytes = MG_Remote::Client::BufferWritebackSliceBytes();
                 if (sliceBytes != 0 && m_size > sliceBytes) {
@@ -936,6 +948,12 @@ namespace MobileGL::MG_State::GLState {
                 !(access & BufferMappingAccessBit::FlushExplicit) &&
                 MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
+                    // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and
+                    // an untrack after that would mprotect pages the buffer no longer owns.
+                    MG_Remote::Client::PersistentMapTracker::Instance().Forget(*this);
+#endif
                     m_resource.AdoptPersistentMap(pushedBase);
 #if MOBILEGL_BUILD_DISAGGREGATED
                     // An adoption takes the buffer OUT of the push set and out of the

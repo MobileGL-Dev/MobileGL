@@ -127,6 +127,22 @@ namespace MobileGL::MG_Pipe {
         void (*TextureRespecify)(MGPipeHandle res, const MGPResourceDesc& desc,
                                  const MGPRespecifiedLevel* level);
         void (*TextureDestroy)(MGPipeHandle res);
+        // P11 B2 (T0, MG_Remote/CONTRACT-P11.md B2): the two members a backend that can take a
+        // client's AHardwareBuffer as a store registers. Both null = this backend has no T0 and
+        // every session it serves runs T2. Appended after the texture trio for the same reason.
+        //
+        // ImportExternal makes `ahb` (an AHardwareBuffer*, a BLOB of `size` bytes) the resident
+        // store of buffer `res` - the twin a monolith map_persistent would have minted - and takes
+        // its OWN reference, which it releases only after its own GPU fence for the store's last
+        // use has completed. False = not imported: the session answers DECLINED and the store runs
+        // T2 as before.
+        Bool (*ImportExternal)(MGPipeHandle res, void* ahb, Uint64 size);
+        // The POST self-test of the sustained-lock pattern (the AHB API does not promise it): with
+        // this backend's context current on the apply thread, allocate a small AHB, hold its CPU
+        // lock for the whole test, import it, let the GPU read what the CPU wrote and write a
+        // pattern of its own, and read that back through the held pointer (and through the
+        // backend's own host map of the import). False with the reason in `why`.
+        Bool (*SelfTestExternal)(char* why, Uint64 whyBytes);
 #endif
     };
 
@@ -1298,6 +1314,14 @@ namespace MobileGL::MG_Pipe {
     // unmap_persistent: the donation ends. Never emitted by P3a's own paths; the call exists
     // so the pair is complete and the transport has both halves.
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle);
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P11 B2 (T0): the split server's map_persistent for a session that runs T0. The client's
+    // AHardwareBuffer `ahb` (`size` bytes) becomes buffer `handle`'s resident store through the
+    // backend's ImportExternal. A handle that is not a live buffer of that width, or a backend
+    // without the member, declines (false); the codec answers DECLINED and the store runs T2.
+    // MapPersistentRoundtrips is not moved: under split the server never counted map_persistent.
+    Bool MGPipeApplyAdoptExternal(const MGPHandleOnly& handle, void* ahb, Uint64 size);
+#endif
 
     // ---------------------------------------------------------------------------------
     // P3a: the five vertex-input entry points (D-G, D-H, D-I)

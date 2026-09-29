@@ -625,12 +625,18 @@ namespace MobileGL::MG_Config {
         // poll loop cannot outlive a late report. 0 = every poll crosses, as before P10: the A/B
         // arm and the red-once of the no-reply gate (FencePollScenario).
         Uint32 PollEscalate = 64;
-        // MOBILEGL_IPC_ADOPT_TIER: 2 = emulate (T2: client keeps the shadow and pushes), the
-        // only implemented tier and the reason persistent-map-push can be non-zero at all
-        // (R-6). 0 (T0) and 1 (T1) parse and are settled at the handshake (P11 A1,
-        // MG_Remote/Transport/AdoptTier.h): a stream data plane refuses them by name and runs
-        // T2; over shared segments the client dies by name before any record.
+        // MOBILEGL_IPC_ADOPT_TIER, THE ZERO-COPY SWITCH (ruling ID-P11-14, CONTRACT-P11 B2):
+        // 2 = emulate (T2: the client keeps the shadow and pushes), the default and today's
+        // behaviour byte for byte; 0 = T0 (the client allocates each adopted store as an
+        // AHardwareBuffer and the server imports it); 1 = T1, closed - refused by name, then T2.
+        // A T0 this session cannot use (a stream plane, the server's allow switch, no
+        // AHardwareBuffer, a failed server POST) is T2 plus one named line, never a Fatal
+        // (MG_Remote/Transport/AdoptTier.h).
         Uint32 AdoptTier = 2;
+        // MOBILEGL_IPC_ALLOW_ADOPT_T0 (server): 1 (default) = grant a client's T0 ask when this
+        // platform and the backend's POST self-test allow it; 0 = never grant it (the session
+        // runs T2 and says so). Read by the server role only; kept through ServerSpawn.
+        Uint32 AllowAdoptT0 = 1;
         // MOBILEGL_IPC_VERB_BARRIER: 1 = the client blocks at every verb boundary until
         // appliedSeq reaches its emitSeq (R-1). 0 is the negative control: it is EXPECTED to
         // be red, because 31 of the 63 PipeInputs fields are still pulled from a live

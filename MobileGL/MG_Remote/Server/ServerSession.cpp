@@ -16,15 +16,18 @@
 #include "../Handshake.h"
 #include "../Transport/LinkMetrics.h"
 #include "../Transport/AdoptTier.h"
+#include "../Transport/AdoptT0.h"
 #include "../Protocol/generated/protocol_generated.h"
 #include "../Transport/InProcessTransport.h"
 
 #include <Config.h>
 #include <MGGitHash.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_Pipe/PipeApply.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <atomic>
+#include <string>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -683,6 +686,18 @@ namespace MobileGL::MG_Remote::Server {
         // for, before a byte of Welcome. A stream refuses T0/T1 by name and serves T2; over
         // shared segments the client settles it (Transport/AdoptTier.h). 0/1 never die here.
         (void)Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Server);
+        // ---- P11 B2: the client's ask (LinkTerms.adoptTier). 2 or, over shared segments, 0;
+        // anything else is not an ask this revision knows. Recorded, echoed in the Welcome, and
+        // granted or refused by name at the first native bind (SettleAdoptT0AtBind).
+        if (terms->adoptTier() != 2 && !(terms->adoptTier() == 0 && !stream))
+            return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
+                                   "adoptTier is neither 2 nor, over shared segments, 0", 2, terms->adoptTier());
+        m_adoptT0Asked = terms->adoptTier() == 0;
+        m_adoptT0Settled = false;
+        m_adoptT0 = false;
+        m_t0Stores = m_t0Bytes = m_t0Declined = 0;
+        m_adoptInbox.Clear();
+        m_adoptInbox.Attach(&transport);
 
         // ---- 3. the four segments, both control pages, the rings.
         MobileGLResult created = MOBILEGL_ERR_UNSUPPORTED;
@@ -778,7 +793,8 @@ namespace MobileGL::MG_Remote::Server {
                         static_cast<unsigned long long>(maxReply));
             }
             auto negotiated = ::MobileGL::Wire::CreateLinkTerms(builder, terms->dataPlane(),
-                ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow, eventWindow);
+                ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow, eventWindow,
+                static_cast<Uint8>(m_adoptT0Asked ? 0 : 2));
             auto welcome = ::MobileGL::Wire::CreateWelcome(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
                 // CONTRACT-P6 4.3: THE SERVER'S OWN PID, not an echo of the client's.
@@ -898,6 +914,9 @@ namespace MobileGL::MG_Remote::Server {
         // R-8/C-4: bits 32..47 of CallMask are the CONSUMER MASK, and this is the only place
         // they are produced.
         Uint64 callMask = CallMask();
+        // P11 B2: this session's T0 grant, never part of the process-wide m_capBits - it is a
+        // statement about THIS client's ask and this server's self-test.
+        if (m_adoptT0) callMask |= static_cast<Uint64>(MG_Pipe::kCapAdoptT0);
         const auto timerSupported = m_backend->GetBackendFunctions().GL.IsTimerQuerySupported;
         if ((callMask & MG_Pipe::kCapTimerQuery) && (!timerSupported || !timerSupported()))
             callMask &= ~static_cast<Uint64>(MG_Pipe::kCapTimerQuery);
@@ -1008,6 +1027,20 @@ namespace MobileGL::MG_Remote::Server {
                 MG_Pipe::gMGPipeEventRingCapacityBytes = nullptr;
             }
         }
+        // P11 B2: the T0 arm's proof for this session, then the inbox's leftovers (an Offer whose
+        // record never came; its client has released the store on the session's end).
+        if (m_accepted && m_adoptT0Asked) {
+            MGLOG_I("MG_Remote server: T0 session totals - %s; stores imported %llu, bytes %llu, declined %llu, "
+                    "stale offers %llu, malformed %llu, unclaimed %zu",
+                    m_adoptT0 ? "ran T0" : m_adoptT0Settled ? "not granted (T2)" : "no native bind (T2)",
+                    static_cast<unsigned long long>(m_t0Stores), static_cast<unsigned long long>(m_t0Bytes),
+                    static_cast<unsigned long long>(m_t0Declined),
+                    static_cast<unsigned long long>(m_adoptInbox.StaleOffers()),
+                    static_cast<unsigned long long>(m_adoptInbox.MalformedOffers()), m_adoptInbox.Kept());
+        }
+        m_adoptInbox.Clear();
+        m_adoptInbox.Attach(nullptr);
+        m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = false;
         m_consumer.Detach();
         *m_commands = Transport::RingConsumer();
         *m_events = Transport::EventRingProducer();
@@ -1021,6 +1054,126 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession* expectedOwner = this;
         g_sessionOwner.compare_exchange_strong(expectedOwner, nullptr,
             std::memory_order_release, std::memory_order_relaxed);
+    }
+
+    // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) ------------------------------------------
+
+    namespace {
+        // THE POST VERDICT IS THE PROCESS'S, like DriverPost's: the driver and the device do not
+        // change between two sessions of one server process, and the test allocates, imports and
+        // waits for the GPU - not a per-session cost. Apply thread only.
+        struct T0PostVerdict {
+            Bool ran = false;
+            Bool passed = false;
+            std::string detail;
+        };
+        T0PostVerdict& T0Post() {
+            static T0PostVerdict verdict;
+            return verdict;
+        }
+    } // namespace
+
+    void ServerSession::SettleAdoptT0AtBind() {
+        if (!m_accepted || !m_adoptT0Asked || m_adoptT0Settled) return;
+        m_adoptT0Settled = true;
+        const char* backendName = m_backend == nullptr ? "server"
+            : m_backend->GetBackendType() == BackendType::DirectVulkan ? "Magma" : "Espryt";
+        std::string why;
+        if (MG_Config::Ipc.AllowAdoptT0 == 0) {
+            why = "this server's MOBILEGL_IPC_ALLOW_ADOPT_T0=0 disallows it";
+        } else if (!Transport::AdoptT0::PlatformHasAhb()) {
+            why = "no AHardwareBuffer on this platform";
+        } else {
+            const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+            if (ops == nullptr || ops->ImportExternal == nullptr || ops->SelfTestExternal == nullptr) {
+                why = std::string("the ") + backendName + " backend registers no T0 import";
+            } else {
+                T0PostVerdict& post = T0Post();
+                if (!post.ran) {
+                    char detail[512] = {};
+                    post.passed = ops->SelfTestExternal(detail, sizeof(detail));
+                    post.detail = detail;
+                    post.ran = true;
+                    MGLOG_I("MG_Remote server: T0 POST (%s, sustained-lock pattern) %s - %s", backendName,
+                            post.passed ? "PASSED" : "FAILED", post.detail.c_str());
+                }
+                if (!post.passed) why = std::string("the ") + backendName + " POST self-test failed: " + post.detail;
+            }
+        }
+        if (!why.empty()) {
+            MGLOG_W("MG_Remote server: Refuse{AdoptT0Unavailable, \"%s\"} - the client asked T0 "
+                    "(MOBILEGL_IPC_ADOPT_TIER=0) and %s; kCapAdoptT0 is not published and the session "
+                    "runs T2 (emulate)",
+                    MG_Config::Ipc.AllowAdoptT0 == 0 ? "disallowed"
+                    : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer" : "POST",
+                    why.c_str());
+            return;
+        }
+        m_adoptT0 = true;
+        MGLOG_I("MG_Remote server: T0 granted - the client asked T0 and the %s POST self-test passed; "
+                "kCapAdoptT0 is published and each map_persistent imports the client's AHardwareBuffer",
+                backendName);
+    }
+
+    Bool ServerSession::AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) {
+        if (!m_adoptT0) return false;
+        status = Wire::ReplySink::kStatusDeclined;
+        int hop = -1;
+        Transport::AdoptT0::Offer offer{};
+        std::string why;
+        const AdoptInbox::Outcome outcome =
+            m_adoptInbox.Take(seq, Transport::AdoptT0::kOfferWaitMs, &hop, &offer, why);
+        const auto closeHop = [&] {
+#if !defined(_WIN32)
+            if (hop >= 0) ::close(hop);
+#endif
+            hop = -1;
+        };
+        if (outcome != AdoptInbox::Outcome::Taken) {
+            ++m_t0Declined;
+            MGLOG_E("MG_Remote server: Refuse{AdoptT0NoStore, \"record %llu\"} - the T0 map_persistent for "
+                    "{slot=%u, gen=%u} is DECLINED: %s; the store runs T2",
+                    static_cast<unsigned long long>(seq), handle.Handle.Slot, handle.Handle.Gen, why.c_str());
+            return true;
+        }
+        if ((offer.flags & Transport::AdoptT0::kOfferHasBuffer) == 0) {
+            closeHop();
+            ++m_t0Declined;
+            MGLOG_W("MG_Remote server: T0 map_persistent {slot=%u, gen=%u} (record %llu) DECLINED - the "
+                    "client could not allocate its AHardwareBuffer (its log names why); the store runs T2",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(seq));
+            return true;
+        }
+        void* ahb = nullptr;
+        const Bool received = Transport::AdoptT0::ReceiveFromHop(hop, offer.size, &ahb, why);
+        closeHop();
+        if (!received) {
+            ++m_t0Declined;
+            MGLOG_E("MG_Remote server: T0 map_persistent {slot=%u, gen=%u} (record %llu) DECLINED - the "
+                    "AHardwareBuffer could not be read off its hop: %s",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(seq), why.c_str());
+            return true;
+        }
+        // The backend takes its own reference on success; this one is the hop's, released here.
+        const Bool imported = MG_Pipe::MGPipeApplyAdoptExternal(handle, ahb, offer.size);
+        Transport::AdoptT0::ReleaseImported(ahb);
+        if (!imported) {
+            ++m_t0Declined;
+            MGLOG_W("MG_Remote server: T0 map_persistent {slot=%u, gen=%u} (record %llu, %llu bytes) DECLINED - "
+                    "the backend did not import the AHardwareBuffer (its log names why); the store runs T2",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(seq),
+                    static_cast<unsigned long long>(offer.size));
+            return true;
+        }
+        ++m_t0Stores;
+        m_t0Bytes += offer.size;
+        status = Wire::ReplySink::kStatusOk;
+        MGLOG_I("MG_Remote server: T0 imported store {slot=%u, gen=%u} - %llu bytes (record %llu); session "
+                "total %llu stores / %llu bytes",
+                handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(offer.size),
+                static_cast<unsigned long long>(seq), static_cast<unsigned long long>(m_t0Stores),
+                static_cast<unsigned long long>(m_t0Bytes));
+        return true;
     }
 
     Transport::RingConsumer& ServerSession::CommandRing() { return *m_commands; }

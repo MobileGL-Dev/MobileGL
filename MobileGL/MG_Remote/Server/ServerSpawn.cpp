@@ -101,10 +101,14 @@ namespace MobileGL::MG_Remote::Server {
         // PH-6 (ID-P7-2) adds MOBILEGL_IPC_EVENT_WAIT_MS on the same argument: it is the server's
         // patience with a client that has stopped draining SEG_EVENT, nothing on the client reads
         // it, and scrubbing it would make a spawned server wait the default whatever the lane set.
+        //
+        // P11 B2 adds MOBILEGL_IPC_ALLOW_ADOPT_T0, the server's own T0 allow switch: only the server
+        // reads it, and scrubbing it would make "allow switch off" unreachable on the spawn arm.
+        // MOBILEGL_IPC_ADOPT_TIER itself still goes - the client's ask travels in its Hello.
         bool ShouldScrub(const char* entry) {
             static constexpr const char* kServerOwned[] = {
                 "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=", "MOBILEGL_IPC_SERVER_AFFINITY=",
-                "MOBILEGL_IPC_AUDIT=", "MOBILEGL_IPC_EVENT_WAIT_MS=",
+                "MOBILEGL_IPC_AUDIT=", "MOBILEGL_IPC_EVENT_WAIT_MS=", "MOBILEGL_IPC_ALLOW_ADOPT_T0=",
             };
             for (const char* kept : kServerOwned) {
                 if (std::strncmp(entry, kept, std::strlen(kept)) == 0) {

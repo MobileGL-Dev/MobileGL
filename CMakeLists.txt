@@ -618,6 +618,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # P11 A1: the adopt tier settled at the handshake from the knob and the data plane, by
         # both roles (so SERVER-partition code in the link ratchet, not the client's tracker).
         MobileGL/MG_Remote/Transport/AdoptTier.cpp
+        # P11 B2: T0 - the client's AHardwareBuffer store and its hop descriptor (both roles).
+        MobileGL/MG_Remote/Transport/AdoptT0.cpp
         # ---- P5: the three new directories ------------------------------
         # Wire/   the G3 codec: MGPWireRec_* in and out of SEG_CMD, blobs and
         #         var-tails in and out of SEG_STAGE.                    [w1]
@@ -661,6 +663,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # P11 PAIR: a socket client's control and aux connections paired by the nonce each
         # presents first (PairBind), not by arrival order - both unix supervisors take pairs here.
         MobileGL/MG_Remote/Server/PairAcceptor.cpp
+        # P11 B2: T0's Offers on the aux socket, matched to their map_persistent records by seq.
+        MobileGL/MG_Remote/Server/AdoptInbox.cpp
         MobileGL/MG_Remote/Server/ServerSpawn.cpp
         # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).

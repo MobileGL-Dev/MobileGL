@@ -783,7 +783,8 @@ struct LinkTerms FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_MAXREPLYBYTES = 8,
     VT_CMDWINDOWBYTES = 10,
     VT_STAGEWINDOWBYTES = 12,
-    VT_EVENTWINDOWBYTES = 14
+    VT_EVENTWINDOWBYTES = 14,
+    VT_ADOPTTIER = 16
   };
   MobileGL::Wire::DataPlane dataPlane() const {
     return static_cast<MobileGL::Wire::DataPlane>(GetField<uint8_t>(VT_DATAPLANE, 0));
@@ -803,6 +804,9 @@ struct LinkTerms FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t eventWindowBytes() const {
     return GetField<uint64_t>(VT_EVENTWINDOWBYTES, 0);
   }
+  uint8_t adoptTier() const {
+    return GetField<uint8_t>(VT_ADOPTTIER, 2);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -812,6 +816,7 @@ struct LinkTerms FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<uint64_t>(verifier, VT_CMDWINDOWBYTES, 8) &&
            VerifyField<uint64_t>(verifier, VT_STAGEWINDOWBYTES, 8) &&
            VerifyField<uint64_t>(verifier, VT_EVENTWINDOWBYTES, 8) &&
+           VerifyField<uint8_t>(verifier, VT_ADOPTTIER, 1) &&
            verifier.EndTable();
   }
 };
@@ -838,6 +843,9 @@ struct LinkTermsBuilder {
   void add_eventWindowBytes(uint64_t eventWindowBytes) {
     fbb_.AddElement<uint64_t>(LinkTerms::VT_EVENTWINDOWBYTES, eventWindowBytes, 0);
   }
+  void add_adoptTier(uint8_t adoptTier) {
+    fbb_.AddElement<uint8_t>(LinkTerms::VT_ADOPTTIER, adoptTier, 2);
+  }
   explicit LinkTermsBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -856,12 +864,14 @@ inline ::flatbuffers::Offset<LinkTerms> CreateLinkTerms(
     uint64_t maxReplyBytes = 0,
     uint64_t cmdWindowBytes = 0,
     uint64_t stageWindowBytes = 0,
-    uint64_t eventWindowBytes = 0) {
+    uint64_t eventWindowBytes = 0,
+    uint8_t adoptTier = 2) {
   LinkTermsBuilder builder_(_fbb);
   builder_.add_eventWindowBytes(eventWindowBytes);
   builder_.add_stageWindowBytes(stageWindowBytes);
   builder_.add_cmdWindowBytes(cmdWindowBytes);
   builder_.add_maxReplyBytes(maxReplyBytes);
+  builder_.add_adoptTier(adoptTier);
   builder_.add_wireForm(wireForm);
   builder_.add_dataPlane(dataPlane);
   return builder_.Finish();

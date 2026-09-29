@@ -201,7 +201,18 @@ namespace MobileGL::MG_Remote::Client {
     }
 
         // -- screen -------------------------------------------------------------------
-        MGP_WIRE_PLAIN(ResourceDestroy, MGPHandleOnly, Screen)
+        // resource_destroy is MGP_WIRE_PLAIN plus one line: P11 B2 - a destroyed buffer's T0
+        // store is released by this client after the record is out (the server's import holds its
+        // own reference until its fence for the store's last use; CONTRACT-P11.md B2).
+        void Wire_ResourceDestroy(const MG_Pipe::MGPHandleOnly* payload) {
+            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceDestroy(payload); return; }
+            ClientSession& session = RequireSession("ResourceDestroy");
+            session.EmitAndWait(MGPWireOp::ResourceDestroy, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
+                                nullptr);
+            ++g_emitted;
+            if (static_cast<MG_Pipe::MGPipeKind>(payload->Kind) == MG_Pipe::MGPipeKind::Buffer)
+                session.ReleaseT0Store(payload->Handle);
+        }
         MGP_WIRE_PLAIN(UnmapPersistent, MGPHandleOnly, Screen)
 
         // -- context, plain -----------------------------------------------------------
@@ -887,6 +898,13 @@ namespace MobileGL::MG_Remote::Client {
                                           nullptr, 0, nullptr, 0, &status);
             }
             ++g_emitted;
+            // P11 B2: A RESPECIFIED BUFFER'S T0 STORE IS DONE FOR THIS CLIENT. The frontend has
+            // already dropped its adopted pointer (BufferObject::RedefineStorage) and the store's
+            // replacement is minted by the next map_persistent; the server keeps its own
+            // reference until its fence for the store's last use has completed, so releasing ours
+            // here cannot pull pages from under a frame still in flight (the fire-and-forget arm
+            // above included).
+            if (desc->Target == MG_Pipe::kMGPipeResourceTargetBuffer) session.ReleaseT0Store(desc->Resource);
             // ERROR IS NOT A DECLINE (M4 / codex 5 / R-5). status is 0 OK / 1 DECLINED / 2 ERROR;
             // an escape may not fold 2 into `false`, which is what a bare `return status == 0`
             // did - a transport fault then read as "the server said no". Every reply-owning row
@@ -929,6 +947,16 @@ namespace MobileGL::MG_Remote::Client {
                 return MG_Pipe::MGPipeMonolithEscapes().MapPersistent(handle, size, seedBytes);
             }
             ClientSession& session = RequireSession("MapPersistent");
+            // P11 B2 (CONTRACT-P11.md B2): A T0 SESSION ADOPTS FOR REAL. The store is an
+            // AHardwareBuffer this client allocates, holds locked and seeds from the shadow
+            // (`seedBytes`, `size` of them); the server imports it and answers OK, and the held
+            // pointer is the mapping. Everything below is the T2 arm, unchanged byte for byte.
+            if (session.AdoptT0()) {
+                void* adopted = session.AdoptPersistentT0(*handle, size, seedBytes);
+                ++g_emitted;
+                if (adopted == nullptr) ++g_declined;
+                return adopted;
+            }
             (void)size;
             (void)seedBytes;
             Int32 status = 0;

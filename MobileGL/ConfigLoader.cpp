@@ -433,9 +433,11 @@ namespace MobileGL::MG_ConfigLoader {
         // torn read rather than a divergence. The batch is therefore off whenever the
         // shadow comparer is armed.
         if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
-        // 2 is the only implemented tier (R-6). 0 and 1 parse here and are settled at the
-        // handshake from the data plane (P11 A1, MG_Remote/Transport/AdoptTier.h).
+        // 2 (T2) is the default; 0 asks for T0 and 1 is refused by name - both settled at the
+        // handshake from the data plane (P11 A1/B2, MG_Remote/Transport/AdoptTier.h).
         ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);
+        // P11 B2: the server's own T0 allow switch (Config.h).
+        ipc.AllowAdoptT0 = QueryEnvUint32("MOBILEGL_IPC_ALLOW_ADOPT_T0", 1, 0, 1);
         ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
         // P5e (MG_Remote/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every
         // other IPC knob and armed only where the server publishes kCapRunAheadApply.
@@ -530,10 +532,11 @@ namespace MobileGL::MG_ConfigLoader {
         // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
                 "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u poll-escalate=%u "
-                "adopt-tier=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
+                "adopt-tier=%u allow-t0=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
                 ipc.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate, ipc.AdoptTier,
+                ipc.AllowAdoptT0,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),

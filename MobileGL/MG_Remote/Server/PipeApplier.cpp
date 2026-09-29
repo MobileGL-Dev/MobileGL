@@ -137,6 +137,11 @@ namespace MobileGL::MG_Remote::Server {
         return it->second;
     }
 
+    Bool ServerVerbSink::OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) {
+        ServerSession* session = ServerSession::Active();
+        return session != nullptr && session->AdoptStoreT0(handle, seq, status);
+    }
+
     Bool ServerVerbSink::OnFenceCreate(const MG_Pipe::MGPHandleOnly& desc) {
         if (desc.Kind != static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence))
             Wire::WireProtocolFatal("Fence.Kind", "expected Fence namespace");

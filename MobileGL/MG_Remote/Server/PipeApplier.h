@@ -153,6 +153,8 @@ namespace MobileGL::MG_Remote::Server {
         void SetBackend(MG_Backend::BackendObject* backend);
         void SetMaxReplyBytes(Uint64 bytes) { m_maxReplyBytes = bytes; }
 
+        // P11 B2: T0's map_persistent - ServerSession::AdoptStoreT0 (it owns the aux socket).
+        Bool OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) override;
         Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override;
         Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) override;
         Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) override;

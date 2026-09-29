@@ -69,6 +69,14 @@ table LinkTerms {
   cmdWindowBytes: ulong;
   stageWindowBytes: ulong;
   eventWindowBytes: ulong;
+  // P11 B2 (MG_Remote/CONTRACT-P11.md B2), appended. In the Hello: the persistent-map adoption
+  // tier the client ASKS for - 0 = T0 (it allocates each adopted store as an AHardwareBuffer and
+  // hands it over the aux socket), 2 = T2 (emulate: shadow + push). 1 (T1) is closed and never
+  // sent; a stream plane always asks 2. In the Welcome: the server's echo of the ask it
+  // recorded. It is not the tier: T0 needs the server's POST self-test, which runs at the first
+  // native bind (the GPU context does not exist yet), and is published as kCapAdoptT0 in the
+  // CapsSnapshot that bind republishes. Absent (an older peer) reads 2.
+  adoptTier: ubyte = 2;
 }
 
 enum RefuseCode : uint {

@@ -1824,7 +1824,18 @@ namespace MobileGL::MG_Remote::Wire {
             MGPipeApplyResourceDestroy(*static_cast<const MGPHandleOnly*>(payload));
             return true;
 
-        case MGPWireOp::MapPersistent:
+        case MGPWireOp::MapPersistent: {
+            // P11 B2 (CONTRACT-P11.md B2): A T0 SESSION'S ADOPTION RIDES THIS RECORD. The verb
+            // sink takes the client's AHardwareBuffer for this seq off the aux socket and imports
+            // it (Server/AdoptInbox.h says why that wait cannot hang the apply thread); it answers
+            // for itself or says "not T0", and everything below is the T2 arm, unchanged.
+            Int32 t0Status = ReplySink::kStatusDeclined;
+            if (m_verbs != nullptr &&
+                m_verbs->OnMapPersistent(*static_cast<const MGPHandleOnly*>(payload), seq, t0Status)) {
+                PostReply(op, seq, t0Status, nullptr, 0);
+                return true;
+            }
+        }
             // R-6 / R-2.4: A CONSTANT DECLINE IN P5, and the applier is not called at all.
             // Two reasons, and the second is the one worth writing down: the answer is a HOST
             // POINTER, which cannot cross; and MGPWireRec_MapPersistent's payload is a bare

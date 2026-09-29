@@ -52,8 +52,12 @@
 #include "../Transport/RoleMemory.h"
 #include "../Transport/SessionRings.h"
 #include "../Transport/SocketTransport.h"
+#include "../Transport/AdoptT0.h"
 #include "../Wire/PipeWireCodec.h"
 #include "CapsMirror.h"
+
+#include <functional>
+#include <unordered_map>
 
 #include <memory>
 
@@ -222,6 +226,37 @@ namespace MobileGL::MG_Remote::Client {
                                 Uint64 replyBytes, Int32* statusOut,
                                 Uint64* replySizeOut = nullptr, Bool wantReply = true,
                                 Bool willReadReply = true);
+
+        // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) ------------------------------------
+        //
+        // Does this session adopt persistent stores through T0? Decided ONCE, lazily, at the first
+        // map_persistent - the first moment it matters, and one at which the server's first native
+        // bind has certainly republished its caps (a buffer store cannot exist before a
+        // make-current, and the make-current adopts what the bind published): the Hello asked T0
+        // (MOBILEGL_IPC_ADOPT_TIER=0 over shared segments) AND the server published kCapAdoptT0.
+        // A T0 the session asked for and cannot use is T2 plus ONE named line here
+        // (`Refuse{AdoptT0Unavailable, ...}`), never a Fatal.
+        Bool AdoptT0();
+        // T0's map_persistent: allocate the AHB, hold its lock, seed it from `seed` (the shadow),
+        // queue its Offer for the record's seq BEFORE the record is published (the order the
+        // server's inbox relies on), and wait for the answer. The held pointer on OK - the caller
+        // adopts it as the store's mapping - or null on DECLINED (the store stays T2).
+        void* AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
+        // The client's reference to buffer `handle`'s T0 store ends because the buffer was
+        // respecified or destroyed: unlock and release it. The server's import holds its own
+        // reference until its own fence for the store's last use has completed. No-op for a
+        // handle with no T0 store.
+        void ReleaseT0Store(MG_Pipe::MGPipeHandle handle);
+        // Per-session T0 arm proof (B2): stores the server imported, their bytes, and the
+        // map_persistent answers that came back DECLINED in a T0 session.
+        Uint64 T0StoresImported() const { return m_t0Imported; }
+        Uint64 T0BytesImported() const { return m_t0Bytes; }
+        Uint64 T0Declined() const { return m_t0Declined; }
+        // Test seam: 0 = queue each Offer before its record (the product order); > 0 = queue it
+        // that many ms AFTER the record is published, from another thread; < 0 = never queue it.
+        // What the host tests use to prove a late Offer still lands and a lost one is a named
+        // DECLINED rather than a hang.
+        static void SetT0OfferFaultForTest(Int32 delayMs);
 
         // `willReadReply` (P12) and `wantReply` ARE TWO QUESTIONS AND MUST STAY TWO.
         //
@@ -554,6 +589,20 @@ namespace MobileGL::MG_Remote::Client {
         // Welcome::serverPid, kept because §9.5's arm proof wants it and because a value that is
         // only ever logged cannot be asserted on.
         std::uint32_t m_peerServerPid = 0;
+
+        // P11 B2 (T0). The Hello's ask, settled at the handshake; the lazy decision (-1 = not
+        // yet, 0 = T2, 1 = T0); the stores this client holds by handle key (Gen << 32 | Slot);
+        // the counters; and the one-shot hook EmitAndWaitTails runs between EncodeRecord (the
+        // seq exists) and PublishAndNotify (the record is visible) - where the Offer is queued.
+        Bool m_adoptT0Asked = false;
+        Int32 m_adoptT0Decision = -1;
+        std::unordered_map<Uint64, Transport::AdoptT0::HeldStore> m_t0Stores;
+        Uint64 m_t0Imported = 0;
+        Uint64 m_t0Bytes = 0;
+        Uint64 m_t0Declined = 0;
+        Uint64 m_t0Released = 0;
+        std::function<void(Uint64)> m_prePublish;
+        void ResetT0(Bool releaseStores);
     };
 
     // One per process in P5, because P5 serves one context, and LEAKED AT EXIT like every other

@@ -150,6 +150,13 @@ namespace MobileGL::MG_Pipe {
         // snapshot may only turn it OFF, because a caps re-run must not be able to make a
         // lockstep server run-ahead in the middle of a frame.
         kCapRunAheadApply = 1ull << 10,
+        // P11 B2 (MG_Remote/CONTRACT-P11.md B2). THIS SESSION MAY RUN T0: the client asked for
+        // it in its Hello (LinkTerms.adoptTier = 0) on a shared-segment plane, the server's
+        // allow switch is on, this platform has AHardwareBuffer, and the backend's POST
+        // self-test of the sustained-lock pattern passed on its live context. Never set in the
+        // CapsSnapshot Accept sends (no context exists yet); set in the one the first native
+        // bind republishes. The client adopts through T0 only while it reads this bit.
+        kCapAdoptT0 = 1ull << 11,
     };
 
     // Readiness is supplied independently by each backend's integration gate.
