@@ -25,7 +25,7 @@
 | **P12**（当前）server 自有屏幕窗口 | [`p12/`](p12/README.md) | `PLAN-P12.md`、`INTEGRATOR-DECISIONS-P12.md`、`device/` |
 | P8 / P9 / P10 / P11 / P13（待排） | [`p8/`](p8/README.md)、[`p9/`](p9/README.md)、[`p10/`](p10/README.md)、[`p11/`](p11/README.md)、[`p13/`](p13/README.md) | 目前只有路线图上的完整范围与出口门 |
 
-跨阶段：[`DEBTS.md`](DEBTS.md)（仍开放的债务与去向）、[`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)（开放问题全文，编号稳定）；[`handoff/`](handoff/)（P7 的集成者审查稿，路径被 P7 交接文档引用，保持原位）；[`recovered/`](recovered/)（从失败的 workflow 运行里捞回的 P0–P2 期材料，`wf1` 设计定稿前的计划草案、`wf2` P0、`wf3` P0.5、`wf4` P1、`wf5` P2；与阶段目录逐字节重复的副本已于 2026-09-24 删除，只留独有的）。
+跨阶段：[`DEBTS.md`](DEBTS.md)（仍开放的债务与去向）、[`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)（开放问题全文，编号稳定）；[`handoff/`](handoff/)（P7 的集成者审查稿，路径被 P7 交接文档引用，保持原位）；[`recovered/`](recovered/)（从失败的 workflow 运行里捞回的 P0–P2 期材料，`wf1` 设计定稿前的计划草案、`wf2` P0、`wf3` P0.5、`wf4` P1、`wf5` P2；与阶段目录逐字节重复的副本已于 2026-09-24 删除，只留独有的）；[`perf-five-arm-20260928/`](perf-five-arm-20260928/README.md)（非阶段的五臂传输性能对比与瓶颈归因，2026-09-28）。
 
 ## 旧引用怎么找
 

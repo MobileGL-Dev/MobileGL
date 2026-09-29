@@ -27,6 +27,7 @@
   那一帧 **221.5 s → 182.8 s（−17%）**；设备定频+关深度空闲则是 **166.5 s（−25%）**。服务端日志会打印 `spin 2000 us` 自证。
   见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md) §2.6–2.10。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
+- **五臂传输对比（2026-09-28，未定频交错 A/B）**：重负载（rd12）下 inproc ≈ spawn+shm 比 monolith **快约 1/3**（run-ahead 流水线并行 + applier 路径探针更少），轻负载（openra）下 split 只付固定开销；**tcp localhost 慢 ~8 倍，瓶颈是 present credit=1 的串行等待（~74%）+ futex 唤醒税**，`MOBILEGL_IPC_SPIN_US=2000` 单项实测 21.7→63.6 fps；**跨主机 TCP 在 `eglMakeCurrent` 处 100% hang**（字节级证据链，P12 验收 B 的阻塞项），且实测 Wi-Fi 吞吐 19–22 MiB/s 使重负载 Wi-Fi 臂上限 ~40–45 fps。全文 [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md)。
 
 ## 按阶段
 
@@ -47,3 +48,4 @@
 | 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | [`notes/p65`](notes/p65/README.md) |
 | 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`notes/p7`](notes/p7/README.md) |
 | 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；FCL 与跨机 TCP 收官门仍待完成 | [`notes/p12`](notes/p12/README.md) |
+| 17 | 五臂传输测量（2026-09-28，非阶段） | inproc/shm 重负载比 monolith 快 ~1/3；tcp localhost 瓶颈是 credit=1 + 唤醒税（SPIN_US=2000 → 2.9×）；跨主机 TCP hang 证据链 | [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md) |
