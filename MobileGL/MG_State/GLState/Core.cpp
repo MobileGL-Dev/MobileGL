@@ -1325,6 +1325,13 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::RestoreBoundTransformFeedbackState() {
+#if MOBILEGL_PIPE_PUSH
+            // The FOURTH writer of the transform-feedback binding points (a bind or a delete of
+            // the bound transform-feedback object swaps the whole set in): it moves the generation
+            // like the other three, so bit 17 cannot miss a swap whose two objects happen to carry
+            // the same capture-span generation.
+            NoteBufferBindPointChanged(BufferTarget::TransformFeedback);
+#endif
             const auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
             for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
                 auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, i);

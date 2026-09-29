@@ -64,6 +64,18 @@ namespace MobileGL::MG_State::GLState {
                         if (bindingPoint.GetBoundObject() == it->second) {
                             bindingPoint.Bind(nullptr);
                             bindingPoint.ClearRange();
+#if MOBILEGL_PIPE_PUSH
+                            // An UNBIND, and the one writer of an indexed point that is not an
+                            // entry point (GL_Buffer.cpp's BindBuffer{Base,Range}_State and
+                            // Core.cpp's transform-feedback writers bump their own): without the
+                            // bump the target's window is never re-sent, the server goes on naming
+                            // this buffer's handle, and once its slot is reused at a newer
+                            // generation the next draw or dispatch that walks the window asks the
+                            // backend for the dead one - Espryt dies with Fatal{ProtocolCorruption,
+                            // "BackendSlotTable.Generation"} (DeletedBoundBufferScenario).
+                            NoteBindPointChanged(BufferBindPointTargets[static_cast<SizeT>(
+                                &bindingPointArray - m_bufferBindPointTargets.data())]);
+#endif
                         }
                     }
                 }
