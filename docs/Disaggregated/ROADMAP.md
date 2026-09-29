@@ -34,7 +34,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [P7](notes/p7/README.md) | Vulkan 后端完整迁移；真机画面检查 36/36 通过 | ✅ 09-23 |
 | [**P12**](notes/p12/README.md) | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约 `MG_Remote/CONTRACT-P12.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [P8](notes/p8/README.md) | 把剩余的仿真路径挪到正确的一侧，补齐协议 | 待排 |
-| [P9](notes/p9/README.md) | 反向通道异步化（回读、写回不再同步等待） | 待排 |
+| [P9](notes/p9/README.md) | 反向通道异步化（回读、写回不再同步等待） | 待排；范围已按现状重划，交接见 [`HANDOFF-P9.md`](notes/p9/HANDOFF-P9.md) |
 | [P10](notes/p10/README.md) | 同步对象、查询与帧节奏 | 待排 |
 | [P11](notes/p11/README.md) | 同机大缓冲零拷贝共享 | 待排 |
 | [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
