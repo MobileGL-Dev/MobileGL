@@ -283,6 +283,10 @@ namespace MobileGL::MG_Util::PipeStats {
         WireHostWaits,
         WireHostWaitsIndirect,
         WireHostWaitMicros,
+        // P8-SV: `wdsp` - glDispatchComputeIndirect calls issued as vkCmdDispatchIndirect from the
+        // wire store (VulkanRenderer::DispatchWireComputeIndirect). Their barriers count in `wibar`
+        // with the draws': one barrier per shader write, whichever indirect read consumes it.
+        WireIndirectNativeDispatches,
 #endif
         Count
     };

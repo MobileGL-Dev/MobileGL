@@ -583,8 +583,10 @@ namespace {
         PS::AddCalls(PS::CallClass::WireIndirectNativeDraws, 3);
         PS::AddCalls(PS::CallClass::WireIndirectCpuExpansions, 2);
         PS::AddCalls(PS::CallClass::WireHostWaitMicros, 1500);
+        PS::AddCalls(PS::CallClass::WireIndirectNativeDispatches, 4);
         const String line = PS::FormatWindowLine();
-        EXPECT_NE(line.find("windr[wind=3 wixp=2 wibar=0 whw=0 whwi=0 whwus=1500]"), String::npos) << line;
+        EXPECT_NE(line.find("windr[wind=3 wixp=2 wibar=0 whw=0 whwi=0 whwus=1500 wdsp=4]"), String::npos) << line;
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectNativeDispatches), "wire-indirect-native-dispatches");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectNativeDraws), "wire-indirect-native-draws");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectCpuExpansions), "wire-indirect-cpu-expansions");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectBarriers), "wire-indirect-barriers");

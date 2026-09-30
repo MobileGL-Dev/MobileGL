@@ -21,6 +21,7 @@ namespace MGITest {
         unsigned long long barriers = 0;       // wire-indirect-barriers (`wibar`)
         unsigned long long hostWaits = 0;      // wire-host-waits (`whw`)
         unsigned long long indirectWaits = 0;  // wire-host-waits-indirect (`whwi`)
+        unsigned long long nativeDispatches = 0;  // P8-SV: wire-indirect-native-dispatches (`wdsp`)
     };
 
     bool PeekWireIndirectCounters(WireIndirectCounters* out);

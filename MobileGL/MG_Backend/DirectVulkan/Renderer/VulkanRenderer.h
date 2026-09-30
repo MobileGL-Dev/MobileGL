@@ -693,6 +693,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // a transport (still the `buffer-legacy-arm` role violation).
         Bool m_wireNativeIndirectDraw = false;
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
+        // P8-SV: glDispatchComputeIndirect on the wire arm - vkCmdDispatchIndirect from the
+        // dispatch-indirect store, as the monolith arm issues it (WireDraw.inc).
+        void DispatchWireComputeIndirect(GLintptr offset);
         void RewindWireDescriptorSetsIfDue();
         UniquePtr<RenderPassEntry> m_wireDrawPass;
         Vector<VkImageView> m_wireDrawViews;

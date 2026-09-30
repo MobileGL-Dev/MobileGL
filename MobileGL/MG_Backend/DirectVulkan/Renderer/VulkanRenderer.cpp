@@ -7789,6 +7789,15 @@ void main() {
 
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         SplitOversizedRecording();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            RewindWireDescriptorSetsIfDue();
+            m_textureManager->CollectGarbage();
+            DispatchWireComputeIndirect(indirect);
+            return;
+        }
+#endif
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // See DispatchCompute: the dispatch accessor, not the draw one.

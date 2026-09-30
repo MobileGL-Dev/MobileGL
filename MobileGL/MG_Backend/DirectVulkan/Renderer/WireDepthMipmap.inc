@@ -64,6 +64,14 @@
         if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT)
             return false;
         if (source.is3D || destination.is3D) return false;
+        // P8-SV: THE PASS MAKES 2D VIEWS (makeView below), which a 1D, 1D-array or 3D image does
+        // not admit. A caller that fills viewType from the image gets a refusal here, and the
+        // wire arm's GenerateWireMipmap asks the same question before it grows the chain.
+        for (const VkImageViewType viewType : {source.viewType, destination.viewType}) {
+            if (viewType == VK_IMAGE_VIEW_TYPE_1D || viewType == VK_IMAGE_VIEW_TYPE_1D_ARRAY ||
+                viewType == VK_IMAGE_VIEW_TYPE_3D)
+                return false;
+        }
         if (source.format != destination.format) return false;
         // DEPTH ONLY. A combined depth/stencil image can be sampled for its depth and
         // rendered as a depth attachment, but this pass writes gl_FragDepth and NOTHING

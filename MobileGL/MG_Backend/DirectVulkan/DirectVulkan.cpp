@@ -937,12 +937,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DispatchComputeIndirect(GLintptr indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-SV: THE GPU READS THE GROUP COUNTS on the wire arm too - VulkanRenderer's
+        // DispatchComputeIndirect takes its transport branch into DispatchWireComputeIndirect
+        // (WireDraw.inc), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
+        // that was here (ReadWireBuffer, a whole-GPU wait once a shader had written the store) is gone.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            Uint32 groups[3]{};
-            if (indirect >= 0 && pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
-                    MG_Pipe::MGPipeApplier().VerbDispatchIndirectBuffer,
-                    static_cast<Uint64>(indirect), sizeof(groups), groups))
-                pVulkanRenderer->DispatchCompute(groups[0], groups[1], groups[2]);
+            pVulkanRenderer->DispatchComputeIndirect(indirect);
             return;
         }
 #endif
