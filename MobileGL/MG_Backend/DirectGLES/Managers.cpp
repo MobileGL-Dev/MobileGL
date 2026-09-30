@@ -6908,7 +6908,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // re-serialised copy either way, and adopting that copy for every vertex
                 // shader would put every one of them through a round trip they do not need
                 // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
-                // first time this gate was missing.
+                // first time this gate was missing (the original capture; the case is now
+                // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024).
                 effectiveSpirv = &splitArrayInputSpirv;
             }
 
@@ -6916,8 +6917,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // blocks - the optimizer hands back a re-serialised copy either way, and taking
             // that copy for a module it did not rewrite is not free (it cost the
             // create-indirect retrace 0.15 SSIM when the array-input split first missed
-            // this gate). The report has to be per stage, not cumulative: a fragment shader
-            // consuming the same block reports a name the vertex stage already reported,
+            // this gate; the case is now
+            // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024). The report has to be
+            // per stage, not cumulative: a fragment shader consuming the same block reports a
+            // name the vertex stage already reported,
             // and its own rewrite must still be taken or the two stages stop matching.
             Vector<unsigned int> flattenedXfbSpirv;
             if (!xfbCaptureBlockNames.empty()) {
@@ -7615,8 +7618,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // per stage below so a producer and its consumer keep naming the same block.
             // Gated twice over, because a re-serialised module is not free (it cost the
             // create-indirect retrace 0.15 SSIM the first time the array-input split missed
-            // its gate): only a tessellation or geometry stage can declare blocks in both
-            // directions at all, and even then the probe has to FIND a collision before any
+            // its gate; the case is now
+            // minecraft-1.21.1-neoforge-create-indirect-in-world-align1024): only a tessellation
+            // or geometry stage can declare blocks in both directions at all, and even then the
+            // probe has to FIND a collision before any
             // stage is rewritten.
             std::set<String> collidingIoBlockNames;
             std::set<String> declaredIoBlockNames;

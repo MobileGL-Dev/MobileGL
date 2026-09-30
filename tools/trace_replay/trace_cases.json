@@ -260,10 +260,11 @@
       "target_call": 145353
     },
     {
-      "name": "minecraft-1.21.1-neoforge-create-indirect-in-world",
-      "trace_archive": "minecraft-1.21.1-neoforge-create-indirect-in-world.tgz",
-      "golden": "minecraft-1.21.1-neoforge-create-indirect-in-world.0000504631.png",
-      "target_call": 504631,
+      "name": "minecraft-1.21.1-neoforge-create-indirect-in-world-align1024",
+      "derived_from": "minecraft-1.21.1-neoforge-create-indirect-in-world (the original desktop capture, retired): NOT the same trace - its 16-byte-aligned uniform/storage buffer range binds were relocated to 1024-aligned slots by tools/trace_replay/fixture_tools/realign_buffer_ranges.cpp --align 1024, which inserts calls and renumbers them (original target_call 504631)",
+      "trace_archive": "minecraft-1.21.1-neoforge-create-indirect-in-world-align1024.tgz",
+      "golden": "minecraft-1.21.1-neoforge-create-indirect-in-world-align1024.0000508443.png",
+      "target_call": 508443,
       "timeout_seconds": 1800,
       "coherent_as_flush": true
     },
