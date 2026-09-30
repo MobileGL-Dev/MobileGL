@@ -13020,16 +13020,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return s_forced;
     }
 
+    // WireTextureReadback.inc (included further down) defines it: E's extent-scoped stand-in for a
+    // driver that refuses to read a colour level back, asked here too so a host reaches the store
+    // route below (P8-SE).
+    static Bool WireTextureReadbackRefusedForTesting(const IntVec3& extent);
+
     // The base level as tight RGB floats: the driver's texels first, the staged store second.
+    //
+    // P8-SE: THE STORE ANSWERS ONLY FOR A TEXTURE THE DRIVER NEVER WROTE (P8-E's sticky mark). A
+    // render target's level 0 lives on the driver; the store still holds whatever crossed before
+    // the draw, and filtering it would hand the chain stale texels. `driverWrittenBefore` is the
+    // mark as it stood BEFORE this generation noted its own write (GenerateMipmap's split arm),
+    // because that note is unconditional and would otherwise decline every store read. Anything
+    // the store cannot stand for is a named decline, `declined` says why.
     static Bool ReadThreeChannelFloatLevelOnServer(MG_Pipe::MGPipeHandle mipRes,
                                                    const MG_Pipe::MGPipeResourceRecord& record,
                                                    const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
                                                    TextureTarget textureTarget, TextureUploadTarget face, Uint32 level,
-                                                   const IntVec3& extent, Vector<Float>& rgb) {
+                                                   const IntVec3& extent, Bool driverWrittenBefore,
+                                                   Vector<Float>& rgb, const char*& declined) {
         const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const SizeT texels = static_cast<SizeT>(extent.x()) * static_cast<SizeT>(extent.y());
         Vector<Uint8> bytes;
-        if (ReadTextureLevelTight(backendTexture->GetBackendTextureId(), textureTarget, face, format,
+        if (!WireTextureReadbackRefusedForTesting(extent) &&
+            ReadTextureLevelTight(backendTexture->GetBackendTextureId(), textureTarget, face, format,
                                   static_cast<GLint>(level), extent, backendTexture->RequiresImageBindableStorage(),
                                   GL_RGB, GL_FLOAT, bytes) &&
             bytes.size() == texels * 3 * sizeof(Float)) {
@@ -13037,17 +13051,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Memcpy(rgb.data(), bytes.data(), bytes.size());
             return true;
         }
-        // A view's staged bytes live under its storage owner's key, in the owner's levels; a view
-        // whose level the driver cannot read has no answer here.
-        if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
         auto& store = MG_Remote::Server::ServerStagedTexture();
         const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(mipRes);
         const auto faceCode = static_cast<Uint16>(face);
         const auto levelCode = static_cast<Uint16>(level);
-        if (!store.CopiesIntoServerStorage() || !store.IsCovered(key, faceCode, levelCode)) return false;
         const Bool half = format == TextureInternalFormat::RGB16F;
         const SizeT componentBytes = half ? sizeof(Uint16) : sizeof(Float);
-        if (store.LevelByteSize(key, faceCode, levelCode) != texels * 3 * componentBytes) return false;
+        // A view's staged bytes live under its storage owner's key, in the owner's levels; a view
+        // whose level the driver cannot read has no answer here.
+        if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
+            declined = "a view has no staged level of its own";
+        } else if (!store.CopiesIntoServerStorage()) {
+            declined = "this arm keeps no staged store";
+        } else if (driverWrittenBefore) {
+            declined = "the driver has written the texture since its bytes crossed";
+        } else if (!store.IsCovered(key, faceCode, levelCode)) {
+            declined = "not every byte of the level crossed";
+        } else if (store.LevelByteSize(key, faceCode, levelCode) != texels * 3 * componentBytes) {
+            declined = "the staged level is not the size of the level";
+        }
+        if (declined != nullptr) return false;
         const Uint8* staged = store.RequireLevelBytes(key, faceCode, levelCode, "generate-mipmap-server-cpu");
         rgb.resize(texels * 3);
         for (SizeT i = 0; i < texels * 3; ++i) {
@@ -13068,7 +13091,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static void GenerateThreeChannelFloatMipmapOnServer(MG_Pipe::MGPipeHandle mipRes,
                                                         const MG_Pipe::MGPipeResourceRecord& record,
                                                         const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
-                                                        const char* why) {
+                                                        Bool driverWrittenBefore, const char* why) {
         const auto& desc = record.Desc;
         const auto format = static_cast<TextureInternalFormat>(desc.InternalFormat);
         const auto textureTarget = TextureTargetForPipeResourceTarget(desc.Target);
@@ -13103,12 +13126,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                       desc.Depth, window.Base);
             Vector<Float> level;
+            const char* declined = nullptr;
             if (!ReadThreeChannelFloatLevelOnServer(mipRes, record, backendTexture, textureTarget, face, window.Base,
-                                                    extent, level)) {
-                MGLOG_E_ONCE("MGPipe: generate-mipmap-server-cpu declines texture {%u, %u}: base level %u is "
-                             "neither readable from the driver nor covered by the staged store; levels %u..%u are "
-                             "left as they are",
-                             mipRes.Slot, mipRes.Gen, window.Base, window.Base + 1, window.End - 1);
+                                                    extent, driverWrittenBefore, level, declined)) {
+                MGLOG_E_ONCE("MGPipe: generate-mipmap-server-cpu declines texture {%u, %u}: base level %u could not "
+                             "be read back from the driver and the staged store cannot stand for it (%s); levels "
+                             "%u..%u are left as they are - DECLINED (generate-mipmap-store-declined)",
+                             mipRes.Slot, mipRes.Gen, window.Base, declined != nullptr ? declined : "?",
+                             window.Base + 1, window.End - 1);
                 return;
             }
             for (Uint32 dst = window.Base + 1; dst < window.End; ++dst) {
@@ -13178,9 +13203,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // client's level shadows. P8-B2 retired it (GenerateThreeChannelFloatMipmapOnServer reads the
     // server's own level), so no arm here reads client memory any more; the WaitClass flip itself
     // is a protocol change and is left to the integrator.
+    //
+    // `driverWrittenBefore`: P8-E's driver-written mark on the texture's staged store as it stood
+    // before this call noted its own write - the CPU arm's store route reads it (P8-SE).
     static void GenerateMipmapByRecord(GLenum target, MG_Pipe::MGPipeHandle mipRes,
                                        const MG_Pipe::MGPipeResourceRecord& record,
-                                       const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
+                                       const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
+                                       Bool driverWrittenBefore) {
         const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const auto textureTarget = TextureTargetForPipeResourceTarget(record.Desc.Target);
         const Bool threeChannelFloat =
@@ -13199,7 +13228,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         if (threeChannelFloat && ForcedServerCpuMipmap()) {
-            GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture,
+            GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture, driverWrittenBefore,
                                                     "forced by MGITEST_ESPRYT_FORCE_CPU_MIPMAP");
             return;
         }
@@ -13229,7 +13258,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             refused = g_GLESFuncs.glGetError();
         }
         if (refused == GL_NO_ERROR) return;
-        GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture, "the driver refused glGenerateMipmap");
+        GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture, driverWrittenBefore,
+                                                "the driver refused glGenerateMipmap");
     }
 #endif
 
@@ -13256,6 +13286,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for GenerateMipmap move to kWaitNone.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             const auto mipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
+            // P8-SE: whether the staged store still stands for the texture is read BEFORE the note
+            // below sets the mark, or the CPU arm's store route could never answer at all.
+            const Bool driverWrittenBefore = MG_Remote::Server::ServerStagedTexture().IsDriverWritten(
+                MG_Remote::Server::StagedTextureStore::KeyForHandle(mipRes));
             // Every arm GenerateMipmapByRecord takes writes the levels above the base on the
             // driver only (P8-B2's CPU arm uploads its levels there too), so the note is
             // unconditional.
@@ -13268,7 +13302,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              mipRes.Slot, mipRes.Gen);
                 return;
             }
-            GenerateMipmapByRecord(target, mipRes, *record, backendTexture);
+            GenerateMipmapByRecord(target, mipRes, *record, backendTexture, driverWrittenBefore);
             return;
         }
 #endif
@@ -13545,14 +13579,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ordinary correct path and must still run.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
 #endif
-#if MOBILEGL_PIPE_PUSH
-        // P4a (D-M). glCopyImageSubData's CPU-shadow mirror copies the source level's shadow
-        // rows into the DESTINATION's shadow so a later readback of the destination sees what
-        // the GPU copy put there. Both shadows are the client's, so this is the clearest case
-        // in the family of an emulation that cannot survive a split; ROADMAP puts the move
-        // itself in P8 and this names the site until then.
-        MG_Pipe::MGPipeUnmigratedEmulation("copy-image-shadow-mirror");
-#endif
+        // P4a (D-M) named this site `copy-image-shadow-mirror` with MGPipeUnmigratedEmulation.
+        // P8-SE removed the call: the return above means no transport reaches it, and on a
+        // monolith arm the call was a no-op (PipeCatalogueTest's list and the lint
+        // scripts/ci/unmigrated_emulation_sites.py follow).
 
         const auto srcUploadTarget = srcEndpoint.Texture->GetUploadTargets()[0];
         const auto dstUploadTarget = dstEndpoint.Texture->GetUploadTargets()[0];
@@ -15293,10 +15323,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Session::Fail entirely, which is the funnel the census gate watches.
         //
         // THE FUNNEL KEEPS ITS TEETH FOR THE OTHER SITES: MGPipeUnmigratedEmulation still
-        // names generate-mipmap-storage, generate-mipmap-cpu-fallback and
-        // copy-image-shadow-mirror, on monolith arms only. Only this call site is retired here,
-        // and only because its own premise did not hold (texture-remint-pull went the same way
-        // in P9 W2, and P8-B the two split generate-mipmap names, for the same reason).
+        // names generate-mipmap-storage and generate-mipmap-cpu-fallback, on monolith arms only
+        // (P8-SE dropped copy-image-shadow-mirror, a site no transport reached). Only this call
+        // site is retired here, and only because its own premise did not hold (texture-remint-pull
+        // went the same way in P9 W2, and P8-B the two split generate-mipmap names, likewise).
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             if (shadow == nullptr) {
                 MGLOG_E_ONCE("GetTexImage: no level shadow on this side for target=0x%x level=%d, and under an "
@@ -16198,7 +16228,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // resizing depth/stencil without colour would report the default framebuffer incomplete.
     static void PublishDefaultFramebufferDepthStencilFormat() {
         auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
+#if MOBILEGL_PIPE_PUSH
+        // P8-SE: THE PLACEHOLDER IS ONLY THE MONOLITH ARM'S TARGET. With a transport the answer is
+        // posted (OnSurfaceChanged, below) and the client writes its own placeholder; a spawn or tcp
+        // server process has no frontend at all, so pDefaultFramebufferInfo is null there. Gating on
+        // it returned before the post, the client kept Init.cpp's GL_DEPTH32F_STENCIL8 guess for a
+        // D24S8 pbuffer, and a blit into a buffer allocated from that guess lost depth and stencil
+        // (notes/p8/SE.md). Inproc only passed because client and server share the process.
+        if (!g_GLESFuncs.glGetFramebufferAttachmentParameteriv) return;
+        if (!defaultFBOInfo && MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == nullptr) return;
+#else
         if (!defaultFBOInfo || !g_GLESFuncs.glGetFramebufferAttachmentParameteriv) return;
+#endif
 
         // GL_DEPTH / GL_STENCIL are the default framebuffer's spellings; a user framebuffer
         // would need GL_DEPTH_ATTACHMENT / GL_STENCIL_ATTACHMENT and answers GL_INVALID_ENUM
@@ -16279,8 +16320,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stencilFormat = TextureInternalFormat::StencilIndex8;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // Null in a spawn / tcp server (above); only the monolith arm below writes through them.
+        auto* depthTexture = defaultFBOInfo ? defaultFBOInfo->depthAttachment.get() : nullptr;
+        auto* stencilTexture = defaultFBOInfo ? defaultFBOInfo->stencilAttachment.get() : nullptr;
+#else
         auto* depthTexture = defaultFBOInfo->depthAttachment.get();
         auto* stencilTexture = defaultFBOInfo->stencilAttachment.get();
+#endif
 #if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
             // P5c ev (CONTRACT-P5C §4.2): with an active transport the attachments are CLIENT

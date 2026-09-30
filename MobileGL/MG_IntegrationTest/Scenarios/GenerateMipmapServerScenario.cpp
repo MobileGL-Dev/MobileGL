@@ -29,6 +29,14 @@
 // Espryt's server-side CPU filter, which a host driver never needs: llvmpipe generates both
 // formats natively. Under the knob the server log must name that arm, or the entry proved nothing.
 //
+// THE CPU ARM'S STORE ROUTE (P8-SE). When the driver cannot read the base level back, the server's
+// CPU arm filters the staged store's copy of it - but only for a texture the driver never wrote
+// (P8-E's sticky mark), because a render target's level 0 exists only on the driver and the store
+// still holds what crossed before the draw. The `CpuMipRefused.` entries add
+// MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16 (P8-E's knob, also read by the SERVER) to the
+// forced-CPU knob: a render-target base must decline by name (generate-mipmap-store-declined) and
+// never filter the stale store, and an uploaded-only base must still be filtered from the store.
+//
 // MONOLITH DEFECTS, recorded for dev (ID-P8-3) and skipped by name on the monolith arm they live
 // on unless MGITEST_RUN_MONOLITH_MIP_DEFECTS=1 is set (which is how each was shown red):
 //   M1  Espryt: the RGB16F / RGB32F CPU filter reads the frontend's level shadow, which a GPU
@@ -68,6 +76,10 @@ namespace MGITest {
         constexpr const char* kForceCpuMipmap = "MGITEST_ESPRYT_FORCE_CPU_MIPMAP";
         constexpr const char* kCpuMipmapMarker = "generate-mipmap-server-cpu";
         constexpr const char* kRunMonolithDefects = "MGITEST_RUN_MONOLITH_MIP_DEFECTS";
+        // P8-SE: E's server-read knob; the entries set it to kEdge x kEdge, the base level's extent.
+        constexpr const char* kRefuseReadback = "MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT";
+        constexpr const char* kStoreDeclinedMarker = "generate-mipmap-store-declined";
+        constexpr const char* kStoreFilteredMarker = "filtering the staged store's copy";
 
         constexpr const char* kVertexSource = R"(#version 430 core
 void main() {
@@ -123,6 +135,7 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 m_wire = SplitRuntimeSkipReason().empty();
                 m_espryt = Gl().BackendName() == "DirectGLES";
                 m_forcedCpu = std::getenv(kForceCpuMipmap) != nullptr;
+                m_refusedReadback = std::getenv(kRefuseReadback) != nullptr;
                 std::string error;
                 m_sampleProgram = CompileProgram(kVertexSource, kSampleSource, &error);
                 ASSERT_NE(m_sampleProgram, 0u) << error;
@@ -368,6 +381,84 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
             // upload, so the chain must come from the GPU's level 0 and never from the uploaded texels.
             void RenderTargetBase(const Format& format) {
                 if (MonolithDefect(true, false)) GTEST_SKIP() << kM1;
+                PaintSentinelBaseAsRenderTarget(format);
+                if (HasFatalFailure() || IsSkipped()) return;
+                Generate();
+                const int last = 4;
+                for (int level = 0; level < last; ++level)
+                    ExpectHalves(SampleLevel(level, last), format, kBottom, kTop, 0, 0,
+                                 std::string(format.name) + " render-target base, level " + std::to_string(level));
+                ExpectCpuArmNamed();
+                EXPECT_EQ(FirstGLError(), 0u);
+            }
+
+            // ---- P8-SE: the CPU arm's store route under a refused readback ----------------------
+
+            // Only the `CpuMipRefused.` entries carry both server knobs; anywhere else the store route
+            // is unreachable on a host (its driver reads every level back) and the case says so.
+            void SkipUnlessTheStoreRouteIsArmed() {
+                if (m_wire && m_espryt && m_forcedCpu && m_refusedReadback) return;
+                GTEST_SKIP() << "the store route needs Espryt's split server with " << kForceCpuMipmap << " and "
+                             << kRefuseReadback << "=" << kEdge << "x" << kEdge << " (the CpuMipRefused. entries)";
+            }
+
+            // The render-target base again, with the driver refusing to read level 0 back: the store
+            // holds the uploaded sentinel, the driver the drawn halves, and P8-E's mark says so. The
+            // arm must decline by name - a stale chain of sentinel texels is the defect.
+            void RefusedReadbackOfADrawnBase(const Format& format) {
+                SkipUnlessTheStoreRouteIsArmed();
+                if (IsSkipped()) return;
+                PaintSentinelBaseAsRenderTarget(format);
+                if (HasFatalFailure() || IsSkipped()) return;
+                Generate();
+                const std::string log = PipeStatsWindow::ReadServerLogSince(m_mark);
+                EXPECT_NE(log.find(kStoreDeclinedMarker), std::string::npos)
+                    << "the base level was drawn and its readback refused, but the server log after glGenerateMipmap "
+                       "has no '" << kStoreDeclinedMarker << "' line";
+                EXPECT_EQ(log.find(kStoreFilteredMarker), std::string::npos)
+                    << "the CPU arm filtered the staged store's copy of a level the driver has since drawn over";
+                const int last = 4;
+                ExpectHalves(SampleLevel(0, last), format, kBottom, kTop, 0, 0,
+                             std::string(format.name) + " drawn base (untouched by the decline)");
+                for (int level = 1; level < last; ++level) {
+                    const Image image = SampleLevel(level, last);
+                    const Rgba8 got = image.At(0, 0);
+                    EXPECT_FALSE(std::abs(got.r - ToByte(kSentinel[0])) <= 2 && std::abs(got.g - ToByte(kSentinel[1])) <= 2 &&
+                                 std::abs(got.b - ToByte(kSentinel[2])) <= 2)
+                        << format.name << " level " << level << " is the uploaded sentinel " << got
+                        << ": the chain was filtered from the stale staged store";
+                }
+                ExpectCpuArmNamed();
+                FirstGLError();
+            }
+
+            // The control: a base that only ever crossed as an upload IS what the store holds, so a
+            // refused readback is answered from the store and the chain is right. This is what tells
+            // the check above from "the store route always declines" - the generation's own
+            // driver-write note must not count against the level it reads.
+            void RefusedReadbackOfAnUploadedBase(const Format& format) {
+                SkipUnlessTheStoreRouteIsArmed();
+                if (IsSkipped()) return;
+                NewTexture();
+                DefineLevel(format, 0, kEdge, Halves(format, kEdge, kBottom, kTop, 0, 0));
+                ASSERT_EQ(FirstGLError(), 0u) << "define level 0";
+                Generate();
+                const std::string log = PipeStatsWindow::ReadServerLogSince(m_mark);
+                EXPECT_NE(log.find(kStoreFilteredMarker), std::string::npos)
+                    << "the uploaded base's readback was refused, but the server log has no '" << kStoreFilteredMarker
+                    << "' line: the store route did not answer";
+                EXPECT_EQ(log.find(kStoreDeclinedMarker), std::string::npos)
+                    << "the store route declined a level that only ever crossed as an upload";
+                const int last = 4;
+                for (int level = 1; level < last; ++level)
+                    ExpectHalves(SampleLevel(level, last), format, kBottom, kTop, 0, 0,
+                                 std::string(format.name) + " uploaded base, store-filtered level " +
+                                     std::to_string(level));
+                EXPECT_EQ(FirstGLError(), 0u);
+            }
+
+            // Level 0 uploaded as the sentinel, then drawn over as a render target (bottom / top halves).
+            void PaintSentinelBaseAsRenderTarget(const Format& format) {
                 NewTexture();
                 DefineLevel(format, 0, kEdge, Flat(format, kEdge, kSentinel, 0));
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -390,18 +481,12 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 ASSERT_EQ(FirstGLError(), 0u) << "draw into level 0";
-                Generate();
-                const int last = 4;
-                for (int level = 0; level < last; ++level)
-                    ExpectHalves(SampleLevel(level, last), format, kBottom, kTop, 0, 0,
-                                 std::string(format.name) + " render-target base, level " + std::to_string(level));
-                ExpectCpuArmNamed();
-                EXPECT_EQ(FirstGLError(), 0u);
             }
 
             bool m_wire = false;
             bool m_espryt = false;
             bool m_forcedCpu = false;
+            bool m_refusedReadback = false;
             GLuint m_sampleProgram = 0;
             GLuint m_paintProgram = 0;
             GLuint m_vao = 0;
@@ -455,6 +540,16 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
     TEST_F(GenerateMipmapServerScenario, Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel) {
         if (!Ready()) return;
         RenderTargetBase(kRgb32F);
+    }
+
+    // P8-SE: the CPU arm's store route (header; the CpuMipRefused. entries).
+    TEST_F(GenerateMipmapServerScenario, Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName) {
+        if (!Ready()) return;
+        RefusedReadbackOfADrawnBase(kRgb16F);
+    }
+    TEST_F(GenerateMipmapServerScenario, Rgb16fUploadedBaseWithARefusedReadbackIsFilteredFromTheStore) {
+        if (!Ready()) return;
+        RefusedReadbackOfAnUploadedBase(kRgb16F);
     }
 
 } // namespace MGITest

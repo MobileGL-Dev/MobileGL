@@ -4864,6 +4864,44 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# P8-SE (docs/Disaggregated/notes/p8/SE.md): Espryt split residuals.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    # The default framebuffer's depth/stencil format reaches a spawn / tcp client now (the server
+    # process has no frontend placeholder, and the publish used to return on it before posting),
+    # so the case A left as `pending-fix` joins the three Espryt arms.
+    mgl_itest_register_split_arms(
+        "DepthStencilReadbackAttachmentShapeScenario.DefaultFramebufferDepthStencilFormatIsBlitCompatible" "")
+    # B2's CPU mip arm x P8-E's driver-written mark: the forced-CPU knob plus E's refused-readback
+    # knob at the base level's extent (16x16), both read by the SERVER - so inproc and spawn only,
+    # and their own label as B's `CpuMip.` entries have (the tcp arm's server is the shared
+    # TcpServer.Start fixture, and the refusal there would reach every 16x16 colour readback).
+    foreach(mglItestArm IN ITEMS Split Spawn)
+        string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+        string(TOLOWER "${mglItestArm}" mglItestArmLower)
+        foreach(cpuMipCase Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName
+                           Rgb16fUploadedBaseWithARefusedReadbackIsFilteredFromTheStore)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestArm}.CpuMipRefused."
+                TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8se-cpu-mip-refused-${mglItestArmLower}-${cpuMipCase}.log")
+        endforeach()
+    endforeach()
+    # PipeCatalogueTest's unmigrated-emulation list against the call sites in the tree (a source
+    # lint, so the unit lane runs it wherever the split build's unit tests run; CI also runs it
+    # beside split_coverage.py).
+    add_test(NAME PipeCatalogue.UnmigratedEmulationSitesSelfTest
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/unmigrated_emulation_sites.py" --self-test)
+    add_test(NAME PipeCatalogue.UnmigratedEmulationSitesMatchTheList
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/unmigrated_emulation_sites.py"
+            "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(PipeCatalogue.UnmigratedEmulationSitesSelfTest
+        PipeCatalogue.UnmigratedEmulationSitesMatchTheList PROPERTIES LABELS unit TIMEOUT 60)
+endif()
+
 # =====================================================================================
 # P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
 # =====================================================================================
