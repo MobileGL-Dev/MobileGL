@@ -2148,8 +2148,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # - because under inproc and spawn the server inherits the client's environment and under tcp
     # it does not. A feature knob that reaches two of three arms is the worst of the three states:
     # the lane is green and tests nothing.
+    #
+    # P8-A: THE VULKAN PINS FOR THE SAME REASON - the ICD and, on lavapipe, the three iterationRP
+    # repairs every DirectVulkan entry carries (MGL_ITEST_VULKAN_ENV above). Magma reads them in
+    # the SERVER. Measured: DirectVulkan.Tcp.IterationRPProgram203Scenario and its Tcp.Full. twin
+    # missed the golden output by one texel while the Split and Spawn copies passed - the
+    # unrepaired shape that block describes. All four are Vulkan-only, so Espryt's server is
+    # unchanged.
+    set(mglItestTcpServerEnvironment "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+    foreach(mglItestVulkanPin IN LISTS MGL_ITEST_VULKAN_ENV)
+        if(NOT mglItestVulkanPin IN_LIST MGL_ITEST_COMMON_ENV)
+            list(APPEND mglItestTcpServerEnvironment "${mglItestVulkanPin}")
+        endif()
+    endforeach()
     set_tests_properties(TcpServer.Start PROPERTIES FIXTURES_SETUP mobilegl-tcp TIMEOUT 20
-        ENVIRONMENT "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+        ENVIRONMENT "${mglItestTcpServerEnvironment}")
     set_tests_properties(TcpServer.Stop PROPERTIES FIXTURES_CLEANUP mobilegl-tcp TIMEOUT 20)
     add_test(NAME TcpLane.AccountingControls COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_lane_tools_test.py")
@@ -2587,8 +2600,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # had no split coverage at all, so every claim about it was a reading of the code rather than
     # a run of it. Arming the lanes is the first half of the work and the census is the second:
     # what reds here IS the remaining worklist, and each red is either D1's to fix or excluded BY
-    # NAME with the Fatal quoted, the way the d1 draw block excludes
-    # MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws.
+    # NAME with the Fatal quoted, the way the d1 draw block excluded
+    # MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws until P8-A.
     mgl_itest_register_split_arms("PixelStoreSweepScenario.*" "")
     mgl_itest_register_split_arms("PackedWordReadbackScenario.*" "")
     mgl_itest_register_split_arms("LayeredTextureReadbackScenario.*" "")
@@ -2627,7 +2640,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # left all of them passing. A split arm that inherited the ambient default would be measuring
     # the same non-path three more times. So the pin is MIRRORED here, which is what the plan's
     # row asks for.
-    foreach(mglItestDsArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+    #
+    # P8-A: SPLIT AND SPAWN ONLY HERE. The knob is read by the server, and the Tcp arm's server
+    # is the lane-wide fixture, so a Tcp copy registered here ran the NATIVE readback under the
+    # ForcedDs. name. The same-named Tcp entries are registered in P8Coverage.cmake, against a
+    # supervisor started with the knob.
+    foreach(mglItestDsArm Split Spawn)
         mgl_itest_magma_arm_shape(${mglItestDsArm})
         string(TOLOWER "${mglItestDsArm}" mglItestDsArmLower)
         mgl_itest_join_environment(mglItestDsEnvironment
@@ -2755,19 +2773,20 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # the two multi-draws, an indirect draw), so a record that did not cross is a wrong picture
     # and not a green. MultiDrawScenario, DrawParametersScenario and PrimitiveRestartScenario are
     # the census's own DrawElements / MultiDrawElementsBaseVertex / DrawArraysInstancedBaseInstance
-    # / MultiDraw*Indirect* first-blocker scenarios, now at their pictures. The ONE case excluded
-    # by filter is MultiDrawScenario's ClientSideIndicesBatchMatchesUnrolledDraws: a multi-draw
-    # with client-side indices is refused BY NAME under split (Fatal{UnmigratedVerb,
-    # "MultiDrawElementsBaseVertex+CLIENT_INDICES"}, CONTRACT-P5B.md d1 - P8's HostResolve.cpp
-    # flattens it), which is its next first blocker and not a lane failure. It is listed in
-    # d1-v1.md, not deleted (G14). GuiBatchScenario (the census's other DrawElements scenario) is
-    # NOT registered: past its draws it stops at Fatal{UnmigratedVerb, "MemoryBarrier"}, which is
-    # i1's to flip; i1 registers it when that lands.
+    # / MultiDraw*Indirect* first-blocker scenarios, now at their pictures. The whole of
+    # MultiDrawScenario is here since P8-A: its ClientSideIndicesBatchMatchesUnrolledDraws was
+    # excluded while a multi-draw with client-side indices was refused BY NAME under split
+    # (Fatal{UnmigratedVerb, "MultiDrawElementsBaseVertex+CLIENT_INDICES"}), and the client now
+    # flattens every sub-draw's client indices into one owned element buffer before the record is
+    # emitted (EmitTables.cpp's EmitMultiIndexedDraw, OwnedDrawInputs.h), so the
+    # server's CLIENT_INDICES latch is unreachable from our client and this case is the entry that
+    # would see it come back. GuiBatchScenario (the census's other DrawElements scenario) waited
+    # on Fatal{UnmigratedVerb, "MemoryBarrier"}; that verb has crossed since i1 and class C is
+    # empty, so P8Coverage.cmake registers it with the other monolith-only cases.
     set(MGL_SPLIT_D1_SCENARIOS IndexedDrawFamilyScenario MultiDrawScenario DrawParametersScenario
                                PrimitiveRestartScenario)
     set(MGL_SPLIT_D1_FILTER_IndexedDrawFamilyScenario "IndexedDrawFamilyScenario.*")
-    set(MGL_SPLIT_D1_FILTER_MultiDrawScenario
-        "MultiDrawScenario.*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
+    set(MGL_SPLIT_D1_FILTER_MultiDrawScenario "MultiDrawScenario.*")
     set(MGL_SPLIT_D1_FILTER_DrawParametersScenario "DrawParametersScenario.*")
     set(MGL_SPLIT_D1_FILTER_PrimitiveRestartScenario "PrimitiveRestartScenario.*")
     foreach(mglItestD1Scenario IN LISTS MGL_SPLIT_D1_SCENARIOS)
@@ -2810,8 +2829,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # THE FILTER IS THE TIER-SENSITIVE WORKLOAD and nothing else, which is this file's own rule
     # for an armed Split entry: MultiDrawScenario (its whole point is that a batch matches the
     # unrolled draws, which is precisely what a wrong index buffer breaks quietly) and
-    # IndexedDrawFamilyScenario's three MultiDraw cases. The client-side-indices case keeps the
-    # d1 block's exclusion - it is refused by name under split before any tier is chosen.
+    # IndexedDrawFamilyScenario's three MultiDraw cases. The client-side-indices case joined with
+    # the d1 block's (P8-A): its flattened indices arrive as one owned element buffer, which is
+    # exactly the bound index buffer each tier asks its questions of.
     #
     # NOTE FOR THE STRICT-MARKER CENSUS (PREAMBLE-ADDENDUM-WAVE3 §4): these entries carry a THIRD
     # name segment, so `strict_census2.sh` re-derives their gtest filter from the last two
@@ -2827,7 +2847,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_drawelements "DrawElements")
     set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_compute "Compute")
     set(MGL_SPLIT_MULTIDRAW_TIER_FILTER
-        "MultiDrawScenario.*:IndexedDrawFamilyScenario.MultiDraw*-MultiDrawScenario.ClientSideIndicesBatchMatchesUnrolledDraws")
+        "MultiDrawScenario.*:IndexedDrawFamilyScenario.MultiDraw*")
     foreach(mglItestMultiDrawTier IN LISTS MGL_SPLIT_MULTIDRAW_TIERS)
         mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT
             "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
@@ -4666,6 +4686,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ENVIRONMENT "${p5f_rsp_environment}")
         endforeach()
     endforeach()
+endif()
+
+# P8-A
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/P8Coverage.cmake)
 endif()
 
 # =====================================================================================

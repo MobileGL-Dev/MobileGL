@@ -1,0 +1,64 @@
+# Monolith integration cases that are on NO split arm, and why (P8-A, ID-P8-2).
+# Read by scripts/ci/split_coverage.py; its docstring states every rule a row must keep.
+#
+#   [<Backend>:]<gtest pattern> <reason-class> <one-line reason>
+#
+# Reason classes:
+#   mechanism       the case asserts a process-local mechanism or pins one arm by design
+#                   (MGL_ITEST_MONOLITH_MECHANISM_FILTER in MG_IntegrationTest/CMakeLists.txt)
+#   single-backend  the case belongs to the OTHER backend and skips on this one; scoped to this one
+#   no-records      the workload never reaches a verb (answered from the caps mirror or the
+#                   client's own error surface), so ScenarioFixture's armed split assertion
+#                   (EmitSeq must advance) is red by construction
+#   inproc-peek     reads server state through an in-process peek only an inproc arm can answer
+#   pending-fix     red on a split arm today; the reason names the package or DEBTS.md row that
+#                   fixes it, and the row goes when the case is registered (a stale row is an error)
+#
+# Evidence for every row: docs/Disaggregated/notes/p8/A.md (per-arm census, junit per case).
+
+# ---- mechanism: MGL_ITEST_MONOLITH_MECHANISM_FILTER, pinned to monolith by construction -------
+HandleRecycleScenario.* mechanism pointer-key ABA / slot recycling inside one process (integration-monolith-control)
+CsoContentAddressingScenario.* mechanism toggles the process-local CSO content-addressing switch
+ResourceSubsystemControlScenario.* mechanism toggles the process-local P3a push mask
+ObjectSubsystemControlScenario.* mechanism toggles the process-local P4a push mask
+PipeVerifyArmingScenario.* mechanism same-address-space verify comparator; its split arm is build-verify's integration-verify-split
+PoisonOmissionScenario.* mechanism withheld-stamp oracle; its split arm is build-verify's VerifySplitPoisonOmitted entries
+StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw mechanism counts synchronous stats-slot roundtrips of direct persistent adoption
+DirectGLES:MonolithAttachmentClearScenario.* mechanism pins the push-monolith arm (DirectGLES.PushMonolithArm., ID-107); the split clear-attachment path is F1WireScenario's
+DirectVulkan:DualBlockScenario.* mechanism needs MOBILEGL_IPC_ROLE_SPLIT_STATE=1; its lane is integration-dualblock-split (Espryt) and the Magma census filters it out
+
+# ---- single-backend: Magma's cases, skipping on Espryt ----------------------------------------
+DirectGLES:MagmaRunAheadScenario.* single-backend Magma run-ahead lane only (integration-magma-runahead)
+DirectGLES:MagmaWireCacheScenario.* single-backend Magma wire-cache lane only (integration-magma-caches)
+DirectGLES:MagmaWireReclaimScenario.* single-backend Magma wire-arm store reclaim
+DirectGLES:MagmaVertexLayoutScenario.* single-backend Magma's vertex format map (Espryt hands GL_FIXED to the driver)
+DirectGLES:PrimitivesGeneratedNoXfbScenario.* single-backend the stream-query defect and its reroute are DirectVulkan's
+DirectGLES:ImageLoadStoreSsoScenario.AnImageArrayAlongsideAnotherDescriptorKeepsBothBindings single-backend DirectVulkan's descriptor binding remap
+DirectGLES:UnwrittenPositionOutputScenario.CapturingAnUnwrittenPositionStillDraws single-backend pins DirectVulkan's gl_Position injection (Espryt gap noted in the case)
+DirectGLES:F1WireScenario.CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone single-backend Magma wire-arm decline (CONTRACT-P7 3.2 copy-image-in-place)
+DirectGLES:F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession single-backend Magma wire-arm decline (depth-stencil-mipmap)
+DirectGLES:F1WireScenario.MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession single-backend Magma wire-arm decline (multisample-blit-aspect)
+DirectGLES:F1WireScenario.MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession single-backend Magma wire-arm decline (multisample-blit-shape)
+DirectGLES:F1WireScenario.ShortUniformBufferRangePadsMissingBytes single-backend Magma short-UBO compatibility policy
+DirectGLES:F1WireScenario.SubWordUniformBufferRangePadsMissingBytes single-backend Magma short-UBO compatibility policy
+DirectGLES:F1WireScenario.UnalignedAtomicCounterRangeDeclinesAndTheSessionLives single-backend Magma descriptor-alignment decline
+DirectGLES:F1WireScenario.GenerateMipmapWithoutNativeBlitPixels single-backend Magma shader-mip arm (MGITEST_MAGMA_FORCE_SHADER_MIPMAP, Magma Fm lane)
+DirectGLES:F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels single-backend Magma depth shader-mip arm (MGITEST_MAGMA_FORCE_SHADER_MIPMAP, Magma Fm lane)
+
+# ---- no-records: EmitSeq does not move, so the armed split assertion is red by construction ----
+AdvertisedLimitsScenario.ComputeLocalSizeComesFromTheLinkedProgram no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.ComputeUniformBlocksIsAnAmountAnApplicationCouldActuallyAllocate no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnswer no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.EveryBufferLimitIsWithinItsAdvertisedRange no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.EveryGL45CoreMinimumIsMet no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.IndexedTargetSizeSurvivesDivisionByItsBindingCount no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.PerStageBlockCountsFitInTheirBindingPoints no-records limits query answered from the client's CapsMirror
+AdvertisedLimitsScenario.ViewportArrayLimitsMeetTheirGL43Floors no-records limits query answered from the client's CapsMirror
+SpirvShaderBinaryScenario.AnUnsupportedBinaryFormatIsRejectedInsteadOfSilentlyAccepted no-records shader-binary error surface stays on the client
+SpirvShaderBinaryScenario.CompileShaderOnASpirvShaderIsInvalidOperationAndShaderSourceTakesItBack no-records shader-binary error surface stays on the client
+SpirvShaderBinaryScenario.ShaderBinaryFormatIsAdvertisedExactlyOnce no-records extension-string query answered from the client's CapsMirror
+SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension no-records shader-binary error surface stays on the client
+ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline no-records a reserved pipeline name's state is client-side and draws nothing
+
+# ---- pending-fix -------------------------------------------------------------------------------
+DirectGLES:DepthStencilReadbackAttachmentShapeScenario.DefaultFramebufferDepthStencilFormatIsBlitCompatible pending-fix Espryt spawn+tcp blit the default framebuffer's depth out as 0 (inproc and all Magma arms green, knob or not); no P8 package owns it - DEBTS.md row requested in notes/p8/A.md

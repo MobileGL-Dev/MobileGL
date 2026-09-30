@@ -1461,6 +1461,15 @@ jobs:
       - name: Spawn/split lane parity (9.2)
         run: python3 scripts/ci/spawn_lane_parity.py build-split
 
+      # P8-A (ID-P8-2): every monolith case, tails normalised, is on a gated split arm or is named
+      # with a reason class in scripts/data/split_coverage_exemptions.txt. The same `ctest -N`
+      # cost as the parity step above, and the question it cannot answer: parity compares the
+      # split arms with EACH OTHER, so a case missing from all three passes it.
+      - name: Split coverage against monolith (P8-A)
+        run: |
+          python3 scripts/ci/split_coverage.py --self-test
+          python3 scripts/ci/split_coverage.py build-split
+
       - name: Unit tests on the split runtime
         working-directory: build-split
         env:
