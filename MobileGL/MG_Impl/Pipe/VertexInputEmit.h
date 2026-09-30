@@ -263,8 +263,8 @@ namespace MobileGL::MG_Pipe {
             if (vao) {
                 if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
                     m_lastIndex.Res = MGPipeSlots().Acquire(MGPipeKind::Buffer, bound->GetLifetimeId());
-                    // The ELEMENT_ARRAY bit, and it is the one the split path keys on
-                    // (kCapNeedsHostIndexBytes -> restart rewriting, multi-draw flattening).
+                    // The INDEX|ELEMENT_ARRAY bind bits. ELEMENT_ARRAY's D-B7 reader
+                    // (kCapNeedsHostIndexBytes) is RESERVED (P8-F) and was never built.
                     // Noted at every draw for RefreshBindMask's reason: an EBO defined through
                     // DSA and unbound before its last respecify would otherwise never publish
                     // it, and getting that bit wrong is invisible in monolith.

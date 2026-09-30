@@ -20,6 +20,8 @@
     // missing WHICH feature bit - was the one thing it did not. The census, the retrace
     // refusal tally and every log grep key on the leading word, so it is unchanged and
     // unprefixed; everything after the first space is for the reader of the next device run.
+    // P8-F: the refusal is a named decline now (WireDeclines.def MipmapShaderFormatOrShape);
+    // the line it logs keeps this word and this detail.
     static String MagmaWireShapeDetail(const char* name, VkFormat format, VkFormat storageFormat,
                                        const VkFormatProperties& props, VkImageAspectFlags aspect,
                                        VkImageViewType viewType, VkImageUsageFlags usage,
@@ -1400,8 +1402,10 @@
                          base + 1, base + count - 1);
             return;
         }
-        if (!m_textureManager->GrowWireTextureMipChain(handle,base+count,frame.commandBuffer))
-            MagmaWireFatal("mipmap-growth");
+        // P8-F: WHICH ARM TAKES THIS CHAIN IS DECIDED BEFORE THE CHAIN IS GROWN, for the
+        // depth-stencil decline's reason above. Nothing here depends on the growth: the format,
+        // its features, the knob tier, the aspect, view type, usage and layer window are the
+        // same before and after it (GrowWireTextureMipChain carries every one of them over).
         VkFormatProperties props{};
         const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle,format,&props);
@@ -1411,6 +1415,50 @@
                                 (props.optimalTilingFeatures & required) == required;
         const VkFilter filter = props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT ?
                                 VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        const Bool layersInRange = baseLayer < resource->arrayLayers &&
+                                   layerCount <= resource->arrayLayers - baseLayer;
+        // The depth arm's shape: the layer window, and what WireDepthMipmap.inc's pass refuses
+        // for an image this function hands it - a format that does not both sample and attach
+        // as depth (its other refusals, 3D / multisample / a default image, are never built here).
+        const auto depthPassFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        const Bool depthArmTakesShape =
+            layersInRange && (props.optimalTilingFeatures & depthPassFeatures) == depthPassFeatures;
+        // The colour arm's shape (the two shader shapes are explained at the colour arm below).
+        const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+        const Bool planar = resource->viewType != VK_IMAGE_VIEW_TYPE_1D &&
+                            resource->viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY &&
+                            resource->viewType != VK_IMAGE_VIEW_TYPE_3D;
+        // The shader arm samples through a sampler2D and writes a vec4, which is what
+        // BlitWireColorImage's own float check enforces; naming it here rather than letting the
+        // blit return false is what puts the reason in the decline line.
+        const Bool sampledFloat = vkuFormatIsSampledFloat(format);
+        const Bool renderableFormat =
+            (props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
+        const Bool attachable = forcedShaderTier < 2 &&
+            (resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+        const Bool viaScratch = !attachable && renderableFormat &&
+            (resource->usageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
+        const Bool colourArmTakesShape =
+            colour && planar && layersInRange && sampledFloat && (attachable || viaScratch);
+        // P8-F: `mipmap-shader-format-or-shape` IS A NAMED DECLINE, NOT A FATAL (rule I (a)).
+        // The monolith arm has always answered this chain with a decline (VulkanRenderer.cpp's
+        // GenerateMipmap: a format without blit support is skipped and the chain left unwritten),
+        // and a shape no shader arm takes is a coverage gap in this backend, not a broken record.
+        // The leading word stays, so every device-log grep keyed on it still finds the line.
+        const Bool shaderArmTakesShape =
+            resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT ? depthArmTakesShape : colourArmTakesShape;
+        if (!nativeBlit && !shaderArmTakesShape) {
+            const String detail = MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
+                resource->format, props, resource->aspect, resource->viewType, resource->usageFlags,
+                resource->extent, resource->depth, resource->mipLevels, baseLayer, layerCount,
+                resource->arrayLayers);
+            MGL_WIRE_DECLINE_AT(MipmapShaderFormatOrShape, "%s; no mip arm takes this shape, levels %u..%u left as they are",
+                                detail.c_str(), base + 1, base + count - 1);
+            return;
+        }
+        if (!m_textureManager->GrowWireTextureMipChain(handle,base+count,frame.commandBuffer))
+            MagmaWireFatal("mipmap-growth");
         if (!nativeBlit && resource->aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
             // P7 wave 2-B, CONTRACT-P7 §5.1 (A): THE DEPTH ARM, and it is first because a
             // depth format without BLIT_DST is the ordinary case, not the exotic one -
@@ -1422,12 +1470,7 @@
             // The per-level pass is WireDepthMipmap.inc's, which is the monolith's fragment
             // shader with the monolith's arithmetic on a baked pipeline that owns no frontend
             // object - §3.2's "observably the monolith's" without the GL program the monolith
-            // needs to get there.
-            if (baseLayer >= resource->arrayLayers || layerCount > resource->arrayLayers - baseLayer)
-                MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
-                    resource->format, props, resource->aspect, resource->viewType,
-                    resource->usageFlags, resource->extent, resource->depth, resource->mipLevels,
-                    baseLayer, layerCount, resource->arrayLayers).c_str());
+            // needs to get there. Its layer window and format were checked before the growth.
             for (Uint32 level = base + 1; level < base + count; ++level) {
                 for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
                     WireImage source{};
@@ -1445,15 +1488,19 @@
                     destination.level = level;
                     destination.extent = {std::max(resource->extent.width >> level, 1u),
                                           std::max(resource->extent.height >> level, 1u)};
-                    // The pass reports the SHAPE it cannot take (1D, 3D, multisample, a
-                    // format without sampled or depth-attachment support), so the refusal
-                    // keeps its name and gains the reason.
-                    if (!GenerateWireDepthMipLevel(source, destination))
-                        MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
+                    // The pass reports the SHAPE it cannot take. depthArmTakesShape above asks
+                    // its questions first, so this is reached only if the two lists drift apart
+                    // - and then it is the same named decline (P8-F), not a session's end. It
+                    // can only refuse the first level: the shape does not change down the chain.
+                    if (!GenerateWireDepthMipLevel(source, destination)) {
+                        const String detail = MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
                             resource->format, props, resource->aspect, resource->viewType,
                             resource->usageFlags, resource->extent, resource->depth,
-                            resource->mipLevels, baseLayer, layerCount,
-                            resource->arrayLayers).c_str());
+                            resource->mipLevels, baseLayer, layerCount, resource->arrayLayers);
+                        MGL_WIRE_DECLINE_AT(MipmapShaderFormatOrShape, "%s; the depth pass refused level %u",
+                                            detail.c_str(), level);
+                        return;
+                    }
                 }
             }
         } else if (!nativeBlit) {
@@ -1470,27 +1517,9 @@
             // cannot, an owned scratch attachment of the destination level's size renders
             // the mip and vkCmdCopyImage moves it in: a raw texel move, no conversion, and
             // the texels still come from GPU contents rather than from a staged shadow.
-            const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
-            const Bool planar = resource->viewType != VK_IMAGE_VIEW_TYPE_1D &&
-                                resource->viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY &&
-                                resource->viewType != VK_IMAGE_VIEW_TYPE_3D;
-            const Bool layersInRange = baseLayer < resource->arrayLayers &&
-                                       layerCount <= resource->arrayLayers - baseLayer;
-            // The shader arm samples through a sampler2D and writes a vec4, which is what
-            // BlitWireColorImage's own float check enforces; naming it here rather than
-            // letting the blit return false is what puts the reason in the fatal line.
-            const Bool sampledFloat = vkuFormatIsSampledFloat(format);
-            const Bool renderableFormat =
-                (props.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
-            const Bool attachable = forcedShaderTier < 2 &&
-                (resource->usageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
-            const Bool viaScratch = !attachable && renderableFormat &&
-                (resource->usageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
-            if (!colour || !planar || !layersInRange || !sampledFloat || (!attachable && !viaScratch))
-                MagmaWireFatal(MagmaWireShapeDetail("mipmap-shader-format-or-shape", format,
-                    resource->format, props, resource->aspect, resource->viewType,
-                    resource->usageFlags, resource->extent, resource->depth, resource->mipLevels,
-                    baseLayer, layerCount, resource->arrayLayers).c_str());
+            //
+            // Which of the two (`attachable` or `viaScratch`), and whether either takes the
+            // shape at all, was decided before the growth (colourArmTakesShape, P8-F).
             for (Uint32 level = base + 1; level < base + count; ++level) {
                 for (Uint32 layer = baseLayer; layer < baseLayer + layerCount; ++layer) {
                     WireImage source{};

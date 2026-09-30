@@ -675,6 +675,65 @@ TEST_F(F1WireScenario, GenerateMipmapDepthStencilDeclinesAndKeepsTheSession) {
     glClearDepth(1.0);
 }
 
+// P8-F: `Magma:mipmap-shader-format-or-shape` IS A NAMED DECLINE ON THE WIRE ARM NOW, which is
+// the monolith arm's answer for a chain it cannot build (VulkanRenderer.cpp's GenerateMipmap
+// declines a format without blit support and leaves the chain unwritten). It used to end the
+// session. A 3D texture is a shape neither wire shader arm takes (the colour pass samples a
+// sampler2D), so with the native blit forced off (MGITEST_MAGMA_FORCE_SHADER_MIPMAP) it is what
+// reaches the refusal on this host - lavapipe blits a 3D RGBA8 chain natively otherwise.
+//
+// What this case pins: no GL error, the session still answering (two readback round trips), level
+// 0 untouched, and level 1 still holding the application's own texels - the decline wrote nothing.
+// Magma only, and knob-gated, like GenerateMipmapWithoutNativeBlitPixels above.
+// Red once (executed, reverted): restore the MagmaWireFatal and this case dies with
+// Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape ..."}.
+TEST_F(F1WireScenario, GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession) {
+    if (!Ready()) return;
+    if (Gl().BackendName() != "DirectVulkan")
+        GTEST_SKIP() << "Magma wire-arm decline (P8-F, mipmap-shader-format-or-shape): the knob and "
+                        "the shader mip arms it forces are Magma's; Espryt ("
+                     << Gl().BackendName() << ") generates this chain itself";
+    const std::string tier = SplitLane::MarkerValue("MGITEST_MAGMA_FORCE_SHADER_MIPMAP");
+    if (tier.empty())
+        GTEST_SKIP() << "MGITEST_MAGMA_FORCE_SHADER_MIPMAP is unset: this driver blits a 3D RGBA8 "
+                        "chain natively, so the decline under test is not entered";
+    GLuint volume = 0;
+    glGenTextures(1, &volume);
+    glBindTexture(GL_TEXTURE_3D, volume);
+    glTexStorage3D(GL_TEXTURE_3D, 3, GL_RGBA8, 4, 4, 4);
+    const std::array<GLubyte, 4> base{200, 40, 80, 255};
+    const std::array<GLubyte, 4> sentinel{10, 220, 30, 255};
+    const auto fill = [](int side, const std::array<GLubyte, 4>& texel) {
+        std::vector<GLubyte> pixels(static_cast<size_t>(side * side * side * 4));
+        for (size_t at = 0; at < pixels.size(); at += 4) std::copy(texel.begin(), texel.end(), pixels.begin() + at);
+        return pixels;
+    };
+    const auto level0 = fill(4, base);
+    const auto level1 = fill(2, sentinel);
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 4, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, level0.data());
+    glTexSubImage3D(GL_TEXTURE_3D, 1, 0, 0, 0, 2, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, level1.data());
+    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.ShaderMipDecline.setup";
+    const auto before = PeekSplitRuntime().emitSeq;
+    glGenerateMipmap(GL_TEXTURE_3D);
+    ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.ShaderMipDecline.wire";
+    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.ShaderMipDecline.error";
+    for (const int level : {0, 1}) {
+        const int side = 4 >> level;
+        std::vector<GLubyte> pixels(static_cast<size_t>(side * side * side * 4), 0x5a);
+        glGetTexImage(GL_TEXTURE_3D, level, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.ShaderMipDecline.readback level " << level;
+        const std::array<GLubyte, 4>& expected = level == 0 ? base : sentinel;
+        size_t wrong = 0;
+        for (size_t at = 0; at < pixels.size(); at += 4)
+            if (!std::equal(expected.begin(), expected.end(), pixels.begin() + at)) ++wrong;
+        EXPECT_EQ(wrong, 0u) << "F1.ShaderMipDecline.level" << level << " tier=" << tier
+                             << ": a declined mip must leave every level as the application wrote it";
+    }
+    glBindTexture(GL_TEXTURE_3D, 0);
+    glDeleteTextures(1, &volume);
+    glBindTexture(GL_TEXTURE_2D, texture);
+}
+
 TEST_F(F1WireScenario, GenerateMipmapHonorsMutableBaseAndMaxWithoutChangingOtherLevels) {
     if (!Ready()) return;
     const std::array<GLubyte, 4> colors[5] = {

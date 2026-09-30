@@ -162,9 +162,9 @@ namespace MobileGL::MG_Remote::Server {
         // that owns the question (kCapTimerQuery to the query family, kCapResidentSubData to
         // b1, and so on). `SetCapabilityBits(0)` is a legitimate and explicit answer - "this
         // server offers no optional capability" - and is the right call while those packages
-        // land. kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes must stay 0 for the whole of
-        // P5 by ruling (CONTRACT-P5 table 0): they are the only two things that ask for an
-        // MGHostSpan, and 0 is what keeps every one of them out of the first IPC frame.
+        // land. kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes / kCapViewportArray are RESERVED
+        // (P8-F; CONTRACT-P5 table 0 first held the two host-byte bits at 0): the first two are
+        // the only things that ask for an MGHostSpan, and 0 keeps every one of them off the wire.
         void SetCapabilityBits(Uint64 capBits);
 
         // BITS 32..47, THE CONSUMER MASK (R-8 / C-4): which MGPipe subsystems this server has

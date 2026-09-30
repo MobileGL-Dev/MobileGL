@@ -148,9 +148,9 @@ namespace MobileGL::MG_Remote::Wire {
     // declared. Fatal on an absent blob, then CheckBlobIsHonest on a present one.
     Bool RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                              const SegmentTable& segments);
-    // R-2.3 arms 1 and 3 for MGHostSpan. P5's reduced path should produce ZERO host spans
-    // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are both 0 in P5, table 0), so this
-    // firing at all is a finding, not just a corruption check.
+    // R-2.3 arms 1 and 3 for MGHostSpan. Our client produces ZERO host spans
+    // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are RESERVED since P8-F, never set), so
+    // this firing at all is a finding, not just a corruption check.
     //
     // IT CANNOT DO ARM 4 - it has no segment table - so a span that names a real segment and a
     // run PAST THE END OF IT passes this function. Use the overload below on any path that has

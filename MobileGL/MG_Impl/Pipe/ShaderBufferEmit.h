@@ -247,10 +247,10 @@ namespace MobileGL::MG_Pipe {
             for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
                 header.WritableMask[w] = writableMask[w];
             }
-            // HostSpanCount IS 0 ALWAYS on Espryt, and that is a ruling rather than an omission:
-            // the second var-tail exists for kCapNeedsHostUboBytes (Magma's named-UBO ring) and
-            // that bit is 0 for the whole of P5 (CONTRACT-P5.md table 0). The codec's host-span
-            // honesty pass is the guard that says so out loud if a backend ever publishes it.
+            // HostSpanCount IS 0 ALWAYS, and that is a ruling rather than an omission: the
+            // second var-tail exists for kCapNeedsHostUboBytes (a Magma named-UBO ring that was
+            // never built) and that bit is RESERVED (P8-F): no server publishes it. The codec's
+            // host-span honesty pass is the guard that says so out loud if a peer sends one.
             header.HostSpanCount = 0;
             header.ContentHash = hash;
             MGPipeRouteSetShaderBuffers(header, m_entries.data());

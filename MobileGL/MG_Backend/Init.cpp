@@ -186,9 +186,9 @@ namespace MobileGL::MG_Backend {
             // ZERO IS THE EXPLICIT ANSWER FOR P5, not an omission (ServerSession.h's block):
             // every optional capability bit belongs to the package that owns its question, and
             // withholding one leaves the legacy path running, which is the safe direction.
-            // kCapNeedsHostIndexBytes and kCapNeedsHostUboBytes must be 0 for the whole of P5
-            // by ruling - they are the only two things that ask for an MGHostSpan, and 0 is
-            // what keeps every one of them out of the first IPC frame (contract table 0).
+            // kCapNeedsHostIndexBytes, kCapNeedsHostUboBytes and kCapViewportArray are RESERVED
+            // (P8-F) and never set here: the first two are the only things that ask for an
+            // MGHostSpan, and 0 keeps every one of them off the wire (contract table 0).
             //
             // P5b t2 (CONTRACT-P5B.md §6.5) PUBLISHES THE ONE BIT P5b ADDS, and this is the
             // only place that can: the question kCapBackendOwnsXfbCapture answers is "does the

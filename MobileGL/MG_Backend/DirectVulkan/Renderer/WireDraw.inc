@@ -294,7 +294,14 @@
             const Uint32 location = input.bindingAttributeLocations[binding];
             const auto& attr = vao.Attributes[location];
             const auto& resource = state.VertexBuffers[location];
-            if (MG_Pipe::MGPipeHandleIsNull(resource.Res)) MagmaWireFatal("client-vertex-array@P8");
+            // P8-F: A RECORD INVARIANT, NOT AN UNMIGRATED VERB (it carried a P8 phase tag).
+            // The client turns every enabled client-memory array into an owned buffer before the
+            // draw record is built, or refuses the draw itself (MG_Impl/Pipe/OwnedDrawInputs.h),
+            // so an attribute the program reads with no buffer handle is a foreign peer's record.
+            if (MG_Pipe::MGPipeHandleIsNull(resource.Res))
+                MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"Magma:client-vertex-array\"} location=%u: an "
+                    "attribute the program reads carries no buffer handle", location);
             BufferSlice slice{};
             if (!m_bufferManager.AcquireWireSlice(BufferKind::Vertex, resource.Res, slice))
                 MagmaWireFatal("vertex-buffer-resource");
