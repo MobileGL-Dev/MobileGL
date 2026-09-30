@@ -500,6 +500,9 @@ namespace MobileGL::MG_Config {
         Offscreen = 0, // a window surface is the client's own window, as before (the default)
         Server = 1,    // a window surface is the SERVER's window: WindowKind::ServerOwned
     };
+    // IpcTable::AdoptTier when MOBILEGL_IPC_ADOPT_TIER is unset (or unparseable): T0 by default,
+    // with QUIET fallbacks. Not a tier a user can type - the knob admits 0..2.
+    inline constexpr Uint32 kAdoptTierUnset = 3;
     struct IpcTable {
         // MOBILEGL_IPC_SERVER_PATH: where to find libMobileGLServer. P6 consumes it; P5
         // lands the parse because t1's ctest ENVIRONMENT blocks and add_trace_replay_test's
@@ -626,13 +629,13 @@ namespace MobileGL::MG_Config {
         // arm and the red-once of the no-reply gate (FencePollScenario).
         Uint32 PollEscalate = 64;
         // MOBILEGL_IPC_ADOPT_TIER, THE ZERO-COPY SWITCH (ruling ID-P11-14, CONTRACT-P11 B2):
-        // 2 = emulate (T2: the client keeps the shadow and pushes), the default and today's
-        // behaviour byte for byte; 0 = T0 (the client allocates each adopted store as an
-        // AHardwareBuffer and the server imports it); 1 = T1, closed - refused by name, then T2.
-        // A T0 this session cannot use (a stream plane, the server's allow switch, no
-        // AHardwareBuffer, a failed server POST) is T2 plus one named line, never a Fatal
-        // (MG_Remote/Transport/AdoptTier.h).
-        Uint32 AdoptTier = 2;
+        // UNSET (kAdoptTierUnset, the default since 2026-09-29, the user's decision) = T0 where the
+        // session can run it, T2 QUIETLY where it cannot (MGLOG_D only, still counted);
+        // 0 = T0 asked by name - a T0 this session cannot use (a stream plane, the server's allow
+        // switch, no AHardwareBuffer, a failed server POST) is T2 plus one named line;
+        // 1 = T1, closed - refused by name, then T2; 2 = emulate (T2: the client keeps the shadow
+        // and pushes). Never a Fatal (MG_Remote/Transport/AdoptTier.h).
+        Uint32 AdoptTier = kAdoptTierUnset;
         // MOBILEGL_IPC_ALLOW_ADOPT_T0 (server): 1 (default) = grant a client's T0 ask when this
         // platform and the backend's POST self-test allow it; 0 = never grant it (the session
         // runs T2 and says so). Read by the server role only; kept through ServerSpawn.

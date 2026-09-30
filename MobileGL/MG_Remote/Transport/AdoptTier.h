@@ -13,9 +13,11 @@
 // and the server imports it; T1 = the server exports an opaque fd (CLOSED, ID-P11-1); T2 = the
 // resource owner declines and the client keeps the shadow and pushes.
 //
-// MOBILEGL_IPC_ADOPT_TIER IS THE SWITCH (ruling ID-P11-14): 2, the default, is today's T2 byte
-// for byte; 0 asks for T0; 1 is refused by name and runs T2. T0 that this session cannot use is
-// never a Fatal - it is T2 plus one named line:
+// MOBILEGL_IPC_ADOPT_TIER IS THE SWITCH (ruling ID-P11-14). UNSET - the default since 2026-09-29,
+// the user's decision - asks for T0 and falls back to T2 QUIETLY (MGLOG_D only, still counted),
+// so a tcp session or a host session is not one line longer; 0 asks for T0 BY NAME (the table
+// below); 1 is refused by name and runs T2; 2 is T2 byte for byte. T0 that this session cannot use
+// is never a Fatal - it is T2 plus one named line (knob 0) or one D line (unset):
 //
 //   data plane      side     knob 0                                  knob 1
 //   Stream (tcp)    either   `Refuse{AdoptTierOnStream, "T0"}`, T2   `Refuse{AdoptTierOnStream, "T1"}`, T2
@@ -40,15 +42,28 @@ namespace MobileGL::MG_Remote::Transport {
 
     enum class AdoptTierSide : std::uint8_t { Client, Server };
 
+    // THE HELLO'S T0 ASK WHEN THE KNOB IS UNSET (LinkTerms.adoptTier, protocol.fbs): T0 as asked
+    // by 0, except that the server names a refusal only at MGLOG_D. The ask travels because only
+    // the server knows why it did not grant T0 (its allow switch, its platform, its POST).
+    inline constexpr std::uint32_t kAdoptAskT0Default = 0x80;
+    // An ask that is a T0 ask (0 by name, kAdoptAskT0Default by default).
+    inline bool AdoptAskIsT0(std::uint32_t ask) { return ask == 0 || ask == kAdoptAskT0Default; }
+    // This process's knob asks for T0 (0, or unset).
+    bool AdoptTierWantsT0();
+    // This process's knob is unset: T0 fallbacks are quiet.
+    bool AdoptTierIsDefault();
+
     // The tier the client's Hello asks for (LinkTerms.adoptTier): 0 when the knob says 0 and the
-    // plane it proposes is shared segments, else 2. Pure - the lines are the settle's.
+    // plane it proposes is shared segments, kAdoptAskT0Default when the knob is unset on shared
+    // segments, else 2. Pure - the lines are the settle's.
     std::uint32_t AdoptTierAskFor(bool streamDataPlane);
 
     // Settles this side's handshake answer from MOBILEGL_IPC_ADOPT_TIER and the negotiated data
-    // plane and returns the tier this side asks (client) or serves by its own knob (server): 0
-    // only for a client asking T0 over shared segments, 2 otherwise. Logs at most one line per
-    // call (A1's stream refusal, the T1 refusal). Never aborts for 0/1; a knob above 2 (only a
-    // direct assignment can make one) is still Fatal{UnimplementedAdoptTier}.
+    // plane and returns the ask this side made (client) or serves by its own knob (server):
+    // AdoptTierAskFor's value for a client asking T0 over shared segments, 2 otherwise. Logs at
+    // most one line per call (A1's stream refusal - at MGLOG_D when the knob is unset - and the
+    // T1 refusal). Never aborts for 0/1/unset; any other value (only a direct assignment can
+    // make one) is still Fatal{UnimplementedAdoptTier}.
     std::uint32_t SettleAdoptTierAtHandshake(bool streamDataPlane, AdoptTierSide side);
 
     // True once a handshake in this process has settled the tier. The at-use check trusts a

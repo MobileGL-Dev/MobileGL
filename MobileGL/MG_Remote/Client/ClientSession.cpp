@@ -823,7 +823,10 @@ namespace MobileGL::MG_Remote::Client {
                 return result;
             }
             ResetT0(false);
-            m_adoptT0Asked = adoptAsk == 0;
+            m_adoptT0Asked = Transport::AdoptAskIsT0(adoptAsk);
+            m_adoptT0Quiet = Transport::AdoptTierIsDefault();
+            if (terms->dataPlane() == ::MobileGL::Wire::DataPlane::Stream && Transport::AdoptTierWantsT0())
+                m_t0Fallbacks = 1; // a stream carries T2 only (the settle said so, by name or at D)
             // The four SegmentRefs are what a spawn client MAPS (P6). Under inproc the mapping
             // already exists, so what they are good for here is the cross-check that the two
             // sides agree about the geometry at all - which is the assertion that would
@@ -1127,7 +1130,10 @@ namespace MobileGL::MG_Remote::Client {
                 return result;
             }
             ResetT0(false);
-            m_adoptT0Asked = adoptAsk == 0;
+            m_adoptT0Asked = Transport::AdoptAskIsT0(adoptAsk);
+            m_adoptT0Quiet = Transport::AdoptTierIsDefault();
+            if (stream && Transport::AdoptTierWantsT0())
+                m_t0Fallbacks = 1; // a stream carries T2 only (the settle said so, by name or at D)
             if (stream) {
                 // PH-7 (4). A Stream Welcome without a nonce of exactly the minted width names no
                 // data connection this client could open; refused rather than guessed at.
@@ -2728,6 +2734,13 @@ namespace MobileGL::MG_Remote::Client {
                     "AHardwareBuffers the server imports");
         } else {
             m_adoptT0Decision = 0;
+            ++m_t0Fallbacks;
+            if (m_adoptT0Quiet) {
+                // T0 BY DEFAULT (knob unset) FALLS BACK QUIETLY - counted, said at MGLOG_D.
+                MGLOG_D("MG_Remote client: T0 by default is not available (no kCapAdoptT0; the server's log "
+                        "says why at MGLOG_D); the session runs T2");
+                return false;
+            }
             MGLOG_W("MG_Remote client: Refuse{AdoptT0Unavailable, \"no kCapAdoptT0\"} - "
                     "MOBILEGL_IPC_ADOPT_TIER=0 asked for T0 and the server did not publish kCapAdoptT0 (its "
                     "log names why: its allow switch, no AHardwareBuffer, or its POST self-test); the "
@@ -2853,21 +2866,34 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void ClientSession::ResetT0(Bool releaseStores) {
-        if (m_adoptT0Asked) {
-            MGLOG_I("MG_Remote client: T0 session totals - %s; stores imported %llu, bytes %llu, declined %llu, "
-                    "released %llu, held at teardown %zu",
-                    m_adoptT0Decision == 1 ? "ran T0" : m_adoptT0Decision == 0 ? "fell back to T2" : "never decided",
-                    static_cast<unsigned long long>(m_t0Imported), static_cast<unsigned long long>(m_t0Bytes),
-                    static_cast<unsigned long long>(m_t0Declined), static_cast<unsigned long long>(m_t0Released),
-                    m_t0Stores.size());
+        if (m_adoptT0Asked || m_t0Fallbacks != 0) {
+            // A default (unset-knob) session that did not run T0 says its totals at MGLOG_D.
+            const bool quiet = m_adoptT0Quiet && m_adoptT0Decision != 1;
+            const char* ran =
+                m_adoptT0Decision == 1 ? "ran T0" : m_adoptT0Decision == 0 || m_t0Fallbacks ? "fell back to T2" : "never decided";
+#define MGL_T0_CLIENT_TOTALS(LOG)                                                                            \
+            LOG("MG_Remote client: T0 session totals - %s%s; stores imported %llu, bytes %llu, declined %llu, "  \
+                "fallbacks %llu, released %llu, held at teardown %zu",                                          \
+                ran, m_adoptT0Quiet ? " (default)" : "", static_cast<unsigned long long>(m_t0Imported),          \
+                static_cast<unsigned long long>(m_t0Bytes), static_cast<unsigned long long>(m_t0Declined),       \
+                static_cast<unsigned long long>(m_t0Fallbacks), static_cast<unsigned long long>(m_t0Released),   \
+                m_t0Stores.size())
+            if (quiet) {
+                MGL_T0_CLIENT_TOTALS(MGLOG_D);
+            } else {
+                MGL_T0_CLIENT_TOTALS(MGLOG_I);
+            }
+#undef MGL_T0_CLIENT_TOTALS
+            (void)ran;
         }
         if (releaseStores) {
             for (auto& [key, store] : m_t0Stores) Transport::AdoptT0::ReleaseHeld(store);
         }
         m_t0Stores.clear();
         m_adoptT0Asked = false;
+        m_adoptT0Quiet = false;
         m_adoptT0Decision = -1;
-        m_t0Imported = m_t0Bytes = m_t0Declined = m_t0Released = 0;
+        m_t0Imported = m_t0Bytes = m_t0Declined = m_t0Released = m_t0Fallbacks = 0;
         m_prePublish = nullptr;
     }
 

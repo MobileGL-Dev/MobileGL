@@ -686,16 +686,20 @@ namespace MobileGL::MG_Remote::Server {
         // for, before a byte of Welcome. A stream refuses T0/T1 by name and serves T2; over
         // shared segments the client settles it (Transport/AdoptTier.h). 0/1 never die here.
         (void)Transport::SettleAdoptTierAtHandshake(stream, Transport::AdoptTierSide::Server);
-        // ---- P11 B2: the client's ask (LinkTerms.adoptTier). 2 or, over shared segments, 0;
-        // anything else is not an ask this revision knows. Recorded, echoed in the Welcome, and
-        // granted or refused by name at the first native bind (SettleAdoptT0AtBind).
-        if (terms->adoptTier() != 2 && !(terms->adoptTier() == 0 && !stream))
+        // ---- P11 B2: the client's ask (LinkTerms.adoptTier). 2 or, over shared segments, 0 (T0
+        // by name) or kAdoptAskT0Default (T0 by default: refusals quiet); anything else is not an
+        // ask this revision knows. Recorded, echoed in the Welcome, and granted or refused at the
+        // first native bind (SettleAdoptT0AtBind).
+        if (terms->adoptTier() != 2 && !(Transport::AdoptAskIsT0(terms->adoptTier()) && !stream))
             return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
-                                   "adoptTier is neither 2 nor, over shared segments, 0", 2, terms->adoptTier());
-        m_adoptT0Asked = terms->adoptTier() == 0;
+                                   "adoptTier is neither 2 nor, over shared segments, a T0 ask (0 or 0x80)", 2,
+                                   terms->adoptTier());
+        m_adoptAsk = terms->adoptTier();
+        m_adoptT0Asked = Transport::AdoptAskIsT0(m_adoptAsk);
+        m_adoptT0Quiet = m_adoptAsk == Transport::kAdoptAskT0Default;
         m_adoptT0Settled = false;
         m_adoptT0 = false;
-        m_t0Stores = m_t0Bytes = m_t0Declined = 0;
+        m_t0Stores = m_t0Bytes = m_t0Declined = m_t0Refusals = 0;
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(&transport);
 
@@ -794,7 +798,7 @@ namespace MobileGL::MG_Remote::Server {
             }
             auto negotiated = ::MobileGL::Wire::CreateLinkTerms(builder, terms->dataPlane(),
                 ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow, eventWindow,
-                static_cast<Uint8>(m_adoptT0Asked ? 0 : 2));
+                static_cast<Uint8>(m_adoptT0Asked ? m_adoptAsk : 2));
             auto welcome = ::MobileGL::Wire::CreateWelcome(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
                 // CONTRACT-P6 4.3: THE SERVER'S OWN PID, not an echo of the client's.
@@ -1030,17 +1034,29 @@ namespace MobileGL::MG_Remote::Server {
         // P11 B2: the T0 arm's proof for this session, then the inbox's leftovers (an Offer whose
         // record never came; its client has released the store on the session's end).
         if (m_accepted && m_adoptT0Asked) {
-            MGLOG_I("MG_Remote server: T0 session totals - %s; stores imported %llu, bytes %llu, declined %llu, "
-                    "stale offers %llu, malformed %llu, unclaimed %zu",
-                    m_adoptT0 ? "ran T0" : m_adoptT0Settled ? "not granted (T2)" : "no native bind (T2)",
-                    static_cast<unsigned long long>(m_t0Stores), static_cast<unsigned long long>(m_t0Bytes),
-                    static_cast<unsigned long long>(m_t0Declined),
-                    static_cast<unsigned long long>(m_adoptInbox.StaleOffers()),
-                    static_cast<unsigned long long>(m_adoptInbox.MalformedOffers()), m_adoptInbox.Kept());
+            // A default ask that ended on T2 says its totals at MGLOG_D, like its refusal.
+            const bool quiet = m_adoptT0Quiet && !m_adoptT0;
+            const char* ran = m_adoptT0 ? "ran T0" : m_adoptT0Settled ? "not granted (T2)" : "no native bind (T2)";
+#define MGL_T0_SERVER_TOTALS(LOG)                                                                             \
+            LOG("MG_Remote server: T0 session totals - %s%s; stores imported %llu, bytes %llu, declined %llu, "  \
+                "refused %llu, stale offers %llu, malformed %llu, unclaimed %zu",                                 \
+                ran, m_adoptT0Quiet ? " (default ask)" : "", static_cast<unsigned long long>(m_t0Stores),         \
+                static_cast<unsigned long long>(m_t0Bytes), static_cast<unsigned long long>(m_t0Declined),        \
+                static_cast<unsigned long long>(m_t0Refusals),                                                     \
+                static_cast<unsigned long long>(m_adoptInbox.StaleOffers()),                                       \
+                static_cast<unsigned long long>(m_adoptInbox.MalformedOffers()), m_adoptInbox.Kept())
+            if (quiet) {
+                MGL_T0_SERVER_TOTALS(MGLOG_D);
+            } else {
+                MGL_T0_SERVER_TOTALS(MGLOG_I);
+            }
+#undef MGL_T0_SERVER_TOTALS
+            (void)ran;
         }
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(nullptr);
-        m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = false;
+        m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = m_adoptT0Quiet = false;
+        m_adoptAsk = 2;
         m_consumer.Detach();
         *m_commands = Transport::RingConsumer();
         *m_events = Transport::EventRingProducer();
@@ -1094,19 +1110,32 @@ namespace MobileGL::MG_Remote::Server {
                     post.passed = ops->SelfTestExternal(detail, sizeof(detail));
                     post.detail = detail;
                     post.ran = true;
-                    MGLOG_I("MG_Remote server: T0 POST (%s, sustained-lock pattern) %s - %s", backendName,
-                            post.passed ? "PASSED" : "FAILED", post.detail.c_str());
+                    if (m_adoptT0Quiet) {
+                        MGLOG_D("MG_Remote server: T0 POST (%s, sustained-lock pattern) %s - %s", backendName,
+                                post.passed ? "PASSED" : "FAILED", post.detail.c_str());
+                    } else {
+                        MGLOG_I("MG_Remote server: T0 POST (%s, sustained-lock pattern) %s - %s", backendName,
+                                post.passed ? "PASSED" : "FAILED", post.detail.c_str());
+                    }
                 }
                 if (!post.passed) why = std::string("the ") + backendName + " POST self-test failed: " + post.detail;
             }
         }
         if (!why.empty()) {
+            ++m_t0Refusals;
+            const char* word = MG_Config::Ipc.AllowAdoptT0 == 0 ? "disallowed"
+                               : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer" : "POST";
+            if (m_adoptT0Quiet) {
+                // THE DEFAULT ASK (MOBILEGL_IPC_ADOPT_TIER unset) FALLS BACK QUIETLY: every host
+                // session would otherwise carry this line. Counted (T0Refusals, the totals line).
+                MGLOG_D("MG_Remote server: T0 by default not granted (%s) - %s; the session runs T2",
+                        word, why.c_str());
+                return;
+            }
             MGLOG_W("MG_Remote server: Refuse{AdoptT0Unavailable, \"%s\"} - the client asked T0 "
                     "(MOBILEGL_IPC_ADOPT_TIER=0) and %s; kCapAdoptT0 is not published and the session "
                     "runs T2 (emulate)",
-                    MG_Config::Ipc.AllowAdoptT0 == 0 ? "disallowed"
-                    : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer" : "POST",
-                    why.c_str());
+                    word, why.c_str());
             return;
         }
         m_adoptT0 = true;

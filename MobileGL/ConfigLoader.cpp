@@ -433,9 +433,10 @@ namespace MobileGL::MG_ConfigLoader {
         // torn read rather than a divergence. The batch is therefore off whenever the
         // shadow comparer is armed.
         if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
-        // 2 (T2) is the default; 0 asks for T0 and 1 is refused by name - both settled at the
-        // handshake from the data plane (P11 A1/B2, MG_Remote/Transport/AdoptTier.h).
-        ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", 2, 0, 2);
+        // UNSET is T0 with quiet fallbacks (the default since 2026-09-29); 0 asks for T0 by name, 1 is
+        // refused by name, 2 is T2 - settled at the handshake from the data plane (P11 A1/B2,
+        // MG_Remote/Transport/AdoptTier.h). An unparseable value is warned about and reads as unset.
+        ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", MG_Config::kAdoptTierUnset, 0, 2);
         // P11 B2: the server's own T0 allow switch (Config.h).
         ipc.AllowAdoptT0 = QueryEnvUint32("MOBILEGL_IPC_ALLOW_ADOPT_T0", 1, 0, 1);
         ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
@@ -532,10 +533,11 @@ namespace MobileGL::MG_ConfigLoader {
         // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
                 "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u poll-escalate=%u "
-                "adopt-tier=%u allow-t0=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
+                "adopt-tier=%s allow-t0=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
-                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate, ipc.AdoptTier,
+                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
+                ipc.AdoptTier == 0 ? "0" : ipc.AdoptTier == 1 ? "1" : ipc.AdoptTier == 2 ? "2" : "unset(T0)",
                 ipc.AllowAdoptT0,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
                 static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),

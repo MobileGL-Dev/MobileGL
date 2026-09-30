@@ -315,6 +315,11 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 T0StoresImported() const { return m_t0Stores; }
         Uint64 T0BytesImported() const { return m_t0Bytes; }
         Uint64 T0Declined() const { return m_t0Declined; }
+        // 1 when this session asked T0 and was not granted it (allow switch, no AHardwareBuffer,
+        // POST): counted whether the refusal was named (knob 0) or quiet (the default ask).
+        Uint64 T0Refusals() const { return m_t0Refusals; }
+        // The ask was the client's DEFAULT (kAdoptAskT0Default): a refusal is said at MGLOG_D.
+        Bool AdoptT0Quiet() const { return m_adoptT0Quiet; }
         AdoptInbox& T0Inbox() { return m_adoptInbox; }
 
     private:
@@ -355,12 +360,15 @@ namespace MobileGL::MG_Remote::Server {
         // P11 B2 (T0). Set by Accept from the Hello, by SettleAdoptT0AtBind on the apply thread;
         // the inbox and the counters are the apply thread's.
         Bool m_adoptT0Asked = false;
+        Bool m_adoptT0Quiet = false;
+        Uint8 m_adoptAsk = 2;
         Bool m_adoptT0Settled = false;
         Bool m_adoptT0 = false;
         AdoptInbox m_adoptInbox;
         Uint64 m_t0Stores = 0;
         Uint64 m_t0Bytes = 0;
         Uint64 m_t0Declined = 0;
+        Uint64 m_t0Refusals = 0;
     };
 
     // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may

@@ -252,6 +252,10 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 T0StoresImported() const { return m_t0Imported; }
         Uint64 T0BytesImported() const { return m_t0Bytes; }
         Uint64 T0Declined() const { return m_t0Declined; }
+        // 1 when this session's knob asked for T0 (0, or unset) and it runs T2 instead: a stream
+        // data plane, or no kCapAdoptT0 at the first map_persistent. Counted whether the fallback
+        // was named (knob 0) or quiet (unset, the default).
+        Uint64 T0Fallbacks() const { return m_t0Fallbacks; }
         // Test seam: 0 = queue each Offer before its record (the product order); > 0 = queue it
         // that many ms AFTER the record is published, from another thread; < 0 = never queue it.
         // What the host tests use to prove a late Offer still lands and a lost one is a named
@@ -595,12 +599,14 @@ namespace MobileGL::MG_Remote::Client {
         // the counters; and the one-shot hook EmitAndWaitTails runs between EncodeRecord (the
         // seq exists) and PublishAndNotify (the record is visible) - where the Offer is queued.
         Bool m_adoptT0Asked = false;
+        Bool m_adoptT0Quiet = false; // the knob is unset: fallbacks at MGLOG_D
         Int32 m_adoptT0Decision = -1;
         std::unordered_map<Uint64, Transport::AdoptT0::HeldStore> m_t0Stores;
         Uint64 m_t0Imported = 0;
         Uint64 m_t0Bytes = 0;
         Uint64 m_t0Declined = 0;
         Uint64 m_t0Released = 0;
+        Uint64 m_t0Fallbacks = 0;
         std::function<void(Uint64)> m_prePublish;
         void ResetT0(Bool releaseStores);
     };

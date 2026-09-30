@@ -1247,6 +1247,10 @@ namespace MobileGL::MG_Remote::Client {
     Bool AdoptTierIsEmulate() {
         const Uint32 tier = MG_Config::Ipc.AdoptTier;
         if (tier == 2) return true;
+        // P11 B2: UNSET (T0 by default) reaching the T2 path - settled or not - is T2, quietly: a
+        // session-free caller (a unit case, a harness) runs the P5 default it always ran, and a
+        // settled session already counted its fallback at the handshake or its first map_persistent.
+        if (tier == MG_Config::kAdoptTierUnset) return true;
         // P11 A1 (CONTRACT-P11 §1): THE VERDICT IS THE HANDSHAKE'S, NOT THIS CALL'S. Both roles
         // settle the tier from the knob and the data plane before the first record
         // (Transport/AdoptTier.cpp): a stream refuses T0/T1 by name and runs T2, a client over
