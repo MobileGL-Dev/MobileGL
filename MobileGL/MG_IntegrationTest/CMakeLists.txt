@@ -2148,8 +2148,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # - because under inproc and spawn the server inherits the client's environment and under tcp
     # it does not. A feature knob that reaches two of three arms is the worst of the three states:
     # the lane is green and tests nothing.
+    #
+    # P8-A: THE VULKAN PINS FOR THE SAME REASON - the ICD and, on lavapipe, the three iterationRP
+    # repairs every DirectVulkan entry carries (MGL_ITEST_VULKAN_ENV above). Magma reads them in
+    # the SERVER. Measured: DirectVulkan.Tcp.IterationRPProgram203Scenario and its Tcp.Full. twin
+    # missed the golden output by one texel while the Split and Spawn copies passed - the
+    # unrepaired shape that block describes. All four are Vulkan-only, so Espryt's server is
+    # unchanged.
+    set(mglItestTcpServerEnvironment "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+    foreach(mglItestVulkanPin IN LISTS MGL_ITEST_VULKAN_ENV)
+        if(NOT mglItestVulkanPin IN_LIST MGL_ITEST_COMMON_ENV)
+            list(APPEND mglItestTcpServerEnvironment "${mglItestVulkanPin}")
+        endif()
+    endforeach()
     set_tests_properties(TcpServer.Start PROPERTIES FIXTURES_SETUP mobilegl-tcp TIMEOUT 20
-        ENVIRONMENT "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+        ENVIRONMENT "${mglItestTcpServerEnvironment}")
     set_tests_properties(TcpServer.Stop PROPERTIES FIXTURES_CLEANUP mobilegl-tcp TIMEOUT 20)
     add_test(NAME TcpLane.AccountingControls COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_SOURCE_DIR}/scripts/ci/tcp_lane_tools_test.py")
