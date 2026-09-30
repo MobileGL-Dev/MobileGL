@@ -1,6 +1,6 @@
 # MobileGL 作为 Anland 的 GL 提供者：调研（2026-09-30）
 
-> 非阶段笔记。只读源码调研，**没做原型、没上设备**。Anland 审计于 `SuperTurtleDev/anland@cc169180`（6.x main），MobileGL 审计于 `p8/main@648800a2`（P8 收官头）。结论里凡是"要做 / 要改"的都是推断，事实部分在两份报告里逐行有出处（方案 B 的三处 Anland 事实直接链到源码）。
+> 非阶段笔记。只读源码调研，**没做原型、没上设备**。Anland 审计于 `SuperTurtleDev/anland@cc169180`（6.x main），MobileGL 审计于 `p8/main@648800a2`（P8 收官头）。结论里凡是"要做 / 要改"的都是推断，事实部分在两份报告里逐行有出处（方案 B 与 Mesa 对照两处的 Anland 事实直接链到源码）。
 
 | 文件 | 内容 |
 |---|---|
@@ -38,6 +38,33 @@ Android 侧 MobileGL render server ←──────────────
 - 两条路线里 Wayland 连接、`xdg_toplevel`、输入与输入法都归 Linux 应用 / Anland；MobileGL 只管帧。
 - P12 的 server 自有窗口不适用：Anland 下 Android 窗口归 Anland（Activity 的 Surface 交给 waylandbridge 绘制，输入也从这里转成 Wayland 事件），应用的帧必须作为 `wl_buffer` 提交到自己的 `wl_surface`；P12 画进 MobileGL 自己的 Activity，会绕开 Anland 的窗口与输入。B 不是 P12：窗口仍是 Anland 的，只是生产者换成 MobileGL。
 - 容器内直接让 Magma 跑在 turnip 上：只有 Adreno，和现有 Mesa 同一驱动，价值小；MobileGL 的价值是把厂商驱动（含 Mali）带进来，只能靠 split 跨到 bionic。
+
+## 对照：容器里现在的 Mesa（freedreno / turnip）
+
+Mesa 属于 A，准确地说是 A 里"Anland 不改、走 dma-buf"那一档，只是渲染在应用进程内、没有 server。
+
+| | Mesa freedreno / turnip | 方案 A | 方案 B |
+|---|---|---|---|
+| 在哪渲染 | 应用进程内，容器里直接调 kgsl（[anland-session.sh:108–112](https://github.com/SuperTurtleDev/anland/blob/cc1691805fe6aca6851b6fcccb6a1e33019026c1/anland-session/anland-session.sh#L108-L112)：`GALLIUM_DRIVER=kgsl`、`FD_FORCE_KGSL=1`） | Android 侧 render server | Android 侧 render server |
+| 缓冲谁分配 | 应用进程里的 Mesa 经 kgsl 分配，没有 gralloc 元数据 | server 用 gralloc 分配 AHB | Anland 窗口 Surface 自己的缓冲队列 |
+| 怎么交给 Anland | 标准 Wayland：`zwp_linux_dmabuf_v1` 单平面线性 AR24/XR24 | 标准 Wayland：`wl_buffer` | 不经过 Wayland 缓冲，直接画进 Surface |
+| Anland 怎么处理 | 伪造 AHB（高通 snapalloc donor）→ SC / GLES 合成 | 原生 AHB 入口，不伪造 | 不经手，只在上面叠子层 |
+| 同步 | 隐式：提交时 `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` 从 dma-buf 抓写 fence，失败就轮询 dma-buf（[awl_surface.c:199–209](https://github.com/SuperTurtleDev/anland/blob/cc1691805fe6aca6851b6fcccb6a1e33019026c1/services/waylandbridge/awl_surface.c#L199-L209)）；Mesa EGL 不走 explicit sync v1 是推断 | explicit sync（sync_file） | 缓冲队列内部 |
+
+Anland 6.x 的 dma-buf 入口就是照 Mesa / kgsl 的产物做的：
+
+- 伪造 AHB 的起因：注释写明容器 kgsl dma-buf 缺 gralloc 元数据，直接导入被拒（[awl_ahb.cpp:10–14](https://github.com/SuperTurtleDev/anland/blob/cc1691805fe6aca6851b6fcccb6a1e33019026c1/services/waylandbridge/awl_ahb.cpp#L10-L14)）；这也是只有 Adreno 能加速的原因之一。
+- Xwayland 补丁迁就 kgsl：把 DRI3 报的错误 modifier `1274` 改成 LINEAR，强制提交 `DRM_FORMAT_MOD_INVALID`，无 v4 feedback 也启用 glamor（[anland-kgsl-glamor.patch](https://github.com/SuperTurtleDev/anland/blob/cc1691805fe6aca6851b6fcccb6a1e33019026c1/patches/xwayland/anland-kgsl-glamor.patch)）。
+- SC 直出 / 拷贝切换按 turnip WSI 调：vkmark 123 fps 对 ~1300 fps（[awl_sc.cpp:60–75](https://github.com/SuperTurtleDev/anland/blob/cc1691805fe6aca6851b6fcccb6a1e33019026c1/services/waylandbridge/awl_sc.cpp#L60-L75)）。
+
+对 MobileGL 的含义：Mesa 相当于"容器里的 monolith MobileGL"，因为 kgsl 能在 glibc 进程里直接用；厂商驱动（bionic）不能，所以 MobileGL 必须 split，渲染挪到 Android 侧，缓冲来源从 kgsl dma-buf 变成 gralloc AHB。"Magma 跑在容器 turnip 上"就是 Mesa 这条路的翻版。
+
+B 在 6.x 没有对应物（今天只有 waylandbridge 自己往窗口 Surface 里画）。5.x 的私有 Anland Display Protocol 介于两者之间：
+
+- 像 B：Android 端从窗口自己的缓冲队列 `dequeueBuffer`，只导出 `handle->data[0]` 给容器里的合成器（如 KWin + Mesa），合成器画完回 sync_file，Android 端 `queueBuffer`；缓冲属于窗口，零拷贝、不伪造（[protocol.h:7–49](https://github.com/SuperTurtleDev/anland/blob/9ab13eb146bc9f3dd3cc44cabc268659d9eb0a46/common/protocol.h#L7-L49)、[native_consumer.c:144–172](https://github.com/SuperTurtleDev/anland/blob/9ab13eb146bc9f3dd3cc44cabc268659d9eb0a46/consumers/anland_v5/android_consumer/app/src/main/jni/native_consumer.c#L144-L172)、[:955–1003](https://github.com/SuperTurtleDev/anland/blob/9ab13eb146bc9f3dd3cc44cabc268659d9eb0a46/consumers/anland_v5/android_consumer/app/src/main/jni/native_consumer.c#L955-L1003)）。
+- 像 A：缓冲仍以 dma-buf 跨进程，依赖容器 Mesa / kgsl 能把 gralloc 的 `data[0]` 当线性缓冲导入，同样只有 Adreno。
+
+6.x 为了让原生合成器不改就能接入，换回了标准 Wayland 缓冲（A 这条路）。
 
 ## 两边现状
 
