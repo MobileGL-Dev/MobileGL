@@ -29,4 +29,4 @@
 
 拆分路线已走完。按 [`ROADMAP.md`](ROADMAP.md)：**P8**（monolith 跑道：把读前端字节的 CPU 变换下放到 client、仿真路径下放、协议广度），之后 P13（删掉旧的「后端直接读前端」路径）；P6.5 残余与 P3b / P4b 余项并行。
 
-**阻塞**：没有需要决策的事项。
+**待用户决策**：P8 开工确认（只读核查在跑）；[`DEBTS.md`](notes/DEBTS.md) 六项「需裁定」（CI 触发条件、`TCP_USER_TIMEOUT`、HyperOS 下 FCL 保活、Mali 复测、TLS、`IDLE_EXIT_S`）。
