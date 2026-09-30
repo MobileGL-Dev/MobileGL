@@ -42,3 +42,27 @@
 - **trace split 双后端 SSIM ≥ 0.99**（含两个 `coherent_as_flush` fixture），出口再跑。
 - **P13 前置**：C、D 先于 P13 落地，否则删掉 monolith 臂后继承 split 臂的缺陷。
 - **G1**：pull 构建不变；split 半边在 `MOBILEGL_BUILD_DISAGGREGATED` 下。monolith 半边若 red-once 证实有缺陷，在 dev 上单独修再合并（ID-P8-3）。
+
+## 第二波（2026-09-30，ID-P8-13）
+
+| 包 | 树 / 分支 | 内容 |
+|---|---|---|
+| SE（split，Espryt + 文档） | `~/w7/p8-se` / `p8/se` | 默认帧缓冲深度在 Espryt spawn / tcp 读 0（A 的 pending-fix 豁免）；B2 的 CPU mip 回退看 E 的 driver-written 标；D 的 case 3 在 Espryt split 臂放开（C 已落地）；`PipeCatalogueTest` 名单去死名 `copy-image-shadow-mirror` 并加"名单 = 调用点"的门；B / C / D / E 包说明的行号漂移 |
+| SV（split，Magma） | `~/w7/p8-sv` / `p8/sv` | 3D 纹理原生 mip blit 把 depth 当 `layerCount`（VUID-vkCmdBlitImage-srcImage-00240）；深度模板 mip 拒绝补 `WireDeclineTally` 行；`GenerateWireDepthMipLevel` 拒 1D；wire 臂 `DispatchComputeIndirect` 原生化 |
+| MD（dev，设备） | `~/w7/dev-p8-md` / `devfix/p8-md` | create-* 在 Adreno 830 上的三条：Espryt create-instancing monolith SSIM 0.870；Espryt 每次 indirect draw 整 buffer 同步回读（设备上挂死 > 10 分钟）；Magma 计算写与 indirect 读之间无依赖（可能就是 ID-P7-4）。先在 dev 构建上复现，复现才在 dev 上修；只在 feat 构建上出现的交回集成者 |
+
+### monolith 缺陷（ID-P8-3）的取舍
+
+所有 14 条都在 monolith 专属臂里；P13 把 monolith 换到第一波已修好的记录臂上，它们随之消失。按 P8-0 的真实内容命中取舍：
+
+| 缺陷 | 来源 | 真实内容命中 | 做法 |
+|---|---|---|---|
+| Espryt create-instancing monolith 画面错（0.870） | S | Create（Adreno） | **MD 修（dev）** |
+| Espryt indirect draw 整 buffer 同步回读、设备挂死 | S | Create（Adreno） | **MD 修（dev）** |
+| Magma 计算写 → indirect 读无依赖 | D | Create（推断，ID-P7-4） | **MD 修（dev）** |
+| Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子 | C | 0 | 留给 P13 |
+| Magma `glMultiDrawArraysIndirectCount` CPU 臂读未同步影子 | C、D | 0 | 留给 P13 |
+| Magma 录制中途 `SyncGpuWrites` → SIGSEGV | C | 0 | 留给 P13 |
+| Espryt RGB16F / RGB32F CPU 滤波读陈旧影子；R11F / 深度链无视 BASE / MAX | B | 0 | 留给 P13 |
+| Magma 无 BLIT 颜色格式缺着色器 mip 臂 | B | 0 | 留给 P13 |
+| Espryt 拷贝后 `glGetTexImage` 读拷贝前影子 | E | 0 | 留给 P13 |

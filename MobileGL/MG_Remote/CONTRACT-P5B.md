@@ -149,7 +149,9 @@ VBO-backed index buffers (restart rewriting, multi-draw flattening) and is answe
 `Server/IndexHostMirror` (ARCHITECTURE §10.3), not by a per-draw span. **A multi-draw with
 client-side indices** (`indices[i]` are `drawcount` separate client pointers, one span can
 name one run) is refused by name, `Fatal{UnmigratedVerb, "MultiDrawElements+CLIENT_INDICES"}`,
-until P8's `HostResolve.cpp` flattens it; no measured workload has one.
+until P8's `HostResolve.cpp` flattens it; no measured workload has one. **P8 amendment (ID-P8-6):**
+the client flattens client indices into an owned EBO (`EmitTables.cpp:688-709`), so only a foreign
+peer can reach the server latch, which is now `ProtocolCorruption`.
 
 **Client-side VERTEX arrays** (attribute pointers into client memory, no VBO) are NOT d1's
 and are not a wire question: Espryt's `SyncClientSideAttributesForDrawArrays`

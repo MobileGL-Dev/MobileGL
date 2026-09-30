@@ -4,16 +4,18 @@
 
 ## 重定界后的包
 
-| 包 | 内容 |
-|---|---|
-| P8-0 | 普查：设备与主机 trace 语料上各拒绝点 / 仿真谓词的命中数；split 日志与逐 op 等待 |
-| A | 覆盖对齐：monolith 用例登记到 split / spawn / tcp，豁免表 + 归一化名单门 |
-| B | Espryt 生成 mip：存储检查读计划窗口（B1）；RGB16F / RGB32F 在 server 完成（B2） |
-| C | Espryt server 暂存影子与 GPU 写对账 |
-| D | Magma wire 臂原生 indirect（不再 CPU 展开 + 等 GPU 空闲） |
-| E | CopyImage 在 server store 上处理 |
-| F | 死闩清理与重分类（无行为变化） |
-| G | 大 blob 分片：按 P8-0 的测量决定做不做 |
+| 包 | 内容 | 结果 |
+|---|---|---|
+| P8-0 | 普查：设备与主机的 trace 语料上各拒绝点 / 仿真谓词的命中数 | ✅ 真实内容只 D 命中；G 不做；create-indirect 门在多帧 trace 上成立（[`S.md`](S.md)，ID-P8-5） |
+| A | 覆盖对齐 | ✅ 246 例登上三臂，`split_coverage.py` 进门（[`A.md`](A.md)，ID-P8-7） |
+| B | Espryt 生成 mip | ✅ 生成窗口 + RGB16F / RGB32F 在 server 完成，两个 split 名退役（[`B.md`](B.md)，ID-P8-8） |
+| C | Espryt server 暂存影子与 GPU 写 | ✅ 基线 21/21 红 → 绿（[`C.md`](C.md)，ID-P8-9） |
+| D | Magma wire 臂原生 indirect | ✅ create-indirect 每次整 GPU 等待 321 → 0（[`D.md`](D.md)，ID-P8-10） |
+| E | CopyImage / 驱动拒读 | ✅ 前提改正：真实缺口是驱动拒读时会话 Fatal，改由 server store 作答（[`E.md`](E.md)，ID-P8-11） |
+| F | 死闩清理与重分类 | ✅（[`F.md`](F.md)，ID-P8-6） |
+| G | 大 blob 分片 | 不做（ID-P8-5） |
+
+第一波集成头 `39cd8fb7` 整套门全绿（ID-P8-12）。第二波见 [`PLAN-P8.md`](PLAN-P8.md)。
 
 ## 摘要（原文，已划掉）
 

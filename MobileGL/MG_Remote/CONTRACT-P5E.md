@@ -441,7 +441,9 @@ pointer, `Managers.cpp:5382`): under `RunAheadArmed` a draw with `kDrawClientArr
 array arm; the lockstep arm is unchanged; the staged form (a per-attribute `{BindingIndex,
 MGHostSpan}` tail like `kDrawHasUserIndices`) is P8's. Two pins by test: `CurrentBufferMutationEpoch()`
 (`Managers.cpp:794`) is apply-thread-only under a transport; the VAO twin key is 1:1 only while the
-vertex-elements CSO stays identity-addressed.
+vertex-elements CSO stays identity-addressed. **P8 amendment (ID-P8-6):** client arrays and client
+indices became owned buffers (`beba0256`); Magma's `client-vertex-array` site is unreachable from our
+client and is now `ProtocolCorruption`.
 
 ### 5.2 Textures (tx2)
 Every draw-path entry is `SyncTextureToBackendByHandle(h, imageBindable)`: record first, twin by
