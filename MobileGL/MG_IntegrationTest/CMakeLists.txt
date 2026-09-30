@@ -111,6 +111,9 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageTargetKindScenario.cpp
     Scenarios/ImageFormatQualifierScenario.cpp
     Scenarios/TextureRemintPullScenario.cpp
+    # P8-B: glGenerateMipmap's window and RGB16F / RGB32F on Espryt's server. Ordinary GL, so the
+    # monolith arms of both backends run it too.
+    Scenarios/GenerateMipmapServerScenario.cpp
     Scenarios/NonCoreImageFormatScenario.cpp
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/EmptyTextureLevelScenario.cpp
@@ -3360,6 +3363,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
     )
+
+    # P8-B: glGenerateMipmap ON ESPRYT'S SERVER (notes/p8/B.md). The window a record names (B1) and
+    # RGB16F / RGB32F (B2) on the three Espryt arms; the Magma control is the gated
+    # `DirectVulkan.<arm>.Mip.` block beside `Remint.`, and both monoliths come from the ambient
+    # discovery. The FORCED-CPU entries run the three-channel cases with
+    # MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1, which the SERVER reads: inproc and spawn only, because the
+    # tcp arm's server is the one shared TcpServer.Start fixture and the knob there would take the
+    # native arm off every tcp entry. Their own label keeps the spawn-parity sets knob-free, as the
+    # `RemintFallback.` entries do; integration-gpu is what runs them in the gate.
+    mgl_itest_register_split_arms("GenerateMipmapServerScenario.*" "")
+    foreach(mglItestArm IN ITEMS Split Spawn)
+        string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+        string(TOLOWER "${mglItestArm}" mglItestArmLower)
+        foreach(cpuMipCase Rgb16fUploadedBaseGeneratesItsChain
+                           Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
+                           Rgb32fUploadedBaseGeneratesItsChain
+                           Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestArm}.CpuMip."
+                TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-cpu-mip-${mglItestArmLower}-${cpuMipCase}.log")
+        endforeach()
+    endforeach()
+
     # The configure_file that used to sit here MOVED TO THE END OF THIS FILE (P6 `t6`).
     #
     # It substitutes @MGL_SPLIT_ARM_TEST_LISTS@, which the registration macro appends to - so
@@ -4061,6 +4092,35 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
+# P8-B: THE MAGMA CONTROL for GenerateMipmapServerScenario, all three arms, GATED, in the band
+# flavour. Magma generates every case on the GPU (GenerateWireMipmap), so these entries say what
+# the Espryt arms above must match. One entry per case for a private log each.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(mglItestMagmaMipEnvironment
+            ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(mipCase PackedFloatMutableMaxLevelBelowTheChain
+                        PackedFloatStorageWithFewerLevelsThanTheChain
+                        PackedFloatMutableBaseLevelOneKeepsTheLevelsOutsideItsWindow
+                        DepthMutableMaxLevelBelowTheChain
+                        DepthStorageWithFewerLevelsThanTheChain
+                        DepthMutableBaseLevelOneKeepsTheLevelsOutsideItsWindow
+                        Rgb16fUploadedBaseGeneratesItsChain
+                        Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
+                        Rgb32fUploadedBaseGeneratesItsChain
+                        Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Mip."
+                TEST_FILTER "GenerateMipmapServerScenario.${mipCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${mglItestMagmaMipEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-mip${mglItestArmLogTag}-${mipCase}.log")
         endforeach()
     endforeach()
 endif()

@@ -1435,9 +1435,17 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // the re-mint is the server's own (RequireImageBindableStorageByHandle reads the GPU level and
     // replays the staged store), the frontend arm that carried the marker is monolith-only, and no
     // pull protocol or ResourceSubDataComplete terminator exists (notes/p9/W2-REMINT.md).
+    //
+    // AND THE LIST HAD DRIFTED BY ONE UNTIL P8-B. The tree carried a sixth name this list never
+    // had: "generate-mipmap-cpu-filter", the split arm's RGB16F/RGB32F refusal in
+    // GenerateMipmapByRecord. P8-B2 retired it (the server filters its own level,
+    // GenerateThreeChannelFloatMipmapOnServer), and P8-B1 retired the split arm's two
+    // "generate-mipmap-storage" sites (the record's plan is the window). What is left is these
+    // four names, one call site each, and every one of them is on a MONOLITH arm - the split
+    // arms no longer reach an unmigrated emulation (notes/p8/B.md).
     const char* const kNames[] = {
         "copy-image-shadow-mirror",     // the glCopyImageSubData CPU-shadow mirror
-        "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated
+        "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated (monolith grow)
         "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
         "get-tex-image-shadow",         // GetTexImageViaShadowConversion
     };
