@@ -423,8 +423,9 @@ namespace MobileGL::MG_Config {
         Uint32 PipeIndexMirrorMb = 64;
         // MOBILEGL_PIPE_STATS_PERIOD: frames per boundary-counter summary line. 120 is the
         // steady-state cadence; the device retrace harness never reaches the teardown dump
-        // and a trimmed fixture (create-indirect) is shorter than 120 frames, so a run that
-        // needs its numbers at all sets this low enough to land at least one window.
+        // and a trimmed fixture (minecraft-1.21.1-neoforge-create-indirect-in-world-align1024)
+        // is shorter than 120 frames, so a run that needs its numbers at all sets this low
+        // enough to land at least one window.
         Uint32 PipeStatsPeriod = 120;
         // MOBILEGL_PIPE_STATS_FILE: where the boundary counters' teardown JSON dump goes.
         // Empty (the default) means no dump; the per-120-frame summary line still goes to

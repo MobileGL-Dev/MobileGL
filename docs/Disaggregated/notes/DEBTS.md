@@ -1,6 +1,6 @@
 # 仍开放的债务（跨阶段）
 
-> 路线图只列"有债务、看这里"。每条写明去向；已关闭的历史债与当时的完整债务表见 [`p5b/README.md`](p5b/README.md) 末节。开放问题另见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)。更新：2026-09-30（P8 第二波；按债务审查重排）。去向「需裁定」= 等用户定；「可进行」= 随时可开的小修，不依赖别的阶段。
+> 路线图只列"有债务、看这里"。每条写明去向；已关闭的历史债与当时的完整债务表见 [`p5b/README.md`](p5b/README.md) 末节。开放问题另见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)。更新：2026-09-30（P8 第二波；按债务审查重排。同日：create-indirect 换成派生 fixture `minecraft-1.21.1-neoforge-create-indirect-in-world-align1024`（不是原抓取，16 字节对齐的 SSBO 范围绑定挪到 1024 对齐），ID-P8-14、ID-P8-19 两条关闭——红米两后端 monolith / spawn 全过，Magma spawn 不再丢设备）。去向「需裁定」= 等用户定；「可进行」= 随时可开的小修，不依赖别的阶段。
 
 | 债务 | 去向 |
 |---|---|
@@ -18,14 +18,12 @@
 | P11 转出（B2）：handle 臂的 CPU 读者读采纳 / T0 映射前先落排队常驻写——split 半已由 P8-C 实现（`SplitHostBytesForCpuRead` 的 T0 臂：落写 + `glFinish`，ID-P8-9），但主机无 T0、未能证红 | 需设备验证（红米 Android 集成测试 + static-peek） |
 | P11 转出（B2）：server 准了 T0 而 client 选了 T2 时，每个存储的 `map_persistent` 等 2 s 再具名拒绝（产品里 grant 与 caps 一致，只在变异下见过） | 可进行（小修：每会话一个「client 不要 T0」提示） |
 | P9 转出：Espryt 重铸保留路径上 framebuffer clear 后 `imageLoad` 偶读旧值（主机 3/30，加 barrier 后 0/30；`TextureRemintPullScenario` case C 暂钉 barrier），疑 llvmpipe（ID-P9-11）；P11 合并 dev 后 push 单进程臂上也见过一次，`ImageBindableRemintScenario` 同样钉 barrier（ID-P11-6） | 可进行（在红米上不加 barrier 归因） |
-| P8 转出（D）：应用省略 `glMemoryBarrier` 时，两臂在计算写与顶点着色器读之间都没有依赖（GL 未定义，但真实应用依赖它）；D 的每轮屏障在真机上的开销未测；create-indirect 验证不了这两件事（ID-P8-14），需要一个「计算写命令、无应用屏障、不重写」的 fixture | 待归因（需新 fixture） |
+| P8 转出（D）：应用省略 `glMemoryBarrier` 时，两臂在计算写与顶点着色器读之间都没有依赖（GL 未定义，但真实应用依赖它）；D 的每轮屏障在真机上的开销未测；create-indirect（现为派生的 `minecraft-1.21.1-neoforge-create-indirect-in-world-align1024`，内容相同）验证不了这两件事（ID-P8-14），需要一个「计算写命令、无应用屏障、不重写」的 fixture | 待归因（需新 fixture） |
 | P8 转出（E）：driver-written 标按整张纹理打（`GenerateMipmap` 也打），驱动拒读时连基级也具名拒绝，偏保守；跨格式拷贝 store 不跟随；拒绝仍是会话 Fatal（要改回包状态才能答 `GL_INVALID_OPERATION`） | 小修（按 level 打标）；其余按需 |
 | P8 转出（B）：`PipeCalls.def:260` `GenerateMipmap` 仍是 `kWaitApplied`，裁定 14 的理由（CPU 滤波碰 client 影子）已不成立，可改 `kWaitNone` | 性能工作（协议行为变更，需单独裁定） |
 | P8 转出（C）：server SSBO 标记过近似（窗口内每个绑定的 SSBO 都标）；一个留在 SSBO 绑定上又当 restart EBO 用的 buffer 每次 draw 都回读 | 性能工作 |
 | P8 转出（monolith，ID-P8-13）：9 条 monolith 缺陷真实内容 0 命中，不在 dev 上修——Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子；Magma `glMultiDrawArraysIndirectCount` CPU 臂同病；Magma 录制中途 `SyncGpuWrites` → SIGSEGV；Espryt RGB16F / RGB32F CPU 滤波读陈旧影子、R11F / 深度链无视 BASE / MAX；Magma 无 BLIT 颜色格式缺着色器 mip 臂；Espryt 拷贝后 `glGetTexImage` 读拷贝前影子（证据见 `notes/p8/{B,C,D,E}.md`） | P13（monolith 换到已修好的记录臂） |
 | P8 转出（monolith，feat，ID-P8-14）：feat 的 monolith 臂每次 indirect draw 在命令缓冲有 GPU 写时整 buffer 同步回读（`SyncClientSideVertexArraysForIndirectFetch`，`62bfe461`，dev 无）；Magma 的 split 构建 monolith 深度 mip 不传 view 类型，无深度 `BLIT_DST` 的设备上 1D 深度链会拿到 2D view（推断，Release 下断言编译掉，SV） | P13（monolith 换臂） |
-| P8 转出（ID-P8-19）：create-indirect × Magma × spawn 在红米上由 0.84 变为每次丢设备（该 fixture 的 indirect 命令本身是乱的；推断 D 原生化后乱命令直达 GPU，monolith 臂一直原生、基线上也偶发丢设备）；坏命令能打挂 GPU 是 GL 未定义行为，robust buffer access 可兜住 | 待归因（fixture 重抓后复测） |
-| P8 转出（ID-P8-14）：create-indirect fixture 在桌面上抓（SSBO 偏移对齐 16），Adreno 要求 64，任何臂任何后端都过不了；设备车道记为不适用 | 需要时在对齐 64 的设备上重抓 |
 | P8 转出（MD）：dev 的 `RingAllocateSlow` 在出错的上下文上无上限地排水（设备上挂在 `glFinish`） | 小修（dev） |
 | P8 转出：`LogForwardChannel.APeerThatStopsReadingCostsWarnLinesNotTheCallersTime` 在负载下超时（两次），单跑必过 | 小修（放宽时限或隔离） |
 | P8 转出（SV）：`gen_pipe_dirty_surface.py` 扫描集成测试源，测试成员名与 GLContext 成员同名（如 `m_parameters`）会静默弄坏它的自检；`.Mip3DValidation.` 在没装校验层的车道上是失败不是跳过 | 小修 / CI 记录 |

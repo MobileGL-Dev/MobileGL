@@ -2983,6 +2983,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return imported;
             }
 
+            // The POST's second round: the CPU writes region 1 through the held lock only now, after
+            // the import and a GPU use of it, and reads region 4 (the first round's fill) back into
+            // its cache; a second dispatch copies region 1 out and overwrites region 4. Appends its
+            // counts to `detail`.
+            Bool SelfTestExternalSteady(GLuint imported, GLuint out, void* heldPtr, char* detail, SizeT detailBytes) {
+                constexpr Uint32 kWords = 1024;
+                constexpr Uint32 kSteadyAtWord = kWords;   // region 1
+                constexpr Uint32 kFillAtWord = 4 * kWords; // region 4
+                auto* held = static_cast<volatile Uint32*>(heldPtr);
+                Uint32 cached = 0;
+                for (Uint32 i = 0; i < kWords; ++i) {
+                    held[kSteadyAtWord + i] = 0xA5000000u ^ (i * 40503u);
+                    cached ^= held[kFillAtWord + i];
+                }
+                (void)cached;
+                static const char* kSource =
+                    "#version 310 es\n"
+                    "layout(local_size_x = 64) in;\n"
+                    "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+                    "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+                    "void main() {\n"
+                    "  uint i = gl_GlobalInvocationID.x;\n"
+                    "  outb.w[i] = ext.w[1024u + i];\n"
+                    "  ext.w[4096u + i] = 0x3D5EA11Eu ^ i;\n"
+                    "}\n";
+                const GLuint program = g_GLESFuncs.glCreateShaderProgramv(GL_COMPUTE_SHADER, 1, &kSource);
+                GLint linked = 0;
+                if (program != 0) g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                const SizeT used = std::strlen(detail);
+                if (!linked) {
+                    if (program != 0) g_GLESFuncs.glDeleteProgram(program);
+                    std::snprintf(detail + used, detailBytes - used, "; steady: the second program did not link");
+                    return false;
+                }
+                g_GLESFuncs.glUseProgram(program);
+                g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, imported);
+                g_GLESFuncs.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, out);
+                g_GLESFuncs.glMemoryBarrier(0x00004000 /*GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT_EXT*/);
+                g_GLESFuncs.glDispatchCompute(kWords / 64, 1, 1);
+                g_GLESFuncs.glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT |
+                                            0x00004000 /*GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT_EXT*/);
+                g_GLESFuncs.glFinish();
+                Uint32 steadyRead = 0, steadySaw = 0;
+                for (Uint32 i = 0; i < kWords; ++i)
+                    if (held[kFillAtWord + i] == (0x3D5EA11Eu ^ i)) ++steadySaw;
+                g_GLESFuncs.glBindBuffer(GL_SHADER_STORAGE_BUFFER, out);
+                const auto* copied = static_cast<const Uint32*>(
+                    g_GLESFuncs.glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kWords * 4, GL_MAP_READ_BIT));
+                if (copied != nullptr) {
+                    for (Uint32 i = 0; i < kWords; ++i)
+                        if (copied[i] == (0xA5000000u ^ (i * 40503u))) ++steadyRead;
+                    g_GLESFuncs.glUnmapBuffer(GL_SHADER_STORAGE_BUFFER);
+                }
+                g_GLESFuncs.glDeleteProgram(program);
+                std::snprintf(detail + used, detailBytes - used,
+                              "; with the import in use, GPU read %u/%u words the CPU wrote after it, GPU write "
+                              "seen through the held lock %u/%u words",
+                              steadyRead, kWords, steadySaw, kWords);
+                return steadyRead == kWords && steadySaw == kWords;
+            }
+
             // THE POST (B2, the standing rule: decide by probe, never by driver name). The AHB API
             // promises CPU coherence only across an unlock/lock; T0 keeps the client's lock for the
             // store's life, so the pattern it depends on is exactly what this exercises, on this
@@ -2993,7 +3054,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   gpu   - a compute dispatch copies that pattern out of the import (the GPU read) and
             //           fills another region of it (the GPU write);
             //   back  - after glFinish the fill is read through the HELD pointer and the copy is
-            //           read back from the dispatch's output.
+            //           read back from the dispatch's output;
+            //   steady - the same again with bytes the CPU wrote AFTER the import and its first GPU
+            //           use (VkBufferManager::SelfTestWireImport says why the first round is not enough).
             // In a throwaway ES 3.1 pbuffer context, so none of this context's state or Espryt's
             // binding caches is disturbed; the caller's bind is restored before returning.
             Bool Ops_H_SelfTestExternal(char* whyOut, Uint64 whyBytes) {
@@ -3046,7 +3109,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GLuint out = 0, program = 0;
                 void* hostMap = nullptr;
                 const GLuint imported = ImportAhbAsBuffer(held.ahb, kBytes, &hostMap, why, /*throwaway=*/true);
-                char detail[256] = {};
+                char detail[512] = {};
                 if (imported == 0) {
                     std::snprintf(detail, sizeof(detail), "import: %s", why.c_str());
                 } else if (std::memcmp(hostMap, pattern.data(), kWords * 4) != 0) {
@@ -3096,6 +3159,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       "64 KiB AHB, lock held throughout: host map read ok, GPU read %u/%u words of "
                                       "the CPU's pattern, GPU write seen through the held lock %u/%u words",
                                       gpuRead, kWords, heldSaw, kWords);
+                        if (ok) ok = SelfTestExternalSteady(imported, out, held.ptr, detail, sizeof(detail));
                     }
                 }
                 if (program != 0) g_GLESFuncs.glDeleteProgram(program);

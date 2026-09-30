@@ -10,8 +10,9 @@
 //
 // Before P8-D every wire indirect draw read its commands (and its count word) through
 // ReadWireBuffer and expanded them on the CPU, and a store a shader had written turned that read
-// into a whole-GPU wait per draw (create-indirect: 321 expansions, 327 waits, ~4-8 s of waiting
-// per replay on lavapipe). The cases pin both halves of the change:
+// into a whole-GPU wait per draw (the create-indirect trace, now
+// minecraft-1.21.1-neoforge-create-indirect-in-world-align1024: 321 expansions, 327 waits, ~4-8 s of
+// waiting per replay on lavapipe). The cases pin both halves of the change:
 //   * PIXELS, on every arm and both backends where the backend's own semantics allow it - each
 //     indirect form draws exactly the strips its commands name, and GPU-written commands are the
 //     ones the draw sees (the poison the buffers start with names the OTHER strips);
@@ -336,8 +337,9 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
             EXPECT_EQ(delta.barriers, 2u) << "one barrier per draw whose count store a shader wrote";
         }
 
-        // Flywheel's shape (create-indirect's trace: 322 cull-then-draw rounds, no glMemoryBarrier
-        // between them). GL leaves it undefined; the wire arm orders it anyway, once per write,
+        // Flywheel's shape (minecraft-1.21.1-neoforge-create-indirect-in-world-align1024: 322
+        // cull-then-draw rounds, no glMemoryBarrier between them). GL leaves it undefined; the
+        // wire arm orders it anyway, once per write,
         // because the CPU path it replaced did (by waiting). Magma's split arms only: the monolith
         // arm records no dependency here (recorded for dev), and Espryt's is its driver's.
         TEST_F(WireIndirectDrawScenario, ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered) {

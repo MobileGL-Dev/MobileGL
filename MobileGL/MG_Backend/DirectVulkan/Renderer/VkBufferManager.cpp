@@ -786,7 +786,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //   read - this server's own host map of the import reads what the CPU wrote through the lock;
     //   gpu  - one submission copies that pattern out of the import (the GPU read) and fills another
     //          region of it (the GPU write), then a transfer->host barrier and a fence wait;
-    //   back - the fill is read through the HELD pointer, the copy from a host-visible staging buffer.
+    //   back - the fill is read through the HELD pointer, the copy from a host-visible staging buffer;
+    //   steady - the same again with bytes the CPU wrote AFTER the import and its first GPU use (the
+    //          block at the end says why the first round alone is not enough).
     Bool VkBufferManager::SelfTestWireImport(char* whyOut, Uint64 whyBytes) {
         const auto answer = [&](Bool ok, const String& text) {
             std::snprintf(whyOut, static_cast<SizeT>(whyBytes), "%s", text.c_str());
@@ -909,6 +911,55 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                       String(imported.coherent ? "coherent" : "non-coherent") + " memory), GPU read " +
                       std::to_string(gpuRead) + "/1024 words of the CPU's pattern, GPU write seen through the "
                       "held lock " + std::to_string(heldSaw) + "/1024 words";
+            if (!ok) break;
+
+            // STEADY STATE. The round above reads bytes the CPU wrote BEFORE the import, and an import
+            // can clean the CPU's caches on its way in, so it passes on a device whose GPU never sees a
+            // write made through the held lock afterwards - which is all of T0's real traffic (Mali-G1
+            // on a Dimensity: the first round passed, then Flywheel's staging scatter read stale bytes
+            // and the create-indirect trace lost every instanced object). So the CPU now writes a fresh
+            // pattern into region 1 and reads region 4 back into its cache, and one more submission
+            // copies region 1 out and overwrites region 4.
+            constexpr Uint64 kSteadyAt = 1 * 4096; // region 1
+            constexpr Uint32 kSteadyFillWord = 0x3D5EA11Eu;
+            auto* heldWrite = static_cast<volatile Uint32*>(held.ptr);
+            Uint32 cached = 0;
+            for (Uint32 i = 0; i < kWords; ++i) {
+                heldWrite[kSteadyAt / 4 + i] = 0xA5000000u ^ (i * 40503u);
+                cached ^= heldWrite[kFillAt / 4 + i];
+            }
+            (void)cached;
+            std::memset(staging.mapped, 0, kWords * 4);
+            if (vkResetFences(ctx.device, 1, &fence) != VK_SUCCESS ||
+                vkResetCommandPool(ctx.device, pool, 0) != VK_SUCCESS ||
+                vkBeginCommandBuffer(commands, &begin) != VK_SUCCESS) {
+                ok = false;
+                verdict = "steady: the second submission could not be recorded";
+                break;
+            }
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                                 &hostWrites, 0, nullptr, 0, nullptr);
+            VkBufferCopy steadyRegion{kSteadyAt, 0, kWords * 4};
+            vkCmdCopyBuffer(commands, imported.buffer, staging.buffer, 1, &steadyRegion);
+            vkCmdFillBuffer(commands, imported.buffer, kFillAt, kWords * 4, kSteadyFillWord);
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
+                                 0, nullptr, 0, nullptr);
+            vkEndCommandBuffer(commands);
+            if (vkQueueSubmit(ctx.queue, 1, &submit, fence) != VK_SUCCESS ||
+                vkWaitForFences(ctx.device, 1, &fence, VK_TRUE, 2'000'000'000ull) != VK_SUCCESS) {
+                ok = false;
+                verdict = "steady: the second submission did not complete within 2 s";
+                break;
+            }
+            Uint32 steadyRead = 0, steadySaw = 0;
+            for (Uint32 i = 0; i < kWords; ++i) {
+                if (copied[i] == (0xA5000000u ^ (i * 40503u))) ++steadyRead;
+                if (heldWords[kFillAt / 4 + i] == kSteadyFillWord) ++steadySaw;
+            }
+            ok = steadyRead == kWords && steadySaw == kWords;
+            verdict += "; with the import in use, GPU read " + std::to_string(steadyRead) +
+                       "/1024 words the CPU wrote after it, GPU write seen through the held lock " +
+                       std::to_string(steadySaw) + "/1024 words";
         } while (false);
         if (fence != VK_NULL_HANDLE) vkDestroyFence(ctx.device, fence, nullptr);
         if (pool != VK_NULL_HANDLE) vkDestroyCommandPool(ctx.device, pool, nullptr);

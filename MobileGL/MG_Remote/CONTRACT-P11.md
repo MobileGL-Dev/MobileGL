@@ -264,10 +264,13 @@
 
 ### POST（`kCapAdoptT0` 的前提）
 
-持续持锁形状：分配 64 KiB AHB，**整个测试期间 CPU lock 不放**，导入，GPU 读 CPU 写的图案、GPU 写一段，经持有的指针读回比较。
-- Espryt（`Ops_H_SelfTestExternal`）：一次性 ES 3.1 pbuffer 上下文（不碰 Espryt 的绑定缓存），`glBufferStorageExternalEXT` + 持久 coherent 映射，映射读一遍，compute shader 把 region 0 拷到输出、在 word 4096 起写 `0x6C0FFEE0 ^ i`。
-- Magma（`VkBufferManager::SelfTestWireImport`，`VkBufferManager.cpp:768`）：renderer 的设备，`vkCmdCopyBuffer` region 0 → staging、`vkCmdFillBuffer` region 4，栅栏等 2 s。
-- 结果一行 I `T0 POST (<后端>, sustained-lock pattern) PASSED|FAILED - …`。红米（Adreno 830）两后端 PASSED。
+持续持锁形状：分配 64 KiB AHB，**整个测试期间 CPU lock 不放**，导入，GPU 读 CPU 写的图案、GPU 写一段，经持有的指针读回比较。**两轮**：
+- 第一轮读的是导入**之前**写进去的图案。导入会顺手清 CPU 缓存，所以只有这一轮的 POST 在「导入之后经持有指针的写 GPU 永远看不见」的设备上照样通过——而 T0 的真实流量全是导入之后的写。
+- 第二轮（steady，2026-09-30 补）：导入且 GPU 用过之后，CPU 才经持有的指针写 region 1、把 region 4（第一轮的 GPU 写）读进缓存；再一次 GPU 工作把 region 1 拷出、改写 region 4，两个方向都比对。两轮都全对才 PASSED。
+- 实测：Mali-G1-Ultra（天玑，`3B159D009VZ00000`）第一轮全对、第二轮 Magma 读到 0/1024 词、写回 16/1024（import 内存 non-coherent），Espryt 48/1024、160/1024 → FAILED，T0 回退 T2。改之前该机 T0 被授予，`create-indirect-in-world-align1024` × Magma 的 inproc / spawn 丢掉全部 Flywheel 实例物体（0.867 / 0.848），同 trace 的 T2 0.99998；改之后两臂 0.999984。红米（Adreno 830）两后端两轮全对（Magma coherent），T0 照旧授予。
+- Espryt（`Ops_H_SelfTestExternal`，第二轮 `SelfTestExternalSteady`）：一次性 ES 3.1 pbuffer 上下文（不碰 Espryt 的绑定缓存），`glBufferStorageExternalEXT` + 持久 coherent 映射，映射读一遍，compute shader 把 region 0 拷到输出、在 word 4096 起写 `0x6C0FFEE0 ^ i`；第二轮另一个 compute program 拷 word 1024 起、在 word 4096 起写 `0x3D5EA11E ^ i`。
+- Magma（`VkBufferManager::SelfTestWireImport`，`VkBufferManager.cpp:768`）：renderer 的设备，`vkCmdCopyBuffer` region 0 → staging、`vkCmdFillBuffer` region 4，栅栏等 2 s；第二轮同一命令池重录：region 1 → staging、region 4 填 `0x3D5EA11E`。
+- 结果一行 I `T0 POST (<后端>, sustained-lock pattern) PASSED|FAILED - …`，两轮的计数都在这一行。红米（Adreno 830）两后端 PASSED；Mali-G1-Ultra 两后端 FAILED（缺省旋钮下这行降为 D，见上表）。
 
 ### server 端存储
 
