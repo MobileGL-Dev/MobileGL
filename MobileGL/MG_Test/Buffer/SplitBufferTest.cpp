@@ -567,6 +567,19 @@ TEST_F(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) {
         EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Server), 2u);
         EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
     }
+    // UNSET (the default since 2026-09-29): a T0 ask of its own kind over shared segments, 2 over a
+    // stream, and a session-free caller runs T2 quietly instead of dying - it never named a tier.
+    MG_Config::Ipc.AdoptTier = MG_Config::kAdoptTierUnset;
+    Tier::ForgetAdoptTierSettlementForTest();
+    EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
+    EXPECT_EQ(Tier::AdoptTierAskFor(false), Tier::kAdoptAskT0Default);
+    EXPECT_EQ(Tier::AdoptTierAskFor(true), 2u);
+    EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(false, Tier::AdoptTierSide::Client), Tier::kAdoptAskT0Default);
+    for (const auto side : {Tier::AdoptTierSide::Client, Tier::AdoptTierSide::Server}) {
+        Tier::ForgetAdoptTierSettlementForTest();
+        EXPECT_EQ(Tier::SettleAdoptTierAtHandshake(true, side), 2u);
+    }
+    EXPECT_TRUE(MG_Remote::Client::AdoptTierIsEmulate());
     MG_Config::Ipc.AdoptTier = 2;
 }
 

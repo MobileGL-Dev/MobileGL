@@ -151,6 +151,33 @@ TEST(AdoptTierStream, AClientNamingT0OrT1IsRefusedOnceAndItsMapPersistentIsDecli
     }
 }
 
+// P11 B2: THE KNOB UNSET - T0 BY DEFAULT since 2026-09-29 - ON A STREAM. The Hello asks 2 (a stream
+// carries T2 only), the session runs T2, and nothing says so above MGLOG_D: every tcp session would
+// otherwise carry A1's line. The client still COUNTS the fallback (ClientSession::T0Fallbacks,
+// reported through PeerReport::pixel). The supervisor's own knob is unset as well (ServerSpawn
+// scrubs it), so its stream settle is quiet too.
+// RED-ONCE: log the unset stream settle at W instead of D -> one AdoptTierOnStream line, not 0.
+TEST(AdoptTierStream, AnUnsetKnobRunsT2OnAStreamQuietlyAndCountsTheFallback) {
+    ServerProcess server;
+    ASSERT_TRUE(LaunchSupervisor("adopt-unset", &server)) << server.Log();
+    const auto body = [](Remote::Client::ClientSession& client, PeerReport& r) {
+        MapPersistentThenARecord(client, r);
+        r.pixel = static_cast<Uint32>(client.T0Fallbacks());
+    };
+    const PeerReport r = RunPeer(server.endpoint, body, /*stopCleanly=*/true, 30000, 0, nullptr,
+                                 [] { MG_Config::Ipc.AdoptTier = MG_Config::kAdoptTierUnset; });
+    const std::string client = ClientLog(server);
+    ASSERT_EQ(r.started, 1) << "the session did not come up: " << r.note << "\n" << client;
+    EXPECT_EQ(r.status, Remote::Wire::ReplySink::kStatusDeclined) << "a stream session runs T2\n" << client;
+    EXPECT_EQ(r.applied, 1) << client;
+    EXPECT_EQ(r.pixel, 1u) << "the stream's T0 fallback was not counted\n" << client;
+    for (const char* line : {"AdoptTierOnStream", "T0 by default", "AdoptT0Unavailable", "T0 session totals"}) {
+        EXPECT_EQ(Count(client, line), 0u) << "an unset knob's fallback is MGLOG_D only: " << line << "\n" << client;
+        EXPECT_EQ(Count(server.Log(), line), 0u) << line << "\n" << server.Log();
+    }
+    EXPECT_EQ(Count(client, "Fatal{"), 0u) << client;
+}
+
 TEST(AdoptTierStream, AServerNamingT0RefusesOncePerSessionAndServesT2) {
     ServerProcess server;
     const std::string peerBase = "/tmp/mgl-p11-adopt-server-peers-" + std::to_string(::getpid()) + ".log";

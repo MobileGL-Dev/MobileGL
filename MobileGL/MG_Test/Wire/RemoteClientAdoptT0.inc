@@ -242,6 +242,36 @@ TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
     EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
 }
 
+// THE KNOB UNSET - T0 BY DEFAULT, the user's decision of 2026-09-29 - over shared segments on the
+// host's own platform (no AHardwareBuffer): the Hello asks T0 of its default kind, the server
+// refuses it at its first bind and the client falls back at its first map_persistent - both
+// QUIETLY (MGLOG_D only: every host session would otherwise carry two lines), both COUNTED.
+// Knob 0's named lines are KnobZero... / NoAhardwareBuffer... above; this is the unset half.
+// RED-ONCE: log the unset path's fallbacks at W instead of D -> the line counts below are 1, not 0.
+TEST(RemoteClientAdoptT0, AnUnsetKnobFallsBackToT2QuietlyAndCountsIt) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.AdoptTier = MG_Config::kAdoptTierUnset;
+        MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // a backend WITH the members: the platform decides
+        StartControlSession();
+        if (!Srv::ServerSessionInstance().AdoptT0Asked()) ::_exit(210); // the Hello asked T0 by default
+        if (!Srv::ServerSessionInstance().AdoptT0Quiet()) ::_exit(211);
+        GrantAtFirstBind();
+        if (Srv::ServerSessionInstance().AdoptT0()) ::_exit(212);
+        if (Srv::ServerSessionInstance().T0Refusals() != 1) ::_exit(213); // counted, not said
+        const auto seed = Pattern(kT0Bytes, 0x66);
+        const MGPHandleOnly handle = MakeBufferStore(5, kT0Bytes);
+        if (MGPipeRouteMapPersistent(handle, kT0Bytes, seed.data()) != nullptr) ::_exit(214); // T2: declined
+        if (ClientSessionInstance().AdoptT0()) ::_exit(215);
+        if (ClientSessionInstance().T0Fallbacks() != 1) ::_exit(216); // counted, not said
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    for (const char* line : {"AdoptT0Unavailable", "T0 by default", "T0 POST", "T0 session totals", "Refuse{"})
+        EXPECT_EQ(CountOf(child.Log, line), 0u) << "an unset knob's fallback is MGLOG_D only: " << line << "\n"
+                                                << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
+}
+
 // Knob 1 names T1, which P11 closed: one named refusal, the Hello asks T2, never a Fatal.
 TEST(RemoteClientAdoptT0, KnobOneIsRefusedByNameAndAsksT2) {
     const auto child = RunInChild([] {

@@ -285,7 +285,8 @@ TEST(SessionHandshakeTest, ARevisionFourPeerIsRefusedByNameAtRevisionFive) {
 // legal ask is the Welcome's.
 TEST(SessionHandshakeTest, AHelloAskingAnAdoptTierThatIsNotAnAskIsRefusedByName) {
     using namespace ::MobileGL::Wire;
-    for (const Uint8 ask : {Uint8{0}, Uint8{1}, Uint8{2}, Uint8{7}}) {
+    // 0x80 is the T0 ask of an unset knob (T0 by default, refusals quiet); 0x81 is not an ask.
+    for (const Uint8 ask : {Uint8{0}, Uint8{1}, Uint8{2}, Uint8{7}, Uint8{0x80}, Uint8{0x81}}) {
         SCOPED_TRACE(static_cast<int>(ask));
         std::unique_ptr<Transport::InProcessTransport> client, server;
         Transport::InProcessTransport::CreatePair(client, server);
@@ -302,7 +303,7 @@ TEST(SessionHandshakeTest, AHelloAskingAnAdoptTierThatIsNotAnAskIsRefusedByName)
         sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
         sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
         session.SetSegmentSizes(sizes);
-        const Bool legal = ask == 0 || ask == 2;
+        const Bool legal = ask == 0 || ask == 2 || ask == 0x80;
         EXPECT_EQ(session.Accept(*server, &first), legal ? MOBILEGL_OK : MOBILEGL_ERR_PROTOCOL_MISMATCH);
         const auto reply = ReadHandshakeFrame(*client);
         ASSERT_FALSE(reply.empty());
@@ -311,7 +312,8 @@ TEST(SessionHandshakeTest, AHelloAskingAnAdoptTierThatIsNotAnAskIsRefusedByName)
             ASSERT_NE(envelope->msg_as_Welcome(), nullptr);
             ASSERT_NE(envelope->msg_as_Welcome()->linkTerms(), nullptr);
             EXPECT_EQ(envelope->msg_as_Welcome()->linkTerms()->adoptTier(), ask) << "the Welcome echoes the ask";
-            EXPECT_EQ(session.AdoptT0Asked(), ask == 0);
+            EXPECT_EQ(session.AdoptT0Asked(), ask == 0 || ask == 0x80);
+            EXPECT_EQ(session.AdoptT0Quiet(), ask == 0x80) << "only the default ask is quiet";
             EXPECT_FALSE(session.AdoptT0()) << "no grant before the first native bind";
         } else {
             ASSERT_NE(envelope->msg_as_Refuse(), nullptr);
