@@ -4,10 +4,10 @@
 
 ## 1. 结论
 
-- wire 臂的 `glDraw*Indirect` / `glMultiDraw*Indirect[Count]` 改为从 wire store 自己的 `VkBuffer` 发 `vkCmdDraw[Indexed]Indirect[Count]`：`VulkanRenderer::DrawWireIndirectNative`（`MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:620`）。
+- wire 臂的 `glDraw*Indirect` / `glMultiDraw*Indirect[Count]` 改为从 wire store 自己的 `VkBuffer` 发 `vkCmdDraw[Indexed]Indirect[Count]`：`VulkanRenderer::DrawWireIndirectNative`（`MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc:627`）。
 - `DrawWireIndirect`（`MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp:381`）先走原生；CPU 展开只留给设备发不出的 COUNT 形态（与 monolith 同条件，§3）。
 - create-indirect × Magma × split：indirect 引起的 host 等待 321 → 0，等待时间 8.07 s → 0.013 s（剩下 6 次是应用回读，§2）；SSIM 各臂不变。
-- 新增 barrier：着色器写过的 store 在下一次 indirect 读前补一个 `INDIRECT_COMMAND_READ` barrier，每次写一次（`WireDraw.inc:686-698`）。create-indirect 的 322 次 cull→draw 里 320 次没有 `glMemoryBarrier`，旧 CPU 路径靠整 GPU 等待碰巧有序，原生路径靠这个 barrier。
+- 新增 barrier：着色器写过的 store 在下一次 indirect 读前补一个 `INDIRECT_COMMAND_READ` barrier，每次写一次（`WireDraw.inc:693-705`）。create-indirect 的 322 次 cull→draw 里 320 次没有 `glMemoryBarrier`，旧 CPU 路径靠整 GPU 等待碰巧有序，原生路径靠这个 barrier。
 
 ## 2. 测量（主机，`MOBILEGL_PIPE_STATS=1 MOBILEGL_PIPE_STATS_PERIOD=1`，server 日志 `windr[...]` 求和）
 
@@ -33,11 +33,11 @@
 |---|---|---|
 | 没绑 `GL_DRAW_INDIRECT_BUFFER`：命令在 client 内存 | `DirectVulkan.cpp:684`、`:825`、`:884` | client 在兼容档拒绝（`MobileGL/MG_Remote/Client/EmitTables.cpp:730` `CLIENT_COMMANDS`）；store 为空则具名拒绝 `IndirectBufferUnbound` |
 | `glMultiDrawArraysIndirectCount`：总在 CPU 读 count 字 | `DirectVulkan.cpp:720-757` | 原生 `vkCmdDrawIndirectCount`（`MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp:15942` 加载，只在 disaggregated 构建） |
-| `glMultiDrawElementsIndirectCount`：无 `VK_KHR_draw_indirect_count`，或 maxdrawcount > 1 且无 `multiDrawIndirect` → CPU 循环 | `VulkanRenderer.cpp:13421-13444` | 同条件（`WireDraw.inc:623-628`）返回 false，走原 CPU 展开（`DirectVulkan.cpp:390-413`，计入 `wixp`） |
-| 无 `multiDrawIndirect` 或 stride 不是 4 的倍数：逐条原生 indirect，仍由 GPU 读 | `VulkanRenderer.cpp:13510`、`:13615` | 同（`WireDraw.inc:725-733`）；stride 非 4 倍数在 GL 是 INVALID_VALUE，wire 上具名拒绝 `IndirectCommandRange` |
+| `glMultiDrawElementsIndirectCount`：无 `VK_KHR_draw_indirect_count`，或 maxdrawcount > 1 且无 `multiDrawIndirect` → CPU 循环 | `VulkanRenderer.cpp:13421-13444` | 同条件（`WireDraw.inc:630-635`）返回 false，走原 CPU 展开（`DirectVulkan.cpp:390-413`，计入 `wixp`） |
+| 无 `multiDrawIndirect` 或 stride 不是 4 的倍数：逐条原生 indirect，仍由 GPU 读 | `VulkanRenderer.cpp:13510`、`:13615` | 同（`WireDraw.inc:732-740`）；stride 非 4 倍数在 GL 是 INVALID_VALUE，wire 上具名拒绝 `IndirectCommandRange` |
 | client 顶点数组 + arrays indirect：CPU 读命令定上传范围，draw 仍原生 | `VulkanRenderer.cpp:13576` | 不可达：client 把 client 数组拷成自有 buffer |
 | `GL_LINE_LOOP`：indirect 不改写，退化为 LINE_STRIP | `MobileGL/MG_Util/Converters/MGToVk/RenderStateEnumConverter.cpp:27` | 同 |
-| uint8 索引无扩展 / 非固定 restart 索引 / 非对齐偏移：整段索引在 CPU 改写，命令仍 GPU 读 | 两臂都在各自的索引上传里 | `WireDraw.inc:391`，索引视图是整个 EBO（`WireDraw.inc:674`，同 monolith） |
+| uint8 索引无扩展 / 非固定 restart 索引 / 非对齐偏移：整段索引在 CPU 改写，命令仍 GPU 读 | 两臂都在各自的索引上传里 | `WireDraw.inc:398`，索引视图是整个 EBO（`WireDraw.inc:681`，同 monolith） |
 | baseInstance / gl_DrawID | 原生（monolith 不查 `drawIndirectFirstInstance`） | 原生；旧 CPU 展开的第 3 档把 gl_DrawID 全给 0（`VulkanRenderer.cpp:13154`），原生反而更对 |
 
 ## 4. 设计
@@ -45,15 +45,15 @@
 | 项 | 内容 |
 |---|---|
 | 入口 | `DrawWireIndirect`（`DirectVulkan.cpp:381`）→ `DrawWireIndirectNative`；false 才走 CPU 展开 |
-| store | `AcquireWireSlice` 取 indirect / count / 元素 store（打 `lastUseSerial`，之后的 `glBufferSubData` 会排在这次读之后）；范围、4 字节对齐、count 字越界都是具名拒绝（`MobileGL/MG_Backend/DirectVulkan/Renderer/WireDeclines.def:109-112`） |
-| draw 准备 | 复用 `SetupDraw` → `SetupWireDraw`，带 `IndirectDrawBuffer`；该 aspect 原来是 `buffer-legacy-arm` Fatal，现只对 monolith 入口仍 Fatal（`WireDraw.inc:213`，`m_wireNativeIndirectDraw`）；顶点流转换不再按 first+count 截断（`WireDraw.inc:319`） |
-| 发射 | 同 monolith 的三档：COUNT 原生、`multiDrawIndirect` 一次发、否则逐条；另按 `maxDrawIndirectCount` 分块（`WireDraw.inc:712-733`） |
+| store | `AcquireWireSlice` 取 indirect / count / 元素 store（打 `lastUseSerial`，之后的 `glBufferSubData` 会排在这次读之后）；范围、4 字节对齐、count 字越界都是具名拒绝（`MobileGL/MG_Backend/DirectVulkan/Renderer/WireDeclines.def:115-118`） |
+| draw 准备 | 复用 `SetupDraw` → `SetupWireDraw`，带 `IndirectDrawBuffer`；该 aspect 原来是 `buffer-legacy-arm` Fatal，现只对 monolith 入口仍 Fatal（`WireDraw.inc:213`，`m_wireNativeIndirectDraw`）；顶点流转换不再按 first+count 截断（`WireDraw.inc:326`） |
+| 发射 | 同 monolith 的三档：COUNT 原生、`multiDrawIndirect` 一次发、否则逐条；另按 `maxDrawIndirectCount` 分块（`WireDraw.inc:719-740`） |
 | barrier | `MarkWireBufferGpuWritten` 置 `indirectReadBarrierPending`（`VkBufferManager.cpp:611`），`TakeWireIndirectReadBarrier`（`VkBufferManager.cpp:624`）取走；有则结束 render pass 并记 `ALL_COMMANDS/MEMORY_WRITE → DRAW_INDIRECT/INDIRECT_COMMAND_READ`。transfer 写已有 `MEMORY_READ` 后置 barrier（`VkBufferManager.cpp:514`、`:1437`），不置位。应用自己的 `glMemoryBarrier(GL_COMMAND_BARRIER_BIT)` 仍走 `BuildMemoryBarrierForGlBarriers`（`VulkanRenderer.cpp:7873`），与 monolith 一样 |
 | G1 | 全部在 `MOBILEGL_BUILD_DISAGGREGATED` / `MOBILEGL_PIPE_PUSH` 下；pull 构建 `added=0 removed=0` |
 
 ## 5. 门与 red-once
 
-用例 `WireIndirectDrawScenario`（`MobileGL/MG_IntegrationTest/Scenarios/WireIndirectDrawScenario.cpp:225`、`:274`、`:302`、`:340`），读数经 `MobileGL/MG_IntegrationTest/Harness/WireIndirectPeek.cpp:22`（进程内 PipeStats，只在 inproc 臂看得到 server）。登记：`MobileGL/MG_IntegrationTest/CMakeLists.txt:4651-4684`——Magma 门控三臂 `DirectVulkan.{Split,Spawn,Tcp}.Indirect.`、DirectGLES 三臂（经宏，含 Magma 信息层）、两后端 monolith（环境发现）。
+用例 `WireIndirectDrawScenario`（`MobileGL/MG_IntegrationTest/Scenarios/WireIndirectDrawScenario.cpp:225`、`:274`、`:304`、`:343`），读数经 `MobileGL/MG_IntegrationTest/Harness/WireIndirectPeek.cpp:22`（进程内 PipeStats，只在 inproc 臂看得到 server）。登记：`MobileGL/MG_IntegrationTest/CMakeLists.txt:4831-4864`——Magma 门控三臂 `DirectVulkan.{Split,Spawn,Tcp}.Indirect.`、DirectGLES 三臂（经宏，含 Magma 信息层）、两后端 monolith（环境发现）。
 
 | 用例 | 断言 | 两后端 / 各臂 |
 |---|---|---|

@@ -7,7 +7,7 @@
 | 项 | 改动 | 位置 | 之前 | 之后 |
 |---|---|---|---|---|
 | 1 | multi-draw 的两个 server 闩改族 | `PipeApplier.cpp:779-784`、`:976-981` | `Fatal{UnmigratedVerb, "MultiDraw{Arrays,Elements}+{CLIENT_INDICES,INSTANCED}"}` | `Fatal{ProtocolCorruption, <同名>}`，仍按名闩住外来 peer |
-| 2 | `Magma:client-vertex-array` 去掉 P8 阶段标签，改为协议不变量 | `WireDraw.inc:297-304` | `MagmaWireFatal`（UnmigratedVerb 族，名字带 `@P8`） | `MGPipeSessionFail(ProtocolCorruption)`，名字 `Magma:client-vertex-array` 加 location |
+| 2 | `Magma:client-vertex-array` 去掉 P8 阶段标签，改为协议不变量 | `WireDraw.inc:300-307` | `MagmaWireFatal`（UnmigratedVerb 族，名字带 `@P8`） | `MGPipeSessionFail(ProtocolCorruption)`，名字 `Magma:client-vertex-array` 加 location |
 | 3 | Magma 生成 mip 的"无着色器臂形状"改为具名拒绝 | `WireFramebuffer.inc:1405-1459`（判定）、`:1456`、`:1500`（两个拒绝点） | wire 臂三处 Fatal（旧 `:1427`、`:1452`、`:1489-1493`） | `WireDeclines.def:112` 的 `MipmapShaderFormatOrShape`；判定在 `GrowWireTextureMipChain`（`:1460`）之前，拒绝时不增长 mip 链 |
 | 4 | `kCapViewportArray`、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes` 与 index-mirror 哨兵标为保留位 | `MGPipeTypes.h:110`、`:117-123`、`:315-320`、`:332-335`、`:994-999`、`:1007-1009`；`MGPipeHostSpan.h:16-26`；`VertexInputEmit.h:266-267`；`ShaderBufferEmit.h:250-253`；`MG_Backend/Init.cpp:189-191` | 注释说"P5 期间为 0"或"arms the index host mirror" | 注释说 RESERVED、从不发布、位不复用不重编号；只改注释 |
 
@@ -23,8 +23,8 @@
 | 2 | client 把每个启用的 client 内存数组转成自有 buffer，指针为空就拒绝整个 draw | `OwnedDrawInputs.h:102-131` |
 | 2 | `fatal_census.py` 只数 `Fatal{Word` 族词与 abort 点，不按 `@P` 字面计数 | `fatal_census.py:165-167` |
 | 2 | 普查前后：79 个 abort 点、20 个文件、45 个族词，均不变；不重写基线 | 本包门禁读数 |
-| 2 | 树内 `@P8` 字面：1（`WireDraw.inc:297`，基线）→ 0 | `git grep '@P8' -- MobileGL scripts tools` |
-| 3 | monolith 臂对无 BLIT 的格式一直是拒绝（跳过、链不写） | `VulkanRenderer.cpp:12225-12229` |
+| 2 | 树内 `@P8` 字面：1（`WireDraw.inc:300`，基线）→ 0 | `git grep '@P8' -- MobileGL scripts tools` |
+| 3 | monolith 臂对无 BLIT 的格式一直是拒绝（跳过、链不写） | `VulkanRenderer.cpp:12228-12232` |
 | 3 | 增长前后格式、特性、knob 档位、aspect、view 类型、usage、层窗口都不变 | `VkTextureManager.cpp:2884-2995` |
 | 3 | 深度 pass 对本函数交给它的图像只会因"格式不能同时采样和作深度附件"拒绝 | `WireDepthMipmap.inc:58-81` |
 | 3 | 深度 pass 若仍拒绝（两份清单漂移），走同一行拒绝，不结束会话 | `WireFramebuffer.inc:1491-1502` |
@@ -43,7 +43,7 @@
 | 3 | `spawn_lane_parity.py` 的 `.ShaderMipDecline.` 例外行 | 删掉该行 | `spawn_lane_parity.py build-split` | rc 1：`the tcp arm does not match the split arm: missing=['DirectVulkan.ShaderMipDecline.F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession']` |
 | 2 | 普查读数 | — | `fatal_census.py` | 无变化：该脚本不计阶段标签（见上） |
 
-- 新用例只登记 split + spawn：knob 由 server 读，tcp fixture 带不过去。登记在 `MobileGL/MG_IntegrationTest/CMakeLists.txt:3358-3376`，前缀 `.ShaderMipDecline.`。
+- 新用例只登记 split + spawn：knob 由 server 读，tcp fixture 带不过去。登记在 `MobileGL/MG_IntegrationTest/CMakeLists.txt:3484-3502`，前缀 `.ShaderMipDecline.`。
 - 该尾自成一行加进 `MAGMA_SERVER_ENV_KNOB_NO_TCP`（`spawn_lane_parity.py:141-143`）：脚本要求每个尾恰好命中一个用例，借用 `.ShaderMip1.` 会命中两个，门禁时 parity 报 1 个错，已改。
 - Espryt 不涉及第 2、3 项（Magma 专属）；新用例在 DirectGLES 上按后端名跳过。第 1 项在后端无关的 applier 里。
 

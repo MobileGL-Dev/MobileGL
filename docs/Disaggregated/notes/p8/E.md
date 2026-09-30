@@ -18,21 +18,21 @@
 | store 路由 | `DirectGLES/WireTextureReadback.inc:352` | 驱动拒绝回读时，store 仅在「整层覆盖、尺寸一致、纹理从未被驱动写过」时回答；转换同 `GetTexImageViaShadowConversion`（打包格式按字原样，其余解成宽 RGBA 逐行转） |
 | 具名拒绝 / 武装标记 | `DirectGLES/WireTextureReadback.inc:411`，`:416` | 拒绝：`MGLOG_E_ONCE` `texture-readback-store-declined`，回复 error，client Fatal。回答：`MGLOG_W_ONCE` `texture-readback-from-store` |
 | 驱动写标记 | `MG_Remote/Server/StagedTextureStore.h:479-514` | 按纹理、粘性；只有 `Drop` / `DropAll` 清，`ResetLevels` 不清（附件在重定义后照样写） |
-| 标记来源 | `DirectGLES/Managers.cpp:10901` | `NoteDriverSideTextureWriteByHandle` 同时标 store：附件、可写 image、`CopyTexSubImage`、生成 mip 都经过它 |
-| store 跟随 copy | `StagedTextureStore.h:519`，`DirectGLES/Managers.cpp:10924`，调用点 `DirectGLES/DirectGLES.cpp:13347-13365` | 两端同一内部格式（`DirectGLES/Managers.cpp:10946`）、单 upload target（非 cube / 1D array）、源整层覆盖且未被驱动写、目标整层覆盖或 copy 覆盖整层 → store 做同一搬移；否则给目标标驱动写 |
-| copy 失败 | `DirectGLES/DirectGLES.cpp:13440` | 驱动拒绝 copy 时 store 已搬，补标驱动写 |
-| 跟随后的 client 上传 | `DirectGLES/Managers.cpp:3193`，`StagedTextureStore.h:573` | client run 是 client 影子（没见过 copy），只落 record 声明写过的盒（regions，无 region 时 union box）；放不下则照常收养并标驱动写；`AdoptRun` 兜底同样标（`StagedTextureStore.h:353`） |
+| 标记来源 | `DirectGLES/Managers.cpp:10991` | `NoteDriverSideTextureWriteByHandle` 同时标 store：附件、可写 image、`CopyTexSubImage`、生成 mip 都经过它 |
+| store 跟随 copy | `StagedTextureStore.h:519`，`DirectGLES/Managers.cpp:11014`，调用点 `DirectGLES/DirectGLES.cpp:13670-13688` | 两端同一内部格式（`DirectGLES/Managers.cpp:11036`）、单 upload target（非 cube / 1D array）、源整层覆盖且未被驱动写、目标整层覆盖或 copy 覆盖整层 → store 做同一搬移；否则给目标标驱动写 |
+| copy 失败 | `DirectGLES/DirectGLES.cpp:13763` | 驱动拒绝 copy 时 store 已搬，补标驱动写 |
+| 跟随后的 client 上传 | `DirectGLES/Managers.cpp:3197`，`StagedTextureStore.h:573` | client run 是 client 影子（没见过 copy），只落 record 声明写过的盒（regions，无 region 时 union box）；放不下则照常收养并标驱动写；`AdoptRun` 兜底同样标（`StagedTextureStore.h:353`） |
 | 测试旋钮 | `DirectGLES/WireTextureReadback.inc:328` | `MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h>`，server 读；该尺寸颜色层的 FBO 腿视为驱动拒绝，R32UI 字腿不动 |
 
 不选「标 GPU 脏」：
 
-- Espryt 的 `GpuDirty` 语义是「需要从 store 重传」（`DirectGLES/Managers.cpp:8460`），标了会把 store 旧字节传回去盖掉 GPU 上的 copy。
-- 跟随后其他整层读 store 的路径也拿到对的字节：重铸回读被拒时的 W2-b 重放（`DirectGLES/Managers.cpp:6888`）、整层重传。
+- Espryt 的 `GpuDirty` 语义是「需要从 store 重传」（`DirectGLES/Managers.cpp:8550`），标了会把 store 旧字节传回去盖掉 GPU 上的 copy。
+- 跟随后其他整层读 store 的路径也拿到对的字节：重铸回读被拒时的 W2-b 重放（`DirectGLES/Managers.cpp:6978`）、整层重传。
 - 跟随不了的形状（跨格式、renderbuffer 源、被驱动写过的源、cube / 1D array、视图）降为具名拒绝，不给旧字节。
 
 旋钮按尺寸定界：
 
-- tcp 的 server 是整条 lane 共用的 `TcpServer.Start` fixture，旋钮只能放进它的 ENVIRONMENT（`MG_IntegrationTest/CMakeLists.txt:3245`）。
+- tcp 的 server 是整条 lane 共用的 `TcpServer.Start` fixture，旋钮只能放进它的 ENVIRONMENT（`MG_IntegrationTest/CMakeLists.txt:3268`）。
 - 场景只有自身环境里有旋钮时才建 13x7 的纹理，否则 12x6（`CopyImageStoreReadbackScenario.cpp:66`），所以 lane 级旋钮只碰 StoreRead 条目。
 - 实测：tcp 上无旋钮条目的 server 日志没有 `texture-readback-from-store`，StoreRead 条目有。
 
@@ -51,9 +51,9 @@
 | 条目 | 臂 | 登记 |
 |---|---|---|
 | `DirectGLES.*` / `DirectVulkan.*` | monolith | 整体发现 |
-| `DirectGLES.{Split,Spawn,Tcp}.*` | 三臂，无旋钮 | `mgl_itest_register_split_arms`（`MG_IntegrationTest/CMakeLists.txt:3229`） |
-| `DirectGLES.{Split,Spawn,Tcp}.StoreRead.*` | 三臂，旋钮 13x7，前 4 例 | `MG_IntegrationTest/CMakeLists.txt:3247-3273`，带 `integration-gpu` |
-| `DirectVulkan.{Split,Spawn,Tcp}.CopyStore.*` | Magma 门控三臂 | `MG_IntegrationTest/CMakeLists.txt:3281`；另有 tier 2 信息层 |
+| `DirectGLES.{Split,Spawn,Tcp}.*` | 三臂，无旋钮 | `mgl_itest_register_split_arms`（`MG_IntegrationTest/CMakeLists.txt:3252`） |
+| `DirectGLES.{Split,Spawn,Tcp}.StoreRead.*` | 三臂，旋钮 13x7，前 4 例 | `MG_IntegrationTest/CMakeLists.txt:3270-3296`，带 `integration-gpu` |
+| `DirectVulkan.{Split,Spawn,Tcp}.CopyStore.*` | Magma 门控三臂 | `MG_IntegrationTest/CMakeLists.txt:3304`；另有 tier 2 信息层 |
 
 - 三臂对称，`spawn_lane_parity.py` 不需例外行（`StoreRead.` 尾不被 Espryt 的 `CASE` 解析，`scripts/ci/spawn_lane_parity.py:39`）。
 - store 单元用例 6 个：`MG_Test/Wire/StagedTextureStoreTest.cpp:330-475`。
@@ -78,19 +78,19 @@
 
 ## 5. 死闩清理（无行为变化）
 
-- `CopyImageSubData+RENDERBUFFER`：原在 `SyncRenderbufferObjectToBackend` 内，条件是 transport≠monolith；唯一调用点只在 monolith 臂（split 臂按句柄处理，`DirectGLES/DirectGLES.cpp:13134-13155`），删去并改写注释（`DirectGLES/DirectGLES.cpp:13110-13117`）。
-- 镜像函数里过时的「client 侧镜像留给 P8」「由两个 Fatal 兜底」注释改写（`DirectGLES/DirectGLES.cpp:13239-13252`）。
+- `CopyImageSubData+RENDERBUFFER`：原在 `SyncRenderbufferObjectToBackend` 内，条件是 transport≠monolith；唯一调用点只在 monolith 臂（split 臂按句柄处理，`DirectGLES/DirectGLES.cpp:13461-13482`），删去并改写注释（`DirectGLES/DirectGLES.cpp:13437-13444`）。
+- 镜像函数里过时的「client 侧镜像留给 P8」「由两个 Fatal 兜底」注释改写（`DirectGLES/DirectGLES.cpp:13566-13579`）。
 - Fatal 普查：abort 点 79 → 78（`DirectGLES.cpp` 15 → 14），族 45 不变；基线用 `fatal_census.py --write-baseline` 重写。
 
 ## 6. monolith 缺陷（ID-P8-3，记给 dev，不在此修）
 
-- `MirrorCopyImageIntoDestinationShadow` 只对 `HasRedundantPackedEncoding`（仅 RGB9_E5）调用（`DirectGLES/DirectGLES.cpp:13450`）；其他格式 copy 后 CPU 影子不变。
-- 驱动 attach 不了目标格式时 `GetTexImage` 退到影子（`DirectGLES/DirectGLES.cpp:15748`）→ 返回 copy 前字节。设备（Adreno：RGB16 / 16 位 SNORM / 无 norm16 时的 RGBA16）可达。
+- `MirrorCopyImageIntoDestinationShadow` 只对 `HasRedundantPackedEncoding`（仅 RGB9_E5）调用（`DirectGLES/DirectGLES.cpp:13773`）；其他格式 copy 后 CPU 影子不变。
+- 驱动 attach 不了目标格式时 `GetTexImage` 退到影子（`DirectGLES/DirectGLES.cpp:16071`）→ 返回 copy 前字节。设备（Adreno：RGB16 / 16 位 SNORM / 无 norm16 时的 RGBA16）可达。
 - red-once 见 §4 MONO；修法建议：镜像对所有非压缩同格式 copy 都做，或像 split 一样按纹理记「驱动写过」后拒绝。
 
 ## 7. 未做 / 发现未修
 
-- `copy-image-shadow-mirror` 的 `MGPipeUnmigratedEmulation` 调用（`DirectGLES/DirectGLES.cpp:13261`）在 transport 下不可达（`:13253` 先返回），未删：名单在 `PipeCatalogueTest.cpp:1439`，归 B / F 统一改。
+- `copy-image-shadow-mirror` 的 `MGPipeUnmigratedEmulation` 调用在 transport 下不可达（`DirectGLES/DirectGLES.cpp:13580` 先返回），本包未删；P8-SE 已删调用与名（`DirectGLES/DirectGLES.cpp:13582-13585`、`PipeCatalogueTest.cpp:1448-1450`，[`SE.md`](SE.md)）。
 - `MGPipeTypes.h:1535` 的 P5b 历史注释仍提 `+RENDERBUFFER` 拒绝；是 wire 头注释，未动。
 - 跨格式 copy 不跟随（store 存规范影子，16 位打包、RGB10 / RGB12 的规范表示不是 GL 位），降为具名拒绝。
 - 具名拒绝仍是会话 Fatal（client 的 `RequireReadbackReplyComplete`）；改成 `GL_INVALID_OPERATION` 需要协议变更，不在本包。
