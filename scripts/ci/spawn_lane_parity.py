@@ -138,7 +138,9 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".Reclaim.MagmaWireReclaimScenario.ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle",
                                 ".Reclaim.MagmaWireReclaimScenario.DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires") + tuple(
     f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES) + tuple(
-    f".SplitRecording64.OversizedRecordingSplitScenario.{case}" for case in SPLIT_RECORDING_CASES)
+    f".SplitRecording64.OversizedRecordingSplitScenario.{case}" for case in SPLIT_RECORDING_CASES) + (
+    # P8-F: the mip shader-shape decline, forced by MGITEST_MAGMA_FORCE_SHADER_MIPMAP (server-read).
+    ".ShaderMipDecline.",)
 
 
 # THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. Each tail must match at least

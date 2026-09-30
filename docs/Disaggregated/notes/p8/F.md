@@ -38,11 +38,13 @@
 | 项 | 门 | 变异 | 载体 | 观测到的红 |
 |---|---|---|---|---|
 | 1 | `PeerLatchTest` 行 `MultiDrawInstanced` 期望 `Fatal{ProtocolCorruption, "MultiDrawArrays+INSTANCED"}` | 闩的族改回 `UnmigratedVerb` | `FuzzArm2/PeerLatchSite.*/MultiDrawInstanced`、`PeerLatch.SiteMap` | 两例红：首行 `Fatal{UnmigratedVerb, ...}` 不含期望标记；站点图报该站点未映射 |
-| 3 | `F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession`（3D RGBA8，`MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1`） | 拒绝改回 `MagmaWireFatal` | `DirectVulkan.{Split,Spawn}.ShaderMip1.` 两例 | 两例 `Subprocess aborted`，server 日志 `Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape format=37 extent=4x4x4 ..."}` |
+| 3 | `F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession`（3D RGBA8，`MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1`） | 拒绝改回 `MagmaWireFatal` | `DirectVulkan.{Split,Spawn}.ShaderMipDecline.` 两例（当时前缀为 `.ShaderMip1.`，后改名，见下） | 两例 `Subprocess aborted`，server 日志 `Fatal{UnmigratedVerb, "Magma:mipmap-shader-format-or-shape format=37 extent=4x4x4 ..."}` |
 | 3 | 同上（前提） | 无（新用例落在未改的基线代码上） | 同上 | 同样两例 abort：前提成立 |
+| 3 | `spawn_lane_parity.py` 的 `.ShaderMipDecline.` 例外行 | 删掉该行 | `spawn_lane_parity.py build-split` | rc 1：`the tcp arm does not match the split arm: missing=['DirectVulkan.ShaderMipDecline.F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession']` |
 | 2 | 普查读数 | — | `fatal_census.py` | 无变化：该脚本不计阶段标签（见上） |
 
-- 新用例只登记 split + spawn：knob 由 server 读，tcp fixture 带不过去；`.ShaderMip1.` 尾已在 `spawn_lane_parity.py:130` 的 `MAGMA_SERVER_ENV_KNOB_NO_TCP` 中。登记在 `MobileGL/MG_IntegrationTest/CMakeLists.txt:3358-3376`。
+- 新用例只登记 split + spawn：knob 由 server 读，tcp fixture 带不过去。登记在 `MobileGL/MG_IntegrationTest/CMakeLists.txt:3358-3376`，前缀 `.ShaderMipDecline.`。
+- 该尾自成一行加进 `MAGMA_SERVER_ENV_KNOB_NO_TCP`（`spawn_lane_parity.py:141-143`）：脚本要求每个尾恰好命中一个用例，借用 `.ShaderMip1.` 会命中两个，门禁时 parity 报 1 个错，已改。
 - Espryt 不涉及第 2、3 项（Magma 专属）；新用例在 DirectGLES 上按后端名跳过。第 1 项在后端无关的 applier 里。
 
 ## 发现但未修

@@ -3359,15 +3359,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # (WireDeclines.def MipmapShaderFormatOrShape), as the monolith arm's GenerateMipmap already
     # declines. The shape is a 3D chain with the native blit forced off - neither shader mip arm
     # takes it - and the knob is read BY THE SERVER, so split + spawn only (the ShaderMip entries'
-    # tcp note below). The `.ShaderMip1.` tail is already MAGMA_SERVER_ENV_KNOB_NO_TCP in
-    # scripts/ci/spawn_lane_parity.py. Environment: the Fm lane's flavour plus the arm.
+    # tcp note below). Its own `.ShaderMipDecline.` tail is in MAGMA_SERVER_ENV_KNOB_NO_TCP
+    # (scripts/ci/spawn_lane_parity.py: one tail per knob case). The Fm lane's flavour plus the arm.
     foreach(mglItestArm IN ITEMS Split Spawn)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(mglItestP8fMipEnvironment
             "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV} ${mglItestArmTransportEnv})
         gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMip1."
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMipDecline."
             TEST_FILTER "F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession"
             DISCOVERY_TIMEOUT 30
             PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
