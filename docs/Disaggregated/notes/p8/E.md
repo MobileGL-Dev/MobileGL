@@ -97,6 +97,23 @@
 - 深度格式经 `BlitDepthTexture2D` 的 copy 由 store 按原样搬移；若该仿真非逐位，store 与 GPU 可能有精度差，只影响驱动拒绝深度回读的情形。
 - 未上设备验证（简报：只有 S 包用手机）。
 
+- tcp 的 lane 级旋钮今后会碰到任何读回 13x7x1 颜色层的 tcp 条目；现有场景无 13x7 纹理（grep），现有 357 个 tcp 条目在它下面全过。
+- 设备上走 store 路由时，`ReadTextureLevelTight` 先打一行 `MGLOG_E_ONCE` `framebuffer status=`（`DirectGLES/WireTextureReadback.inc:269`），随后才是成功的 `texture-readback-from-store`；日志里会有一行 ERROR 在正常路径上。
+
 ## 8. 门
 
-（见 §8 补记）
+`gate.sh ~/w7/p8-e p8e`，头 `00d6c248`，dirty 0（`~/w7/notes/p8/e-evidence/gate-p8e.log`）。
+
+| 项 | 读数 |
+|---|---|
+| G1 | `added=0 removed=0`；`.text` a5ba13 与基线相同 |
+| Fatal 普查 | 78 abort 点 / 20 文件 / 45 族 / 0 未标记（79 → 78，§5） |
+| link ratchet | 172 不变 |
+| parity errors | 0 |
+| protocol pin / wire-declines | revision 5 / 53 行 53 处 0 未记 |
+| hygiene | 12/12 OK |
+| unit | 2720 / 2720 |
+| integration-split / spawn / tcp | 436 / 355 / 357，全过 |
+| magma split / spawn / tcp / full-split | 256 / 233 / 202 / 641，全过 |
+| integration-gpu[monolith] / [inproc] | 2725 / 2725 |
+| retrace（`-L retrace`，236） | 230 过；6 红 = 已知 `iterationrp-in-world` llvmpipe JIT 崩溃（monolith 两后端 + split / spawn 两后端）；split 76、spawn 76 条全过（`retrace-p8e.log`） |
