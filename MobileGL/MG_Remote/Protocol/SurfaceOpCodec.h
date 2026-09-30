@@ -68,6 +68,9 @@ namespace MobileGL::MG_Remote {
         // CreateWindowSurface only, and only with nativeToken 0:
         ServerOwnedTokenNotZero,      // -> Fatal{ProtocolCorruption, "SurfaceOp.nativeToken"}, latched
         ServerOwnedOnSetWindowHandle, // -> a NAMED REFUSAL (reply ok=false), not a latch
+        // MOBILEGL_IPC_SURFACE=host, the same two rules for the other on-screen shape:
+        HostFrameTokenNotZero,      // -> Fatal{ProtocolCorruption, "SurfaceOp.nativeToken"}, latched
+        HostFrameOnSetWindowHandle, // -> a NAMED REFUSAL (reply ok=false), not a latch
     };
 
     const char* SurfaceWireErrorName(SurfaceWireError error);

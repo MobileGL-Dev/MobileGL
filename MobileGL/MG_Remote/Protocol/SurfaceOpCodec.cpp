@@ -58,6 +58,11 @@ namespace MobileGL::MG_Remote {
         static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer) == 6);
         // P12's append, on the same terms: the value is wire ABI.
         static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::ServerOwned) == 7);
+        static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::HostFrame) == 8);
+        static_assert(static_cast<Uint8>(::MobileGL::Wire::SurfaceRefusal::HostFrameOnSetWindowHandle) ==
+                      static_cast<Uint8>(Server::SurfaceRefusalCode::HostFrameOnSetWindowHandle));
+        static_assert(Server::kHostFrameWindowBackend > Server::kServerOwnedWindowBackend,
+                      "kHostFrameWindowBackend must not collide with the server-owned tag");
         // The frame's refusal codes ARE the wire's SurfaceRefusal (SurfaceControlFrame.h), pinned
         // value by value so a schema edit that renumbers either side fails here.
         using Server::SurfaceRefusalCode;
@@ -94,6 +99,8 @@ namespace MobileGL::MG_Remote {
         case SurfaceWireError::AndroidNativeWindowArrived: return "AndroidNativeWindowArrived";
         case SurfaceWireError::ServerOwnedTokenNotZero: return "ServerOwnedTokenNotZero";
         case SurfaceWireError::ServerOwnedOnSetWindowHandle: return "ServerOwnedOnSetWindowHandle";
+        case SurfaceWireError::HostFrameTokenNotZero: return "HostFrameTokenNotZero";
+        case SurfaceWireError::HostFrameOnSetWindowHandle: return "HostFrameOnSetWindowHandle";
         }
         return "<unknown SurfaceWireError>";
     }
@@ -167,6 +174,15 @@ namespace MobileGL::MG_Remote {
                 }
                 windowKind = ::MobileGL::Wire::WindowKind::ServerOwned;
                 nativeToken = 0;
+            } else if (frame.windowBackend == Server::kHostFrameWindowBackend) {
+                // MOBILEGL_IPC_SURFACE=host: the frames are the DISPLAY HOST's, taken by the
+                // server from the host frame bridge.  As for the server-owned tag - a creation
+                // only, and the token is 0 whatever the frame carried.
+                if (frame.kind != SurfaceControlOp::CreateWindowSurface) {
+                    return SurfaceWireError::HostFrameOnSetWindowHandle;
+                }
+                windowKind = ::MobileGL::Wire::WindowKind::HostFrame;
+                nativeToken = 0;
             } else if (!WireWindowKindForWindowBackend(
                            static_cast<MG_Backend::WindowBackend>(frame.windowBackend), &windowKind)) {
                 return SurfaceWireError::UnknownWindowKind;
@@ -213,6 +229,21 @@ namespace MobileGL::MG_Remote {
                 *frame = decoded;
                 return SurfaceWireError::None;
             }
+            if (op.windowKind() == ::MobileGL::Wire::WindowKind::HostFrame) {
+                // MOBILEGL_IPC_SURFACE=host.  As above: a creation only, and a token of 0
+                // only - anything else is a value from the peer's window system trying to
+                // cross (Rule G), which is corruption rather than a refusal.
+                if (kind != SurfaceControlOp::CreateWindowSurface) {
+                    return SurfaceWireError::HostFrameOnSetWindowHandle;
+                }
+                if (op.nativeToken() != 0) {
+                    return SurfaceWireError::HostFrameTokenNotZero;
+                }
+                decoded.windowBackend = Server::kHostFrameWindowBackend;
+                decoded.nativeToken = 0;
+                *frame = decoded;
+                return SurfaceWireError::None;
+            }
             if (op.windowKind() == ::MobileGL::Wire::WindowKind::AndroidNativeWindow) {
                 // The one refusal that is not corruption: the window kind is LEGAL and the token
                 // is an ANativeWindow*, which names memory in the CLIENT's process. Real window
@@ -225,10 +256,10 @@ namespace MobileGL::MG_Remote {
             }
             MG_Backend::WindowBackend backend;
             if (!WindowBackendForWireWindowKind(op.windowKind(), &backend)) {
-                // THE UPPER BOUND IS THE LAST APPENDED KIND (P12: ServerOwned), for the reason
+                // THE UPPER BOUND IS THE LAST APPENDED KIND (P12: HostFrame), for the reason
                 // SurfaceControlOpForWireKind's bound gives.
                 return ::flatbuffers::IsOutRange(op.windowKind(), ::MobileGL::Wire::WindowKind::None,
-                                                 ::MobileGL::Wire::WindowKind::ServerOwned)
+                                                 ::MobileGL::Wire::WindowKind::HostFrame)
                            ? SurfaceWireError::UnknownWindowKind
                            : SurfaceWireError::WindowKindNamesNoBackend;
             }

@@ -60,6 +60,7 @@ namespace MobileGL::MG_Remote::Server {
         case SurfaceRefusalCode::NoServerWindow: return "NoServerWindow";
         case SurfaceRefusalCode::SurfaceModeMismatch: return "SurfaceModeMismatch";
         case SurfaceRefusalCode::ServerOwnedOnSetWindowHandle: return "ServerOwnedOnSetWindowHandle";
+        case SurfaceRefusalCode::HostFrameOnSetWindowHandle: return "HostFrameOnSetWindowHandle";
         }
         return "<unknown SurfaceRefusalCode>";
     }

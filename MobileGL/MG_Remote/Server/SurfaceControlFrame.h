@@ -105,6 +105,7 @@ namespace MobileGL::MG_Remote::Server {
         NoServerWindow = 2,               // a display, but no window within the wait
         SurfaceModeMismatch = 3,          // D4: the session's surface mode is the other one
         ServerOwnedOnSetWindowHandle = 4, // SetWindowHandle named the server's own window
+        HostFrameOnSetWindowHandle = 5,   // SetWindowHandle named the display host's frames
     };
 
     const char* SurfaceRefusalCodeName(SurfaceRefusalCode code);

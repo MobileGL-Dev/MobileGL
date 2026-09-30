@@ -341,11 +341,12 @@ enum class WindowKind : uint8_t {
   Pbuffer = 5,
   MetalLayer = 6,
   ServerOwned = 7,
+  HostFrame = 8,
   MIN = None,
-  MAX = ServerOwned
+  MAX = HostFrame
 };
 
-inline const WindowKind (&EnumValuesWindowKind())[8] {
+inline const WindowKind (&EnumValuesWindowKind())[9] {
   static const WindowKind values[] = {
     WindowKind::None,
     WindowKind::AndroidNativeWindow,
@@ -354,13 +355,14 @@ inline const WindowKind (&EnumValuesWindowKind())[8] {
     WindowKind::Surfaceless,
     WindowKind::Pbuffer,
     WindowKind::MetalLayer,
-    WindowKind::ServerOwned
+    WindowKind::ServerOwned,
+    WindowKind::HostFrame
   };
   return values;
 }
 
 inline const char * const *EnumNamesWindowKind() {
-  static const char * const names[9] = {
+  static const char * const names[10] = {
     "None",
     "AndroidNativeWindow",
     "X11",
@@ -369,13 +371,14 @@ inline const char * const *EnumNamesWindowKind() {
     "Pbuffer",
     "MetalLayer",
     "ServerOwned",
+    "HostFrame",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameWindowKind(WindowKind e) {
-  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::ServerOwned)) return "";
+  if (::flatbuffers::IsOutRange(e, WindowKind::None, WindowKind::HostFrame)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesWindowKind()[index];
 }
@@ -386,35 +389,38 @@ enum class SurfaceRefusal : uint8_t {
   NoServerWindow = 2,
   SurfaceModeMismatch = 3,
   ServerOwnedOnSetWindowHandle = 4,
+  HostFrameOnSetWindowHandle = 5,
   MIN = None,
-  MAX = ServerOwnedOnSetWindowHandle
+  MAX = HostFrameOnSetWindowHandle
 };
 
-inline const SurfaceRefusal (&EnumValuesSurfaceRefusal())[5] {
+inline const SurfaceRefusal (&EnumValuesSurfaceRefusal())[6] {
   static const SurfaceRefusal values[] = {
     SurfaceRefusal::None,
     SurfaceRefusal::NoServerDisplay,
     SurfaceRefusal::NoServerWindow,
     SurfaceRefusal::SurfaceModeMismatch,
-    SurfaceRefusal::ServerOwnedOnSetWindowHandle
+    SurfaceRefusal::ServerOwnedOnSetWindowHandle,
+    SurfaceRefusal::HostFrameOnSetWindowHandle
   };
   return values;
 }
 
 inline const char * const *EnumNamesSurfaceRefusal() {
-  static const char * const names[6] = {
+  static const char * const names[7] = {
     "None",
     "NoServerDisplay",
     "NoServerWindow",
     "SurfaceModeMismatch",
     "ServerOwnedOnSetWindowHandle",
+    "HostFrameOnSetWindowHandle",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameSurfaceRefusal(SurfaceRefusal e) {
-  if (::flatbuffers::IsOutRange(e, SurfaceRefusal::None, SurfaceRefusal::ServerOwnedOnSetWindowHandle)) return "";
+  if (::flatbuffers::IsOutRange(e, SurfaceRefusal::None, SurfaceRefusal::HostFrameOnSetWindowHandle)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesSurfaceRefusal()[index];
 }

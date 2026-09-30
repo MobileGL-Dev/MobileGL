@@ -274,6 +274,12 @@ enum WindowKind : ubyte {
   // SurfaceView) and has none of its own to name, so `nativeToken` is always 0 and no pointer
   // crosses (Rule G/H). Legal on CreateWindowSurface only; SetWindowHandle may not name it.
   ServerOwned = 7,
+  // P12, appended: the OTHER on-screen shape, and its mirror image.  The client names no
+  // window here either - but the frames are the DISPLAY HOST's: it allocates them, offers
+  // each one over the host frame bridge, and puts them on the glass itself, while the
+  // server draws into them.  `nativeToken` is always 0, as for ServerOwned, and it is legal
+  // on CreateWindowSurface only.
+  HostFrame = 8,
 }
 
 // P12, appended: WHY A SURFACE OP WAS DECLINED, so the client can name the refusal in its own log
@@ -285,6 +291,7 @@ enum SurfaceRefusal : ubyte {
   NoServerWindow = 2,               // the server owns a display, but no window came within its wait
   SurfaceModeMismatch = 3,          // the session's surface mode (on-screen / offscreen) is the other one
   ServerOwnedOnSetWindowHandle = 4, // SetWindowHandle named the server's own window
+  HostFrameOnSetWindowHandle = 5,   // SetWindowHandle named the display host's frames
 }
 
 table SurfaceOp {
