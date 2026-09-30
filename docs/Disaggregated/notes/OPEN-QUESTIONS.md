@@ -27,4 +27,4 @@ P0 已回答的不再列出（spike A 的域、spike B 的分档、`posix_spawn`
 21. **配对 / 认证的形式。** **已裁定（ID-P7-3，2026-09-22）：令牌足够，不做 TLS。** 威胁模型是「任何人都能连的远程代码路径」而不是窃听：令牌常量时间比较、≥16 字节、无令牌只 loopback、数据面以 `Welcome.dataNonce` 绑定到已认证的控制连接、fork 前认证。TLS 作为 P12 的开放项保留。
 22. **client 平台范围。** 默认先 Linux + Android（现有 CI 能验），Windows client 第二批（`ShmSegmentWin32` 在；`pipe:` 具名拒绝作废、TCP 替代），macOS 仍不拆分。这决定 `ARCHITECTURE.md` §15.3 "Windows 机器不是正确性门"要不要改。
 23. **半开连接的检测。** Wi-Fi 掉线不产生挂断事件；dl 的闩取自描述符挂断，TCP 上需要 keepalive / 心跳超时并**由传输层报告为挂断**——这与"绝不取自 apply 超时"不矛盾，写清楚免得重吵。P6.5 ct。
-24. **E1 对照的重定义（ID-122）无主。** 建议并入 P6.5 的门设计：S8 的好路径断言（`SessionFaultCount() == 0`）已是它想表达的形状，缺的是一个能被证伪的负控。
+24. **E1 对照的重定义（ID-122）。** **已关闭（2026-09-29 债务审查）**：`10bfd29f` 把 E1 的像素竞速换成观测协议等待的负控 `scripts/ci/wait_boundary_negative_control.py`，由 `split_negative_controls.sh:174` 调用。

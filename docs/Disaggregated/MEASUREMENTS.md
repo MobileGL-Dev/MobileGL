@@ -49,3 +49,4 @@
 | 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`notes/p7`](notes/p7/README.md) |
 | 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；**P12 已收官（09-29）**：跨机 TCP 门 (b) 通过（rd12 ssim 0.999883、稳态 17–22 fps）；FCL 门 (a) 通过（Minecraft 上屏到 render server 窗口，杀 server 后 33–54 ms 闩住 device-lost） | [`notes/p12`](notes/p12/README.md) |
 | 17 | 五臂传输测量（2026-09-28，非阶段） | inproc/shm 重负载比 monolith 快 ~1/3；tcp localhost 瓶颈是 credit=1 + 唤醒税（SPIN_US=2000 → 2.9×）；跨主机 hang 实为主机 xray TUN 代理造成；直连 Wi-Fi 稳态 rd12 17–22 fps、openra 105–133 fps | [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md) |
+| 18 | P11 | 同机零拷贝（T0）MC 26.3 峰值内存 Espryt −41–42%、Magma −18–26%，ssim / 帧时 / CPU 不变；外部 client 走共享内存 rd12 Espryt 约 119 fps（TCP 40–53）；split T2 相对单进程采纳 p99 Espryt +37–42%、Magma 约 2.5×。未量：M2 后 split server 上纹理无 GPU 写时 Espryt 自己按存储阈值取舍精确写入框，非 ring 路径可能多发几个小框 | [`notes/p11`](notes/p11/README.md) |

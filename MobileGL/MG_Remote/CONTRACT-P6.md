@@ -667,7 +667,7 @@ Negative controls, each run red once:
 ## §11 Not P6
 
 Real window arrival and the `android:process=":mgl"` Service (P12); multi-context (P12); chunked
-readback and the reply-slot pool (P9); `DynamicBackendParameters`' fixed-width rewrite (P7);
+readback and the reply-slot pool (P9); `DynamicBackendParameters`' fixed-width rewrite (landed by P6.5 wf);
 `MOBILEGL_IPC_POLL_ESCALATE` (P10); remaining monolith-only frontend-object / twin-registry glue
 (P3b/P4b) and the named P7 functionality debts; Windows `pipe:` / `unix:`; the 511 class-C entries.
 
