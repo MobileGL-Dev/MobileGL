@@ -160,6 +160,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GetSyncPointSubmitIndex(), which answers m_submitCounter when nothing is recorded -
         // true for a fence taken at that instant, wrong for work about to be recorded.
         Uint64 GetWireNextSubmitIndex() const { return m_submitCounter + 1; }
+        // P8-D: the wire arm's indirect draw families, issued as vkCmdDraw[Indexed]Indirect[Count]
+        // from the wire stores MGPipeApplier().VerbIndirectBuffer / VerbIndirectParameterBuffer
+        // name. `offset` / `countOffset` are byte offsets into those stores; `stride` 0 means
+        // tightly packed. FALSE = this device cannot issue the COUNT form natively (the monolith
+        // arm's own condition, see the definition in WireDraw.inc) and the caller must read the
+        // words on the CPU; TRUE = issued, or declined by name.
+        Bool DrawWireIndirectNative(GLenum mode, GLenum type, Uint64 offset, GLsizei drawcount, GLsizei stride,
+                                    Bool indexed, Bool counted, Uint64 countOffset);
         // P11 B2 (T0): what importing a client's AHardwareBuffer as a wire buffer store needs from
         // this device. False when the device did not take VK_ANDROID_external_memory_android_
         // hardware_buffer at creation (not Android, not advertised, or a monolith device).
@@ -680,6 +688,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void CollectWireObjects(Uint64 completedSubmit, Bool all = false);
         Vector<WireRetiredObjects> m_wireRetiredObjects;
         Uint32 m_wirePreparationDepth = 0;
+        // P8-D: set only while DrawWireIndirectNative is inside SetupDraw, so SetupWireDraw can
+        // tell the wire arm's own indirect draw from a monolith indirect entry point reached under
+        // a transport (still the `buffer-legacy-arm` role violation).
+        Bool m_wireNativeIndirectDraw = false;
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
         void RewindWireDescriptorSetsIfDue();
         UniquePtr<RenderPassEntry> m_wireDrawPass;
@@ -921,6 +933,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
                                                                  Uint32 stride);
         static inline PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-D: vkCmdDrawIndirectCount (same signature, same extension), for the wire arm's
+        // glMultiDrawArraysIndirectCount. The monolith arm never loads it: it reads that count on
+        // the CPU (DirectVulkan.cpp's MultiDrawArraysIndirectCount).
+        static inline PFNDrawIndexedIndirectCountFunc s_vkCmdWireDrawIndirectCount = nullptr;
+#endif
         // VK_EXT_multi_draw entry points, loaded at device creation when the extension
         // (and its multiDraw feature) is enabled; null otherwise.
         static inline PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;

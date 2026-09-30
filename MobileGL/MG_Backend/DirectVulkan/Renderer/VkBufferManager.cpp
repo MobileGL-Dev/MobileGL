@@ -22,6 +22,7 @@
 #include <android/hardware_buffer.h>
 #endif
 #include <Config.h>
+#include <chrono>
 #include <cstdlib>
 #endif
 
@@ -271,6 +272,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->lastUseSerial = 0;
         resource->lastUseSubmitIndex = 0;  // M2 r2: the new store carries no submission yet (B3's stamp is per store)
         resource->gpuWritesPending = false;
+        resource->indirectReadBarrierPending = false;
         resource->stagedCoverage.clear();
         ++m_sliceEpochCounter;
         if (resource->size == 0) return;
@@ -315,7 +317,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                              0, 1, &barrier, 0, nullptr, 0, nullptr);
-        if (!pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
+        // P8-D: counted here, past the idle early-out, so `whw` is waits TAKEN, not calls.
+        ++m_wireHostWaits;
+        const Bool timed = MG_Util::PipeStats::Enabled();
+        const auto waitStart = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const Bool waited =
+            pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true);
+        if (timed) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireHostWaits, 1);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireHostWaitMicros,
+                static_cast<Uint64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - waitStart).count()));
+        }
+        if (!waited) {
             return false;
         }
         resource.lastUseSerial = 0;
@@ -594,6 +608,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->lastUseSerial = m_frameSerial;
         resource->stagedCoverage.clear();
         resource->gpuWritesPending = true;
+        resource->indirectReadBarrierPending = true;
         ++m_sliceEpochCounter;
         // The existing client dirty-state protocol accepts one whole-store
         // notification. The store remains on the GPU and exact later SubData
@@ -604,6 +619,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::abort();
         }
         MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &range);
+    }
+
+    Bool VkBufferManager::TakeWireIndirectReadBarrier(MG_Pipe::MGPipeHandle res) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || !resource->indirectReadBarrierPending) return false;
+        resource->indirectReadBarrierPending = false;
+        return true;
     }
 
     // ---- P11 B2: T0 - THE CLIENT'S AHardwareBuffer AS A WIRE STORE -----------------------------

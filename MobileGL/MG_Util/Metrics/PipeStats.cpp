@@ -238,6 +238,8 @@ namespace MobileGL::MG_Util::PipeStats {
             "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
             "resident-subdata-emissions",
             "residual-pulls", "server-verb-boundaries", "wire-records",
+            "wire-indirect-native-draws", "wire-indirect-cpu-expansions", "wire-indirect-barriers",
+            "wire-host-waits", "wire-host-waits-indirect", "wire-host-wait-us",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -690,6 +692,15 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " wlivepk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)]));
         line += " wdefpk=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)]));
         line += " wdefsync=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)]));
+        // P8-D: the Magma wire arm's indirect draws and its host-access waits, windowed like the
+        // other CallClass fields (per window, not per frame: the create fixtures hold one frame).
+        line += "] windr[wind=" +
+                std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDraws)]);
+        line += " wixp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectCpuExpansions)]);
+        line += " wibar=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectBarriers)]);
+        line += " whw=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaits)]);
+        line += " whwi=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitsIndirect)]);
+        line += " whwus=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitMicros)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {

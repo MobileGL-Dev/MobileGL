@@ -4648,6 +4648,41 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# P8-D: the Magma wire arm issues indirect draws natively (docs/Disaggregated/notes/p8/D.md).
+# Public GL, so the source joins the binary unguarded and the ambient `DirectGLES.` /
+# `DirectVulkan.` monolith discovery runs it too. Split arms: DirectGLES through the registration
+# macro (which also replays it on Magma's informational tier), Magma's gated tier by hand, all
+# three transports - the counter halves read only on the inproc arm (WireIndirectPeek.h) and the
+# pixel halves everywhere, so there is no arm-only property to declare.
+target_sources(MobileGLIntegrationTest PRIVATE Harness/WireIndirectPeek.cpp Scenarios/WireIndirectDrawScenario.cpp)
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_register_split_arms("WireIndirectDrawScenario.*" "")
+    set(MGL_ITEST_MAGMA_INDIRECT_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm} indirect)
+        mgl_itest_join_environment(MGL_ITEST_MAGMA_INDIRECT_ENVIRONMENT
+            ${MGL_ITEST_MAGMA_INDIRECT_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        foreach(indirectCase
+                EveryIndirectFormIsIssuedNativelyFromItsStore
+                ComputeWrittenCommandsDrawWithoutAHostWait
+                ComputeWrittenCountWordIsTheOneTheGpuReads
+                ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.Indirect."
+                TEST_FILTER "WireIndirectDrawScenario.${indirectCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${MGL_ITEST_MAGMA_INDIRECT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-indirect${mglItestArmLogTag}-${indirectCase}.log")
+        endforeach()
+    endforeach()
+endif()
+
 # =====================================================================================
 # P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
 # =====================================================================================

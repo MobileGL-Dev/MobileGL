@@ -3582,6 +3582,9 @@ void main() {
             m_device = VK_NULL_HANDLE;
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        s_vkCmdWireDrawIndirectCount = nullptr;
+#endif
         s_vkCmdDrawMultiEXT = nullptr;
         s_vkCmdDrawMultiIndexedEXT = nullptr;
 
@@ -15933,6 +15936,16 @@ void main() {
             MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-D: the wire arm's glMultiDrawArraysIndirectCount. Null = that verb reads its count on
+        // the CPU (WireDraw.inc's DrawWireIndirectNative answers false for it).
+        s_vkCmdWireDrawIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
+            vkGetDeviceProcAddr(m_device, "vkCmdDrawIndirectCountKHR"));
+        if (s_vkCmdWireDrawIndirectCount == nullptr) {
+            s_vkCmdWireDrawIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
+                vkGetDeviceProcAddr(m_device, "vkCmdDrawIndirectCount"));
+        }
+#endif
 
         s_vkCmdDrawMultiEXT = nullptr;
         s_vkCmdDrawMultiIndexedEXT = nullptr;

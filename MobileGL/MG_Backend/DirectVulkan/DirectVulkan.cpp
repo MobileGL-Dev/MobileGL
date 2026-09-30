@@ -370,16 +370,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif // !MOBILEGL_BUILD_DISAGGREGATED
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // The verb's handles identify server stores. Readback orders GPU-produced
-        // command/count bytes before CPU tier expansion; never inspect a client binding.
+        // The verb's handles identify server stores; never inspect a client binding.
+        //
+        // P8-D: THE GPU READS THE WORDS (VulkanRenderer::DrawWireIndirectNative, WireDraw.inc), as
+        // on the monolith arm. The CPU expansion below is kept for the one shape the monolith arm
+        // also expands - a COUNT form the device cannot issue natively (no VK_KHR_draw_indirect_count,
+        // or maxdrawcount > 1 without multiDrawIndirect: VulkanRenderer.cpp's
+        // MultiDrawElementsIndirectCount) - where ReadWireBuffer orders GPU-produced command/count
+        // bytes before the expansion.
         void DrawWireIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
                               GLsizei stride, Bool indexed, Bool counted = false, GLintptr countOffset = 0) {
-            if (drawcount <= 0) return;
+            if (drawcount <= 0 || countOffset < 0) return;
+            if (pVulkanRenderer->DrawWireIndirectNative(mode, type, reinterpret_cast<Uint64>(indirect), drawcount,
+                    stride, indexed, counted, static_cast<Uint64>(countOffset)))
+                return;
             auto& buffers = pVulkanRenderer->GetWireBufferManager();
             const auto& state = MG_Pipe::MGPipeApplier();
+            // P8-D: this call reads its words on the CPU; the waits those reads take are its own.
+            struct ExpansionCount {
+                VkBufferManager& buffers;
+                const Uint64 waitsBefore = buffers.GetWireHostWaitCount();
+                ~ExpansionCount() {
+                    if (!MG_Util::PipeStats::Enabled()) return;
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectCpuExpansions, 1);
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireHostWaitsIndirect,
+                                                 buffers.GetWireHostWaitCount() - waitsBefore);
+                }
+            } expansionCount{buffers};
             if (counted) {
                 Uint32 count = 0;
-                if (countOffset < 0 || !buffers.ReadWireBuffer(state.VerbIndirectParameterBuffer,
+                if (!buffers.ReadWireBuffer(state.VerbIndirectParameterBuffer,
                         static_cast<Uint64>(countOffset), sizeof(count), &count)) return;
                 drawcount = static_cast<GLsizei>(std::min<Uint32>(count, static_cast<Uint32>(drawcount)));
                 if (!drawcount) return;

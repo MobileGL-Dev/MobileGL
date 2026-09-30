@@ -104,3 +104,9 @@ MGL_WIRE_DECLINE(ShapeCreateImageFailed)
 // Appended by the B3 review round: the preserve-copy arm of a reallocation was the one exit in
 // SyncWireTextureShape still leaving no trace at all.
 MGL_WIRE_DECLINE(ShapePreserveCopyFailed)
+
+// ---- VulkanRenderer::DrawWireIndirectNative (P8-D), in statement order -----------------------
+MGL_WIRE_DECLINE(IndirectBufferUnbound)
+MGL_WIRE_DECLINE(IndirectCommandRange)
+MGL_WIRE_DECLINE(IndirectCountRange)
+MGL_WIRE_DECLINE(IndirectIndexStore)

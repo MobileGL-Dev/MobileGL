@@ -125,6 +125,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
                                                Uint32 frameIndex, const BufferSlice& dst, Uint64 dstSkip);
         void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
+        // P8-D: whether a shader write was marked on this store since the last indirect draw
+        // read it natively, clearing the mark. The caller records the INDIRECT_COMMAND_READ
+        // barrier before the draw when this answers true. Transfer writes need no mark: their own
+        // after-barriers already make them visible to MEMORY_READ at ALL_COMMANDS.
+        Bool TakeWireIndirectReadBarrier(MG_Pipe::MGPipeHandle res);
+        // P8-D: every WaitForWireBufferHostAccess that actually waited, over this manager's life -
+        // the attribution base a caller reads before and after its own ReadWireBuffer.
+        Uint64 GetWireHostWaitCount() const { return m_wireHostWaits; }
 
         // Resource-op entry points. All run on the server apply owner.
         void CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc);
@@ -257,7 +265,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // P11 B2 (T0): `buffer` is the client's imported AHardwareBuffer. Its readback posts
             // no bytes (the client reads its own pages once the wait below it is done).
             Bool imported = false;
+            // P8-D: a shader write was marked (MarkWireBufferGpuWritten) and no indirect draw has
+            // recorded its INDIRECT_COMMAND_READ barrier since (TakeWireIndirectReadBarrier).
+            Bool indirectReadBarrierPending = false;
         };
+        // P8-D: see GetWireHostWaitCount.
+        Uint64 m_wireHostWaits = 0;
         static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
             return (static_cast<Uint64>(res.Gen) << 32) | res.Slot;
         }

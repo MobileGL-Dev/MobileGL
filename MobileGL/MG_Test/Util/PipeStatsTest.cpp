@@ -574,4 +574,23 @@ namespace {
         }
         EXPECT_EQ(PS::FrameCount(), PS::SummaryFramePeriod());
     }
+
+#if MOBILEGL_PIPE_PUSH
+    // P8-D: the Magma wire arm's indirect-draw bracket. Its short names are what the create
+    // fixtures' measurement (notes/p8/D.md) reads off the server's line, and its long names are
+    // what Harness/WireIndirectPeek.cpp's readers expect in the JSON dump.
+    TEST_F(PipeStatsTest, WireIndirectCountersPrintInTheirOwnBracket) {
+        PS::AddCalls(PS::CallClass::WireIndirectNativeDraws, 3);
+        PS::AddCalls(PS::CallClass::WireIndirectCpuExpansions, 2);
+        PS::AddCalls(PS::CallClass::WireHostWaitMicros, 1500);
+        const String line = PS::FormatWindowLine();
+        EXPECT_NE(line.find("windr[wind=3 wixp=2 wibar=0 whw=0 whwi=0 whwus=1500]"), String::npos) << line;
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectNativeDraws), "wire-indirect-native-draws");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectCpuExpansions), "wire-indirect-cpu-expansions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireIndirectBarriers), "wire-indirect-barriers");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireHostWaits), "wire-host-waits");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireHostWaitsIndirect), "wire-host-waits-indirect");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::WireHostWaitMicros), "wire-host-wait-us");
+    }
+#endif
 } // namespace
