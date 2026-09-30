@@ -51,13 +51,25 @@
 
 验证层后验：`.Split.IndirectDispatch.` 三例、`.Split.ShaderMipDepth1D.`、`.Split.Mip3D.`、`.Split.Fm.` 深度模板例在层下全绿，VUID 0 条。
 
-## 5. monolith 观察（记给 dev / P13，本包不修）
+## 5. 整套门（`~/w7/notes/p8/gate.sh`，树外）
+
+| 项 | 读数 | 相对第一波集成头（ID-P8-12） |
+|---|---|---|
+| G1 | 符号增 0 减 0，`.text` `a5ba13` | 不变 |
+| census / ratchet / parity / 修订 | 78 / 20 / 45；172；0；5 | 不变 |
+| wire-declines | 61 行、66 站点、0 未记日志 | +3 行（`MipmapDepthStencilAspect`、`DispatchIndirect{BufferUnbound,Range}`），+7 站点（新派发函数另复用 4 个 `Compute*` 行） |
+| split_coverage | Espryt monolith 706 = 门控 617 + 豁免 89；Magma 706：门控 227、只在信息层 447、豁免 32；missing 0 | +5 例（2 mip + 3 派发），无新豁免行 |
+| 车道 | unit 2721；split / spawn / tcp 740 / 654 / 666；Magma 277 / 253 / 220 / 673；gpu monolith / inproc 3709 / 3709，全部 100 % | +5 / +5 / +5；Magma +6 / +5 / +4 / +5；gpu +25 |
+| retrace（`2edb2aa8`，只改测试的提交之前） | 230 / 236，只挂已知 6 例 iterationrp | 同第一波 |
+
+## 6. monolith 观察（记给 dev / P13，本包不修）
 
 | 观察 | 位置 | 证据 |
 |---|---|---|
 | split 构建的 monolith 臂深度着色器 mip 同样不传 view 类型：设备无深度 BLIT_DST 时，1D 深度链会对 1D 图像建 2D view；Release 下 `MOBILEGL_ASSERT` 是空的 | `VulkanRenderer.cpp:4905`、`:12321` | 推断：lavapipe 原生 blit 深度，主机红不出；monolith 不读 `MGITEST_MAGMA_FORCE_SHADER_MIPMAP` |
 
-## 6. 发现但未修
+## 7. 发现但未修
 
 - `mipmap-shader-format-or-shape` 的明细对深度形状也打印 `missing=COLOR_ATTACHMENT`（1D 深度的真实原因是 `view=0`）；是 F 的 `MagmaWireShapeDetail` 口径，未改。
 - create 系列 fixture 没有 `glDispatchComputeIndirect`（[`D.md`](D.md) §7），item 4 的真实负载收益未测。
+- `gen_pipe_dirty_surface.py` 的「根外写者」扫描读整个 `MobileGL/`（`gen_pipe_dirty_surface.py:394`），集成测试源也在内：派发用例的 fixture 成员曾叫 `m_parameters`，让 NEW_PATCH_STATE 的 shutter 看起来在根外被写，自检否定对照 16（`gen_pipe_dirty_surface.py:1770-1778`）不再触发、门红。本包把成员改名 `m_groupCounts`；扫描口径未改，任何新测试 fixture 用到 GLContext 的成员名都会再撞上。
