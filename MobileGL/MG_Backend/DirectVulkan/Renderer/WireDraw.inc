@@ -207,7 +207,10 @@
             MGL_WIRE_DECLINE_AT(ProgramLinkOrSpirv, "program is not linked or carries no SPIR-V");
             return false;
         }
-        if (aspects & DrawSetupAspect::IndirectDrawBuffer)
+        // P8-D: the wire arm's own indirect draw (DrawWireIndirectNative) is the one caller that
+        // may pass this aspect; a monolith indirect entry point reached here is still the role
+        // violation.
+        if ((aspects & DrawSetupAspect::IndirectDrawBuffer) && !m_wireNativeIndirectDraw)
             WireBufferLegacyFatal();
         MakeXfbWritesVisible();
         const auto* fbo = state.DrawFramebuffer();
@@ -317,8 +320,10 @@
                 const SizeT stride = static_cast<SizeT>(attr.Stride);
                 SizeT count = stride ? 1 + (static_cast<SizeT>(slice.size - offset) - elementSize) / stride : 1;
                 // Direct non-indexed draws bound the conversion; indexed/multi-draw may
-                // name arbitrary vertices, so preserve the entire valid source stream.
-                if (stride && !(aspects & DrawSetupAspect::IndexBuffer) && !resource.Divisor)
+                // name arbitrary vertices, so preserve the entire valid source stream. So may an
+                // indirect draw (P8-D): its vertex range is in GPU words nobody read.
+                if (stride && !(aspects & DrawSetupAspect::IndexBuffer) &&
+                    !(aspects & DrawSetupAspect::IndirectDrawBuffer) && !resource.Divisor)
                     count = std::min<SizeT>(count, static_cast<SizeT>(drawParams.firstVertex) + drawParams.vertexCount);
                 if (!count) {
                     MGL_WIRE_DECLINE_AT(VertexStreamCountZero, "the converted vertex stream would hold no elements");
@@ -605,6 +610,136 @@
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
         if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
+        return true;
+    }
+
+    // ---- P8-D: THE WIRE ARM'S INDIRECT DRAWS READ THEIR WORDS ON THE GPU ----------------------
+    //
+    // The shape the monolith arm records (VulkanRenderer.cpp's MultiDraw{Elements,Arrays}Indirect
+    // and MultiDrawElementsIndirectCount), with the wire store's own VkBuffer in place of the
+    // frontend buffer's resident slice. Before this, every wire indirect draw read its commands
+    // through ReadWireBuffer and expanded them on the CPU, and a store a shader had written made
+    // that read a whole-GPU wait (WaitForWireBufferHostAccess) per draw.
+    //
+    // THE ONE FALSE: a COUNT form this device cannot issue - the monolith arm's own condition for
+    // vkCmdDrawIndexedIndirectCount (MultiDrawElementsIndirectCount), extended to the non-indexed
+    // twin the monolith never loads. Everything else is issued here or declined by name.
+    Bool VulkanRenderer::DrawWireIndirectNative(GLenum mode, GLenum type, Uint64 offset, GLsizei drawcount,
+                                                GLsizei stride, Bool indexed, Bool counted, Uint64 countOffset) {
+        if (drawcount <= 0) return true;
+        if (counted) {
+            const auto countEntry = indexed ? s_vkCmdDrawIndexedIndirectCount : s_vkCmdWireDrawIndirectCount;
+            if (!m_drawIndirectCountExtensionEnabled || countEntry == nullptr ||
+                (!m_multiDrawIndirectFeatureEnabled && drawcount != 1))
+                return false;
+        }
+        const auto& state = MG_Pipe::MGPipeApplier();
+        // GL's command sizes (GL 4.6 10.3.10), which are also Vulkan's.
+        const Uint64 commandSize = indexed ? 5 * sizeof(Uint32) : 4 * sizeof(Uint32);
+        if (stride == 0) stride = static_cast<GLsizei>(commandSize);
+        BufferSlice commands{};
+        if (MG_Pipe::MGPipeHandleIsNull(state.VerbIndirectBuffer) ||
+            !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbIndirectBuffer, commands)) {
+            MGL_WIRE_DECLINE_AT(IndirectBufferUnbound, "an indirect draw names no live indirect buffer store");
+            return true;
+        }
+        const Uint64 span = static_cast<Uint64>(stride) * static_cast<Uint64>(drawcount - 1) + commandSize;
+        // GL refuses a stride that is not a multiple of four (INVALID_VALUE), and Vulkan requires
+        // it for drawCount > 1; a peer's record that breaks either is declined, not issued.
+        if (stride < static_cast<GLsizei>(commandSize) || (stride & 3) != 0 || (offset & 3u) != 0 ||
+            offset > commands.size || span > commands.size - offset) {
+            MGL_WIRE_DECLINE_AT(IndirectCommandRange, "the indirect commands lie outside their store or are misaligned");
+            return true;
+        }
+        BufferSlice parameters{};
+        if (counted) {
+            if (MG_Pipe::MGPipeHandleIsNull(state.VerbIndirectParameterBuffer) ||
+                !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbIndirectParameterBuffer, parameters) ||
+                (countOffset & 3u) != 0 || countOffset > parameters.size || parameters.size - countOffset < sizeof(Uint32)) {
+                MGL_WIRE_DECLINE_AT(IndirectCountRange, "the indirect draw count lies outside its parameter store");
+                return true;
+            }
+        }
+
+        // The index view is the WHOLE bound element store past its binding offset, as the monolith
+        // arm binds it: the commands name their own firstIndex, which only the GPU reads.
+        IndexBufferView indices{};
+        DrawCmdParam vertexRange{};
+        vertexRange.instanceCount = 1;
+        Flags<DrawSetupAspect> aspects = DrawSetupAspect::IndirectDrawBuffer;
+        if (indexed) {
+            const SizeT width = MG_Util::GetGLTypeSize(type);
+            BufferSlice elements{};
+            if (width == 0 || MG_Pipe::MGPipeHandleIsNull(state.IndexBuffer.Res) ||
+                !m_bufferManager.AcquireWireSlice(BufferKind::Index, state.IndexBuffer.Res, elements) ||
+                state.IndexBuffer.Offset > elements.size) {
+                MGL_WIRE_DECLINE_AT(IndirectIndexStore, "an indexed indirect draw names no usable element store");
+                return true;
+            }
+            indices.indexType = type;
+            indices.indexByteOffset = 0;
+            indices.indexByteSize = static_cast<SizeT>(elements.size - state.IndexBuffer.Offset);
+            vertexRange.vertexCount = static_cast<Uint32>(indices.indexByteSize / width);
+            aspects |= DrawSetupAspect::IndexBuffer;
+        }
+
+        // A shader write the store was marked with (MarkWireBufferGpuWritten) is made visible to
+        // the indirect read here, once per write, so a program that omits GL_COMMAND_BARRIER_BIT
+        // is not left racing a read the old CPU path used to take after a whole-GPU wait. The
+        // application's own glMemoryBarrier is BuildMemoryBarrierForGlBarriers, as on the monolith
+        // arm; transfer writes carry their own MEMORY_READ after-barrier (VkBufferManager.cpp).
+        const Bool commandsWritten = m_bufferManager.TakeWireIndirectReadBarrier(state.VerbIndirectBuffer);
+        const Bool countWritten = counted && m_bufferManager.TakeWireIndirectReadBarrier(state.VerbIndirectParameterBuffer);
+        if (commandsWritten || countWritten) {
+            RetireWireDrawPass();
+            auto& barrierFrame = m_frameContext.GetCurrent();
+            if (!barrierFrame.isCommandRecording) m_frameContext.BeginCommandRecording();
+            if (VkRenderPassManager::GetActiveRenderPass() != nullptr)
+                VkRenderPassManager::EndRenderPass(barrierFrame.commandBuffer);
+            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            vkCmdPipelineBarrier(barrierFrame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+            if (MG_Util::PipeStats::Enabled())
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectBarriers, 1);
+        }
+
+        auto& frame = m_frameContext.GetCurrent();
+        m_wireNativeIndirectDraw = true;
+        const Bool ready = SetupDraw(frame, mode, aspects, vertexRange, indexed ? &indices : nullptr);
+        m_wireNativeIndirectDraw = false;
+        if (!ready) return true;
+        MOBILEGL_ASSERT(frame.isCommandRecording, "%s: frame recording was not started", __func__);
+
+        const VkCommandBuffer commandBuffer = frame.commandBuffer;
+        const VkDeviceSize first = commands.offset + offset;
+        const Uint32 count = static_cast<Uint32>(drawcount);
+        const Uint32 byteStride = static_cast<Uint32>(stride);
+        if (counted) {
+            const auto countEntry = indexed ? s_vkCmdDrawIndexedIndirectCount : s_vkCmdWireDrawIndirectCount;
+            countEntry(commandBuffer, commands.buffer, first, parameters.buffer, parameters.offset + countOffset,
+                       count, byteStride);
+        } else if (count == 1 || (!m_multiDrawForceUnrollIndirect && m_multiDrawIndirectFeatureEnabled)) {
+            // maxDrawIndirectCount bounds one call; GL's drawcount does not.
+            const Uint32 limit = std::max<Uint32>(1u, m_physicalDevice.properties.limits.maxDrawIndirectCount);
+            for (Uint32 base = 0; base < count; base += limit) {
+                const Uint32 chunk = std::min(count - base, limit);
+                const VkDeviceSize at = first + static_cast<VkDeviceSize>(base) * byteStride;
+                if (indexed) vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
+                else vkCmdDrawIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
+            }
+        } else {
+            // No multiDrawIndirect: one indirect draw per command, still read by the GPU
+            // (the monolith arm's own fallback).
+            for (Uint32 i = 0; i < count; ++i) {
+                const VkDeviceSize at = first + static_cast<VkDeviceSize>(i) * byteStride;
+                if (indexed) vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, 1, 0);
+                else vkCmdDrawIndirect(commandBuffer, commands.buffer, at, 1, 0);
+            }
+        }
+        if (MG_Util::PipeStats::Enabled())
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectNativeDraws, 1);
         return true;
     }
 

@@ -110,3 +110,9 @@ MGL_WIRE_DECLINE(ShapePreserveCopyFailed)
 // is the monolith's decline now. Counted once per refused glGenerateMipmap, whose chain is left
 // as it was.
 MGL_WIRE_DECLINE(MipmapShaderFormatOrShape)
+
+// ---- VulkanRenderer::DrawWireIndirectNative (P8-D), in statement order -----------------------
+MGL_WIRE_DECLINE(IndirectBufferUnbound)
+MGL_WIRE_DECLINE(IndirectCommandRange)
+MGL_WIRE_DECLINE(IndirectCountRange)
+MGL_WIRE_DECLINE(IndirectIndexStore)

@@ -270,6 +270,19 @@ namespace MobileGL::MG_Util::PipeStats {
         // that goes with it (FormatWindowLine prints the run total instead when the window holds
         // no Present).
         WireRecords,
+        // P8-D: the Magma wire arm's indirect draws, on the server (`windr[...]` on the line).
+        // `wind` - indirect draw calls issued as vkCmdDraw*Indirect[Count] from the wire store.
+        // `wixp` - indirect draw calls whose words were read on the CPU instead (the count word,
+        //          or every command, through ReadWireBuffer).
+        // `wibar` - the INDIRECT_COMMAND_READ barriers recorded for a store marked GPU-written.
+        // `whw` / `whwus` - WaitForWireBufferHostAccess calls that actually waited, and their
+        //          microseconds, from any caller; `whwi` - the subset an indirect read caused.
+        WireIndirectNativeDraws,
+        WireIndirectCpuExpansions,
+        WireIndirectBarriers,
+        WireHostWaits,
+        WireHostWaitsIndirect,
+        WireHostWaitMicros,
 #endif
         Count
     };
