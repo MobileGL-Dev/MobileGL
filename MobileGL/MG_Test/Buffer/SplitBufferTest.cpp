@@ -819,19 +819,19 @@ namespace {
 } // namespace
 
 TEST(EsprytFlushLadder, AWholeBufferRangeOrphansTheStore) {
-    EXPECT_EQ(InvalidateFlushAccessFor(0, kStore, 0, kStore, kStore, kStore),
+    EXPECT_EQ(InvalidateFlushAccessFor(0, kStore, 0, kStore, kStore, kStore, false),
               static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
 }
 
 TEST(EsprytFlushLadder, ALargePartialRangeInvalidatesExactlyThatRange) {
     const SizeT start = 4096;
     const SizeT end = start + kEsprytInvalidateRangeMinBytes;
-    EXPECT_EQ(InvalidateFlushAccessFor(start, end, start, end, kStore, kStore),
+    EXPECT_EQ(InvalidateFlushAccessFor(start, end, start, end, kStore, kStore, false),
               static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT));
 }
 
 TEST(EsprytFlushLadder, ASmallPartialRangeFallsThroughToTheStagingRing) {
-    EXPECT_EQ(InvalidateFlushAccessFor(4096, 4096 + 64, 4096, 4096 + 64, kStore, kStore), 0u)
+    EXPECT_EQ(InvalidateFlushAccessFor(4096, 4096 + 64, 4096, 4096 + 64, kStore, kStore, false), 0u)
         << "below the threshold the map WAITS out the WAR hazard on the CPU instead of "
            "substituting pages, which is the whole reason tier 2 exists";
 }
@@ -846,19 +846,33 @@ TEST(EsprytFlushLadder, AMapWiderThanTheQueuedRangeRefusesTierOne) {
     const SizeT queuedStart = 4096;
     const SizeT queuedEnd = queuedStart + kEsprytInvalidateRangeMinBytes;
     // Page-aligned outward, the exact widening the in-tree note records.
-    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, 0, queuedEnd + 4096, kStore, kStore), 0u)
+    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, 0, queuedEnd + 4096, kStore, kStore, false), 0u)
         << "a widened INVALIDATE_RANGE declares bytes dead that the shadow is not about to "
            "rewrite, and overwrites whatever the GPU put there";
     // And narrower, which is the same corruption read the other way round: bytes left
     // unwritten inside a range that has just been declared dead.
-    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, queuedStart, queuedEnd - 8, kStore, kStore), 0u);
+    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, queuedStart, queuedEnd - 8, kStore, kStore, false),
+              0u);
 }
 
 TEST(EsprytFlushLadder, AnEmptyRangeIsNeverTierOne) {
-    EXPECT_EQ(InvalidateFlushAccessFor(4096, 4096, 4096, 4096, kStore, kStore), 0u);
+    EXPECT_EQ(InvalidateFlushAccessFor(4096, 4096, 4096, 4096, kStore, kStore, false), 0u);
+}
+
+// dev f973008c's rule on the push arm (P8-MF): Adreno 830 loses an upload-ring copy still queued
+// on a store when a partial range-invalidating map of that store overtakes it, so a partial range
+// waits behind the copy on the ring. The whole-buffer orphan-map is exempt.
+TEST(EsprytFlushLadder, APartialRangeDoesNotOvertakeAQueuedRingCopy) {
+    const SizeT start = 4096;
+    const SizeT end = start + kEsprytInvalidateRangeMinBytes;
+    EXPECT_EQ(InvalidateFlushAccessFor(start, end, start, end, kStore, kStore, true), 0u)
+        << "a range-invalidating map of a store with a queued ring copy loses the copy on Adreno 830";
+    EXPECT_EQ(InvalidateFlushAccessFor(0, kStore, 0, kStore, kStore, kStore, true),
+              static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
+        << "the whole-buffer orphan-map rewrites every byte from the shadow the copies were taken from";
 }
 #else
-// The same five names in a pull build, for the G2/G14 reason above: the ladder's push arm
+// The same six names in a pull build, for the G2/G14 reason above: the ladder's push arm
 // (FlushPendingRangesFrom) is the only one that carries this decision as a function - the pull
 // arm's FlushPendingRangesNow is byte-frozen against 5cb826b0 (ID-15) and may not grow one.
 #define MGL_PUSH_ONLY_OR_SKIP()                                                                    \
@@ -869,4 +883,5 @@ TEST(EsprytFlushLadder, ALargePartialRangeInvalidatesExactlyThatRange) { MGL_PUS
 TEST(EsprytFlushLadder, ASmallPartialRangeFallsThroughToTheStagingRing) { MGL_PUSH_ONLY_OR_SKIP(); }
 TEST(EsprytFlushLadder, AMapWiderThanTheQueuedRangeRefusesTierOne) { MGL_PUSH_ONLY_OR_SKIP(); }
 TEST(EsprytFlushLadder, AnEmptyRangeIsNeverTierOne) { MGL_PUSH_ONLY_OR_SKIP(); }
+TEST(EsprytFlushLadder, APartialRangeDoesNotOvertakeAQueuedRingCopy) { MGL_PUSH_ONLY_OR_SKIP(); }
 #endif // MOBILEGL_PIPE_PUSH

@@ -1005,10 +1005,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // matches, exactly like the per-VAO memo stamps.
             Uint64 drawCleanEpoch = 0;
             // Frame serial whose completion retires the last glCopyBufferSubData the upload
-            // ring staged INTO this store (FlushPendingRangesNow's ring tier); 0 = none. Until
-            // it retires, FlushPendingRangesNow keeps every partial range off the
-            // range-invalidating map: on Adreno 830 that map, on a store with a queued copy,
-            // loses the copy (see FlushPendingRangesNow). Draw thread only, like the flush.
+            // ring staged INTO this store (the flush ladder's ring tier: FlushPendingRangesNow
+            // on the pull arm, FlushPendingRangesFrom on the push arm); 0 = none. Until it
+            // retires, both keep every partial range off the range-invalidating map: on
+            // Adreno 830 that map, on a store with a queued copy, loses the copy (see
+            // FlushPendingRangesNow and InvalidateFlushAccessFor). Draw thread only, like the
+            // flush.
             Uint64 ringCopyRetireSerial = 0;
             // Zero-copy coherent persistent map (EXT_buffer_storage): the GL store is
             // immutable, persistently+coherently mapped, and persistentPtr is what the app
@@ -1192,10 +1194,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ("do not take tier 1"), which drops the range onto the staging ring and costs a copy
         // rather than a corruption.
         //
+        // `ringCopyInFlight`: the store still has an upload-ring glCopyBufferSubData queued that the
+        // GPU may not have run (GLESBufferResource::ringCopyRetireSerial not yet retired).
+        //
         // Returns the glMapBufferRange access bits, or 0 when tier 1 must not be taken.
         inline constexpr SizeT kEsprytInvalidateRangeMinBytes = 128u * 1024u;
         constexpr GLbitfield InvalidateFlushAccessFor(SizeT queuedStart, SizeT queuedEnd, SizeT mapStart,
-                                                      SizeT mapEnd, SizeT limit, SizeT storageSize) {
+                                                      SizeT mapEnd, SizeT limit, SizeT storageSize,
+                                                      Bool ringCopyInFlight) {
             if (mapEnd <= mapStart) return 0u;
             // THE WIDENING REFUSAL. Not >=, not "covers": exactly, in both directions. A map
             // narrower than the queued range leaves bytes unwritten inside a range it has just
@@ -1207,6 +1213,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // page-substitution fast path needs a page-coverable range to engage, and below it
             // the driver falls back to waiting out the WAR hazard on the CPU.
             if (!wholeBuffer && size < kEsprytInvalidateRangeMinBytes) return 0u;
+            // A partial range-invalidating map must not overtake a ring copy into this store the GPU
+            // has not run yet. Adreno 830 answers such a map on a store with a copy still queued by
+            // losing the copy (dev f973008c, the pull arm's FlushPendingRangesNow: create-instancing
+            // drew whole Embeddium terrain sections empty, SSIM 0.870). The range goes to the ring
+            // instead, GPU-ordered behind the copies. The whole-buffer orphan-map is exempt: it
+            // rewrites every byte from the shadow the queued copies were taken from.
+            if (!wholeBuffer && ringCopyInFlight) return 0u;
             return GL_MAP_WRITE_BIT |
                    (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
         }
