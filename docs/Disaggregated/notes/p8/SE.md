@@ -49,7 +49,7 @@
 
 | 条目 | 臂 | 登记 |
 |---|---|---|
-| `DirectGLES.{Split,Spawn}.CpuMipRefused.*` | 旋钮 `MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1` + `MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16`，标签 `integration-gpu`、`integration-cpu-mip-<arm>` | `CMakeLists.txt:4883` |
+| `DirectGLES.{Split,Spawn}.CpuMipRefused.*` | 旋钮 `MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1` + `MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16`，标签 `integration-gpu`、`integration-cpu-mip-<arm>` | `MobileGL/MG_IntegrationTest/CMakeLists.txt:4883` |
 | 其他臂（monolith、无旋钮 split 三臂、Magma） | 两例按旋钮缺席跳过 | 环境发现 / `GenerateMipmapServerScenario.*` |
 
 - 不上 tcp：server 是共享 `TcpServer.Start`，16x16 拒绝会碰到整条 lane 的 16x16 颜色读回；与 B 的 `CpuMip.` 同形，parity 无需例外行（实测 0 错）。
@@ -68,7 +68,7 @@
 | 名单现 3 名，一名一处调用 | `MobileGL/MG_Test/Pipe/PipeCatalogueTest.cpp:1448-1455` |
 | lint 规则（全是 error）：名单每名恰一处产品调用；每处调用名在名单；名单无重复；调用须是字符串字面量。产品源 = `MobileGL/` 去掉 `MG_Test/`、`MG_IntegrationTest/`；先掩码注释 | `scripts/ci/unmigrated_emulation_sites.py` |
 | CI：`test.yml` 在 `split_coverage.py` 之后一步 | `.github/workflows/test.yml:1475` |
-| unit 车道：`PipeCatalogue.UnmigratedEmulationSites{SelfTest,MatchTheList}` | `CMakeLists.txt:4895-4901` |
+| unit 车道：`PipeCatalogue.UnmigratedEmulationSites{SelfTest,MatchTheList}` | `MobileGL/MG_IntegrationTest/CMakeLists.txt:4895-4901` |
 | 门命令：`python3 scripts/ci/unmigrated_emulation_sites.py --self-test && python3 scripts/ci/unmigrated_emulation_sites.py` | — |
 | 回看：lint 在 `8d3e2317`（B 之前）红 2 条：`generate-mipmap-storage` 4 处调用、`generate-mipmap-cpu-filter` 不在名单；在 `cbbaf77f` 绿（4 名 4 处） | 证据 `r4b-lint-*.log` |
 
