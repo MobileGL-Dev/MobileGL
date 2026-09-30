@@ -245,7 +245,17 @@ namespace {
         {"eglLabelObjectKHR", reinterpret_cast<void*>(VendorLabelObjectKHR)},
     };
 
-    void* EGLAPIENTRY VendorGetProcAddress(const char* procName) {
+    // THE SAME ANSWER TO BOTH OF GLVND'S QUESTIONS, and that is not a shortcut - glvnd asks them
+    // from two places and a library that answers one of them has a hole the size of the other:
+    //
+    //   getProcAddress       is asked for every entry point glvnd builds its own static EGL table
+    //                        from, so a null here drops the vendor outright.
+    //   getDispatchAddress   is what glvnd falls back to for eglGetProcAddress on any name it does
+    //                        not know itself - which is every extension entry point that is not in
+    //                        its list, the device queries among them.  A vendor that answers these
+    //                        from a GL-only table hands the application a null for a function the
+    //                        vendor implements, and the caller reports the extension as missing.
+    void* LookupEntryPoint(const char* procName) {
         if (procName == nullptr) {
             return nullptr;
         }
@@ -259,6 +269,8 @@ namespace {
         return reinterpret_cast<void*>(MG_Impl::EGLImpl::GetProcAddress(procName));
     }
 
+    void* EGLAPIENTRY VendorGetProcAddress(const char* procName) { return LookupEntryPoint(procName); }
+
     // glvnd hands a vendor the index each EGL entry point occupies in its dispatch table, so that a
     // vendor whose entry points are thin wrappers around glvnd can call back into the right slot.
     // This library's entry points ARE the implementation - they never re-enter glvnd - so there is
@@ -269,15 +281,7 @@ namespace {
         (void)index;
     }
 
-    // glvnd builds its GL/GLES dispatch out of these: one address per entry point, taken from the
-    // vendor that owns the current display.  This library exports them all, so the answer is its
-    // own table.
-    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) {
-        if (procName == nullptr) {
-            return nullptr;
-        }
-        return reinterpret_cast<void*>(MG_Impl::EGLImpl::GetProcAddress(procName));
-    }
+    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) { return LookupEntryPoint(procName); }
 }  // namespace
 
 extern "C" MOBILEGL_EGL_API EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports,
