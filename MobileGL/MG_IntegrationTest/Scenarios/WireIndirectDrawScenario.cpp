@@ -296,13 +296,16 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
             EXPECT_EQ(delta.barriers, 2u) << "one INDIRECT_COMMAND_READ barrier per freshly written store";
         }
 
-        // The COUNT word a compute shader wrote. Magma only: Espryt reads that word from a
-        // server shadow GPU writes do not update, on both arms (OPEN-QUESTIONS 15, P8-C's
-        // package), so its answer here is a known divergence rather than this package's claim.
+        // The COUNT word a compute shader wrote. Espryt reads that word on the CPU from the
+        // server's staged copy of the parameter buffer; P8-C refreshes that copy after a shader
+        // write (SplitHostBytesForCpuRead), so its split arms answer here too (P8-SE). Espryt's
+        // MONOLITH arm still reads the frontend shadow without a sync (OPEN-QUESTIONS 15, C.md's
+        // monolith defects), left to P13 (ID-P8-13).
         TEST_F(WireIndirectDrawScenario, ComputeWrittenCountWordIsTheOneTheGpuReads) {
             if (!Ready() || IsSkipped()) return;
-            if (!m_magma) {
-                GTEST_SKIP() << "Espryt reads the count word from its shadow on both arms (OQ15, P8-C)";
+            if (!m_magma && m_transport == "monolith") {
+                GTEST_SKIP() << "Espryt's monolith arm reads the count word from the frontend shadow without "
+                                "a sync (OQ15; recorded for P13, ID-P8-13)";
             }
             Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER, std::vector<ElementsCommand>{Elements(0), Elements(3), Elements(2)});
             Fill(m_parameter, GL_PARAMETER_BUFFER, std::vector<std::uint32_t>{3});

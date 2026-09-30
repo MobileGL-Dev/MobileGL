@@ -62,4 +62,4 @@ SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension no-rec
 ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline no-records a reserved pipeline name's state is client-side and draws nothing
 
 # ---- pending-fix -------------------------------------------------------------------------------
-DirectGLES:DepthStencilReadbackAttachmentShapeScenario.DefaultFramebufferDepthStencilFormatIsBlitCompatible pending-fix Espryt spawn+tcp blit the default framebuffer's depth out as 0 (inproc and all Magma arms green, knob or not); no P8 package owns it - DEBTS.md row requested in notes/p8/A.md
+# (none: P8-SE fixed the default-framebuffer depth/stencil case and registered it, notes/p8/SE.md)

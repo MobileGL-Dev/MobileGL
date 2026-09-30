@@ -1423,7 +1423,9 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 // gate rather than a surprise three phases later.
 //
 // The names are pinned here rather than counted in the backend, because the count alone cannot
-// say WHICH one was lost. The purity gate greps the count; this says what the count is of.
+// say WHICH one was lost. P8-SE: scripts/ci/unmigrated_emulation_sites.py holds this list against
+// the `MGPipeUnmigratedEmulation("...")` call sites in the tree - equal sets, one site per name -
+// because nothing did before and the list drifted twice unseen (P8-B, and P8-SE's dead name).
 TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // Every one of these is an emulation that reads or writes CLIENT memory a split server
     // would not have: a CPU shadow mirror, a CPU mipmap fallback and a shadow-conversion
@@ -1440,16 +1442,18 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // had: "generate-mipmap-cpu-filter", the split arm's RGB16F/RGB32F refusal in
     // GenerateMipmapByRecord. P8-B2 retired it (the server filters its own level,
     // GenerateThreeChannelFloatMipmapOnServer), and P8-B1 retired the split arm's two
-    // "generate-mipmap-storage" sites (the record's plan is the window). What is left is these
-    // four names, one call site each, and every one of them is on a MONOLITH arm - the split
-    // arms no longer reach an unmigrated emulation (notes/p8/B.md).
+    // "generate-mipmap-storage" sites (the record's plan is the window). Every name left is on a
+    // MONOLITH arm - the split arms no longer reach an unmigrated emulation (notes/p8/B.md).
+    //
+    // THREE, NOT FOUR (P8-SE). "copy-image-shadow-mirror" sat after the mirror's own
+    // `Transport != Monolith` return, so no transport ever reached it and on monolith it was a
+    // no-op; the call and the name went together (notes/p8/SE.md).
     const char* const kNames[] = {
-        "copy-image-shadow-mirror",     // the glCopyImageSubData CPU-shadow mirror
         "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated (monolith grow)
         "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
         "get-tex-image-shadow",         // GetTexImageViaShadowConversion
     };
-    EXPECT_EQ(std::size(kNames), 4u);
+    EXPECT_EQ(std::size(kNames), 3u);
     // No duplicates: two sites sharing a name would make the grepped count and this list
     // disagree in the one direction nobody would notice.
     for (SizeT i = 0; i < std::size(kNames); ++i) {

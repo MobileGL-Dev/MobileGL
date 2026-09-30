@@ -1470,6 +1470,13 @@ jobs:
           python3 scripts/ci/split_coverage.py --self-test
           python3 scripts/ci/split_coverage.py build-split
 
+      # P8-SE: PipeCatalogueTest's unmigrated-emulation list equals the MGPipeUnmigratedEmulation
+      # call sites in the tree, one site per name. A source lint: no build needed.
+      - name: Unmigrated-emulation list against its call sites (P8-SE)
+        run: |
+          python3 scripts/ci/unmigrated_emulation_sites.py --self-test
+          python3 scripts/ci/unmigrated_emulation_sites.py
+
       - name: Unit tests on the split runtime
         working-directory: build-split
         env:
