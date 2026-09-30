@@ -1080,6 +1080,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_hostFrameFramebufferId = m_hostFrameTarget.Framebuffer;
         FramebufferImpl::InvalidateFramebufferBindingCache();
         HostFrameTargetBind(m_hostFrameTarget);
+        // AND ON TO THE CONTAINER, as the dma-buf descriptor behind it.  The Wayland compositor
+        // over there renders into THESE frames - it runs this project's own GBM, whose
+        // gbm_bo_create answers with the phone's frame instead of an allocation of its own - so
+        // every frame taken here is useless to it until its descriptor has crossed.  Open() binds
+        // the listening socket a container dials, and the IsUp() test keeps the ordinary frame
+        // down to an integer compare: the socket outlives every container and every connection,
+        // while OfferFrame accepts whoever dialled since the last frame and opens the socket
+        // itself when the first frame arrives before any container has.
+        //
+        // NEITHER ANSWER IS EXAMINED, and that is the channel's contract rather than an
+        // oversight: no container running, a container that has died, or one that has taken the
+        // descriptor and stopped reading must all leave this frame drawn and presented exactly as
+        // it would have been without a channel - the descriptor is a copy of the pixels' route,
+        // not a step in producing them.
+        if (!m_gbmFrameChannel.IsUp()) m_gbmFrameChannel.Open();
+        (void)m_gbmFrameChannel.OfferFrame(frame, offer);
         MGLOG_I("host frame %u is the draw target: %ux%u", offer.Index, target.Width, target.Height);
         return true;
     }
@@ -1091,6 +1107,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             AHardwareBuffer_release(m_hostFrameBuffer);
             m_hostFrameBuffer = nullptr;
         }
+        // THE CONNECTION THAT DESCRIBED IT GOES WITH IT.  Every frame this side drops is one the
+        // container was told to render into by descriptor, and a channel left open across that
+        // would go on describing frames as if the one it named were still the draw target - so
+        // the connection ends here, the container falls back to allocating frames of its own
+        // (the state it starts in), and the next frame taken opens the socket again and is
+        // offered to whoever dials.  Close() is idempotent and safe from a destructor, which is
+        // also what the member's own does at backend teardown, so this call costs the paths that
+        // drop nothing - a take that replaces the frame, a teardown before the first one - a
+        // handful of integer tests.
+        m_gbmFrameChannel.Close();
     }
 
     Bool BackendObject_DirectGLES::PresentHostFrame() {
@@ -1098,6 +1124,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // about, and the host's own readback - which Complete reads - is what proves the drawing
         // landed where the screen will look.
         if (g_GLESFuncs.glFinish != nullptr) g_GLESFuncs.glFinish();
+        // WHAT THE CONTAINER SAID WHILE THIS FRAME WAS BEING DRAWN.  This is the one place the
+        // server's apply loop passes through the host channel - the swap it runs lands here for a
+        // host-framed surface - and a release is the container's compositor saying it is done
+        // reading a frame this side handed over.  Poll() is a bare recvmsg on a non-blocking
+        // socket: with no container connected it returns on its first test, and a container that
+        // is between frames answers EAGAIN, so a pass costs nothing when there is nothing to
+        // read.  Nothing here is waited for and nothing is required to arrive; the count of
+        // frames offered and not released is a number the channel keeps for the log, never a
+        // frame the render path waits on.
+        m_gbmFrameChannel.Poll();
         String why;
         if (!m_hostFrameBridge.Complete(m_hostFrameOffer, /*imported=*/true, /*drawn=*/true, /*fenceOk=*/true, why)) {
             MGLOG_E("PresentHostFrame: %s", why.c_str());
