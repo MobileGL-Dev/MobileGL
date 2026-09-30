@@ -58,7 +58,7 @@ MGL_WIRE_DECLINE(CurrentAttributePayload)
 MGL_WIRE_DECLINE(CurrentAttributeUpload)
 MGL_WIRE_DECLINE(BeginRenderPass)
 
-// ---- DispatchWireCompute ----------------------------------------------------------------
+// ---- DispatchWireCompute (and DispatchWireComputeIndirect, P8-SV) -------------------------
 MGL_WIRE_DECLINE(ComputeProgramLinkOrSpirv)
 MGL_WIRE_DECLINE(ComputeTextureResourcesUnprepared)
 MGL_WIRE_DECLINE(ComputePipelineUnavailable)
@@ -116,3 +116,13 @@ MGL_WIRE_DECLINE(IndirectBufferUnbound)
 MGL_WIRE_DECLINE(IndirectCommandRange)
 MGL_WIRE_DECLINE(IndirectCountRange)
 MGL_WIRE_DECLINE(IndirectIndexStore)
+
+// ---- P8-SV -------------------------------------------------------------------------------
+// VulkanRenderer::GenerateWireMipmap: a combined depth/stencil (or stencil-only) chain, which no
+// arm generates (CONTRACT-P7 §3.2). It logged but was never counted, so MGWIRE-DECLINES could
+// not see it. Counted once per refused glGenerateMipmap, whose chain is left as it was.
+MGL_WIRE_DECLINE(MipmapDepthStencilAspect)
+// VulkanRenderer::DispatchWireComputeIndirect, in statement order: the dispatch-indirect store
+// is missing, or the three group-count words lie outside it or are misaligned.
+MGL_WIRE_DECLINE(DispatchIndirectBufferUnbound)
+MGL_WIRE_DECLINE(DispatchIndirectRange)

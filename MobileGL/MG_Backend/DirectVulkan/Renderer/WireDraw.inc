@@ -770,4 +770,80 @@
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         vkCmdDispatch(frame.commandBuffer, x, y, z);
     }
+
+    // ---- P8-SV: THE WIRE ARM'S INDIRECT DISPATCH READS ITS GROUP COUNTS ON THE GPU ----------
+    //
+    // The monolith arm's shape (VulkanRenderer.cpp's DispatchComputeIndirect) with the wire
+    // store's own VkBuffer in place of the frontend buffer's resident slice. Before this the wire
+    // arm read the three words through ReadWireBuffer and dispatched them from the CPU, and a store
+    // a shader had written made that read a whole-GPU wait (WaitForWireBufferHostAccess) per call.
+    // There is no shape the device cannot issue, so there is no CPU path left: a record whose
+    // store or words are unusable is declined by name.
+    //
+    // The barrier is P8-D's draw rule (DrawWireIndirectNative): a store marked shader-written gets
+    // one MEMORY_WRITE -> INDIRECT_COMMAND_READ barrier before its next indirect read, whether or
+    // not the application issued GL_COMMAND_BARRIER_BIT; DRAW_INDIRECT is the stage that consumes
+    // VkDispatchIndirectCommand too. It is TAKEN before the bindings below, because binding this
+    // dispatch's own storage buffers marks them written, and a store that is both this dispatch's
+    // parameters and one of its outputs must keep that mark for the next reader.
+    void VulkanRenderer::DispatchWireComputeIndirect(GLintptr offset) {
+        RetireWireDrawPass();
+        const auto& state = MG_Pipe::MGPipeApplier();
+        constexpr Uint64 kCommandSize = 3 * sizeof(Uint32); // GL 4.6 10.3.10 / VkDispatchIndirectCommand
+        BufferSlice parameters{};
+        if (MG_Pipe::MGPipeHandleIsNull(state.VerbDispatchIndirectBuffer) ||
+            !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbDispatchIndirectBuffer, parameters)) {
+            MGL_WIRE_DECLINE_AT(DispatchIndirectBufferUnbound, "an indirect dispatch names no live dispatch-indirect store");
+            return;
+        }
+        // GL refuses an offset that is negative or not a multiple of four (INVALID_VALUE) and a
+        // command past the end of the buffer (INVALID_OPERATION); a peer's record that breaks
+        // either is declined, not issued.
+        if (offset < 0 || (static_cast<Uint64>(offset) & 3u) != 0 || static_cast<Uint64>(offset) > parameters.size ||
+            parameters.size - static_cast<Uint64>(offset) < kCommandSize) {
+            MGL_WIRE_DECLINE_AT(DispatchIndirectRange, "the dispatch group counts lie outside their store or are misaligned");
+            return;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (m_bufferManager.TakeWireIndirectReadBarrier(state.VerbDispatchIndirectBuffer)) {
+            if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
+            if (VkRenderPassManager::GetActiveRenderPass() != nullptr)
+                VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+            VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+            if (MG_Util::PipeStats::Enabled())
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectBarriers, 1);
+        }
+        const auto program = WireProgramSource(state.DispatchProgram);
+        if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
+            MGL_WIRE_DECLINE_AT(ComputeProgramLinkOrSpirv, "the compute program is not linked or carries no SPIR-V");
+            return;
+        }
+        const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
+        if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
+            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
+            return;
+        }
+        const auto pipeline = GetOrCreateComputePipeline(programObj);
+        if (!pipeline) {
+            MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");
+            return;
+        }
+        // PrepareWireTextureResources may have flushed and begun a new recording.
+        auto& dispatchFrame = m_frameContext.GetCurrent();
+        if (!dispatchFrame.isCommandRecording) m_frameContext.BeginCommandRecording();
+        if (!m_uniformManager->BindProgramUniformBuffers(dispatchFrame.commandBuffer, program, programObj,
+                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_COMPUTE)) {
+            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding, "the dispatch's uniform/storage bindings could not be bound");
+            return;
+        }
+        vkCmdBindPipeline(dispatchFrame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        vkCmdDispatchIndirect(dispatchFrame.commandBuffer, parameters.buffer,
+                              parameters.offset + static_cast<VkDeviceSize>(offset));
+        if (MG_Util::PipeStats::Enabled())
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectNativeDispatches, 1);
+    }
 #endif

@@ -240,6 +240,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "residual-pulls", "server-verb-boundaries", "wire-records",
             "wire-indirect-native-draws", "wire-indirect-cpu-expansions", "wire-indirect-barriers",
             "wire-host-waits", "wire-host-waits-indirect", "wire-host-wait-us",
+            "wire-indirect-native-dispatches",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -701,6 +702,8 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " whw=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaits)]);
         line += " whwi=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitsIndirect)]);
         line += " whwus=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitMicros)]);
+        // P8-SV: the indirect dispatches, on the same bracket (their barriers are in `wibar`).
+        line += " wdsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDispatches)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {

@@ -1394,12 +1394,16 @@
         // release build both arms ship as. Nothing in GL promises a stencil mip either - the
         // pass writes gl_FragDepth and would leave the stencil aspect of the level it produced
         // undefined, which is worse than leaving the whole level alone and saying so.
+        //
+        // P8-SV: a NAMED decline (WireDeclines.def MipmapDepthStencilAspect), so MGWIRE-DECLINES
+        // counts it like every other refusal on this arm; the line keeps its words.
         if (resource->aspect != VK_IMAGE_ASPECT_COLOR_BIT && resource->aspect != VK_IMAGE_ASPECT_DEPTH_BIT) {
-            MGLOG_E_ONCE("DirectVulkan::GenerateWireMipmap: aspect 0x%x (a combined depth/stencil or "
-                         "stencil-only texture, format %d) has no mip generation on either arm; "
-                         "declining and leaving levels %u..%u as they are",
-                         static_cast<Uint32>(resource->aspect), static_cast<Int>(resource->format),
-                         base + 1, base + count - 1);
+            MGL_WIRE_DECLINE_AT(MipmapDepthStencilAspect,
+                                "DirectVulkan::GenerateWireMipmap: aspect 0x%x (a combined depth/stencil or "
+                                "stencil-only texture, format %d) has no mip generation on either arm; "
+                                "declining and leaving levels %u..%u as they are",
+                                static_cast<Uint32>(resource->aspect), static_cast<Int>(resource->format),
+                                base + 1, base + count - 1);
             return;
         }
         // P8-F: WHICH ARM TAKES THIS CHAIN IS DECIDED BEFORE THE CHAIN IS GROWN, for the
@@ -1417,18 +1421,23 @@
                                 VK_FILTER_LINEAR : VK_FILTER_NEAREST;
         const Bool layersInRange = baseLayer < resource->arrayLayers &&
                                    layerCount <= resource->arrayLayers - baseLayer;
-        // The depth arm's shape: the layer window, and what WireDepthMipmap.inc's pass refuses
-        // for an image this function hands it - a format that does not both sample and attach
-        // as depth (its other refusals, 3D / multisample / a default image, are never built here).
-        const auto depthPassFeatures =
-            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        const Bool depthArmTakesShape =
-            layersInRange && (props.optimalTilingFeatures & depthPassFeatures) == depthPassFeatures;
-        // The colour arm's shape (the two shader shapes are explained at the colour arm below).
-        const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
+        // Both shader arms render a 2D view of one layer of one level, so a 1D, 1D-array or 3D
+        // image is a shape neither takes.
         const Bool planar = resource->viewType != VK_IMAGE_VIEW_TYPE_1D &&
                             resource->viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY &&
                             resource->viewType != VK_IMAGE_VIEW_TYPE_3D;
+        // The depth arm's shape: the layer window, and what WireDepthMipmap.inc's pass refuses
+        // for an image this function hands it (the view type is passed to it below) - a 1D,
+        // 1D-array or 3D view type, and a format that does not both sample and attach as depth.
+        // Its other refusals, multisample and a default image, are never built here. P8-SV: the
+        // view type half is new; before it a 1D depth chain reached the pass, which made a 2D
+        // view of the 1D image.
+        const auto depthPassFeatures =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        const Bool depthArmTakesShape = planar &&
+            layersInRange && (props.optimalTilingFeatures & depthPassFeatures) == depthPassFeatures;
+        // The colour arm's shape (the two shader shapes are explained at the colour arm below).
+        const Bool colour = resource->aspect == VK_IMAGE_ASPECT_COLOR_BIT;
         // The shader arm samples through a sampler2D and writes a vec4, which is what
         // BlitWireColorImage's own float check enforces; naming it here rather than letting the
         // blit return false is what puts the reason in the decline line.
@@ -1477,6 +1486,10 @@
                     source.image = resource->image;
                     source.format = format;
                     source.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    // P8-SV: the image's own view type, so the pass can refuse a shape it cannot
+                    // render (it makes 2D views) instead of receiving the struct's 2D default.
+                    source.viewType = resource->viewType;
+                    source.is3D = resource->viewType == VK_IMAGE_VIEW_TYPE_3D;
                     source.layout = resource->layout;
                     source.trackedLayout = &resource->layout;
                     source.levels = resource->mipLevels;
@@ -1603,14 +1616,24 @@
             if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,resource->layout,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,stage,VK_PIPELINE_STAGE_TRANSFER_BIT,access,
                 VK_ACCESS_TRANSFER_WRITE_BIT,resource->aspect,0,resource->mipLevels)) MagmaWireFatal("mipmap-transition");
+            // P8-SV: A 3D IMAGE HAS ONE ARRAY LAYER, AND ITS DEPTH IS THE Z EXTENT OF THE BLIT.
+            // ResolveWireTextureStorage answers `layerCount` in slices for Tex3D (Depth >> level,
+            // VkTextureManager.cpp) - the addressing attachments, descriptors and readback use - and
+            // passing that on as the blit's subresource layerCount names layers the image (created
+            // with arrayLayers = 1) does not have (VUID-vkCmdBlitImage-srcImage-00240,
+            // -srcSubresource-01707, -dstSubresource-01708). The monolith arm blits layer 0, count 1,
+            // with the z offsets below halving the depth level by level; so does this one now.
+            const Bool volume = resource->viewType == VK_IMAGE_VIEW_TYPE_3D;
+            const Uint32 blitBaseLayer = volume ? 0u : baseLayer;
+            const Uint32 blitLayerCount = volume ? 1u : layerCount;
             for (Uint32 level=base+1;level<base+count;++level) {
                 VkImageLayout previous = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 VkTextureManager::TransitionImageLayout(frame.commandBuffer,resource->image,previous,
                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,resource->aspect,level-1,1);
                 VkImageBlit blit{};
-                blit.srcSubresource = {resource->aspect,level-1,baseLayer,layerCount};
-                blit.dstSubresource = {resource->aspect,level,baseLayer,layerCount};
+                blit.srcSubresource = {resource->aspect,level-1,blitBaseLayer,blitLayerCount};
+                blit.dstSubresource = {resource->aspect,level,blitBaseLayer,blitLayerCount};
                 blit.srcOffsets[1] = {static_cast<Int32>(std::max(resource->extent.width>>(level-1),1u)),
                     static_cast<Int32>(std::max(resource->extent.height>>(level-1),1u)),
                     static_cast<Int32>(std::max(resource->depth>>(level-1),1u))};
