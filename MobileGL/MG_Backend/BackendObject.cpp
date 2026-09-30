@@ -172,11 +172,15 @@ namespace MobileGL::MG_Backend {
             return false;
         }
 
-        if (m_eglDisplayInitialized && m_eglDisplay != dpy) {
-            MGLOG_E("InitializeEGLDisplay failed: backend already bound to a different EGLDisplay");
-            return false;
-        }
-
+        // A DISPLAY IS A CONNECTION, NOT A RESOURCE THIS BACKEND OWNS, and refusing the second one
+        // refused a caller for a reason that is not there: the surface and context tables are keyed
+        // by the display each was created on, every operation carries its own display handle, and
+        // this field has no reader anywhere - it was the whole of the rule.
+        //
+        // What the rule cost was a compositor.  One asks for the display it will draw into AFTER
+        // probing another, so the second eglInitialize is the one that matters, and a refusal there
+        // is reported one layer up as "no usable DRM render device" - the probe having succeeded
+        // and the real display having failed, with nothing in between that says which was refused.
         m_eglDisplay = dpy;
         m_eglDisplayInitialized = true;
         if (major) {
