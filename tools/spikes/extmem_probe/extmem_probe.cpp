@@ -89,6 +89,7 @@ static const char* kT4HostRow = "T4-host-image";
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -5634,6 +5635,19 @@ struct T4HostSeen {
     char note[64];
 } __attribute__((packed));
 
+static int t4Pending(int fd)
+{
+    int n = -1;
+    return ioctl(fd, FIONREAD, &n) == 0 ? n : -1;
+}
+
+
+// The magic the display host's ahb_bridge.h stamps on all three of its messages.  It is NOT
+// kT4Magic: that one belongs to the dma-buf protocol between this probe and the container
+// peer, and using it here failed a good round trip while reporting the wrong reason -- the
+// handle had arrived, the description had arrived, and only the comparison was wrong.
+static const uint32_t kT4HostMagic = 0x4D474C41u;  // "ALGM" in memory order
+
 static void runT4Host(GlCtx& g, bool glOk, const char* path) {
     if (!glOk) {
         record(kT4HostRow, "SKIP", "no headless GLES context: nothing on this side could take the host's image");
@@ -5684,12 +5698,25 @@ static void runT4Host(GlCtx& g, bool glOk, const char* path) {
     std::string trace, fail;
 
     for (int i = 0; i < 16; ++i) {
+        const int pendBefore = t4Pending(fd);
         AHardwareBuffer* ahb = nullptr;
-        if (AHardwareBuffer_recvHandleFromUnixSocket(fd, &ahb) != 0 || !ahb)
+        const int hrc = AHardwareBuffer_recvHandleFromUnixSocket(fd, &ahb);
+        const int pendAfter = t4Pending(fd);
+        /* The handle message footprint, measured rather than assumed: a receiver that leaves
+         * bytes behind hands the description reader whatever was left. */
+        pr("T4-host: recvHandle rc=%d pending %d -> %d", hrc, pendBefore, pendAfter);
+        if (hrc != 0 || !ahb)
             break;
         T4HostOffer of{};
-        if (!readAll(fd, &of, sizeof(of)) || of.magic != kT4Magic) {
-            fail = "the offer's sideband did not follow its handle";
+        const bool ofRead = readAll(fd, &of, sizeof(of));
+        if (!ofRead || of.magic != kT4HostMagic) {
+            pr("T4-host: sideband read=%d magic=0x%08x first=%02x %02x %02x %02x", (int)ofRead, of.magic,
+               ((const unsigned char *)&of)[0], ((const unsigned char *)&of)[1],
+               ((const unsigned char *)&of)[2], ((const unsigned char *)&of)[3]);
+            char why[160];
+            snprintf(why, sizeof(why), "handle rc=%d (pending %d -> %d) then sideband read=%d magic=0x%08x",
+                     hrc, pendBefore, pendAfter, (int)ofRead, of.magic);
+            fail = why;
             AHardwareBuffer_release(ahb);
             break;
         }
@@ -5698,7 +5725,7 @@ static void runT4Host(GlCtx& g, bool glOk, const char* path) {
         AHardwareBuffer_describe(ahb, &d);
 
         T4HostAck ack{};
-        ack.magic = kT4Magic;
+        ack.magic = kT4HostMagic;
         ack.version = 1;
         ack.index = of.index;
 
@@ -5750,7 +5777,7 @@ static void runT4Host(GlCtx& g, bool glOk, const char* path) {
         (void)writeAll(fd, &ack, sizeof(ack));
 
         T4HostSeen back{};
-        if (readAll(fd, &back, sizeof(back)) && back.magic == kT4Magic) {
+        if (readAll(fd, &back, sizeof(back)) && back.magic == kT4HostMagic) {
             ++seen;
             const bool first = !memcmp(back.observed, kT4AhbSeed, 4);
             const bool corner = !memcmp(back.observed_corner, kT4AhbSeed, 4);
