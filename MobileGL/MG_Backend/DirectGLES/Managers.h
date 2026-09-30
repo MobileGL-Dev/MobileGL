@@ -1051,6 +1051,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // store's last use has signalled (RetireT0Import). Survives an ES context loss:
             // the next ensure re-imports it. Null for every store T0 did not adopt.
             void* externalAhb = nullptr;
+            // P8-C: A SHADER WROTE THIS STORE ON THIS SIDE since the R-11 staged copy (or, for
+            // T0, the coherent map) was last known to match it - set by the draw / dispatch that
+            // bound it writable (storage block, atomic counter, writable buffer image), cleared
+            // by SplitHostBytesForCpuRead's refresh and by a respecify. Only the server's own
+            // CPU readers consult it; the client keeps its own set (GpuWritePending.h).
+            Bool serverGpuWritten = false;
 #endif
         };
 
@@ -1122,6 +1128,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (resource.hostBytes != nullptr) return resource.hostBytes;
             return resource.externalAhb != nullptr ? static_cast<const Uint8*>(resource.persistentPtr) : nullptr;
         }
+
+        // P8-C: THE SAME BYTES, MADE CURRENT FIRST - for a reader that CONSUMES them (the restart
+        // rewrite, the multi-draw rebase, the *IndirectCount count, an indirect command's
+        // CPU-fed fields, the XFB scatter's pre-capture bytes). SplitHostBytes above is only
+        // "what uploads staged": a store a shader wrote on this side (serverGpuWritten) is
+        // refreshed from this server's own GL buffer - queued uploads flushed into it first,
+        // then the whole store read back into the staged copy, which also gives an orphaned
+        // store its first copy - and a T0 store lands its queued resident writes and finishes
+        // before its coherent map is read. A clean staged store costs one flag test.
+        // `res` names the record whose descriptor width the copy takes; `site` names the
+        // reader in the one-time diagnostic when the refresh cannot run.
+        const Uint8* SplitHostBytesForCpuRead(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
+                                              const char* site);
+        // P8-C: bytes the SERVER itself put into a store's GL buffer and already holds on the CPU
+        // (an XFB capture it mapped for the client's writeback, a scatter it composed) go into
+        // the staged copy as well, so no refresh is owed for them. A T0 store has no copy.
+        void StageServerWrittenRange(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res, const void* bytes,
+                                     SizeT offset, SizeT size);
 
         // M-3's WHOLE-STORE predicate, and the GUARD every caller of RequireStagedCoverage over
         // a whole-store read has to carry: true when the application DECLARED the store's
@@ -3079,6 +3103,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
             // uniform write, and only such a program needs the reset after one.
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P8-C: same for the gl_BaseInstance uniform - which an indirect draw feeds from the
+            // command on the CPU only when the mg_IndirectParams view is absent.
+            Bool ReadsBaseInstance() const { return m_baseInstanceUniformLocation >= 0; }
+#endif
             // Which viewport indices the next draw's fragments may keep, one bit each. Written
             // once per replay pass; see ForEachViewportRoutingPass.
             void SetViewportPassMask(Uint32 indexMask) const;
