@@ -4051,6 +4051,1393 @@ static void runT3Parent(VkCtx& c, uint64_t size) {
 }
 
 // ---------------------------------------------------------------------------
+// T4: the image the peer allocated OUTSIDE Android
+//
+// The {Owner=Platform, Storage=OfferedImage} cell of an Anland-style Wayland host: a
+// glibc peer in a Droidspaces container creates the GBM buffer on the device the
+// container owns and offers it here as a dma-buf, and this side -- the one holding the
+// live EGL/GLES context -- has to be able to READ it and to DRAW into it.
+//
+// The topology is the reverse of every other leg on purpose.  The peer is not a re-exec
+// of /proc/self/exe: nothing here needs a second driver instance (the only reason the
+// other legs exec is that driver threads and device state do not survive fork), and the
+// peer has to be glibc to create a GBM buffer at all.  So this side LISTENS on an
+// abstract unix socket and the peer dials it, and because a Droidspaces container runs
+// with net_mode=host, one network namespace holds both ends.  The peer is therefore not
+// this process's child: there is nothing to reapChild(), and the frozen protocol has no
+// MSG_BYE for T4, so the socket close is the whole teardown.
+//
+// Two failures must never be reported the same way:
+//   capability  (fourcc, modifier) is not in the driver's own eglQueryDmaBufFormatsEXT /
+//               eglQueryDmaBufModifiersEXT answer.  Refusing a pair the driver never
+//               advertised is the driver being right, and no import attempt can change it.
+//   driver bug  the pair IS advertised and the import still fails.
+// The capability question is asked first and its answer travels in the row.
+//
+// Both paths are read at (0,0) AND at the far corner: a wrong stride or offset shifts the
+// corner texel, which a one-pixel read cannot see.
+//
+// T4 is two rows over that one connection, and they answer different halves:
+//   T4-image-import  the container's dma-buf, imported here.  Gated on
+//                    EGL_EXT_image_dma_buf_import: a driver without it gets a capability
+//                    answer recorded before the ladder is entered, never an import
+//                    failure dressed up as a driver bug.
+//   T4-ahb-image     an AHardwareBuffer minted on THIS side and imported in the container,
+//                    which is the direction that still answers on such a driver.
+//
+// GL hands back channels (R,G,B,A) where the peer's seed is memory bytes, and the fourcc the
+// peer allocates -- GBM's ARGB8888 -- is B,G,R,A in memory.  A working import therefore reads
+// back the seed's bytes in CHANNEL order rather than verbatim, so the row carries both
+// readings: the verbatim one the protocol specifies, and the channel-order one beside it, so
+// the byte-order convention can never be mistaken for a broken import (and vice versa).
+//
+// The host build compiles this section, but its runT4 is a one-line SKIP row: the only way
+// this side can be dialed is rtListen(), which lives inside the AHardwareBuffer guard with
+// the rest of the T0/route block, and a host build has neither a listener nor a container
+// peer.  T4 itself needs no AHardwareBuffer -- PROBE_HAVE_AHB is simply the macro that
+// carries rtListen() -- so the guard is spelled out here with the stub beside it rather
+// than left to look like an Android-only leg.
+// ---------------------------------------------------------------------------
+
+static const char* kT4Row = "T4-image-import";
+
+#if PROBE_HAVE_AHB
+
+// The peer spells the same literal, so neither side depends on the other's byte order.
+static const uint32_t kT4Magic = 0x5434474DU;
+
+enum : uint32_t {
+    MSG_T4_OFFER = 50,
+    MSG_T4_READ = 51,
+    MSG_T4_WROTE = 52,
+    MSG_T4_ACK = 53,
+    MSG_T4_RESULT = 54,
+    // The Android-minted half of T4, appended so that no existing tag moves.  The
+    // AHardwareBuffer handle travels beside the offer exactly the way the T0 legs
+    // send theirs -- AHardwareBuffer_sendHandleToUnixSocket into one end of a
+    // socketpair, and that end's peer over SCM_RIGHTS with the message.
+    MSG_T4_AHB_OFFER = 55,
+    MSG_T4_AHB_ACK = 56,
+};
+
+// Byte for byte the peer's struct in peer/t4_gbm_peer.c: every field is fixed width, so the
+// two compilers cannot disagree about padding even though only one of them is bionic.
+struct T4Layout {
+    uint32_t magic, version, width, height, fourcc, stride, offset, reserved;
+    uint64_t modifier;  // UINT64_MAX = the peer has none, so rung 0 has nothing to name
+    uint8_t seed[4];    // what the peer filled the image with, in the buffer's memory order
+    char peer[128];
+    char note[128];
+};
+
+struct T4Read {
+    int32_t texOk, rbOk, rung, pad;
+    uint8_t texWord[4], texCorner[4], rbWord[4], rbCorner[4];
+    char importNote[160];
+};
+
+// path 0 = renderbuffer, 1 = texture.  `color` is the byte sequence the peer should find in
+// the buffer, so it is in memory order and not in GL channel order.
+struct T4Wrote {
+    int32_t path;
+    uint8_t color[4];
+};
+
+struct T4Ack {
+    int32_t ok;
+    uint8_t observed[4];
+    char note[128];
+};
+
+// MSG_T4_AHB_OFFER: the buffer THIS side minted, described so the container can
+// import it without guessing any part of the layout.  The fourcc is the DRM name
+// whose memory order is the order AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM names --
+// DRM_FORMAT_ABGR8888, fourcc_code('A','B','2','4') = 0x34324241, whose
+// little-endian [31:0] A:B:G:R layout puts R,G,B,A in bytes 0..3, the same pairing
+// gralloc itself uses for HAL_PIXEL_FORMAT_RGBA_8888 -- so the bytes the peer
+// compares are the bytes glClearColor() produced, and no channel-renaming step
+// sits between the two sides where a convention could pass for a working image.
+// The stride is the stride AHardwareBuffer_describe() reported, never width*4.
+struct T4AhbOffer {
+    uint32_t magic, version, width, height, stride, fourcc;
+    uint8_t seed[4];  // what this side cleared into the buffer, in memory order
+    char note[128];
+};
+
+// MSG_T4_AHB_ACK: what the container's GBM import made of the fd, what both pixels
+// of its mapping held BEFORE it wrote anything, and the pattern it then wrote over
+// the whole mapping.  `matched` is the peer's own comparison -- bit0 for (0,0),
+// bit1 for the far corner -- and this side recomputes it from the two pixel fields
+// instead of trusting it, so a disagreement between the bits and the bytes is
+// visible in the row.
+struct T4AhbAck {
+    int32_t imported;  // the peer's gbm_bo_import returned a bo
+    int32_t matched;   // 1 = (0,0) held the announced seed, 2 = the far corner did
+    uint32_t stride;   // the stride the peer's own mapping reports
+    uint8_t observed[4];
+    uint8_t observedCorner[4];
+    uint8_t pattern[4];  // zero when the peer could not write anything
+    char note[128];
+};
+
+// The dma-buf import entry points stay local to T4 rather than joining GlCtx: T1-gles asks
+// the same question through GL_EXT_memory_object, and widening GlCtx would move that leg
+// for no reason.
+struct T4Egl {
+    PFNEGLCREATEIMAGEKHRPROC pCreateImage = nullptr;
+    PFNEGLDESTROYIMAGEKHRPROC pDestroyImage = nullptr;
+    PFNEGLQUERYDMABUFFORMATSEXTPROC pFormats = nullptr;
+    PFNEGLQUERYDMABUFMODIFIERSEXTPROC pModifiers = nullptr;
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC pTargetTexture = nullptr;
+    PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC pTargetRb = nullptr;
+};
+
+// The two-pixel read only means anything byte-exact: a wrong stride or offset shows up as
+// differing bytes, which a decimal rendering would hide.
+static std::string t4Hex4(const uint8_t* b) {
+    return fmt("%02x%02x%02x%02x", b[0], b[1], b[2], b[3]);
+}
+
+// glClientWaitSync answers in its own vocabulary, which glErrStr does not cover.
+static std::string t4WaitStr(GLenum w) {
+    switch (w) {
+        case GL_ALREADY_SIGNALED: return "GL_ALREADY_SIGNALED";
+        case GL_CONDITION_SATISFIED: return "GL_CONDITION_SATISFIED";
+        case GL_TIMEOUT_EXPIRED: return "GL_TIMEOUT_EXPIRED";
+        case GL_WAIT_FAILED: return "GL_WAIT_FAILED";
+        default: return fmt("GL(0x%04x)", (unsigned)w);
+    }
+}
+// The driver's own answer to "do you take this (fourcc, modifier) pair", asked before any
+// import so that a pair the driver never advertised can never be reported as an import
+// failure.  `asked` says whether the answer means anything at all.
+struct T4Cap {
+    bool asked = false;
+    bool formatListed = false;
+    bool listed = false;
+    int formats = 0;
+    int modifiers = 0;
+    std::string note;
+};
+
+static T4Cap t4Capability(EGLDisplay dpy, const T4Egl& e, uint32_t fourcc, uint64_t modifier) {
+    T4Cap cap;
+    if (!e.pFormats || !e.pModifiers) {
+        cap.note = "EGL_EXT_image_dma_buf_import_modifiers absent, or its two entry points are: the driver "
+                   "publishes no (fourcc, modifier) list, so an import failure cannot be attributed either way";
+        return cap;
+    }
+    EGLint total = 0;
+    if (!e.pFormats(dpy, 0, nullptr, &total) || total <= 0) {
+        cap.note = fmt("eglQueryDmaBufFormatsEXT(list) -> 0x%04x num=%d", (unsigned)eglGetError(), (int)total);
+        return cap;
+    }
+    std::vector<EGLint> formats((size_t)total);
+    EGLint filled = 0;
+    if (!e.pFormats(dpy, total, formats.data(), &filled)) {
+        cap.note = fmt("eglQueryDmaBufFormatsEXT(%d) -> 0x%04x", (int)total, (unsigned)eglGetError());
+        return cap;
+    }
+    cap.asked = true;
+    cap.formats = (int)filled;
+    for (EGLint i = 0; i < filled; ++i) {
+        if ((uint32_t)formats[(size_t)i] == fourcc) cap.formatListed = true;
+    }
+    if (!cap.formatListed) {
+        cap.note = fmt("fourcc=0x%08x is not among the %d formats the driver lists: this is a capability answer, "
+                       "not an import failure",
+                       fourcc, (int)filled);
+        return cap;
+    }
+    EGLint nmods = 0;
+    if (!e.pModifiers(dpy, (EGLint)fourcc, 0, nullptr, nullptr, &nmods)) {
+        cap.note = fmt("fourcc=0x%08x is listed, eglQueryDmaBufModifiersEXT(list) -> 0x%04x", fourcc,
+                       (unsigned)eglGetError());
+        return cap;
+    }
+    cap.modifiers = (int)nmods;
+    if (modifier == UINT64_MAX) {
+        // Nothing to look up: the implicit modifier is the only one rung 1 can name, and it
+        // is legal for every format the driver lists.
+        cap.listed = true;
+        cap.note = fmt("fourcc=0x%08x is listed; the driver lists %d explicit modifier(s) but the peer offered "
+                       "none, so rung 1 is the only rung that can be spelled",
+                       fourcc, (int)nmods);
+        return cap;
+    }
+    if (nmods <= 0) {
+        cap.note = fmt("fourcc=0x%08x is listed with no explicit modifiers and the peer offered modifier=0x%016llx: "
+                       "the driver never advertised that pair",
+                       fourcc, (unsigned long long)modifier);
+        return cap;
+    }
+    std::vector<EGLuint64KHR> mods((size_t)nmods);
+    EGLint modFilled = 0;
+    if (!e.pModifiers(dpy, (EGLint)fourcc, nmods, mods.data(), nullptr, &modFilled)) {
+        cap.note = fmt("eglQueryDmaBufModifiersEXT(fourcc=0x%08x, %d) -> 0x%04x", fourcc, (int)nmods,
+                       (unsigned)eglGetError());
+        return cap;
+    }
+    for (EGLint i = 0; i < modFilled; ++i) {
+        if ((uint64_t)mods[(size_t)i] == modifier) cap.listed = true;
+    }
+    cap.note = cap.listed
+                   ? fmt("fourcc=0x%08x modifier=0x%016llx is in the driver's own list (%d formats, %d modifiers "
+                         "for this one), so any import failure below is the driver refusing its own pair",
+                         fourcc, (unsigned long long)modifier, (int)filled, (int)modFilled)
+                   : fmt("fourcc=0x%08x is listed but modifier=0x%016llx is not among its %d modifiers", fourcc,
+                         (unsigned long long)modifier, (int)modFilled);
+    return cap;
+}
+
+// The ladder EGL_EXT_image_dma_buf_import{,_modifiers} defines.  Rung 0 names the modifier
+// through EGL_DMA_BUF_PLANE0_MODIFIER_*_EXT, rung 1 is the original four-integer form.  A
+// peer with no modifier has no rung-0 spelling at all, and the ladder records that as
+// "skipped" rather than as a rejection, so "rung 1 accepted" cannot be misread as the
+// driver having refused rung 0.
+struct T4Import {
+    EGLImageKHR image = EGL_NO_IMAGE_KHR;
+    int rung = -1;
+    std::string accepted = "none";
+    std::string ladder;
+    std::string fail;
+};
+
+static T4Import t4ImportImage(EGLDisplay dpy, const T4Egl& e, int fd, const T4Layout& lay) {
+    T4Import imp;
+    for (int rung = 0; rung < 2; ++rung) {
+        if (rung == 0 && lay.modifier == UINT64_MAX) {
+            imp.ladder += "rung0=skipped(peer offered no modifier) ";
+            continue;
+        }
+        EGLint attrs[24];
+        int n = 0;
+        attrs[n++] = EGL_WIDTH;
+        attrs[n++] = (EGLint)lay.width;
+        attrs[n++] = EGL_HEIGHT;
+        attrs[n++] = (EGLint)lay.height;
+        attrs[n++] = EGL_LINUX_DRM_FOURCC_EXT;
+        attrs[n++] = (EGLint)lay.fourcc;
+        attrs[n++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+        attrs[n++] = fd;
+        attrs[n++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+        attrs[n++] = (EGLint)lay.offset;
+        attrs[n++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+        attrs[n++] = (EGLint)lay.stride;
+        if (rung == 0) {
+            attrs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+            attrs[n++] = (EGLint)(lay.modifier & 0xFFFFFFFFu);
+            attrs[n++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+            attrs[n++] = (EGLint)(lay.modifier >> 32);
+        }
+        attrs[n++] = EGL_NONE;
+        EGLImageKHR img = e.pCreateImage(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attrs);
+        // read the error either way: it is this call's, and one left in the queue would be
+        // blamed on the next one
+        const EGLint err = eglGetError();
+        if (img != EGL_NO_IMAGE_KHR) {
+            imp.image = img;
+            imp.rung = rung;
+            imp.accepted = rung == 0 ? "rung0-modifier" : "rung1-legacy";
+            imp.ladder += fmt("rung%d=accepted ", rung);
+            return imp;
+        }
+        imp.ladder += fmt("rung%d=0x%04x ", rung, (unsigned)err);
+        imp.fail = fmt("eglCreateImageKHR(rung%d) -> 0x%04x", rung, (unsigned)err);
+    }
+    return imp;
+}
+// The memory order of the 32-bit layouts the peer can plausibly hand over.  A DRM fourcc is
+// a name, not a layout rule -- 'AR24' is [31:0] A:R:G:B, so a little-endian buffer holds
+// B,G,R,A -- and a derived-then-wrong order would silently invert the peer's byte compare,
+// so the layouts are written out instead of computed.
+struct T4MemOrder {
+    uint32_t fourcc;
+    const char* mem;  // channels in memory order, byte 0 first
+};
+
+static const T4MemOrder kT4MemOrders[] = {
+    {0x34325241u, "BGRA"},  // 'AR24' DRM_FORMAT_ARGB8888
+    {0x34324241u, "RGBA"},  // 'AB24' DRM_FORMAT_ABGR8888
+    {0x34324152u, "ABGR"},  // 'RA24' DRM_FORMAT_RGBA8888
+    {0x34324142u, "ARGB"},  // 'BA24' DRM_FORMAT_BGRA8888
+    {0x34325258u, "BGRX"},  // 'XR24' DRM_FORMAT_XRGB8888
+    {0x34324258u, "RGBX"},  // 'XB24' DRM_FORMAT_XBGR8888
+    {0x34325852u, "XBGR"},  // 'RX24' DRM_FORMAT_RGBX8888
+    {0x34325842u, "XRGB"},  // 'BX24' DRM_FORMAT_BGRX8888
+};
+
+struct T4ColorPlan {
+    bool pinned = false;
+    GLfloat clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    std::string note;
+};
+
+static T4ColorPlan t4PlanColor(uint32_t fourcc, const uint8_t want[4]) {
+    T4ColorPlan plan;
+    const char* mem = nullptr;
+    for (const T4MemOrder& m : kT4MemOrders) {
+        if (m.fourcc == fourcc) mem = m.mem;
+    }
+    if (!mem) {
+        // GL channel order is all this side can honestly claim here, and the row says the
+        // compare the peer is about to make was not pinned by the format.
+        for (int i = 0; i < 4; ++i) plan.clear[i] = want[i] / 255.0f;
+        plan.note = fmt("fourcc=0x%08x is not one of the 32-bit layouts whose memory order this side knows, so "
+                        "the clear goes out in GL channel order and the peer's byte compare is not pinned by "
+                        "the format",
+                        fourcc);
+        return plan;
+    }
+    plan.pinned = true;
+    for (int i = 0; i < 4; ++i) {
+        switch (mem[i]) {
+            case 'R': plan.clear[0] = want[i] / 255.0f; break;
+            case 'G': plan.clear[1] = want[i] / 255.0f; break;
+            case 'B': plan.clear[2] = want[i] / 255.0f; break;
+            case 'A': plan.clear[3] = want[i] / 255.0f; break;
+            default: break;  // 'X' is written as 1.0, which want[3] = 0xFF matches
+        }
+    }
+    plan.note = fmt("fourcc=0x%08x holds %s in memory", fourcc, mem);
+    return plan;
+}
+
+// GL hands back channels while the peer's seed is memory bytes; when the fourcc's memory
+// order is known the seed can be re-read in channel order, and the row reports that
+// comparison next to the verbatim one so a byte-order convention can never pass for a
+// broken import.  Returns false, leaving `out` alone, when the order is not known.
+static bool t4SeedAsChannels(uint32_t fourcc, const uint8_t seed[4], uint8_t out[4]) {
+    const char* mem = nullptr;
+    for (const T4MemOrder& m : kT4MemOrders) {
+        if (m.fourcc == fourcc) mem = m.mem;
+    }
+    if (!mem) return false;
+    const char* channels = "RGBA";
+    for (int ch = 0; ch < 4; ++ch) {
+        out[ch] = 0xFF;  // an 'X' byte carries nothing; the driver writes 1.0 there
+        for (int i = 0; i < 4; ++i) {
+            if (mem[i] == channels[ch]) out[ch] = seed[i];
+        }
+    }
+    return true;
+}
+
+// The 1x1 sampling program the texture read goes through.  The leg's own FBO holds the
+// image, so the draw has to land somewhere else, and the probe's surface is a 1x1 pbuffer --
+// exactly the target this needs.
+static const char* kT4ReadVs =
+    "#version 300 es\n"
+    "void main() {\n"
+    "  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n";
+
+// highp on the texel centre: (w - 0.5) / w is not representable in mediump for a real image,
+// and a rounded coordinate would sample the neighbouring texel -- exactly the mistake the
+// corner read exists to catch.
+static const char* kT4ReadFs =
+    "#version 300 es\n"
+    "precision highp float;\n"
+    "precision highp sampler2D;\n"
+    "uniform sampler2D uTex;\n"
+    "uniform vec2 uTexel;\n"
+    "out vec4 oColor;\n"
+    "void main() { oColor = texture(uTex, uTexel); }\n";
+static GLuint t4BuildReadProgram(std::string* fail) {
+    auto compile = [&](GLenum kind, const char* src) -> GLuint {
+        GLuint sh = glCreateShader(kind);
+        glShaderSource(sh, 1, &src, nullptr);
+        glCompileShader(sh);
+        GLint ok = 0;
+        glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+        if (!ok) {
+            char log[512] = {0};
+            glGetShaderInfoLog(sh, sizeof(log) - 1, nullptr, log);
+            *fail = std::string("shader compile failed: ") + log;
+            glDeleteShader(sh);
+            return 0;
+        }
+        return sh;
+    };
+    GLuint vs = compile(GL_VERTEX_SHADER, kT4ReadVs);
+    if (!vs) return 0;
+    GLuint fs = compile(GL_FRAGMENT_SHADER, kT4ReadFs);
+    if (!fs) {
+        glDeleteShader(vs);
+        return 0;
+    }
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512] = {0};
+        glGetProgramInfoLog(prog, sizeof(log) - 1, nullptr, log);
+        *fail = std::string("link failed: ") + log;
+        glDeleteProgram(prog);
+        return 0;
+    }
+    return prog;
+}
+
+static bool t4ReadTexel(GLuint prog, GLint locTex, GLint locTexel, GLuint tex, uint32_t w, uint32_t h, uint32_t x,
+                        uint32_t y, uint8_t out[4], std::string* fail) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glUniform1i(locTex, 0);
+    glUniform2f(locTexel, ((float)x + 0.5f) / (float)w, ((float)y + 0.5f) / (float)h);
+    glDrain();
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    const GLenum drawErr = glDrain();
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+    const GLenum readErr = glDrain();
+    if (drawErr != GL_NO_ERROR || readErr != GL_NO_ERROR) {
+        *fail = fmt("1x1 sampling draw -> %s, glReadPixels -> %s", glErrStr(drawErr).c_str(),
+                    glErrStr(readErr).c_str());
+        return false;
+    }
+    return true;
+}
+
+static bool t4ReadRb(GLuint fbo, uint32_t x, uint32_t y, uint8_t out[4], std::string* fail) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDrain();
+    glReadPixels((GLint)x, (GLint)y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+    const GLenum e = glDrain();
+    if (e != GL_NO_ERROR) {
+        *fail = "glReadPixels off the image FBO -> " + glErrStr(e);
+        return false;
+    }
+    return true;
+}
+
+// Clears one path to `color`, then glFinish *and* an explicit fence whose wait result is what
+// comes back: the peer is a different process on a different driver stack, so "the drawing
+// landed" needs evidence this side can show, and glFinish alone only says the commands were
+// accepted.
+static std::string t4WritePath(GLuint fbo, uint32_t w, uint32_t h, const GLfloat color[4]) {
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glViewport(0, 0, (GLsizei)w, (GLsizei)h);
+    glClearColor(color[0], color[1], color[2], color[3]);
+    glDrain();
+    glClear(GL_COLOR_BUFFER_BIT);
+    const GLenum clearErr = glDrain();
+    glFinish();
+    const GLenum finishErr = glDrain();
+    const GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    const GLenum fenceErr = glDrain();
+    std::string wait = "no sync object";
+    if (sync) {
+        // bounded: an unsignalled fence has to read as GL_TIMEOUT_EXPIRED, never as a hang
+        wait = t4WaitStr(glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000ull));
+        glDeleteSync(sync);
+        glDrain();
+    }
+    return fmt("clear=%s finish=%s fence=%s wait=%s", glErrStr(clearErr).c_str(), glErrStr(finishErr).c_str(),
+               glErrStr(fenceErr).c_str(), wait.c_str());
+}
+
+// Per-path state: the import attempt, the two reads, and the peer's answer to the clear.
+struct T4PathRun {
+    const char* name = "?";
+    bool targetOk = false;  // glEGLImageTarget*OES took the image
+    std::string targetFail;
+    bool fboOk = false;  // and the image is a complete COLOR_ATTACHMENT0
+    std::string fboFail;
+    bool readDone = false;
+    uint8_t word[4] = {0, 0, 0, 0};
+    uint8_t corner[4] = {0, 0, 0, 0};
+    std::string readFail;
+    bool wrote = false;
+    bool ackGot = false;
+    int32_t ackOk = 0;
+    uint8_t observed[4] = {0, 0, 0, 0};
+    std::string ackNote;
+    std::string writeFail;
+};
+
+struct T4GL {
+    GLuint tex = 0;
+    GLuint rb = 0;
+    GLuint fboTex = 0;
+    GLuint fboRb = 0;
+    GLuint prog = 0;
+    GLint locTex = -1;
+    GLint locTexel = -1;
+};
+
+// Waits for `want`, stepping over -- and naming -- any other frame.  The frozen protocol
+// gives MSG_T4_RESULT no payload contract, so a frame carrying it is skipped rather than
+// parsed, which keeps the stream aligned for the ack that follows.  Skipping assumes the
+// unexpected frame is no larger than the one being awaited, which is the only size the
+// protocol defines.
+static bool t4RecvTag(int sock, uint32_t want, void* payload, size_t maxLen, size_t* gotOut, int* fdOut,
+                      std::string* skipped, std::string* fail) {
+    for (int i = 0; i < 8; ++i) {
+        uint32_t tag = 0;
+        size_t got = 0;
+        int fd = -1;
+        if (!recvMsg(sock, &tag, payload, maxLen, &got, &fd)) {
+            *fail = fmt("recvMsg -> errno=%d(%s)", errno, strerror(errno));
+            if (fd >= 0) close(fd);
+            return false;
+        }
+        if (tag == want) {
+            if (gotOut) {
+                *gotOut = got;
+            }
+            if (fdOut) {
+                *fdOut = fd;
+            } else if (fd >= 0) {
+                close(fd);
+            }
+            return true;
+        }
+        if (fd >= 0) close(fd);
+        if (skipped) {
+            if (!skipped->empty()) *skipped += ",";
+            *skipped += fmt("tag%u(len=%zu)", tag, got);
+        }
+    }
+    *fail = "too many unexpected frames before the expected one";
+    return false;
+}
+
+// The Android-minted row, defined at the end of this section: runT4 records the
+// container-minted direction first and this one second, and the second is the row
+// the first cannot stand in for.
+static void runT4AhbRow(GlCtx& g, const T4Egl& e, int sock, const T4Layout& lay);
+
+static void runT4(GlCtx& g, bool glOk, const char* endpoint) {
+    // Capability gates come before the listen: with no context, or without the extensions
+    // and entry points the import is spelled in, there is nothing this side could import,
+    // and saying so here beats leaving the peer to discover it through its own timeout.
+    if (!glOk) {
+        record(kT4Row, "SKIP", "no headless GLES context: nothing on this side could import the peer's dma-buf");
+        return;
+    }
+    T4Egl e;
+    e.pCreateImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    e.pDestroyImage = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    e.pFormats = (PFNEGLQUERYDMABUFFORMATSEXTPROC)eglGetProcAddress("eglQueryDmaBufFormatsEXT");
+    e.pModifiers = (PFNEGLQUERYDMABUFMODIFIERSEXTPROC)eglGetProcAddress("eglQueryDmaBufModifiersEXT");
+    e.pTargetTexture = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    e.pTargetRb =
+        (PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC)eglGetProcAddress("glEGLImageTargetRenderbufferStorageOES");
+
+    if (!g.hasEgl("EGL_KHR_image_base") || !e.pCreateImage || !e.pDestroyImage) {
+        record(kT4Row, "UNSUPPORTED",
+               fmt("EGL_KHR_image_base=%d and of that extension eglCreateImageKHR=%d eglDestroyImageKHR=%d",
+                   (int)g.hasEgl("EGL_KHR_image_base"), (int)(e.pCreateImage != nullptr),
+                   (int)(e.pDestroyImage != nullptr)));
+        return;
+    }
+    if (!g.hasGl("GL_OES_EGL_image") || (!e.pTargetTexture && !e.pTargetRb)) {
+        record(kT4Row, "UNSUPPORTED",
+               fmt("GL_OES_EGL_image=%d and of that extension glEGLImageTargetTexture2DOES=%d "
+                   "glEGLImageTargetRenderbufferStorageOES=%d",
+                   (int)g.hasGl("GL_OES_EGL_image"), (int)(e.pTargetTexture != nullptr),
+                   (int)(e.pTargetRb != nullptr)));
+        return;
+    }
+
+    int ls = rtListen(endpoint);
+    if (ls < 0) {
+        record(kT4Row, "FAIL", fmt("could not listen on %s for the container peer: errno=%d(%s)", endpoint, errno,
+                                   strerror(errno)));
+        return;
+    }
+    setRecvTimeout(ls, 60);
+    pr("T4: listening on %s for the Droidspaces peer (abstract socket; net_mode=host keeps both ends in one "
+       "namespace)",
+       endpoint);
+    int sock = accept(ls, nullptr, nullptr);
+    close(ls);
+    if (sock < 0) {
+        record(kT4Row, "FAIL", fmt("no peer dialed %s within the accept timeout: errno=%d(%s)", endpoint, errno,
+                                   strerror(errno)));
+        return;
+    }
+    setRecvTimeout(sock, 60);
+
+    // ---- 1. the peer's offer -------------------------------------------------
+    T4Layout lay{};
+    uint32_t tag = 0;
+    size_t got = 0;
+    int fd = -1;
+    if (!recvMsg(sock, &tag, &lay, sizeof(lay), &got, &fd) || tag != MSG_T4_OFFER || got != sizeof(lay)) {
+        record(kT4Row, "FAIL", fmt("no T4 offer: tag=%u len=%zu errno=%d(%s)", tag, got, errno, strerror(errno)));
+        if (fd >= 0) close(fd);
+        close(sock);
+        return;
+    }
+    lay.peer[sizeof(lay.peer) - 1] = 0;
+    lay.note[sizeof(lay.note) - 1] = 0;
+    const std::string fdDesc = describeFd(fd);
+    const std::string modifierStr =
+        lay.modifier == UINT64_MAX ? std::string("none") : fmt("0x%016llx", (unsigned long long)lay.modifier);
+    pr("T4 peer [%s] %s", lay.peer, lay.note);
+    pr("T4 offer: v%u %ux%u fourcc=0x%08x stride=%u offset=%u modifier=%s seed=%s fd[%s]", lay.version, lay.width,
+       lay.height, lay.fourcc, lay.stride, lay.offset, modifierStr.c_str(), t4Hex4(lay.seed).c_str(),
+       fdDesc.c_str());
+
+    if (lay.magic != kT4Magic) {
+        record(kT4Row, "FAIL", fmt("offer magic=0x%08x, expected 0x%08x: the two sides do not speak the same "
+                                   "protocol | peer [%s] %s",
+                                   lay.magic, kT4Magic, lay.peer, lay.note));
+        if (fd >= 0) close(fd);
+        close(sock);
+        return;
+    }
+    if (fd < 0) {
+        record(kT4Row, "FAIL", fmt("the offer carried no fd over SCM_RIGHTS, so the peer could not create the GBM "
+                                   "buffer | %ux%u fourcc=0x%08x | peer [%s] %s",
+                                   lay.width, lay.height, lay.fourcc, lay.peer, lay.note));
+        close(sock);
+        return;
+    }
+    if (lay.width == 0 || lay.height == 0 || lay.stride == 0) {
+        record(kT4Row, "FAIL", fmt("degenerate layout %ux%u stride=%u: nothing can be imported from it | fd[%s]",
+                                   lay.width, lay.height, lay.stride, fdDesc.c_str()));
+        close(fd);
+        close(sock);
+        return;
+    }
+
+    // ---- the capability gate: EGL_EXT_image_dma_buf_import -------------------
+    // Every rung of the EGL_LINUX_DMA_BUF_EXT ladder is defined by that extension,
+    // so a driver that does not advertise it does not take a container's dma-buf at
+    // all.  Walking the ladder anyway would report a capability answer as an import
+    // failure -- the two things this row exists to keep apart -- so the row is
+    // recorded here, naming the extension, and the ladder is not entered.  The peer
+    // stays connected: the Android-minted row below is the half of T4 that can still
+    // be measured on such a driver, and it needs this same connection.
+    if (!g.hasEgl("EGL_EXT_image_dma_buf_import")) {
+        pr("T4: EGL_EXT_image_dma_buf_import is not advertised: the EGL_LINUX_DMA_BUF_EXT ladder is not walked");
+        record(kT4Row, "UNSUPPORTED",
+               fmt("EGL_EXT_image_dma_buf_import is not advertised (EGL_KHR_image_base=%d, GL_OES_EGL_image=%d), so "
+                   "EGL_LINUX_DMA_BUF_EXT has no spelling here and no rung of that ladder can be accepted or "
+                   "rejected: the container's %ux%u fourcc=0x%08x stride=%u offset=%u modifier=%s fd[%s] and peer "
+                   "[%s] %s are recorded as an offer this driver cannot take up",
+                   (int)g.hasEgl("EGL_KHR_image_base"), (int)g.hasGl("GL_OES_EGL_image"), lay.width, lay.height,
+                   lay.fourcc, lay.stride, lay.offset, modifierStr.c_str(), fdDesc.c_str(), lay.peer, lay.note));
+        runT4AhbRow(g, e, sock, lay);
+        close(fd);
+        close(sock);
+        return;
+    }
+
+    // ---- 2. the driver's own question, before any import ---------------------
+    const T4Cap cap = t4Capability(g.dpy, e, lay.fourcc, lay.modifier);
+    pr("T4 capability: asked=%d formatListed=%d pairListed=%d formats=%d modifiers=%d | %s", (int)cap.asked,
+       (int)cap.formatListed, (int)cap.listed, cap.formats, cap.modifiers, cap.note.c_str());
+
+    // ---- 3. the import ladder ------------------------------------------------
+    T4Import imp = t4ImportImage(g.dpy, e, fd, lay);
+    pr("T4 import: accepted=%s | ladder: %s| %s", imp.accepted.c_str(), imp.ladder.c_str(),
+       imp.fail.empty() ? "-" : imp.fail.c_str());
+
+    // ---- 4. read both paths, at two pixels each ------------------------------
+    T4GL gl;
+    T4PathRun tex, rb;
+    tex.name = "tex";
+    rb.name = "rb";
+    uint8_t seedCh[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    const bool seedChKnown = t4SeedAsChannels(lay.fourcc, lay.seed, seedCh);
+
+    if (imp.image != EGL_NO_IMAGE_KHR) {
+        if (e.pTargetTexture) {
+            glGenFramebuffers(1, &gl.fboTex);
+            glGenTextures(1, &gl.tex);
+            glBindTexture(GL_TEXTURE_2D, gl.tex);
+            // NEAREST and no mip chain: the read has to land on the texel asked for and not
+            // on an average of its neighbours
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glDrain();
+            e.pTargetTexture(GL_TEXTURE_2D, (GLeglImageOES)imp.image);
+            const GLenum texErr = glDrain();
+            if (texErr != GL_NO_ERROR) {
+                tex.targetFail = "glEGLImageTargetTexture2DOES -> " + glErrStr(texErr);
+            } else {
+                tex.targetOk = true;
+                glBindFramebuffer(GL_FRAMEBUFFER, gl.fboTex);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gl.tex, 0);
+                const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                const GLenum attachErr = glDrain();
+                if (st != GL_FRAMEBUFFER_COMPLETE || attachErr != GL_NO_ERROR) {
+                    tex.fboFail = fmt("the image texture attached but the FBO is 0x%04x (%s)", (unsigned)st,
+                                      glErrStr(attachErr).c_str());
+                } else {
+                    tex.fboOk = true;
+                }
+            }
+        } else {
+            tex.targetFail = "glEGLImageTargetTexture2DOES is absent, so the texture path was not exercised";
+        }
+
+        if (e.pTargetRb) {
+            glGenFramebuffers(1, &gl.fboRb);
+            glGenRenderbuffers(1, &gl.rb);
+            glBindRenderbuffer(GL_RENDERBUFFER, gl.rb);
+            glDrain();
+            e.pTargetRb(GL_RENDERBUFFER, (GLeglImageOES)imp.image);
+            const GLenum rbErr = glDrain();
+            if (rbErr != GL_NO_ERROR) {
+                rb.targetFail = "glEGLImageTargetRenderbufferStorageOES -> " + glErrStr(rbErr);
+            } else {
+                rb.targetOk = true;
+                glBindFramebuffer(GL_FRAMEBUFFER, gl.fboRb);
+                glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, gl.rb);
+                const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                const GLenum attachErr = glDrain();
+                if (st != GL_FRAMEBUFFER_COMPLETE || attachErr != GL_NO_ERROR) {
+                    rb.fboFail = fmt("the image renderbuffer attached but the FBO is 0x%04x (%s)", (unsigned)st,
+                                     glErrStr(attachErr).c_str());
+                } else {
+                    rb.fboOk = true;
+                }
+            }
+        } else {
+            rb.targetFail =
+                "glEGLImageTargetRenderbufferStorageOES is absent, so the renderbuffer path was not exercised";
+        }
+    } else {
+        tex.targetFail = fmt("no EGLImage to attach: %s (ladder: %s)",
+                             imp.fail.empty() ? "the import ladder was not entered" : imp.fail.c_str(),
+                             imp.ladder.c_str());
+        rb.targetFail = tex.targetFail;
+    }
+
+    const uint32_t farX = lay.width - 1, farY = lay.height - 1;
+    if (tex.targetOk) {
+        std::string progFail;
+        gl.prog = t4BuildReadProgram(&progFail);
+        if (!gl.prog) {
+            tex.readFail = progFail;
+        } else {
+            gl.locTex = glGetUniformLocation(gl.prog, "uTex");
+            gl.locTexel = glGetUniformLocation(gl.prog, "uTexel");
+            std::string failA, failB;
+            const bool okA = t4ReadTexel(gl.prog, gl.locTex, gl.locTexel, gl.tex, lay.width, lay.height, 0, 0,
+                                         tex.word, &failA);
+            const bool okB = t4ReadTexel(gl.prog, gl.locTex, gl.locTexel, gl.tex, lay.width, lay.height, farX, farY,
+                                         tex.corner, &failB);
+            tex.readDone = okA && okB;
+            if (!okA) tex.readFail = "pixel(0,0): " + failA;
+            if (!okB) tex.readFail += (tex.readFail.empty() ? "" : "; ") + std::string("pixel(w-1,h-1): ") + failB;
+        }
+    } else {
+        tex.readFail = "not attempted: " + tex.targetFail;
+    }
+
+    if (rb.targetOk && rb.fboOk) {
+        std::string failA, failB;
+        const bool okA = t4ReadRb(gl.fboRb, 0, 0, rb.word, &failA);
+        const bool okB = t4ReadRb(gl.fboRb, farX, farY, rb.corner, &failB);
+        rb.readDone = okA && okB;
+        if (!okA) rb.readFail = "pixel(0,0): " + failA;
+        if (!okB) rb.readFail += (rb.readFail.empty() ? "" : "; ") + std::string("pixel(w-1,h-1): ") + failB;
+    } else if (rb.targetOk) {
+        rb.readFail = "not attempted: " + rb.fboFail;
+    } else {
+        rb.readFail = "not attempted: " + rb.targetFail;
+    }
+
+    // The protocol's read comparison is verbatim and the verdict keeps it that way.  GL hands
+    // back channels while the peer's seed is memory bytes, so when the fourcc's memory order
+    // is known the same comparison is also made against the seed re-read in channel order:
+    // the two disagreeing is a fact about byte order, not about the import, and the row shows
+    // both rather than letting the verbatim test alone imply a broken driver.
+    const bool texReadOk = tex.targetOk && tex.readDone && !memcmp(tex.word, lay.seed, 4) &&
+                           !memcmp(tex.corner, lay.seed, 4);
+    const bool rbReadOk = rb.targetOk && rb.readDone && !memcmp(rb.word, lay.seed, 4) &&
+                          !memcmp(rb.corner, lay.seed, 4);
+    const bool texOrderOk = seedChKnown && !memcmp(tex.word, seedCh, 4) && !memcmp(tex.corner, seedCh, 4);
+    const bool rbOrderOk = seedChKnown && !memcmp(rb.word, seedCh, 4) && !memcmp(rb.corner, seedCh, 4);
+
+    // ---- 5. what the two reads produced, back to the peer --------------------
+    T4Read rep{};
+    rep.texOk = texReadOk ? 1 : 0;
+    rep.rbOk = rbReadOk ? 1 : 0;
+    rep.rung = imp.rung;
+    memcpy(rep.texWord, tex.word, 4);
+    memcpy(rep.texCorner, tex.corner, 4);
+    memcpy(rep.rbWord, rb.word, 4);
+    memcpy(rep.rbCorner, rb.corner, 4);
+    snprintf(rep.importNote, sizeof(rep.importNote), "%s | ladder: %s| %s", imp.accepted.c_str(), imp.ladder.c_str(),
+             cap.note.c_str());
+    const bool readSent = sendMsg(sock, MSG_T4_READ, &rep, sizeof(rep), -1);
+    if (!readSent) pr("T4: MSG_T4_READ did not go out: errno=%d(%s)", errno, strerror(errno));
+
+    // ---- 6/7. draw into each path, ack by ack --------------------------------
+    // Both palettes end in 0xFF so an ignored 'X' channel and a real 'A' agree, and the two
+    // clears differ in every byte so a swapped path cannot pass unnoticed.
+    const uint8_t rbWant[4] = {0x11, 0x22, 0x33, 0xFF};
+    const uint8_t texWant[4] = {0x44, 0x55, 0x66, 0xFF};
+    const T4ColorPlan rbPlan = t4PlanColor(lay.fourcc, rbWant);
+    const T4ColorPlan texPlan = t4PlanColor(lay.fourcc, texWant);
+    std::string rbFence = "not attempted", texFence = "not attempted";
+    std::string skipped;
+
+    if (rb.fboOk) {
+        rbFence = t4WritePath(gl.fboRb, lay.width, lay.height, rbPlan.clear);
+        T4Wrote w{};
+        w.path = 0;
+        memcpy(w.color, rbWant, 4);
+        if (!sendMsg(sock, MSG_T4_WROTE, &w, sizeof(w), -1)) {
+            rb.writeFail = fmt("sendMsg(MSG_T4_WROTE path=0) errno=%d(%s)", errno, strerror(errno));
+        } else {
+            rb.wrote = true;
+            T4Ack ack{};
+            std::string fail;
+            if (!t4RecvTag(sock, MSG_T4_ACK, &ack, sizeof(ack), nullptr, nullptr, &skipped, &fail)) {
+                rb.writeFail = "no ack for the renderbuffer write: " + fail;
+            } else {
+                ack.note[sizeof(ack.note) - 1] = 0;
+                rb.ackGot = true;
+                rb.ackOk = ack.ok;
+                memcpy(rb.observed, ack.observed, 4);
+                rb.ackNote = ack.note;
+                if (!ack.ok) {
+                    rb.writeFail = fmt("peer ack ok=0 observed=%s want=%s note=[%s]", t4Hex4(ack.observed).c_str(),
+                                       t4Hex4(rbWant).c_str(), ack.note);
+                }
+            }
+        }
+    } else {
+        const std::string whyNot = rb.targetOk ? rb.fboFail : rb.targetFail;
+        rb.writeFail = "no clear was attempted: " + whyNot;
+    }
+
+    if (tex.fboOk) {
+        texFence = t4WritePath(gl.fboTex, lay.width, lay.height, texPlan.clear);
+        T4Wrote w{};
+        w.path = 1;
+        memcpy(w.color, texWant, 4);
+        if (!sendMsg(sock, MSG_T4_WROTE, &w, sizeof(w), -1)) {
+            tex.writeFail = fmt("sendMsg(MSG_T4_WROTE path=1) errno=%d(%s)", errno, strerror(errno));
+        } else {
+            tex.wrote = true;
+            T4Ack ack{};
+            std::string fail;
+            if (!t4RecvTag(sock, MSG_T4_ACK, &ack, sizeof(ack), nullptr, nullptr, &skipped, &fail)) {
+                tex.writeFail = "no ack for the texture write: " + fail;
+            } else {
+                ack.note[sizeof(ack.note) - 1] = 0;
+                tex.ackGot = true;
+                tex.ackOk = ack.ok;
+                memcpy(tex.observed, ack.observed, 4);
+                tex.ackNote = ack.note;
+                if (!ack.ok) {
+                    tex.writeFail = fmt("peer ack ok=0 observed=%s want=%s note=[%s]", t4Hex4(ack.observed).c_str(),
+                                        t4Hex4(texWant).c_str(), ack.note);
+                }
+            }
+        }
+    } else {
+        const std::string whyNot = tex.targetOk ? tex.fboFail : tex.targetFail;
+        tex.writeFail = "no clear was attempted: " + whyNot;
+    }
+    pr("T4 clear: renderbuffer %s ack=%d | texture %s ack=%d", rbFence.c_str(), rb.ackGot ? rb.ackOk : -1,
+       texFence.c_str(), tex.ackGot ? tex.ackOk : -1);
+
+    // ---- 8. the peer's last word ---------------------------------------------
+    // MSG_T4_RESULT has no payload contract in the frozen protocol, so it is taken raw: the
+    // length and the leading bytes go into the row and nothing is parsed out of it.
+    uint8_t lastWord[256];
+    memset(lastWord, 0, sizeof(lastWord));
+    std::string resultNote;
+    {
+        setRecvTimeout(sock, 2);  // bounded: a peer that says nothing must not hold the row up
+        uint32_t rtag = 0;
+        size_t rgot = 0;
+        if (recvMsg(sock, &rtag, lastWord, sizeof(lastWord), &rgot, nullptr)) {
+            if (rtag == MSG_T4_RESULT) {
+                std::string hex;
+                for (size_t i = 0; i < rgot && i < 16; ++i) hex += fmt("%02x", lastWord[i]);
+                resultNote = fmt("MSG_T4_RESULT len=%zu bytes=%s", rgot, hex.c_str());
+            } else {
+                resultNote = fmt("the peer's last frame was tag=%u len=%zu, not MSG_T4_RESULT", rtag, rgot);
+            }
+        } else {
+            resultNote = fmt("no MSG_T4_RESULT frame (the peer closed, timed out, or sent more than %zu bytes): "
+                             "errno=%d(%s)",
+                             sizeof(lastWord), errno, strerror(errno));
+        }
+    }
+
+    // ---- the verdict ---------------------------------------------------------
+    std::vector<Leg> legs;
+    {
+        Leg l;
+        l.name = tex.name;
+        l.decisive = true;
+        l.attempted = tex.targetOk;
+        l.readOk = texReadOk;
+        l.writeOk = tex.ackGot && tex.ackOk != 0;
+        if (!tex.targetOk)
+            l.fail = tex.targetFail;
+        else if (!tex.readDone)
+            l.fail = "texture read: " + tex.readFail;
+        else if (!l.readOk)
+            l.fail = fmt("texture read is not the peer's seed verbatim: word=%s corner=%s seed(memory)=%s "
+                         "seed(channels)=%s channelMatch=%d -- GL hands back channels while the peer fills "
+                         "memory bytes, so a fourcc whose memory order is not RGBA differs here on a working "
+                         "import",
+                         t4Hex4(tex.word).c_str(), t4Hex4(tex.corner).c_str(), t4Hex4(lay.seed).c_str(),
+                         seedChKnown ? t4Hex4(seedCh).c_str() : "fourcc order unknown", (int)texOrderOk);
+        else if (!l.writeOk)
+            l.fail = tex.writeFail;
+        legs.push_back(l);
+    }
+    {
+        Leg l;
+        l.name = rb.name;
+        l.decisive = true;
+        l.attempted = rb.targetOk;
+        l.readOk = rbReadOk;
+        l.writeOk = rb.ackGot && rb.ackOk != 0;
+        if (!rb.targetOk)
+            l.fail = rb.targetFail;
+        else if (!rb.readDone)
+            l.fail = "renderbuffer read: " + rb.readFail;
+        else if (!l.readOk)
+            l.fail = fmt("renderbuffer read is not the peer's seed verbatim: word=%s corner=%s seed(memory)=%s "
+                         "seed(channels)=%s channelMatch=%d -- GL hands back channels while the peer fills "
+                         "memory bytes, so a fourcc whose memory order is not RGBA differs here on a working "
+                         "import",
+                         t4Hex4(rb.word).c_str(), t4Hex4(rb.corner).c_str(), t4Hex4(lay.seed).c_str(),
+                         seedChKnown ? t4Hex4(seedCh).c_str() : "fourcc order unknown", (int)rbOrderOk);
+        else if (!l.writeOk)
+            l.fail = rb.writeFail;
+        legs.push_back(l);
+    }
+    std::string why;
+    const char* status = legVerdict(legs, &why);
+
+    // every failure string already names its step, so an empty one leaves no marker
+    auto join = [](const std::string& a, const std::string& b) {
+        if (a.empty()) return b;
+        if (b.empty()) return a;
+        return a + "; " + b;
+    };
+
+    std::string detail = fmt(
+        "%s | %ux%u fourcc=0x%08x stride=%u offset=%u modifier=%s seed=%s | capability[asked=%d format=%d pair=%d "
+        "formats=%d modifiers=%d: %s] | import[accepted=%s ladder: %s| %s] | fd[%s]",
+        legTrace(legs).c_str(), lay.width, lay.height, lay.fourcc, lay.stride, lay.offset, modifierStr.c_str(),
+        t4Hex4(lay.seed).c_str(), (int)cap.asked, (int)cap.formatListed, (int)cap.listed, cap.formats, cap.modifiers,
+        cap.note.c_str(), imp.accepted.c_str(), imp.ladder.c_str(), imp.fail.empty() ? "-" : imp.fail.c_str(),
+        fdDesc.c_str());
+    detail += fmt(" | tex[target=%d fbo=%d word=%s corner=%s read=%d orderMapped=%d(%s) fail=[%s]]",
+                  (int)tex.targetOk, (int)tex.fboOk, t4Hex4(tex.word).c_str(), t4Hex4(tex.corner).c_str(),
+                  (int)tex.readDone, (int)texOrderOk, seedChKnown ? t4Hex4(seedCh).c_str() : "fourcc order unknown",
+                  join(tex.targetFail, join(tex.readFail, tex.writeFail)).c_str());
+    detail += fmt(" rb[target=%d fbo=%d word=%s corner=%s read=%d orderMapped=%d(%s) fail=[%s]]",
+                  (int)rb.targetOk, (int)rb.fboOk, t4Hex4(rb.word).c_str(), t4Hex4(rb.corner).c_str(),
+                  (int)rb.readDone, (int)rbOrderOk, seedChKnown ? t4Hex4(seedCh).c_str() : "fourcc order unknown",
+                  join(rb.targetFail, join(rb.readFail, rb.writeFail)).c_str());
+    detail += fmt(" | clear[rb fence=%s want=%s ack=%d observed=%s note=[%s]] [tex fence=%s want=%s ack=%d "
+                  "observed=%s note=[%s]] skipped=[%s]",
+                  rbFence.c_str(), t4Hex4(rbWant).c_str(), rb.ackGot ? rb.ackOk : -1, t4Hex4(rb.observed).c_str(),
+                  rb.ackNote.c_str(), texFence.c_str(), t4Hex4(texWant).c_str(), tex.ackGot ? tex.ackOk : -1,
+                  t4Hex4(tex.observed).c_str(), tex.ackNote.c_str(), skipped.c_str());
+    detail += fmt(" | colourOrder[rb pinned=%d %s] [tex pinned=%d %s] | readSent=%d | %s | peer [%s] %s | %s",
+                  (int)rbPlan.pinned, rbPlan.note.c_str(), (int)texPlan.pinned, texPlan.note.c_str(),
+                  (int)readSent, resultNote.c_str(), lay.peer, lay.note, why.c_str());
+    record(kT4Row, status, detail);
+
+    // The other half of T4, over the connection that is still open: this side mints
+    // the image and the container imports it.  See runT4AhbRow for what it measures.
+    runT4AhbRow(g, e, sock, lay);
+
+    // The EGLImage outlives every GL object that wraps it, and the fd is the peer's only
+    // handle on the buffer: tear down in that order.
+    if (gl.prog) glDeleteProgram(gl.prog);
+    if (gl.fboTex) glDeleteFramebuffers(1, &gl.fboTex);
+    if (gl.fboRb) glDeleteFramebuffers(1, &gl.fboRb);
+    if (gl.tex) glDeleteTextures(1, &gl.tex);
+    if (gl.rb) glDeleteRenderbuffers(1, &gl.rb);
+    if (imp.image != EGL_NO_IMAGE_KHR) e.pDestroyImage(g.dpy, imp.image);
+    close(fd);
+    close(sock);
+}
+
+// ---------------------------------------------------------------------------
+// T4-ahb-image: the same image, minted on the Android side
+//
+// T4-image-import above asks whether an image allocated in the container can be
+// imported HERE.  This row asks the other half of the same question, and it is the
+// half that survives on a driver with no EGL_EXT_image_dma_buf_import.  An app
+// cannot adopt the container's fd as an AHardwareBuffer (createFromHandle is a
+// SystemApi, not NDK), so the image is born on this side and travels the other way:
+// the buffer is allocated in this process, handed over as an fd over a socketpair --
+// the mechanism T0 hands its BLOB across -- and imported in the container as a GBM bo.
+//
+// Both directions are measured, and neither is measured by this side alone:
+//   read   the peer must find, at (0,0) AND at the far corner of its own mapping,
+//          the four bytes this side cleared into the image.
+//   write  the peer fills its mapping with a pattern of its own and this side reads
+//          it back through the GPU -- glEGLImageTargetTexture2DOES plus the same 1x1
+//          sampling program the row above uses, not a second CPU mapping of a buffer
+//          this process already owns, which would prove nothing about the peer.
+// A refusal anywhere is recorded where it happened with its EGL or GL error named,
+// and can never come out as OK.
+// ---------------------------------------------------------------------------
+
+static const char* kT4AhbRow = "T4-ahb-image";
+
+// The DRM fourcc this row offers, and why it is that one: an AHardwareBuffer does
+// not carry a fourcc, so the two sides must agree on memory order in words.
+// AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM is R,G,B,A in memory, and the DRM name with
+// that same little-endian layout is DRM_FORMAT_ABGR8888, fourcc_code('A','B','2','4')
+// = 0x34324241, whose [31:0] A:B:G:R puts R in byte 0 -- the pairing gralloc itself
+// uses for HAL_PIXEL_FORMAT_RGBA_8888.  Choosing it is what makes the comparison
+// below mean something: t4PlanColor() derives the clear colour from the same table
+// entry the peer's bytes are compared through, so a channel mistake cannot cancel
+// itself out between the two sides.
+static const uint32_t kT4AhbFourcc = 0x34324241u;  // DRM_FORMAT_ABGR8888, memory order R,G,B,A
+
+// AHardwareBuffer_Desc::stride IS IN PIXELS -- the platform's own unit -- while every
+// consumer on the wire wants the row stride in BYTES: gbm_bo_import is told it, and the
+// peer's mapping and both of its pixel offsets follow from it.  Announcing the pixel
+// count as if it were bytes cost a device run (the peer imported a 64-byte row for a
+// 256-byte-row image), so the conversion lives here, next to the fourcc that fixes the
+// bytes per pixel: DRM_FORMAT_ABGR8888 is four bytes per pixel, and the AHB format this
+// row allocates (AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM) is the same memory order.
+static const uint32_t kT4AhbBytesPerPixel = 4u;
+
+// The colour this side clears into the image before offering it: four bytes in that
+// memory order, all four distinct, so a permuted or repeated byte shows up as a
+// different sequence instead of hiding inside the colour itself.
+static const uint8_t kT4AhbSeed[4] = {0x2A, 0x5B, 0x8C, 0xFF};
+
+static void runT4AhbRow(GlCtx& g, const T4Egl& e, int sock, const T4Layout& lay) {
+    // The row is sized by the leg's only size knob: the peer dialled with --width/
+    // --height (64x64 by default) and the same two numbers size this allocation, so a
+    // single option moves both sides and they cannot silently disagree about the
+    // layout.  The stride, by contrast, is never assumed to be width*4: it is what
+    // AHardwareBuffer_describe() reports in PIXELS, converted to the BYTES every consumer
+    // on the wire wants, and it is what the peer is told.
+    const uint32_t w = lay.width, h = lay.height;
+    const uint32_t farX = w - 1, farY = h - 1;
+    const T4ColorPlan plan = t4PlanColor(kT4AhbFourcc, kT4AhbSeed);
+
+    // ---- the entry points this row is spelled in -----------------------------
+    if (!g.hasEgl("EGL_ANDROID_get_native_client_buffer") || !g.pGetNativeClientBuffer) {
+        record(kT4AhbRow, "UNSUPPORTED",
+               fmt("EGL_ANDROID_get_native_client_buffer=%d and of that extension eglGetNativeClientBufferANDROID=%d: "
+                   "an AHardwareBuffer cannot become an EGLClientBuffer here, so there is no image to offer",
+                   (int)g.hasEgl("EGL_ANDROID_get_native_client_buffer"),
+                   (int)(g.pGetNativeClientBuffer != nullptr)));
+        return;
+    }
+    if (!e.pTargetRb || !e.pTargetTexture) {
+        record(kT4AhbRow, "UNSUPPORTED",
+               fmt("GL_OES_EGL_image=%d but glEGLImageTargetRenderbufferStorageOES=%d glEGLImageTargetTexture2DOES=%d: "
+                   "this row clears through a renderbuffer and reads back through the texture path, and one of the "
+                   "two is absent",
+                   (int)g.hasGl("GL_OES_EGL_image"), (int)(e.pTargetRb != nullptr),
+                   (int)(e.pTargetTexture != nullptr)));
+        return;
+    }
+
+    // ---- 1. the buffer, allocated here, described verbatim -------------------
+    AHardwareBuffer_Desc desc{};
+    desc.width = w;
+    desc.height = h;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+    desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
+                 AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+    AHardwareBuffer* ahb = nullptr;
+    const int allocRc = AHardwareBuffer_allocate(&desc, &ahb);
+    if (allocRc != 0 || !ahb) {
+        record(kT4AhbRow, "UNSUPPORTED",
+               fmt("AHardwareBuffer_allocate(width=%u height=%u layers=1 format=AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM "
+                   "usage=0x%llx) rc=%d errno=%d(%s): this side cannot mint the image at all, so the "
+                   "Android-minted direction has nothing to measure",
+                   w, h, (unsigned long long)desc.usage, allocRc, errno, strerror(errno)));
+        return;
+    }
+    AHardwareBuffer_Desc back{};
+    AHardwareBuffer_describe(ahb, &back);
+    pr("T4-ahb: AHardwareBuffer_allocate rc=%d, AHardwareBuffer_describe -> width=%u height=%u layers=%u "
+       "format=0x%x usage=0x%llx stride=%u rfu0=%u rfu1=%llu",
+       allocRc, back.width, back.height, back.layers, (unsigned)back.format, (unsigned long long)back.usage,
+       back.stride, back.rfu0, (unsigned long long)back.rfu1);
+    if (back.width == 0 || back.height == 0 || back.stride == 0) {
+        record(kT4AhbRow, "FAIL",
+               fmt("AHardwareBuffer_describe returned a degenerate layout: %ux%u layers=%u stride=%u", back.width,
+                   back.height, back.layers, back.stride));
+        AHardwareBuffer_release(ahb);
+        return;
+    }
+
+    // ---- 2. import it HERE: client buffer -> EGLImage -> renderbuffer --------
+    EGLClientBuffer cb = g.pGetNativeClientBuffer(ahb);
+    const EGLint cbErr = eglGetError();
+    pr("T4-ahb: eglGetNativeClientBufferANDROID(ahb=%p) -> %p, eglGetError=0x%04x", (void*)ahb, (void*)cb,
+       (unsigned)cbErr);
+    if (!cb) {
+        record(kT4AhbRow, "FAIL",
+               fmt("eglGetNativeClientBufferANDROID(ahb) returned NULL with eglGetError=0x%04x, for an "
+                   "AHardwareBuffer this same driver allocated one call earlier (%ux%u stride=%u)",
+                   (unsigned)cbErr, back.width, back.height, back.stride));
+        AHardwareBuffer_release(ahb);
+        return;
+    }
+    const EGLint imgAttrs[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+    EGLImageKHR img = e.pCreateImage(g.dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, cb, imgAttrs);
+    const EGLint imgErr = eglGetError();
+    pr("T4-ahb: eglCreateImageKHR(EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer=%p) -> %p, "
+       "eglGetError=0x%04x",
+       (void*)cb, (void*)img, (unsigned)imgErr);
+    if (img == EGL_NO_IMAGE_KHR) {
+        record(kT4AhbRow, "FAIL",
+               fmt("eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) -> EGL_NO_IMAGE_KHR with eglGetError=0x%04x: the "
+                   "driver took the client buffer (%p) and then refused the image",
+                   (unsigned)imgErr, (void*)cb));
+        AHardwareBuffer_release(ahb);
+        return;
+    }
+
+    GLuint rb = 0, fboRb = 0, tex = 0, fboTex = 0, prog = 0;
+    std::string stepFail;
+    glGenRenderbuffers(1, &rb);
+    glBindRenderbuffer(GL_RENDERBUFFER, rb);
+    glDrain();
+    e.pTargetRb(GL_RENDERBUFFER, (GLeglImageOES)img);
+    const GLenum rbErr = glDrain();
+    pr("T4-ahb: glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, image) -> %s", glErrStr(rbErr).c_str());
+    if (rbErr != GL_NO_ERROR) stepFail = "glEGLImageTargetRenderbufferStorageOES -> " + glErrStr(rbErr);
+    glGenFramebuffers(1, &fboRb);
+    glBindFramebuffer(GL_FRAMEBUFFER, fboRb);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
+    const GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    const GLenum attachErr = glDrain();
+    pr("T4-ahb: image renderbuffer FBO completeness=0x%04x (%s), glGetError=%s", (unsigned)fboStatus,
+       fboStatus == GL_FRAMEBUFFER_COMPLETE ? "GL_FRAMEBUFFER_COMPLETE" : "not complete",
+       glErrStr(attachErr).c_str());
+    if (stepFail.empty() && (fboStatus != GL_FRAMEBUFFER_COMPLETE || attachErr != GL_NO_ERROR)) {
+        stepFail = fmt("the image renderbuffer attached but the FBO is 0x%04x (%s)", (unsigned)fboStatus,
+                       glErrStr(attachErr).c_str());
+    }
+    if (!stepFail.empty()) {
+        record(kT4AhbRow, "FAIL",
+               fmt("%s | AHB[%ux%u layers=%u format=0x%x usage=0x%llx stride=%u] | fourcc=0x%08x seed=%s | image=%p "
+                   "egl=0x%04x clientBuffer=%p egl=0x%04x | nothing was drawn and nothing was offered",
+                   stepFail.c_str(), back.width, back.height, back.layers, (unsigned)back.format,
+                   (unsigned long long)back.usage, back.stride, kT4AhbFourcc, t4Hex4(kT4AhbSeed).c_str(),
+                   (void*)img, (unsigned)imgErr, (void*)cb, (unsigned)cbErr));
+        glDeleteFramebuffers(1, &fboRb);
+        glDeleteRenderbuffers(1, &rb);
+        e.pDestroyImage(g.dpy, img);
+        AHardwareBuffer_release(ahb);
+        return;
+    }
+
+    // The clear is what the peer's two pixels are compared against, so it goes
+    // through the same clear + glFinish + fence path the row above uses, and that
+    // fence's wait result is reported verbatim.
+    const std::string clearFence = t4WritePath(fboRb, w, h, plan.clear);
+    pr("T4-ahb: clear %s into the renderbuffer FBO: %s | %s", t4Hex4(kT4AhbSeed).c_str(), clearFence.c_str(),
+       plan.note.c_str());
+
+    // ---- 3. hand it over: socketpair + SCM_RIGHTS, exactly as T0 does -------
+    T4AhbOffer off{};
+    off.magic = kT4Magic;
+    off.version = 1;
+    off.width = back.width;
+    off.height = back.height;
+    off.stride = back.stride * kT4AhbBytesPerPixel;  // describe() reports pixels; the wire wants bytes
+    off.fourcc = kT4AhbFourcc;
+    memcpy(off.seed, kT4AhbSeed, 4);
+    snprintf(off.note, sizeof(off.note), "clear=[%s] fence=[%s] modifier=DRM_FORMAT_MOD_LINEAR assumed",
+             t4Hex4(kT4AhbSeed).c_str(), clearFence.c_str());
+    off.note[sizeof(off.note) - 1] = 0;
+    int sp[2] = {-1, -1};
+    int sendRc = -1;
+    std::string spDesc = "no socketpair";
+    std::string sendFail;
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sp) != 0) {
+        sendRc = -errno;
+        sendFail = fmt("socketpair -> errno=%d(%s)", errno, strerror(errno));
+    } else {
+        spDesc = describeFd(sp[1]);
+        sendRc = AHardwareBuffer_sendHandleToUnixSocket(ahb, sp[0]);
+        if (sendRc != 0) {
+            sendFail = fmt("AHardwareBuffer_sendHandleToUnixSocket(ahb, socketpair[0]) -> %d errno=%d(%s)", sendRc,
+                           errno, strerror(errno));
+        }
+        close(sp[0]);
+        if (sendRc == 0 && !sendMsg(sock, MSG_T4_AHB_OFFER, &off, sizeof(off), sp[1])) {
+            sendRc = -errno;
+            sendFail = fmt("sendMsg(MSG_T4_AHB_OFFER, fd=socketpair[1]) -> errno=%d(%s)", errno, strerror(errno));
+        }
+        close(sp[1]);
+    }
+    const bool offered = sendRc == 0;
+    pr("T4-ahb: MSG_T4_AHB_OFFER %ux%u stride=%u B (%u px x %u B/px) fourcc=0x%08x seed=%s note=[%s] "
+       "handle-send=%d fd[%s]",
+       off.width, off.height, off.stride, back.stride, kT4AhbBytesPerPixel, off.fourcc,
+       t4Hex4(off.seed).c_str(), off.note, sendRc, spDesc.c_str());
+
+    // ---- 4. the peer's answer ------------------------------------------------
+    T4AhbAck ack{};
+    size_t ackGot = 0;
+    std::string ackFail;
+    std::string ackSkipped;
+    bool ackRecv = false;
+    if (offered) {
+        // The dma-buf row's last step shortens the socket timeout to 2s to bound its
+        // wait for a frame the peer never sends; this wait is a real exchange and
+        // takes the leg's own budget back.
+        setRecvTimeout(sock, 60);
+        ackRecv = t4RecvTag(sock, MSG_T4_AHB_ACK, &ack, sizeof(ack), &ackGot, nullptr, &ackSkipped, &ackFail);
+    } else {
+        ackFail = sendFail;
+    }
+    if (ackRecv) {
+        ack.note[sizeof(ack.note) - 1] = 0;
+        pr("T4-ahb: MSG_T4_AHB_ACK imported=%d matched=0x%x stride=%u observed=%s observedCorner=%s pattern=%s "
+           "note=[%s] skipped=[%s]",
+           (int)ack.imported, (int)ack.matched, ack.stride, t4Hex4(ack.observed).c_str(),
+           t4Hex4(ack.observedCorner).c_str(), t4Hex4(ack.pattern).c_str(), ack.note, ackSkipped.c_str());
+    } else if (offered) {
+        pr("T4-ahb: no MSG_T4_AHB_ACK: %s", ackFail.c_str());
+    }
+
+    // ---- 5. this side's own read: the texture path, at both pixels -----------
+    // Taken AFTER the peer's ack, so what comes back is its answer and not the
+    // colour this side cleared a moment ago.
+    std::string readFail;
+    bool readDone = false;
+    uint8_t texWord[4] = {0, 0, 0, 0}, texCorner[4] = {0, 0, 0, 0};
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glDrain();
+    e.pTargetTexture(GL_TEXTURE_2D, (GLeglImageOES)img);
+    const GLenum texErr = glDrain();
+    pr("T4-ahb: glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image) -> %s", glErrStr(texErr).c_str());
+    if (texErr != GL_NO_ERROR) {
+        readFail = "glEGLImageTargetTexture2DOES -> " + glErrStr(texErr);
+    } else {
+        glGenFramebuffers(1, &fboTex);
+        glBindFramebuffer(GL_FRAMEBUFFER, fboTex);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+        const GLenum texFboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLenum texAttachErr = glDrain();
+        if (texFboStatus != GL_FRAMEBUFFER_COMPLETE || texAttachErr != GL_NO_ERROR) {
+            readFail = fmt("the image texture attached but the FBO is 0x%04x (%s)", (unsigned)texFboStatus,
+                           glErrStr(texAttachErr).c_str());
+        }
+    }
+    if (readFail.empty()) {
+        std::string progFail;
+        prog = t4BuildReadProgram(&progFail);
+        if (!prog) {
+            readFail = progFail;
+        } else {
+            const GLint locTex = glGetUniformLocation(prog, "uTex");
+            const GLint locTexel = glGetUniformLocation(prog, "uTexel");
+            std::string failA, failB;
+            const bool okA = t4ReadTexel(prog, locTex, locTexel, tex, w, h, 0, 0, texWord, &failA);
+            const bool okB = t4ReadTexel(prog, locTex, locTexel, tex, w, h, farX, farY, texCorner, &failB);
+            readDone = okA && okB;
+            if (!okA) readFail = "pixel(0,0): " + failA;
+            if (!okB) readFail += (readFail.empty() ? "" : "; ") + std::string("pixel(w-1,h-1): ") + failB;
+            const std::string rf = readFail.empty() ? std::string("-") : readFail;
+            pr("T4-ahb: texture-path read word=%s corner=%s readDone=%d fail=[%s]", t4Hex4(texWord).c_str(),
+               t4Hex4(texCorner).c_str(), (int)readDone, rf.c_str());
+        }
+    }
+
+    // ---- 6. the row's verdict: one decisive leg, both halves named -----------
+    Leg l;
+    l.name = "ahb";
+    l.decisive = true;
+    l.attempted = offered;
+    l.readOk = ackRecv && ack.imported && (ack.matched & 3) == 3 && !memcmp(ack.observed, kT4AhbSeed, 4) &&
+               !memcmp(ack.observedCorner, kT4AhbSeed, 4);
+    l.writeOk = ackRecv && readDone && !memcmp(texWord, ack.pattern, 4) && !memcmp(texCorner, ack.pattern, 4);
+    if (!offered) {
+        l.fail = "the offer never went out: " + sendFail;
+    } else if (!ackRecv) {
+        l.fail = "no MSG_T4_AHB_ACK: " + ackFail;
+    } else if (!ack.imported) {
+        l.fail = fmt("the container's gbm_bo_import refused the fd: peer note=[%s]", ack.note);
+    } else if (!l.readOk) {
+        l.fail = fmt("the peer did not see the clear colour at both pixels: matched=0x%x observed=%s corner=%s "
+                     "want=%s",
+                     (unsigned)ack.matched, t4Hex4(ack.observed).c_str(), t4Hex4(ack.observedCorner).c_str(),
+                     t4Hex4(kT4AhbSeed).c_str());
+    } else if (!readDone) {
+        l.fail = "texture-path read of the same image: " + readFail;
+    } else if (!l.writeOk) {
+        l.fail = fmt("texture-path read is not the peer's pattern: word=%s corner=%s pattern=%s",
+                     t4Hex4(texWord).c_str(), t4Hex4(texCorner).c_str(), t4Hex4(ack.pattern).c_str());
+    }
+    std::vector<Leg> legs{l};
+    std::string why;
+    const char* status = legVerdict(legs, &why);
+
+    // Every raw value goes into the row, in the shape the other legs use: the leg
+    // trace first, then what each step actually saw, then the failure.
+    std::string detail = fmt(
+        "%s | AHB[%ux%u layers=%u format=0x%x usage=0x%llx stride=%u rfu0=%u rfu1=%llu] | fourcc=0x%08x [%s] | "
+        "seed=%s | egl[clientBuffer=%p err=0x%04x image=%p err=0x%04x] | rbFbo[status=0x%04x glErr=%s] | "
+        "clear[%s] | offer[sent=%d handleSend=%d fd[%s] note=[%s]] | ack[len=%zu got=%d imported=%d matched=0x%x "
+        "stride=%u observed=%s observedCorner=%s pattern=%s note=[%s] skipped=[%s]] | texRead[done=%d word=%s "
+        "corner=%s fail=[%s]] | %s | peer [%s] %s",
+        legTrace(legs).c_str(), back.width, back.height, back.layers, (unsigned)back.format,
+        (unsigned long long)back.usage, back.stride, back.rfu0, (unsigned long long)back.rfu1, kT4AhbFourcc,
+        plan.note.c_str(), t4Hex4(kT4AhbSeed).c_str(), (void*)cb, (unsigned)cbErr, (void*)img, (unsigned)imgErr,
+        (unsigned)fboStatus, glErrStr(attachErr).c_str(), clearFence.c_str(), (int)offered, sendRc, spDesc.c_str(),
+        off.note, ackGot, (int)ackRecv, ackRecv ? (int)ack.imported : -1, ackRecv ? (int)ack.matched : 0,
+        ack.stride, t4Hex4(ack.observed).c_str(), t4Hex4(ack.observedCorner).c_str(), t4Hex4(ack.pattern).c_str(),
+        ackRecv ? ack.note : ackFail.c_str(), ackSkipped.c_str(), (int)readDone, t4Hex4(texWord).c_str(),
+        t4Hex4(texCorner).c_str(), readFail.empty() ? "-" : readFail.c_str(), why.c_str(), lay.peer, lay.note);
+    record(kT4AhbRow, status, detail);
+
+    // The EGLImage outlives every GL object that wraps it, and the AHardwareBuffer is
+    // what the image was created from, so the teardown order is the one the row above
+    // already uses.
+    if (prog) glDeleteProgram(prog);
+    if (fboTex) glDeleteFramebuffers(1, &fboTex);
+    if (fboRb) glDeleteFramebuffers(1, &fboRb);
+    if (tex) glDeleteTextures(1, &tex);
+    if (rb) glDeleteRenderbuffers(1, &rb);
+    e.pDestroyImage(g.dpy, img);
+    AHardwareBuffer_release(ahb);
+}
+
+#else  // !PROBE_HAVE_AHB
+
+static void runT4(GlCtx&, bool, const char*) {
+    record(kT4Row, "SKIP",
+           "host build has no listener: rtListen() is compiled with the AHardwareBuffer block, so the container "
+           "peer has nothing to dial");
+}
+
+#endif  // PROBE_HAVE_AHB
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -4087,8 +5474,12 @@ int main(int argc, char** argv) {
     uint64_t size = kDefaultSize;
     bool routeClientMode = false;
     std::string routeEndpoint;
+    std::string t4Endpoint = "@mgl-t4";
     const char* childRoute = nullptr;
     bool doT1 = true, doT0 = true, doT3 = true, doGles = true;
+    // T4 waits for a peer that only exists when it is asked for, so it is off unless
+    // --only-t4 turns it on.
+    bool doT4 = false;
     bool regionsAtEnd = false;
     uint32_t sustainedRounds = 0;
     std::string markerPath;
@@ -4129,23 +5520,34 @@ int main(int argc, char** argv) {
         } else if (!strcmp(a, "--sustained-lock")) {
             sustainedRounds = 8;
         } else if (!strcmp(a, "--only-t1")) {
-            doT0 = doT3 = false;
+            doT0 = doT3 = doT4 = false;
         } else if (!strcmp(a, "--only-t0")) {
-            doT1 = doT3 = doGles = false;
+            doT1 = doT3 = doGles = doT4 = false;
         } else if (!strcmp(a, "--only-sustained")) {
-            doT1 = doT0 = doT3 = doGles = false;
+            doT1 = doT0 = doT3 = doGles = doT4 = false;
             if (!sustainedRounds) sustainedRounds = 8;
         } else if (!strcmp(a, "--only-t3")) {
-            doT1 = doT0 = doGles = false;
+            doT1 = doT0 = doGles = doT4 = false;
         } else if (!strcmp(a, "--only-gles")) {
-            doT1 = doT0 = doT3 = false;
+            doT1 = doT0 = doT3 = doT4 = false;
+        } else if (!strcmp(a, "--only-t4")) {
+            doT1 = doT0 = doT3 = doGles = false;
+            doT4 = true;
+        } else if (!strncmp(a, "--only-t4=", 10)) {
+            doT1 = doT0 = doT3 = doGles = false;
+            doT4 = true;
+            t4Endpoint = a + 10;
         } else if (!strcmp(a, "--no-gles")) {
             doGles = false;
         } else if (!strcmp(a, "--help")) {
             printf("usage: extmem_probe [markerPath] [--size=BYTES] [--regions-at-end] [--sustained-lock[=ROUNDS]]\n"
                    "       extmem_probe --route-client[=@endpoint] [--size=BYTES] [--sustained-lock=ROUNDS] [--regions-at-end]\n"
                    "       extmem_probe <endpoint> --serve   (packaged as libMobileGLServer.so)\n"
-                   "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained] [--no-gles]\n"
+                   "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained|--only-t4[=@endpoint]] [--no-gles]\n"
+                   "  --only-t4[=@endpoint]: listen on @mgl-t4 (default) for the droidspaces container peer;\n"
+                   "                         one connection carries both T4 rows: T4-image-import (its dma-buf\n"
+                   "                         into this side) and T4-ahb-image (this side's AHardwareBuffer into\n"
+                   "                         the container, sent as an fd over SCM_RIGHTS)\n"
                    "  markerPath: exec-hook mode; options are also read from <markerPath>.args\n");
             return 0;
         }
@@ -4210,6 +5612,8 @@ int main(int argc, char** argv) {
         runT3Parent(c, size);
         runT3ClientAllocParent(c, size);
     }
+    pr("=== phase T4: an image allocated outside Android (dma-buf from the container peer) ===");
+    if (doT4) runT4(g, glOk, t4Endpoint.c_str());
 
     glCtxDestroy(g);
     vkCtxDestroy(c);

@@ -181,6 +181,128 @@ and the client reads both fills through the still-held pointer; after the last
 round it unlocks and relocks once more (`after unlock+relock`), which separates
 "GPU writes never landed" from "the held mapping kept stale lines".
 
+## T4 — an image allocated outside Android
+
+Can the render server draw into an image that was allocated **outside** Android —
+a GBM buffer minted in a Linux container on the same kernel? That is the
+`{Owner=Platform, Storage=OfferedImage}` cell an Anland-style Wayland host needs,
+and nothing in MobileGL imports a dma-buf today. It is a per-device fact, not a
+code fact.
+
+### What the device answered
+
+Redmi 23117RK66C, Adreno 750, Android 16, Droidspaces Fedora 44 container,
+2026-09-30. The answer has two halves and they point in opposite directions.
+
+| row | verdict | what it means |
+|---|---|---|
+| `T4-image-import` | `UNSUPPORTED` | This driver does not advertise `EGL_EXT_image_dma_buf_import`, so a container-minted dma-buf has no spelling as an EGLImage here. A capability answer, not a failure — and the reason the second row exists. |
+| `T4-ahb-image` | `FAIL`, and the failure is the finding | **Android-side allocation works end to end.** `AHardwareBuffer_allocate` → `eglGetNativeClientBufferANDROID` → `eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID)` → `glEGLImageTargetRenderbufferStorageOES` (FBO `GL_FRAMEBUFFER_COMPLETE`) → clear, `glFinish`, and a waited `glFenceSync` — all clean — and `glEGLImageTargetTexture2DOES` reads **the same bytes back on both pixels**. The container then imports the same handle's fd with `gbm_bo_import(GBM_BO_IMPORT_FD_MODIFIER, …)` and **that** is where it breaks: the bytes it maps are not the bytes the GPU wrote, and its own writes do not arrive either. |
+
+The reason is visible in the offer: the AHB's handle carries **two** descriptors,
+while the import claims `DRM_FORMAT_MOD_LINEAR` over plane 0 alone. A multi-plane,
+possibly compressed allocation imported as one linear plane is not a view of that
+buffer, so a CPU mapping of it agrees with nothing — and no userspace API hands the
+importer the modifier it should have used, because `AHardwareBuffer` does not expose
+one. (`AHardwareBuffer_Desc::stride`, for its part, is in **pixels** while every
+consumer on the wire wants bytes; that trap cost a device run and is now a named
+constant beside the fourcc.)
+
+### What this decides
+
+The cell is reachable **only** when the image is allocated where the server can use
+it — on the Android side — **and** its layout travels with the offer. That is a
+requirement on the host that mints the scanout buffers, not a MobileGL feature:
+Anland-style hosts that allocate in the container cannot be served by this driver,
+and a host that publishes plane count, strides, offsets and modifier alongside the
+fd can be. Note also that the container never needs a CPU view of the image in the
+product: the compositor hands the buffer to its GL, which is MobileGL, and the
+server renders into it. The CPU mapping in this leg is a *verification device* —
+which is exactly why `FAIL` here means "a linear view is invalid", not "the driver
+cannot render into an AHardwareBuffer".
+
+This leg's topology differs from every other one: the peer is **not** a re-exec
+child. It is a glibc process inside the container, because only that side can
+allocate on the device Anland hands the container. So the probe **listens**
+(`--only-t4[=@endpoint]`, default `@mgl-t4`) and the peer **dials** it. The
+endpoint is an abstract socket name because a Droidspaces container runs
+`net_mode=host`: the abstract namespace is common to both sides, while a
+filesystem pathname would have to exist in the other side's root.
+
+Both rows run on the one connection `--only-t4` opens, so the peer never waits for
+a frame by name and a skipped row is not an error.
+
+* **`T4-image-import`** — the container-minted direction. This side has no GBM
+  device, so it waits for an fd, asks the driver whether the announced
+  `(fourcc, modifier)` pair is one it even lists (`eglQueryDmaBufFormatsEXT` / `eglQueryDmaBufModifiersEXT`; a pair
+  the driver does not list is a capability answer, an import failure on a pair it
+  *does* list is a driver bug, and the two are never reported the same way),
+  imports the buffer as a texture **and** as a renderbuffer, reads two pixels on
+  each path — `(0,0)` and the far corner, so a wrong stride or offset cannot
+  pass as a working import — and then clears each path to a colour.
+* **`T4-ahb-image`** — the Android-minted direction, and the one the measurement
+  says the architecture must use. This side allocates an `AHardwareBuffer`
+  (`R8G8B8A8_UNORM`, `GPU_SAMPLED_IMAGE|GPU_COLOR_OUTPUT|CPU_READ_OFTEN|CPU_WRITE_OFTEN`),
+  imports **the same buffer** into GL as an EGLImage, clears it through the
+  renderbuffer path behind a reported fence, hands its handle to the peer over a
+  socketpair (`AHardwareBuffer_sendHandleToUnixSocket`), and then reads the peer's
+  answer back through the **texture** path at `(0,0)` and at the far corner. One
+  decisive leg, `ahb[D]`: it needs the peer to have seen this side's clear colour
+  at both pixels *and* this side to have read the peer's pattern at both.
+* **`peer/t4_gbm_peer.c`** — serves both rows. For the first it allocates with
+  `gbm_bo_create(…, GBM_FORMAT_ARGB8888,
+  GBM_BO_USE_RENDERING|GBM_BO_USE_LINEAR)`, fills the whole mapping with
+  `--seed=RRGGBBAA` in ARGB8888 memory order (B,G,R,A; a *solid* fill, so a
+  vertical flip cannot turn a working import into a reported failure), sends the
+  fd over `SCM_RIGHTS`, and after each of the probe's two writes takes a **fresh**
+  read mapping and answers with the bytes it actually saw. A driver that refuses
+  the allocation has answered the question: the refusal is printed verbatim and
+  the peer exits non-zero, with no silent fallback to another format. For the
+  second it takes the descriptors off the socketpair, imports the first with
+  `gbm_bo_import(GBM_BO_IMPORT_FD_MODIFIER, …)` and reports **how many** arrived —
+  the plane count is itself evidence — then compares both pixels against the
+  announced colour before writing a pattern of its own.
+
+The peer **must run inside the container**: `/dev/dri/renderD128` there is the
+Anland-backed `msm_drm` GBM device, and the Android side has no GBM device at all.
+
+```sh
+S=<serial>; DS="/data/local/Droidspaces/bin/droidspaces --name=Fedora"
+
+# peer: into the container's own rootfs (adb push lands on the Android side),
+# then built there with the container's own glibc gcc -- the documented line is
+#   gcc -O2 -o t4_gbm_peer t4_gbm_peer.c -lgbm
+base64 -w0 tools/spikes/extmem_probe/peer/t4_gbm_peer.c > /tmp/t4_gbm_peer.c.b64
+adb -s $S shell "$DS run sh -c 'base64 -d > /root/t4_gbm_peer.c'" < /tmp/t4_gbm_peer.c.b64
+adb -s $S shell "$DS run sh -c 'cd /root && gcc -O2 -o t4_gbm_peer t4_gbm_peer.c -lgbm'"
+
+# probe: build and start it FIRST — it is the side that listens
+ANDROID_NDK=$HOME/android-sdk/ndk/27.3.13750724 ./build_android.sh /tmp/extmem-build
+adb -s $S push /tmp/extmem-build/extmem_probe /data/local/tmp/extmem_probe
+adb -s $S shell "chmod 755 /data/local/tmp/extmem_probe && /data/local/tmp/extmem_probe --only-t4" \
+  | tee out-t4-$S.txt
+
+# then, with the probe listening, dial it from the container
+adb -s $S shell "$DS run /root/t4_gbm_peer --endpoint=@mgl-t4"
+```
+
+Peer options: `--endpoint=@mgl-t4`, `--width=64`, `--height=64`,
+`--seed=RRGGBBAA`, `--timeout=60`. The row is `T4-image-import`, with two
+decisive legs `tex[D]` and `rb[D]` under the usual rule: `OK` needs each path to
+have read the peer's seed bytes **and** to have had its own write observed by the
+peer. The peer exits 0 only on that same two-way condition, and its last line
+carries every raw value (stride, format, modifier, the fd's kernel name, the
+exporter, both pixels of both paths) — read those, not the exit code.
+
+Two things there will look like failures and are not. `gbm_bo_unmap()` of a
+**WRITE** mapping segfaults on this container's mixed-version Mesa (distro
+`libgbm`/`dri_gbm` 26.1.5 plus an unowned self-built
+`libgallium-26.2.0-devel.so`), so the peer deliberately leaves its fill mapping
+mapped instead. And the peer's fd name plus exporter (`/dmabuf:`,
+`exp_name: system`) is the evidence that this is the same *kind* of object the
+compositor scans out: kwin's own scanout allocations come from that same system
+dma-heap.
+
 ## Route mode (P11 B2 step 1)
 
 Does a client's AHB cross the *real* B1 routes into the server app? A spike APK built with
