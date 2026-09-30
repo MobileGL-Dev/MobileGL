@@ -44,9 +44,9 @@ namespace MobileGL::MG_Remote {
     // (MGPipeTypes.h:108-124) and has no per-family bit at all, so "read the CallMask" was
     // not yet an implementable instruction. It is now:
     //
-    //   bits  0..8   MGPCapBit, unchanged. kCapNeedsHostIndexBytes and kCapNeedsHostUboBytes
-    //                are BOTH ZERO in P5 by ruling (table 0), which is what keeps every
-    //                MGHostSpan out of the first IPC frame.
+    //   bits  0..8   MGPCapBit, unchanged. kCapViewportArray (0), kCapNeedsHostIndexBytes (7)
+    //                and kCapNeedsHostUboBytes (8) are RESERVED (P8-F): never published, and
+    //                their positions are never reused, which keeps every MGHostSpan off the wire.
     //   bits  9..31  reserved for further MGPCapBits.
     //   bits 32..47  THE CONSUMER MASK: bit (32 + n) means "the server has a consumer for
     //                MGPipe subsystem bit n" - i.e. the server's own subsystem mask, shifted.

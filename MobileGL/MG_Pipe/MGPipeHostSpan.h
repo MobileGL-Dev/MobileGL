@@ -13,16 +13,16 @@
 //
 // Monolith: Ptr addresses the frontend shadow or the application's own memory and the
 // accessor is one predictable branch. Split: Ptr is null and the bytes live in a staging
-// segment named by Seg/Offset, or - for the index bytes a server-side primitive-restart
-// rewrite or multi-draw flattening consumes - in the server's own index host mirror, which
-// costs no wire traffic at all (D-B7).
+// segment named by Seg/Offset. D-B7's third shape - index bytes a server-side restart
+// rewrite reads out of its own index host mirror, at no wire cost - was never built; its
+// sentinel below is RESERVED (P8-F).
 namespace MobileGL::MG_Pipe {
     // Seg sentinels. Anything else is a real SEG_STAGE id assigned by the transport.
     inline constexpr Uint32 kMGHostSpanSegNone = 0;
-    // "The bytes are already on your side": the server reads them out of the index host
-    // mirror it maintains for every resource created with the ELEMENT_ARRAY bind bit while
-    // kCapNeedsHostIndexBytes is set. When the mirror is over budget the tracker degrades
-    // to per-draw staging and counts the bytes in index-bytes-shipped.
+    // RESERVED (P8-F). It was to mean "the bytes are already on your side", read out of an
+    // index host mirror armed by kCapNeedsHostIndexBytes. Neither was built (client indices
+    // travel as owned element buffers; the cap is reserved), so no encoder writes this value
+    // and SegmentTable::Resolve answers it "unknown". Kept so the value is never reused.
     inline constexpr Uint32 kMGHostSpanSegFromServerIndexMirror = 0xFFFFFFFFu;
 
     struct MGHostSpan {

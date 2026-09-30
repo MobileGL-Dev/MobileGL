@@ -251,7 +251,7 @@ namespace MobileGL::MG_Remote::Client {
         // P5e (sb, CONTRACT-P5E.md §5.6): the indexed buffer binding points, one record per
         // class. The generic tail wrapper carries the FIRST tail only, which is the whole of
         // the record on Espryt - the optional MGHostSpan tail exists for kCapNeedsHostUboBytes
-        // and that bit is 0 for the whole of P5.
+        // and that bit is RESERVED (P8-F): no server publishes it.
         MGP_WIRE_TAIL(SetShaderBuffers, MGPShaderBuffers, MGPBufferRange)
         MGP_WIRE_TAIL(SetVertexAttribDefaults, MGPVertexAttribDefaults, MGPAttribValue)
 

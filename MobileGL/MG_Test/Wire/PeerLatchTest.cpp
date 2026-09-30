@@ -1159,8 +1159,10 @@ namespace {
              p.FrameSerial = 0;
              return Forge(c, r, P::MGPWireOp::Present, Bytes(p));
          }},
+        // P8-F: ProtocolCorruption, no longer UnmigratedVerb - our client cannot send this shape
+        // (nor +CLIENT_INDICES, the same site), so only a foreign peer like this one reaches it.
         {"MultiDrawInstanced", "PipeApplier.cpp", "MultiDraw*+INSTANCED", Outcome::Latched,
-         "Fatal{UnmigratedVerb, \"MultiDrawArrays+INSTANCED\"}", false,
+         "Fatal{ProtocolCorruption, \"MultiDrawArrays+INSTANCED\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPDrawInfo info{};
              info.Mode = GL_TRIANGLES;

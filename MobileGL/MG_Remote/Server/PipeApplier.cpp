@@ -766,17 +766,20 @@ namespace MobileGL::MG_Remote::Server {
         return LandReadbackInBuffer(record, bytes.data(), bpp);
     }
 
-    // P5b's server-side stub shape (CONTRACT-P5B.md): the same line the client's class-C table
-    // raises (EmitTables.cpp UnmigratedVerbFatal) and the same family the census greps, so a
-    // slot flipped on the client ahead of its server half aborts BY NAME on the apply thread
-    // rather than rendering nothing. Named "(server sink)" in the message so a log reader can
-    // tell which half is missing.
+    // P8-F: A PROTOCOL GUARD, NOT AN UNMIGRATED VERB. This was P5b's server-side stub shape
+    // (`Fatal{UnmigratedVerb, ...}`, "ServerVerbSink has no body for it yet"), but no package is
+    // going to give these two multi-draw shapes a body, because our client can no longer send
+    // either: client index arrays become one owned element buffer before the record is built
+    // (EmitTables.cpp's multi-draw arm, OwnedDrawInputs.h clears kDrawHasUserIndices), and no GL
+    // entry point produces an instanced multi-draw. A record that carries one came from a
+    // foreign peer, so the family is the one every other malformed-record check uses.
     //
     // PH-1 (3): the shape is the PEER's (a multi-draw record it chose to send), so in an armed
     // session child the refusal latches and the verb returns false; unarmed it still dies.
-    static Bool ServerUnmigratedVerbLatch(const char* slot) {
-        return SessionLatch(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"} (server sink: the record crossed and "
-                "ServerVerbSink has no body for it yet - CONTRACT-P5B.md names the package)",
+    static Bool MultiDrawShapeLatch(const char* slot) {
+        return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} a multi-draw "
+                "record with a shape this protocol does not carry: client indices travel as an owned "
+                "element buffer and no GL entry point produces an instanced multi-draw",
                 slot);
     }
 
@@ -802,10 +805,10 @@ namespace MobileGL::MG_Remote::Server {
     // of 1 and no base instance is the plain draw it is equivalent to, and a count of 0 must
     // NOT collapse onto the plain draw (it draws nothing, the plain draw would draw once).
     //
-    // What is still refused by name (the census's own grep family): a multi-draw that arrived
-    // with a span (the client refuses "MultiDrawElements+CLIENT_INDICES" first; P8's
-    // HostResolve.cpp flattens it) and a multi-draw that claims instancing (no GL entry point
-    // produces one; the client never sends it).
+    // What is still refused by name, as protocol corruption (P8-F): a multi-draw that arrived
+    // with a span (our client stages client indices into an owned element buffer and never sets
+    // kDrawHasUserIndices) and a multi-draw that claims instancing (no GL entry point produces
+    // one; the client never sends it). Only a foreign peer reaches either.
 #if MOBILEGL_BUILD_DISAGGREGATED
     namespace {
         // P5e (tx2), CONTRACT-P5E §5.3 / ruling 19 (ID-95, A8 closed). THE TWO UNIT WINDOWS MUST
@@ -970,12 +973,12 @@ namespace MobileGL::MG_Remote::Server {
         // ---- the multi-draws: the two arrays rebuilt from the ranges (rule C) --------------
         if (info.NumDraws != 1) {
             if (userIndices != nullptr) {
-                return ServerUnmigratedVerbLatch(info.IndexSize == 0 ? "MultiDrawArrays+CLIENT_INDICES"
-                                                                     : "MultiDrawElements+CLIENT_INDICES");
+                return MultiDrawShapeLatch(info.IndexSize == 0 ? "MultiDrawArrays+CLIENT_INDICES"
+                                                               : "MultiDrawElements+CLIENT_INDICES");
             }
             if (instanced) {
-                return ServerUnmigratedVerbLatch(info.IndexSize == 0 ? "MultiDrawArrays+INSTANCED"
-                                                                     : "MultiDrawElements+INSTANCED");
+                return MultiDrawShapeLatch(info.IndexSize == 0 ? "MultiDrawArrays+INSTANCED"
+                                                               : "MultiDrawElements+INSTANCED");
             }
             const auto n = static_cast<SizeT>(info.NumDraws);
             m_multiCounts.resize(n);

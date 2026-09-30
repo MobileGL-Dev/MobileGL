@@ -456,8 +456,9 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     const void* SegmentTable::Resolve(Uint32 seg, Uint64 offset, Uint64 size) const {
-        // 0 is "no segment", ALWAYS (table 0), and 0xFFFFFFFF is P8's index-mirror sentinel
-        // which this phase does not resolve. Both land here as "unknown", and the CALLER
+        // 0 is "no segment", ALWAYS (table 0), and 0xFFFFFFFF is the RESERVED index-mirror
+        // sentinel (P8-F: the mirror was never built, so nothing resolves it and no client of
+        // ours sends it). Both land here as "unknown", and the CALLER
         // escalates to Fatal - a unit case has to be able to exercise this arithmetic without
         // dying.
         if (seg == kSegNone || seg > static_cast<Uint32>(kSegAdopt)) {
@@ -2121,7 +2122,7 @@ namespace MobileGL::MG_Remote::Wire {
             // entire point is that the server stops walking the client's binding-point table.
             //
             // THE HOST-SPAN PASS STILL RUNS FIRST, and it runs whether or not the record is
-            // applied: kCapNeedsHostUboBytes is 0 for the whole of P5 (table 0), so the second
+            // applied: kCapNeedsHostUboBytes is RESERVED (P8-F, never published), so the second
             // tail is always absent here, and this pass is what says so out loud if it ever is
             // not. A span that was going to be refused must be refused BEFORE the applier has
             // stored the window it rides with.

@@ -107,19 +107,19 @@ namespace MobileGL::MG_Pipe {
     // flattening - is not expressible as a capability (D-B7).
     enum MGPCapBit : Uint64 {
         kCapNone = 0,
-        kCapViewportArray = 1ull << 0,
+        kCapViewportArray = 1ull << 0, // RESERVED (P8-F): no producer, no consumer; never renumber
         kCapFloat64VertexAttrib = 1ull << 1,
         kCapResidentSubData = 1ull << 2,
         kCapCpuXfbPrimitiveAccounting = 1ull << 3,
         kCapTimerQuery = 1ull << 4,
         kCapOcclusionQuery = 1ull << 5,
         kCapXfbPrimitivesQuery = 1ull << 6,
-        // The server rewrites restart indices / flattens multi-draws itself and therefore
-        // needs the index bytes on its side: under split this arms the index host mirror
-        // (D-B7).
+        // RESERVED (P8-F): never published, never read. The index host mirror it would arm
+        // (D-B7) was not built: client indices travel as owned element buffers and the server
+        // reads its own staged bytes. The bit position is wire format: never reuse/renumber it.
         kCapNeedsHostIndexBytes = 1ull << 7,
-        // The server packs named uniform blocks into its own ring and therefore needs the
-        // host bytes of a set_shader_buffers(Uniform) range (D-B8).
+        // RESERVED (P8-F): never published, never read - the named-UBO host span (D-B8) has
+        // no producer. The bit position is wire format: never reuse or renumber it.
         kCapNeedsHostUboBytes = 1ull << 8,
         // P5b t2 (CONTRACT-P5B.md §6.5), the one cap bit P5b adds. The SERVER's backend owns
         // the transform-feedback capture, i.e. its own table registers EndTransformFeedback.
@@ -312,11 +312,11 @@ namespace MobileGL::MG_Pipe {
         kMGPipeBindDepthStencil = 1u << 8,
         kMGPipeBindStreamOutput = 1u << 9,
         kMGPipeBindAtomic = 1u << 10,
-        // THE D-B7 SWITCH. With kCapNeedsHostIndexBytes set the server mirrors this
-        // resource's bytes so it can rewrite restart indices and flatten multi-draws
-        // (ARCHITECTURE.md 10.3). Getting it wrong is invisible in monolith and silently
-        // disables both under split, which is why it is set from a table rather than from a
-        // special case at the emission site.
+        // Set beside INDEX on every element-array buffer, from a table (ResourceTracker.h).
+        // It was THE D-B7 SWITCH: with kCapNeedsHostIndexBytes the server would mirror this
+        // resource's bytes for restart rewriting and multi-draw flattening (ARCHITECTURE.md
+        // 10.3). That cap is RESERVED (P8-F) and the mirror was never built, so no reader
+        // consumes this bit today; it stays on the wire, at this position.
         kMGPipeBindElementArray = 1u << 11,
     };
 
@@ -331,8 +331,8 @@ namespace MobileGL::MG_Pipe {
         Uint8 StorageKind; // == TextureStorageType (Mipmap | Buffer)
         // MGPipeBindBit, above: VERTEX|INDEX|CONSTANT|SHADER_BUFFER|INDIRECT|SAMPLER|
         // SHADER_IMAGE|RENDER_TARGET|DEPTH_STENCIL|STREAM_OUTPUT|ATOMIC|ELEMENT_ARRAY. The
-        // ELEMENT_ARRAY bit is the D-B7 switch: with kCapNeedsHostIndexBytes set the server
-        // mirrors this resource.
+        // ELEMENT_ARRAY bit was the D-B7 switch; kCapNeedsHostIndexBytes is RESERVED (P8-F)
+        // and no server mirrors this resource.
         Uint16 BindMask;
         Uint32 InternalFormat; // already resolved to an uncompressed fallback by the client
         Uint32 Width, Height, Depth;
@@ -992,11 +992,11 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPShaderImages, 16);
 
     // One bound buffer range: 24 bytes, no inline host span. The named-UBO host bytes a
-    // backend needs under kCapNeedsHostUboBytes (D-B8) travel as an OPTIONAL second var-tail,
-    // MGHostSpan[HostSpanCount] behind the ranges, announced by MGPShaderBuffers below. An
-    // inline span would have cost every SSBO, atomic-counter and XFB range 32 dead bytes, and
-    // D-B8 says not to freeze that payload's shape before the stage-ubo-named counter has
-    // produced numbers.
+    // backend would need under kCapNeedsHostUboBytes (D-B8; that cap is RESERVED since P8-F
+    // and nothing sends the tail) travel as an OPTIONAL second var-tail, MGHostSpan[HostSpanCount]
+    // behind the ranges, announced by MGPShaderBuffers below. An inline span would have cost
+    // every SSBO, atomic-counter and XFB range 32 dead bytes, and D-B8 says not to freeze that
+    // payload's shape before the stage-ubo-named counter has produced numbers.
     struct MGPBufferRange {
         MGPipeHandle Res;
         Uint64 Offset;
@@ -1005,8 +1005,8 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPBufferRange, 24);
 
     // Var-tail header: MGPBufferRange[Count], then MGHostSpan[HostSpanCount]. HostSpanCount is
-    // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (a range with nothing to
-    // ship carries an empty span, so the two arrays stay index-aligned).
+    // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (RESERVED, P8-F: 0 today;
+    // a range with nothing to ship carries an empty span, so the two arrays stay aligned).
     // MGPShaderBuffers::Class's three values, and the ONLY spelling of them (P5e,
     // MG_Remote/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
     // nothing numbered them, so the emitter and the applier were one literal each away from
