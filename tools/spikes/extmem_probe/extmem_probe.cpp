@@ -71,6 +71,7 @@
 #  define PROP_VALUE_MAX 92
 #endif
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -4347,6 +4348,151 @@ static T4Import t4ImportImage(EGLDisplay dpy, const T4Egl& e, int fd, const T4La
     }
     return imp;
 }
+// ---------------------------------------------------------------------------
+// T4's second route to an EGLImage: wrap the peer's fd as an AHardwareBuffer
+// ---------------------------------------------------------------------------
+//
+// WHY THIS EXISTS.  EGL_LINUX_DMA_BUF_EXT is the portable spelling and this driver does
+// not have it (measured), which left the cross-process image story depending on the HOST
+// allocating the buffer instead.  But the device ships AHardwareBuffer_createFromHandle
+// in libnativewindow.so: the NDK does not declare it because it is a SystemApi, and plain
+// C has no opinion about that.  If it accepts a container's bare dma-buf, the detour
+// disappears -- the compositor keeps minting its buffers exactly as it does today and the
+// render server wraps the fd it is already sent, with no host change at all.
+//
+// handleType is tried BOTH ways (1 for a handle from AHardwareBuffer_getNativeHandle, 2
+// for a dma-buf) because that enum is not in the NDK here and guessing one would turn a
+// two-line answer into an unattributable FAIL.  Nothing but the integer reaches the
+// platform.
+//
+// WHAT A SUCCESS HERE WOULD AND WOULD NOT SAY.  Wrap plus EGLImage means the driver takes
+// the image.  It does NOT say the driver will render into memory gralloc never described
+// -- that is what the two-pixel round trip at the end of this row measures, and it is the
+// only thing that settles it.
+
+struct T4NativeHandle {  // native_handle_t, which the NDK does not declare
+    int version;
+    int numFds;
+    int numInts;
+    int data[1];
+};
+
+struct T4WrapApi {
+    void* lib = nullptr;
+    int (*createFromHandle)(const void* desc, const T4NativeHandle* handle, int handleType, void** out) = nullptr;
+};
+
+static T4WrapApi t4WrapApi() {
+    T4WrapApi a;
+    // libnativewindow.so first: that is where the measured device exports it.
+    const char* libs[] = {"libnativewindow.so", "libandroid.so", "libui.so"};
+    for (const char* name : libs) {
+        a.lib = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+        if (!a.lib) continue;
+        a.createFromHandle = (int (*)(const void*, const T4NativeHandle*, int, void**))dlsym(
+            a.lib, "AHardwareBuffer_createFromHandle");
+        if (a.createFromHandle) return a;
+        dlclose(a.lib);
+        a.lib = nullptr;
+    }
+    return a;
+}
+
+// AHardwareBuffer_Format for the fourcc the peer named, or 0 for a pairing this row has
+// never seen.  The memory order decides it: 'AB24' holds R,G,B,A and 'AR24' holds B,G,R,A,
+// and the two numbers below say exactly that in Android's vocabulary.  They are written
+// out because they are the ABI of an enum the NDK does not carry.
+static uint32_t t4AhbFormatFor(uint32_t fourcc) {
+    switch (fourcc) {
+        case 0x34324241u: return 1u;  // 'AB24' DRM_FORMAT_ABGR8888 -> R8G8B8A8_UNORM
+        case 0x34325241u: return 5u;  // 'AR24' DRM_FORMAT_ARGB8888 -> B8G8R8A8_UNORM
+        default: return 0u;
+    }
+}
+
+// The AHB the row wrapped.  The EGLImage keeps using it until the row ends, and the row
+// ends at process exit, so the reference is deliberately never dropped: releasing a buffer
+// out from under a live image would be a use-after-free, which is a worse answer than a
+// leak in a program that is about to print its summary and exit.
+static void* gT4WrappedAhb = nullptr;
+
+static T4Import t4ImportViaWrap(GlCtx& g, const T4Egl& e, int fd, const T4Layout& lay) {
+    T4Import imp;
+    const T4WrapApi api = t4WrapApi();
+    if (!api.createFromHandle) {
+        imp.ladder = "wrap-api=absent ";
+        imp.fail = "no library here exports AHardwareBuffer_createFromHandle";
+        return imp;
+    }
+    // ahbFmt, not fmt: the file's fmt() is the printf helper, and a local named the same
+    // would shadow it for the whole of this function.
+    const uint32_t ahbFmt = t4AhbFormatFor(lay.fourcc);
+    if (ahbFmt == 0) {
+        imp.ladder = "wrap-api=present format=unknown ";
+        imp.fail = fmt("fourcc=0x%08x has no AHardwareBuffer_Format on this row", lay.fourcc);
+        return imp;
+    }
+    if (!g.pGetNativeClientBuffer) {
+        imp.ladder = "wrap-api=present clientBuffer=absent ";
+        imp.fail = "eglGetNativeClientBufferANDROID is not loadable, so an AHardwareBuffer cannot become an "
+                   "EGLClientBuffer";
+        return imp;
+    }
+
+    // AHardwareBuffer_Desc::stride is in PIXELS while the peer's layout is in bytes -- the
+    // same trap that cost the Android-minted row a device run, hence the division.
+    struct Desc {
+        uint32_t width, height, layers, format;
+        uint64_t usage;
+        uint32_t stride, rfu0;
+        uint64_t rfu1;
+    } desc{};
+    desc.width = lay.width;
+    desc.height = lay.height;
+    desc.layers = 1;
+    desc.format = ahbFmt;
+    desc.usage = (1u << 8) | (1u << 9);  // GPU_SAMPLED_IMAGE | GPU_COLOR_OUTPUT
+    desc.stride = lay.stride / 4u;
+
+    uint8_t hbuf[sizeof(T4NativeHandle) + 2 * sizeof(int)] = {0};
+    T4NativeHandle* h = (T4NativeHandle*)hbuf;
+    h->version = (int)sizeof(hbuf);
+    h->numFds = 1;
+    h->numInts = 0;
+    h->data[0] = fd;
+
+    for (int type = 1; type <= 2; ++type) {
+        void* ahb = nullptr;
+        const int rc = api.createFromHandle(&desc, h, type, &ahb);
+        imp.ladder += fmt("handleType%d=rc%d ", type, rc);
+        if (rc != 0 || !ahb) continue;
+        EGLClientBuffer cb = g.pGetNativeClientBuffer((const struct AHardwareBuffer*)ahb);
+        const EGLint cbErr = eglGetError();
+        if (!cb) {
+            imp.ladder += fmt("clientBuffer(type%d)=null(0x%04x) ", type, (unsigned)cbErr);
+            continue;
+        }
+        const EGLint attrs[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        EGLImageKHR img = e.pCreateImage(g.dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, cb, attrs);
+        const EGLint imgErr = eglGetError();
+        if (img == EGL_NO_IMAGE_KHR) {
+            imp.ladder += fmt("image(type%d)=0x%04x ", type, (unsigned)imgErr);
+            imp.fail = fmt("eglCreateImageKHR(EGL_NATIVE_BUFFER_ANDROID) on an fd wrapped as an AHardwareBuffer "
+                           "(handleType=%d) -> 0x%04x",
+                           type, (unsigned)imgErr);
+            continue;
+        }
+        gT4WrappedAhb = ahb;
+        imp.image = img;
+        imp.rung = 100 + type;  // off the two extension rungs, so the row cannot confuse them
+        imp.accepted = fmt("wrap-handleType%d", type);
+        imp.ladder += fmt("accepted(type%d) ", type);
+        return imp;
+    }
+    if (imp.fail.empty()) imp.fail = "no handleType produced an EGLImage";
+    return imp;
+}
+
 // The memory order of the 32-bit layouts the peer can plausibly hand over.  A DRM fourcc is
 // a name, not a layout rule -- 'AR24' is [31:0] A:R:G:B, so a little-endian buffer holds
 // B,G,R,A -- and a derived-then-wrong order would silently invert the peer's byte compare,
@@ -4720,30 +4866,45 @@ static void runT4(GlCtx& g, bool glOk, const char* endpoint) {
     // recorded here, naming the extension, and the ladder is not entered.  The peer
     // stays connected: the Android-minted row below is the half of T4 that can still
     // be measured on such a driver, and it needs this same connection.
+    // ---- 2/3. into an EGLImage: the driver's own ladder, or the wrap that replaces it
+    // A driver without EGL_EXT_image_dma_buf_import cannot be asked the ladder question at
+    // all, so the row goes to the wrap route instead of reporting a capability answer it
+    // has not finished establishing.  Only when BOTH routes fail is the offer recorded as
+    // one this driver cannot take up.
+    T4Import imp;
+    // The capability probe only means anything on the ladder route, and the row prints it
+    // either way: a default-constructed T4Cap says "never asked" (asked=0), which is the
+    // truth when the extension is not there to ask about.
+    T4Cap cap;
     if (!g.hasEgl("EGL_EXT_image_dma_buf_import")) {
         pr("T4: EGL_EXT_image_dma_buf_import is not advertised: the EGL_LINUX_DMA_BUF_EXT ladder is not walked");
-        record(kT4Row, "UNSUPPORTED",
-               fmt("EGL_EXT_image_dma_buf_import is not advertised (EGL_KHR_image_base=%d, GL_OES_EGL_image=%d), so "
-                   "EGL_LINUX_DMA_BUF_EXT has no spelling here and no rung of that ladder can be accepted or "
-                   "rejected: the container's %ux%u fourcc=0x%08x stride=%u offset=%u modifier=%s fd[%s] and peer "
-                   "[%s] %s are recorded as an offer this driver cannot take up",
-                   (int)g.hasEgl("EGL_KHR_image_base"), (int)g.hasGl("GL_OES_EGL_image"), lay.width, lay.height,
-                   lay.fourcc, lay.stride, lay.offset, modifierStr.c_str(), fdDesc.c_str(), lay.peer, lay.note));
-        runT4AhbRow(g, e, sock, lay);
-        close(fd);
-        close(sock);
-        return;
+        imp = t4ImportViaWrap(g, e, fd, lay);
+        pr("T4 wrap: accepted=%s | ladder: %s| %s", imp.accepted.c_str(), imp.ladder.c_str(),
+           imp.fail.empty() ? "-" : imp.fail.c_str());
+        if (imp.image == EGL_NO_IMAGE_KHR) {
+            record(kT4Row, "UNSUPPORTED",
+                   fmt("neither route to an EGLImage exists here: EGL_EXT_image_dma_buf_import is not advertised "
+                       "(EGL_KHR_image_base=%d, GL_OES_EGL_image=%d) so EGL_LINUX_DMA_BUF_EXT has no spelling, and "
+                       "wrapping the fd as an AHardwareBuffer did not produce one either (%s): the container's %ux%u "
+                       "fourcc=0x%08x stride=%u offset=%u modifier=%s fd[%s] and peer [%s] %s are recorded as an "
+                       "offer this driver cannot take up",
+                       (int)g.hasEgl("EGL_KHR_image_base"), (int)g.hasGl("GL_OES_EGL_image"),
+                       imp.fail.empty() ? imp.ladder.c_str() : imp.fail.c_str(), lay.width, lay.height, lay.fourcc,
+                       lay.stride, lay.offset, modifierStr.c_str(), fdDesc.c_str(), lay.peer, lay.note));
+            runT4AhbRow(g, e, sock, lay);
+            close(fd);
+            close(sock);
+            return;
+        }
+    } else {
+        // ---- the driver's own question, before any import ---------------------
+        cap = t4Capability(g.dpy, e, lay.fourcc, lay.modifier);
+        pr("T4 capability: asked=%d formatListed=%d pairListed=%d formats=%d modifiers=%d | %s", (int)cap.asked,
+           (int)cap.formatListed, (int)cap.listed, cap.formats, cap.modifiers, cap.note.c_str());
+        imp = t4ImportImage(g.dpy, e, fd, lay);
+        pr("T4 import: accepted=%s | ladder: %s| %s", imp.accepted.c_str(), imp.ladder.c_str(),
+           imp.fail.empty() ? "-" : imp.fail.c_str());
     }
-
-    // ---- 2. the driver's own question, before any import ---------------------
-    const T4Cap cap = t4Capability(g.dpy, e, lay.fourcc, lay.modifier);
-    pr("T4 capability: asked=%d formatListed=%d pairListed=%d formats=%d modifiers=%d | %s", (int)cap.asked,
-       (int)cap.formatListed, (int)cap.listed, cap.formats, cap.modifiers, cap.note.c_str());
-
-    // ---- 3. the import ladder ------------------------------------------------
-    T4Import imp = t4ImportImage(g.dpy, e, fd, lay);
-    pr("T4 import: accepted=%s | ladder: %s| %s", imp.accepted.c_str(), imp.ladder.c_str(),
-       imp.fail.empty() ? "-" : imp.fail.c_str());
 
     // ---- 4. read both paths, at two pixels each ------------------------------
     T4GL gl;
