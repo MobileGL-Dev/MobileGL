@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-09-29**：P0 到 P7、P12、P9、P10、**P11** 已完成——拆分路线走完。P11：同机大缓冲零拷贝（T0，默认开、用不了静默退回共享内存；MC 26.3 峰值内存 Espryt −41 %、Magma −18–26 %），同机其他 app 启动的 GL 程序（Termux 类）经 `app_process` helper 与令牌 broker 走共享内存，连接按 nonce 配对；契约 `MG_Remote/CONTRACT-P11.md`，G1 仅 Magma 空 uniform 修复 +224 字节 `.text`。下一阶段 **P8**（monolith 跑道：仿真路径下放与协议广度），之后 P13。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
+> **2026-09-29**：P0 到 P7、P12、P9、P10、**P11** 已完成——拆分路线走完。P11：同机大缓冲零拷贝（T0，默认开、用不了静默退回共享内存；MC 26.3 峰值内存 Espryt −41 %、Magma −18–26 %），同机其他 app 启动的 GL 程序（Termux 类）经 `app_process` helper 与令牌 broker 走共享内存，连接按 nonce 配对；契约 `MG_Remote/CONTRACT-P11.md`，G1 仅 Magma 空 uniform 修复 +224 字节 `.text`。当前阶段 **P8**（09-29 起，重定界：~~仿真路径下放与协议广度~~ → 补齐 server 侧仿真缺口与 split 覆盖，[`PLAN-P8.md`](notes/p8/PLAN-P8.md)），之后 P13。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
 
 ## 目标
 
@@ -33,7 +33,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [P3b / P4b](notes/p34b/README.md) | GLES 后端的深化与收尾 | 大部分 ✅，余项并行 |
 | [P7](notes/p7/README.md) | Vulkan 后端完整迁移；真机画面检查 36/36 通过 | ✅ 09-23 |
 | [**P12**](notes/p12/README.md) | **server 自己开窗口上屏，client 不需要窗口** | ✅ 09-29：出口门 B（跨机 TCP）✅ 09-28、A（FCL + 杀 server）✅ 09-29；契约 `MG_Remote/CONTRACT-P12.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
-| [P8](notes/p8/README.md) | 把剩余的仿真路径挪到正确的一侧，补齐协议 | 待排 |
+| [**P8**](notes/p8/README.md) | ~~把剩余的仿真路径挪到正确的一侧，补齐协议~~ → **补齐 server 侧仿真缺口与 split 覆盖**：Espryt 生成 mip（RGB16F / RGB32F、存储窗口）、Espryt 暂存影子与 GPU 写对账、Magma wire 原生 indirect、CopyImage 在 server store 上处理、monolith 用例登记到 split 各臂；原范围 6 项前序阶段已完成（[`PLAN-P8.md`](notes/p8/PLAN-P8.md)） | 进行中（09-29 起） |
 | [**P9**](notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `MG_Remote/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约 `MG_Remote/CONTRACT-P11.md`；余项进 [`DEBTS.md`](notes/DEBTS.md) |
