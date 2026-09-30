@@ -91,7 +91,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 for (GLuint& buffer : m_marks) {
                     if (buffer != 0) glDeleteBuffers(1, &buffer);
                 }
-                for (GLuint* buffer : {&m_parameters, &m_source}) {
+                for (GLuint* buffer : {&m_groupCounts, &m_source}) {
                     if (*buffer != 0) glDeleteBuffers(1, buffer);
                     *buffer = 0;
                 }
@@ -130,13 +130,13 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
 
             // The dispatch-indirect store, holding CPU-written counts.
             void Parameters(const std::vector<std::uint32_t>& words) {
-                Fill(m_parameters, GL_DISPATCH_INDIRECT_BUFFER, words);
+                Fill(m_groupCounts, GL_DISPATCH_INDIRECT_BUFFER, words);
             }
 
             // The compute write: the parameter store (already holding its poison) receives `words`.
             void ComputeWriteParameters(const std::vector<std::uint32_t>& words) {
                 Fill(m_source, GL_SHADER_STORAGE_BUFFER, words);
-                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_parameters);
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_groupCounts);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_source);
                 glUseProgram(m_copy);
                 glDispatchCompute(static_cast<GLuint>(words.size()), 1, 1);
@@ -152,7 +152,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 m_marks.push_back(marks);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, marks);
                 glUseProgram(m_mark);
-                glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_parameters);
+                glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, m_groupCounts);
                 glDispatchComputeIndirect(offset);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, 0);
                 return m_marks.size() - 1;
@@ -210,7 +210,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
             bool m_magma = false;
             std::string m_transport;
             WireIndirectCounters m_before{};
-            GLuint m_mark = 0, m_copy = 0, m_parameters = 0, m_source = 0;
+            GLuint m_mark = 0, m_copy = 0, m_groupCounts = 0, m_source = 0;
             std::vector<GLuint> m_marks;
         };
 
