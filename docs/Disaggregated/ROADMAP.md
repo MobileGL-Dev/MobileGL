@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-09-29**：P0 到 P7、P12、P9、**P10** 已完成（P10：fence 轮询不再往返——server 报告完成的 fence、client 本地作答，真机两后端 0 次往返；最后一个 class-C 清零；credit 1/2/3 在设备 loopback 上量过、默认保持 1；契约 `MG_Remote/CONTRACT-P10.md`，G1 成立）；下一阶段 **P11**（IPC 跑道）与 **P8**（monolith 跑道）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
+> **2026-09-29**：P0 到 P7、P12、P9、P10、**P11** 已完成——拆分路线走完。P11：同机大缓冲零拷贝（T0，默认开、用不了静默退回共享内存；MC 26.3 峰值内存 Espryt −41 %、Magma −18–26 %），同机其他 app 启动的 GL 程序（Termux 类）经 `app_process` helper 与令牌 broker 走共享内存，连接按 nonce 配对；契约 `MG_Remote/CONTRACT-P11.md`，G1 仅 Magma 空 uniform 修复 +224 字节 `.text`。下一阶段 **P8**（monolith 跑道：仿真路径下放与协议广度），之后 P13。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
 
 ## 目标
 
@@ -9,7 +9,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 ## 两条路线
 
 - **单进程路线**：先把接口建起来，让单进程版本也受益（后端拥有自己的状态、可以挪到渲染线程）。P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → P13。
-- **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → **P10** → P11。
+- **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → P10 → **P11**（走完）。
 
 ## 阶段一览
 
@@ -36,7 +36,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [P8](notes/p8/README.md) | 把剩余的仿真路径挪到正确的一侧，补齐协议 | 待排 |
 | [**P9**](notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `MG_Remote/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
-| [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | 进行中（09-29）：已合并 dev；采纳档位在握手时定；连接按 nonce 配对（修订 4）；同机外部 client（Termux 类）经 helper 与令牌 broker 走共享内存（B1）；下一步 T0 零拷贝（可开关） |
+| [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约 `MG_Remote/CONTRACT-P11.md`；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
 
 ## 另见

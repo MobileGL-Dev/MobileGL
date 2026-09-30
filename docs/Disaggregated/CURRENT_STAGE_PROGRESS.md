@@ -1,4 +1,4 @@
-# 当前阶段：P11 进行中（2026-09-29）
+# 当前阶段：P11 已收官（2026-09-29）；下一阶段 P8 待排
 
 > **更新 2026-09-29**。这一页只有摘要；计划、裁定与测量在 [`notes/p11/README.md`](notes/p11/README.md)（计划 [`PLAN-P11.md`](notes/p11/PLAN-P11.md)、裁定 [`INTEGRATOR-DECISIONS-P11.md`](notes/p11/INTEGRATOR-DECISIONS-P11.md)）。上一阶段 P10 同日收官，见 [`notes/p10/README.md`](notes/p10/README.md)。
 
@@ -21,11 +21,12 @@
 | helper 可行性探针 | ✅ 无 Context 的 `app_process` helper 经 Binder 拿到连接（依赖 ROM，`HSPIKE.md`） |
 | 合并 dev（M2） | ✅ KGSL 分段提交、零散写入按矩形（补齐 split 半边）、描述符池 |
 | B1 同机外部 client 走共享内存 | ✅ `fd:` 端点 + 令牌 broker + helper + 启动命令 + 外部 client 的 apply 线程策略；rd12 Espryt 约 119 vs tcp 40–53 fps |
-| B2 T0 零拷贝导入（可开关，`ADOPT_TIER` 0；默认 2 = 共享内存推送） | 下一步 |
-| 主机门（集成头） | ✅ 全绿，数字见 ID-P11-16（B1）与 ID-P11-15（M2） |
+| B2 T0 零拷贝导入 | ✅ 两后端、同 app 与外部路线；**默认开**（用户），用不了静默退回 T2；MC 26.3 峰值内存 Espryt −41–42 %、Magma −18–26 %（`notes/p11/B2-DEVICE.md`） |
+| 顺带修掉 | 删除仍绑定的 buffer 留旧句柄、Magma 空 uniform 绑定段错误、Espryt split 用例跳过算通过 |
+| 主机门（收官头） | ✅ 全绿，数字见 ID-P11-20 |
 
 ## 下一步
 
-B2：T0 导入（两后端，经 B1 的通道；第一项真机检查是 AHardwareBuffer 的 dma-buf fd 跨 app 传递），保留开关。本阶段转出的两个 dev 缺陷（Espryt 零散写入、Magma rd12 映射耗尽）已在 dev 修好并经 M2 合入；其余转出项见 [`notes/DEBTS.md`](notes/DEBTS.md)。
+拆分路线已走完。按 [`ROADMAP.md`](ROADMAP.md)：**P8**（monolith 跑道：把读前端字节的 CPU 变换下放到 client、仿真路径下放、协议广度），之后 P13（删掉旧的「后端直接读前端」路径）；P6.5 残余与 P3b / P4b 余项并行。
 
 **阻塞**：没有需要决策的事项。

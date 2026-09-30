@@ -11,6 +11,8 @@
 | P11 转出（性能）：设备上 MC 26.3，split T2 相对单进程采纳的 p99 Espryt +37–42%、Magma 约 2.5×，RSS 1.4–2×；其中一部分是线程落位——server apply 线程钉在 6–7 核，client GL 线程多半落到慢核，每帧 CPU 约 2.3×（`notes/p11/A-DEVICE.md`） | 路线图推完后的性能工作；RSS 由 B（T0）处理 |
 | P11 转出：client 与 server 共用日志前缀时，client 以 `"w"` 打开 `<base>.server.log` 写转发来的 server 日志，会截断 server 自己的文件（依赖 server 日志行的 P12 装置测试可能受影响） | 小修 |
 | P11 转出（B0 F1）：HyperOS 熄屏时冻结 server app 的整个 uid（FGS 进程、supervisor、会话子进程同一 cgroup），在飞会话 120 s 后 `Fatal{BarrierTimeout}`；FCL 同机用法同样受影响（`notes/p11/B0-CROSS-APP.md`） | B1 的防冻结一项；FCL 侧另议 |
+| P11 转出（B2）：T0 只在红米一台 Adreno 上实测；Mali 等只有 spike B 的 shell 域证据（server 自测会在不支持的设备上自动退回 T2）。「respecify 时立即释放导入」的变异在 Espryt 上不红（驱动大概自己持有引用，未核实），带 fence 的释放保留 | 有第二种设备时复测 |
+| P11 转出（B2）：`DualBlock` 条目单跑时红（要 `MOBILEGL_IPC_ROLE_SPLIT_STATE=1`，CI 的 dual-block 步骤才会设），门禁车道不选它 | 按设计；需要时给条目加环境 |
 | P11 转出（B1）：会话位被一个慢启动程序占着时，第二个 client 若 2 s 内发 Hello 得具名 `Refuse{Busy}`，更慢的只见发送失败（那条路径不读待发的拒绝）；已写进契约 | 小修 |
 | P11 转出（B1）：会话启动失败后 client 还多报一个误导性的 `Fatal{CapsBeforeFirstSnapshot}`（早于 B1，helper 用户每次被拒都会看到） | 小修 |
 | P11 转出（B1）：外部 client 的 apply 线程策略只在红米一台（两大核）上量过；Magma openra 两个数据面都卡在 server（约 285 fps），共享内存无收益 | 需要第二种拓扑的设备时再量 |

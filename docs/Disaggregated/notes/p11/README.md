@@ -1,6 +1,19 @@
-# P11 — persistent map 与 ≥16 MiB 采纳（进行中）
+# P11 — persistent map 与 ≥16 MiB 采纳（已收官，2026-09-29）
 
-> **2026-09-29 开工**。计划与范围重划 [`PLAN-P11.md`](PLAN-P11.md)（B 已排期：消费者是同机从其他 app 启动的 GL 程序）；裁定 [`INTEGRATOR-DECISIONS-P11.md`](INTEGRATOR-DECISIONS-P11.md)；真机测量 [`A-DEVICE.md`](A-DEVICE.md)；协议 `MobileGL/MG_Remote/CONTRACT-P11.md`。已落地：合并 dev（两次）、A1 / A2、A3（T0 在 app 域两后端 GO）、A4（基线重测）、B0 / HSPIKE（跨 app 通道）、PAIR（连接按 nonce 配对，修订 4）、B1（同机外部 client 经 helper 与令牌 broker 走共享内存）。下一步：B2（T0，可开关）。
+> **2026-09-29 收官**。计划与范围重划 [`PLAN-P11.md`](PLAN-P11.md)；裁定 [`INTEGRATOR-DECISIONS-P11.md`](INTEGRATOR-DECISIONS-P11.md)（ID-P11-1..20）；协议 `MobileGL/MG_Remote/CONTRACT-P11.md`；测量 [`A-DEVICE.md`](A-DEVICE.md)、[`B0-CROSS-APP.md`](B0-CROSS-APP.md)、[`HSPIKE.md`](HSPIKE.md)、[`B2-DEVICE.md`](B2-DEVICE.md)。
+>
+> | 包 | 结果 |
+> |---|---|
+> | A1 / A2 | 采纳档位在握手时由知道数据面的一侧定；Stream 上具名拒绝后 T2；断言 arena 落在车道声明的档、三臂登记 |
+> | A3 / A4 | T0 在 app 域两后端 GO；采纳基线在 Adreno 830 上重测（省 RSS、不改帧时），路线图的三个数撤下 |
+> | B0 / HSPIKE | 跨 app 连 server 的 unix 端点被 SELinux 拒；无 Context 的 `app_process` helper 经 Binder 拿到连接（依赖 ROM） |
+> | PAIR | socket client 的两条连接按 `PairBind` nonce 配对，修订 3 → 4 |
+> | B1 | 同机外部 client（Termux 类）经 helper + 令牌 broker + `fd:` 端点走共享内存；rd12 Espryt 约 119 vs TCP 40–53 fps；外部 client 的 apply 核策略 |
+> | B2 | T0 零拷贝导入（两后端，同 app 与外部路线），**默认开**、用不了静默退回 T2；MC 26.3 峰值内存 Espryt −41–42 %、Magma −18–26 %，ssim / 帧时 / CPU 不变；修订 4 → 5 |
+> | M / M2 | 两次合并 dev（重铸读回、局部上传、Magma 排序与交换间隔、分段提交、零散写入、描述符池），补齐 split 半边 |
+> | 顺带修掉 | 删除仍绑定的 buffer 后 server 留旧句柄（Espryt Fatal / Magma 丢 draw）；Magma 空 uniform 绑定段错误；Espryt split 用例的「跳过算通过」漏洞 |
+>
+> 门（收官头）：见 ID-P11-20。
 >
 > 下面是该阶段在路线图上的原始范围与出口门（2026-09-24 从 [`ROADMAP.md`](../../ROADMAP.md) 阶段表移入，原文照录）。
 
