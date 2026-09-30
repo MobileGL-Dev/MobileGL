@@ -107,7 +107,20 @@
 
 ## 8. 门
 
-（门跑完后填）
+`gate.sh ~/w7/p8-se p8se`，头 `edcb9328`，dirty 0（`~/w7/notes/p8/se-evidence/gate-p8se.log`）；与第一波集成头（ID-P8-12）对比。
+
+| 项 | 读数 | 变化 |
+|---|---|---|
+| G1 | 符号 `added=0 removed=0`（clang 22.1.6）；`.text` `a5ba13` | 不变 |
+| fatal census / link ratchet | 78 abort 点 / 20 文件 / 45 族；172 | 不变（`MGPipeUnmigratedEmulation` 调用不是 abort 点） |
+| parity / protocol pin / wire-declines | 0 错；revision 5；58 行 59 处 0 未记 | 不变 |
+| hygiene | 13/13 OK（含 `split_coverage`、`doc_citations`） | — |
+| split_coverage | DirectGLES monolith 703 = 门控 615 + 豁免 88，missing 0；DirectVulkan 703 = 门控 222 + 信息层 449 + 豁免 32 | monolith +2（两个新例）；Espryt 门控 +3，豁免 −1（pending-fix） |
+| unit | 2723 | +2（lint 两条 ctest） |
+| integration-split / spawn / tcp | 739 / 653 / 665 | 各 +4：默认帧缓冲例、其 `ForcedDs.` 条目、两个新例（无旋钮臂跳过） |
+| magma split / spawn / tcp / full-split | 271 / 248 / 216 / 670 | full-split +2（两个新例经 tier 3 回放） |
+| integration-gpu[monolith] / [inproc] | 3704 / 3704 | +20：默认帧缓冲例的 Espryt 三臂与 `ForcedDs.` 三臂 6；两个新例 14（两后端 monolith 4、Espryt 三臂 6、`CpuMipRefused.` 4） |
+| retrace（`MOBILEGL_BUILD_TRACE_REPLAY=ON`，236 条） | 230 过；6 红 = 已知 `iris-iterationrp-in-world`（两后端 × monolith / SPLIT / SPAWN，主机 llvmpipe JIT `Cannot select`） | 与第一波相同（`retrace-p8se.log`） |
 
 ## 9. 发现未修
 
