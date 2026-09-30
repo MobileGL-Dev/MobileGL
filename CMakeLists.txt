@@ -917,6 +917,9 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(MobileGLGbm SHARED
     MobileGL/MG_Gbm/GbmDevice.cpp
+    # The display host's socket protocol, kept in its own translation unit so that the
+    # allocation paths never have to know how a frame arrives - only that one did.
+    MobileGL/MG_Gbm/GbmHostChannel.cpp
     MobileGL/MG_Gbm/GbmApi.cpp
     # MGLOG_I/W/E expand to a call to MobileGL::MG_Util::Debug::Log, and this is the
     # one translation unit that defines it. It is compiled in rather than linked from

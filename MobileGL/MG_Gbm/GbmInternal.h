@@ -74,11 +74,24 @@ namespace MobileGL::MG_Gbm
     };
 
     // The phone offers frames with this packed struct immediately followed by an
-    // AHardwareBuffer native handle in the ancillary data of the same message.
-    // The layout is fixed by the phone side, so the packing attribute is load
-    // bearing and the field order may not be rearranged. Nothing in this run reads
-    // or writes it: it is the hook the host-frame backend plugs into, kept here so
-    // that the wire format has one home and does not have to be re-derived.
+    // AHardwareBuffer native handle in the payload of one message, with the handle's
+    // descriptors in the SCM_RIGHTS control data of that same message. The layout is
+    // fixed by the phone side, so the packing attribute is load bearing and the field
+    // order may not be rearranged.
+    //
+    // The transport below the two structs is SOCK_SEQPACKET, and that is part of the
+    // protocol rather than an implementation detail: a frame and its descriptors only
+    // mean anything together, and the message boundary is what lets the reader take
+    // the two as one thing. A stream socket would let a reader receive half an offer,
+    // or a descriptor whose position in the byte stream it had to reconstruct, and the
+    // failure mode of getting that arithmetic wrong is a frame silently made of
+    // another frame's memory.
+    //
+    // Format is a DRM fourcc and not an AHardwareBuffer format, because it is what
+    // gbm_bo_get_format has to answer with and a compositor compares it against
+    // DRM_FORMAT_* values. StrideBytes is the byte distance between two rows of plane
+    // 0, which is the same single-stride description GBM_BO_IMPORT_FD carries - and
+    // the reason a frame read from this struct is reported as linear.
     struct GbmFrameOffer
     {
         uint32_t Magic; // 'M','G','G','F' little endian on both ends of the wire
@@ -131,6 +144,40 @@ namespace MobileGL::MG_Gbm
         SizeT Size = 0;
     };
 
+    // One frame the phone offered, as this process holds it: the offer's own
+    // description of the memory, plus the descriptor this library duped out of the
+    // handle the phone sent. It owns that descriptor for as long as it lives, so a
+    // caller that takes a frame and then fails still closes it, and the descriptor the
+    // phone sent is closed with the rest of the message's descriptors rather than kept.
+    struct GbmHostFrame
+    {
+        Uint32 Seq = 0;
+        Uint32 Index = 0;
+        Uint32 Width = 0;
+        Uint32 Height = 0;
+        Uint32 StrideBytes = 0;
+        Uint32 Format = 0;
+        // Bytes per pixel of plane 0. The offer carries a fourcc, so it comes from the
+        // format table when there is an entry for it and from the stride otherwise.
+        Uint32 BytesPerPixel = 0;
+        Uint64 Usage = 0;
+        // Which connection offered the frame. A release names a frame, and a frame only
+        // means anything to the connection that offered it.
+        Uint64 Generation = 0;
+        // The duped dma-buf descriptor, and how many bytes it actually backs as asked
+        // of the descriptor itself rather than computed from the offered geometry.
+        Int Fd = -1;
+        SizeT Size = 0;
+
+        // Move-only, because two records naming one descriptor would close it twice.
+        GbmHostFrame() = default;
+        GbmHostFrame(const GbmHostFrame&) = delete;
+        GbmHostFrame& operator=(const GbmHostFrame&) = delete;
+        GbmHostFrame(GbmHostFrame&& other) noexcept;
+        GbmHostFrame& operator=(GbmHostFrame&& other) noexcept;
+        ~GbmHostFrame();
+    };
+
     // One imported or locally allocated buffer. The struct is private to this
     // library; gbm_bo is the public opaque name and is defined in terms of it.
     struct GbmBufferObject
@@ -167,9 +214,13 @@ namespace MobileGL::MG_Gbm
         GbmBackend Backend = GbmBackend::None;
 
         // Set only for host frames: the slot index and sequence number that the
-        // release message has to mention so the phone can recycle the right slot.
+        // release message has to mention so the phone can recycle the right slot, and
+        // the connection the frame arrived on. A frame left over from a connection
+        // that has since died is never released into the one that replaced it, because
+        // that would free a slot belonging to another session.
         Uint32 HostIndex = 0;
         Uint32 HostSeq = 0;
+        Uint64 HostGeneration = 0;
         Bool HostOwned = false;
 
         // How many maps are outstanding. The mapping itself is kept here so that
@@ -240,21 +291,27 @@ namespace MobileGL::MG_Gbm
         Int HeapFd = -1;
         String HeapPath;
 
+        // Where the display host is reached, as configured when the device was created.
         String SocketPath;
         GbmBackend DefaultBackend = GbmBackend::DmaHeap;
+        // True while the channel below is connected and frames are arriving over it.
+        // False means every allocation this device answers is answered locally.
         Bool HostAvailable = false;
         // The name gbm_device_get_backend_name reports. It names what this device
-        // actually does, because a compositor that logs it is asking exactly that.
+        // actually does, because a compositor that logs it is asking exactly that - so
+        // it changes when the host channel connects and when that connection dies, and
+        // SelfAllocatedBackendName is what it falls back to when it does.
         String BackendName = "mobilegl";
+        String SelfAllocatedBackendName = "mobilegl";
 
         std::mutex Mutex;
         std::unordered_map<::gbm_bo*, GbmBufferObject*> Buffers;
         std::unordered_map<::gbm_surface*, GbmSurface*> Surfaces;
 
-        // The host channel is a separate translation unit so that the socket
-        // protocol never leaks into the allocation paths. This run implements only
-        // the self-allocated backend, so the pointer stays null and HostAvailable
-        // stays false; the member and the wire structs above are the hook.
+        // The host channel is a separate translation unit so that the socket protocol
+        // never leaks into the allocation paths. It lives for as long as the device
+        // does and is reached only under this device's mutex, which is what lets the
+        // allocation path ask it for a frame without a second lock to order against.
         class GbmHostChannel* Host = nullptr;
 
         // Closes the heap node and the private device dup, so that a device which
@@ -316,6 +373,30 @@ namespace MobileGL::MG_Gbm
 
     // Drops one mapping; the last one unmaps.
     void GbmBufferUnmap(::gbm_bo& bo, void* mapData) noexcept;
+
+    // ---- host frames -------------------------------------------------------
+
+    // Builds the channel to the display host and makes one attempt to connect it, then
+    // stores it in the device. A machine that is not the container half of a split run
+    // has nothing at that path, and that is a device which allocates locally from then
+    // on - not a device that failed to be created.
+    void GbmHostChannelCreate(::gbm_device& device) noexcept;
+
+    // Closes the channel and releases what it holds. Called from the device's
+    // destructor, after the buffers that still name offered frames are gone, so that
+    // their releases can still be sent.
+    void GbmHostChannelDestroy(::gbm_device& device) noexcept;
+
+    // Takes the next frame the host offered, or returns false when none is waiting or
+    // the channel is down. Never blocks: the socket is non-blocking, so a caller that
+    // finds nothing allocates locally in the same call, which is what makes this usable
+    // from a compositor's frame loop.
+    Bool GbmHostChannelTakeFrame(::gbm_device& device, GbmHostFrame& frameOut) noexcept;
+
+    // Tells the host that a frame may be recycled. Called from the buffer record's
+    // destructor, so a frame goes back exactly when nothing in this process can still
+    // read it, and only into the connection that offered it.
+    void GbmHostChannelReleaseFrame(::gbm_device& device, Uint32 seq, Uint64 generation) noexcept;
 
     // ---- swapchains --------------------------------------------------------
 

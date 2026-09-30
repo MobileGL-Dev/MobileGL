@@ -3,6 +3,12 @@
 //
 // The records, and the backend that allocates without a display server behind it.
 //
+// There are two ways a buffer can come into existence here, and which one answers is
+// decided per allocation: a frame the display host offered is taken (GbmHostChannel.cpp
+// owns that conversation), and everything else is allocated locally by this file. A
+// device therefore does not have "a" backend so much as a backend per buffer, which is
+// why the buffer record names the one it was built on.
+//
 // Allocation happens in the kernel's dma-heap when a heap node is readable by this
 // user, and in a memfd when it is not. The order is not a preference: a dma-heap
 // buffer is a real dma-buf, so the Anland display producer can import the fd and
@@ -208,6 +214,69 @@ namespace MobileGL::MG_Gbm
                 }
             }
             return end;
+        }
+
+        // Builds the record for a frame the display host offered. The geometry is the
+        // offer's rather than the caller's, which is the whole point of the backend: the
+        // buffer is one the phone's display path already knows how to show, and its
+        // width, height, stride and format are facts about that memory instead of
+        // requests this library could have answered differently.
+        ::gbm_bo* GbmHostBufferCreate(::gbm_device& device, GbmHostFrame& frame) noexcept
+        {
+            ::gbm_bo* bo = nullptr;
+            try
+            {
+                bo = new gbm_bo();
+                GbmBufferObject& impl = bo->Impl;
+                impl.Width = frame.Width;
+                impl.Height = frame.Height;
+                impl.Format = frame.Format;
+                impl.Stride = frame.StrideBytes;
+                impl.BytesPerPixel = frame.BytesPerPixel;
+                // The host's own statement about what the frame was allocated for is the
+                // only true one here: the caller's usage flags describe a buffer the
+                // caller asked for, and the caller did not get one.
+                impl.Usage = frame.Usage;
+                impl.PlaneCount = 1;
+                // Measured from the descriptor rather than computed from the geometry,
+                // and the only length that is safe to mmap.
+                impl.AllocationSize = frame.Size;
+                impl.Backend = GbmBackend::HostFrame;
+                impl.Owner = &device;
+                impl.RefCount = 1;
+                impl.Fds[0] = frame.Fd;
+                // The record owns the descriptor from here on, so the frame that carried
+                // it must not close it when it goes out of scope - and the throwing path
+                // below is covered by the record's own destructor instead.
+                frame.Fd = -1;
+                // A stride is a complete description of a linear image and the offer
+                // carries nothing else about the layout, so linear is what this records.
+                impl.Modifier = DrmFormatModLinear;
+                for (Int i = 0; i < (Int)GbmMaxPlanes; ++i)
+                {
+                    impl.Strides[i] = i == 0 ? frame.StrideBytes : 0;
+                    impl.Offsets[i] = 0;
+                    impl.Modifiers[i] = DrmFormatModLinear;
+                }
+                impl.HostOwned = true;
+                impl.HostSeq = frame.Seq;
+                impl.HostIndex = frame.Index;
+                impl.HostGeneration = frame.Generation;
+
+                device.Impl.Buffers[bo] = &impl;
+
+                MGLOG_I("gbm_bo_create: %ux%u format=0x%08x stride=%u planes=1 size=%zu fd=%d "
+                        "backend=host-frame seq=%u index=%u",
+                        impl.Width, impl.Height, impl.Format, impl.Stride, impl.AllocationSize, impl.Fds[0],
+                        frame.Seq, frame.Index);
+                return bo;
+            }
+            catch (...)
+            {
+                delete bo;
+                errno = ENOMEM;
+                return nullptr;
+            }
         }
     } // namespace
 
@@ -454,6 +523,17 @@ namespace MobileGL::MG_Gbm
                 Fds[i] = -1;
             }
         }
+        if (HostOwned && Owner != nullptr)
+        {
+            // The frame goes back to the phone only now, with this process's descriptor
+            // already closed: a release that left first would let the host recycle a
+            // slot that this process could still read. This is also the one place a
+            // frame can be released from, which is what keeps the release to exactly one
+            // per frame - gbm_bo_destroy of a buffer a surface still presents only drops
+            // the caller's reference and must not free the frame underneath it.
+            GbmHostChannelReleaseFrame(*Owner, HostSeq, HostGeneration);
+            HostOwned = false;
+        }
         if (UserDataDestroy != nullptr)
         {
             // The public name of this record is the gbm_bo that contains it, which is
@@ -580,19 +660,26 @@ namespace MobileGL::MG_Gbm
                         impl.BackendName.c_str(), impl.DeviceFd, heapNodes[0]);
             }
 
-            // The host-frame backend is not part of this build: the channel object
-            // stays null and HostAvailable stays false, which is exactly the state
-            // the allocation paths treat as "allocate locally".
-            impl.HostAvailable = false;
-            impl.Host = nullptr;
-            impl.SocketPath = "";
+            // The host-frame backend, and the one connection attempt it makes at
+            // creation time. A machine that is not the container half of a split run has
+            // nothing at that path, and a device with no display host is a device that
+            // allocates locally rather than one that failed - the channel keeps retrying
+            // on later allocations.
+            impl.SelfAllocatedBackendName = impl.BackendName;
+            GbmHostChannelCreate(*device);
 
             return device;
         }
         catch (...)
         {
             // A GBM device that throws cannot be caught by any of its C callers, so
-            // the failure is reported the way GBM reports every other one.
+            // the failure is reported the way GBM reports every other one. The channel
+            // is a no-op to destroy when it was never built, and the one thing here that
+            // owns a descriptor which the device's own destructor does not close.
+            if (device != nullptr)
+            {
+                GbmHostChannelDestroy(*device);
+            }
             delete device;
             errno = ENOMEM;
             return nullptr;
@@ -626,6 +713,13 @@ namespace MobileGL::MG_Gbm
             GbmBufferForceDestroy(device, *impl.Buffers.begin()->first);
         }
 
+        // The channel outlives the buffers so that the frames they were made of can
+        // still be released to the phone - a release sent after the socket closed would
+        // be a slot the phone never gets back - and dies here rather than in the
+        // destructor, which is below the public struct and could only reach it through
+        // a cast back to it.
+        GbmHostChannelDestroy(device);
+
         // The destructor closes the heap node and the private device fd.
         delete &device;
     }
@@ -654,6 +748,26 @@ namespace MobileGL::MG_Gbm
             return nullptr;
         }
 
+        // A frame the display host offered is taken before the caller's request is
+        // examined any further, because the host decides the geometry: what the
+        // compositor gets is the buffer the phone's display path already knows, and
+        // reporting the size the caller asked for instead would describe memory that is
+        // not there. The checks above still apply - they are about what a caller may be
+        // handed at all rather than about how big it is.
+        //
+        // The errno of a failed attempt is put back before the local path runs: a buffer
+        // that was allocated locally is not a failure, and the strerror(errno) a caller
+        // prints has to describe a failure that actually happened.
+        const Int callerErrno = errno;
+        GbmHostFrame hostFrame;
+        if (GbmHostChannelTakeFrame(device, hostFrame))
+        {
+            return GbmHostBufferCreate(device, hostFrame);
+        }
+        errno = callerErrno;
+
+        // The modifier list is not consulted for a host frame either: its layout is the
+        // display's, and the stride the offer carries is a description of linear memory.
         GbmPlaneLayout layout[GbmMaxPlanes] = {};
         Int planeCount = 0;
         SizeT totalBytes = 0;
