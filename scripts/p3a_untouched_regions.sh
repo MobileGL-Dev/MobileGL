@@ -24,8 +24,18 @@
 #   RingAllocate                   the fast path on the hot upload route
 #   FlushPendingRangesNow          the three-tier drain: tier 1 is an INVALIDATE_BUFFER map + memcpy
 #                                  for a whole-buffer flush or a range >= 128 KiB, tier 2 the upload
-#                                  ring + glCopyBufferSubData, tier 3 UploadRangeNow
+#                                  ring + glCopyBufferSubData, tier 3 UploadRangeNow. PINNED since
+#                                  ID-P8-14 (see below)
 #   FlushPendingRangesFrom         the SAME three-tier drain, on the arm that ships. Born in P3a
+#
+# ID-P8-14 PINS THE TENTH TOO. dev f973008c changed FlushPendingRangesNow on purpose: on Adreno 830 a
+# partial range-invalidating map of a store that still has an upload-ring glCopyBufferSubData queued
+# loses the copy (create-instancing drew whole terrain sections empty, SSIM 0.870), so the ring tier
+# stamps ringCopyRetireSerial and a partial range waits behind an unretired copy. P8 merged dev
+# (37174242) and P8-MF mirrored the rule into FlushPendingRangesFrom (via InvalidateFlushAccessFor).
+# The base ref CI passes (37da3c3a) predates the fix, so the tenth row can no longer be compared
+# against <ref-a>; both ladders are now PINNED rows, re-pinned together on the reviewed post-fix
+# bodies, and still compared on every run.
 #
 # THE ELEVENTH IS HERE BY INTEGRATOR DECISION ID-15, and it is the whole reason the row about the
 # tenth is not decorative. On this tree Managers.cpp has TWO arms: `#if MOBILEGL_PIPE_PUSH` holds
@@ -36,9 +46,10 @@
 # would exit 2 rather than run). The consequence, and what ID-15 closes: a push build compiles no
 # FlushPendingRangesNow at all, so a gate that hashed only that name protected text the shipping
 # build never sees, and a tier-threshold edit made in the ladder that DOES ship would pass it. So
-# both names are hashed. The pull build's ladder is compared against the base ref; the push build's
-# is compared, ALWAYS AND WHETHER OR NOT <ref-a> DEFINES IT, against a sha pinned at the commit
-# where that body was reviewed - see PINNED_FUNCTIONS.
+# both names are hashed. The push build's ladder is compared, ALWAYS AND WHETHER OR NOT <ref-a>
+# DEFINES IT, against a sha pinned at the commit where that body was reviewed - see
+# PINNED_FUNCTIONS. The pull build's ladder was compared against the base ref until ID-P8-14 pinned
+# it the same way (see the note under the list above).
 #
 # "ALWAYS" IS INTEGRATOR DECISION ID-41 AND IT IS A CHANGE. Until P5 this text said "pinned" while
 # the implementation consulted the pin only as a FALLBACK, when <ref-a> did not define the function
@@ -50,7 +61,8 @@
 # InvalidateFlushAccessFor, the pull arm (FlushPendingRangesNow) is byte-identical across that
 # change and G1 reports .text +0, so it is the intended change to the eleventh row rather than
 # drift - and the answer is to RE-PIN it, not to revert it and not to let the row stop being
-# compared. The OTHER TEN stay ref-a-vs-ref-b: nothing about them moved.
+# compared. The other nine stay ref-a-vs-ref-b: nothing about them moved (the tenth moved at
+# ID-P8-14 and was pinned then).
 #
 # THE TENTH IS HERE BY INTEGRATOR DECISION ID-11, resolving a contradiction inside the brief.
 # D-F's "Decision: nine functions" table omits FlushPendingRangesNow, but BRIEF-P3A.md:420 calls it
@@ -99,24 +111,33 @@
 set -u -o pipefail
 
 SOURCE_PATH=MobileGL/MG_Backend/DirectGLES/Managers.cpp
-# The ten that exist at the P3a base ref, so their baseline is read out of <ref-a>.
-FUNCTIONS="IsPoolable EnrollIntoPool AcquireFromPool TrimBufferPool ClearBufferPool ProcessDeferredBufferReleases CreateRingStorage RingAvailable RingAllocate FlushPendingRangesNow"
-# The ELEVENTH (ID-15), and it is a different kind of row: it was BORN in P3a, so there was no
-# body at the base ref to compare it with, and its baseline is PINNED below and consulted
-# UNCONDITIONALLY (ID-41 - see the long note at the top of this file).
+# The nine unpinned rows: they exist at the P3a base ref, so their baseline is read out of <ref-a>.
+FUNCTIONS="IsPoolable EnrollIntoPool AcquireFromPool TrimBufferPool ClearBufferPool ProcessDeferredBufferReleases CreateRingStorage RingAvailable RingAllocate"
+# The TENTH and the ELEVENTH, and they are a different kind of row: their baseline is PINNED below
+# and consulted UNCONDITIONALLY (ID-41 - see the long note at the top of this file). The eleventh
+# (ID-15) was BORN in P3a, so there was no body at the base ref to compare it with; the tenth joined
+# it at ID-P8-14, when a reviewed fix moved it past the base ref. PINNED_FUNCTIONS is in the fixed
+# order, because apply_pinned_shas appends the pinned rows in that order.
 #
-# THE PIN, AND WHAT RE-PINS IT. Whoever moves this body deliberately replaces BOTH lines and
-# writes the decision beside them; a pin with no commit and no decision next to it is a number
-# nobody can audit.
-#   3e298c9a  37fc94ff...  ID-15, P3a: the two-arm shape, reviewed and accepted
-#   3dadd4c1  172b0222...  ID-41, P5 (b1): [Fix] (DirectGLES): make the extent hostBase is good
-#                          for a parameter of the flush ladder, so tier 1's widening refusal is
-#                          live code the moment a SEG_STAGE snapshot is narrower than the queued
-#                          range.  <- CURRENT
-PINNED_FUNCTIONS="FlushPendingRangesFrom"
-PINNED_BASELINE_REF=3dadd4c1
-PINNED_BASELINE_DECISION=ID-41
-PINNED_SHA_FlushPendingRangesFrom=172b022273db01b16e772d15b269ffcd797fe38c767f7354d83ce113a66040d0
+# THE PIN, AND WHAT RE-PINS IT. Whoever moves one of these bodies deliberately replaces the shas
+# AND the commit AND the decision, and writes a line here; a pin with no commit and no decision
+# next to it is a number nobody can audit.
+#   3e298c9a  From 37fc94ff...  ID-15, P3a: the two-arm shape, reviewed and accepted
+#   3dadd4c1  From 172b0222...  ID-41, P5 (b1): [Fix] (DirectGLES): make the extent hostBase is
+#                               good for a parameter of the flush ladder, so tier 1's widening
+#                               refusal is live code the moment a SEG_STAGE snapshot is narrower
+#                               than the queued range.
+#   ac9ab078  Now c40cae66...  ID-P8-14, P8-MF: dev f973008c (merged at 37174242) keeps a partial
+#             From 33bc4cb8... range-invalidating map behind an upload-ring copy still queued on the
+#                               store - Adreno 830 loses the queued copy - in FlushPendingRangesNow;
+#                               ac9ab078 mirrors it into FlushPendingRangesFrom (the stamp on
+#                               the ring tier, the guard in InvalidateFlushAccessFor, the
+#                               whole-buffer exemption kept).  <- CURRENT
+PINNED_FUNCTIONS="FlushPendingRangesNow FlushPendingRangesFrom"
+PINNED_BASELINE_REF=ac9ab078
+PINNED_BASELINE_DECISION=ID-P8-14
+PINNED_SHA_FlushPendingRangesNow=c40cae66f021160478ef9af6bcf5e8ef0bf26721486173695d5257263c97723f
+PINNED_SHA_FlushPendingRangesFrom=33bc4cb855b932ed4fb0de44a4cfa7a9be8aca34da267ccd2fc9fedfad4d3328
 ALL_FUNCTIONS="$FUNCTIONS $PINNED_FUNCTIONS"
 EXPECTED_FUNCTION_COUNT=11
 # The functions the self-test perturbs, one control each. ClearBufferPool is small, has no forward
@@ -353,21 +374,22 @@ apply_pinned_shas() {
   for name in $PINNED_FUNCTIONS; do
     eval "pinned=\$PINNED_SHA_$name"
     if [ -z "$pinned" ] || [ "$pinned" = "PLACEHOLDER_SHA" ]; then
-      say "$name has no pinned baseline sha; the eleventh row cannot be compared"
+      say "$name has no pinned baseline sha; that row cannot be compared"
       return 2
     fi
     grep -v "  $name\$" "$file" > "$file.unpinned" || true
     mv -f "$file.unpinned" "$file" || return 2
-    # Appended LAST, which is also its position in the fixed order (it is the eleventh of eleven),
-    # so the header's "stdout is always the sha list in the fixed order" stays true and a baseline
-    # captured by redirect still diffs cleanly against a two-ref run.
+    # Appended LAST, in PINNED_FUNCTIONS order, which is also their position in the fixed order
+    # (the tenth and the eleventh of eleven), so the header's "stdout is always the sha list in the
+    # fixed order" stays true and a baseline captured by redirect still diffs cleanly against a
+    # two-ref run.
     printf '%s  %s\n' "$pinned" "$name" >> "$file"
   done
   return 0
 }
 
-# The BASELINE side (<ref-a>). The TEN are extracted strictly, so a rename of one of THOSE is
-# exit 2 rather than a silently short list. FlushPendingRangesFrom then takes the PINNED sha
+# The BASELINE side (<ref-a>). The NINE are extracted strictly, so a rename of one of THOSE is
+# exit 2 rather than a silently short list. Each pinned row then takes the PINNED sha
 # WHETHER OR NOT <ref-a> defines it (ID-41), and a <ref-a> that defines it DIFFERENTLY is
 # reported - loudly - because the two answers disagreeing is itself a finding rather than a
 # reason to prefer the ref.
@@ -379,7 +401,7 @@ extract_baseline() {
     return 2
   fi
   if ! python3 "$PY" extract "$blob" "$FUNCTIONS" > "$WORK_DIR/$out.sha" 2>"$WORK_DIR/$out.err"; then
-    say "the baseline ref '$ref' does not define the pre-P3a ten exactly once each:"
+    say "the baseline ref '$ref' does not define the nine unpinned rows exactly once each:"
     sed 's/^/[p3a-untouched]   /' "$WORK_DIR/$out.err" >&2
     return 2
   fi
@@ -387,7 +409,7 @@ extract_baseline() {
     eval "pinned=\$PINNED_SHA_$name"
     atRef=$(python3 "$PY" extract "$blob" "$name" 2>/dev/null | awk -v n="$name" '$2 == n { print $1 }')
     if [ -z "$atRef" ]; then
-      say "$name is not defined at '$ref' (it was born in P3a): its baseline is the sha PINNED in"
+      say "$name is not defined at '$ref' (a pinned row): its baseline is the sha PINNED in"
       say "  this script, captured at $PINNED_BASELINE_REF ($PINNED_BASELINE_DECISION)"
     elif [ "$atRef" != "$pinned" ]; then
       say "NOTE: $name IS defined at '$ref' and hashes"
@@ -517,14 +539,16 @@ if [ "${1:-}" = "--self-test" ]; then
   # --- THE PINNED ROW (ID-41) -----------------------------------------------------------------
   # TWO more controls, and they exist because none of the five above can see the pin at all: every
   # one of them compares one extraction of the working tree against another, so they would all be
-  # green on a build of this script in which PINNED_SHA_* was never read by anything. The eleventh
-  # row's whole claim is "the baseline is the PIN, not <ref-a>", and that claim needs its own two.
+  # green on a build of this script in which PINNED_SHA_* was never read by anything. A pinned
+  # row's whole claim is "the baseline is the PIN, not <ref-a>", and that claim needs its own two -
+  # per pinned row (both ladders since ID-P8-14).
   for target in $PINNED_FUNCTIONS; do
     eval "pinned=\$PINNED_SHA_$target"
 
     # (1) PIN PRECEDENCE, positive. A baseline that carries some OTHER sha for the pinned row -
     # which is the shape of every <ref-a> CI passes today, since ff2994d9 and 37da3c3a both DEFINE
-    # FlushPendingRangesFrom - must come out of apply_pinned_shas carrying the PIN. This is the
+    # FlushPendingRangesFrom and both predate ID-P8-14's FlushPendingRangesNow - must come out of
+    # apply_pinned_shas carrying the PIN. This is the
     # control that would have caught the ID-41 defect itself: before it, the pin was consulted
     # only when <ref-a> lacked the function, so the row silently reverted to ref-a-vs-ref-b the
     # moment a base ref had one.
@@ -537,7 +561,7 @@ if [ "${1:-}" = "--self-test" ]; then
     got=$(awk -v n="$target" '$2 == n { print $1 }' "$WORK_DIR/pinprec.sha")
     if [ "$got" != "$pinned" ]; then
       say "PIN CONTROL FAILED: a baseline that carried a DIFFERENT sha for $target came out as"
-      say "  '${got:-<absent>}' and not as the pin ($pinned). The eleventh row would be compared"
+      say "  '${got:-<absent>}' and not as the pin ($pinned). That pinned row would be compared"
       say "  against <ref-a> again, which is exactly the defect $PINNED_BASELINE_DECISION closed."
       exit 2
     fi
@@ -545,7 +569,7 @@ if [ "${1:-}" = "--self-test" ]; then
 
     # (2) A ONE-TOKEN EDIT TO THE PINNED LADDER, negative, AGAINST THE PIN. The comparison must go
     # red, must name the row, and must say that the row is PINNED - R-16's "a control asserts its
-    # OWN failure string": the pinned row and the ten ref-a rows are fixed differently, and a
+    # OWN failure string": the pinned rows and the nine ref-a rows are fixed differently, and a
     # reader who gets only the generic paragraph goes looking for a diff against <ref-a> that does
     # not exist.
     python3 "$PY" perturb-token "$WORK_DIR/pristine.cpp" "$WORK_DIR/pinperturbed.cpp" \

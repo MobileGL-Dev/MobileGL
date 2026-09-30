@@ -25,7 +25,8 @@
 #   CreateRingStorage              glBufferStorageEXT + persistent|coherent, retires at serial + 1
 #   RingAvailable                  self-heals a stale context generation
 #   RingAllocate                   the fast path on the hot upload route
-#   FlushPendingRangesNow          the three-tier drain, pull arm
+#   FlushPendingRangesNow          the three-tier drain, pull arm. PINNED since ID-P8-14: dev
+#                                  f973008c moved it past <ref-a> on purpose (the parent's note)
 #   FlushPendingRangesFrom         the SAME three-tier drain, on the arm that ships (ID-15). Born
 #                                  in P3a, so its baseline is PINNED, not read from <ref-a>
 #
@@ -125,6 +126,11 @@
 #          be RE-PINNED on the reviewed P5 body rather than reverted or quietly left comparing
 #          against <ref-a>. This script says so on stderr, in both directions, and keeps the PIN -
 #          because the pin is the reviewed text.
+#
+#          ID-P8-14 extends the same treatment to FlushPendingRangesNow: dev f973008c changed it
+#          past every <ref-a> CI passes (the Adreno 830 queued-ring-copy guard), P8-MF mirrored the
+#          rule into FlushPendingRangesFrom, and both ladders were re-pinned together on the
+#          reviewed post-fix bodies.
 set -u -o pipefail
 
 # One row per region: <name>@<kind>@<path>. The ORDER is the fixed order the sha list is printed
@@ -151,21 +157,32 @@ ShouldUseCaveatTextureFormat@function@MobileGL/MG_Backend/DirectGLES/Utils.cpp"
 
 EXPECTED_FUNCTION_COUNT=17
 
-# The one region born in P3a, so there is no body at P4a's base ref that this phase reviewed: its
-# baseline is PINNED and consulted UNCONDITIONALLY (DEVIATIONS D-N/2, and ID-41 for the parent).
+# The two flush ladders. FlushPendingRangesFrom was born in P3a, so there is no body at P4a's base
+# ref that this phase reviewed; FlushPendingRangesNow was moved past the base ref by a reviewed fix
+# (ID-P8-14, dev f973008c: a partial range-invalidating map must not overtake an upload-ring copy
+# still queued on the store - Adreno 830 loses the copy). Both baselines are PINNED and consulted
+# UNCONDITIONALLY (DEVIATIONS D-N/2, and ID-41 for the parent).
 #
-# THE PIN, AND WHAT RE-PINS IT. Whoever moves this body deliberately replaces BOTH lines and
-# writes the decision beside them; a pin with no commit and no decision next to it is a number
-# nobody can audit. The parent script carries the identical table and the two must not drift.
-#   3e298c9a  37fc94ff...  ID-15, P3a: the two-arm shape, reviewed and accepted
-#   3dadd4c1  172b0222...  ID-41, P5 (b1): [Fix] (DirectGLES): make the extent hostBase is good
-#                          for a parameter of the flush ladder, so tier 1's widening refusal is
-#                          live code the moment a SEG_STAGE snapshot is narrower than the queued
-#                          range.  <- CURRENT
-PINNED_FUNCTIONS="FlushPendingRangesFrom"
-PINNED_BASELINE_REF=3dadd4c1
-PINNED_BASELINE_DECISION=ID-41
-PINNED_SHA_FlushPendingRangesFrom=172b022273db01b16e772d15b269ffcd797fe38c767f7354d83ce113a66040d0
+# THE PIN, AND WHAT RE-PINS IT. Whoever moves one of these bodies deliberately replaces the shas
+# AND the commit AND the decision, and writes a line here; a pin with no commit and no decision
+# next to it is a number nobody can audit. The parent script carries the identical table and the
+# two must not drift.
+#   3e298c9a  From 37fc94ff...  ID-15, P3a: the two-arm shape, reviewed and accepted
+#   3dadd4c1  From 172b0222...  ID-41, P5 (b1): [Fix] (DirectGLES): make the extent hostBase is
+#                               good for a parameter of the flush ladder, so tier 1's widening
+#                               refusal is live code the moment a SEG_STAGE snapshot is narrower
+#                               than the queued range.
+#   ac9ab078  Now c40cae66...  ID-P8-14, P8-MF: dev f973008c (merged at 37174242) keeps a partial
+#             From 33bc4cb8... range-invalidating map behind an upload-ring copy still queued on the
+#                               store - Adreno 830 loses the queued copy - in FlushPendingRangesNow;
+#                               ac9ab078 mirrors it into FlushPendingRangesFrom (the stamp on
+#                               the ring tier, the guard in InvalidateFlushAccessFor, the
+#                               whole-buffer exemption kept).  <- CURRENT
+PINNED_FUNCTIONS="FlushPendingRangesNow FlushPendingRangesFrom"
+PINNED_BASELINE_REF=ac9ab078
+PINNED_BASELINE_DECISION=ID-P8-14
+PINNED_SHA_FlushPendingRangesNow=c40cae66f021160478ef9af6bcf5e8ef0bf26721486173695d5257263c97723f
+PINNED_SHA_FlushPendingRangesFrom=33bc4cb855b932ed4fb0de44a4cfa7a9be8aca34da267ccd2fc9fedfad4d3328
 
 # The regions the self-test perturbs, one negative control each. FOUR, exactly as D-N requires, and
 # each is a different shape so that a control which only ever perturbed the easy one cannot leave
@@ -502,8 +519,8 @@ extract_ref() {
   return $?
 }
 
-# The BASELINE side (<ref-a>). The sixteen ordinary regions are extracted strictly, so a rename of
-# one of THOSE is exit 2 rather than a silently short list. FlushPendingRangesFrom then takes the
+# The BASELINE side (<ref-a>). The fifteen ordinary regions are extracted strictly, so a rename of
+# one of THOSE is exit 2 rather than a silently short list. Each pinned row then takes the
 # PINNED sha (DEVIATIONS D-N/2) whether or not <ref-a> defines it, and a <ref-a> that defines it
 # DIFFERENTLY is reported - loudly - because the two answers disagreeing is itself a finding.
 extract_baseline() {
@@ -517,7 +534,7 @@ extract_baseline() {
     mv -f "$WORK_DIR/$out.spec.tmp" "$WORK_DIR/$out.spec" || return 2
   done
   if ! python3 "$PY" extract "$WORK_DIR/$out.spec" > "$WORK_DIR/$out.sha" 2>"$WORK_DIR/$out.err"; then
-    say "the baseline ref '$ref' does not define the sixteen unpinned regions exactly once each:"
+    say "the baseline ref '$ref' does not define the fifteen unpinned regions exactly once each:"
     sed 's/^/[p4a-untouched]   /' "$WORK_DIR/$out.err" >&2
     return 2
   fi
@@ -608,8 +625,8 @@ compare_lists() {
         say "  $labelA ${shaA:-<not found>}"
         say "  $labelB ${shaB:-<not found>}"
         if is_pinned_row "$name"; then
-          # ITS OWN MESSAGE, and that is R-16 rather than decoration: the pinned row and the
-          # sixteen ref-a rows fail differently and are fixed differently, so a reader who sees
+          # ITS OWN MESSAGE, and that is R-16 rather than decoration: the pinned rows and the
+          # fifteen ref-a rows fail differently and are fixed differently, so a reader who sees
           # only the generic paragraph below goes looking for a diff against <ref-a> that does not
           # exist.
           say "  $name IS A PINNED ROW ($PINNED_BASELINE_DECISION): its baseline is ALWAYS the sha"
@@ -640,10 +657,10 @@ compare_lists() {
 # A gate that always says "identical" and a gate that is working produce the same green, so the
 # comparison has to be shown failing. Both controls run: the POSITIVE ones (an untouched copy
 # compares equal; an edit OUTSIDE the regions is invisible; a baseline that names another sha for
-# the PINNED row is overridden by the pin) rule out a comparison that reports every region as
-# moved, and the NINE NEGATIVE ones - D-N's four regions, each perturbed at the HEAD of its body
-# and again at its TAIL, plus a ONE-TOKEN edit to the pinned ladder compared AGAINST THE PIN
-# (ID-41) - rule out the comparison that never reports any, the extraction whose extent stops
+# a PINNED row is overridden by the pin) rule out a comparison that reports every region as
+# moved, and the TEN NEGATIVE ones - D-N's four regions, each perturbed at the HEAD of its body
+# and again at its TAIL, plus a ONE-TOKEN edit to each pinned ladder compared AGAINST THE PIN
+# (ID-41; two pinned rows since ID-P8-14) - rule out the comparison that never reports any, the extraction whose extent stops
 # before the closing brace (F-m2), and a pin that nothing consults.
 if [ "${1:-}" = "--self-test" ]; then
   [ $# -eq 1 ] || { say "--self-test takes no other arguments"; exit 2; }
@@ -750,18 +767,17 @@ if [ "${1:-}" = "--self-test" ]; then
   # --- THE PINNED ROW (ID-41) -----------------------------------------------------------------
   # TWO more controls, and they exist because none of the ten above can see the pin at all: every
   # one of them compares one extraction of the working tree against another, so they would all be
-  # green on a build of this script in which PINNED_SHA_* was never read by anything. The pinned
+  # green on a build of this script in which PINNED_SHA_* was never read by anything. A pinned
   # row's whole claim is "the baseline is the PIN, not <ref-a>" (D-N/2, ID-41), and that claim
-  # needs its own two.
+  # needs its own two - per pinned row (both ladders since ID-P8-14).
   for target in $PINNED_FUNCTIONS; do
     eval "pinned=\$PINNED_SHA_$target"
     targetSource=$(printf '%s\n' "$REGIONS" | awk -F@ -v n="$target" '$1 == n { print $3 }')
     [ -n "$targetSource" ] || { say "$target is not one of the regions"; exit 2; }
 
     # (1) PIN PRECEDENCE, positive. A baseline that carries some OTHER sha for the pinned row -
-    # which is the shape of every <ref-a> CI passes, since 37da3c3a DOES define
-    # FlushPendingRangesFrom and no longer hashes the pin - must come out of apply_pinned_shas
-    # carrying the PIN.
+    # which is the shape of every <ref-a> CI passes, since 37da3c3a DOES define both ladders and
+    # hashes neither pin - must come out of apply_pinned_shas carrying the PIN.
     grep -v "  $target\$" "$WORK_DIR/pristine.sha" > "$WORK_DIR/pinprec.sha" || true
     printf '%s  %s\n' \
         "0000000000000000000000000000000000000000000000000000000000000000" "$target" \
@@ -779,7 +795,7 @@ if [ "${1:-}" = "--self-test" ]; then
 
     # (2) A ONE-TOKEN EDIT TO THE PINNED LADDER, negative, AGAINST THE PIN. The comparison must go
     # red, must name the region, and must say the region is PINNED - R-16's "a control asserts its
-    # OWN failure string": the pinned row and the sixteen ref-a rows are fixed differently, and a
+    # OWN failure string": the pinned rows and the fifteen ref-a rows are fixed differently, and a
     # reader who gets only the generic paragraph goes looking for a diff against <ref-a> that does
     # not exist.
     rm -rf "$WORK_DIR/pinperturbed"
