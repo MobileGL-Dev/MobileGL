@@ -595,6 +595,13 @@ namespace MobileGL {
             virtual Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);
             virtual Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
             virtual Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
+            // The host owns the screen: this side never gets a window of the client's to draw
+            // into, so the surface it draws into is a frame the host allocated and offered over
+            // the host frame bridge.  Each swap tells the host the frame is done and takes the
+            // next; presentation is the host's, not a swapchain's.
+            virtual Bool CreateEGLHostFrameSurface(EGLSurface surface, Uint32 width, Uint32 height);
+            virtual Bool InitHostFrameSurface(EGLint width, EGLint height);
+            virtual Bool PresentHostFrame();
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
             // Forwards the app-requested eglSwapInterval to the backend's native
@@ -616,7 +623,11 @@ namespace MobileGL {
             enum class SurfaceKind {
                 None,
                 Window,
-                Pbuffer
+                Pbuffer,
+                // A surface whose drawing target is a frame the display host owns.  There is no
+                // swapchain behind it: the host puts the frame on the glass when this side says
+                // it is drawn, which is why presenting one is its own call and not a Present.
+                HostFrame
             };
 
             struct EGLCurrentState {

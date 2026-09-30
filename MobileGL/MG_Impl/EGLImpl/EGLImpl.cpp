@@ -137,8 +137,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // the window is the SERVER's: a headless client passes none, so NULL is not
         // EGL_BAD_NATIVE_WINDOW here. Whatever the client passed never reaches the wire - the
         // remote backend sends WindowKind::ServerOwned with token 0 (BackendObject_Remote).
-        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
-        if (IsNullNativeHandle(window) && !serverOwnedWindow) {
+        // Either on-screen shape leaves this side without a window of its own: =server asks the
+        // server for its own window, =host draws into the frames the display host offers.
+        const Bool windowlessOnScreen =
+            MG_Config::ServerOwnedWindowSurfaces() || MG_Config::HostFrameWindowSurfaces();
+        if (IsNullNativeHandle(window) && !windowlessOnScreen) {
 #else
         if (IsNullNativeHandle(window)) {
 #endif
@@ -157,15 +160,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // alike; the same game in a landscape window was right). The native window it handed us
         // knows the size the game believes it has: ask for THAT, and the server fixes its window
         // buffer to it and aspect-fits the view (MobileGLDisplayActivity), letterboxed.
-        if (serverOwnedWindow && requestedWidth == 0 && requestedHeight == 0 && !IsNullNativeHandle(window)) {
+        if (windowlessOnScreen && requestedWidth == 0 && requestedHeight == 0 && !IsNullNativeHandle(window)) {
             auto* native = reinterpret_cast<ANativeWindow*>(ToVoidHandle(window));
             const int32_t nativeWidth = ANativeWindow_getWidth(native);
             const int32_t nativeHeight = ANativeWindow_getHeight(native);
             if (nativeWidth > 0 && nativeHeight > 0) {
                 requestedWidth = static_cast<Uint32>(nativeWidth);
                 requestedHeight = static_cast<Uint32>(nativeHeight);
-                MGLOG_I("eglCreateWindowSurface: no EGL_WIDTH/EGL_HEIGHT; the server-owned window is asked for the "
-                        "native window's %dx%d", nativeWidth, nativeHeight);
+                MGLOG_I("eglCreateWindowSurface: no EGL_WIDTH/EGL_HEIGHT; the on-screen surface is asked for "
+                        "the native window's %dx%d", nativeWidth, nativeHeight);
             }
         }
 #endif
@@ -177,11 +180,20 @@ namespace MobileGL::MG_Impl::EGLImpl {
         };
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        EGLSurface surface = serverOwnedWindow
-                                 ? state->CreateServerOwnedWindowSurface(
-                                       dpy, config, windowHandle.Handle, static_cast<EGLint>(windowHandle.Width),
-                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/false)
-                                 : state->CreateWindowSurface(dpy, config, window, attrib_list);
+        EGLSurface surface = EGL_NO_SURFACE;
+        if (MG_Config::ServerOwnedWindowSurfaces()) {
+            // The server's own window: it makes one and draws into it.
+            surface = state->CreateServerOwnedWindowSurface(
+                dpy, config, windowHandle.Handle, static_cast<EGLint>(windowHandle.Width),
+                static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/false);
+        } else if (MG_Config::HostFrameWindowSurfaces()) {
+            // The display host's frames, as above: no window of the client's either way.
+            surface = state->CreateHostFrameWindowSurface(
+                dpy, config, windowHandle.Handle, static_cast<EGLint>(windowHandle.Width),
+                static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/false);
+        } else {
+            surface = state->CreateWindowSurface(dpy, config, window, attrib_list);
+        }
 #else
         EGLSurface surface = state->CreateWindowSurface(dpy, config, window, attrib_list);
 #endif
@@ -724,8 +736,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P12 (on-screen server window), D1: as CreateWindowSurface - with MOBILEGL_IPC_SURFACE=server
         // the window is the server's, and a headless client's NULL is accepted.
-        const Bool serverOwnedWindow = MG_Config::ServerOwnedWindowSurfaces();
-        if (native_window == nullptr && !serverOwnedWindow) {
+        // Either on-screen shape leaves this side without a window of its own: =server asks the
+        // server for its own window, =host draws into the frames the display host offers.
+        const Bool windowlessOnScreen =
+            MG_Config::ServerOwnedWindowSurfaces() || MG_Config::HostFrameWindowSurfaces();
+        if (native_window == nullptr && !windowlessOnScreen) {
 #else
         if (native_window == nullptr) {
 #endif
@@ -749,11 +764,21 @@ namespace MobileGL::MG_Impl::EGLImpl {
         };
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        EGLSurface surface = serverOwnedWindow
-                                 ? state->CreateServerOwnedWindowSurface(
-                                       dpy, config, native_window, static_cast<EGLint>(windowHandle.Width),
-                                       static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/true)
-                                 : state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+        EGLSurface surface = EGL_NO_SURFACE;
+        if (MG_Config::ServerOwnedWindowSurfaces()) {
+            // The server's own window: it makes one and draws into it.
+            surface = state->CreateServerOwnedWindowSurface(
+                dpy, config, native_window, static_cast<EGLint>(windowHandle.Width),
+                static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/true);
+        } else if (MG_Config::HostFrameWindowSurfaces()) {
+            // The display host's frames: it allocates them, the server draws into them,
+            // and the host puts each one on the glass when the server says it is drawn.
+            surface = state->CreateHostFrameWindowSurface(
+                dpy, config, native_window, static_cast<EGLint>(windowHandle.Width),
+                static_cast<EGLint>(windowHandle.Height), /*platformWindow=*/true);
+        } else {
+            surface = state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
+        }
 #else
         EGLSurface surface = state->CreatePlatformWindowSurface(dpy, config, native_window, attrib_list);
 #endif

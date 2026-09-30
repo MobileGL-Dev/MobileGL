@@ -87,6 +87,14 @@ namespace MobileGL::MG_Remote::Server {
     // substitutes its own window there; no pointer crosses the wire (Rule G/H).
     inline constexpr Int kServerOwnedWindowBackend = 0x10000;
 
+    // The OTHER on-screen shape, and its mirror image.  With MOBILEGL_IPC_SURFACE=server the
+    // client has no window and the SERVER's own goes into the backend call; with =host the
+    // client still has no window, but the frames are the display host's - it allocates them,
+    // offers each one over the host frame bridge, and puts them on the glass itself.  Same
+    // kind of frame-local tag as the one above, and for the same reason: it names no
+    // WindowBackend of MG_Backend's enum, which is in the pull build (gate G1).
+    inline constexpr Int kHostFrameWindowBackend = 0x10001;
+
     // P12. Why the server declined a surface op, carried back in the reply half (`refusal`). The
     // values ARE the wire's SurfaceRefusal (protocol.fbs); SurfaceOpCodec pins the agreement with
     // static_asserts, the way it pins SurfaceControlOp against SurfaceOpKind. None of them latches

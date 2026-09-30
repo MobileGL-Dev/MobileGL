@@ -499,6 +499,7 @@ namespace MobileGL::MG_Config {
     enum class IpcSurface : Uint8 {
         Offscreen = 0, // a window surface is the client's own window, as before (the default)
         Server = 1,    // a window surface is the SERVER's window: WindowKind::ServerOwned
+        Host = 2,      // a window surface draws into frames the DISPLAY HOST owns; the host presents
     };
     // IpcTable::AdoptTier when MOBILEGL_IPC_ADOPT_TIER is unset (or unparseable): T0 by default,
     // with QUIET fallbacks. Not a tier a user can type - the knob admits 0..2.
@@ -728,6 +729,15 @@ namespace MobileGL::MG_Config {
     // surface is the server's when the knob says so AND there is a remote server to own it.
     inline Bool ServerOwnedWindowSurfaces() {
         return Transport == TransportMode::Spawn && Ipc.Surface == IpcSurface::Server;
+    }
+
+    // P12: the other on-screen shape, and the mirror image of the one above.  The display host
+    // (the Android side that owns the screen) allocates the frames, offers each one over the
+    // host frame bridge, and puts it on the glass when this side says it is drawn - so a
+    // client that asks for this has no window of its own either, and the server takes the
+    // frames rather than making a window.
+    inline Bool HostFrameWindowSurfaces() {
+        return Transport == TransportMode::Spawn && Ipc.Surface == IpcSurface::Host;
     }
 #else
     // The whole point: in a build without MG_Remote this folds at compile time, so

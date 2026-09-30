@@ -29,7 +29,11 @@ namespace MobileGL::MG_Backend {
     // makes a mismatched pair fail loudly instead of being read as plausible numbers.
     inline constexpr Uint32 kHostFrameMagic = 0x4D474C41u;  // the host spells it "ALGM" in memory
     inline constexpr Uint32 kHostFrameVersion = 1u;
-    inline constexpr const char* kHostFrameSocket = "/data/local/tmp/mobilegl_bridge.sock";
+    // AN ABSTRACT NAME, not a path: the two ends are separate apps, and neither may create a
+    // socket file in /data/local/tmp (its directory grants others traverse only).  An abstract
+    // name lives in the kernel namespace instead of the filesystem, so there is no file
+    // permission to get wrong - the same reason this project names its own endpoints @mgl-*.
+    inline constexpr const char* kHostFrameSocket = "@mobilegl-host-frame";
 
     struct HostFrameOffer {
         Uint32 Magic;

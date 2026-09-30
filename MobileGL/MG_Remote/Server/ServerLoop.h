@@ -459,6 +459,9 @@ namespace MobileGL::MG_Remote::Server {
 
         // P12. The ServerOwned arm of the CreateWindowSurface dispatch (D3, D4).
         MobileGLResult ApplyServerOwnedWindowSurface(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
+        MobileGLResult ApplyHostFrameWindowSurface(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
+        Bool IsHostFrameSurface(EGLSurface surface) const;
+        void ForgetHostFrameSurface(EGLSurface surface);
         // P12 (D6), apply thread: the lost window's backend surface goes, the lease ends, and the
         // session latches ServerWindowLost. Runs from PumpControlRequest when Detach asked.
         void ReleaseLostServerWindow();
@@ -471,6 +474,10 @@ namespace MobileGL::MG_Remote::Server {
         void ForgetServerOwnedSurface(EGLSurface surface);
         // Apply thread only: this session's surfaces created on the server's window; reset by Start().
         std::vector<EGLSurface> m_serverOwnedSurfaces;
+        // The surfaces whose drawing target is a frame the display host owns.  Kept apart from
+        // the server-owned list because the two are different paths with different owners,
+        // and a resize or a release has to reach the right one.
+        std::vector<EGLSurface> m_hostFrameSurfaces;
         // ServerDisplay's lost hook: called under the display's lock from Detach's thread. Sets the
         // request and rings the apply thread's bell; never blocks.
         static void ServerWindowLostThunk(void* self);
@@ -659,6 +666,10 @@ namespace MobileGL::MG_Remote::Server {
         Uint32 height = 0;
     };
     ServerOwnedWindowReply ServerCreateServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
+    // The host-framed on-screen shape (MOBILEGL_IPC_SURFACE=host): the client names no window
+    // either, but the frames come from the display host over the host frame bridge, and the
+    // host presents them.  The reply carries the size the surface was made at.
+    ServerOwnedWindowReply ServerCreateHostFrameWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
     // P12 review fix: ResizeWindowSurface for a surface created on the server's window. The server
     // resizes its WINDOW (a geometry request) and replies with the window's real extent.
     ServerOwnedWindowReply ServerResizeServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);

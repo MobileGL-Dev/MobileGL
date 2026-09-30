@@ -91,6 +91,9 @@ namespace MobileGL::MG_Remote::Client {
         // CreateEGLWindowSurface - ONE ServerOwned frame, no SetWindowHandle, the server's real
         // geometry adopted before it returns, and every refusal named in this process's log.
         Bool CreateServerOwnedWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
+        // MOBILEGL_IPC_SURFACE=host: the frames are the display host's, and the server takes
+        // them from the host frame bridge.  Nothing of the client's crosses the wire here either.
+        Bool CreateHostFrameWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
 
         // The generation of the snapshot m_formatCapabilities was filled from. Exposed only
         // through the log line on a refresh: a cache that silently stopped tracking the mirror

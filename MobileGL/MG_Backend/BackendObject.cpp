@@ -209,6 +209,28 @@ namespace MobileGL::MG_Backend {
         return true;
     }
 
+    // The frame itself is the backend's business (InitHostFrameSurface); what happens here is
+    // the registration every surface kind shares, so the swap path and the state mirrors see
+    // a host-framed surface exactly like any other.
+    Bool BackendObject::CreateEGLHostFrameSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_eglDisplayInitialized) {
+            MGLOG_E("CreateEGLHostFrameSurface failed: EGL display is not initialized");
+            return false;
+        }
+        if (surface == EGL_NO_SURFACE) {
+            MGLOG_E("CreateEGLHostFrameSurface failed: invalid EGLSurface");
+            return false;
+        }
+        auto& state = m_eglSurfaces[surface];
+        state = EGLSurfaceState{
+            .Kind = SurfaceKind::HostFrame,
+            .Width = static_cast<EGLint>(std::max<Uint32>(width, 1)),
+            .Height = static_cast<EGLint>(std::max<Uint32>(height, 1)),
+        };
+        return ActivateEGLSurface(surface);
+    }
+
     Bool BackendObject::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         return RegisterEGLPbufferSurface(surface, width, height) && ActivateEGLSurface(surface);
@@ -288,6 +310,11 @@ namespace MobileGL::MG_Backend {
         } else if (surfaceState->Kind == SurfaceKind::Pbuffer) {
             if (!InitPbufferSurface(surfaceState->Width, surfaceState->Height)) {
                 MGLOG_E("ActivateEGLSurface failed: backend InitPbufferSurface failed");
+                return false;
+            }
+        } else if (surfaceState->Kind == SurfaceKind::HostFrame) {
+            if (!InitHostFrameSurface(surfaceState->Width, surfaceState->Height)) {
+                MGLOG_E("ActivateEGLSurface failed: backend InitHostFrameSurface failed");
                 return false;
             }
         } else {
@@ -387,6 +414,12 @@ namespace MobileGL::MG_Backend {
             return false;
         }
 
+        // A host-framed surface has no swapchain: presenting it means telling the host the frame
+        // is drawn, because the host is what puts it on the glass.
+        if (m_eglSurfaceKind == SurfaceKind::HostFrame) {
+            return PresentHostFrame();
+        }
+
         const auto& backendFunctions = GetBackendFunctions();
         if (!backendFunctions.Present) {
             MGLOG_E("SwapEGLBuffers failed: backend Present function is null");
@@ -402,6 +435,21 @@ namespace MobileGL::MG_Backend {
         if (backendFunctions.SetSwapInterval) {
             backendFunctions.SetSwapInterval(interval);
         }
+    }
+
+    // A backend that has no host-framed surfaces says so by name: the server may ask for one
+    // (MOBILEGL_IPC_SURFACE=host) against a build that cannot serve it, and that has to be a
+    // refusal with a reason rather than a surface that draws nowhere.
+    Bool BackendObject::InitHostFrameSurface(EGLint width, EGLint height) {
+        (void)width;
+        (void)height;
+        MGLOG_E("InitHostFrameSurface: this backend has no host-framed surfaces");
+        return false;
+    }
+
+    Bool BackendObject::PresentHostFrame() {
+        MGLOG_E("PresentHostFrame: this backend has no host-framed surfaces");
+        return false;
     }
 
     Bool BackendObject::IsEGLSurfaceCurrent(EGLSurface surface) const {

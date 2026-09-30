@@ -63,13 +63,21 @@ namespace MobileGL::MG_Backend {
         sockaddr_un address{};
         address.sun_family = AF_UNIX;
         if (std::strlen(name) >= sizeof(address.sun_path)) {
-            why = std::format("the socket path is longer than the kernel takes: {}", name);
+            why = std::format("the socket name is longer than the kernel takes: {}", name);
             Close();
             return false;
         }
-        std::strncpy(address.sun_path, name, sizeof(address.sun_path) - 1);
-        // A leftover socket file from a server that died is not a reason to refuse the host.
-        ::unlink(name);
+        // "@name" is the abstract namespace: sun_path[0] is NUL and the name follows it.
+        // Nothing is created on disk, so nothing is left behind and no file permission stands
+        // between two apps that may not write each other's directories.
+        if (name[0] == '@') {
+            address.sun_path[0] = 0;
+            std::strncpy(address.sun_path + 1, name + 1, sizeof(address.sun_path) - 2);
+        } else {
+            std::strncpy(address.sun_path, name, sizeof(address.sun_path) - 1);
+            // A leftover socket file from a server that died is not a reason to refuse the host.
+            ::unlink(name);
+        }
         if (::bind(m_listen, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0) {
             why = std::format("bind({}): {}", name, std::strerror(errno));
             Close();

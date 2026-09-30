@@ -1091,6 +1091,18 @@ namespace MobileGL {
                 return surface;
             }
 
+            // MOBILEGL_IPC_SURFACE=host: the registration is the server-owned one verbatim, because
+            // what makes a window surface host-framed is not its EGL state but where its pixels go -
+            // and that is decided one layer down, by the backend the creation calls next.
+            EGLContext::EGLSurfaceHandle EGLContext::CreateHostFrameWindowSurface(EGLDisplayHandle display,
+                                                                              EGLConfigHandle config,
+                                                                              const void* nativeWindow,
+                                                                              EGLint width, EGLint height,
+                                                                              Bool platformWindow) {
+                return CreateServerOwnedWindowSurface(display, config, nativeWindow, width, height,
+                                                       platformWindow);
+            }
+
             Bool EGLContext::SetSurfaceExtent(EGLSurfaceHandle surface, EGLint width, EGLint height) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto surfaceIt = m_surfaces.find(surface);

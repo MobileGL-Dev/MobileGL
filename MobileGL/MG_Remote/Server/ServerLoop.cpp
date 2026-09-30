@@ -287,6 +287,7 @@ namespace MobileGL::MG_Remote::Server {
         m_surfaceMode = SessionSurfaceMode::None;
         m_holdsWindowLease = false;
         m_serverOwnedSurfaces.clear();
+        m_hostFrameSurfaces.clear();
         m_windowLostRequested.store(false, std::memory_order_release);
         m_serverWindowsLost.store(0, std::memory_order_release);
         m_testLogFloodLines = ApplyLogFloodLinesForTest();
@@ -1338,6 +1339,8 @@ namespace MobileGL::MG_Remote::Server {
             // P12 (D3): the SERVER's window, asked for by a headless client. Before the unpack,
             // which would refuse the frame-local tag as a WindowBackend out of range.
             if (frame.windowBackend == kServerOwnedWindowBackend) return ApplyServerOwnedWindowSurface(backend, frame);
+            // The mirror image: the frames are the display host's, and it presents them.
+            if (frame.windowBackend == kHostFrameWindowBackend) return ApplyHostFrameWindowSurface(backend, frame);
             MG_Backend::WindowHandle window;
             if (!UnpackWindowHandle(frame, &window)) {
                 frame.ok = false;
@@ -1445,6 +1448,7 @@ namespace MobileGL::MG_Remote::Server {
             const EGLSurface surface = HandleFromToken<EGLSurface>(frame.surface);
             backend->ReleaseEGLSurface(surface);
             ForgetServerOwnedSurface(surface);
+            ForgetHostFrameSurface(surface);
             // N-3: a released surface the held tuple names may have taken the context with it
             // (BackendObject::ReleaseEGLSurface -> OnEGLSurfaceReleased -> DestroyEGLContext once
             // nothing holds it current). Forgetting when the base class only DEFERRED the destroy
@@ -1658,6 +1662,52 @@ namespace MobileGL::MG_Remote::Server {
         return MOBILEGL_OK;
     }
 
+    MobileGLResult ServerLoop::ApplyHostFrameWindowSurface(MG_Backend::BackendObject* backend,
+                                                          SurfaceControlFrame& frame) {
+        frame.ok = false;
+        frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::None);
+        const Uint32 wantWidth = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        const Uint32 wantHeight = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        // Both on-screen shapes are the same session mode: one rendering path per session, and
+        // this is the on-screen one whichever side owns the window.
+        if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/true)) {
+            frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
+            MGLOG_E("MG_Remote server: SurfaceModeMismatch - a HostFrame CreateWindowSurface (seq %llu, "
+                    "%ux%u) in a session whose surface mode is %s. Refused, the session is not latched",
+                    static_cast<unsigned long long>(frame.seq), wantWidth, wantHeight,
+                    SessionSurfaceModeName(m_surfaceMode));
+            return MOBILEGL_ERR_INVALID_ARGUMENT;
+        }
+        const EGLSurface surface = HandleFromToken<EGLSurface>(frame.surface);
+        // THE SUBSTITUTION, the other way round from ServerOwned: nothing of the client's and
+        // nothing of the server's goes into the backend call - the backend takes the frames from
+        // the display host, and every swap hands the next one back to it.
+        frame.ok = backend->CreateEGLHostFrameSurface(surface, wantWidth, wantHeight);
+        if (!frame.ok) {
+            MGLOG_E("MG_Remote server: the backend could not take the display host frames (seq %llu, %ux%u)",
+                    static_cast<unsigned long long>(frame.seq), wantWidth, wantHeight);
+            return MOBILEGL_OK;
+        }
+        ForgetCurrentTuple();
+        m_surfaceMode = SessionSurfaceMode::OnScreen;
+        if (!IsHostFrameSurface(surface)) m_hostFrameSurfaces.push_back(surface);
+        frame.width = static_cast<Int>(wantWidth);
+        frame.height = static_cast<Int>(wantHeight);
+        MGLOG_I("MG_Remote server: surface=window %ux%u owner=host (HostFrame seq %llu)", wantWidth,
+                wantHeight, static_cast<unsigned long long>(frame.seq));
+        return MOBILEGL_OK;
+    }
+
+    Bool ServerLoop::IsHostFrameSurface(EGLSurface surface) const {
+        return std::find(m_hostFrameSurfaces.begin(), m_hostFrameSurfaces.end(), surface) !=
+               m_hostFrameSurfaces.end();
+    }
+
+    void ServerLoop::ForgetHostFrameSurface(EGLSurface surface) {
+        m_hostFrameSurfaces.erase(std::remove(m_hostFrameSurfaces.begin(), m_hostFrameSurfaces.end(), surface),
+                                 m_hostFrameSurfaces.end());
+    }
+
     Bool ServerLoop::IsServerOwnedSurface(EGLSurface surface) const {
         return std::find(m_serverOwnedSurfaces.begin(), m_serverOwnedSurfaces.end(), surface) !=
                m_serverOwnedSurfaces.end();
@@ -1770,6 +1820,25 @@ namespace MobileGL::MG_Remote::Server {
         return rc == MOBILEGL_OK && frame.ok;
     }
 
+    ServerOwnedWindowReply ServerCreateHostFrameWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        // One frame, and no SetWindowHandle in front of it: the client names no window, and this
+        // side does not make one - the frames are the display host's, taken from the bridge.
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::CreateWindowSurface;
+        frame.surface = TokenFromHandle(surface);
+        frame.windowBackend = kHostFrameWindowBackend;
+        frame.nativeToken = 0;
+        frame.width = static_cast<Int>(width);
+        frame.height = static_cast<Int>(height);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        ServerOwnedWindowReply reply;
+        reply.transport = rc;
+        reply.ok = rc == MOBILEGL_OK && frame.ok;
+        reply.refusal = static_cast<SurfaceRefusalCode>(frame.refusal);
+        reply.width = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
+        reply.height = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
+        return reply;
+    }
     ServerOwnedWindowReply ServerCreateServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         // P12 (D1/D2): ONE frame, and no SetWindowHandle in front of it - the window is the
         // server's, so there is nothing of the client's to name. The frame-local tag is what the

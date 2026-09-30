@@ -216,6 +216,10 @@ namespace MobileGL::MG_Remote::Client {
         WaitForApplyBeforeEglForwarder("CreateEGLWindowSurface");
         // P12 (D1): unless the window is the SERVER's - then there is no handle of ours to tell.
         if (MG_Config::ServerOwnedWindowSurfaces()) return CreateServerOwnedWindowSurface(surface, handle);
+        // The other on-screen shape: the frames belong to the display host, and the server takes
+        // them from the bridge.  As for the server-owned shape, no window of the client's crosses
+        // the wire - only the size it asked for.
+        if (MG_Config::HostFrameWindowSurfaces()) return CreateHostFrameWindowSurface(surface, handle);
         Server::ServerSetWindowHandle(handle);
         if (!Server::ServerCreateEGLWindowSurface(surface, handle)) return false;
         // The server's surface init published the default framebuffer's shape as a
@@ -295,6 +299,10 @@ namespace MobileGL::MG_Remote::Client {
         // dereferenced - the client's InitWindowSurface is a no-op - and never crosses the wire
         // (the ServerOwned frame carries token 0).
         char g_serverOwnedWindowPlaceholder = 0;
+        // The host-framed shape names no window of the client's either; the base class still wants
+        // a handle to register the surface with, and this is the same stand-in the server-owned
+        // shape uses.
+        char g_hostFrameWindowPlaceholder = 0;
     } // namespace
 
     Bool BackendObject_Remote::CreateServerOwnedWindowSurface(EGLSurface surface,
@@ -355,6 +363,46 @@ namespace MobileGL::MG_Remote::Client {
         MG_Backend::WindowHandle local = handle;
         if (local.Backend == MG_Backend::WindowBackend::Unknown) local.Backend = MG_Backend::WindowBackend::Android;
         if (local.Handle == nullptr) local.Handle = &g_serverOwnedWindowPlaceholder;
+        local.Width = reply.width;
+        local.Height = reply.height;
+        return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, local);
+    }
+
+    Bool BackendObject_Remote::CreateHostFrameWindowSurface(EGLSurface surface,
+                                                            const MG_Backend::WindowHandle& handle) {
+        // The size crosses the wire and nothing else of the client's does: the server takes frames
+        // from the display host at that size and answers with the extent the surface has.
+        const Server::ServerOwnedWindowReply reply =
+            Server::ServerCreateHostFrameWindowSurface(surface, handle.Width, handle.Height);
+        if (!reply.ok) {
+            // FAILS BY NAME ON THIS SIDE TOO, as the server-owned shape does: the server logged its
+            // reason, and the refusal code is what lets this line say the same thing.
+            switch (reply.refusal) {
+            case Server::SurfaceRefusalCode::SurfaceModeMismatch:
+                MGLOG_E("MG_Remote client: Refuse HostFrame (SurfaceModeMismatch) - MOBILEGL_IPC_SURFACE=host "
+                        "asked for this %ux%u window surface in a session that already chose a pbuffer: only "
+                        "one rendering path is active per session. eglCreateWindowSurface fails with "
+                        "EGL_BAD_NATIVE_WINDOW",
+                        handle.Width, handle.Height);
+                break;
+            case Server::SurfaceRefusalCode::NoServerWindow:
+                MGLOG_E("MG_Remote client: Refuse HostFrame (NoServerWindow) - the server could not take a frame "
+                        "from the display host for this %ux%u surface; its log names what the host or the "
+                        "bridge said (its own answer was %ux%u)",
+                        handle.Width, handle.Height, reply.width, reply.height);
+                break;
+            default:
+                MGLOG_E("MG_Remote client: Refuse HostFrame (code %u) for this %ux%u window surface",
+                        static_cast<Uint>(reply.refusal), handle.Width, handle.Height);
+                break;
+            }
+            return false;
+        }
+        // From here the frames are the server's and the host's business; this side only registers the
+        // surface, exactly as it does for the server-owned shape.
+        MG_Backend::WindowHandle local = handle;
+        if (local.Backend == MG_Backend::WindowBackend::Unknown) local.Backend = MG_Backend::WindowBackend::Android;
+        if (local.Handle == nullptr) local.Handle = &g_hostFrameWindowPlaceholder;
         local.Width = reply.width;
         local.Height = reply.height;
         return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, local);

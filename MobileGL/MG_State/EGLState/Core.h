@@ -97,6 +97,13 @@ namespace MobileGL {
                 EGLSurfaceHandle CreateServerOwnedWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
                                                                 const void* nativeWindow, EGLint width,
                                                                 EGLint height, Bool platformWindow);
+                // MOBILEGL_IPC_SURFACE=host: the same registration under the other on-screen name.
+                // The EGL state does not care which side owns the frames - that is the backend's
+                // business - but a trace has to be able to tell the two runs apart, and the two
+                // paths part company in the backend call that follows.
+                EGLSurfaceHandle CreateHostFrameWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
+                                                              const void* nativeWindow, EGLint width,
+                                                              EGLint height, Bool platformWindow);
                 // P12: the server's REAL extent of a surface - a server-owned window's geometry, from
                 // the CreateWindowSurface reply and from every surface-changed event after it - so
                 // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) answers what the server renders at. Unlike

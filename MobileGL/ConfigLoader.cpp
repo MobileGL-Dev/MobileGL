@@ -494,8 +494,8 @@ namespace MobileGL::MG_ConfigLoader {
             }
         }
 
-        // P12 (on-screen server window): MOBILEGL_IPC_SURFACE = offscreen | server (Config.h has
-        // the semantics). An unknown value is named and read as the default, like every knob here.
+        // P12 (on-screen): MOBILEGL_IPC_SURFACE = offscreen | server | host (Config.h has the
+        // semantics). An unknown value is named and read as the default, like every knob here.
         {
             String surface;
             QueryEnvVariable("MOBILEGL_IPC_SURFACE", surface, "offscreen");
@@ -505,9 +505,11 @@ namespace MobileGL::MG_ConfigLoader {
                 ipc.Surface = MG_Config::IpcSurface::Offscreen;
             } else if (surface == "server") {
                 ipc.Surface = MG_Config::IpcSurface::Server;
+            } else if (surface == "host") {
+                ipc.Surface = MG_Config::IpcSurface::Host;
             } else {
                 MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_IPC_SURFACE='%s'; expected "
-                        "offscreen|server, using offscreen",
+                        "offscreen|server|host, using offscreen",
                         surface.c_str());
                 ipc.Surface = MG_Config::IpcSurface::Offscreen;
             }
@@ -515,12 +517,14 @@ namespace MobileGL::MG_ConfigLoader {
             // parses this before RunSession sets its own transport, and has no client half anyway.)
             const char* role = std::getenv("MOBILEGL_IPC_ROLE");
             const Bool serverProcess = role != nullptr && std::strcmp(role, "server") == 0;
-            if (ipc.Surface == MG_Config::IpcSurface::Server && !serverProcess &&
+            if (ipc.Surface != MG_Config::IpcSurface::Offscreen && !serverProcess &&
                 MG_Config::Transport != MG_Config::TransportMode::Spawn) {
                 // Said, not silently honoured: there is no remote server here to own a window.
-                MGLOG_W("Config: MOBILEGL_IPC_SURFACE=server is IGNORED - it asks a remote server "
-                        "(MOBILEGL_TRANSPORT=spawn, a fork or tcp:// control) to own the window surface, "
-                        "and this run has none. Window surfaces stay the client's own");
+                MGLOG_W("Config: MOBILEGL_IPC_SURFACE=%s is IGNORED - it asks for an on-screen "
+                        "surface (the server's own window, or the frames the display host owns) and "
+                        "this run has no remote server to provide one: MOBILEGL_TRANSPORT is not "
+                        "spawn. Window surfaces stay the client's own",
+                        ipc.Surface == MG_Config::IpcSurface::Server ? "server" : "host");
             }
         }
 
