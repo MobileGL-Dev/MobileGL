@@ -172,10 +172,10 @@ set(MGL_P8A_KNOB_ENV_NoViewportArrayEmulation "MOBILEGL_ESPRYT_FORCE_VIEWPORT_AR
 set(MGL_P8A_KNOB_FILTER_WidenedPacked16 "CopyImagePacked16Scenario.*")
 set(MGL_P8A_KNOB_ENV_WidenedPacked16 "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1")
 # ForcedDs keeps the spelling the existing Split/Spawn DepthStencilReadbackMatrix block uses. The
-# default-framebuffer case is left out on every arm: red on spawn and tcp with or without the
-# knob (pending-fix row in the exemption table).
+# default-framebuffer case was left out here while it was red on spawn and tcp; P8-SE fixed it
+# (notes/p8/SE.md) and it runs under the knob on every arm like the rest.
 set(MGL_P8A_KNOB_FILTER_ForcedDs
-    "DepthStencilReadbackScenario.*:DepthStencilReadbackAttachmentShapeScenario.*-DepthStencilReadbackAttachmentShapeScenario.DefaultFramebufferDepthStencilFormatIsBlitCompatible")
+    "DepthStencilReadbackScenario.*:DepthStencilReadbackAttachmentShapeScenario.*")
 set(MGL_P8A_KNOB_ENV_ForcedDs "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1")
 # The Matrix scenario's Tcp copy moves HERE from the ForcedDs block (same names): that block
 # put the knob in the client's environment only, so its Tcp arm ran the native readback path.
