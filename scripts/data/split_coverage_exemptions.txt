@@ -44,6 +44,7 @@ DirectGLES:F1WireScenario.SubWordUniformBufferRangePadsMissingBytes single-backe
 DirectGLES:F1WireScenario.UnalignedAtomicCounterRangeDeclinesAndTheSessionLives single-backend Magma descriptor-alignment decline
 DirectGLES:F1WireScenario.GenerateMipmapWithoutNativeBlitPixels single-backend Magma shader-mip arm (MGITEST_MAGMA_FORCE_SHADER_MIPMAP, Magma Fm lane)
 DirectGLES:F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels single-backend Magma depth shader-mip arm (MGITEST_MAGMA_FORCE_SHADER_MIPMAP, Magma Fm lane)
+DirectGLES:F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession single-backend Magma wire-arm decline (mipmap-shader-format-or-shape, P8-F; its split arms are DirectVulkan.{Split,Spawn}.ShaderMipDecline.)
 
 # ---- no-records: EmitSeq does not move, so the armed split assertion is red by construction ----
 AdvertisedLimitsScenario.ComputeLocalSizeComesFromTheLinkedProgram no-records limits query answered from the client's CapsMirror
