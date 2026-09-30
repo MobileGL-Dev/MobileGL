@@ -11625,51 +11625,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
-    // P5c (hd), P5e (tx2): the verification half, with the RECORD passed in instead of re-read
-    // from the verb stash - the caller has it and the two must not disagree about which texture
-    // is being verified.
-    static void EnsureGenerateMipmapStorageDescribed(const MG_Pipe::MGPipeResourceRecord& record) {
+    // P8-B1: THE LEVELS A generate_mipmap RECORD GENERATES, end-exclusive. GL generates levels
+    // BASE_LEVEL+1 .. q, q = min(p, MAX_LEVEL) with p the last level the base image's own chain
+    // reaches, and an immutable texture's storage bounds the chain too (GL 4.6 core 8.14.4). The
+    // client already computed that window (ComputeMipmapGenerationRange) and defined its levels
+    // before emitting the verb, so the record's plan is the window and the descriptor is what
+    // holds it: Base = VerbMipBaseLevel, End = min(VerbMipLevelCount, Desc.Levels, MaxLevel + 1,
+    // Base + the base extent's chain) - the same clip Magma's GenerateWireMipmap makes.
+    //
+    // What stood here instead demanded the full chain from LEVEL 0 and died with
+    // Fatal{UnmigratedEmulation, "generate-mipmap-storage"} whenever the descriptor held less: a
+    // MAX_LEVEL below the chain, or glTexStorage2D with fewer levels, both legal GL.
+    struct RecordMipWindow {
+        Uint32 Base = 0;
+        Uint32 End = 0; // end-exclusive; End <= Base + 1 generates nothing
+    };
+
+    static RecordMipWindow GenerateMipmapWindowByRecord(const MG_Pipe::MGPipeResourceRecord& record) {
+        const auto& applier = MG_Pipe::MGPipeApplier();
         const auto& desc = record.Desc;
-        if (desc.Width == 0 || desc.Levels == 0) {
-            MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
+        RecordMipWindow window{applier.VerbMipBaseLevel, applier.VerbMipBaseLevel};
+        if (desc.Width == 0 || desc.Levels == 0 || window.Base >= desc.Levels) return window;
+        Uint32 end = std::min<Uint32>(applier.VerbMipLevelCount, desc.Levels);
+        if (record.ParamsSerial) end = std::min<Uint32>(end, static_cast<Uint32>(record.Params.MaxLevel) + 1u);
+        const IntVec3 baseExtent = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+                                                                            desc.Depth, window.Base);
+        const Int shrinking = MG_Remote::Server::StagedTextureShrinkingAxisCount(desc.Target);
+        Int largest = 1;
+        for (Int axis = 0; axis < shrinking && axis < 3; ++axis) largest = std::max<Int>(largest, baseExtent[axis]);
+        Uint32 chain = 1;
+        while (largest > 1) {
+            largest /= 2;
+            ++chain;
         }
-        Uint maxDimension = desc.Width;
-        const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(desc.Target);
-        if (target != MG_Pipe::MGPipeResourceTarget::Tex1D &&
-            target != MG_Pipe::MGPipeResourceTarget::Tex1DArray) {
-            maxDimension = std::max(maxDimension, desc.Height);
-        }
-        if (target == MG_Pipe::MGPipeResourceTarget::Tex3D) {
-            maxDimension = std::max(maxDimension, desc.Depth);
-        }
-        Uint requiredLevels = 1;
-        while (maxDimension > 1) {
-            maxDimension /= 2;
-            ++requiredLevels;
-        }
-        if (desc.Levels < requiredLevels) {
-            MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
-        }
+        window.End = std::max(window.Base, std::min(end, window.Base + chain));
+        return window;
     }
 #endif
 
     static Bool EnsureGenerateMipmapStorageAllocated(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            // The frontend has already defined the generated chain before emitting this verb.
-            // Its resource_respecify carries that shape, so the server only verifies the
-            // descriptor; it must not allocate or dirty the client's level shadows again.
-            // P5c (hd): identity is the handle the generate_mipmap record carried
-            // (MGPMipPlan::Res, the verb stash) - the client allocator is never probed (T2).
-            const auto handle = MG_Pipe::MGPipeApplier().VerbMipRes;
-            const auto* record = PipeTextureRecordForHandle(handle);
-            if (record == nullptr) {
-                MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
-            }
-            EnsureGenerateMipmapStorageDescribed(*record);
-            return false; // No server-side shadow allocation was necessary.
-        }
-#endif
+        // P8-B1: the transport arm that stood here (a descriptor check under the same
+        // `generate-mipmap-storage` name) was unreachable - GenerateMipmap returns through
+        // GenerateMipmapByRecord before this call on every split arm - and the record arm's
+        // window above replaces the check it made.
         auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
         MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
         Bool allocatedStorage = false;
@@ -12403,11 +12401,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // re-derived its handle with a scoped `HandleOf` probe (the two sites §4.4 listed as
     // barriered), and the handle is now simply passed in - the extent derivation, the per-level
     // blits and the format question are §1's descriptor reads exactly as P5c wrote them.
+    //
+    // P8-B1: both chains run over the record's WINDOW (GenerateMipmapWindowByRecord), not from
+    // level 1 to the end of the descriptor: a BASE_LEVEL above 0 is the source and a level past
+    // MAX_LEVEL is left as it is, which is what the monolith twins below still get wrong.
     static void GenerateDepthTexture2DMipmapByRecord(const MG_Pipe::MGPipeResourceRecord& record,
-                                                     const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
+                                                     const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
+                                                     const RecordMipWindow& window) {
         const auto& desc = record.Desc;
         const GLuint textureId = backendTexture->GetBackendTextureId();
-        for (Uint32 level = 1; level < desc.Levels; ++level) {
+        for (Uint32 level = window.Base + 1; level < window.End; ++level) {
             const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level - 1);
             const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
@@ -12420,12 +12423,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static void GenerateColorTexture2DMipmapByRecord(const MG_Pipe::MGPipeResourceRecord& record,
-                                                     const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
+                                                     const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
+                                                     const RecordMipWindow& window) {
         const auto& desc = record.Desc;
         const GLenum filter =
             IsIntegerColorFormat(static_cast<TextureInternalFormat>(desc.InternalFormat)) ? GL_NEAREST : GL_LINEAR;
         const GLuint textureId = backendTexture->GetBackendTextureId();
-        for (Uint32 level = 1; level < desc.Levels; ++level) {
+        for (Uint32 level = window.Base + 1; level < window.End; ++level) {
             const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level - 1);
             const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
@@ -12879,65 +12883,238 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // P8-B2: RGB16F / RGB32F MIP GENERATION ON THE SERVER, FROM THE SERVER'S OWN LEVEL.
+    //
+    // ES generates a chain only for a colour-renderable, filterable format, and whether the
+    // driver's storage for these two is one depends on the driver: Espryt stores them natively
+    // where the driver renders the three-channel form and widens them to RGBA16F / RGBA32F where
+    // it does not (TextureImpl::BackendTextureFormatAddsAlpha), and a widened RGBA32F still needs
+    // OES_texture_float_linear to be filterable. So GenerateMipmapByRecord asks the driver first
+    // and comes here only when it refuses - or when MGITEST_ESPRYT_FORCE_CPU_MIPMAP says to, which
+    // is the only way a host whose driver never refuses reaches this arm.
+    //
+    // THE SOURCE IS THE SERVER'S LEVEL, NEVER THE CLIENT'S. The base level is read back from the
+    // driver (ReadTextureLevelTight), because a render target's texels exist only there - the
+    // monolith arm (GenerateThreeChannelFloatMipmapOnCpu) filters the frontend's level shadow
+    // instead and reads a stale base after a draw. Only when the driver cannot read the level back
+    // (storage it cannot attach) does the staged store answer, and a store that does not cover the
+    // level declines by name rather than inventing texels.
+    static Bool ForcedServerCpuMipmap() {
+        // The R-16 control. Read by the SERVER, like the MGITEST_MAGMA_FORCE_* knobs.
+        static const Bool s_forced = std::getenv("MGITEST_ESPRYT_FORCE_CPU_MIPMAP") != nullptr;
+        return s_forced;
+    }
+
+    // The base level as tight RGB floats: the driver's texels first, the staged store second.
+    static Bool ReadThreeChannelFloatLevelOnServer(MG_Pipe::MGPipeHandle mipRes,
+                                                   const MG_Pipe::MGPipeResourceRecord& record,
+                                                   const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
+                                                   TextureTarget textureTarget, TextureUploadTarget face, Uint32 level,
+                                                   const IntVec3& extent, Vector<Float>& rgb) {
+        const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+        const SizeT texels = static_cast<SizeT>(extent.x()) * static_cast<SizeT>(extent.y());
+        Vector<Uint8> bytes;
+        if (ReadTextureLevelTight(backendTexture->GetBackendTextureId(), textureTarget, face, format,
+                                  static_cast<GLint>(level), extent, backendTexture->RequiresImageBindableStorage(),
+                                  GL_RGB, GL_FLOAT, bytes) &&
+            bytes.size() == texels * 3 * sizeof(Float)) {
+            rgb.resize(texels * 3);
+            Memcpy(rgb.data(), bytes.data(), bytes.size());
+            return true;
+        }
+        // A view's staged bytes live under its storage owner's key, in the owner's levels; a view
+        // whose level the driver cannot read has no answer here.
+        if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
+        auto& store = MG_Remote::Server::ServerStagedTexture();
+        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(mipRes);
+        const auto faceCode = static_cast<Uint16>(face);
+        const auto levelCode = static_cast<Uint16>(level);
+        if (!store.CopiesIntoServerStorage() || !store.IsCovered(key, faceCode, levelCode)) return false;
+        const Bool half = format == TextureInternalFormat::RGB16F;
+        const SizeT componentBytes = half ? sizeof(Uint16) : sizeof(Float);
+        if (store.LevelByteSize(key, faceCode, levelCode) != texels * 3 * componentBytes) return false;
+        const Uint8* staged = store.RequireLevelBytes(key, faceCode, levelCode, "generate-mipmap-server-cpu");
+        rgb.resize(texels * 3);
+        for (SizeT i = 0; i < texels * 3; ++i) {
+            if (half) {
+                Uint16 bits = 0;
+                Memcpy(&bits, staged + i * componentBytes, sizeof(bits));
+                rgb[i] = MG_Util::DecodeHalfBitsToFloat(bits);
+            } else {
+                Memcpy(&rgb[i], staged + i * componentBytes, sizeof(Float));
+            }
+        }
+        MGLOG_W_ONCE("MGPipe: generate-mipmap-server-cpu: texture {%u, %u} level %u could not be read back from "
+                     "the driver; filtering the staged store's copy of it instead",
+                     mipRes.Slot, mipRes.Gen, level);
+        return true;
+    }
+
+    static void GenerateThreeChannelFloatMipmapOnServer(MG_Pipe::MGPipeHandle mipRes,
+                                                        const MG_Pipe::MGPipeResourceRecord& record,
+                                                        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture,
+                                                        const char* why) {
+        const auto& desc = record.Desc;
+        const auto format = static_cast<TextureInternalFormat>(desc.InternalFormat);
+        const auto textureTarget = TextureTargetForPipeResourceTarget(desc.Target);
+        const RecordMipWindow window = GenerateMipmapWindowByRecord(record);
+        if (window.End <= window.Base + 1) return;
+        Vector<TextureUploadTarget> faces;
+        if (textureTarget == TextureTarget::Texture2D) {
+            faces.push_back(TextureUploadTarget::Texture2D);
+        } else if (textureTarget == TextureTarget::TextureCubeMap) {
+            for (Int face = 0; face < 6; ++face)
+                faces.push_back(static_cast<TextureUploadTarget>(
+                    static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + face));
+        }
+        // The upload spelling the driver's storage takes: GL_FLOAT is legal for all four float
+        // internal formats (ES 3.2 table 8.2), and the channel count follows the storage.
+        GLenum esInternal = GL_NONE, esFormat = GL_NONE, esType = GL_NONE;
+        TextureImpl::GenerateTextureFormatInfo(format, &esInternal, &esFormat, &esType, textureTarget);
+        const Bool fourChannel = esInternal == GL_RGBA16F || esInternal == GL_RGBA32F;
+        if (faces.empty() || (!fourChannel && esInternal != GL_RGB16F && esInternal != GL_RGB32F)) {
+            MGLOG_E_ONCE("MGPipe: generate-mipmap-server-cpu declines texture {%u, %u}: target %s stored as %s has "
+                         "no server CPU arm (%s); levels %u..%u are left as they are",
+                         mipRes.Slot, mipRes.Gen, MG_Util::ConvertTextureTargetToString(textureTarget).c_str(),
+                         MG_Util::ConvertGLEnumToString(esInternal).c_str(), why, window.Base + 1, window.End - 1);
+            return;
+        }
+        MGLOG_I_ONCE("MGPipe: generate-mipmap-server-cpu: %s levels filtered on the server's CPU from its own "
+                     "level (%s)", MG_Util::ConvertTextureInternalFormatToString(format).c_str(), why);
+
+        const GLuint textureId = backendTexture->GetBackendTextureId();
+        const GLenum bindTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(textureTarget);
+        for (const TextureUploadTarget face : faces) {
+            IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+                                                                      desc.Depth, window.Base);
+            Vector<Float> level;
+            if (!ReadThreeChannelFloatLevelOnServer(mipRes, record, backendTexture, textureTarget, face, window.Base,
+                                                    extent, level)) {
+                MGLOG_E_ONCE("MGPipe: generate-mipmap-server-cpu declines texture {%u, %u}: base level %u is "
+                             "neither readable from the driver nor covered by the staged store; levels %u..%u are "
+                             "left as they are",
+                             mipRes.Slot, mipRes.Gen, window.Base, window.Base + 1, window.End - 1);
+                return;
+            }
+            for (Uint32 dst = window.Base + 1; dst < window.End; ++dst) {
+                const IntVec3 dstExtent =
+                    MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, dst);
+                // The monolith's box filter: the 2x2 source footprint, clamped where a dimension
+                // is already 1 (GL 4.6 core 8.14.4 leaves the filter to the implementation).
+                Vector<Float> next(static_cast<SizeT>(dstExtent.x()) * static_cast<SizeT>(dstExtent.y()) * 3);
+                const auto at = [&](Int x, Int y, Int c) {
+                    return level[(static_cast<SizeT>(y) * static_cast<SizeT>(extent.x()) + static_cast<SizeT>(x)) * 3 +
+                                 static_cast<SizeT>(c)];
+                };
+                for (Int y = 0; y < dstExtent.y(); ++y) {
+                    for (Int x = 0; x < dstExtent.x(); ++x) {
+                        const Int x0 = std::min(x * 2, extent.x() - 1), x1 = std::min(x * 2 + 1, extent.x() - 1);
+                        const Int y0 = std::min(y * 2, extent.y() - 1), y1 = std::min(y * 2 + 1, extent.y() - 1);
+                        for (Int c = 0; c < 3; ++c)
+                            next[(static_cast<SizeT>(y) * static_cast<SizeT>(dstExtent.x()) + static_cast<SizeT>(x)) *
+                                     3 + static_cast<SizeT>(c)] =
+                                0.25f * (at(x0, y0, c) + at(x1, y0, c) + at(x0, y1, c) + at(x1, y1, c));
+                    }
+                }
+                Vector<Float> upload;
+                if (fourChannel) {
+                    const SizeT count = next.size() / 3;
+                    upload.resize(count * 4);
+                    for (SizeT i = 0; i < count; ++i) {
+                        upload[i * 4] = next[i * 3];
+                        upload[i * 4 + 1] = next[i * 3 + 1];
+                        upload[i * 4 + 2] = next[i * 3 + 2];
+                        upload[i * 4 + 3] = 1.0f;
+                    }
+                }
+                // Tight float rows are a multiple of four bytes, which the resting UNPACK state
+                // (4/0/0/0, and the unpack-PBO binding at 0) parses as they are - CopyR32FTexture2D's
+                // discipline, including the re-bind that keeps the binding cache truthful.
+                ClearGLErrors();
+                BufferImpl::BindPixelUnpackBufferId(0);
+                TextureImpl::ActivateTextureUnit(TextureImpl::TempTextureUnit);
+                g_GLESFuncs.glBindTexture(bindTarget, textureId);
+                g_GLESFuncs.glTexSubImage2D(TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(face),
+                                            static_cast<GLint>(dst), 0, 0, static_cast<GLsizei>(dstExtent.x()),
+                                            static_cast<GLsizei>(dstExtent.y()), fourChannel ? GL_RGBA : GL_RGB,
+                                            GL_FLOAT, fourChannel ? upload.data() : next.data());
+                const GLenum err = g_GLESFuncs.glGetError();
+                auto* cachedBound = TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
+                                                                     [static_cast<SizeT>(textureTarget)];
+                g_GLESFuncs.glBindTexture(bindTarget, cachedBound ? cachedBound->GetBackendTextureId() : 0);
+                if (err != GL_NO_ERROR) {
+                    MGLOG_E_ONCE("MGPipe: generate-mipmap-server-cpu: uploading level %u of texture {%u, %u} "
+                                 "failed: %s", dst, mipRes.Slot, mipRes.Gen,
+                                 MG_Util::ConvertGLEnumToString(err).c_str());
+                    return;
+                }
+                level = Move(next);
+                extent = dstExtent;
+            }
+        }
+    }
+
     // P5e (tx2), CONTRACT-P5E §5.2: glGenerateMipmap's body once the texture came from
     // VerbMipRes. Same four arms as the frontend body, with every shape question answered from
     // the descriptor.
     //
-    // RULING 14, AND WHY THE ROW IS NOT FLIPPED HERE. The unit read this arm retires is what the
-    // wait existed for, but ONE frontend contact is left on the path and it is not tx2's to
-    // retire: the RGB16F/RGB32F CPU filter reaches into the client's level shadows
-    // (GenerateThreeChannelFloatMipmapOnCpu, kimi audit row 61) and P8/P9 own the pull. So the
-    // brief's escape applies - the arm is not complete, the row stays kWaitApplied and the flip
-    // is listed as trailing - and the record stays barriered, which is what keeps the CPU arm's
-    // refusal a refusal rather than a wrong picture.
+    // RULING 14's TRAILING FLIP. tx2 kept this verb's PipeCalls.def row at kWaitApplied because
+    // one frontend contact was left on the path: the RGB16F/RGB32F CPU filter reached into the
+    // client's level shadows. P8-B2 retired it (GenerateThreeChannelFloatMipmapOnServer reads the
+    // server's own level), so no arm here reads client memory any more; the WaitClass flip itself
+    // is a protocol change and is left to the integrator.
     static void GenerateMipmapByRecord(GLenum target, MG_Pipe::MGPipeHandle mipRes,
                                        const MG_Pipe::MGPipeResourceRecord& record,
                                        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
         const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const auto textureTarget = TextureTargetForPipeResourceTarget(record.Desc.Target);
+        const Bool threeChannelFloat =
+            format == TextureInternalFormat::RGB16F || format == TextureInternalFormat::RGB32F;
 
-        if (format == TextureInternalFormat::R11FG11FB10F || IsDepthOnlyFormat(format) ||
-            format == TextureInternalFormat::RGB16F || format == TextureInternalFormat::RGB32F) {
-            // The storage verification EnsureGenerateMipmapStorageAllocated's disaggregated arm
-            // already makes, with the record passed in rather than re-read from VerbMipRes: the
-            // frontend defined the generated chain before emitting this verb, so the server only
-            // checks that the descriptor it was given can carry it.
-            EnsureGenerateMipmapStorageDescribed(record);
-        }
-        if (format == TextureInternalFormat::RGB16F || format == TextureInternalFormat::RGB32F) {
-            // The CPU filter reads and writes the CLIENT's level shadows. It already aborts
-            // three frames deep at the MipmapStorage guard under a transport; naming it here
-            // says which emulation, which is what the guard cannot.
-            MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-cpu-filter");
-        }
         // A view's layer window is the one bound the native arm cannot express, so it is asked
         // for before the format arms - those two are 2D-only emulations of the same generation
         // and a view reaches them too.
         if (GenerateMipmapThroughViewWindowByRecord(mipRes, record, format)) return;
         if (IsDepthOnlyFormat(format)) {
-            GenerateDepthTexture2DMipmapByRecord(record, backendTexture);
+            GenerateDepthTexture2DMipmapByRecord(record, backendTexture, GenerateMipmapWindowByRecord(record));
             return;
         }
         if (format == TextureInternalFormat::R11FG11FB10F && textureTarget == TextureTarget::Texture2D) {
-            GenerateColorTexture2DMipmapByRecord(record, backendTexture);
+            GenerateColorTexture2DMipmapByRecord(record, backendTexture, GenerateMipmapWindowByRecord(record));
+            return;
+        }
+        if (threeChannelFloat && ForcedServerCpuMipmap()) {
+            GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture,
+                                                    "forced by MGITEST_ESPRYT_FORCE_CPU_MIPMAP");
             return;
         }
 
         const GLenum backendTarget =
             TextureImpl::ConvertTextureTargetToBackendGLEnum(MG_Util::ConvertGLEnumToTextureTarget(target));
-        // TempTextureUnit, not the active unit: the scratch bind is the backend's own and
-        // BindCurrentTextures re-establishes the sampling bindings regardless. The ACTIVE unit
-        // was never anything but the frontend's way of naming the texture, and the record names
-        // it now.
-        backendTexture->Bind(backendTarget, TextureImpl::TempTextureUnit);
-        // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps, so the
-        // source texture is detached from every framebuffer that attaches it - by handle, over
-        // the applier's own framebuffer records.
-        ScopedDetachedTextureFramebufferAttachments detachedAttachments(mipRes);
-        ScopedCompleteFramebufferBinding completeFramebuffer;
-        ClearGLErrors();
-        g_GLESFuncs.glGenerateMipmap(backendTarget);
-        RecordGLError("glGenerateMipmap", backendTarget, format);
+        GLenum refused = GL_NO_ERROR;
+        {
+            // TempTextureUnit, not the active unit: the scratch bind is the backend's own and
+            // BindCurrentTextures re-establishes the sampling bindings regardless. The ACTIVE unit
+            // was never anything but the frontend's way of naming the texture, and the record
+            // names it now.
+            backendTexture->Bind(backendTarget, TextureImpl::TempTextureUnit);
+            // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps, so the
+            // source texture is detached from every framebuffer that attaches it - by handle,
+            // over the applier's own framebuffer records.
+            ScopedDetachedTextureFramebufferAttachments detachedAttachments(mipRes);
+            ScopedCompleteFramebufferBinding completeFramebuffer;
+            ClearGLErrors();
+            g_GLESFuncs.glGenerateMipmap(backendTarget);
+            if (!threeChannelFloat) {
+                RecordGLError("glGenerateMipmap", backendTarget, format);
+                return;
+            }
+            // The driver's refusal of a three-channel float chain is not the application's
+            // error: the CPU arm below answers it.
+            refused = g_GLESFuncs.glGetError();
+        }
+        if (refused == GL_NO_ERROR) return;
+        GenerateThreeChannelFloatMipmapOnServer(mipRes, record, backendTexture, "the driver refused glGenerateMipmap");
     }
 #endif
 
@@ -12965,7 +13142,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             const auto mipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
             // Every arm GenerateMipmapByRecord takes writes the levels above the base on the
-            // driver only (its CPU filter is unmigrated and aborts), so the note is unconditional.
+            // driver only (P8-B2's CPU arm uploads its levels there too), so the note is
+            // unconditional.
             TextureImpl::NoteDriverSideTextureWriteByHandle(mipRes);
             auto& backendTexture = TextureImpl::SyncTextureToBackendByHandle(mipRes);
             const auto* record = PipeTextureRecordForHandle(mipRes);
@@ -14988,10 +15166,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Session::Fail entirely, which is the funnel the census gate watches.
         //
         // THE FUNNEL KEEPS ITS TEETH FOR THE OTHER SITES: MGPipeUnmigratedEmulation still
-        // aborts for generate-mipmap-storage, generate-mipmap-cpu-fallback and
-        // generate-mipmap-cpu-filter, which really do reach into a client address space. Only
-        // this call site is retired here, and only because its own premise did not hold
-        // (texture-remint-pull went the same way in P9 W2, for the same reason).
+        // names generate-mipmap-storage, generate-mipmap-cpu-fallback and
+        // copy-image-shadow-mirror, on monolith arms only. Only this call site is retired here,
+        // and only because its own premise did not hold (texture-remint-pull went the same way
+        // in P9 W2, and P8-B the two split generate-mipmap names, for the same reason).
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             if (shadow == nullptr) {
                 MGLOG_E_ONCE("GetTexImage: no level shadow on this side for target=0x%x level=%d, and under an "
