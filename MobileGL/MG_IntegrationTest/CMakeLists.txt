@@ -4863,6 +4863,80 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
+# P8-SV: Magma split residuals (docs/Disaggregated/notes/p8/SV.md) - the 3D native mip blit's layer
+# count, the 1D depth mip decline, the depth/stencil mip decline's tally row (asserted inside
+# F1WireScenario) and the wire arm's native glDispatchComputeIndirect. Public GL, so the sources join
+# the binary unguarded and the ambient `DirectGLES.` / `DirectVulkan.` monolith discovery runs them
+# too (the Espryt entries are the control). Split arms: DirectGLES through the registration macro
+# (which also replays them on Magma's informational tier), Magma's gated tier by hand:
+#   `.Mip3D.` and `.IndirectDispatch.` - all three transports; the counter halves read only on the
+#       inproc arm (WireIndirectPeek.h, WireDeclinePeek.h), the pixel/grid halves everywhere.
+#   `.ShaderMipDepth1D.` - split + spawn: MGITEST_MAGMA_FORCE_SHADER_MIPMAP is read BY THE SERVER,
+#       so a tcp copy would run the default arm (its tail is in spawn_lane_parity.py's
+#       MAGMA_SERVER_ENV_KNOB_NO_TCP).
+#   `.Mip3DValidation.` - inproc only: the 3D chain under VK_LAYER_KHRONOS_validation, red on any
+#       vkCmdBlitImage VUID in the output. The server's Vulkan instance must be this process for its
+#       stdout to be the entry's and for the case to prove the layer loaded (/proc/self/maps), so it
+#       is in MAGMA_INPROC_ONLY. The lane that runs integration-magma-split in CI installs the layer.
+target_sources(MobileGLIntegrationTest PRIVATE Harness/WireDeclinePeek.cpp Scenarios/WireMipShapeScenario.cpp
+                                               Scenarios/WireIndirectDispatchScenario.cpp)
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_register_split_arms("WireMipShapeScenario.*" "")
+    mgl_itest_register_split_arms("WireIndirectDispatchScenario.*" "")
+    set(MGL_ITEST_MAGMA_SV_FLAVOUR_ENV
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan"
+        "MOBILEGL_IPC_ROLE_SPLIT_STATE=1" "MOBILEGL_IPC_STRICT_ERRORS=1"
+        "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(MGL_ITEST_MAGMA_SV_ENVIRONMENT
+            ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.Mip3D."
+            TEST_FILTER "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d${mglItestArmLogTag}.log")
+        foreach(dispatchCase
+                CpuWrittenGroupCountsAreReadByTheGpuAtTheirOffsets
+                ComputeWrittenGroupCountsDispatchWithoutAHostWait
+                ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.IndirectDispatch."
+                TEST_FILTER "WireIndirectDispatchScenario.${dispatchCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-dispatch${mglItestArmLogTag}-${dispatchCase}.log")
+        endforeach()
+        if (NOT mglItestArm STREQUAL "Tcp")
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMipDepth1D."
+                TEST_FILTER "WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES LABELS "${mglItestMagmaLabels}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ${mglItestArmProperties}
+                    ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-depth1d${mglItestArmLogTag}.log")
+        endif()
+    endforeach()
+    mgl_itest_magma_arm_shape(Split)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_SV_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.Split.Mip3DValidation."
+        TEST_FILTER "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES LABELS "${mglItestMagmaLabels}"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            FAIL_REGULAR_EXPRESSION "VUID-vkCmdBlitImage-"
+            ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation\;MGITEST_REQUIRE_VK_VALIDATION_LAYER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d-validation.log")
+endif()
+
 # =====================================================================================
 # P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
 # =====================================================================================

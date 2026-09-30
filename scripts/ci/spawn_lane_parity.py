@@ -64,7 +64,12 @@ FIXTURE_ENTRIES = {"TcpServer.Start", "TcpServer.Stop"}
 #                          answers unavailable, so a copy there checks pixels under a name claiming
 #                          the pools. The pixels do run on every arm: the Espryt entries and the
 #                          Magma informational and full-suite tiers.
-MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "DescriptorPoolGrowthScenario.")
+#   `.Mip3DValidation.` (P8-SV, a TAIL): WireMipShapeScenario's 3D chain under the Khronos validation
+#                          layer, red on a vkCmdBlitImage VUID in the entry's own output and proving the
+#                          layer loaded from /proc/self/maps - both need the server's Vulkan instance
+#                          in this process. The knob-free `.Mip3D.` entries keep all three arms.
+MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "DescriptorPoolGrowthScenario.",
+                     ".Mip3DValidation.")
 
 # P7 wave 2-B2: THE SANCTIONED ASYMMETRY THAT IS NOT INPROC-ONLY - these exist on split AND
 # spawn and cannot exist on tcp. Every MGITEST_MAGMA_FORCE_* knob is read BY THE SERVER
@@ -140,7 +145,9 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
     f".PrimGenReroute.PrimitivesGeneratedNoXfbScenario.{case}" for case in PRIMGEN_REROUTE_CASES) + tuple(
     f".SplitRecording64.OversizedRecordingSplitScenario.{case}" for case in SPLIT_RECORDING_CASES) + (
     # P8-F: the mip shader-shape decline, forced by MGITEST_MAGMA_FORCE_SHADER_MIPMAP (server-read).
-    ".ShaderMipDecline.",)
+    ".ShaderMipDecline.",
+    # P8-SV: the 1D depth chain's decline, forced by the same server-read knob.
+    ".ShaderMipDepth1D.",)
 
 
 # THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. Each tail must match at least

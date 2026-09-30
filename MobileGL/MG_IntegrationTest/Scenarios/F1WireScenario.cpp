@@ -3,6 +3,7 @@
 #include "../Harness/SplitRuntimePeek.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/SplitLane.h"
+#include "../Harness/WireDeclinePeek.h"
 #include <array>
 #include <algorithm>
 #include <cstring>
@@ -659,6 +660,12 @@ TEST_F(F1WireScenario, GenerateMipmapDepthStencilDeclinesAndKeepsTheSession) {
     glDisable(GL_SCISSOR_TEST);
     glClearDepth(0.5);
     glClear(GL_DEPTH_BUFFER_BIT);
+    // P8-SV: the decline is a WireDeclines.def row now (MipmapDepthStencilAspect), so the server's
+    // MGWIRE-DECLINES dump sees it. Readable where the server is this process: the inproc arm.
+    // Red once (executed, reverted): the site back to a bare MGLOG_E_ONCE - the count stays 0.
+    unsigned long long declinesBefore = 0;
+    const bool counted = PeekSplitRuntime().transportName == "inproc" &&
+                         PeekWireDeclineCount("MipmapDepthStencilAspect", &declinesBefore);
     glGenerateMipmap(GL_TEXTURE_2D);
     EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DepthStencilMip.error";
     // The session is what the retired Fatal used to take with it. A readback is a round trip
@@ -669,6 +676,12 @@ TEST_F(F1WireScenario, GenerateMipmapDepthStencilDeclinesAndKeepsTheSession) {
     glReadPixels(1, 1, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &level0);
     EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.DepthStencilMip.readback";
     EXPECT_NEAR(level0, 0.5f, 0.002f) << "F1.DepthStencilMip.level0";
+    if (counted) {
+        unsigned long long declinesAfter = 0;
+        ASSERT_TRUE(PeekWireDeclineCount("MipmapDepthStencilAspect", &declinesAfter));
+        EXPECT_EQ(declinesAfter - declinesBefore, 1u) << "F1.DepthStencilMip.tally: one named decline per refused "
+                                                         "glGenerateMipmap (WireDeclines.def MipmapDepthStencilAspect)";
+    }
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
     glDeleteTextures(1, &depthStencil);
     glBindTexture(GL_TEXTURE_2D, texture);
