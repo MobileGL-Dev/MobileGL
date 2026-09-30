@@ -68,6 +68,8 @@ set(MGL_P8A_AMBIENT_CASES
     FragmentOutputArrayIndexScenario.*
     GeometryDrawModeScenario.*
     GuiBatchScenario.*
+    # dev f973008c merge: the empty-binding uniform block (853c5f12 + P11 7784d6bb)
+    UnboundUniformBlockScenario.*
     ImageFormatQualifierScenario.*
     ImageLoadStoreSsoScenario.PerElementImageUnitsReachAPipelineDraw
     ImageLoadStoreSsoScenario.ReassigningAnImageUnitBetweenDrawsReachesTheNextDraw

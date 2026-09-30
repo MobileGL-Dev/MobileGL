@@ -159,6 +159,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/UnboundImageDescriptorScenario.cpp
     # P7 gate 5: an image unit naming a (level, layer) its texture lacks (GL 4.6 core 8.26).
     Scenarios/InvalidImageUnitScenario.cpp
+    Scenarios/UnboundUniformBlockScenario.cpp
     Scenarios/IntegerBorderColorScenario.cpp
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
     Scenarios/RenderbufferBlendFormatScenario.cpp

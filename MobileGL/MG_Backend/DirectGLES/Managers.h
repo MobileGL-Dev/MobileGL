@@ -1004,6 +1004,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // (the UBO binding walk) skip the probe while their pre-pass epoch read
             // matches, exactly like the per-VAO memo stamps.
             Uint64 drawCleanEpoch = 0;
+            // Frame serial whose completion retires the last glCopyBufferSubData the upload
+            // ring staged INTO this store (FlushPendingRangesNow's ring tier); 0 = none. Until
+            // it retires, FlushPendingRangesNow keeps every partial range off the
+            // range-invalidating map: on Adreno 830 that map, on a store with a queued copy,
+            // loses the copy (see FlushPendingRangesNow). Draw thread only, like the flush.
+            Uint64 ringCopyRetireSerial = 0;
             // Zero-copy coherent persistent map (EXT_buffer_storage): the GL store is
             // immutable, persistently+coherently mapped, and persistentPtr is what the app
             // (and the frontend PipeResource) write into directly. While set, draw-time

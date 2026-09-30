@@ -1766,8 +1766,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // shadow's to rewrite. Widening to page bounds looked free and was
                     // not - the widened bytes clobbered GPU-written data (an SSBO
                     // counter beside the app's SubData) with the stale shadow.
+                    //
+                    // A partial range-invalidating map must not overtake a ring copy into
+                    // this store the GPU has not run yet. Adreno 830 answers such a map on
+                    // a store with a copy still queued by losing the copy: the Embeddium
+                    // section meshes create-instancing staged through the ring came out
+                    // empty (whole terrain sections missing, SSIM 0.870), and routing the
+                    // map ranges behind the copies - the ring tier, GPU-ordered after them -
+                    // brings every one back. The whole-buffer orphan-map is exempt: it
+                    // rewrites every byte from the shadow the queued copies were taken from.
                     const Bool wholeBuffer = start == 0 && end == limit && limit == resource.storageSize;
-                    if (mapUsable && (wholeBuffer || size >= kInvalidateRangeMinBytes)) {
+                    const Bool ringCopyInFlight = resource.ringCopyRetireSerial > DirectGLES::CompletedFrameSerial();
+                    if (mapUsable && (wholeBuffer || (size >= kInvalidateRangeMinBytes && !ringCopyInFlight))) {
                         BindBufferId(TempBufferTarget, resource.id);
                         const GLbitfield access =
                             GL_MAP_WRITE_BIT |
@@ -1788,6 +1798,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
+                        // Commands recorded now retire with the fence the next Present inserts.
+                        resource.ringCopyRetireSerial = DirectGLES::CurrentFrameSerial() + 1;
                     } else {
                         UploadRangeNow(resource, bufferObject, start, end);
                     }

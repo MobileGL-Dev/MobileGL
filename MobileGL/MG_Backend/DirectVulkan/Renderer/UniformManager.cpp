@@ -2786,11 +2786,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto& bufferObject = bindingPoint.GetBoundObject();
         static thread_local Vector<Uint8> paddedUbo;
         if (bufferObject == nullptr) {
-            // A block the program declares at a point with nothing bound - e.g. its buffer was
-            // deleted while bound, which unbinds it (DeletedBoundBufferScenario). GL leaves what
-            // the shader READS undefined and raises no error; this used to dereference the null
-            // object. The wire arm already answers it with a zeroed block
-            // (ResolveWireUniformBufferPayload), so this one does too.
+            // A block the program declares at a point with nothing bound - never bound, or its
+            // buffer was deleted while bound, which unbinds it (UnboundUniformBlockScenario,
+            // DeletedBoundBufferScenario). GL leaves what the shader READS undefined and raises no
+            // error; this used to dereference the null object. Answer it with a zeroed block of the
+            // reflected size, as the wire arm does (ResolveWireUniformBufferPayload).
             const VkDeviceSize blockSize =
                 static_cast<VkDeviceSize>(program.GetUBOSizeAt(static_cast<Uint32>(blockIndex)));
             paddedUbo.assign(static_cast<SizeT>(blockSize > 0 ? blockSize : 16), 0);
