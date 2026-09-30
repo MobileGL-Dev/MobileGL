@@ -350,6 +350,12 @@ namespace MobileGL::MG_Remote::Server {
                 shadow.Covered.clear();
             }
 #endif
+            if (shadow.HoldsFollowedCopy) {
+                // P8-E: a run landed whole over a followed copy (AdoptClientBoxes is the spelling
+                // that keeps it), so the bytes no longer hold what the driver does.
+                shadow.HoldsFollowedCopy = false;
+                m_driverWritten[key] = true;
+            }
             shadow.GpuDirty = false;
             return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize);
         }
@@ -367,6 +373,8 @@ namespace MobileGL::MG_Remote::Server {
             LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
             RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
             shadow.GpuDirty = false;
+            // P8-E: the caller states these bytes ARE the level, which a followed copy is part of.
+            shadow.HoldsFollowedCopy = false;
             shadow.Bytes.clear();
             shadow.Covered.clear();
             return CopyRunInto(shadow, key, uploadTarget, level, 0, bytes, byteSize);
@@ -424,6 +432,7 @@ namespace MobileGL::MG_Remote::Server {
                 // the bytes it described.
                 shadow.Covered.clear();
                 shadow.GpuDirty = false;
+                shadow.HoldsFollowedCopy = false;
             }
             shadow.Extent = extent;
             shadow.InternalFormat = internalFormat;
@@ -457,12 +466,155 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_any.load(std::memory_order_acquire)) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows.erase(key);
+            m_driverWritten.erase(key);
         }
 
         void DropAll() {
             if (!m_any.load(std::memory_order_acquire)) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows.clear();
+            m_driverWritten.clear();
+        }
+
+        // ---- P8-E (docs/Disaggregated/notes/p8/E.md): WHEN THESE BYTES ARE THE LEVEL'S CONTENT ----
+        //
+        // The store holds what the client uploaded. It is also the only CPU copy of a level the
+        // server has, so a readback the driver refuses (a format the ES driver will not attach -
+        // RGB16 and 16-bit SNORM on Adreno) can be answered from it - but only while the driver
+        // holds nothing the store has not seen. Two facts decide that:
+        //
+        //   * THE DRIVER-WRITTEN MARK, per texture and sticky: a framebuffer attachment, a writable
+        //     image unit, a glCopyTexSubImage, a generated mip chain, a copy this store could not
+        //     follow. The writers know the texture, not the level, and an attachment keeps writing
+        //     for as long as it stays attached, so only the key's death (Drop / DropAll) clears it -
+        //     a whole-resource respecify (ResetLevels) does not.
+        //   * A COPY THE STORE FOLLOWED (FollowCopy): glCopyImageSubData between two levels whose
+        //     bytes this store holds is a raw texel-block move, so the store makes the same move and
+        //     the destination stays readable from here. Its level is flagged, because the client's
+        //     next run for it is the CLIENT's shadow, which never saw the copy: AdoptClientBoxes
+        //     lands only the texels that run says the client wrote.
+        void MarkDriverWritten(Uint64 key) {
+            if (!m_copies) return;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_driverWritten[key] = true;
+            m_any.store(true, std::memory_order_release);
+        }
+        Bool IsDriverWritten(Uint64 key) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_driverWritten.find(key) != m_driverWritten.end();
+        }
+        Bool LevelHoldsFollowedCopy(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
+            if (!m_any.load(std::memory_order_acquire)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            return shadow != nullptr && shadow->HoldsFollowedCopy;
+        }
+
+        // The copy, in the level images' own texel grid (x, y, z = texel, row, slice/layer). True
+        // when the destination's bytes now hold it. False - and neither level touched - unless the
+        // source level is complete and its texture was never written by the driver, the destination
+        // level is complete (or the copy covers all of it), both levels' stored texels are one size,
+        // and the box lies inside both. The caller marks the destination driver-written on false.
+        Bool FollowCopy(Uint64 srcKey, Uint16 srcTarget, Uint16 srcLevel, const IntVec3& srcOrigin,
+                        Uint64 dstKey, Uint16 dstTarget, Uint16 dstLevel, const IntVec3& dstOrigin,
+                        const IntVec3& size) {
+            if (!m_copies) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_driverWritten.find(srcKey) != m_driverWritten.end()) return false;
+            const LevelShadow* src = FindLevel(srcKey, srcTarget, srcLevel);
+            LevelShadow* dst = FindLevelMutable(dstKey, dstTarget, dstLevel);
+            if (src == nullptr || dst == nullptr || !LevelComplete(*src)) return false;
+            const SizeT texel = LevelTexelBytes(*src);
+            if (texel == 0 || !dst->Defined || dst->DeclaredByteBound == 0 || LevelTexelBytes(*dst) != texel) return false;
+            if (!BoxInside(srcOrigin, size, src->Extent) || !BoxInside(dstOrigin, size, dst->Extent)) return false;
+            const Bool wholeDestination = dstOrigin == IntVec3{0, 0, 0} && size == dst->Extent;
+            if (!LevelComplete(*dst) && !wholeDestination) return false;
+            // Gathered first, so a copy within one level cannot read rows it has already written.
+            const SizeT rowBytes = static_cast<SizeT>(size.x()) * texel;
+            Vector<Uint8> rows(rowBytes * static_cast<SizeT>(size.y()) * static_cast<SizeT>(size.z()));
+            for (Int z = 0; z < size.z(); ++z) {
+                for (Int y = 0; y < size.y(); ++y) {
+                    std::memcpy(rows.data() + (static_cast<SizeT>(z) * size.y() + y) * rowBytes,
+                                src->Bytes.data() + TexelOffset(src->Extent, srcOrigin.x(), srcOrigin.y() + y,
+                                                                srcOrigin.z() + z, texel),
+                                rowBytes);
+                }
+            }
+            if (!LevelComplete(*dst)) {
+                dst->Bytes.assign(static_cast<SizeT>(dst->DeclaredByteBound), Uint8{0});
+                dst->Covered.clear();
+                StagedShadowStore::CoverageAdd(dst->Covered, 0, static_cast<SizeT>(dst->DeclaredByteBound));
+            }
+            for (Int z = 0; z < size.z(); ++z) {
+                for (Int y = 0; y < size.y(); ++y) {
+                    std::memcpy(dst->Bytes.data() + TexelOffset(dst->Extent, dstOrigin.x(), dstOrigin.y() + y,
+                                                                dstOrigin.z() + z, texel),
+                                rows.data() + (static_cast<SizeT>(z) * size.y() + y) * rowBytes, rowBytes);
+                }
+            }
+            dst->HoldsFollowedCopy = true;
+            m_any.store(true, std::memory_order_release);
+            return true;
+        }
+
+        // One box of texels, in the level image's grid, that a client record says it wrote.
+        struct ClientTexelBox {
+            Int32 X, Y, Z;
+            Uint32 W, H, D;
+        };
+
+        // A client run for a level that holds a followed copy. The run is the client's level shadow
+        // (or one slab of it) and is stale everywhere the client did not write, so only `boxes` land,
+        // each texel read from where it sits in the run (the run begins at `imageOffset` of the
+        // level image) - the rest of the level keeps the copy. False, touching nothing, when a box
+        // is outside the level or a row of it is outside the run: the caller then adopts the run as
+        // usual and marks the texture driver-written.
+        Bool AdoptClientBoxes(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
+                              Uint64 imageOffset, const void* bytes, SizeT byteSize,
+                              const ClientTexelBox* boxes, SizeT boxCount) {
+            if (!m_copies || bytes == nullptr || (boxCount != 0 && boxes == nullptr)) return false;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            LevelShadow* shadow = FindLevelMutable(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->HoldsFollowedCopy || !LevelComplete(*shadow) || shadow->Extent != extent) {
+                return false;
+            }
+            const SizeT texel = LevelTexelBytes(*shadow);
+            if (texel == 0) return false;
+            const auto rowInRun = [&](const ClientTexelBox& box, Uint32 row, Uint32 slice, SizeT& offset) {
+                offset = TexelOffset(shadow->Extent, box.X, box.Y + static_cast<Int>(row), box.Z + static_cast<Int>(slice),
+                                     texel);
+                const Uint64 begin = static_cast<Uint64>(offset);
+                const Uint64 end = begin + static_cast<Uint64>(box.W) * texel;
+                return begin >= imageOffset && end <= imageOffset + byteSize;
+            };
+            for (SizeT i = 0; i < boxCount; ++i) {
+                const ClientTexelBox& box = boxes[i];
+                if (!BoxInside(IntVec3{box.X, box.Y, box.Z},
+                               IntVec3{static_cast<Int>(box.W), static_cast<Int>(box.H), static_cast<Int>(box.D)},
+                               shadow->Extent)) {
+                    return false;
+                }
+                for (Uint32 slice = 0; slice < box.D; ++slice) {
+                    for (Uint32 row = 0; row < box.H; ++row) {
+                        SizeT offset = 0;
+                        if (!rowInRun(box, row, slice, offset)) return false;
+                    }
+                }
+            }
+            const auto* run = static_cast<const Uint8*>(bytes);
+            for (SizeT i = 0; i < boxCount; ++i) {
+                const ClientTexelBox& box = boxes[i];
+                for (Uint32 slice = 0; slice < box.D; ++slice) {
+                    for (Uint32 row = 0; row < box.H; ++row) {
+                        SizeT offset = 0;
+                        rowInRun(box, row, slice, offset);
+                        std::memcpy(shadow->Bytes.data() + offset, run + (offset - static_cast<SizeT>(imageOffset)),
+                                    static_cast<SizeT>(box.W) * texel);
+                    }
+                }
+            }
+            return true;
         }
 
         // Fatal when a sync wants texels this store has no covered run for. This is THE data
@@ -589,6 +741,8 @@ namespace MobileGL::MG_Remote::Server {
             Uint64 DeclaredByteBound = 0;
             Bool Defined = false;
             Bool GpuDirty = false;
+            // P8-E: FollowCopy wrote server-side texels into Bytes that the client's shadow lacks.
+            Bool HoldsFollowedCopy = false;
         };
         struct TextureShadow {
             ska::flat_hash_map<Uint32, LevelShadow> Levels;
@@ -684,11 +838,51 @@ namespace MobileGL::MG_Remote::Server {
             const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
             return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
         }
+        LevelShadow* FindLevelMutable(Uint64 key, Uint16 uploadTarget, Uint16 level) {
+            const auto textureIt = m_shadows.find(key);
+            if (textureIt == m_shadows.end()) return nullptr;
+            const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
+            return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
+        }
+
+        // P8-E helpers, with the lock held. A level is COMPLETE when every declared byte crossed
+        // (IsCovered's test); its texel size is the declared bound over the texel count, and a bound
+        // that does not divide evenly is a level this cannot address texel by texel.
+        static Bool LevelComplete(const LevelShadow& shadow) {
+            return shadow.Defined && shadow.DeclaredByteBound != 0 &&
+                   shadow.Bytes.size() == shadow.DeclaredByteBound &&
+                   StagedShadowStore::CoverageHas(shadow.Covered, 0, static_cast<SizeT>(shadow.DeclaredByteBound));
+        }
+        static SizeT LevelTexelBytes(const LevelShadow& shadow) {
+            if (shadow.Extent.x() <= 0 || shadow.Extent.y() <= 0 || shadow.Extent.z() <= 0) return 0;
+            const Uint64 texels = static_cast<Uint64>(shadow.Extent.x()) * static_cast<Uint64>(shadow.Extent.y()) *
+                                  static_cast<Uint64>(shadow.Extent.z());
+            if (shadow.DeclaredByteBound == 0 || shadow.DeclaredByteBound % texels != 0) return 0;
+            return static_cast<SizeT>(shadow.DeclaredByteBound / texels);
+        }
+        static Bool BoxInside(const IntVec3& origin, const IntVec3& size, const IntVec3& extent) {
+            for (Int axis = 0; axis < 3; ++axis) {
+                if (origin[axis] < 0 || size[axis] <= 0 ||
+                    static_cast<Int64>(origin[axis]) + size[axis] > static_cast<Int64>(extent[axis])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static SizeT TexelOffset(const IntVec3& extent, Int x, Int y, Int z, SizeT texel) {
+            return ((static_cast<SizeT>(z) * static_cast<SizeT>(extent.y()) + static_cast<SizeT>(y)) *
+                        static_cast<SizeT>(extent.x()) +
+                    static_cast<SizeT>(x)) *
+                   texel;
+        }
 
         const Bool m_copies;
         mutable std::mutex m_mutex;
         StagedTextureDeviceLimits m_deviceLimits{};
         ska::flat_hash_map<Uint64, TextureShadow> m_shadows;
+        // P8-E: MarkDriverWritten's keys (the value is always true). Apart from m_shadows on purpose,
+        // because ResetLevels erases a key's levels and must not forget this.
+        ska::flat_hash_map<Uint64, Bool> m_driverWritten;
         // Read on every IsLevelGpuDirty / LevelExtentOrUndefined, so the monolith cost is one
         // acquire load of a never-written flag rather than a mutex and two hash lookups.
         std::atomic<Bool> m_any{false};

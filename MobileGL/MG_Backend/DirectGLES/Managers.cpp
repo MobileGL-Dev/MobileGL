@@ -3189,6 +3189,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target);
                 const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(stored->Desc, record);
                 const SizeT runBytes = static_cast<SizeT>(record.Blob.Size);
+                // P8-E (notes/p8/E.md): THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
+                // (FollowCopyImageInStagedStore). The run is the client's shadow, stale everywhere it
+                // did not write, so only the texels it names land - its regions, or its union box
+                // when it carries none (D-D3's "the box is the whole story"). A run the store cannot
+                // place that way is adopted as ever, and the store stops standing for the texture.
+                if (store.LevelHoldsFollowedCopy(key, uploadTarget, record.Level) &&
+                    (record.RegionCount == 0 || regions != nullptr)) {
+                    Vector<MG_Remote::Server::StagedTextureStore::ClientTexelBox> boxes;
+                    if (record.RegionCount == 0) {
+                        const auto& box = record.UnionBox;
+                        boxes.push_back({box.X, box.Y, box.Z, box.W, box.H, box.D});
+                    } else {
+                        for (Uint32 i = 0; i < record.RegionCount; ++i) {
+                            const auto& region = regions[i];
+                            boxes.push_back({region.X, region.Y, region.Z, region.W, region.H, region.D});
+                        }
+                    }
+                    const Uint64 imageOffset = record.RegionCount == 0
+                        ? 0 : MG_Remote::Server::StagedTextureRunImageOffset(record, regions);
+                    if (store.AdoptClientBoxes(key, uploadTarget, record.Level, extent, imageOffset, bytes, runBytes,
+                                               boxes.data(), boxes.size())) {
+                        return;
+                    }
+                    store.MarkDriverWritten(key);
+                }
                 // RegionCount == 0 IS the whole-level spelling - "the run is the level shadow",
                 // beginning at the level's first byte - so it is adopted with the spelling that
                 // replaces the level; every other record names a RUN of the level by its own box.
@@ -10963,7 +10988,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return slot->get();
         }
 
-        void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle res) {
+        void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle res, Bool storeFollowsTheWrite) {
             // The storage owner's handle, one hop per view like the frontend walk above (the
             // client composes a view of a view onto its root, so one hop is the real shape).
             MG_Pipe::MGPipeHandle storage = res;
@@ -10973,6 +10998,55 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 storage = record->Desc.ViewOf;
             }
             if (auto* twin = ResolveTextureTwin(storage)) twin->NoteDriverSideWrite();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P8-E: the staged store stops standing for this texture's content (a no-op on a
+            // monolith arm, where the store does not copy).
+            if (!storeFollowsTheWrite && !MG_Pipe::MGPipeHandleIsNull(storage)) {
+                MG_Remote::Server::ServerStagedTexture().MarkDriverWritten(
+                    MG_Remote::Server::StagedTextureStore::KeyForHandle(storage));
+            }
+#else
+            (void)storeFollowsTheWrite;
+#endif
+        }
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
+                                          MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
+                                          const IntVec3& destinationOrigin, const IntVec3& size) {
+            auto& store = MG_Remote::Server::ServerStagedTexture();
+            if (!store.CopiesIntoServerStorage()) return false;
+            // The store's level key for an endpoint copy-image addresses as ONE image with its
+            // layers on z: exactly one upload target (not a cube map, whose faces are six store
+            // levels) and not a 1D array (the store keeps its layers as rows). A view's own levels
+            // are byteless, so FollowCopy answers false for it by itself.
+            const auto storeTarget = [](MG_Pipe::MGPipeHandle handle, Uint16& target) {
+                const auto* record = PipeTextureRecordForHandle(handle);
+                if (record == nullptr ||
+                    record->Desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex1DArray)) {
+                    return false;
+                }
+                const auto& targets = BufferImpl::StagedUploadTargetsForPipeTarget(record->Desc.Target);
+                if (targets.size() != 1) return false;
+                target = static_cast<Uint16>(targets[0]);
+                return true;
+            };
+            Uint16 sourceTarget = 0, destinationTarget = 0;
+            if (!storeTarget(source, sourceTarget) || !storeTarget(destination, destinationTarget)) return false;
+            // ONE FORMAT BOTH ENDS. Copy-image moves the GL texel bits; the store holds each
+            // format's canonical shadow, which for most formats IS those bits and for some is not
+            // (the 16-bit packed formats are kept as UNorm8, RGB10 / RGB12 as UNorm16). Between two
+            // levels of one format the canonical move and the GL move agree whatever the format;
+            // across two compatible formats they need not, so that copy is not followed.
+            if (PipeTextureRecordForHandle(source)->Desc.InternalFormat !=
+                PipeTextureRecordForHandle(destination)->Desc.InternalFormat) {
+                return false;
+            }
+            return store.FollowCopy(MG_Remote::Server::StagedTextureStore::KeyForHandle(source), sourceTarget,
+                                    static_cast<Uint16>(sourceLevel), sourceOrigin,
+                                    MG_Remote::Server::StagedTextureStore::KeyForHandle(destination),
+                                    destinationTarget, static_cast<Uint16>(destinationLevel), destinationOrigin,
+                                    size);
         }
 #endif
     } // namespace TextureImpl

@@ -302,6 +302,197 @@ TEST(StagedTextureStoreTest, TheGpuDirtyMarkIsTheServersOwnDirtyAnswer) {
     EXPECT_EQ(monolithStore.TrackedResources(), 0u);
 }
 
+// ---- P8-E (docs/Disaggregated/notes/p8/E.md): the store follows glCopyImageSubData -----------
+//
+// Two 4x4 RGBA8 levels (four bytes a texel), each adopted whole with a distinct byte pattern so a
+// mis-addressed row or a swapped endpoint shows as a wrong byte, not a coincidentally right one.
+namespace {
+    const IntVec3 kFollowExtent{4, 4, 1};
+
+    Vector<Uint8> FollowPattern(Uint8 base) {
+        Vector<Uint8> bytes(64);
+        for (SizeT i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<Uint8>(base + i);
+        return bytes;
+    }
+
+    void DefineAndAdopt(Server::StagedTextureStore& store, Uint64 key, const Vector<Uint8>& bytes) {
+        store.NoteLevelDefined(key, kTex2DTarget, 0, kFollowExtent);
+        store.Adopt(key, kTex2DTarget, 0, kFollowExtent, bytes.data(), bytes.size());
+    }
+
+    // The byte (x, y, channel) of a 4x4 RGBA8 level image.
+    SizeT At(Int x, Int y, Int c) { return static_cast<SizeT>((y * 4 + x) * 4 + c); }
+} // namespace
+
+// THE MOVE: the 2x3 window at (1, 1) of the source lands at (2, 0) of the destination, every other
+// destination byte and every source byte stays, and only the destination is flagged as holding a
+// copy the client never saw.
+TEST(StagedTextureStoreTest, AFollowedCopyMovesTheWindowAndLeavesTheSourceAlone) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(60, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(61, 1));
+    const auto srcBytes = FollowPattern(0x00);
+    const auto dstBytes = FollowPattern(0x80);
+    DefineAndAdopt(store, src, srcBytes);
+    DefineAndAdopt(store, dst, dstBytes);
+
+    ASSERT_TRUE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{1, 1, 0}, dst, kTex2DTarget, 0, IntVec3{2, 0, 0},
+                                 IntVec3{2, 3, 1}));
+    EXPECT_TRUE(store.LevelHoldsFollowedCopy(dst, kTex2DTarget, 0));
+    EXPECT_FALSE(store.LevelHoldsFollowedCopy(src, kTex2DTarget, 0));
+    const Uint8* got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    const Uint8* source = store.RequireLevelBytes(src, kTex2DTarget, 0, "unit");
+    for (Int y = 0; y < 4; ++y) {
+        for (Int x = 0; x < 4; ++x) {
+            const Bool copied = x >= 2 && y < 3;
+            for (Int c = 0; c < 4; ++c) {
+                const Uint8 want = copied ? srcBytes[At(x - 2 + 1, y + 1, c)] : dstBytes[At(x, y, c)];
+                ASSERT_EQ(got[At(x, y, c)], want) << "destination texel (" << x << ", " << y << ")";
+                ASSERT_EQ(source[At(x, y, c)], srcBytes[At(x, y, c)]) << "the copy moved a SOURCE byte";
+            }
+        }
+    }
+}
+
+// Every shape the store cannot address, and a source it can no longer vouch for, is REFUSED with
+// the destination untouched - the caller marks it driver-written instead. The monolith store
+// follows nothing at all.
+TEST(StagedTextureStoreTest, ACopyTheStoreCannotVouchForIsNotFollowed) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(62, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(63, 1));
+    const Uint64 narrow = Server::StagedTextureStore::KeyForHandle(TestHandle(64, 1));
+    const Uint64 bare = Server::StagedTextureStore::KeyForHandle(TestHandle(65, 1));
+    const auto dstBytes = FollowPattern(0x80);
+    DefineAndAdopt(store, src, FollowPattern(0x00));
+    DefineAndAdopt(store, dst, dstBytes);
+    store.NoteLevelDefined(narrow, kTex2DTarget, 0, IntVec3{8, 8, 1},
+                           static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                           static_cast<Uint32>(TextureInternalFormat::R8)); // 64 bytes, one a texel
+    Vector<Uint8> narrowBytes(64, 0x11);
+    store.Adopt(narrow, kTex2DTarget, 0, IntVec3{8, 8, 1}, narrowBytes.data(), narrowBytes.size());
+    store.NoteLevelDefined(bare, kTex2DTarget, 0, kFollowExtent); // defined, no bytes crossed
+
+    const IntVec3 origin{0, 0, 0};
+    EXPECT_FALSE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{3, 0, 0}, dst, kTex2DTarget, 0, origin,
+                                  IntVec3{2, 1, 1}))
+        << "the box runs off the source's right edge";
+    EXPECT_FALSE(store.FollowCopy(narrow, kTex2DTarget, 0, origin, dst, kTex2DTarget, 0, origin, IntVec3{1, 1, 1}))
+        << "a one-byte texel moved into a four-byte one";
+    EXPECT_FALSE(store.FollowCopy(src, kTex2DTarget, 0, origin, bare, kTex2DTarget, 0, origin, IntVec3{2, 2, 1}))
+        << "a partial copy into a level none of whose bytes crossed";
+    EXPECT_FALSE(store.FollowCopy(bare, kTex2DTarget, 0, origin, dst, kTex2DTarget, 0, origin, IntVec3{1, 1, 1}))
+        << "a source none of whose bytes crossed";
+    store.MarkDriverWritten(src);
+    EXPECT_FALSE(store.FollowCopy(src, kTex2DTarget, 0, origin, dst, kTex2DTarget, 0, origin, IntVec3{1, 1, 1}))
+        << "the driver wrote the source behind the store's back, so its bytes are not the texels copied";
+    EXPECT_FALSE(store.LevelHoldsFollowedCopy(dst, kTex2DTarget, 0));
+    const Uint8* got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    for (SizeT i = 0; i < dstBytes.size(); ++i) ASSERT_EQ(got[i], dstBytes[i]) << "a refused copy moved byte " << i;
+
+    Server::StagedTextureStore monolithStore(/*copies=*/false);
+    EXPECT_FALSE(monolithStore.FollowCopy(src, kTex2DTarget, 0, origin, dst, kTex2DTarget, 0, origin,
+                                          IntVec3{1, 1, 1}));
+}
+
+// A copy that covers ALL of a destination level whose bytes never crossed (glTexStorage, no upload)
+// makes that level's content known: the store completes it.
+TEST(StagedTextureStoreTest, AWholeLevelCopyCompletesADestinationThatHadNoBytes) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(66, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(67, 1));
+    const auto srcBytes = FollowPattern(0x40);
+    DefineAndAdopt(store, src, srcBytes);
+    store.NoteLevelDefined(dst, kTex2DTarget, 0, kFollowExtent);
+    ASSERT_FALSE(store.IsCovered(dst, kTex2DTarget, 0));
+    ASSERT_TRUE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{0, 0, 0}, dst, kTex2DTarget, 0, IntVec3{0, 0, 0},
+                                 kFollowExtent));
+    ASSERT_TRUE(store.IsCovered(dst, kTex2DTarget, 0));
+    const Uint8* got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    for (SizeT i = 0; i < srcBytes.size(); ++i) ASSERT_EQ(got[i], srcBytes[i]) << "byte " << i;
+}
+
+// The client's next run for a level holding a followed copy is the CLIENT's shadow, which never saw
+// the copy: only the boxes it says it wrote land, the copied window survives, and a box whose rows
+// are not in the run is refused with nothing written.
+TEST(StagedTextureStoreTest, AClientRunOverAFollowedCopyLandsOnlyItsBoxes) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(68, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(69, 1));
+    const auto srcBytes = FollowPattern(0x00);
+    const auto dstBytes = FollowPattern(0x80);
+    DefineAndAdopt(store, src, srcBytes);
+    DefineAndAdopt(store, dst, dstBytes);
+    ASSERT_TRUE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{0, 0, 0}, dst, kTex2DTarget, 0, IntVec3{0, 0, 0},
+                                 IntVec3{2, 2, 1}));
+
+    // The client's whole-level shadow: its own old bytes everywhere, 0xEE in the one row it wrote.
+    Vector<Uint8> run = dstBytes;
+    for (Int x = 0; x < 4; ++x) {
+        for (Int c = 0; c < 4; ++c) run[At(x, 3, c)] = 0xEE;
+    }
+    const Server::StagedTextureStore::ClientTexelBox lastRow{0, 3, 0, 4, 1, 1};
+    ASSERT_TRUE(store.AdoptClientBoxes(dst, kTex2DTarget, 0, kFollowExtent, 0, run.data(), run.size(), &lastRow, 1));
+    const Uint8* got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    for (Int y = 0; y < 4; ++y) {
+        for (Int x = 0; x < 4; ++x) {
+            for (Int c = 0; c < 4; ++c) {
+                const Uint8 want = y == 3 ? Uint8{0xEE} : (x < 2 && y < 2) ? srcBytes[At(x, y, c)] : dstBytes[At(x, y, c)];
+                ASSERT_EQ(got[At(x, y, c)], want) << "texel (" << x << ", " << y << ")";
+            }
+        }
+    }
+    EXPECT_TRUE(store.LevelHoldsFollowedCopy(dst, kTex2DTarget, 0));
+    EXPECT_FALSE(store.IsDriverWritten(dst));
+
+    // A slab run that holds rows 2..3 only (imageOffset 32): row 0 is not in it.
+    const Server::StagedTextureStore::ClientTexelBox firstRow{0, 0, 0, 4, 1, 1};
+    Vector<Uint8> slab(32, 0x33);
+    EXPECT_FALSE(store.AdoptClientBoxes(dst, kTex2DTarget, 0, kFollowExtent, 32, slab.data(), slab.size(), &firstRow, 1));
+    EXPECT_EQ(got[At(0, 0, 0)], srcBytes[At(0, 0, 0)]) << "a refused run wrote into the level";
+}
+
+// A run adopted WHOLE over a followed copy (any caller that does not take AdoptClientBoxes' route)
+// puts the client's stale texels back over it - so the store stops standing for the texture.
+TEST(StagedTextureStoreTest, AWholeRunOverAFollowedCopyMarksTheTextureDriverWritten) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(70, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(71, 1));
+    const auto dstBytes = FollowPattern(0x80);
+    DefineAndAdopt(store, src, FollowPattern(0x00));
+    DefineAndAdopt(store, dst, dstBytes);
+    ASSERT_TRUE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{0, 0, 0}, dst, kTex2DTarget, 0, IntVec3{0, 0, 0},
+                                 IntVec3{1, 1, 1}));
+    store.AdoptRun(dst, kTex2DTarget, 0, kFollowExtent, 0, dstBytes.data(), dstBytes.size());
+    EXPECT_TRUE(store.IsDriverWritten(dst));
+    EXPECT_FALSE(store.LevelHoldsFollowedCopy(dst, kTex2DTarget, 0));
+    EXPECT_FALSE(store.IsDriverWritten(src));
+}
+
+// The driver-written mark is per texture and sticky: a whole-resource respecify does not clear it
+// (an attachment made before it keeps writing after it), only the key's death does. Inert on a
+// monolith store.
+TEST(StagedTextureStoreTest, TheDriverWrittenMarkOutlivesAResetAndDiesWithTheKey) {
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 a = Server::StagedTextureStore::KeyForHandle(TestHandle(72, 1));
+    const Uint64 b = Server::StagedTextureStore::KeyForHandle(TestHandle(73, 1));
+    EXPECT_FALSE(store.IsDriverWritten(a));
+    store.MarkDriverWritten(a);
+    store.MarkDriverWritten(b);
+    EXPECT_TRUE(store.IsDriverWritten(a));
+    store.ResetLevels(a);
+    EXPECT_TRUE(store.IsDriverWritten(a)) << "a respecify forgot that the driver writes this texture";
+    store.Drop(a);
+    EXPECT_FALSE(store.IsDriverWritten(a)) << "a destroyed texture's mark must not answer for the slot's next owner";
+    EXPECT_TRUE(store.IsDriverWritten(b));
+    store.DropAll();
+    EXPECT_FALSE(store.IsDriverWritten(b));
+
+    Server::StagedTextureStore monolithStore(/*copies=*/false);
+    monolithStore.MarkDriverWritten(a);
+    EXPECT_FALSE(monolithStore.IsDriverWritten(a));
+}
+
 // The two key namespaces share one map, so their disjointness is a property to pin, not to
 // assume: handle keys carry the top bit, twin addresses (user-space, aligned) never do.
 TEST(StagedTextureStoreTest, HandleKeysAndTwinAddressKeysCannotCollide) {

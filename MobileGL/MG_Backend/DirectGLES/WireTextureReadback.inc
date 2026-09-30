@@ -320,6 +320,105 @@
         return width == extent.x() && height == extent.y() && (!layered || depth == extent.z());
     }
 
+    // P8-E (notes/p8/E.md). MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h>, READ BY THE SERVER:
+    // a colour level of exactly that extent is treated as one the driver refused to attach - what an
+    // Adreno does for RGB16 and the 16-bit SNORM formats, and what no host driver can be made to do.
+    // Scoped by the extent so the tcp lane's shared supervisor can carry it for the whole lane: only
+    // the scenario that builds that extent (CopyImageStoreReadbackScenario) ever meets it.
+    static Bool WireTextureReadbackRefusedForTesting(const IntVec3& extent) {
+        static const IntVec3 s_refused = [] {
+            const char* value = std::getenv("MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT");
+            if (value == nullptr) return IntVec3{0, 0, 0};
+            char* end = nullptr;
+            const long width = std::strtol(value, &end, 10);
+            if (end == value || *end != 'x') return IntVec3{0, 0, 0};
+            const long height = std::strtol(end + 1, nullptr, 10);
+            if (width <= 0 || height <= 0) return IntVec3{0, 0, 0};
+            return IntVec3{static_cast<Int>(width), static_cast<Int>(height), 1};
+        }();
+        return s_refused.x() > 0 && extent == s_refused;
+    }
+
+    // P8-E: THE STORE ROUTE, for a level the driver refused to read back. The server's staged store
+    // is the only CPU copy of the level on this side, and it answers only while its bytes ARE the
+    // level: every byte crossed (IsCovered), at the extent asked for, and the texture was never
+    // written by the driver except by copies the store followed (!IsDriverWritten - see
+    // StagedTextureStore's P8-E block and FollowCopyImageInStagedStore). The conversion is
+    // GetTexImageViaShadowConversion's, into tight rows: a packed format read with its own type
+    // takes the stored words verbatim, everything else decodes to wide RGBA and converts row by row.
+    // Anything else DECLINES BY NAME: the reply is an error, and the client's
+    // Fatal{ReplyError, "ReadPixels"} ends the session instead of handing back bytes the driver has
+    // since overwritten.
+    static Bool ReadWireLevelFromStagedStore(MG_Pipe::MGPipeHandle res, TextureInternalFormat logicalFormat,
+                                             TextureUploadTarget uploadTarget, GLint level, const IntVec3& extent,
+                                             GLenum format, GLenum type, Vector<Uint8>& bytes) {
+        auto& store = MG_Remote::Server::ServerStagedTexture();
+        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+        const auto target = static_cast<Uint16>(uploadTarget);
+        const auto mip = static_cast<Uint16>(level);
+        ReadbackChannelMapping mapping{};
+        const SizeT pixelBytes = GetReadbackChannelMapping(format, mapping) ? GetReadbackDstPixelSize(mapping, type) : 0;
+        const SizeT texels = static_cast<SizeT>(std::max(extent.x(), 0)) * static_cast<SizeT>(std::max(extent.y(), 0)) *
+                             static_cast<SizeT>(std::max(extent.z(), 0));
+        const char* declined = nullptr;
+        if (!store.CopiesIntoServerStorage()) {
+            declined = "this arm keeps no staged store";
+        } else if (store.IsDriverWritten(key)) {
+            declined = "the driver has written the texture since its bytes crossed";
+        } else if (!store.IsCovered(key, target, mip)) {
+            declined = "not every byte of the level crossed";
+        } else if (store.LevelExtentOrUndefined(key, target, mip) != extent) {
+            declined = "the staged level is not the extent asked for";
+        } else if (pixelBytes == 0 || texels == 0) {
+            declined = "the format/type pair has no readback mapping";
+        }
+        Vector<Uint8> out;
+        if (declined == nullptr) {
+            const Uint8* staged = store.RequireLevelBytes(key, target, mip, "texture-readback-from-store");
+            if (MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                    logicalFormat, MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                    MG_Util::ConvertGLEnumToTexturePixelDataType(type))) {
+                if (store.LevelByteSize(key, target, mip) != texels * pixelBytes) {
+                    declined = "the staged words are not the client's word size";
+                } else {
+                    out.assign(staged, staged + texels * pixelBytes);
+                }
+            } else {
+                Vector<Uint8> wide;
+                Bool isInteger = false;
+                Bool isSigned = false;
+                if (!MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(logicalFormat, staged, texels, wide,
+                                                                             isInteger, isSigned)) {
+                    declined = "the staged format has no wide decoding";
+                } else if (mapping.isInteger != isInteger) {
+                    declined = "an integer read of a normalized level, or the reverse";
+                } else {
+                    const GLenum wideType = isInteger ? (isSigned ? GL_INT : GL_UNSIGNED_INT) : GL_FLOAT;
+                    const SizeT rowTexels = static_cast<SizeT>(extent.x());
+                    const SizeT rows = texels / rowTexels;
+                    const SizeT wideRowBytes = rowTexels * 4 * GetReadbackComponentSize(wideType);
+                    out.resize(texels * pixelBytes);
+                    for (SizeT row = 0; row < rows; ++row) {
+                        ReadbackImpl::ConvertWideReadbackRow(wide.data() + row * wideRowBytes,
+                                                             out.data() + row * rowTexels * pixelBytes, rowTexels,
+                                                             wideType, mapping, type);
+                    }
+                }
+            }
+        }
+        if (declined != nullptr) {
+            MGLOG_E_ONCE("MGPipe: texture {%u,%u} level %d: the driver refused the readback and the staged store "
+                         "cannot answer it (%s) - DECLINED (texture-readback-store-declined)",
+                         res.Slot, res.Gen, level, declined);
+            return false;
+        }
+        MGLOG_W_ONCE("MGPipe: texture {%u,%u} level %d: the driver refused the readback (internal format %u); "
+                     "answered from the server's staged store (texture-readback-from-store)",
+                     res.Slot, res.Gen, level, static_cast<unsigned>(logicalFormat));
+        bytes = Move(out);
+        return true;
+    }
+
     Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes) {
         const auto* record = PipeTextureRecordForHandle(info.Res);
         if (!record) return false;
@@ -333,15 +432,29 @@
         const Bool wholeCube = info.Target == GL_TEXTURE_CUBE_MAP;
         const IntVec3 extent{static_cast<Int>(info.Box.W), static_cast<Int>(info.Box.H),
                             wholeCube ? 1 : static_cast<Int>(info.Box.D)};
+        const auto logicalFormat = static_cast<TextureInternalFormat>(record->Desc.InternalFormat);
+        // The R32UI word leg never goes through a framebuffer, so the knob leaves it alone (it is
+        // ReadTextureLevelTight's first choice for exactly these reads).
+        const Bool packedWordRead =
+            !twin->RequiresImageBindableStorage() &&
+            MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                logicalFormat, MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)) &&
+            MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                                           MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)) == sizeof(Uint32);
+        const Bool refusedForTesting = !packedWordRead && WireTextureReadbackRefusedForTesting(extent);
         Vector<Uint8> result;
         for (Int face = 0; face < (wholeCube ? 6 : 1); ++face) {
             const auto uploadTarget = wholeCube
                 ? static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + face)
                 : MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target);
             Vector<Uint8> slice;
-            if (!ReadTextureLevelTight(twin->GetBackendTextureId(), target, uploadTarget,
-                    static_cast<TextureInternalFormat>(record->Desc.InternalFormat), info.Level, extent,
-                    twin->RequiresImageBindableStorage(), info.Format, info.Type, slice)) return false;
+            if (refusedForTesting ||
+                !ReadTextureLevelTight(twin->GetBackendTextureId(), target, uploadTarget, logicalFormat, info.Level,
+                    extent, twin->RequiresImageBindableStorage(), info.Format, info.Type, slice)) {
+                if (!ReadWireLevelFromStagedStore(info.Res, logicalFormat, uploadTarget, info.Level, extent,
+                                                  info.Format, info.Type, slice)) return false;
+            }
             result.insert(result.end(), slice.begin(), slice.end());
         }
         bytes = Move(result);
