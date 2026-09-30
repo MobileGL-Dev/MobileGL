@@ -9,7 +9,7 @@
 | 1 | multi-draw 的两个 server 闩改族 | `PipeApplier.cpp:779-784`、`:976-981` | `Fatal{UnmigratedVerb, "MultiDraw{Arrays,Elements}+{CLIENT_INDICES,INSTANCED}"}` | `Fatal{ProtocolCorruption, <同名>}`，仍按名闩住外来 peer |
 | 2 | `Magma:client-vertex-array` 去掉 P8 阶段标签，改为协议不变量 | `WireDraw.inc:297-304` | `MagmaWireFatal`（UnmigratedVerb 族，名字带 `@P8`） | `MGPipeSessionFail(ProtocolCorruption)`，名字 `Magma:client-vertex-array` 加 location |
 | 3 | Magma 生成 mip 的"无着色器臂形状"改为具名拒绝 | `WireFramebuffer.inc:1405-1459`（判定）、`:1456`、`:1500`（两个拒绝点） | wire 臂三处 Fatal（旧 `:1427`、`:1452`、`:1489-1493`） | `WireDeclines.def:112` 的 `MipmapShaderFormatOrShape`；判定在 `GrowWireTextureMipChain`（`:1460`）之前，拒绝时不增长 mip 链 |
-| 4 | `kCapViewportArray`、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes` 与 index-mirror 哨兵标为保留位 | `MGPipeTypes.h:110`、`:117-123`、`:315-320`、`:332-335`、`:994-999`、`:1007-1009`；`MGPipeHostSpan.h:16-26`；`VertexInputEmit.h:266-267`；`ShaderBufferEmit.h:250-253`；`Init.cpp:189-191` | 注释说"P5 期间为 0"或"arms the index host mirror" | 注释说 RESERVED、从不发布、位不复用不重编号；只改注释 |
+| 4 | `kCapViewportArray`、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes` 与 index-mirror 哨兵标为保留位 | `MGPipeTypes.h:110`、`:117-123`、`:315-320`、`:332-335`、`:994-999`、`:1007-1009`；`MGPipeHostSpan.h:16-26`；`VertexInputEmit.h:266-267`；`ShaderBufferEmit.h:250-253`；`MG_Backend/Init.cpp:189-191` | 注释说"P5 期间为 0"或"arms the index host mirror" | 注释说 RESERVED、从不发布、位不复用不重编号；只改注释 |
 
 ## 各项依据
 
@@ -28,7 +28,7 @@
 | 3 | 增长前后格式、特性、knob 档位、aspect、view 类型、usage、层窗口都不变 | `VkTextureManager.cpp:2884-2995` |
 | 3 | 深度 pass 对本函数交给它的图像只会因"格式不能同时采样和作深度附件"拒绝 | `WireDepthMipmap.inc:58-81` |
 | 3 | 深度 pass 若仍拒绝（两份清单漂移），走同一行拒绝，不结束会话 | `WireFramebuffer.inc:1491-1502` |
-| 4 | 生产者 0：唯一的 `SetCapabilityBits` 只置 XFB、query、resident、run-ahead 位 | `Init.cpp:202-255` |
+| 4 | 生产者 0：唯一的 `SetCapabilityBits` 只置 XFB、query、resident、run-ahead 位 | `MG_Backend/Init.cpp:202-255` |
 | 4 | 消费者 0：`kCapViewportArray` 在树内只有枚举定义；`kMGPipeBindElementArray` 只在 bind mask 表里被置 | `MGPipeTypes.h:110`、`ResourceTracker.h:95` |
 | 4 | `0xFFFFFFFF` 哨兵无编码方；`SegmentTable::Resolve` 把它当未知段 | `MGPipeHostSpan.h:26`、`PipeWireCodec.cpp:458-465` |
 | 4 | pull 构建只改注释，逐文件行数不变；G1 `added=0 removed=0`，`.text` 与基线同为 `a5ba13` | 本包门禁读数 |
