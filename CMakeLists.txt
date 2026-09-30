@@ -889,6 +889,65 @@ if(NOT ANDROID)
     )
 endif()
 
+# ---------------------------------------------------------------------------
+# MobileGLGbm: the GBM drop-in the container's compositor loads.
+#
+# kwin - the Wayland compositor in the container half of the split - allocates the
+# buffers it renders into and scans out through libgbm, and the dma-buf fds it gets
+# back are what the Anland display producer ships to the phone. Mesa's libgbm cannot
+# serve that: its buffers belong to the host GPU, and the phone would receive a copy
+# through a path that was never designed to carry one. This target is the library
+# that is loaded in its place, under the name a loader looks for.
+#
+# It is deliberately NOT part of libMobileGL.so. The compositor needs one file named
+# libgbm.so that it loads instead of Mesa's, and folding this code into the GL
+# library would put a second GL frontend, a second Vulkan instance and a second
+# glslang in the compositor's address space to serve an API that shares none of them.
+#
+# The include paths below are borrowed rather than linked. Includes.h - which this
+# library includes for the MobileGL types and the MGLOG macros - pulls in the GL,
+# EGL, Vulkan, glslang, SPIRV-Cross and xxHash HEADERS transitively, and headers are
+# all this library wants from them: linking any of those static libraries into a
+# libgbm would embed a copy of each in a process that already has one.
+#
+# -Bsymbolic-functions, for the same reason the main target carries it: the point of
+# this library is to REPLACE a libgbm that may already be loaded in the process, so
+# every internal reference has to bind to this file's own definitions rather than to
+# whatever else the process has under the same names.
+# ---------------------------------------------------------------------------
+add_library(MobileGLGbm SHARED
+    MobileGL/MG_Gbm/GbmDevice.cpp
+    MobileGL/MG_Gbm/GbmApi.cpp
+    # MGLOG_I/W/E expand to a call to MobileGL::MG_Util::Debug::Log, and this is the
+    # one translation unit that defines it. It is compiled in rather than linked from
+    # libMobileGL.so because this library has to load into a compositor that has no
+    # libMobileGL in it at all - and because a libgbm with an undefined symbol is a
+    # library that fails on the first diagnostic rather than at a link step somebody
+    # could have read.
+    MobileGL/MG_Util/Debug/Log.cpp
+)
+
+# The vendored gbm.h first: this library implements THAT declaration set, and a
+# system <gbm.h> from another Mesa version on the include path ahead of it would
+# change the ABI under the implementations in GbmApi.cpp.
+target_include_directories(MobileGLGbm PRIVATE
+    ${CMAKE_SOURCE_DIR}/3rdparty/gbm/include
+    ${MOBILEGL_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/3rdparty/glslang
+    ${CMAKE_SOURCE_DIR}/3rdparty/SPIRV-Cross
+    ${CMAKE_SOURCE_DIR}/3rdparty/xxHash
+    ${CMAKE_SOURCE_DIR}/3rdparty/Vulkan-Headers/include
+)
+
+set_target_properties(MobileGLGbm PROPERTIES
+    OUTPUT_NAME gbm
+    POSITION_INDEPENDENT_CODE ON
+)
+
+if (UNIX AND NOT APPLE)
+    target_link_options(MobileGLGbm PRIVATE "LINKER:-Bsymbolic-functions")
+endif()
+
 if (TRACY_ENABLE)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Tracy::TracyClient)
     target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC Tracy::TracyClient)
