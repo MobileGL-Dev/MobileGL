@@ -137,6 +137,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/CopyImagePacked16Scenario.cpp
+    Scenarios/CopyImageStoreReadbackScenario.cpp
     Scenarios/TextureViewScenario.cpp
     # P3b/P4b wave 2-D package D2: the verification half of the owner-keyed emission cursor.
     Scenarios/TextureViewAliasScenario.cpp
@@ -3224,6 +3225,72 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # ScenarioFixture's armed-lane rule (the client encoder's record ordinal must move) makes a
     # case that produced no record RED for having nothing to say - which is the rule working, not
     # a defect. They stay unregistered for that reason and are listed in the census note.
+
+    # P8-E (docs/Disaggregated/notes/p8/E.md): glCopyImageSubData into a level the driver will not
+    # read back, then glGetTexImage. The knob-free cases on Espryt's three arms; Magma's gated arms
+    # are the `DirectVulkan.<arm>.CopyStore.` entries just below; both monolith entries come from
+    # the whole-binary discovery.
+    mgl_itest_register_split_arms("CopyImageStoreReadbackScenario.*" "")
+    # The same cases with MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT pinned: the Espryt server
+    # treats a colour level of exactly that extent as one the driver refused to attach (what an
+    # Adreno does for RGB16 and 16-bit SNORM), so its staged store has to answer. READ BY THE
+    # SERVER, and it reaches all three arms: inproc sees this entry's environment, spawn copies it
+    # into the child, and the tcp supervisor carries it in its own fixture ENVIRONMENT (appended to
+    # TcpServer.Start here). Lane-wide there is harmless because the knob names an EXTENT and the
+    # scenario builds that extent only when it finds the knob in its own environment - every other
+    # tcp entry, this scenario's knob-free ones included, reads levels of other sizes. The
+    # renderbuffer case is not here: a renderbuffer's texels were never uploaded, so no store can
+    # answer for them, and a declined readback ends the session by design.
+    set(MGL_P8E_REFUSE_EXTENT "13x7")
+    set_property(TEST TcpServer.Start APPEND PROPERTY ENVIRONMENT
+        "MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}")
+    foreach(mglItestArm IN ITEMS Split Spawn Tcp)
+        string(TOUPPER "${mglItestArm}" mglItestArmUpper)
+        string(TOLOWER "${mglItestArm}" mglItestArmLower)
+        set(mglItestStoreReadProperties)
+        if(mglItestArm STREQUAL "Tcp")
+            set(mglItestStoreReadProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
+        endif()
+        foreach(storeReadCase AnUploadedLevelReadsBackExactly
+                              ACopiedWindowReadsBackOverTheUpload
+                              ACopiedWindowReadsBackFromAnImmutableLevel
+                              APartialUploadAfterTheCopyKeepsTheCopiedWindow)
+            gtest_discover_tests(MobileGLIntegrationTest
+                TEST_PREFIX "DirectGLES.${mglItestArm}.StoreRead."
+                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+                TEST_FILTER "CopyImageStoreReadbackScenario.${storeReadCase}"
+                DISCOVERY_TIMEOUT 30
+                PROPERTIES
+                    LABELS "integration-gpu\\;integration-${mglItestArmLower}"
+                    TIMEOUT ${MGL_ITEST_TIMEOUT}
+                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}"
+                    ${mglItestStoreReadProperties}
+            )
+            # Into the accumulated list, so SplitLogPaths gives each entry a private log: the
+            # store-route assertion reads the server's half of it.
+            list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+            math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+        endforeach()
+        # Magma, the control backend, GATED on its three arms: it reads the VkImage back whatever
+        # the format, so it has no store route and no knob - only the copy and the read.
+        set(mglItestMagmaCopyStoreProperties)
+        if(mglItestArm STREQUAL "Tcp")
+            set(mglItestMagmaCopyStoreProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
+        endif()
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.CopyStore."
+            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
+            TEST_FILTER "CopyImageStoreReadbackScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-magma-${mglItestArmLower}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_VULKAN_${mglItestArmUpper}_ENVIRONMENT}"
+                ${mglItestMagmaCopyStoreProperties}
+        )
+        list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
+        math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
+    endforeach()
 
     # The split half of the counting pair. MGITEST_PERSISTENT_MAP_ARM=emulated is R-6: under split
     # the adopt tier is pinned at T2, the resource owner declines every acquisition and the client

@@ -13109,25 +13109,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // The renderbuffer twin of TextureImpl::SyncTextureObjectToBackend: the same
     // find-or-create-then-sync the framebuffer attachment walk does (see SyncAttachmentObject),
-    // reachable from a path that has a renderbuffer but no framebuffer.
+    // reachable from a path that has a renderbuffer but no framebuffer. The MONOLITH arm's only:
+    // under a transport MakeGLESCopyImageEndpoint resolves a renderbuffer endpoint by handle and
+    // never calls this. (P8-E removed the `CopyImageSubData+RENDERBUFFER` latch that stood here -
+    // its transport condition could not hold at the only call site - and
+    // CopyImageStoreReadbackScenario's renderbuffer case runs the handle arm on every transport.)
     static SharedPtr<RenderbufferImpl::BackendRenderbufferObject> SyncRenderbufferObjectToBackend(
         const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbufferObject) {
         if (!renderbufferObject) return nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P5e (fb, CONTRACT-P5E.md §4.4): the scope at this site is DELETED, and with it the
-        // arm that needed it. The only caller is the glCopyImageSubData endpoint builder, and a
-        // RENDERBUFFER endpoint is refused on the wire before it is emitted and again at the
-        // sink (PipeApplier.cpp's ServerUnmigratedVerbFatal("CopyImageSubData+RENDERBUFFER")),
-        // so under a transport nothing can reach here with one. Saying so by name is better
-        // than a find-or-MINT against the frontend address that the refusal already proved
-        // unreachable - if it ever becomes reachable, the name is where to start.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"CopyImageSubData+RENDERBUFFER\"} a renderbuffer "
-                    "endpoint reached the backend under an active transport, where both the client "
-                    "emitter and the sink refuse one");
-            std::abort();
-        }
-#endif
         SharedPtr<RenderbufferImpl::BackendRenderbufferObject> backendRenderbufferObject;
         if (auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.Find(renderbufferObject.get())) {
             backendRenderbufferObject = *slot;
@@ -13248,19 +13237,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* dstMipmap = MG_State::GLState::AsMipmapTexture(dstEndpoint.Texture.get());
         if (!srcMipmap || !dstMipmap) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5b package i1's ONE backend edit, and the contract names this site
-        // (MG_Remote/CONTRACT-P5B.md §2 i1 "the copy-image-shadow-mirror emulation", ruling
-        // §6.7). Migrating glCopyImageSubData moves the first blocker off the client's
-        // Fatal{UnmigratedVerb} and onto the Fatal below, on every Espryt copy between two
-        // textures with CPU shadows - so the ruling is: UNDER A REAL TRANSPORT THE SERVER SKIPS
-        // THE MIRROR, and the client-side mirror ROADMAP P8 names ("CopyImage 镜像搬到 client")
-        // stays P8's.
-        //
-        // WHAT THE SKIP LOSES IS BOUNDED BY TWO FATALS, which is the whole reason it is allowed
-        // to be a skip rather than a port: a later glGetTexImage of the destination served from
-        // the shadow is class C wave 3 (Fatal{UnmigratedVerb, "GetTexImage"}, P9), and a texture
-        // re-mint under a transport reads the GPU level itself (RequireImageBindableStorageByHandle,
-        // P9 W2) rather than any shadow. Neither can silently read the un-mirrored shadow.
+        // UNDER A REAL TRANSPORT THE SERVER HAS NO FRONTEND SHADOW TO MIRROR INTO (P5b i1, ruling
+        // §6.7), and P8-E settled where the move lives instead - not on the client (ROADMAP P8's
+        // original row) but in the server's staged store: CopyImageSubData's handle arm makes the
+        // same texel-block move there (TextureImpl::FollowCopyImageInStagedStore) for EVERY
+        // format, not only the redundant-encoding ones this mirror serves, and marks the store
+        // driver-written where it cannot. The store is what answers a split glGetTexImage the
+        // driver refuses to read back (WireTextureReadback.inc's store route); every other split
+        // read of the destination reads the GPU level itself (notes/p8/E.md).
         //
         // BEHIND #if MOBILEGL_BUILD_DISAGGREGATED so the pull build's code does not move (G1),
         // and the arm is the TRANSPORT and not the build - build-split runs its unit and
@@ -13347,9 +13331,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The handle arm's endpoint names its texture by handle, and the server has no frontend
-        // object to note.
-        if (!dstEndpoint.IsRenderbuffer() && !MG_Pipe::MGPipeHandleIsNull(dstEndpoint.TextureHandle)) {
-            TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
+        // object to note. The staged store's half of the note waits for the copy (P8-E, below).
+        const Bool handleArmDestination =
+            !dstEndpoint.IsRenderbuffer() && !MG_Pipe::MGPipeHandleIsNull(dstEndpoint.TextureHandle);
+        if (handleArmDestination) {
+            TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle, /*storeFollowsTheWrite=*/true);
         }
 #endif
         if (!MakeGLESCopyImageEndpoint(srcEndpoint, srcTarget, srcX, srcY, srcZ, src) ||
@@ -13357,6 +13343,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
             return;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-E (notes/p8/E.md): THE SERVER'S STAGED STORE FOLLOWS THE COPY. Both endpoints are synced,
+        // so every byte the store holds for them is on the driver, and the copy below is a raw
+        // texel-block move - the store makes the same move, which keeps the destination level
+        // answerable from here when the driver will not read it back (ReadTextureImageWire's store
+        // route) and keeps a whole-level replay of it (a re-mint's refused readback, a full-level
+        // re-upload) from putting the pre-copy texels back. Where the store cannot follow (a
+        // renderbuffer, a cube or 1D-array endpoint, a source the driver has written, a level whose
+        // bytes did not all cross) it is marked driver-written instead, so it declines rather than
+        // answering with stale bytes. Nothing moves to the client (ROADMAP P8's original row).
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && handleArmDestination) {
+            const Bool followed =
+                !srcEndpoint.IsRenderbuffer() && !MG_Pipe::MGPipeHandleIsNull(srcEndpoint.TextureHandle) &&
+                TextureImpl::FollowCopyImageInStagedStore(
+                    srcEndpoint.TextureHandle, static_cast<Uint32>(srcLevel), IntVec3{srcX, srcY, srcZ},
+                    dstEndpoint.TextureHandle, static_cast<Uint32>(dstLevel), IntVec3{dstX, dstY, dstZ},
+                    IntVec3{srcWidth, srcHeight, srcDepth});
+            if (!followed) TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
+        }
+#endif
 
         // Verbatim: GL already spells a 1D array's extent the way the ES 2D array it maps onto
         // wants it (height 1, layers on depth) - see MakeGLESCopyImageEndpoint.
@@ -13430,6 +13436,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                          MG_Util::ConvertGLEnumToString(dst.target).c_str(),
                          MG_Util::ConvertGLEnumToString(dstTarget).c_str());
             MOBILEGL_ASSERT(false, "glCopyImageSubData failed after frontend validation accepted the request.");
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P8-E: the store already made the move the driver just refused.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith && handleArmDestination) {
+                TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
+            }
+#endif
             return;
         }
         // The copy landed on the GPU. For a destination whose readback cannot be bit-exact the

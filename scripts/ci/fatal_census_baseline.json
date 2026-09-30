@@ -1,7 +1,7 @@
 {
-  "abort_sites": 79,
+  "abort_sites": 78,
   "abort_sites_by_file": {
-    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 15,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 14,
     "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 12,
     "MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp": 2,
     "MobileGL/MG_Backend/DirectGLES/Utils.cpp": 1,

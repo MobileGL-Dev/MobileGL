@@ -2321,7 +2321,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // VerbCopyTexDst, a copy-image endpoint): the twin the handle's record names is marked, or
         // its storage owner's (Desc.ViewOf) for a view. Nothing on the apply thread reads a
         // frontend object for it.
-        void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture);
+        //
+        // P8-E: under a transport the same storage owner's staged store is marked driver-written
+        // too (StagedTextureStore::MarkDriverWritten), so a refused readback does not answer from
+        // bytes the driver has since overwritten - unless `storeFollowsTheWrite`, which only
+        // glCopyImageSubData passes: it tries FollowCopyImageInStagedStore first and marks the store
+        // itself when that fails.
+        void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture, Bool storeFollowsTheWrite = false);
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P8-E (notes/p8/E.md): make glCopyImageSubData's texel-block move in the server's staged
+        // store too (StagedTextureStore::FollowCopy), so the destination level's bytes stay its
+        // content. Box in each image's own texel grid. False when the store cannot follow: a cube
+        // map or 1D array endpoint (copy-image puts faces / layers on z, the store does not), a view,
+        // two different internal formats, a level whose bytes did not all cross, a source the
+        // driver has written, or a monolith arm.
+        Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
+                                          MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
+                                          const IntVec3& destinationOrigin, const IntVec3& size);
 #endif
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
