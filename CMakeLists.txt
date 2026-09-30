@@ -434,10 +434,13 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/Init.cpp
     MobileGL/MG_Backend/BackendObject.cpp
 
+    MobileGL/MG_Backend/HostFrameBridge.cpp
+
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
+    MobileGL/MG_Backend/DirectGLES/HostFrameTarget.cpp
     MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
