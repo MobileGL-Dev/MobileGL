@@ -232,14 +232,19 @@
 
 | 数据面 | `MOBILEGL_IPC_ADOPT_TIER` | client | server |
 |---|---|---|---|
-| 任意 | 2（缺省） | 今天的 T2，逐字节不变；Hello 的 `adoptTier` = 2 | 不变 |
+| SharedSegments | **未设（缺省，2026-09-29 起）** | Hello 问 `0x80`（`kAdoptAskT0Default`：T0，回退安静）。有 `kCapAdoptT0` → T0（I 行同 0）；没有 → **只 MGLOG_D**，本会话 T2，计入 `T0Fallbacks` | 授予同 0（`T0 granted` I 行）；不授予 → **只 MGLOG_D**（POST 结果行同样降为 D），计入 `T0Refusals`；会话总计行降为 D |
+| Stream | 未设 | Hello 问 2；**只 MGLOG_D**（不是 A1 的 W 行），T2，计入 `T0Fallbacks` | server 自己的旋钮未设时同样只 D |
+| 任意 | 2 | 今天的 T2，逐字节不变；Hello 的 `adoptTier` = 2 | 不变 |
 | Stream | 0 / 1 | A1 不变：一行 W `Refuse{AdoptTierOnStream, "T<n>"}`，T2 | A1 不变 |
 | SharedSegments | 1 | 一行 W `Refuse{AdoptTierClosed, "T1"}`，问 2，T2 | — |
 | SharedSegments | 0 | Hello 问 T0。第一次 `map_persistent` 时档 = min(旋钮, caps, 数据面)：有 `kCapAdoptT0` → T0（I 行）；没有 → 一行 W `Refuse{AdoptT0Unavailable, "no kCapAdoptT0"}`，本会话 T2 | 第一次原生 bind 时定（`ServerSession::SettleAdoptT0AtBind`，`ServerSession.cpp:1076`）：允许开关 → 平台有 AHB → 后端登记了导入 op → POST（进程内缓存）。授予：I `T0 granted`，post-bind 的 caps 快照带 `kCapAdoptT0`；否则一行 W `Refuse{AdoptT0Unavailable, "disallowed" \| "no AHardwareBuffer" \| "POST"}`，不发布 |
-| 任意 | > 2 | 解析器不收 → Fatal（不变） | 同 |
+| 任意 | 解析不了的值 | 一行 W（Config 忽略该值），按**未设**处理 | 同 |
 
+- **缺省是 T0（用户 2026-09-29 决定）**：旋钮未设 = 能用就用 T0，不能用就安静回退 T2——stream、没有 AHB、POST 失败、server 不允许这四种都只打 MGLOG_D、没有 W / I 行，但照样计数（client `T0Fallbacks`、server `T0Refusals`，以及两侧的会话总计）。否则每个 tcp 会话和每个主机会话都会多一行回退。**显式 `=0` 与未设的区别只在日志**：`=0` 保留全部具名行（A1 的 `Refuse{AdoptTierOnStream}`、`Refuse{AdoptT0Unavailable, …}`），线上问 `0`；未设问 `0x80`，这样 server 才知道要安静（拒绝的原因只有 server 知道）。`=2` 仍是 T2，`MOBILEGL_IPC_ALLOW_ADOPT_T0` 不变。Config 行记为 `adopt-tier=unset(T0)`。
+- **修订 5 的 schema 补丁**：`protocol.fbs` 里 `adoptTier` 的注释加上 `0x80`，修订 5 按 `protocol_revision_pin.py --write --force` 重钉（`4632750f…`）。依据是脚本自己写的「修订号提交本身的罕见补丁」这一例外：修订 5 只在这条未落地的分支里出现过，没有外部对端。e44d6ac7 之前的修订 5 server 收到 `0x80` 时按名 `Refuse{LinkTerms}`，不会静默误读。生成的头文件不变。
 - **行为变化（A1 → B2）**：SharedSegments + 0 / 1 不再在握手期 `Fatal{UnimplementedAdoptTier}`。A1 的两个死亡用例改写为 `RemoteClientAdoptT0.*` 的具名回退用例。从不 Fatal：T0 不可用 → T2 + 具名行。
 - server 允许开关 `MOBILEGL_IPC_ALLOW_ADOPT_T0`（缺省 1；0 = 从不授予），进 `ServerSpawn` 的 server 自有名单（环境剔除后仍在），Config 行 `allow-t0=`。
+- 门（缺省 T0）：`RemoteClientAdoptT0.AnUnsetKnobFallsBackToT2QuietlyAndCountsIt`（主机无 AHB 的共享段）、`AdoptTierStream.AnUnsetKnobRunsT2OnAStreamQuietlyAndCountsTheFallback`（真 tcp）；未设 → T2，没有 W / I 回退行，计数为 1。red-once：把未设路径的三处 D 改成 W → 两例都红。`KnobTwoIsTodaysT2WithNoT0Line` 显式设 2。`SessionHandshakeTest` 的问值表加上 `0x80`（合法且安静）和 `0x81`（`Refuse{LinkTerms}`）。
 - 单个 store 的拒绝（server 已授予，这一条没导入）→ 该 store DECLINED = T2，client W 行，会话继续：Offer 未到（E `Refuse{AdoptT0NoStore, "record N"}`）、client 分配失败（Offer flags 0）、hop 读不出、后端导入失败；client 建不了 hop → W `Refuse{AdoptT0NoStore, "hop"}`、不发记录。
 - refusal 词 4 → 7（`AdoptTierClosed`、`AdoptT0Unavailable`、`AdoptT0NoStore` 进 `LOCAL_REFUSAL_WORDS`）；abort 站点仍 79、family 仍 45。
 

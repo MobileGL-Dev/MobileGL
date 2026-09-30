@@ -58,7 +58,8 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
 | `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | Magma wire 臂延迟回收的水位线；`0` 是 M2 阴性对照 |
 | `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` / `_PERSISTENT_HASH_SUPPRESS` | 64 / 1 | persistent-map 推送粒度 / 只推变化的块；`0` 是对照 |
-| `MOBILEGL_IPC_ADOPT_TIER` | 2 | `auto/0/1/2`；T0 / T1 今天是 Fatal-at-use |
+| `MOBILEGL_IPC_ADOPT_TIER` | 未设 = T0 | 未设（用户 2026-09-29 定为缺省）= 能用就 T0，不能用（stream、无 AHB、POST 失败、server 不允许）安静回退 T2：只 MGLOG_D、照样计数；`0` = 点名要 T0，回退有具名行（A1 的 `Refuse{AdoptTierOnStream}` 等）；`1` = T1 已关，具名拒绝后 T2；`2` = T2（P11 前的缺省）。`CONTRACT-P11.md` B2 |
+| `MOBILEGL_IPC_ALLOW_ADOPT_T0` | 1 | server 自有：`0` = 永不批准 T0（会话走 T2），经 `ServerSpawn` 保留 |
 | `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 0 | 残余输入读升级为 Fatal / 退休 staging 填 `0xDD` / 双块演练（P5f） |
 | `MOBILEGL_IPC_SPIN_US` / `MOBILEGL_IPC_SERVER_AFFINITY` | 50 / `auto` | park 前自旋预算 / apply 线程亲和（Redmi 内核忽略） |
 | `MOBILEGL_IPC_RESPAWN` | — | 具名拒绝：没有阶段实现 server 重启后的全量重推 |
