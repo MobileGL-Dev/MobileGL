@@ -6,10 +6,10 @@
 
 - 门改为「归一化后 monolith ⊆ 门控 split ∪ 豁免表」，由 `scripts/ci/split_coverage.py` 强制；`test.yml` 在 parity 步之后跑它（含 `--self-test`）。
 - 当前读数：DirectGLES monolith 669 例 = 门控 split 581 + 豁免 88，缺 0；DirectVulkan 669 = 门控 202 + 仅信息层 435 + 豁免 32，缺 0。
-- 审计的 396 是 ctest 条目口径（含旋钮尾重复）；按 gtest 名只在 monolith 的 DirectGLES 用例是 335，去掉机制过滤器（`MobileGL/MG_IntegrationTest/CMakeLists.txt:792`）的 31 例后 304 例进普查。
+- 按 gtest 名只在 monolith 的 DirectGLES 用例是 335（审计的 396 按 TEST_F 计，含它自己列出的约 45 个已带尾登记在 split 的「命名假象」）；去掉机制过滤器（`MobileGL/MG_IntegrationTest/CMakeLists.txt:792`）的 31 例后 304 例进普查。
 - 本包新登记：246 个 ambient 用例 × 三臂；5 条 server 旋钮车道共 21 例 × 三臂（tcp 各有自己的 supervisor）；撤 `ClientSideIndices` 排除（d1 块三臂 + 5 个 multi-draw tier）；GuiBatch 随 ambient 登记。
 - 审计 (c′) 的「进程内 peek」类实测为 0：P4aFinalFix / P4aSeamAudit 在 spawn / tcp 上 white-box 读取自行降级，public-GL 半边照跑，三臂全绿，已登记。
-- DoublePrecision 12 例 tcp 也绿（审计 (b) 的推断不成立），已登记。
+- DoublePrecision 12 例在同环境的 loopback tcp 上绿，已登记；`DEBTS.md` 的 fp64 行说的是 server 环境与 client 不同（`MOBILEGL_ADVERTISE_FP64`），本机没测到那一形。
 
 ## 2. 普查（304 例 × Split / Spawn / Tcp，armed 环境，每臂一个 junit）
 

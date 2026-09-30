@@ -137,8 +137,11 @@ mgl_itest_register_split_arms("${mglP8aAmbientFilter}" "")
 # on its own port, started by its own fixture with the knob in the fixture's ENVIRONMENT.
 #
 # THE PORTS: the lane endpoint's port + MOBILEGL_ITEST_TCP_KNOB_PORT_OFFSET + the lane's index.
-# The default offset (1000) keeps the five clear of every per-tree endpoint in use (40613 CI,
-# 407xx / 409xx split and verify builds, 484x0 package trees) and of each other's trees.
+# The default offset (1000) keeps the five clear of every per-tree lane endpoint in use (40613
+# CI, 407xx / 409xx split and verify builds, 484x0 package trees). One overlap remains: a tree
+# whose split and verify builds sit one port apart (409x3 / 409x4) gets knob ports one apart as
+# well, so the two builds must not run integration-tcp at the same moment - set the cache
+# variable differently in one of them if they ever do.
 #
 # THE LOCK IS STILL mobilegl-tcp: spawn_lane_parity.py / junit_tally.py require it of every
 # integration-tcp entry, and one tcp session at a time is what every other tcp entry assumes.
