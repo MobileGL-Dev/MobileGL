@@ -1,4 +1,4 @@
-# P8 — ~~emulation 下放 + 索引宿主镜像 + 协议广度~~ → server 侧仿真缺口与 split 覆盖（进行中，2026-09-29 起）
+# P8 — ~~emulation 下放 + 索引宿主镜像 + 协议广度~~ → server 侧仿真缺口与 split 覆盖（已收官，2026-09-30）
 
 > **2026-09-29 重定界**（用户批准）：只读核查发现原范围 10 项里 6 项已由前序阶段完成，剩下的缺口都在 server 侧，不是"搬到 client"。计划 [`PLAN-P8.md`](PLAN-P8.md)；裁定 [`INTEGRATOR-DECISIONS-P8.md`](INTEGRATOR-DECISIONS-P8.md)。下面原范围照录并划掉，不删。
 
@@ -15,7 +15,15 @@
 | F | 死闩清理与重分类 | ✅（[`F.md`](F.md)，ID-P8-6） |
 | G | 大 blob 分片 | 不做（ID-P8-5） |
 
-第一波集成头 `39cd8fb7` 整套门全绿（ID-P8-12）。第二波见 [`PLAN-P8.md`](PLAN-P8.md)。
+第一波集成头 `39cd8fb7` 整套门全绿（ID-P8-12）。
+
+| 第二波 | 内容 | 结果 |
+|---|---|---|
+| SE | Espryt split 余项 + 文档行号 | ✅ spawn / tcp 默认帧缓冲发布 surface；CPU mip 拒读时具名拒绝；名单对调用点的门（[`SE.md`](SE.md)，ID-P8-15） |
+| SV | Magma split 余项 | ✅ 3D mip blit 1 层、深度 mip 拒绝入账、1D 深度拒绝、`glDispatchComputeIndirect` 原生（[`SV.md`](SV.md)，ID-P8-16） |
+| MD + MF | Create 在 Adreno 830 上 | ✅ dev `f973008c` + push 阶梯镜像：create-instancing × Espryt × monolith 0.870 → 0.99998；create-indirect 坏在 fixture（对齐 16 vs 64），不是 MobileGL（[`MF.md`](MF.md)，ID-P8-14） |
+
+契约 `MobileGL/MG_Remote/CONTRACT-P8.md`；收官 ID-P8-19（出口设备检查无一格变差，P12 跨机门复跑一致）。
 
 ## 摘要（原文，已划掉）
 

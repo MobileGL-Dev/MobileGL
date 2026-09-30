@@ -24,6 +24,7 @@
 | P8 转出（C）：server SSBO 标记过近似（窗口内每个绑定的 SSBO 都标）；一个留在 SSBO 绑定上又当 restart EBO 用的 buffer 每次 draw 都回读 | 性能工作 |
 | P8 转出（monolith，ID-P8-13）：9 条 monolith 缺陷真实内容 0 命中，不在 dev 上修——Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子；Magma `glMultiDrawArraysIndirectCount` CPU 臂同病；Magma 录制中途 `SyncGpuWrites` → SIGSEGV；Espryt RGB16F / RGB32F CPU 滤波读陈旧影子、R11F / 深度链无视 BASE / MAX；Magma 无 BLIT 颜色格式缺着色器 mip 臂；Espryt 拷贝后 `glGetTexImage` 读拷贝前影子（证据见 `notes/p8/{B,C,D,E}.md`） | P13（monolith 换到已修好的记录臂） |
 | P8 转出（monolith，feat，ID-P8-14）：feat 的 monolith 臂每次 indirect draw 在命令缓冲有 GPU 写时整 buffer 同步回读（`SyncClientSideVertexArraysForIndirectFetch`，`62bfe461`，dev 无）；Magma 的 split 构建 monolith 深度 mip 不传 view 类型，无深度 `BLIT_DST` 的设备上 1D 深度链会拿到 2D view（推断，Release 下断言编译掉，SV） | P13（monolith 换臂） |
+| P8 转出（ID-P8-19）：create-indirect × Magma × spawn 在红米上由 0.84 变为每次丢设备（该 fixture 的 indirect 命令本身是乱的；推断 D 原生化后乱命令直达 GPU，monolith 臂一直原生、基线上也偶发丢设备）；坏命令能打挂 GPU 是 GL 未定义行为，robust buffer access 可兜住 | 待归因（fixture 重抓后复测） |
 | P8 转出（ID-P8-14）：create-indirect fixture 在桌面上抓（SSBO 偏移对齐 16），Adreno 要求 64，任何臂任何后端都过不了；设备车道记为不适用 | 需要时在对齐 64 的设备上重抓 |
 | P8 转出（MD）：dev 的 `RingAllocateSlow` 在出错的上下文上无上限地排水（设备上挂在 `glFinish`） | 小修（dev） |
 | P8 转出：`LogForwardChannel.APeerThatStopsReadingCostsWarnLinesNotTheCallersTime` 在负载下超时（两次），单跑必过 | 小修（放宽时限或隔离） |

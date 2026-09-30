@@ -66,3 +66,7 @@
 | Espryt RGB16F / RGB32F CPU 滤波读陈旧影子；R11F / 深度链无视 BASE / MAX | B | 0 | 留给 P13 |
 | Magma 无 BLIT 颜色格式缺着色器 mip 臂 | B | 0 | 留给 P13 |
 | Espryt 拷贝后 `glGetTexImage` 读拷贝前影子 | E | 0 | 留给 P13 |
+
+## 收官（2026-09-30，ID-P8-19）
+
+两波全部合入；第二波另加 MF（feat 的 push 阶梯镜像 dev 修复）与出口设备检查 X。结果见 [`README.md`](README.md)。

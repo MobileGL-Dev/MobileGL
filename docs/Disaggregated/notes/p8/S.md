@@ -42,6 +42,6 @@
 
 ## 设备上基线就有的问题（两臂都有，不归 P8）
 
-- create-indirect 在 Adreno 830 上 kgsl `Preemption Fault`（两后端两臂；ID-P7-4）。
+- create-indirect 在 Adreno 830 上 kgsl `Preemption Fault`（两后端两臂；ID-P7-4）——**原因已查明**（ID-P8-14）：fixture 在桌面上抓，SSBO 偏移对齐 16，Adreno 要求 64，被拒的绑定让 indirect 命令写乱；不是 MobileGL 缺陷。
 - 1.21.11-main-menu（Espryt 0.890、Magma 0.165）、derivative-main（Espryt 0.851）SSIM < 0.99。
 - create-instancing × Espryt × monolith 0.870（spawn 0.99998）——monolith 缺陷，进第二波 dev。
