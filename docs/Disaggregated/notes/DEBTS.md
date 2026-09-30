@@ -22,7 +22,7 @@
 | P8 转出（E）：driver-written 标按整张纹理打（`GenerateMipmap` 也打），驱动拒读时连基级也具名拒绝，偏保守；跨格式拷贝 store 不跟随；拒绝仍是会话 Fatal（要改回包状态才能答 `GL_INVALID_OPERATION`） | 小修（按 level 打标）；其余按需 |
 | P8 转出（B）：`PipeCalls.def:260` `GenerateMipmap` 仍是 `kWaitApplied`，裁定 14 的理由（CPU 滤波碰 client 影子）已不成立，可改 `kWaitNone` | 性能工作（协议行为变更，需单独裁定） |
 | P8 转出（C）：server SSBO 标记过近似（窗口内每个绑定的 SSBO 都标）；一个留在 SSBO 绑定上又当 restart EBO 用的 buffer 每次 draw 都回读 | 性能工作 |
-| P8 转出（monolith，ID-P8-13）：11 条 monolith 缺陷真实内容 0 命中，不在 dev 上修——Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子；Magma `glMultiDrawArraysIndirectCount` CPU 臂同病；Magma 录制中途 `SyncGpuWrites` → SIGSEGV；Espryt RGB16F / RGB32F CPU 滤波读陈旧影子、R11F / 深度链无视 BASE / MAX；Magma 无 BLIT 颜色格式缺着色器 mip 臂；Espryt 拷贝后 `glGetTexImage` 读拷贝前影子（证据见 `notes/p8/{B,C,D,E}.md`） | P13（monolith 换到已修好的记录臂） |
+| P8 转出（monolith，ID-P8-13）：9 条 monolith 缺陷真实内容 0 命中，不在 dev 上修——Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子；Magma `glMultiDrawArraysIndirectCount` CPU 臂同病；Magma 录制中途 `SyncGpuWrites` → SIGSEGV；Espryt RGB16F / RGB32F CPU 滤波读陈旧影子、R11F / 深度链无视 BASE / MAX；Magma 无 BLIT 颜色格式缺着色器 mip 臂；Espryt 拷贝后 `glGetTexImage` 读拷贝前影子（证据见 `notes/p8/{B,C,D,E}.md`） | P13（monolith 换到已修好的记录臂） |
 | P8-0 转出：设备上基线就有的 SSIM < 0.99——1.21.11-main-menu（Espryt 0.890、Magma 0.165）、derivative-main（Espryt 0.851）；两臂都有 | 待归因 |
 | P12 未做：D8 窗口种类白名单——X11 / MetalLayer / Win32Hwnd / None 仍被接受（`SurfaceOpCodec.cpp:138-141`），`HandleFromToken` 把 token 强转为指针（`ServerLoop.cpp:1228`，经 `UnpackWindowHandle`；下游是否交给 EGL 未追到底） | 可进行（Ph 类小修） |
 | P12 未做：修后的横屏 server 窗口未重测 | 可进行（红米只读检查） |
