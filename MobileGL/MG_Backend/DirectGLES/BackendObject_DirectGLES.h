@@ -8,6 +8,8 @@
 
 #pragma once
 #include <Includes.h>
+#include "HostFrameTarget.h"
+#include "MG_Backend/HostFrameBridge.h"
 #include "../BackendObject.h"
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
@@ -56,7 +58,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
     private:
         void UpdateDynamicBackendParameters();
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
+        // A host-framed surface draws into a frame the display host owns; presenting one
+        // tells the host the frame is drawn, because the host is what puts it on the glass.
+        // NOT CreateEGLHostFrameSurface: the base class registers the surface and activates it,
+        // and activation is what reaches InitHostFrameSurface below.  There is nothing about the
+        // EGL side of a host-framed surface this backend needs to do its own way.
+        Bool InitHostFrameSurface(EGLint width, EGLint height) override;
+        Bool PresentHostFrame() override;
+        // Takes the next frame from the host and makes it this context's framebuffer.
+        Bool TakeHostFrame();
+        void DestroyHostFrame();
         void OnEGLSurfaceReleased(EGLSurface surface) override;
+
+        // MOBILEGL_IPC_SURFACE=host: the frames the display host owns, one at a time, which
+        // is what the host offers - it hands one over and waits for the answer before it
+        // presents it and offers the next.
+        MG_Backend::HostFrameBridge m_hostFrameBridge;
+        HostFrameTarget m_hostFrameTarget;
+        struct AHardwareBuffer* m_hostFrameBuffer = nullptr;
+        MG_Backend::HostFrameOffer m_hostFrameOffer{};
+        Bool m_hostFrameBridgeOpen = false;
 
         Bool m_initialized = false;
         MG_External::EGLFunctionsTable m_EGLFunctions;

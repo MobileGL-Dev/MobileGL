@@ -8,6 +8,7 @@
 
 #include "HostFrameTarget.h"
 #include "DirectGLES.h"
+#include "Managers.h"
 
 #if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
 
@@ -168,8 +169,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void HostFrameTargetBind(const HostFrameTarget& target) {
-        if (target.Framebuffer != 0 && g_GLESFuncs.glBindFramebuffer != nullptr)
-            g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, target.Framebuffer);
+        if (target.Framebuffer == 0) return;
+        // THROUGH THE ENGINE'S SHADOW, never raw: a raw bind would leave the shadow claiming
+        // the previous framebuffer and false-skip the next re-bind (FramebufferImpl, Managers.h).
+        FramebufferImpl::BindFramebufferId(GL_FRAMEBUFFER, target.Framebuffer);
     }
 
     void HostFrameTargetDestroy(HostFrameTarget& target) {

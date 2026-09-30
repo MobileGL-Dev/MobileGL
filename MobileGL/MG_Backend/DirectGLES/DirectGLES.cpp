@@ -87,6 +87,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
     MG_External::EGLFunctionsTable g_EGLFuncs;
+    Uint g_hostFrameFramebufferId = 0;
     MG_External::GLESFunctionsTable g_GLESFuncs;
     MG_External::GLESCapabilities g_GLESCapabilities;
 
@@ -6515,7 +6516,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // Through the shadow: a raw bind here would leave the shadow claiming
                     // the previous user FBO, false-skipping its next re-bind.
                     FramebufferImpl::BindFramebufferId(
-                        target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
+                        target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, g_hostFrameFramebufferId);
                 }
                 return;
             }
@@ -6584,7 +6585,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Through the shadow: a raw bind here would leave the shadow claiming
             // the previous user FBO, false-skipping its next re-bind.
             FramebufferImpl::BindFramebufferId(
-                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
+                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, g_hostFrameFramebufferId);
         }
     }
 
@@ -6604,7 +6605,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 FramebufferImpl::g_integerColorDrawBufferMask = 0;
             }
             FramebufferImpl::BindFramebufferId(
-                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
+                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, g_hostFrameFramebufferId);
             return;
         }
 
@@ -6645,7 +6646,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 FramebufferImpl::g_integerColorDrawBufferMask = 0;
             }
             FramebufferImpl::BindFramebufferId(
-                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
+                target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, g_hostFrameFramebufferId);
             return;
         }
 

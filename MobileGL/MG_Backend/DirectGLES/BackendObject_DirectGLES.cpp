@@ -1028,6 +1028,106 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+    #if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+    namespace {
+        // The host may still be starting when the client asks for its surface: it is a separate
+        // app that has to come up and allocate its pool.  Waiting is better than refusing a
+        // surface a client is entitled to, and the wait is answered by name if it expires.
+        constexpr Int kHostFrameWaitMs = 30000;
+    }
+
+    Bool BackendObject_DirectGLES::InitHostFrameSurface(EGLint width, EGLint height) {
+        // The EGL context comes from the same place a pbuffer session's does.  What changes is not
+        // how this side draws but what it draws INTO: a frame the display host allocated, bound as
+        // this context's framebuffer.  The pbuffer stays as the draw target for the moment before
+        // the first frame arrives, which is the only moment it is used.
+        if (!DirectGLES::InitPbufferSurface(width, height)) {
+            MGLOG_E("InitHostFrameSurface: the context the host frames are drawn in did not come up");
+            return false;
+        }
+        if (!m_hostFrameBridgeOpen) {
+            String why;
+            if (!m_hostFrameBridge.Open(MG_Backend::kHostFrameSocket, kHostFrameWaitMs, why)) {
+                MGLOG_E("InitHostFrameSurface: no display host: %s", why.c_str());
+                return false;
+            }
+            m_hostFrameBridgeOpen = true;
+        }
+        return TakeHostFrame();
+    }
+
+    Bool BackendObject_DirectGLES::TakeHostFrame() {
+        String why;
+        struct AHardwareBuffer* frame = nullptr;
+        MG_Backend::HostFrameOffer offer{};
+        if (!m_hostFrameBridge.Acquire(&frame, offer, why)) {
+            MGLOG_E("TakeHostFrame: %s", why.c_str());
+            return false;
+        }
+        HostFrameTarget target;
+        if (!HostFrameTargetCreate(frame, target, why)) {
+            MGLOG_E("TakeHostFrame: the host frame %ux%u did not become a draw target: %s", offer.Width,
+                    offer.Height, why.c_str());
+            AHardwareBuffer_release(frame);
+            return false;
+        }
+        DestroyHostFrame();
+        m_hostFrameTarget = target;
+        m_hostFrameBuffer = frame;
+        m_hostFrameOffer = offer;
+        // BEFORE the bind: every default-framebuffer bind the engine makes from here on has to
+        // resolve to this frame, and that resolution is what this global is.
+        g_hostFrameFramebufferId = m_hostFrameTarget.Framebuffer;
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        HostFrameTargetBind(m_hostFrameTarget);
+        MGLOG_I("host frame %u is the draw target: %ux%u", offer.Index, target.Width, target.Height);
+        return true;
+    }
+
+    void BackendObject_DirectGLES::DestroyHostFrame() {
+        g_hostFrameFramebufferId = 0;
+        HostFrameTargetDestroy(m_hostFrameTarget);
+        if (m_hostFrameBuffer != nullptr) {
+            AHardwareBuffer_release(m_hostFrameBuffer);
+            m_hostFrameBuffer = nullptr;
+        }
+    }
+
+    Bool BackendObject_DirectGLES::PresentHostFrame() {
+        // When this returns, the pixels are complete: glFinish is the fence the host is told
+        // about, and the host's own readback - which Complete reads - is what proves the drawing
+        // landed where the screen will look.
+        if (g_GLESFuncs.glFinish != nullptr) g_GLESFuncs.glFinish();
+        String why;
+        if (!m_hostFrameBridge.Complete(m_hostFrameOffer, /*imported=*/true, /*drawn=*/true, /*fenceOk=*/true, why)) {
+            MGLOG_E("PresentHostFrame: %s", why.c_str());
+            return false;
+        }
+        // The answer has been read, so the host has already put this frame on the glass: it is
+        // this side's to drop, and the next one becomes the drawing target.
+        DestroyHostFrame();
+        return TakeHostFrame();
+    }
+
+#else  // !(MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__)
+
+    Bool BackendObject_DirectGLES::InitHostFrameSurface(EGLint width, EGLint height) {
+        (void)width;
+        (void)height;
+        MGLOG_E("InitHostFrameSurface: host frames are a disaggregated Android path");
+        return false;
+    }
+
+    Bool BackendObject_DirectGLES::TakeHostFrame() { return false; }
+    void BackendObject_DirectGLES::DestroyHostFrame() {}
+
+    Bool BackendObject_DirectGLES::PresentHostFrame() {
+        MGLOG_E("PresentHostFrame: host frames are a disaggregated Android path");
+        return false;
+    }
+
+#endif
+
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {
         return DirectGLES::InitPbufferSurface(width, height);
     }
@@ -1106,6 +1206,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             NoteNativeContextGone();
 #endif
             return false;
+        }
+        // A HOST-FRAMED SURFACE HAS TO BE PUT BACK AFTER EVERY MAKE-CURRENT.  The native call
+        // binds the surface's own default framebuffer - the pbuffer this path makes its context
+        // with - and that is not where these pixels go.  Both the driver and the engine's binding
+        // shadow have to be told again, or the next default-framebuffer bind is deduped away and
+        // every draw lands in a pbuffer nobody sees.
+        if (m_eglSurfaceKind == SurfaceKind::HostFrame && m_hostFrameTarget.Framebuffer != 0) {
+            FramebufferImpl::InvalidateFramebufferBindingCache();
+            HostFrameTargetBind(m_hostFrameTarget);
         }
         return true;
     }

@@ -249,6 +249,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateSyncedRenderState();
     } // namespace RenderStateImpl
 
+    // MOBILEGL_IPC_SURFACE=host: what the client's DEFAULT framebuffer means while a host-framed
+    // surface is current.  Zero everywhere else, because the driver's own 0 IS the EGL surface
+    // then - but on a host-framed surface the pixels belong to a frame the display host owns,
+    // and drawing into the driver's 0 would draw into a pbuffer nobody ever sees.
+    extern Uint g_hostFrameFramebufferId;
     extern MG_External::EGLFunctionsTable g_EGLFuncs;
     extern MG_External::GLESFunctionsTable g_GLESFuncs;
     extern MG_External::GLESCapabilities g_GLESCapabilities;
