@@ -634,8 +634,8 @@ void main() { noBinding.c = afterLayout.a + beforeLayout.b + uint(texelFetch(tex
         << "a samplerBuffer is not a buffer block";
 }
 
-// THE REGRESSION THIS MIGRATION EXISTS FOR (7de7cfc6,
-// minecraft-1.21.1-neoforge-create-indirect-in-world, both backends). Flywheel's indirect
+// THE REGRESSION THIS MIGRATION EXISTS FOR (7de7cfc6, the original capture now replayed as
+// minecraft-1.21.1-neoforge-create-indirect-in-world-align1024, both backends). Flywheel's indirect
 // engine spells every storage-block binding as a macro, and the scan that used to answer this
 // question ran on MACRO-UNEXPANDED text: MobileGL's preprocessing rewrites the source, it does
 // not run the C preprocessor, so `binding = _FLW_MODEL_BUFFER_BINDING` reached the scanner

@@ -40,6 +40,8 @@ KNOWN_CASE_KEYS = frozenset({
     "split",
     "avoid_angle_llvmpipe_explicit_lod_bias",
     "backend_overrides",
+    # Documentation only - which trace a derived fixture was made from, and how. Nothing reads it.
+    "derived_from",
 })
 
 # The only fields a per-backend block may restate. Deliberately three: they are the three the

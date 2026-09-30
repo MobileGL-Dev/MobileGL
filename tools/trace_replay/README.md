@@ -124,10 +124,18 @@ The bundled fixtures cover:
 - minecraft-1.21.4-fabric-iris-sundial-lite-in-world: captured from Minecraft 1.21.4 Fabric with Sodium, Iris, and
   Sundial Lite after entering a singleplayer world.
   ![Minecraft 1.21.4 Fabric Iris Sundial Lite in-world golden](fixtures/minecraft-1.21.4-fabric-iris-sundial-lite-in-world.0000150023.png)
-- minecraft-1.21.1-neoforge-create-indirect-in-world: captured from Minecraft 1.21.1 NeoForge with Create, Sodium,
-  and Iris (no shader pack) in a world facing Create water wheels and a large cogwheel, with Flywheel's
-  `flywheel:indirect` backend (compute-shader culling, glMultiDrawElementsIndirect, persistent-mapped staging).
-  ![Minecraft 1.21.1 NeoForge Create indirect in-world golden](fixtures/minecraft-1.21.1-neoforge-create-indirect-in-world.0000504631.png)
+- minecraft-1.21.1-neoforge-create-indirect-in-world-align1024: **not an original capture** - derived from the retired
+  `minecraft-1.21.1-neoforge-create-indirect-in-world` capture (Minecraft 1.21.1 NeoForge with Create, Sodium, and
+  Iris (no shader pack) in a world facing Create water wheels and a large cogwheel, with Flywheel's
+  `flywheel:indirect` backend: compute-shader culling, glMultiDrawElementsIndirect, persistent-mapped staging). That
+  capture came from a desktop driver whose `GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT` is 16, so Flywheel bound its
+  scatter lists at 16-byte offsets, and a driver that requires more (Adreno 830: 64) rejects every one of those binds
+  with `GL_INVALID_VALUE`. [`fixture_tools/realign_buffer_ranges.cpp`](fixture_tools/realign_buffer_ranges.cpp)
+  `--align 1024` rewrote it: each of the 1,270 range binds off a 1024-byte boundary now binds a 1024-aligned slot of
+  an added buffer that is filled with the same bytes right before the dispatch that reads them. The 3,812 inserted
+  calls renumber the trace (target call 504631 -> 508443); the golden is the original one (the same frame), and the
+  host replay matches it with the original's SSIM to 9 digits on both backends.
+  ![Minecraft 1.21.1 NeoForge Create indirect (align 1024) in-world golden](fixtures/minecraft-1.21.1-neoforge-create-indirect-in-world-align1024.0000508443.png)
 - minecraft-1.21.1-neoforge-create-instancing-in-world: same world and camera as the indirect case, with Flywheel's
   `flywheel:instancing` backend (texture-buffer instance data, glDrawElementsInstancedBaseVertex).
   ![Minecraft 1.21.1 NeoForge Create instancing in-world golden](fixtures/minecraft-1.21.1-neoforge-create-instancing-in-world.0000530333.png)
