@@ -1490,9 +1490,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                      hostBaseFrom, hostBaseTo, start, end);
                     }
 #endif
+                    // Read per range, like the pull arm: a ring copy staged for an earlier range of
+                    // this same drain puts every later partial range of the store behind it
+                    // (InvalidateFlushAccessFor's queued-copy rule, dev f973008c).
+                    const Bool ringCopyInFlight = resource.ringCopyRetireSerial > DirectGLES::CompletedFrameSerial();
                     const GLbitfield access =
                         mapUsable ? InvalidateFlushAccessFor(start, end, coveredFrom, coveredTo, limit,
-                                                             resource.storageSize)
+                                                             resource.storageSize, ringCopyInFlight)
                                   : 0u;
                     if (access != 0) {
                         BindBufferId(TempBufferTarget, resource.id);
@@ -1512,6 +1516,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
+                        // Commands recorded now retire with the fence the next Present inserts.
+                        resource.ringCopyRetireSerial = DirectGLES::CurrentFrameSerial() + 1;
                     } else {
                         UploadRangeFrom(resource, hostBase, start, end);
                     }
