@@ -17,7 +17,7 @@
 
 ## Anland 是什么
 
-root Android（KernelSU / SukiSU 模块）上的 Wayland 宿主：守护进程 `waylandbridge`（root，`awl_daemon` 域，bionic，链 Android EGL / GLESv3）实现 Wayland 协议，每个 `xdg_toplevel` 变成一个独立 Android 窗口；Droidspaces 容器经 `/run/anland/wayland-0`（绑定自 `/data/local/tmp/awl`）连入。容器内 GPU 加速 = Mesa freedreno / turnip on kgsl，只有 Adreno；Mali 等走 llvmpipe。
+root Android（KernelSU / SukiSU 模块）上的 Wayland 宿主：守护进程 `waylandbridge`（root，`awl_daemon` 域，bionic，链 Android EGL / GLESv3）实现 Wayland 协议。每个 `xdg_toplevel` 按需挂到一个独立的 Android 窗口（一个 Activity，来自宿主 APK 或接入 libawl 的应用；可随时分离，Wayland 窗口不死）；多个 toplevel 可同时各挂一个；popup 与子 surface 合成进父窗口，不单独开窗。Droidspaces 容器经 `/run/anland/wayland-0`（绑定自 `/data/local/tmp/awl`）连入。容器内 GPU 加速 = Mesa freedreno / turnip on kgsl，只有 Adreno；Mali 等走 llvmpipe。
 
 ## 推荐形态
 
@@ -30,7 +30,7 @@ waylandbridge ─ SurfaceControl / GLES 合成 ─ SurfaceFlinger
 ```
 
 - Wayland 连接与窗口仍归 Linux 应用；MobileGL 只管帧。
-- P12 的 server 自有全屏窗口不适用（Anland 要每窗一个 Android 窗口）。
+- P12 的 server 自有窗口不适用：Anland 下 Android 窗口归 Anland（Activity 的 Surface 交给 waylandbridge 绘制，输入也从这里转成 Wayland 事件），应用的帧必须作为 `wl_buffer` 提交到自己的 `wl_surface`；P12 画进 MobileGL 自己的 Activity，会绕开 Anland 的窗口与输入。
 - 容器内直接让 Magma 跑在 turnip 上：只有 Adreno，和现有 Mesa 同一驱动，价值小；MobileGL 的价值是把厂商驱动（含 Mali）带进来，只能靠 split 跨到 bionic。
 
 ## 两边现状
