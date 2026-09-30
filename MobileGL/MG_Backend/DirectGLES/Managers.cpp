@@ -2304,6 +2304,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MGL_SERVER_STAGED_DROP(*resource);
                         resource->hostBytes = nullptr;
                     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // P8-C: whatever a shader wrote belonged to the store this call replaces.
+                    resource->serverGpuWritten = false;
+#endif
                 }
                 if (!resource) return; // lazy: the ensure path full-uploads on creation
                 if (resource->immutableStorage) {
@@ -3553,6 +3557,81 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res) {
             const auto* record = ResourceRecordOf(res);
             return record != nullptr && record->Desc.HasDefinedContent != 0;
+        }
+
+        // P8-C. The declaration says what; this says in what order, and it is Ops_H_Readback's
+        // order because it is the same question asked by the server of itself instead of by the
+        // client: (1) queued uploads land in the GL store first - reading back past them would
+        // revert them in the copy - under the same staged-coverage assertion that drain carries;
+        // (2) queued resident writes land (GPU-ordered, behind every command already recorded);
+        // (3) the whole store is read back into the staged copy, which leaves its coverage whole
+        // and so also answers RequireStagedCoverage for an orphaned store's first copy; (4) the
+        // serial stamp and the epoch bump, as Ops_H_ReadbackTracked does them.
+        const Uint8* SplitHostBytesForCpuRead(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
+                                              const char* site) {
+            Bool residentWritesQueued = false;
+            if (resource.externalAhb != nullptr) {
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                residentWritesQueued = !resource.pendingResidentWrites.empty();
+            }
+            if (!resource.serverGpuWritten && !residentWritesQueued) return SplitHostBytes(resource);
+            // The marks are made only under a transport, where the staged store COPIES; the guard
+            // keeps a monolith store (which keeps the caller's pointer) from adopting a mapping.
+            if (!ServerStaged().CopiesIntoServerStorage()) return SplitHostBytes(resource);
+            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized ||
+                resource.pendingRespecify || resource.contextGeneration != g_bufferContextGeneration ||
+                !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) {
+                MGLOG_E_ONCE("%s: buffer {%u, %u} was written on the GPU but its GL store cannot be read "
+                             "back here, so the CPU reads the staged copy as it is",
+                             site, res.Slot, res.Gen);
+                return SplitHostBytes(resource);
+            }
+            if (resource.externalAhb != nullptr) {
+                // T0: the copy IS this server's coherent map of the client's pages. Landing the
+                // queued writes and finishing makes them, and every shader write already queued,
+                // visible through it - Ops_H_Readback's persistent-map arm, for the same reason.
+                DrainResidentWritesNow(resource);
+                if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                resource.serverGpuWritten = false;
+                return SplitHostBytes(resource);
+            }
+            const SizeT width = ResourceWidthOf(res);
+            const SizeT size = std::min(width, resource.storageSize);
+            if (size == 0) return SplitHostBytes(resource);
+            MGL_SERVER_STAGED_REQUIRE_PENDING(resource, resource.hostBytes, width, "gpu_written_refresh_flush_pending");
+            FlushPendingRangesFrom(resource, resource.hostBytes, width);
+            DrainResidentWritesNow(resource);
+            BindBufferId(TempBufferTarget, resource.id);
+            void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
+                                                        GL_MAP_READ_BIT);
+            if (mapped == nullptr) {
+                MGLOG_E_ONCE("%s: glMapBufferRange(read) failed for GPU-written buffer %u; the CPU reads the "
+                             "staged copy as it is",
+                             site, resource.id);
+                return SplitHostBytes(resource);
+            }
+            {
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                resource.hostBytes = MGL_SERVER_STAGED_ADOPT(resource, width, mapped, 0, size);
+            }
+            g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+            resource.serverGpuWritten = false;
+            resource.syncedChangeSerial = ResourceSerialOf(res);
+            BumpBufferMutationEpoch();
+            MGLOG_D("%s: refreshed the staged copy of GPU-written buffer {%u, %u} (%zu bytes)", site, res.Slot,
+                    res.Gen, size);
+            return resource.hostBytes;
+        }
+
+        void StageServerWrittenRange(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res, const void* bytes,
+                                     SizeT offset, SizeT size) {
+            if (bytes == nullptr || size == 0 || resource.externalAhb != nullptr) return;
+            // Only a COPYING store may take bytes that die with a mapping: the monolith one keeps
+            // the caller's pointer (StagedShadow.h), which here would dangle after the unmap.
+            if (!ServerStaged().CopiesIntoServerStorage()) return;
+            // Under pendingMutex, as every other hostBytes store is (M-2).
+            const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+            resource.hostBytes = MGL_SERVER_STAGED_ADOPT(resource, ResourceWidthOf(res), bytes, offset, size);
         }
 #endif
 
@@ -6589,10 +6668,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // path, and a persistently mapped source is excluded separately below (the memo
             // never trusts one, so those re-read every draw through the coherent map).
             //
-            // P8 closes it by moving the pull to the client, where the object lives. Until then
-            // this is the ONE behavioural difference between the two arms under the default
-            // mask, and it is written here rather than only in a document so that the next
-            // reader of this function finds it at the site.
+            // P8-C CLOSES IT UNDER A TRANSPORT, on the server rather than by moving the pull to the
+            // client: a source a shader wrote on this side is read back from this server's own GL
+            // buffer (SplitHostBytesForCpuRead), and that write also voids the memo below, whose
+            // serial a GPU write never moves. The MONOLITH arm of this function keeps the
+            // deviation (its hostBytes is the client's shadow and its mark is the frontend
+            // object's); that half is dev's (ID-P8-3).
             // WHERE THE BYTES ARE, and it is not one fixed place: an ADOPTED store has no client
             // shadow left at all (PipeResource::AdoptPersistentMap clears and shrinks it), so
             // the coherent map IS the source of truth - which is exactly the case the memo
@@ -6601,6 +6682,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // recorded shadow base for such a resource read freed memory; hostBytes is nulled
             // at adoption for the same reason, so the fallback below is a null and a refusal
             // rather than a stale read.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            const Bool sourceGpuWritten =
+                MG_Config::Transport != MG_Config::TransportMode::Monolith && resource->serverGpuWritten;
+            if (sourceGpuWritten) {
+                BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res, "fp64_vertex_narrowing");
+            }
+#else
+            constexpr Bool sourceGpuWritten = false;
+#endif
             const Uint8* const sourceBase =
                 (resource->persistentMapped && resource->persistentPtr != nullptr)
                     ? static_cast<const Uint8*>(resource->persistentPtr)
@@ -6637,7 +6727,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // still never trusted - it is written through the pointer with no call at all, so
             // no serial on either side can prove the converted copy is current.
             const Bool memoHit = stream.valid && convertedBufferId != 0 && !resource->persistentMapped &&
-                                 stream.sourceHandle == binding.Res &&
+                                 !sourceGpuWritten && stream.sourceHandle == binding.Res &&
                                  stream.sourceChangeSerial == sourceSerial &&
                                  stream.sourceOffset == static_cast<SizeT>(attrib.Offset) &&
                                  stream.sourceStride == sourceStride &&

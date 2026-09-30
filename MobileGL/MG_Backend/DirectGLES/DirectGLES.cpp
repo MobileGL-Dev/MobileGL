@@ -483,11 +483,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
             if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
                 auto* resource = BufferImpl::FindBufferResourceForHandle(handle);
-                const Uint8* const base = resource ? BufferImpl::SplitHostBytes(*resource) : nullptr;
+                const Uint8* base = resource ? BufferImpl::SplitHostBytes(*resource) : nullptr;
+                // P8-C: a store nothing ever staged but a shader wrote (the GPU-culling shape)
+                // takes its first copy from this server's own GL buffer. A store that HAS a copy
+                // is not refreshed here: most indirect draws execute natively and read no field
+                // on the CPU, so ExecuteIndexed/ArraysIndirectCommands refresh the fields only
+                // when they consume them.
+                if (base == nullptr && resource != nullptr) {
+                    base = BufferImpl::SplitHostBytesForCpuRead(*resource, handle, "indirect_command_bytes");
+                }
                 const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
                 if (base == nullptr) {
                     MGLOG_E_ONCE("%s skipped: the verb's indirect buffer {%u, %u} has no staged "
-                                 "shadow on this side (GPU-written indirect commands are P8's)",
+                                 "shadow on this side and no GPU write to take one from",
                                  label, handle.Slot, handle.Gen);
                     return nullptr;
                 }
@@ -769,6 +777,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  entry.Res.Gen);
                     continue;
                 }
+                // P8-C: the SERVER's half of the mark MarkShaderStorageBuffersGpuWritten no longer
+                // makes under a transport - on this side's twin, for this side's CPU readers
+                // (SplitHostBytesForCpuRead). Every bound storage point, which is the client's
+                // own conservative set (ShaderBufferEmit.h marks every one writable); a uniform
+                // point is read-only by definition.
+                if (shaderBufferClass != MG_Pipe::kMGPipeShaderBufferClassUniform) {
+                    backendResource->serverGpuWritten = true;
+                }
                 const auto backendBufferId = backendResource->id;
                 if (entry.Offset == 0 && entry.Size == MG_Pipe::kMGPipeWholeBuffer) {
                     BindBufferBaseCached(glTarget, static_cast<GLuint>(i), backendBufferId);
@@ -997,6 +1013,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // from MarkGpuWritesForDraw, WIDER on purpose - it marks every touched
                     // counter point rather than only the ones this program declares, which is
                     // the safe direction for an over-approximate set.
+                    //
+                    // P8-C: the server's own twin is marked instead, for the server's own CPU
+                    // readers (SplitHostBytesForCpuRead) - a counter buffer later bound as a
+                    // parameter or element buffer is read on this side.
+                    backendResource->serverGpuWritten = true;
                 }
                 return;
             }
@@ -1803,7 +1824,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                             const MG_Pipe::MGPipeHandle res = target.handle;
                             auto* resource = BufferImpl::FindBufferResourceForHandle(res);
-                            if (resource == nullptr || resource->persistentMapped) continue;
+                            if (resource == nullptr) continue;
+                            if (resource->persistentMapped) {
+                                // P8-C: nothing to copy - the capture reaches a coherent map -
+                                // but this side's CPU readers must finish before reading it.
+                                resource->serverGpuWritten = true;
+                                continue;
+                            }
                             const SizeT size = target.end - target.start;
                             BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
                             void* mapped = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget,
@@ -1844,6 +1871,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              "captured bytes of buffer {%u,%u} cannot reach the client shadow",
                                              res.Slot, res.Gen);
                             }
+                            // P8-C: the server's own staged copy takes the same bytes, from the
+                            // same mapping, so this side's CPU readers see the capture too.
+                            BufferImpl::StageServerWrittenRange(*resource, res, mapped, target.start, size);
                             g_GLESFuncs.glUnmapBuffer(BufferImpl::TempBufferTarget);
                             // Ops_H_Readback's order: writeback, unmap, THEN the serial
                             // stamp, so the next draw does not re-upload the server's stale
@@ -2004,7 +2034,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          splitRes.Slot, splitRes.Gen);
                             continue;
                         }
-                        const Uint8* hostBytes = splitResource->hostBytes;
+                        // P8-C: made current first - a store a shader wrote here is refreshed.
+                        const Uint8* hostBytes = BufferImpl::SplitHostBytesForCpuRead(*splitResource, splitRes,
+                                                                                      "xfb_scatter_pre_capture");
                         // A NULL SHADOW IS NOT A LOST CAPTURE. It is the ORPHANED store
                         // (glBufferData(size, NULL) with no resource_subdata since), which
                         // M-3 declares legal: every byte the application has not staged is
@@ -2069,9 +2101,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          "scattered capture of buffer {%u,%u} cannot reach the client shadow",
                                          splitRes.Slot, splitRes.Gen);
                         }
-                        // Ops_H_Readback's stamp, for its reason: the GL store now holds
-                        // bytes the server's staged shadow does not, and the next draw must
-                        // not re-upload the stale shadow over the capture.
+                        // P8-C: the staged copy takes the composed range too, so this side's CPU
+                        // readers see the capture (before P8 it kept the pre-capture bytes).
+                        BufferImpl::StageServerWrittenRange(*splitResource, splitRes, staged.data(), target.start,
+                                                            rangeBytes);
+                        // Ops_H_Readback's stamp, for its reason: the GL store now holds the
+                        // capture, and the next draw must not re-upload an older range over it.
                         splitResource->syncedChangeSerial = BufferImpl::ResourceSerialForHandle(splitRes);
                     } else
 #endif
@@ -4425,7 +4460,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reach of an apply thread entirely.
         void MarkWritableImageBufferTexturesGpuWritten() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                // P8-C: the SERVER's twin of the buffer behind each writable buffer image, for
+                // this side's CPU readers (SplitHostBytesForCpuRead). Every read is a record:
+                // the unit set SyncImageTextureBinding(view) tracked, the applier's image view,
+                // and the texture descriptor's backing-store handle.
+                if (g_writableImageBufferUnitCount == 0) return;
+                const auto& st = MG_Pipe::MGPipeApplier();
+                for (Uint unit = 0; unit < g_writableImageBufferUnits.size() && unit < st.BoundShaderImages.size();
+                     ++unit) {
+                    if (!g_writableImageBufferUnits[unit]) continue;
+                    const MG_Pipe::MGPImageView& view = st.BoundShaderImages[unit];
+                    if (!IsWritableImageBufferView(view)) continue;
+                    const auto* record = PipeTextureRecordForHandle(view.Res);
+                    if (record == nullptr) continue;
+                    if (auto* buffer = BufferImpl::FindBufferResourceForHandle(record->Desc.BufferForTexBuffer)) {
+                        buffer->serverGpuWritten = true;
+                    }
+                }
+                return;
+            }
 #endif
             if (g_writableImageBufferUnitCount == 0) return;
             for (Uint unit = 0; unit < g_writableImageBufferUnits.size(); ++unit) {
@@ -8491,6 +8545,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return g_GLESCapabilities.SupportsDrawIndirect;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P8-C: the command bytes an indirect executor is about to CONSUME on the CPU, made current.
+    // Consumed means: every field on the CPU path (no native indirect), or on the native path the
+    // uniforms fed from the command - gl_BaseVertex whenever the program reads it, and
+    // gl_BaseInstance when the program reads it without the mg_IndirectParams storage view that
+    // would give it the GPU's word. A native draw that feeds neither reads nothing and keeps its
+    // pointer, so a compute-culled indirect buffer drawn every frame costs no readback.
+    static const Uint8* CurrentIndirectCommandBytes(MG_Pipe::MGPipeHandle handle, const Uint8* commandBytes,
+                                                    SizeT commandOffset, Bool useNative, Bool indexed) {
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) return commandBytes;
+        if (useNative) {
+            const auto program = GetCurrentBackendProgram();
+            if (program == nullptr) return commandBytes;
+            const Bool baseVertexFromCpu = indexed && program->ReadsBaseVertex();
+            const Bool baseInstanceFromCpu = program->GetIndirectParamsBinding() < 0 && program->ReadsBaseInstance();
+            if (!baseVertexFromCpu && !baseInstanceFromCpu) return commandBytes;
+        }
+        auto* resource = BufferImpl::FindBufferResourceForHandle(handle);
+        if (resource == nullptr) return commandBytes;
+        const Uint8* base = BufferImpl::SplitHostBytesForCpuRead(*resource, handle, "indirect_command_fields");
+        return base != nullptr ? base + commandOffset : commandBytes;
+    }
+#endif
+
     // Runs an (indexed) indirect multi-draw. When a GL_DRAW_INDIRECT_BUFFER is bound the draws
     // execute natively on the GPU so commands written by compute shaders (e.g. Flywheel's
     // culling pipeline updating instanceCount) are honored; the CPU shadow is still consulted
@@ -8537,6 +8615,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 :
 #endif
             drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
+                                                   /*indexed=*/true);
+#endif
         if (useNative) {
             // gl_BaseInstance must observe GPU-written command fields; expose the indirect
             // buffer to the program's mg_IndirectParams SSBO view and address it per draw.
@@ -8635,6 +8717,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 :
 #endif
             drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
+                                                   /*indexed=*/false);
+#endif
         if (useNative) {
             const auto backendProgram = GetCurrentBackendProgram();
             const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
@@ -9219,9 +9305,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 // The staged shadow is the source of truth for CPU reads on this side: a
-                // persistent map's blocks and a shader write's writeback were consumed by the
-                // applier before this verb ran.
-                const Uint8* hostBytes = elementResource ? BufferImpl::SplitHostBytes(*elementResource) : nullptr;
+                // persistent map's blocks were consumed by the applier before this verb ran, and
+                // (P8-C) a store a shader wrote on this side is read back from this server's own
+                // GL buffer first - no writeback ever reaches the server's copy.
+                const Uint8* hostBytes =
+                    elementResource
+                        ? BufferImpl::SplitHostBytesForCpuRead(*elementResource, elements,
+                                                               "primitive_restart_substitution")
+                        : nullptr;
                 if (hostBytes == nullptr) {
                     MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART with restart index %u needs a CPU-readable copy of "
                                  "the bound element array buffer and none is available.",
@@ -9538,8 +9629,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
             auto* paramResource =
                 BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
-            const Uint8* const drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
-            const Uint8* const parameterBytes = paramResource ? BufferImpl::SplitHostBytes(*paramResource) : nullptr;
+            // P8-C: the count is CONSUMED here, so the parameter buffer is made current first
+            // (a store a shader wrote on this side is read back); the command buffer only gets a
+            // first copy when it has none - its fields are made current by the executor, and
+            // only when it consumes them (CurrentIndirectCommandBytes).
+            const Uint8* const parameterBytes =
+                paramResource ? BufferImpl::SplitHostBytesForCpuRead(*paramResource,
+                                                                     applierState.VerbIndirectParameterBuffer,
+                                                                     "indirect_count_parameter")
+                              : nullptr;
+            const Uint8* drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
+            if (drawBytes == nullptr && drawResource != nullptr) {
+                drawBytes = BufferImpl::SplitHostBytesForCpuRead(*drawResource, applierState.VerbIndirectBuffer,
+                                                                 "indirect_count_commands");
+            }
             if (commandBytes > BufferImpl::ResourceWidthForHandle(applierState.VerbIndirectBuffer)) {
                 MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
                 return;
@@ -9692,8 +9795,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
             auto* paramResource =
                 BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
-            const Uint8* const drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
-            const Uint8* const parameterBytes = paramResource ? BufferImpl::SplitHostBytes(*paramResource) : nullptr;
+            // P8-C: the count is CONSUMED here, so the parameter buffer is made current first
+            // (a store a shader wrote on this side is read back); the command buffer only gets a
+            // first copy when it has none - its fields are made current by the executor, and
+            // only when it consumes them (CurrentIndirectCommandBytes).
+            const Uint8* const parameterBytes =
+                paramResource ? BufferImpl::SplitHostBytesForCpuRead(*paramResource,
+                                                                     applierState.VerbIndirectParameterBuffer,
+                                                                     "indirect_count_parameter")
+                              : nullptr;
+            const Uint8* drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
+            if (drawBytes == nullptr && drawResource != nullptr) {
+                drawBytes = BufferImpl::SplitHostBytesForCpuRead(*drawResource, applierState.VerbIndirectBuffer,
+                                                                 "indirect_count_commands");
+            }
             if (commandBytes > BufferImpl::ResourceWidthForHandle(applierState.VerbIndirectBuffer)) {
                 MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
                 return;

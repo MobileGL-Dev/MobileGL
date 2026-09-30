@@ -191,15 +191,16 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 if (question == IndexBufferQuestion::Presence) return view;
 
                 if (question == IndexBufferQuestion::HostBytes) {
-                    // No Sync* pair here and none is missing: on this side the applier has
-                    // already consumed the persistent-map blocks and the shader writebacks for
-                    // this resource before the draw verb replayed, so the server's staged shadow
-                    // IS the synced copy. That is also why this arm cannot be expressed as "find
-                    // the object and run the monolith body".
+                    // The applier has already consumed the persistent-map blocks for this
+                    // resource before the draw verb replayed; the one Sync* this arm owes is the
+                    // monolith's SyncGpuWrites, and (P8-C) SplitHostBytesForCpuRead is it: a store
+                    // a shader wrote on this side is read back from this server's own GL buffer,
+                    // because no writeback ever reaches the server's staged copy. That is also why
+                    // this arm cannot be expressed as "find the object and run the monolith body".
                     auto* resource = BufferImpl::FindBufferResourceForHandle(res);
                     if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
                     view.Size = BufferImpl::ResourceWidthForHandle(res);
-                    view.HostBytes = BufferImpl::SplitHostBytes(*resource);
+                    view.HostBytes = BufferImpl::SplitHostBytesForCpuRead(*resource, res, "multidraw_index_rebase");
                     if (view.HostBytes != nullptr && IndexBufferRecordHasDefinedContent(st, res)) {
                         BufferImpl::RequireStagedCoverage(*resource, view.HostBytes, 0, view.Size,
                                                           "multidraw_index_rebase");

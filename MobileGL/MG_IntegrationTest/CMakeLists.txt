@@ -3340,6 +3340,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             TIMEOUT ${MGL_ITEST_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
     )
+    # P8-C: draw inputs a compute shader wrote, read on the CPU by the side that applies the draw
+    # (restart rewrite, multi-draw rebase, *IndirectCount, indirect gl_BaseVertex, an orphaned
+    # indirect store). Split-only source, like F1: the ambient DirectGLES./DirectVulkan. entries
+    # of the split build are the monolith control and the inproc A/B; this call adds the three
+    # gated Espryt arms and records the Magma tier-2 replay (integration-magma-all-*).
+    target_sources(MobileGLIntegrationTest PRIVATE Scenarios/GpuWrittenDrawInputScenario.cpp)
+    mgl_itest_register_split_arms("GpuWrittenDrawInputScenario.*" "")
     # The configure_file that used to sit here MOVED TO THE END OF THIS FILE (P6 `t6`).
     #
     # It substitutes @MGL_SPLIT_ARM_TEST_LISTS@, which the registration macro appends to - so
