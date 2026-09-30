@@ -64,6 +64,12 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 
+
+// T4 row names, outside the platform guard because BOTH branches report them: the
+// Android branch measures, the host branch says what it cannot measure.
+static const char* kT4Row = "T4-image-import";
+static const char* kT4HostRow = "T4-host-image";
+
 #if PROBE_HAVE_AHB
 #  include <android/hardware_buffer.h>
 #  include <sys/system_properties.h>
@@ -4100,7 +4106,6 @@ static void runT3Parent(VkCtx& c, uint64_t size) {
 // than left to look like an Android-only leg.
 // ---------------------------------------------------------------------------
 
-static const char* kT4Row = "T4-image-import";
 
 #if PROBE_HAVE_AHB
 
@@ -5588,12 +5593,222 @@ static void runT4AhbRow(GlCtx& g, const T4Egl& e, int sock, const T4Layout& lay)
     AHardwareBuffer_release(ahb);
 }
 
+// ---------------------------------------------------------------------------
+// T4, the other end: the buffer the DISPLAY HOST is about to scan out
+// ---------------------------------------------------------------------------
+//
+// WHY THIS LEG IS THE ONE THE PRODUCT TURNS ON.  The rows above ask what a driver will take
+// FROM a container.  This one asks the question the architecture actually depends on: can
+// the render server draw into the buffer the display host is about to put on the glass?  On
+// an Anland-style host that is not a matter of taste -- the host dequeues its scanout
+// buffers from its own SurfaceView, and nothing the server allocates for itself will ever be
+// scanned out.  What makes it possible is that such a buffer is a real gralloc allocation,
+// and the platform hands back an AHardwareBuffer for that handle (measured: handle type 2
+// accepts it, on the device, in the untrusted_app domain).
+//
+// THE ROUND TRIP IS CLOSED FROM THIS SIDE, because only the host can say whether the drawing
+// arrived where the screen will look.  The host offers; this side imports the image, clears a
+// colour through it behind a fence, and answers; the host reads both pixels back through its
+// own view of the same buffer and returns them; this side decides.  A row that said OK on
+// "an EGLImage was created" would be reporting that the platform took the handle, which is
+// not the question.
+
+
+// Mirrors struct ahb_offer / ahb_ack / ahb_seen in the display host's ahb_bridge.h.  The
+// handle travels ahead of the sideband on the same socket, which is the order both ends read.
+struct T4HostOffer {
+    uint32_t magic, version, index, width, height, stride, format, usage_lo, usage_hi;
+    char note[64];
+} __attribute__((packed));
+
+struct T4HostAck {
+    uint32_t magic, version, index, imported, drawn, fence_ok;
+    uint8_t color[4];
+    char note[64];
+} __attribute__((packed));
+
+struct T4HostSeen {
+    uint32_t magic, version, index, locked;
+    uint8_t observed[4];
+    uint8_t observed_corner[4];
+    char note[64];
+} __attribute__((packed));
+
+static void runT4Host(GlCtx& g, bool glOk, const char* path) {
+    if (!glOk) {
+        record(kT4HostRow, "SKIP", "no headless GLES context: nothing on this side could take the host's image");
+        return;
+    }
+    // The entry points this leg is spelled in, loaded here rather than shared with runT4:
+    // the two legs are run on their own (--only-t4 / --only-t4-host), and a load that one of
+    // them needs must not depend on the other having run first.
+    T4Egl e;
+    e.pCreateImage = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    e.pDestroyImage = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    e.pTargetRb =
+        (PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC)eglGetProcAddress("glEGLImageTargetRenderbufferStorageOES");
+    if (!g.hasEgl("EGL_KHR_image_base") || !e.pCreateImage || !e.pDestroyImage || !e.pTargetRb) {
+        record(kT4HostRow, "UNSUPPORTED",
+               fmt("EGL_KHR_image_base=%d eglCreateImageKHR=%d eglDestroyImageKHR=%d "
+                   "glEGLImageTargetRenderbufferStorageOES=%d: the host's image cannot be taken and drawn into",
+                   (int)g.hasEgl("EGL_KHR_image_base"), (int)(e.pCreateImage != nullptr),
+                   (int)(e.pDestroyImage != nullptr), (int)(e.pTargetRb != nullptr)));
+        return;
+    }
+    if (!g.pGetNativeClientBuffer) {
+        record(kT4HostRow, "UNSUPPORTED",
+               "EGL_ANDROID_get_native_client_buffer is not advertised, so an AHardwareBuffer cannot become an "
+               "EGLClientBuffer and the host's image cannot be taken at all");
+        return;
+    }
+    const int lfd = rtListen(path);
+    if (lfd < 0) {
+        record(kT4HostRow, "FAIL", fmt("could not listen on %s: errno=%d(%s)", path, errno, strerror(errno)));
+        return;
+    }
+    setRecvTimeout(lfd, 60);
+    const int fd = accept(lfd, nullptr, nullptr);
+    const int acceptErr = errno;
+    close(lfd);
+    if (fd < 0) {
+        record(kT4HostRow, "FAIL",
+               fmt("no display host dialled %s within the accept timeout: errno=%d(%s)", path, acceptErr,
+                   strerror(acceptErr)));
+        return;
+    }
+    setRecvTimeout(fd, 60);
+    pr("T4-host: a display host dialled %s; waiting for its buffers", path);
+
+    const T4ColorPlan plan = t4PlanColor(kT4AhbFourcc, kT4AhbSeed);
+    int offered = 0, imported = 0, drew = 0, seen = 0, agreed = 0;
+    std::string trace, fail;
+
+    for (int i = 0; i < 16; ++i) {
+        AHardwareBuffer* ahb = nullptr;
+        if (AHardwareBuffer_recvHandleFromUnixSocket(fd, &ahb) != 0 || !ahb)
+            break;
+        T4HostOffer of{};
+        if (!readAll(fd, &of, sizeof(of)) || of.magic != kT4Magic) {
+            fail = "the offer's sideband did not follow its handle";
+            AHardwareBuffer_release(ahb);
+            break;
+        }
+        ++offered;
+        AHardwareBuffer_Desc d{};
+        AHardwareBuffer_describe(ahb, &d);
+
+        T4HostAck ack{};
+        ack.magic = kT4Magic;
+        ack.version = 1;
+        ack.index = of.index;
+
+        EGLClientBuffer cb = g.pGetNativeClientBuffer((const struct AHardwareBuffer*)ahb);
+        const EGLint cbErr = eglGetError();
+        EGLImageKHR img = EGL_NO_IMAGE_KHR;
+        if (cb) {
+            const EGLint attrs[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+            img = e.pCreateImage(g.dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, cb, attrs);
+        }
+        const EGLint imgErr = eglGetError();
+        if (img == EGL_NO_IMAGE_KHR) {
+            trace += fmt("buf%u=image(0x%04x/0x%04x) ", of.index, (unsigned)cbErr, (unsigned)imgErr);
+            snprintf(ack.note, sizeof(ack.note), "clientBuffer=0x%04x image=0x%04x", (unsigned)cbErr,
+                     (unsigned)imgErr);
+            (void)writeAll(fd, &ack, sizeof(ack));
+            AHardwareBuffer_release(ahb);
+            continue;
+        }
+        ++imported;
+        ack.imported = 1;
+
+        GLuint rb = 0, fbo = 0;
+        glGenRenderbuffers(1, &rb);
+        glBindRenderbuffer(GL_RENDERBUFFER, rb);
+        glDrain();
+        e.pTargetRb(GL_RENDERBUFFER, (GLeglImageOES)img);
+        const GLenum rbErr = glDrain();
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
+        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLenum attachErr = glDrain();
+
+        if (rbErr == GL_NO_ERROR && status == GL_FRAMEBUFFER_COMPLETE && attachErr == GL_NO_ERROR) {
+            const std::string fence = t4WritePath(fbo, d.width, d.height, plan.clear);
+            ack.drawn = 1;
+            ack.fence_ok = fence.find("GL_TIMEOUT_EXPIRED") == std::string::npos &&
+                           fence.find("GL_WAIT_FAILED") == std::string::npos;
+            memcpy(ack.color, kT4AhbSeed, 4);
+            snprintf(ack.note, sizeof(ack.note), "%ux%u stride=%u(px) cleared %s | %s", d.width, d.height, d.stride,
+                     t4Hex4(kT4AhbSeed).c_str(), fence.c_str());
+            ++drew;
+        } else {
+            snprintf(ack.note, sizeof(ack.note),
+                     "rb=0x%04x fbo=0x%04x attach=0x%04x: not drawable",
+                     (unsigned)rbErr, (unsigned)status, (unsigned)attachErr);
+        }
+        (void)writeAll(fd, &ack, sizeof(ack));
+
+        T4HostSeen back{};
+        if (readAll(fd, &back, sizeof(back)) && back.magic == kT4Magic) {
+            ++seen;
+            const bool first = !memcmp(back.observed, kT4AhbSeed, 4);
+            const bool corner = !memcmp(back.observed_corner, kT4AhbSeed, 4);
+            if (back.locked && first && corner)
+                ++agreed;
+            trace += fmt("buf%u=%s/%s ", of.index, first ? "first-ok" : "first-bad", corner ? "corner-ok" : "corner-bad");
+        } else {
+            trace += fmt("buf%u=no-readback ", of.index);
+        }
+
+        if (fbo)
+            glDeleteFramebuffers(1, &fbo);
+        if (rb)
+            glDeleteRenderbuffers(1, &rb);
+        e.pDestroyImage(g.dpy, img);
+        AHardwareBuffer_release(ahb);
+    }
+    close(fd);
+
+    if (offered == 0) {
+        record(kT4HostRow, "FAIL",
+               fmt("the display host dialled %s but offered no buffer: %s", path,
+                   fail.empty() ? "the connection closed first" : fail.c_str()));
+        return;
+    }
+    std::vector<Leg> legs;
+    Leg leg;
+    leg.name = "host";
+    leg.decisive = true;
+    leg.attempted = true;
+    leg.readOk = imported == offered && drew == imported;  // the server got in and drew
+    leg.writeOk = seen == offered && agreed == seen;       // and the host saw it at both pixels
+    if (!leg.writeOk)
+        leg.fail = fmt("drawn=%d/%d hostReadback=%d/%d agreed=%d", drew, offered, seen, offered, agreed);
+    legs.push_back(leg);
+    std::string why;
+    const char* status = legVerdict(legs, &why);
+    record(kT4HostRow, status,
+           fmt("%s | offered=%d imported=%d drawn=%d hostReadback=%d agreed=%d | %s | seed=%s [%s] | server=%s | "
+               "trace: %s",
+               legTrace(legs).c_str(), offered, imported, drew, seen, agreed, why.c_str(),
+               t4Hex4(kT4AhbSeed).c_str(), plan.note.c_str(), selfContext().c_str(), trace.c_str()));
+}
+
 #else  // !PROBE_HAVE_AHB
 
+// The host build has neither a listener nor an AHardwareBuffer, so both T4 legs report
+// exactly that instead of inventing a device answer they cannot have.  PROBE_HAVE_AHB is
+// simply the macro that carries rtListen() and the AHardwareBuffer entry points.
 static void runT4(GlCtx&, bool, const char*) {
     record(kT4Row, "SKIP",
-           "host build has no listener: rtListen() is compiled with the AHardwareBuffer block, so the container "
-           "peer has nothing to dial");
+           "host build has no listener: rtListen() is compiled with the AHardwareBuffer block, so the "
+           "container peer has nothing to dial");
+}
+
+static void runT4Host(GlCtx&, bool, const char*) {
+    record(kT4HostRow, "SKIP",
+           "host build has no listener and no AHardwareBuffer: the display host has nothing to dial");
 }
 
 #endif  // PROBE_HAVE_AHB
@@ -5636,6 +5851,11 @@ int main(int argc, char** argv) {
     bool routeClientMode = false;
     std::string routeEndpoint;
     std::string t4Endpoint = "@mgl-t4";
+    // The other end of T4: the buffer the display host is about to scan out.  A path rather
+    // than an abstract name, because the host is the one that dials and that is where its
+    // bridge looks for a listener.
+    bool doT4Host = false;
+    std::string t4HostPath = "/data/local/tmp/mobilegl_bridge.sock";
     const char* childRoute = nullptr;
     bool doT1 = true, doT0 = true, doT3 = true, doGles = true;
     // T4 waits for a peer that only exists when it is asked for, so it is off unless
@@ -5698,13 +5918,24 @@ int main(int argc, char** argv) {
             doT1 = doT0 = doT3 = doGles = false;
             doT4 = true;
             t4Endpoint = a + 10;
+        } else if (!strcmp(a, "--only-t4-host")) {
+            doT1 = doT0 = doT3 = doGles = doT4 = false;
+            doT4Host = true;
+        } else if (!strncmp(a, "--only-t4-host=", 15)) {
+            doT1 = doT0 = doT3 = doGles = doT4 = false;
+            doT4Host = true;
+            t4HostPath = a + 15;
         } else if (!strcmp(a, "--no-gles")) {
             doGles = false;
         } else if (!strcmp(a, "--help")) {
             printf("usage: extmem_probe [markerPath] [--size=BYTES] [--regions-at-end] [--sustained-lock[=ROUNDS]]\n"
                    "       extmem_probe --route-client[=@endpoint] [--size=BYTES] [--sustained-lock=ROUNDS] [--regions-at-end]\n"
                    "       extmem_probe <endpoint> --serve   (packaged as libMobileGLServer.so)\n"
-                   "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained|--only-t4[=@endpoint]] [--no-gles]\n"
+                   "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained|--only-t4[=@endpoint]\n"
+                   "        |--only-t4-host[=PATH]] [--no-gles]\n"
+                   "  --only-t4-host[=PATH]: listen on /data/local/tmp/mobilegl_bridge.sock (default) for a\n"
+                   "                         display host offering the buffer it is about to scan out; the round\n"
+                   "                         trip is closed by that host reading its own pixels back.\n"
                    "  --only-t4[=@endpoint]: listen on @mgl-t4 (default) for the droidspaces container peer;\n"
                    "                         one connection carries both T4 rows: T4-image-import (its dma-buf\n"
                    "                         into this side) and T4-ahb-image (this side's AHardwareBuffer into\n"
@@ -5775,6 +6006,10 @@ int main(int argc, char** argv) {
     }
     pr("=== phase T4: an image allocated outside Android (dma-buf from the container peer) ===");
     if (doT4) runT4(g, glOk, t4Endpoint.c_str());
+    if (doT4Host) {
+        pr("T4-host: listening on %s for the display host buffers", t4HostPath.c_str());
+        runT4Host(g, glOk, t4HostPath.c_str());
+    }
 
     glCtxDestroy(g);
     vkCtxDestroy(c);
