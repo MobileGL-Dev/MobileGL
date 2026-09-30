@@ -437,6 +437,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/BackendObject.cpp
 
     MobileGL/MG_Backend/HostFrameBridge.cpp
+    MobileGL/MG_Backend/GbmFrameChannel.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
