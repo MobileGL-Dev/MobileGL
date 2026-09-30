@@ -1,9 +1,15 @@
 package top.mobilegl.plugin;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.graphics.Typeface;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
@@ -58,6 +64,8 @@ public final class ServerControlActivity extends Activity {
     private Button stopButton;
     private TextView statusView;
     private volatile Thread probeThread;
+    private Button allowBackgroundButton;
+    private TextView keepAliveView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,6 +115,28 @@ public final class ServerControlActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         boxParams.topMargin = dp(8);
         contentLayout.addView(onScreenBox, boxParams);
+
+        // KEEPING THE SERVER ALIVE IS TWO PERMISSIONS THE USER GIVES, and both are invisible
+        // until something goes wrong: without the notification one (Android 13+) the service
+        // notification cannot be shown, and without the battery exemption a dozing phone freezes
+        // the process - the listener stays in /proc/net and stops accepting, which from the other
+        // side of the socket looks exactly like a network fault.  This section shows the state of
+        // both, and asks for whichever is missing.
+        keepAliveView = makeText("", 12, COLOR_INFO, false);
+        LinearLayout.LayoutParams keepParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        keepParams.topMargin = dp(12);
+        contentLayout.addView(keepAliveView, keepParams);
+
+        allowBackgroundButton = new Button(this);
+        allowBackgroundButton.setText("Allow background (notification + battery)");
+        allowBackgroundButton.setAllCaps(false);
+        allowBackgroundButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        allowBackgroundButton.setOnClickListener(v -> requestKeepAlive());
+        LinearLayout.LayoutParams allowParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        allowParams.topMargin = dp(6);
+        contentLayout.addView(allowBackgroundButton, allowParams);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -514,6 +544,73 @@ public final class ServerControlActivity extends Activity {
         statusView.setTextColor(color);
     }
 
+    // ---- keeping the server alive ----------------------------------------------------------
+
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 40614;
+
+    private boolean notificationsAllowed() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true;
+        return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean batteryExempt() {
+        PowerManager power = getSystemService(PowerManager.class);
+        return power != null && power.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    private void refreshKeepAlive() {
+        if (keepAliveView == null) return;
+        boolean notifications = notificationsAllowed();
+        boolean exempt = batteryExempt();
+        keepAliveView.setText("Keep alive: notification " + (notifications ? "allowed" : "NOT allowed")
+                + ", battery exemption " + (exempt ? "granted" : "NOT granted"));
+        keepAliveView.setTextColor(notifications && exempt ? COLOR_PASS : COLOR_WARN);
+        if (allowBackgroundButton != null) allowBackgroundButton.setEnabled(!(notifications && exempt));
+    }
+
+    private void requestKeepAlive() {
+        // One at a time, and in this order: the notification prompt is a system dialog of ours,
+        // while the battery one leaves the app entirely - so it goes second, and coming back from
+        // it re-runs the other branch through onResume.
+        if (!notificationsAllowed() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS },
+                    NOTIFICATION_PERMISSION_REQUEST);
+            return;
+        }
+        if (!batteryExempt()) {
+            try {
+                startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (RuntimeException missingDialog) {
+                // Some builds ship without that dialog; the list is the honest fallback rather than
+                // a button that does nothing.
+                Log.w(TAG, "no battery-optimization dialog; opening the list", missingDialog);
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            }
+            return;
+        }
+        setStatus("Already kept alive: the notification is allowed and the battery exemption is granted.",
+                COLOR_PASS);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshKeepAlive();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST) return;
+        refreshKeepAlive();
+        // The denial is worth saying out loud: the server still runs, but its notification is gone,
+        // and a service the system cannot show is a service it may stop.
+        if (!notificationsAllowed())
+            setStatus("Notifications are denied, so the server has no visible notification. "
+                    + "Android may stop it in the background.", COLOR_WARN);
+    }
     private TextView makeText(String text, int sizeSp, int color, boolean bold) {
         TextView view = new TextView(this);
         view.setText(text);

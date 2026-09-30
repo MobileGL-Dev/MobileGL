@@ -8,6 +8,12 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The two permissions that decide whether the server survives a dozing phone: the
+         notification one lets the foreground service show the notification that is its reason to
+         exist (Android 13+), and the exemption one is what the user grants from the control screen
+         so the system stops freezing the process. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:hasCode="true"
