@@ -42,6 +42,24 @@
 #endif
 
 namespace MobileGL::MG_Remote::Server {
+    namespace {
+        Uint8 g_presetDataNonce[Transport::kDataNonceBytes] = {};
+        Bool g_presetDataNonceSet = false;
+
+        Bool TakePresetDataNonce(Uint8* out, SizeT size) {
+            if (!g_presetDataNonceSet || size != sizeof(g_presetDataNonce)) return false;
+            std::memcpy(out, g_presetDataNonce, size);
+            g_presetDataNonceSet = false;
+            return true;
+        }
+    } // namespace
+
+    void PresetDataNonceForThisProcess(const Uint8* nonce, SizeT size) {
+        if (nonce == nullptr || size != sizeof(g_presetDataNonce)) return;
+        std::memcpy(g_presetDataNonce, nonce, size);
+        g_presetDataNonceSet = true;
+    }
+
 
     namespace {
         // F1 (P7 wave 2). THE ONLY KNOB THAT CAN MAKE THE FIRST CapsSnapshot LATE.
@@ -716,7 +734,9 @@ namespace MobileGL::MG_Remote::Server {
             if (socket == nullptr || !socket->IsTcp() || !m_dataSource)
                 return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::LinkTerms,
                                        "stream needs a TCP control connection and a data-connection source");
-            created = Transport::SocketTransport::MintNonce(dataNonce, sizeof(dataNonce));
+            created = TakePresetDataNonce(dataNonce, sizeof(dataNonce))
+                          ? MOBILEGL_OK
+                          : Transport::SocketTransport::MintNonce(dataNonce, sizeof(dataNonce));
             if (created != MOBILEGL_OK) {
                 // (F fix round) The peer is told by name instead of seeing a bare close. The
                 // return value stays the fault it is - exit 67 in ServerMain, counted in

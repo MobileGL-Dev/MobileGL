@@ -1035,10 +1035,30 @@ private:
     };
 
     bool Reap() {
-        const bool reaped = m_handoffShape == Handoff::Thread ? ReapSessionThread()
-                                                               : ReapActiveSession(m_active, m_sessionsFaulted);
-        if (m_active <= 0 && m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
+        if (m_handoffShape == Handoff::Thread) {
+            const bool reaped = ReapSessionThread();
+            if (m_active <= 0 && m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
+            return reaped;
+        }
+        // The fork shape: every live child is asked, and a reaped one takes its hand-off with it.
+        bool reaped = false;
+        for (auto child = m_children.begin(); child != m_children.end();) {
+            if (ReapActiveSession(child->pid, m_sessionsFaulted)) {
+                if (child->handoff >= 0) ::close(child->handoff);
+                child = m_children.erase(child);
+                reaped = true;
+            } else {
+                ++child;
+            }
+        }
+        m_active = m_children.empty() ? -1 : m_children.back().pid;
         return reaped;
+    }
+
+    // Whether an authenticated Hello has to be told Busy: the thread shape serves one session, the
+    // fork shape up to kMaxForkedSessions side by side.
+    bool SessionsFull() const {
+        return m_handoffShape == Handoff::Thread ? m_active > 0 : m_children.size() >= kMaxForkedSessions;
     }
 
     // P12 (D5): the thread shape's reap - the same line a forked child's reap prints, and the same
@@ -1082,7 +1102,7 @@ private:
     // make the loop wait here; a DataBind's routing takes one look (Judge, fix round).
     void WaitOutAnExitingSession() {
         const auto reapDeadline = Clock::now() + std::chrono::milliseconds(50);
-        while (m_active > 0 && Clock::now() < reapDeadline) {
+        while (SessionsFull() && Clock::now() < reapDeadline) {
             if (Reap()) break;
             ::usleep(1000);
         }
@@ -1176,7 +1196,15 @@ private:
             // either has cut its hand-off already (the send below fails and is refused by name) or
             // refuses what is queued on its way out (ExitBeforeAccept / CloseHandoffRefusingQueued).
             Reap();
-            if (m_active <= 0) {
+            // WHICH SESSION IT BELONGS TO.  The thread shape has one; the fork shape knows every
+            // child's nonce (it minted them, Fork) and hands the connection to the child it names.
+            int handoff = m_active > 0 ? m_handoff : -1;
+            if (m_handoffShape == Handoff::Fork) {
+                handoff = -1;
+                for (const auto& child : m_children)
+                    if (ConstantTimeNonceMatch(child.nonce, nonce)) handoff = child.handoff;
+            }
+            if (handoff < 0) {
                 // StreamLink's frames may already follow the DataBind; read them away so the close
                 // does not become an RST that discards the refusal.
                 DrainUnread(fd);
@@ -1186,7 +1214,7 @@ private:
             // The send is MSG_DONTWAIT and the child cuts its end the moment its own data
             // connection is bound (CloseHandoffRefusingQueued), so this either queues the
             // descriptor for a child that will read or refuse it, or fails and is refused here.
-            if (m_handoff >= 0 && FdPassing::SendFd(m_handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)},
+            if (FdPassing::SendFd(handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)},
                                                     /*dontWait=*/true) == MOBILEGL_OK) {
                 // The child holds its own descriptor now; ours goes without a shutdown(2), which
                 // would disconnect the child's too.
@@ -1217,9 +1245,11 @@ private:
         }
         m_backoff.NoteSuccess(peer.address);
         WaitOutAnExitingSession();
-        if (m_active > 0) {
+        if (SessionsFull()) {
             // The frame is consumed, so closing cannot RST the refusal away.
-            Refuse(*connection, Protocol::RefuseCode::Busy, "one session is already active");
+            Refuse(*connection, Protocol::RefuseCode::Busy,
+                   m_handoffShape == Handoff::Thread ? "one session is already active"
+                                                     : "the session limit is reached");
             return;
         }
         Fork(std::move(connection), payload);
@@ -1235,12 +1265,25 @@ private:
             StartSessionThread(std::move(connection), hello, pair);
             return;
         }
+        // The child's data nonce, minted HERE so this supervisor can route the child's DataBind to it
+        // among other live sessions; the child adopts it instead of minting its own.
+        LiveChild live;
+        if (SocketTransport::MintNonce(live.nonce, sizeof(live.nonce)) != MOBILEGL_OK) {
+            ::close(pair[0]);
+            ::close(pair[1]);
+            Refuse(*connection, Protocol::RefuseCode::Busy, "could not mint the session's data nonce");
+            return;
+        }
         std::fflush(nullptr);
         const pid_t supervisor = ::getpid();
         const pid_t child = ::fork();
         if (child == 0) {
             // P12 (D8): the child dies with this supervisor, not after its client has gone.
             DieWithSupervisor(supervisor);
+            Server::PresetDataNonceForThisProcess(live.nonce, sizeof(live.nonce));
+            // The other live sessions' hand-offs are the supervisor's.
+            for (const auto& other : m_children)
+                if (other.handoff >= 0) ::close(other.handoff);
             // The child owns this one connection and its end of the hand-off. Every OTHER pending
             // peer's descriptor is closed here, or the supervisor's refusal of that peer would not
             // end its connection while this session lives.
@@ -1260,9 +1303,11 @@ private:
             Refuse(*connection, Protocol::RefuseCode::Busy, "could not create session child");
             return;
         }
+        live.pid = child;
+        live.handoff = pair[0];
+        m_children.push_back(live);
         m_active = child;
         ::close(pair[1]);
-        m_handoff = pair[0];
         connection->CloseLocalCopy();
     }
 
@@ -1310,10 +1355,21 @@ private:
     std::atomic<bool> m_sessionDone{false};
     std::atomic<int> m_sessionExit{0};
     unsigned long m_sessionOrdinal = 0;
+    // A live session: the newest child's pid for the fork shape, this process's for the thread shape.
     pid_t m_active = -1;
-    // The supervisor's end of the live child's data-connection hand-off (PH-7 (4)); -1 while no
-    // session is live. It goes with the child: a reaped session can be handed nothing.
+    // The thread shape's end of its session's data-connection hand-off (PH-7 (4)); -1 while no
+    // session is live. It goes with the session: a reaped session can be handed nothing.
     int m_handoff = -1;
+    // THE FORK SHAPE'S LIVE SESSIONS, side by side: a desktop is a compositor AND the GL programs
+    // run inside it, each its own client with its own session.  Each child keeps its end of the
+    // hand-off and the data nonce this supervisor minted for it, which is how a DataBind finds it.
+    struct LiveChild {
+        pid_t pid = -1;
+        int handoff = -1;
+        std::uint8_t nonce[kDataNonceBytes] = {};
+    };
+    static constexpr std::size_t kMaxForkedSessions = 8;
+    std::vector<LiveChild> m_children;
     std::vector<PendingPeer> m_pending;
     std::vector<PendingPeer> m_ready;
     // Accepting resumes at this time after accept(2) ran out of descriptors or memory.

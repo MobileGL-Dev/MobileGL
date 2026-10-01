@@ -63,6 +63,13 @@
 
 namespace MobileGL::MG_Remote::Server {
 
+    // THE DATA NONCE A FORKED SESSION CHILD IS BORN WITH.  The TCP supervisor serves sessions side by
+    // side and routes each data connection (DataBind) to the child whose nonce it presents, so it has
+    // to know every child's nonce: it mints the nonce itself just before fork() and the child adopts
+    // it here instead of minting its own.  One use: the session that takes it clears it.  Never set in
+    // a process that runs more than one session, so the shared storage is the child's alone.
+    void PresetDataNonceForThisProcess(const Uint8* nonce, SizeT size);
+
     class ServerSession {
     public:
         static ServerSession* Active();

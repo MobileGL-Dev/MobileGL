@@ -3119,10 +3119,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
                                "MGITEST_TCP_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1")
             set(mglD2Extra FIXTURES_REQUIRED mobilegl-tcp)
-            # The loopback supervisor serves ONE session (ServerMain.cpp answers a second Hello
-            # Refuse{Busy}), and every other Tcp entry holds this lock. Without it `ctest -L
-            # integration-gpu -j N` ran this case beside another Tcp case and whichever client
-            # connected second died Refuse{Busy} -> Fatal{CapsBeforeFirstSnapshot}.
+            # The loopback supervisor used to serve ONE session (a second Hello was answered
+            # Refuse{Busy}), and `ctest -L integration-gpu -j N` ran this case beside another Tcp
+            # case so that whichever client connected second died Refuse{Busy} ->
+            # Fatal{CapsBeforeFirstSnapshot}. It serves several side by side now (ServerMain.cpp
+            # TcpSupervisor, fork shape); every Tcp entry still holds this lock, so the cases do not
+            # share the fixture's one server and its log while they run.
             # scripts/ci/spawn_lane_parity.py and junit_tally.py --discovery now refuse any entry
             # on the fixture that does not hold it.
             set(mglD2Locks "${mglD2LogName}\;mobilegl-tcp")
