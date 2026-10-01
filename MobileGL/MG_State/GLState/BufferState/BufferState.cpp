@@ -105,7 +105,20 @@ namespace MobileGL::MG_State::GLState {
                 return m_bufferBindPointTargets[i][index];
             }
         }
-        MOBILEGL_ASSERT(false, "Invalid BufferTarget enum value for binding point: %d", static_cast<int>(target));
+        // A GLOBAL TARGET ASKED THROUGH THE INDEXED LOOKUP.  Only four targets have per-index binding
+        // points (Uniform, TransformFeedback, AtomicCounter, ShaderStorage); the rest - Vertex, Index,
+        // PixelPack/Unpack, Texture, CopyRead/Write, Query, the indirect ones - are global, and a caller
+        // that asks for one here is reading the wrong accessor, not passing a bad enum.
+        //
+        // This used to abort, and the compositor reached it right after its vertex-attrib setup: the
+        // whole session died on Trace/breakpoint trap ("Invalid BufferTarget enum value for binding
+        // point").  Aborting a compositor over an accessor mix-up is the wrong trade, so the answer is
+        // a one-time warning and index 0 of the indexed array: the caller gets a valid slot, the
+        // global binding is untouched, and the mismatch stays visible in the log instead of being a
+        // crash.  The proper fix is for that caller to use the global accessor.
+        MGLOG_W_ONCE("BufferState::GetBindingPoint: target=%d has no per-index binding points; answering "
+                     "index 0 of the indexed array (a global target was asked through the indexed lookup)",
+                     static_cast<int>(target));
         return m_bufferBindPointTargets[0][index];
     }
 } // namespace MobileGL::MG_State::GLState
