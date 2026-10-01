@@ -340,6 +340,10 @@ namespace MobileGL::MG_Pipe {
             const SizeT slot = handle.Slot;
             return slot < m_bySlot.size() && m_bySlot[slot].Published;
         }
+        // The session that held every buffer's record is gone (MGPipeForgetAllPublications).
+        void ForgetAllPublished() {
+            for (Entry& entry : m_bySlot) entry.Published = false;
+        }
 
         // The sticky everBoundAs mask. Sticky exactly as MGPResourceDesc::ImageBindableHint's
         // everImageBound is: ORed, never cleared, so a buffer that was an element array once

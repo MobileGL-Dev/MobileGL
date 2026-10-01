@@ -1897,7 +1897,14 @@ namespace MobileGL::MG_Pipe {
         PublicationLatch().NoteUnpublished(kind, handle);
     }
 
-    void MGPipeForgetAllPublications() { PublicationLatch().Clear(); }
+    void MGPipeForgetAllPublications() {
+        PublicationLatch().Clear();
+        // The two families whose death asks their own record rather than the latch: vertex
+        // elements (MGPipeEmitVertexElementsDestroyAndFree's RecordIsPublished) and buffers
+        // (MGPipeEmitResourceDestroyAndFree's WasPublished).
+        MGPipeVertexInputEmitterInstance().ForgetAllRecords();
+        MGPipeResourceTrackerInstance().ForgetAllPublished();
+    }
 
     // THE GATE ITSELF, AS AN OBSERVABLE (ID-39, widened by S-3 / ID-41). Every P4a birth hook
     // below and every `wants()` row in the walk resolve through FamilyIsLive /

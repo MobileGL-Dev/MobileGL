@@ -351,6 +351,14 @@ namespace MobileGL::MG_Pipe {
             m_boundLifetimeId = 0;
         }
 
+        // The session that held the records is gone (MGPipeForgetAllPublications): both halves go,
+        // the record half included, because no applier holds any of them any more.
+        void ForgetAllRecords() {
+            for (Latch& latch : m_latch) latch = Latch{};
+            m_boundHandle = kMGPipeNullHandle;
+            m_boundLifetimeId = 0;
+        }
+
         void ResetCounters() { m_creates = m_binds = m_bufferSets = m_indexSets = 0; }
 
     private:
