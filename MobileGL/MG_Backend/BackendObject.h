@@ -602,6 +602,11 @@ namespace MobileGL {
             virtual Bool CreateEGLHostFrameSurface(EGLSurface surface, Uint32 width, Uint32 height);
             virtual Bool InitHostFrameSurface(EGLint width, EGLint height);
             virtual Bool PresentHostFrame();
+            // The present RECORD's half of a host-framed swap.  A split client's swap reaches the
+            // server as a present record (ServerVerbSink::OnPresent), never as SwapEGLBuffers, so
+            // without this the host was never told a frame was drawn.  True when the current
+            // surface is not host-framed: there is nothing to present then.
+            Bool PresentHostFrameIfCurrent();
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
             // Forwards the app-requested eglSwapInterval to the backend's native

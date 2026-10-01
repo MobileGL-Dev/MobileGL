@@ -479,6 +479,12 @@ namespace MobileGL::MG_Backend {
         return false;
     }
 
+    Bool BackendObject::PresentHostFrameIfCurrent() {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_eglSurfaceInitialized || m_eglSurfaceKind != SurfaceKind::HostFrame) return true;
+        return PresentHostFrame();
+    }
+
     Bool BackendObject::IsEGLSurfaceCurrent(EGLSurface surface) const {
         if (surface == EGL_NO_SURFACE) {
             return false;

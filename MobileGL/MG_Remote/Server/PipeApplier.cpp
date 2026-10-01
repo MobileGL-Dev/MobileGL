@@ -404,6 +404,15 @@ namespace MobileGL::MG_Remote::Server {
         // was wanted, recorded here so a future swap-without-present is looked for rather than
         // assumed impossible. Presents() is exposed for a lane that wants to make the comparison.
         table->Present();
+        // A HOST-FRAMED SURFACE IS PRESENTED BY TELLING THE HOST, not by the swap above (which
+        // swaps the pbuffer the context was made with).  BackendObject::SwapEGLBuffers is the
+        // only other route to PresentHostFrame and a split client never reaches it, so this is
+        // where the display host learns the frame is drawn - before the credit goes back, so a
+        // client released by it is released by a frame that is on its way to the glass.
+        if (m_backend != nullptr) {
+            if (!m_backend->PresentHostFrameIfCurrent())
+                MGLOG_E_ONCE("OnPresent: the host frame was not presented (PresentHostFrame failed; see above)");
+        }
         ++m_presents;
         // FrameSerial 0 means "the server stamps its own" (c1-v1 8.3): P5 has no client-side
         // present credit, so the client sends 0 and the frame count on this side IS the serial.
