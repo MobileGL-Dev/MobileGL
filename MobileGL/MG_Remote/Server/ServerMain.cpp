@@ -1458,20 +1458,24 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     if (const int refused = CheckServerEnvironment(); refused != 0) return refused;
     std::string endpoint;
     bool serve = false;
+    unsigned long maxSessions = 1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
         if (arg == "--serve") serve = true;
         else if (arg == "--max-sessions" && i + 1 < argc) {
             char* end = nullptr;
             const auto count = std::strtoul(argv[++i], &end, 10);
-            // This is a concurrency limit, not a cumulative session budget.
-            // P6.5 deliberately supports one active rendering session.
-            if (*end || count != 1) return 71;
+            // Opt-in concurrency is only for an offscreen unix supervisor: each client gets
+            // a process and independent backend state. In-process displays remain singleton.
+            if (*end || count < 1 || count > 64) return 71;
+            maxSessions = count;
         } else if (endpoint.empty() && arg.compare(0, 2, "--") != 0) endpoint = arg;
         else return 71;
     }
     if (endpoint.empty()) if (const char* value = std::getenv("MOBILEGL_IPC_ENDPOINT")) endpoint = value;
     if (endpoint.empty()) return 71;
+    const bool tcpEndpoint = endpoint.compare(0, 6, "tcp://") == 0;
+    if (maxSessions > 1 && (!serve || tcpEndpoint)) return 71;
     int listener = -1;
     if (SocketTransport::Listen(endpoint, &listener) != MOBILEGL_OK) return 72;
     WireLogError("MG_Remote server: pid=%d listening on %s", static_cast<int>(::getpid()), endpoint.c_str());
@@ -1489,7 +1493,6 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
                      reserved, rule);
     }
     unsigned long sessionsFaulted = 0;
-    const bool tcpEndpoint = endpoint.compare(0, 6, "tcp://") == 0;
     const auto knobs = Server::PreAuthKnobs::FromEnvironment();
     if (tcpEndpoint && serve) {
         // PH-7 (5): the TCP supervisor reads and authenticates every first frame before it forks.
@@ -1500,8 +1503,20 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         return failed;
     }
     // From here: the unix endpoint (--serve or not), and the single-session TCP shape.
-    pid_t active = -1;
-    const auto reap = [&]() { return ReapActiveSession(active, sessionsFaulted); };
+    std::vector<pid_t> active;
+    active.reserve(maxSessions);
+    const auto reap = [&]() {
+        bool reaped = false;
+        for (auto child = active.begin(); child != active.end();) {
+            if (ReapActiveSession(*child, sessionsFaulted)) {
+                child = active.erase(child);
+                reaped = true;
+            } else {
+                ++child;
+            }
+        }
+        return reaped;
+    };
     // P11 PAIR: a unix client's two connections, paired by the nonce each presents first. The
     // connections not yet paired stay in it between calls.
     std::unique_ptr<Server::PairAcceptor> pairs;
@@ -1540,12 +1555,12 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         // exit_group closes files just before waitpid can observe the exit.
         // Allow that small scheduling window; a live peer remains Busy.
         const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
-        while (active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
+        while (active.size() >= maxSessions && std::chrono::steady_clock::now() < reapDeadline) {
             if (reap()) break;
             ::usleep(1000);
         }
-        if (active > 0) {
-            RefuseBusy(*control, "one session is already active");
+        if (active.size() >= maxSessions) {
+            RefuseBusy(*control, maxSessions == 1 ? "one session is already active" : "the session limit is reached");
             continue;
         }
         std::fflush(nullptr);
@@ -1565,7 +1580,7 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             RefuseBusy(*control, "could not create session child");
             continue;
         }
-        active = child;
+        active.push_back(child);
         control->CloseLocalCopy();
     }
     LogSupervisorSummary(sessionsFaulted);

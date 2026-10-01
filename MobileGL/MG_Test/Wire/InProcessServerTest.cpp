@@ -119,13 +119,104 @@ namespace {
         r.applied = Emit(client, P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)) ? 1 : 0;
     }
 
+    void ApplyOneSharedRecord(Remote::Client::ClientSession& client, PeerReport& r) {
+        const auto* link = client.DataLink();
+        r.status = link != nullptr && link->Capabilities().SharedMapping ? 1 : 0;
+        ApplyOneRecord(client, r);
+    }
+
     void LatchTheSession(Remote::Client::ClientSession& client, PeerReport& r) {
         // A CAMetalLayer* on the wire: Fatal{UnmigratedSurface, "MetalLayer@P12"}, latched.
         (void)SendSurfaceOp(client, r, static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface),
                             static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer), 0x1234);
     }
 
+    bool LaunchUnixSupervisor(const std::string& label, unsigned maxSessions, ServerProcess* server) {
+        server->endpoint = "@mgl-unix-multi-" + label + "-" + std::to_string(::getpid());
+        server->logBase = "/tmp/mgl-unix-multi-" + label + "-" + std::to_string(::getpid()) + ".log";
+        ::setenv("MOBILEGL_LOG_FILE_PATH", server->logBase.c_str(), 1);
+        PinHeadlessEgl();
+        Debug::TruncateRoleLogs(server->logBase.c_str());
+        Remote::Server::LaunchedServer launched;
+        std::vector<std::string> args{"--serve"};
+        if (maxSessions > 0) {
+            args.push_back("--max-sessions");
+            args.push_back(std::to_string(maxSessions));
+        }
+        if (Remote::Server::LaunchServerWithArgs(ServerImage(), server->endpoint, args, &launched) != MOBILEGL_OK)
+            return false;
+        server->pid = launched.pid;
+        bool listening = false;
+        (void)WaitFor([&] {
+            if (server->Log().find("listening on") != std::string::npos) return listening = true;
+            return server->WaitExit(0) && server->pid <= 0;
+        }, 10000);
+        // The listener takes the native address; the client control selector includes its
+        // transport prefix. Bare @name is not a supported MOBILEGL_IPC_CONTROL spelling.
+        if (listening) server->endpoint = "unix:" + server->endpoint;
+        return listening;
+    }
+
+    struct HeldPeer {
+        pid_t pid = -1;
+        void Release() {
+            ReleaseHeldPeer(pid);
+            pid = -1;
+        }
+        ~HeldPeer() { Release(); }
+    };
+
+    bool UnixChildReaped(const ServerProcess& server, Uint32 child) {
+        return server.Log().find("session pid=" + std::to_string(child) + " reaped") != std::string::npos;
+    }
+
 } // namespace
+
+TEST(UnixSupervisor, ConcurrentSharedMemoryClientsHaveSeparateWorkersAndAnExitedSlotIsReused) {
+    ServerProcess server;
+    ASSERT_TRUE(LaunchUnixSupervisor("two", 2, &server)) << server.Log();
+    HeldPeer first;
+    const PeerReport a = RunPeer(server.endpoint, ApplyOneSharedRecord, false, 30000, 30000, &first.pid);
+    ASSERT_EQ(a.started, 1) << a.note << "\n" << server.Log();
+    ASSERT_EQ(a.applied, 1) << a.note;
+    EXPECT_EQ(a.status, 1) << "the unix client did not map shared segments";
+    HeldPeer second;
+    const PeerReport b = RunPeer(server.endpoint, ApplyOneSharedRecord, false, 30000, 30000, &second.pid);
+    ASSERT_EQ(b.started, 1) << b.note << "\n" << server.Log();
+    ASSERT_EQ(b.applied, 1) << b.note;
+    EXPECT_EQ(b.status, 1) << "the concurrent client did not map shared segments";
+    EXPECT_NE(a.serverPid, b.serverPid) << "concurrent clients shared process-global GL state";
+    EXPECT_NE(a.serverPid, static_cast<Uint32>(server.pid));
+    EXPECT_NE(b.serverPid, static_cast<Uint32>(server.pid));
+
+    const PeerReport excess = RunPeer(server.endpoint, ApplyOneRecord, true, 15000);
+    EXPECT_EQ(excess.started, 0) << "the configured live-session limit was ignored";
+    EXPECT_NE(server.Log().find("Refuse{Busy} the session limit is reached"), std::string::npos) << server.Log();
+
+    // The second worker must not hold the first peer's connection open after its EOF. This also
+    // proves CloseLocalCopy and CloseInForkedChild cover descriptors inherited by each worker.
+    first.Release();
+    ASSERT_TRUE(WaitFor([&] { return UnixChildReaped(server, a.serverPid); }, 15000)) << server.Log();
+    EXPECT_EQ(::kill(static_cast<pid_t>(b.serverPid), 0), 0) << "reaping one session killed its sibling";
+    const PeerReport replacement = RunPeer(server.endpoint, ApplyOneSharedRecord, true);
+    EXPECT_EQ(replacement.started, 1) << replacement.note << "\n" << server.Log();
+    EXPECT_EQ(replacement.applied, 1) << replacement.note;
+    EXPECT_EQ(replacement.status, 1);
+    EXPECT_NE(replacement.serverPid, b.serverPid);
+    second.Release();
+    EXPECT_TRUE(WaitFor([&] { return UnixChildReaped(server, b.serverPid); }, 15000)) << server.Log();
+}
+
+TEST(UnixSupervisor, ConcurrencyRequiresAnExplicitLimit) {
+    ServerProcess server;
+    ASSERT_TRUE(LaunchUnixSupervisor("default", 0, &server)) << server.Log();
+    HeldPeer first;
+    const PeerReport a = RunPeer(server.endpoint, ApplyOneRecord, false, 30000, 30000, &first.pid);
+    ASSERT_EQ(a.started, 1) << a.note << "\n" << server.Log();
+    const PeerReport b = RunPeer(server.endpoint, ApplyOneRecord, true, 15000);
+    EXPECT_EQ(b.started, 0);
+    EXPECT_NE(server.Log().find("Refuse{Busy} one session is already active"), std::string::npos) << server.Log();
+}
 
 // D5, THE HEADLINE. Three sessions, one process: a healthy one, one that latches, and a healthy one
 // after it. Red with ResetSessionLatch removed from the supervisor's reap: session C's Welcome arrives
