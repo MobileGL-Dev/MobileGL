@@ -38,6 +38,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
     // where the extension IS present) called it: measured as signal 11, fault_addr=(nil), pc=0x0,
     // from KWin::EglDisplay::determineRenderNode() through the GOT slot whose relocation is
     // R_AARCH64_GLOB_DAT epoxy_eglQueryDisplayAttribEXT.
+    // Wayland where a Wayland client can exist (WaylandWindow.h: window surfaces presented through
+    // wl_shm).  Without it glvnd never hands this vendor a Wayland display at all.
+#if defined(__linux__) && !defined(__ANDROID__)
+#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS " EGL_KHR_platform_wayland EGL_EXT_platform_wayland"
+#else
+#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS ""
+#endif
     inline constexpr const char* kPlatformExtensionString =
         "EGL_EXT_client_extensions "
         "EGL_EXT_platform_base "
@@ -46,7 +53,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         "EGL_EXT_platform_gbm "
         "EGL_MESA_platform_gbm "
         "EGL_EXT_platform_device "
-        "EGL_MESA_platform_surfaceless";
+        "EGL_MESA_platform_surfaceless" MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS;
 
     // What a display answers for EGL_EXTENSIONS: the extensions this implementation provides that
     // are not platform ones, then the platform list above.
