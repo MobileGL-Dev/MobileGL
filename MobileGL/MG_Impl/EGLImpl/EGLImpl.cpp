@@ -8,6 +8,7 @@
 
 #include "EGLImpl.h"
 #include "EGLPlatformExtensions.h"
+#include "WaylandWindow.h"
 #include "../GetProcAddress.h"
 #include <Init.h>
 #include <MG_Backend/BackendObjects.h>
@@ -117,6 +118,73 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 return reinterpret_cast<void*>(static_cast<SizeT>(nativeHandle));
             }
         }
+
+#if MOBILEGL_WAYLAND_WINDOWS
+        // Every Wayland window surface's presentation, by surface.  Guarded by EGLOperationMutex,
+        // which every entry point that reaches it holds.
+        UnorderedMap<EGLSurface, UniquePtr<Wayland::WindowSurface>>& WaylandSurfaces() {
+            static auto* surfaces = new UnorderedMap<EGLSurface, UniquePtr<Wayland::WindowSurface>>();
+            return *surfaces;
+        }
+
+        // A WINDOW ON A WAYLAND DISPLAY.  Whatever MOBILEGL_IPC_SURFACE says, the window is this
+        // application's own wl_surface, so neither the server's window nor the display host's frame
+        // is what it shows: the backend draws into a pbuffer of the window's size, and each swap
+        // reads the frame back and attaches it to the wl_surface (WaylandWindow.h).  Answers false
+        // when the display is not a Wayland one; otherwise *out is the surface, or EGL_NO_SURFACE
+        // with the error set.
+        template <typename State>
+        Bool CreateWaylandWindowSurface(State* state, EGLDisplay dpy, EGLConfig config, void* window,
+                                        Bool platformWindow, EGLSurface* out) {
+            Uint64 nativeDisplay = 0;
+            EGLenum platform = EGL_NONE;
+            if (!state->GetDisplayNative(dpy, &nativeDisplay, &platform) ||
+                !Wayland::IsWaylandDisplay(nativeDisplay, platform)) {
+                return false;
+            }
+            *out = EGL_NO_SURFACE;
+            if (!state->IsDisplayInitialized(dpy)) {
+                state->SetError(EGL_NOT_INITIALIZED);
+                return true;
+            }
+            if (!state->ValidateConfigOnDisplay(dpy, config)) {
+                state->SetError(EGL_BAD_CONFIG);
+                return true;
+            }
+            EGLint width = 0;
+            EGLint height = 0;
+            if (!Wayland::WindowSize(window, &width, &height)) {
+                state->SetError(EGL_BAD_NATIVE_WINDOW);
+                return true;
+            }
+            EGLint alpha = 0;
+            (void)state->GetConfigAttrib(dpy, config, EGL_ALPHA_SIZE, &alpha);
+            auto presentation =
+                Wayland::WindowSurface::Create(reinterpret_cast<void*>(static_cast<uintptr_t>(nativeDisplay)), window,
+                                               width, height, alpha > 0);
+            if (!presentation) {
+                state->SetError(EGL_BAD_NATIVE_WINDOW);
+                return true;
+            }
+            const EGLSurface surface =
+                platformWindow ? state->CreatePlatformWindowSurface(dpy, config, window, nullptr)
+                               : state->CreateWindowSurface(
+                                     dpy, config, (NativeWindowType)(reinterpret_cast<uintptr_t>(window)), nullptr);
+            if (surface == EGL_NO_SURFACE) return true;
+            (void)state->ResizeSurface(dpy, surface, width, height);
+            auto* backendObject = GetBackendObject(state);
+            if (!backendObject || !backendObject->CreateEGLPbufferSurface(surface, width, height)) {
+                MGLOG_E("eglCreateWindowSurface: the backend refused the %dx%d drawable behind a Wayland window",
+                        width, height);
+                state->DestroySurface(dpy, surface);
+                state->SetError(EGL_BAD_ALLOC);
+                return true;
+            }
+            WaylandSurfaces()[surface] = std::move(presentation);
+            *out = surface;
+            return true;
+        }
+#endif
     } // namespace
 
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
@@ -125,6 +193,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            EGLSurface waylandSurface = EGL_NO_SURFACE;
+            if (CreateWaylandWindowSurface(state, dpy, config, ToVoidHandle(window), /*platformWindow=*/false,
+                                           &waylandSurface)) {
+                return waylandSurface;
+            }
+        }
+#endif
         if (!state->IsDisplayInitialized(dpy)) {
             state->SetError(EGL_NOT_INITIALIZED);
             return EGL_NO_SURFACE;
@@ -221,6 +299,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
             MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A Wayland window shows what is attached to it: the frame is read back and attached
+        // BEFORE the swap, while it is still the drawable's content.
+        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end()) (void)it->second->Present();
+#endif
         if (!backendObject->SwapEGLBuffers(dpy, draw)) {
             MGLOG_E_ONCE("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
             state->SetError(EGL_BAD_SURFACE);
@@ -356,6 +439,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state->DestroySurface(dpy, surface)) {
             return EGL_FALSE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        WaylandSurfaces().erase(surface);
+#endif
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             backendObject->ReleaseEGLSurface(surface);
         }
@@ -718,6 +804,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            EGLSurface waylandSurface = EGL_NO_SURFACE;
+            if (CreateWaylandWindowSurface(state, dpy, config, native_window, /*platformWindow=*/true,
+                                           &waylandSurface)) {
+                return waylandSurface;
+            }
+        }
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P12 (on-screen server window), D1: as CreateWindowSurface - with MOBILEGL_IPC_SURFACE=server
         // the window is the server's, and a headless client's NULL is accepted.

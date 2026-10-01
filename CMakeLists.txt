@@ -406,6 +406,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Impl/EGLImpl/Exporting/GlvndVendor.cpp
     MobileGL/MG_Impl/EGLImpl/EGLImpl.cpp
+    MobileGL/MG_Impl/EGLImpl/WaylandWindow.cpp
     
     # @INSERTION_POINT:SOURCE_FILE_GLIMPL@ #
     MobileGL/MG_Impl/GLImpl/Sampler/Validators.cpp

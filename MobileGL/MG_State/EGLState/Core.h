@@ -37,6 +37,9 @@ namespace MobileGL {
                 EGLDisplayHandle GetPlatformDisplay(EGLenum platform, void* nativeDisplay);
                 Bool ValidateDisplay(EGLDisplayHandle display) const;
                 Bool IsDisplayInitialized(EGLDisplayHandle display) const;
+                // The native display a display was made for and the platform it was asked for on
+                // (EGL_NONE for eglGetDisplay): what decides how its window surfaces are presented.
+                Bool GetDisplayNative(EGLDisplayHandle display, Uint64* nativeDisplayKey, EGLenum* platform) const;
                 Bool InitializeDisplay(EGLDisplayHandle display, EGLint* major, EGLint* minor);
                 Bool TerminateDisplay(EGLDisplayHandle display);
                 // Whole-library idle checks used by EGLImpl::Terminate to decide
