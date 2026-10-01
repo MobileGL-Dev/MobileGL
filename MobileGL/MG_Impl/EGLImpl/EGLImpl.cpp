@@ -346,6 +346,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return state->ConsumeError();
     }
 
+    // THE DISPLAY HOST'S FRAME, AS THE COMPOSITOR PRESENTS IT.  Set by the surfaceless-bind hook in
+    // MakeCurrent when this client (the compositor) takes the host frame; read by glFlush, which is
+    // that compositor's only frame boundary - it never calls eglSwapBuffers, and without a present
+    // the display host is never told a frame is done, so nothing ever reaches the glass.
+    EGLDisplay g_hostFramePresentDisplay = nullptr;
+    EGLSurface g_hostFramePresentSurface = nullptr;
+
     EGLBoolean MakeCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
@@ -361,6 +368,81 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
                 threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE DISPLAY HOST'S FRAMES, TO A CLIENT THAT ASKS FOR NO SURFACE.
+        //
+        // A compositor on this route never calls eglCreateWindowSurface: it imports the display host's
+        // dma-bufs and draws into them through framebuffers, binding its contexts with EGL_NO_SURFACE.
+        // The host frame bridge, though, is opened by exactly one thing - a surface being CREATED and
+        // activated (ServerLoop's CreateWindowSurface with the host-frame window backend ->
+        // InitHostFrameSurface) - so with no surface ever created the bridge stayed shut, the display
+        // host kept offering frames into a name nobody served ("offer buffer 0: bridge fd=-1"), and no
+        // frame could reach the glass no matter how much was drawn.  So: when the session asked for
+        // host-framed surfaces and a real context is being bound with no surface, make it the surface
+        // eglCreatePlatformWindowSurface would have made, once, and bind that.  The size is the display
+        // host's own frame size; the client's window value is not on this path at all.
+        // ONLY THE COMPOSITOR TAKES THE HOST FRAME.  A desktop is full of processes that bind a
+        // context with no surface - konsole, plasmashell, kactivitymanagerd - and measured with
+        // probe15 as the second client: such a bind from a NON-compositor process made the host-frame
+        // activation fail (makeCurrent=0) and the process aborted.  The compositor is marked by its
+        // launcher with MOBILEGL_HOST_FRAME_CLIENT=1; everyone else keeps the plain surfaceless bind,
+        // which is all they ever wanted.
+        if (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT &&
+            MG_Config::HostFrameWindowSurfaces() &&
+            (std::getenv("MOBILEGL_HOST_FRAME_CLIENT") != nullptr &&
+             std::string("1") == std::getenv("MOBILEGL_HOST_FRAME_CLIENT"))) {
+            static Bool hostFrameSurfaceTaken = false;
+            if (!hostFrameSurfaceTaken) {
+                hostFrameSurfaceTaken = true;
+                EGLConfig hostFrameConfig = nullptr;
+                EGLint hostFrameConfigCount = 0;
+                const EGLint hostFrameChoose[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_NONE};
+                if (state->ChooseConfig(dpy, hostFrameChoose, &hostFrameConfig, 1,
+                                        &hostFrameConfigCount) &&
+                    hostFrameConfigCount > 0 && hostFrameConfig != nullptr) {
+                    // BOTH HALVES, exactly as eglCreateWindowSurface makes one: the EGL state's
+                    // registration (without it every later bind and swap of this surface was refused
+                    // as EGL_BAD_SURFACE - measured: "eglMakeCurrent rejected by EGLState
+                    // error=0x300d", and glFlush's swaps returned before reaching the backend), then
+                    // the backend's own window-surface entry, which the remote backend routes to the
+                    // host frame (BackendObject_Remote::CreateHostFrameWindowSurface) - the call that
+                    // puts a CreateWindowSurface frame with the host-frame window backend on the wire.
+                    const EGLSurface hostFrameSurface = state->CreateHostFrameWindowSurface(
+                        dpy, hostFrameConfig, nullptr, 1440, 3200, /*platformWindow=*/false);
+                    MG_Backend::WindowHandle hostFrameHandle{};
+                    hostFrameHandle.Width = 1440;
+                    hostFrameHandle.Height = 3200;
+                    if (hostFrameSurface == EGL_NO_SURFACE) {
+                        MGLOG_E("host frame: the EGL state refused the display host's frame surface");
+                    } else if (!MG_Backend::pActiveBackendObject->CreateEGLWindowSurface(hostFrameSurface,
+                                                                                       hostFrameHandle)) {
+                        MGLOG_E("host frame: the backend refused the display host's frame surface");
+                        state->DestroySurface(dpy, hostFrameSurface);
+                    } else {
+                        // The frame boundary of a compositor that never swaps is its glFlush.  glFlush
+                        // has no EGL context of its own, so remember HERE which surface presents the
+                        // display host's frame; glFlush presents it (see the host-frame present in
+                        // glFlush's implementation).
+                        g_hostFramePresentDisplay = dpy;
+                        g_hostFramePresentSurface = hostFrameSurface;
+                        MGLOG_I("host frame: the first surfaceless eglMakeCurrent made the display host's "
+                                "frame surface %p (%dx%d)",
+                                hostFrameSurface, 1440, 3200);
+                    }
+                } else {
+                    MGLOG_E("host frame: no config for the display host's frame surface");
+                }
+            }
+            // EVERY surfaceless bind, not only the first: the compositor rebinds with EGL_NO_SURFACE
+            // all the time, and a bind without the surface leaves nothing current for glFlush's swap
+            // to present (BackendObject::SwapEGLBuffers: "draw surface is not current on this thread").
+            if (g_hostFramePresentSurface != nullptr && dpy == g_hostFramePresentDisplay) {
+                draw = g_hostFramePresentSurface;
+                read = g_hostFramePresentSurface;
+            }
+        }
+#endif
 
         if (!state->MakeCurrent(dpy, draw, read, ctx)) {
             const EGLint error = state->ConsumeError();

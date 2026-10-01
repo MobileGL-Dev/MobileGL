@@ -13,6 +13,13 @@
 #include <EGL/eglext.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
+    // The display host's frame surface, as taken by the surfaceless-bind hook in MakeCurrent, and the
+    // display it belongs to.  glFlush reads these: a compositor's frame boundary is glFlush, and the
+    // host frame's "frame is done" signal IS a swap of this surface.  Null until a client marked
+    // MOBILEGL_HOST_FRAME_CLIENT=1 actually took the frame.
+    extern EGLDisplay g_hostFramePresentDisplay;
+    extern EGLSurface g_hostFramePresentSurface;
+
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
                                    const EGLint* attrib_list);
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw);
