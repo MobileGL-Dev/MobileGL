@@ -8,6 +8,9 @@
 
 #pragma once
 #include <Includes.h>
+// EGLImageKHR: the return type of the KHR spelling of eglCreateImage below.  Includes.h brings in
+// the core egl.h, which has no KHR types in it.
+#include <EGL/eglext.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
@@ -53,6 +56,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLBoolean GetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib* value);
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list);
+    // The same image under EGL_KHR_image_base's name and its EGLint attribute list: the two lists
+    // are pairs of different widths, so the caller's array is re-spelled rather than cast.
+    EGLImageKHR CreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                               const EGLint* attrib_list);
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image);
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list);
     EGLSurface CreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,

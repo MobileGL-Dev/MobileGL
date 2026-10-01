@@ -497,6 +497,7 @@ namespace MobileGL {
                 CASE(E_GL_OES_fixed_point)
                 CASE(E_GL_OES_single_precision)
                 CASE(E_GL_OES_compressed_paletted_texture)
+                CASE(E_GL_OES_EGL_image)
                 CASE(E_GL_OES_read_format)
                 CASE(E_GL_OES_query_matrix)
                 CASE(E_GL_EXT_depth_bounds_test)

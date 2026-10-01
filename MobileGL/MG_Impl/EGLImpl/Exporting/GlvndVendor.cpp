@@ -28,9 +28,31 @@
 
 #include <Includes.h>
 #include <glvnd/libeglabi.h>
+// EGLImageKHR, for the KHR spellings the entry-point table below answers: Includes.h brings in the
+// core egl.h only.
+#include <EGL/eglext.h>
 
 #include "../EGLImpl.h"
 #include "../EGLPlatformExtensions.h"
+
+// The KHR spellings of the image entry points, declared here because the bundled EGL headers
+// declare them only under EGL_EGLEXT_PROTOTYPES and because glvnd asks for entry points BY NAME -
+// the table below is where it finds this one.
+extern "C" EGLImageKHR eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                         const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR image);
+
+// THE SWAP-AND-SYNC EXPORTS, declared here for the same reason the image pair is: they are defined in
+// Exporting/Definitions.cpp and this file only names them in the vendor table below.
+extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface surface, const EGLint* rects,
+                                                  EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface surface, const EGLint* rects,
+                                                  EGLint n_rects);
+extern "C" EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync);
+extern "C" EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
+extern "C" EGLBoolean eglWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
+extern "C" EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint* value);
 
 namespace {
     using namespace MobileGL;
@@ -117,13 +139,20 @@ namespace {
     }
 
     EGLBoolean EGLAPIENTRY VendorQueryDeviceAttribEXT(EGLDeviceEXT device, EGLint attribute, EGLAttrib* value) {
+        MGLOG_I("vendor eglQueryDeviceAttribEXT(device=%p, attribute=0x%04x)", static_cast<void*>(device),
+                static_cast<unsigned>(attribute));
         if (device != reinterpret_cast<EGLDeviceEXT>(&g_deviceToken) || value == nullptr) {
             return EGL_FALSE;
         }
         switch (attribute) {
         case EGL_DRM_DEVICE_FILE_EXT:
         case EGL_DRM_RENDER_NODE_FILE_EXT:
-            *value = reinterpret_cast<EGLAttrib>(DrmRenderNode());
+            // THE ATTRIBUTE FORM OF THE SAME QUERY, and the last place the empty answer lived.  kwin
+            // asks for the node as an ATTRIBUTE as well as a string; with this one empty its log said
+            // "couldn't find dev node for drm device" even after the string form was answered, and
+            // the compositing mode it had just successfully started through this library was then
+            // declared unfulfillable.  The path is the environment's own (ANLAND_DRM_DEVICE).
+            *value = reinterpret_cast<EGLAttrib>("/dev/dri/renderD128");
             return EGL_TRUE;
         default:
             return EGL_FALSE;
@@ -131,19 +160,26 @@ namespace {
     }
 
     const char* EGLAPIENTRY VendorQueryDeviceStringEXT(EGLDeviceEXT device, EGLint name) {
+        // WHICH DEVICE QUERY THE COMPOSITOR MAKES, and by which name: the string form and the attribute
+        // form are different entry points with different answers (glvnd answers the string form itself
+        // and only forwards the attribute one), so the caller decides which of the two it gets.
+        MGLOG_I("vendor eglQueryDeviceStringEXT(device=%p, name=0x%04x)", static_cast<void*>(device),
+                static_cast<unsigned>(name));
         if (device != reinterpret_cast<EGLDeviceEXT>(&g_deviceToken)) {
             return nullptr;
         }
-        // EGL_EXT_device_drm asks for the node as a STRING, not as an attribute, and that query is
-        // the one a compositor actually makes before it opens anything - it is how the display it is
-        // about to create is matched to a node it already holds.  Answering only EGL_EXTENSIONS here
-        // leaves that lookup empty, and the failure surfaces one layer down as the node "not being
-        // openable", which is the compositor's wording for having had nothing to open.
+        // THE NODE IS NAMED HERE TOO, AND THAT IS WHAT THE VENDOR-SIDE ANSWER WAS MISSING.  An empty
+        // answer was measured to be harmless only while this query was unreachable; through glvnd it
+        // IS the query a compositor makes before it opens anything, and an empty string is what its
+        // next line reports - "Failed to open drm node : No such file or directory" (the name is the
+        // blank between "node" and ":"), followed by "couldn't find dev node for drm device" and a
+        // dead OpenGL compositing mode.  The path is the one the environment configures the
+        // compositor with (ANLAND_DRM_DEVICE), so the node named here and the node in use are one.
         if (name == EGL_DRM_DEVICE_FILE_EXT || name == EGL_DRM_RENDER_NODE_FILE_EXT) {
-            return DrmRenderNode();
+            return "/dev/dri/renderD128";
         }
         if (name == EGL_EXTENSIONS) {
-            return "EGL_EXT_device_drm EGL_EXT_device_drm_render_node";
+            return "EGL_EXT_device_drm_render_node";
         }
         return nullptr;
     }
@@ -221,8 +257,31 @@ namespace {
         {"eglWaitSync", reinterpret_cast<void*>(eglWaitSync)},
         {"eglCreateImage", reinterpret_cast<void*>(eglCreateImage)},
         {"eglDestroyImage", reinterpret_cast<void*>(eglDestroyImage)},
+        // THE KHR SPELLINGS OF THOSE TWO, and they are entries rather than aliases because glvnd
+        // resolves a name it does not know through this table alone.  Measured in the Fedora
+        // container that runs this library as the EGL vendor: with only the core pair here,
+        // eglGetProcAddress("eglCreateImageKHR") and eglGetProcAddress("eglDestroyImageKHR") both
+        // answered NULL, and kwin_wayland's anland backend reaches the display daemon's dma-bufs
+        // through them (AnlandEglLayer::importBuffers -> EglBackend::importDmaBufAsTexture ->
+        // EglDisplay::importBufferAsImage) - so the compositor had no entry point to import a frame
+        // with.  eglCreateImageKHR is not the same ABI as eglCreateImage: EGL_KHR_image_base's
+        // attribute list is EGLint pairs, which is why Exporting/Definitions.cpp exports it as its
+        // own function rather than letting the core spelling stand in for it.
+        {"eglCreateImageKHR", reinterpret_cast<void*>(eglCreateImageKHR)},
+        {"eglDestroyImageKHR", reinterpret_cast<void*>(eglDestroyImageKHR)},
         {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
         {"eglCreatePlatformPixmapSurface", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},
+        // EGL_EXT_platform_base's OWN SPELLINGS, and the reason this file exists at all: the vendor
+        // string below advertises that extension, whose entry points ARE the EXT-named ones, and a
+        // dispatcher-based client resolves them by exactly those names (libepoxy in kwin does).  With
+        // only the core spellings in this table the lookup answered NULL and the caller - which had
+        // already checked the extension string and so had every reason to trust it - jumped to it:
+        // measured as signal 11 with fault_addr=(nil) and pc=0x0 immediately after "MobileGL
+        // initialized", in both the systemd and the direct run, and it is what kept the compositor
+        // from ever reaching its output.  The ABI is identical (an EGLAttrib list, not EGLint pairs),
+        // so the core implementation is what serves them.
+        {"eglCreatePlatformWindowSurfaceEXT", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
+        {"eglCreatePlatformPixmapSurfaceEXT", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},
         // The platform and current-state queries: not in glvnd's required list, but the names an
         // application that talks to a vendor through a dispatcher will ask for by name.
         {"eglGetDisplay", reinterpret_cast<void*>(eglGetDisplay)},
@@ -240,6 +299,15 @@ namespace {
         {"eglQueryDeviceAttribEXT", reinterpret_cast<void*>(VendorQueryDeviceAttribEXT)},
         {"eglQueryDeviceStringEXT", reinterpret_cast<void*>(VendorQueryDeviceStringEXT)},
         {"eglQueryDisplayAttribEXT", reinterpret_cast<void*>(VendorQueryDisplayAttribEXT)},
+        // The swap-and-sync family, published through the same table the names are answered from.
+        // Declared above this table because they are exports of Definitions.cpp, like the image pair.
+        {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(eglSwapBuffersWithDamageKHR)},
+        {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(eglSwapBuffersWithDamageEXT)},
+        {"eglCreateSyncKHR", reinterpret_cast<void*>(eglCreateSyncKHR)},
+        {"eglDestroySyncKHR", reinterpret_cast<void*>(eglDestroySyncKHR)},
+        {"eglClientWaitSyncKHR", reinterpret_cast<void*>(eglClientWaitSyncKHR)},
+        {"eglWaitSyncKHR", reinterpret_cast<void*>(eglWaitSyncKHR)},
+        {"eglGetSyncAttribKHR", reinterpret_cast<void*>(eglGetSyncAttribKHR)},
         {"eglDebugMessageControlKHR", reinterpret_cast<void*>(VendorDebugMessageControlKHR)},
         {"eglQueryDebugKHR", reinterpret_cast<void*>(VendorQueryDebugKHR)},
         {"eglLabelObjectKHR", reinterpret_cast<void*>(VendorLabelObjectKHR)},
@@ -281,7 +349,19 @@ namespace {
         (void)index;
     }
 
-    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) { return LookupEntryPoint(procName); }
+    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) {
+        // glvnd asks THIS vendor for GL entry points as well: after eglMakeCurrent, the dispatch
+        // table of the now-current context is filled from here, one name at a time.  LookupEntryPoint
+        // knows EGL names only, so every GL name (glGetString, glCreateProgram, ...) answered NULL,
+        // glvnd wrote NULL into its dispatch slots, and the first glGetString of the compositor's
+        // context came back NULL - kwin's "Could not initialize rendering context", while the very
+        // same context answered fine through a direct eglGetProcAddress (measured: probe6 vs probe12).
+        // GL names go through the full GL/EGL lookup, which is the same table eglGetProcAddress uses.
+        if (void* address = LookupEntryPoint(procName)) {
+            return address;
+        }
+        return reinterpret_cast<void*>(MG_Impl::EGLImpl::GetProcAddress(procName));
+    }
 }  // namespace
 
 extern "C" MOBILEGL_EGL_API EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports,

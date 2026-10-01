@@ -646,6 +646,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/FatalFunnel.cpp
         MobileGL/MG_Remote/Wire/PipeWireCodec.cpp
         MobileGL/MG_Remote/Client/ClientSession.cpp
+MobileGL/MG_Remote/Client/DmaBufImport.cpp
         MobileGL/MG_Remote/Client/EmitTables.cpp
         MobileGL/MG_Remote/Client/CapsMirror.cpp
         # P5 c1: the client role's BackendObject. pActiveBackendObject holds one of these
@@ -823,6 +824,17 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     PUBLIC
     ${MOBILEGL_LINK_LIBRARIES}
 )
+
+# A LINUX BUILD COMPILES THE DirectVulkan BACKEND BUT HAS NO VULKAN LOADER TO LINK AGAINST, so the
+# resulting shared library carries undefined vk* symbols - and that is not theoretical: glvnd dlopens
+# this file as the EGL vendor with RTLD_NOW, so the load fails outright with "undefined symbol:
+# vkGetQueryPoolResults" (measured on the phone's container).  Android links the loader already; on
+# Linux the caller passes the runtime's own libvulkan.so.1, and leaving the variable empty keeps the
+# previous behaviour for every build that has no Vulkan runtime to point at.
+set(MOBILEGL_VULKAN_LOADER "" CACHE FILEPATH "Vulkan loader (libvulkan.so.1) to link into the GL library")
+if (UNIX AND NOT ANDROID AND MOBILEGL_VULKAN_LOADER)
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ${MOBILEGL_VULKAN_LOADER})
+endif()
 
 target_compile_definitions(${CMAKE_PROJECT_NAME}
         PUBLIC

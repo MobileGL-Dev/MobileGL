@@ -659,7 +659,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
-            E_GL_ARB_get_program_binary};
+            E_GL_ARB_get_program_binary,
+            // kwin_wayland 6.7.3 will not use a context it cannot drive, and it asks for these
+            // three names first: EglContext::checkSupported() (src/opengl/eglcontext.cpp) takes the
+            // DESKTOP-OpenGL branch for every context whose GL_VERSION is not an "OpenGL ES"
+            // string, and that branch requires GL_ARB_shader_objects, GL_ARB_fragment_shader and
+            // GL_ARB_vertex_shader. GL_VERSION here is "4.6.0 MobileGL ...", so with the names
+            // missing checkSupported() answered false, EglContext::create() returned nullptr,
+            // EglBackend::createContext() returned false, and kwin printed "Could not initialize
+            // rendering context" and quit before drawing a frame.
+            //
+            // The three are true statements about this backend too, and the entry points behind
+            // them are the same ones the DirectGLES half of this list is advertised with: the
+            // frontend implements all 39 ARB_shader_objects procedures, ARB_vertex_shader's three
+            // attrib-location entry points, and nothing for ARB_fragment_shader, whose "New
+            // Procedures and Functions" section reads "None". The shader and program objects live in
+            // MG_Impl/MG_State, above the backend that draws with them, so a name that is true on
+            // one backend is true on the other.
+            E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
+            // NPOT textures: Vulkan puts no power-of-two restriction on an image, its mip chain or
+            // its samplers, so this is the strongest form of the promise the string makes. Kept
+            // identical to the DirectGLES group so the two backends do not disagree about what
+            // MobileGL is.
+            E_GL_ARB_texture_non_power_of_two,
+            // GL_OES_EGL_image: the entry points are real (MG_Impl/GLImpl/Exporting/Definitions.cpp)
+            // and this name is what makes them reachable - libepoxy in kwin resolves
+            // glEGLImageTargetTexture2DOES BY NAME and refuses the import path without it, printing
+            // "No provider of glEGLImageTargetTexture2DOES found.  Requires one of: GL_OES_EGL_image".
+            // That import path is how the compositor's scene reaches the display daemon's dma-bufs.
+            // The render-server half of the import (fd over the GBM socket, then the server-side
+            // EGLImage) is the next change; until it lands an imported texture has no storage behind
+            // it, which is logged once at the entry point rather than left to look like a black frame.
+            E_GL_OES_EGL_image};
         // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
         // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
         // commands; the renderer supplies true only when that word is legal and gl_InstanceID can

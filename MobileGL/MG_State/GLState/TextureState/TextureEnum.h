@@ -21,6 +21,13 @@ namespace MobileGL {
         Texture2DArray,
         TextureCubeMapArray,
         Texture2DMultisampleArray,
+        // GL_TEXTURE_EXTERNAL_OES, APPENDED SO NO EXISTING VALUE MOVES.  The compositor imports the
+        // display daemon's dma-buf with eglCreateImageKHR and binds the result through this target
+        // (glBindTexture(GL_TEXTURE_EXTERNAL_OES, tex) + glEGLImageTargetTexture2DOES).  Without a
+        // member here the bind is answered INVALID_ENUM (measured with probe15: error 0x500 -> 0x0500),
+        // the texture never enters a binding slot, it has no internal format, and the framebuffer
+        // built over it is reported incomplete - "framebuffer for dmabuf 0 is not complete".
+        TextureExternalOES,
         TextureTargetCount,
         Unknown = -1
     };

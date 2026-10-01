@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <cstdio>
+
 // ============== Platform-specific definitions and macros ============== //
 // No __ANDROID_API__ pin here on purpose. The effective API level is owned by
 // the build system (gradle minSdk 26 -> -DANDROID_PLATFORM=android-26, enforced
@@ -110,8 +112,8 @@
     #define MOBILEGL_ASSERT(condition, ...)                                                                                \
         do {                                                                                                               \
             if (!(condition)) {                                                                                            \
-                MGLOG_F("Assertion failed" __VA_OPT__(": ") __VA_ARGS__);                                                  \
-                MGLOG_F("  at %s:%d (%s)", __FILE__, __LINE__, __func__);                                                  \
+                fprintf(stderr, "Assertion failed" __VA_OPT__(": ") "%s", "" __VA_ARGS__);                                 \
+                fprintf(stderr, "  at %s:%d (%s)\n", __FILE__, __LINE__, __func__);                                       \
                 TRAP;                                                                                                      \
             }                                                                                                              \
         } while (0)

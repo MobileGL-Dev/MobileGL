@@ -6,6 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+// The dma-buf import's client half: eglCreateImageKHR keeps a dup() of every plane's descriptor,
+// and this is what tells the render server which texture that buffer backs (see the header).
+#include <MG_Remote/Client/DmaBufImport.h>
 #include <Includes.h>
 #include "../Buffer/GL_Buffer.h"
 #include "../Getter/GL_Getter.h"
@@ -22,6 +25,10 @@
 #include "../Sync/GL_Sync.h"
 #include "../Debug/GL_Debug.h"
 #include <MG_State/GLState/Core.h>
+// The EGL side of the state, for the two GL_OES_EGL_image entry points: what an EGLImage handle
+// names is an object eglCreateImageKHR built (its geometry, its fourcc and the descriptors it owns),
+// and that object lives in the EGL state.  Same include the other GLImpl files that touch it use.
+#include <MG_State/EGLState/Core.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
@@ -1297,17 +1304,325 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMinmaxARB, GLenum target, GLboolean rese
 DECLARE_GL_FUNCTION_STUB_HEAD(void, FramebufferSampleLocationsfvARB, GLenum target, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, FramebufferSampleLocationsfvARB, target, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedFramebufferSampleLocationsfvARB, GLuint framebuffer, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedFramebufferSampleLocationsfvARB, framebuffer, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EvaluateDepthValuesARB, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EvaluateDepthValuesARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteObjectARB, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteObjectARB, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, GetHandleARB, GLenum pname) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, GetHandleARB, pname)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DetachObjectARB, GLhandleARB containerObj, GLhandleARB attachedObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DetachObjectARB, containerObj, attachedObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateShaderObjectARB, GLenum shaderType) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateShaderObjectARB, shaderType)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateProgramObjectARB, void) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateProgramObjectARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, AttachObjectARB, GLhandleARB containerObj, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, AttachObjectARB, containerObj, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, UseProgramObjectARB, GLhandleARB programObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, UseProgramObjectARB, programObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterfvARB, GLhandleARB obj, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterfvARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterivARB, GLhandleARB obj, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterivARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetInfoLogARB, GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetInfoLogARB, obj, maxLength, length, infoLog)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetAttachedObjectsARB, GLhandleARB containerObj, GLsizei maxCount, GLsizei* count, GLhandleARB* obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetAttachedObjectsARB, containerObj, maxCount, count, obj)
+// GL_ARB_shader_objects, GL_ARB_vertex_shader, GL_ARB_fragment_shader.
+//
+// kwin_wayland 6.7.3 refuses a MobileGL context over three of the names these extensions add.
+// EglContext::checkSupported() (src/opengl/eglcontext.cpp) takes the DESKTOP-OpenGL branch for
+// every context whose GL_VERSION is not an "OpenGL ES" string:
+//     const bool supportsGLSL = m_isOpenglES || (hasOpenglExtension("GL_ARB_shader_objects") &&
+//         hasOpenglExtension("GL_ARB_fragment_shader") && hasOpenglExtension("GL_ARB_vertex_shader"));
+// GL_VERSION here is "4.6.0 MobileGL ...", so all three names were REQUIRED of a context that did
+// not carry them: checkSupported() answered false, EglContext::create() returned nullptr,
+// EglBackend::createContext() returned false, and kwin printed "Could not initialize rendering
+// context" and quit without drawing a frame. Both backends now advertise the three, and this block
+// is what makes that advertisement true instead of a test unlock - every entry point the three
+// extensions define is implemented here, over the shader and program objects the core entry points
+// already own:
+//
+//   ARB_shader_objects   the 39 functions of the block include/GL/glext.h:4095-4173 declares.
+//   ARB_vertex_shader    the three attrib-location entry points of glext.h:4856-4862.
+//   ARB_fragment_shader  none. Its "New Procedures and Functions" section reads "None" - it is the
+//                        capability half of the pair, and the reason kwin names it at all.
+//
+// HANDLES. The ARB family names objects with GLhandleARB. This repository's own glext.h types that
+// as void* on Apple and as unsigned int on every other platform (glext.h:4055-4059, the same split
+// the system headers carry), so on Linux, Windows and Android a handle IS the GLuint name this
+// implementation hands out and both conversions below are the identity there. The pointer arm is
+// not decoration: a caller on Apple passes a pointer, and an id written straight into its void*
+// slot would be a size error rather than a cast error. H is a template parameter, and both arms
+// cast through it, so the arm a platform does not use is never instantiated - and never has to be
+// well-formed for the other typedef: reinterpret_cast between two integers, which is what the
+// pointer arm becomes on Linux, is not a cast clang accepts. The shape is the one
+// MG_State/EGLState/Core.h already uses for EGL's handles.
+template <typename H = GLhandleARB>
+static GLhandleARB ToGLHandleARB(GLuint name) {
+    if constexpr (std::is_pointer_v<H>) {
+        return reinterpret_cast<H>(static_cast<std::uintptr_t>(name));
+    } else {
+        return static_cast<H>(name);
+    }
+}
+
+template <typename H = GLhandleARB>
+static GLuint FromGLHandleARB(GLhandleARB handle) {
+    if constexpr (std::is_pointer_v<H>) {
+        return static_cast<GLuint>(reinterpret_cast<std::uintptr_t>(static_cast<H>(handle)));
+    } else {
+        return static_cast<GLuint>(handle);
+    }
+}
+
+// The answer behind GetObjectParameter{if}vARB, and the reason neither of them carries a pname
+// translation table: the GL_OBJECT_*_ARB tokens ARE the core tokens, numerically. Core GL took the
+// object pnames over unchanged when ARB_shader_objects was folded in -
+// GL_OBJECT_DELETE_STATUS_ARB through GL_OBJECT_SHADER_SOURCE_LENGTH_ARB are 0x8B80-0x8B88, the
+// same numbers glcorearb.h gives GL_DELETE_STATUS through GL_SHADER_SOURCE_LENGTH
+// (glext.h:4086-4094) - so the mapping is a RENAME and the same pname goes to the core getter of
+// the same object kind. Handing it to that getter is also the right ERROR behaviour, and the reason
+// this does not whitelist pnames: GL_OBJECT_LINK_STATUS_ARB asked of a SHADER has to come back
+// INVALID_ENUM, and glGetShaderiv is where the set of pnames a shader accepts is defined.
+//
+// The one token core never took is GL_OBJECT_TYPE_ARB (0x8B4E; core's GL_OBJECT_TYPE, 0x9112, is
+// ARB_program_interface_query's interface class, a different question with a different value
+// space), so the object kind is the single thing answered here without a core getter. It is also
+// the only way an ARB-era caller can ask whether a handle names a program or a shader: there is no
+// glIsProgramARB/glIsShaderARB in ARB_shader_objects (include/GL/glext.h:4095-4173 declares
+// neither, and the glIsProgramARB the registry does know, glext.h:3280, belongs to
+// ARB_vertex_program/ARB_fragment_program - those ASM program objects are not these).
+static MobileGL::Bool AnswerObjectParameterARB(GLuint name, GLenum pname, GLint* params) {
+    if (pname == GL_OBJECT_TYPE_ARB) {
+        if (glIsProgram(name)) {
+            *params = GL_PROGRAM_OBJECT_ARB;
+            return true;
+        }
+        if (glIsShader(name)) {
+            *params = GL_SHADER_OBJECT_ARB;
+            return true;
+        }
+        // The error ARB_vertex_shader's own text specifies: "The error INVALID_VALUE is generated
+        // by any command that takes one or more handles as input, and one or more handles are not
+        // an object handle generated by OpenGL."
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidValue,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>(
+                "MG_Impl/GLImpl", __func__,
+                std::to_string(name) + " is not an object handle generated by OpenGL."));
+        return false;
+    }
+    if (glIsProgram(name)) {
+        glGetProgramiv(name, pname, params);
+        return true;
+    }
+    // A shader, or a name that is neither. glGetShaderiv owns both the shader pname set and the
+    // name validation, which is the one place that splits a program name handed to a shader query
+    // (INVALID_OPERATION) from a name GL never generated (INVALID_VALUE) - the split GL 3.3 core
+    // 2.11 requires. It writes nothing in either error case, which is what the caller reads as
+    // "no answer".
+    const MobileGL::Bool isShader = glIsShader(name) == GL_TRUE;
+    glGetShaderiv(name, pname, params);
+    return isShader;
+}
+
+MOBILEGL_GL_API void glDeleteObjectARB(GLhandleARB obj) {
+    // ARB_shader_objects has ONE object namespace - a handle names a program or a shader and
+    // nothing else - and DeleteObjectARB is the deletion entry point for both kinds, so the kind
+    // is decided here. IsProgram/IsShader answer over the same single namespace this
+    // implementation hands names out of, so a program name cannot be taken for a shader name.
+    // Zero, and a handle that names neither object, are ignored: there is no object to delete.
+    const GLuint name = FromGLHandleARB(obj);
+    if (glIsProgram(name)) {
+        glDeleteProgram(name);
+    } else if (glIsShader(name)) {
+        glDeleteShader(name);
+    }
+}
+
+MOBILEGL_GL_API GLhandleARB glGetHandleARB(GLenum pname) {
+    if (pname != GL_PROGRAM_OBJECT_ARB) {
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidEnum,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>(
+                "MG_Impl/GLImpl", __func__,
+                "pname " + std::to_string(pname) + " is not GL_PROGRAM_OBJECT_ARB."));
+        return ToGLHandleARB(0u);
+    }
+    // "The program object currently in use", read from the state GL_CURRENT_PROGRAM is answered
+    // from - so a program bound through glUseProgram is found here too, and a
+    // UseProgramObjectARB(0) reads back as the zero handle.
+    const auto& currentProgram = MobileGL::MG_State::pGLContext->GetCurrentProgram();
+    return ToGLHandleARB(currentProgram ? static_cast<GLuint>(currentProgram->GetExternalIndex()) : 0u);
+}
+
+MOBILEGL_GL_API void glDetachObjectARB(GLhandleARB containerObj, GLhandleARB attachedObj) {
+    glDetachShader(FromGLHandleARB(containerObj), FromGLHandleARB(attachedObj));
+}
+
+MOBILEGL_GL_API GLhandleARB glCreateShaderObjectARB(GLenum shaderType) {
+    return ToGLHandleARB(glCreateShader(shaderType));
+}
+
+MOBILEGL_GL_API void glShaderSourceARB(GLhandleARB shaderObj, GLsizei count, const GLcharARB** string,
+                                       const GLint* length) {
+    glShaderSource(FromGLHandleARB(shaderObj), count, string, length);
+}
+
+MOBILEGL_GL_API void glCompileShaderARB(GLhandleARB shaderObj) {
+    glCompileShader(FromGLHandleARB(shaderObj));
+}
+
+MOBILEGL_GL_API GLhandleARB glCreateProgramObjectARB(void) {
+    return ToGLHandleARB(glCreateProgram());
+}
+
+MOBILEGL_GL_API void glAttachObjectARB(GLhandleARB containerObj, GLhandleARB obj) {
+    glAttachShader(FromGLHandleARB(containerObj), FromGLHandleARB(obj));
+}
+
+MOBILEGL_GL_API void glLinkProgramARB(GLhandleARB programObj) {
+    glLinkProgram(FromGLHandleARB(programObj));
+}
+
+MOBILEGL_GL_API void glUseProgramObjectARB(GLhandleARB programObj) {
+    glUseProgram(FromGLHandleARB(programObj));
+}
+
+MOBILEGL_GL_API void glValidateProgramARB(GLhandleARB programObj) {
+    glValidateProgram(FromGLHandleARB(programObj));
+}
+
+MOBILEGL_GL_API void glUniform1fARB(GLint location, GLfloat v0) {
+    glUniform1f(location, v0);
+}
+
+MOBILEGL_GL_API void glUniform2fARB(GLint location, GLfloat v0, GLfloat v1) {
+    glUniform2f(location, v0, v1);
+}
+
+MOBILEGL_GL_API void glUniform3fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) {
+    glUniform3f(location, v0, v1, v2);
+}
+
+MOBILEGL_GL_API void glUniform4fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+    glUniform4f(location, v0, v1, v2, v3);
+}
+
+MOBILEGL_GL_API void glUniform1iARB(GLint location, GLint v0) {
+    glUniform1i(location, v0);
+}
+
+MOBILEGL_GL_API void glUniform2iARB(GLint location, GLint v0, GLint v1) {
+    glUniform2i(location, v0, v1);
+}
+
+MOBILEGL_GL_API void glUniform3iARB(GLint location, GLint v0, GLint v1, GLint v2) {
+    glUniform3i(location, v0, v1, v2);
+}
+
+MOBILEGL_GL_API void glUniform4iARB(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) {
+    glUniform4i(location, v0, v1, v2, v3);
+}
+
+MOBILEGL_GL_API void glUniform1fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform1fv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform2fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform2fv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform3fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform3fv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform4fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform4fv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform1ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform1iv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform2ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform2iv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform3ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform3iv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniform4ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform4iv(location, count, value);
+}
+
+MOBILEGL_GL_API void glUniformMatrix2fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix2fv(location, count, transpose, value);
+}
+
+MOBILEGL_GL_API void glUniformMatrix3fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix3fv(location, count, transpose, value);
+}
+
+MOBILEGL_GL_API void glUniformMatrix4fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix4fv(location, count, transpose, value);
+}
+
+MOBILEGL_GL_API void glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) {
+    // The fv form asks the same questions - the ARB object model holds no float-valued object
+    // state - so the answer is the iv answer widened. A query the iv path refuses leaves the
+    // output untouched here as well, rather than putting a plausible-looking 0.0 where there is
+    // no answer.
+    GLint value = 0;
+    if (!AnswerObjectParameterARB(FromGLHandleARB(obj), pname, &value)) return;
+    *params = static_cast<GLfloat>(value);
+}
+
+MOBILEGL_GL_API void glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* params) {
+    AnswerObjectParameterARB(FromGLHandleARB(obj), pname, params);
+}
+
+MOBILEGL_GL_API void glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) {
+    // The same handle-kind dispatch as AnswerObjectParameterARB, and the same fallback: the shader
+    // getter is also where the name validation and its error code live.
+    const GLuint name = FromGLHandleARB(obj);
+    if (glIsProgram(name)) {
+        glGetProgramInfoLog(name, maxLength, length, infoLog);
+    } else {
+        glGetShaderInfoLog(name, maxLength, length, infoLog);
+    }
+}
+
+MOBILEGL_GL_API void glGetAttachedObjectsARB(GLhandleARB containerObj, GLsizei maxCount, GLsizei* count,
+                                            GLhandleARB* obj) {
+    // The caller's array holds GLhandleARB while glGetAttachedShaders writes GLuint names, and on
+    // Apple those are different sizes, so the ids are gathered first and converted one at a time.
+    // A negative maxCount is passed through: glGetAttachedShaders is where its INVALID_VALUE is.
+    MobileGL::Vector<GLuint> shaders(maxCount > 0 ? static_cast<MobileGL::SizeT>(maxCount) : 0, 0);
+    GLsizei attached = 0;
+    glGetAttachedShaders(FromGLHandleARB(containerObj), maxCount, &attached, shaders.data());
+    for (GLsizei i = 0; i < attached; ++i) {
+        obj[i] = ToGLHandleARB(shaders[i]);
+    }
+    if (count) *count = attached;
+}
+
+MOBILEGL_GL_API GLint glGetUniformLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetUniformLocation(FromGLHandleARB(programObj), name);
+}
+
+MOBILEGL_GL_API void glGetActiveUniformARB(GLhandleARB programObj, GLuint index, GLsizei maxLength,
+                                           GLsizei* length, GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveUniform(FromGLHandleARB(programObj), index, maxLength, length, size, type, name);
+}
+
+MOBILEGL_GL_API void glGetUniformfvARB(GLhandleARB programObj, GLint location, GLfloat* params) {
+    glGetUniformfv(FromGLHandleARB(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetUniformivARB(GLhandleARB programObj, GLint location, GLint* params) {
+    glGetUniformiv(FromGLHandleARB(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetShaderSourceARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length,
+                                          GLcharARB* source) {
+    glGetShaderSource(FromGLHandleARB(obj), maxLength, length, source);
+}
+
+// ARB_vertex_shader's three entry points. The generic-attribute family that extension also
+// describes is spelled with the ARB_vertex_program names (glVertexAttribPointerARB and the rest),
+// which glext.h declares in that other block and which MobileGL does not advertise; nothing here
+// claims them.
+MOBILEGL_GL_API void glBindAttribLocationARB(GLhandleARB programObj, GLuint index, const GLcharARB* name) {
+    glBindAttribLocation(FromGLHandleARB(programObj), index, name);
+}
+
+MOBILEGL_GL_API void glGetActiveAttribARB(GLhandleARB programObj, GLuint index, GLsizei maxLength,
+                                          GLsizei* length, GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveAttrib(FromGLHandleARB(programObj), index, maxLength, length, size, type, name);
+}
+
+MOBILEGL_GL_API GLint glGetAttribLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetAttribLocation(FromGLHandleARB(programObj), name);
+}
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedStringARB, GLenum type, GLint namelen, const GLchar* name, GLint strinen, const GLchar* string) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedStringARB, type, namelen, name, strinen, string)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteNamedStringARB, GLint namelen, const GLchar* name) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteNamedStringARB, namelen, name)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, CompileShaderIncludeARB, GLuint shader, GLsizei count, const GLchar* const* path, const GLint* length) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CompileShaderIncludeARB, shader, count, path, length)
@@ -1713,6 +2028,141 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexBlendEnviATI, GLenum pname, GLint para
 DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexBlendEnvfATI, GLenum pname, GLfloat param) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexBlendEnvfATI, pname, param)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EGLImageTargetTexStorageEXT, GLenum target, GLeglImageOES image, const GLint* attrib_list) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EGLImageTargetTexStorageEXT, target, image, attrib_list)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EGLImageTargetTextureStorageEXT, GLuint texture, GLeglImageOES image, const GLint* attrib_list) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EGLImageTargetTextureStorageEXT, texture, image, attrib_list)
+
+// GL_OES_EGL_image.
+//
+// MEASURED, and the whole reason this block exists: libepoxy in kwin_wayland prints
+//     No provider of glEGLImageTargetTexture2DOES found.  Requires one of: GL_OES_EGL_image
+// and refuses the import path there - and that path is how the compositor's scene reaches the
+// display daemon's dma-bufs, i.e. how a Linux desktop gets onto the phone's screen.  The EGL half is
+// real: eglCreateImageKHR builds an EGL_LINUX_DMA_BUF_EXT image that owns a dup() of every plane's
+// descriptor and carries that buffer's geometry and fourcc (MG_State/EGLState/Core.h).  So a handle
+// that arrives here is resolvable, and what these two entry points do is exactly that: resolve it,
+// refuse what names nothing, and say ONCE what is not wired yet.  What is not wired yet is the
+// render-server half - telling the server which texture a dma-buf backs, over the one channel that
+// can carry a descriptor across the container boundary - so a framebuffer built over an imported
+// texture is not complete until that lands.  Pretending otherwise (attaching the image to a texture
+// object that has no storage behind it) would turn "not implemented" into "mysteriously black",
+// which is what the log line below is here to prevent.
+MOBILEGL_GL_API void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image) {
+    // 0x8D65 is GL_TEXTURE_EXTERNAL_OES, which the headers this file compiles against do not spell
+    // out.  It matters here MORE than GL_TEXTURE_2D does: a compositor that could not map an
+    // imported dma-buf's format to a non-external one binds its image to THIS target, so refusing it
+    // would turn "no format map yet" into an INVALID_ENUM the caller cannot act on (kwin 6.7.3 does
+    // exactly that when EglDisplay::queryImportFormats() answers nothing).
+    constexpr GLenum kTextureExternalOes = 0x8D65;
+    if (target != GL_TEXTURE_2D && target != kTextureExternalOes) {
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidEnum,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                            "target is not a texture target this entry point takes."));
+        return;
+    }
+    EGLint imageWidth = 0;
+    EGLint imageHeight = 0;
+    EGLint imageFourCC = 0;
+    EGLint imagePlanes = 0;
+    const MobileGL::Bool imageKnown =
+        MobileGL::MG_State::pEGLContext != nullptr &&
+        MobileGL::MG_State::pEGLContext->DescribeImage(reinterpret_cast<::EGLImage>(image), &imageWidth, &imageHeight,
+                                                       &imageFourCC, &imagePlanes);
+    if (!imageKnown) {
+        // A handle this side did not hand out: ARB/OES text puts that on INVALID_VALUE, and it is
+        // the answer a caller can act on rather than a texture that renders nowhere.
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidValue,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                            "image is not an EGLImage this display created."));
+        return;
+    }
+    MGLOG_W_ONCE("glEGLImageTargetTexture2DOES: taking target 0x%04x over an EGLImage of %dx%d fourcc 0x%08x "
+                 "(%d plane(s)) that this side holds; the render server has NOT been told which texture that "
+                 "dma-buf backs yet, so a framebuffer over this texture is not complete (the fd transport over "
+                 "the GBM socket and the server-side import are the next change)",
+                 target, imageWidth, imageHeight, imageFourCC, imagePlanes);
+
+    // AND NOW WIRE IT: a texture bound to an imported EGLImage has no storage on the render server,
+    // and a framebuffer built over it there is not complete - kwin 6.7.3 aborts on its own
+    // RenderTarget assertion right after this log line (measured twice).  So the server is told which
+    // buffer backs the texture: one message per plane, each carrying that plane's descriptor over the
+    // session transport's SCM_RIGHTS channel.  No session, or a transport without that channel, is a
+    // refusal by name from ShareImportedDmaBuf - the texture simply keeps having no storage, which is
+    // the honest state rather than a silent render into nothing.
+    MGLOG_I("dma-buf import: entry (target=0x%04x, image=%p)", static_cast<unsigned>(target), static_cast<void*>(image));
+    if (MobileGL::MG_State::pEGLContext != nullptr) {
+        constexpr MobileGL::Int kDmaBufImportPlanes = 4;
+        EGLint planeCount = 0;
+        EGLint planeFds[kDmaBufImportPlanes] = {-1, -1, -1, -1};
+        EGLint planeOffsets[kDmaBufImportPlanes] = {0, 0, 0, 0};
+        EGLint planePitches[kDmaBufImportPlanes] = {0, 0, 0, 0};
+        MobileGL::Uint64 planeModifiers[kDmaBufImportPlanes] = {0, 0, 0, 0};
+        MobileGL::Bool planeHasModifier[kDmaBufImportPlanes] = {false, false, false, false};
+        if (MobileGL::MG_State::pEGLContext->DescribeImagePlanes(
+                reinterpret_cast<::EGLImage>(image), &planeCount, planeFds, planeOffsets, planePitches,
+                planeModifiers, planeHasModifier, kDmaBufImportPlanes)) {
+            // The texture the image was bound to.  0x8D65 has no TextureTarget member in this state
+            // layer (nothing else here binds it), so the name is looked up through Texture2D and may
+            // come back 0 - the server logs what it was told rather than guessing.
+            MobileGL::Uint32 texName = 0;
+            if (MobileGL::MG_State::pGLContext != nullptr) {
+                const MobileGL::Int unit = MobileGL::MG_State::pGLContext->GetActiveTextureUnit();
+                // THE EXTERNAL SLOT, which is where a compositor's imported dma-buf texture lives.
+                const auto& bound = MobileGL::MG_State::pGLContext->GetTextureUnitObject(unit)
+                                        .GetBindingSlot(MobileGL::TextureTarget::TextureExternalOES)
+                                        .GetBoundObject();
+                if (bound != nullptr) {
+                    texName = static_cast<MobileGL::Uint32>(bound->GetExternalIndex());
+                    // AN IMPORTED TEXTURE IS BACKED, SO IT IS COMPLETE.  Without this the state layer
+                    // answers incompletely (TextureObjectBase::IsComplete only looks at the internal
+                    // format) and the compositor, having attached it to a framebuffer, reports
+                    // "framebuffer for dmabuf 0 is not complete" and stops before drawing anything.
+                    bound->SetInternalFormat(MobileGL::TextureInternalFormat::RGBA8);
+                }
+            }
+            MGLOG_I("dma-buf import: textures resolved (texName=%u planes=%d), sharing", texName,
+                    static_cast<int>(planeCount));
+            for (MobileGL::Int plane = 0; plane < planeCount; plane++) {
+                if (planeFds[plane] < 0) continue;
+                MGLOG_I("dma-buf import: sharing plane %d fd=%d", static_cast<int>(plane), planeFds[plane]);
+                (void)MobileGL::MG_Remote::Client::ShareImportedDmaBuf(
+                    static_cast<MobileGL::Uint32>(target), texName, static_cast<MobileGL::Uint32>(imageWidth),
+                    static_cast<MobileGL::Uint32>(imageHeight), static_cast<MobileGL::Uint32>(imageFourCC),
+                    static_cast<MobileGL::Uint32>(plane), static_cast<MobileGL::Uint32>(planeCount), planeFds[plane],
+                    planePitches[plane], planeOffsets[plane], planeModifiers[plane], planeHasModifier[plane]);
+                MGLOG_I("dma-buf import: plane %d shared", static_cast<int>(plane));
+            }
+        }
+    }
+}
+
+MOBILEGL_GL_API void glEGLImageTargetRenderbufferStorageOES(GLenum target, GLeglImageOES image) {
+    if (target != GL_RENDERBUFFER) {
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidEnum,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                            "target is not GL_RENDERBUFFER."));
+        return;
+    }
+    EGLint imageWidth = 0;
+    EGLint imageHeight = 0;
+    EGLint imageFourCC = 0;
+    EGLint imagePlanes = 0;
+    const MobileGL::Bool imageKnown =
+        MobileGL::MG_State::pEGLContext != nullptr &&
+        MobileGL::MG_State::pEGLContext->DescribeImage(reinterpret_cast<::EGLImage>(image), &imageWidth, &imageHeight,
+                                                       &imageFourCC, &imagePlanes);
+    if (!imageKnown) {
+        MobileGL::MG_State::pGLContext->RecordError(
+            MobileGL::ErrorCode::InvalidValue,
+            MobileGL::MakeUnique<MobileGL::GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                            "image is not an EGLImage this display created."));
+        return;
+    }
+    MGLOG_W_ONCE("glEGLImageTargetRenderbufferStorageOES: the renderbuffer takes an EGLImage of %dx%d fourcc "
+                 "0x%08x; the render-server half of the import is the next change, exactly as for the texture "
+                 "entry point beside this one",
+                 imageWidth, imageHeight, imageFourCC);
+}
 DECLARE_GL_FUNCTION_STUB_HEAD(void, UniformBufferEXT, GLuint program, GLint location, GLuint buffer) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, UniformBufferEXT, program, location, buffer)
 DECLARE_GL_FUNCTION_STUB_HEAD(GLint, GetUniformBufferSizeEXT, GLuint program, GLint location) DECLARE_GL_FUNCTION_STUB_END(GLint, GetUniformBufferSizeEXT, program, location)
 DECLARE_GL_FUNCTION_STUB_HEAD(GLintptr, GetUniformOffsetEXT, GLuint program, GLint location) DECLARE_GL_FUNCTION_STUB_END(GLintptr, GetUniformOffsetEXT, program, location)

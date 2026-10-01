@@ -10,6 +10,7 @@
 #include <Includes.h>
 #include "HostFrameTarget.h"
 #include "MG_Backend/HostFrameBridge.h"
+#include "MG_Backend/GbmFrameChannel.h"
 #include "../BackendObject.h"
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 
@@ -74,6 +75,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is what the host offers - it hands one over and waits for the answer before it
         // presents it and offers the next.
         MG_Backend::HostFrameBridge m_hostFrameBridge;
+        // The frames the bridge just took, on to the container: the Wayland compositor over there
+        // renders into this same memory, and the only route to it that end has is the dma-buf
+        // descriptor this channel offers per frame and reads a release back from.
+        MG_Backend::GbmFrameChannel m_gbmFrameChannel;
         HostFrameTarget m_hostFrameTarget;
         struct AHardwareBuffer* m_hostFrameBuffer = nullptr;
         MG_Backend::HostFrameOffer m_hostFrameOffer{};

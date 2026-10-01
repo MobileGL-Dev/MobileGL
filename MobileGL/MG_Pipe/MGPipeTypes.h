@@ -214,6 +214,8 @@ namespace MobileGL::MG_Pipe {
         TexCubeArray,
         Tex2DMS,
         Tex2DMSArray,
+        // GL_TEXTURE_EXTERNAL_OES
+        TexExternalOES,
         Renderbuffer,
         TexBuffer,
         TexRect,
@@ -263,6 +265,10 @@ namespace MobileGL::MG_Pipe {
             return static_cast<Uint32>(MGPipeResourceTarget::TexCubeArray);
         case MobileGL::TextureTarget::Texture2DMultisampleArray:
             return static_cast<Uint32>(MGPipeResourceTarget::Tex2DMSArray);
+        // GL_TEXTURE_EXTERNAL_OES gets its own row for the same reason TextureRectangle has one: it is
+        // a real target a descriptor may carry (the compositor's imported dma-buf textures live on it).
+        case MobileGL::TextureTarget::TextureExternalOES:
+            return static_cast<Uint32>(MGPipeResourceTarget::TexExternalOES);
         // NOT TEXTURE TARGETS. Listed rather than defaulted so the completeness assert still
         // sees them, and mapped to the sentinel because no descriptor may carry either: the
         // count is the enum's bound and Unknown is what an unresolved GL enum becomes.

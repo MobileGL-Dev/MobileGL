@@ -10151,7 +10151,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     MGLOG_D("Texture state changed significantly or not initialized, regenerating texture buffer with "
                             "ID: %u, buffer ID: %u, buffer size: %zu, format: %s",
-                            m_backendTextureId, backendId, buffer ? buffer->GetSize() : rangeSize,
+                            m_backendTextureId, backendId, buffer ? buffer->GetSize() : (SizeT)0,
                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
                     // A texture that names a window of the buffer needs the range form; the
                     // whole-buffer forms report offset 0 and the buffer's current size, which
@@ -11282,9 +11282,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const Bool isCubeFace = glTextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
                                             glTextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
                     backendTextureObject->Bind(isCubeFace ? GL_TEXTURE_CUBE_MAP : glTextureTarget);
-                    g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
-                                                       backendTextureObject->GetBackendTextureId(),
-                                                       static_cast<GLint>(attachmentObject.GetTextureLevel()));
+                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer == 0) {
+                        // NOBODY ELSE TAKES THE FRAME ON THIS ROUTE (DirectGLES.h): the compositor
+                        // here never creates a window surface, so this attachment is the first place
+                        // the display host's frame is known to be wanted.  A failed take leaves the
+                        // ordinary arm below exactly as it was.
+                        // The numbers size only the fallback pbuffer that is the draw target for the
+                        // moment before the first frame arrives; the frame's real extent comes from the
+                        // display host's own offer.  They are the panel's, because that is the surface
+                        // this route exists to fill.
+                        (void)TakeHostFrameForExternalTexture(1440, 3200);
+                    }
+                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer != 0) {
+                    // THE IMPORTED dma-buf IS THE DISPLAY HOST'S FRAME.  Measured, and the whole reason
+                    // this branch exists: kwin_wayland in the container imports the display daemon's
+                    // dma-buf as an EGLImage ("taking target 0x8d65 over an EGLImage of 1440x2937
+                    // fourcc 0x34324241") and builds a framebuffer over that texture - and a texture
+                    // that arrived this way has NO storage on this side, so the attachment was bound
+                    // as an empty texture and kwin refused its own framebuffer ("framebuffer for
+                    // dmabuf 0 is not complete").  The buffer it imports IS the frame the display
+                    // host handed this process (same memory, same size), and that frame's storage is
+                    // a RENDERBUFFER - a texture argument cannot name it - so the attachment is bound
+                    // to the frame itself.  The gate is the measured shape of that case: target
+                    // GL_TEXTURE_EXTERNAL_OES (0x8d65), which nothing else in this stack binds, and a
+                    // frame currently held.  Every other attachment - a normal GL_TEXTURE_2D, or any
+                    // moment with no frame - takes the ordinary path below, unchanged.
+                        g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
+                                                              g_hostFrameRenderbuffer);
+                    } else {
+                        g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
+                                                           backendTextureObject->GetBackendTextureId(),
+                                                           static_cast<GLint>(attachmentObject.GetTextureLevel()));
+                    }
                 }
             } else if (attachmentObject.IsRenderbuffer()) {
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
@@ -11683,9 +11712,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const Bool isCubeFace = glTextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
                                             glTextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
                     backendTextureObject->Bind(isCubeFace ? GL_TEXTURE_CUBE_MAP : glTextureTarget);
-                    g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
-                                                       backendTextureObject->GetBackendTextureId(),
-                                                       static_cast<GLint>(surface.Level));
+                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer == 0) {
+                        // NOBODY ELSE TAKES THE FRAME ON THIS ROUTE (DirectGLES.h): the compositor
+                        // here never creates a window surface, so this attachment is the first place
+                        // the display host's frame is known to be wanted.  A failed take leaves the
+                        // ordinary arm below exactly as it was.
+                        // The numbers size only the fallback pbuffer that is the draw target for the
+                        // moment before the first frame arrives; the frame's real extent comes from the
+                        // display host's own offer.  They are the panel's, because that is the surface
+                        // this route exists to fill.
+                        (void)TakeHostFrameForExternalTexture(1440, 3200);
+                    }
+                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer != 0) {
+                    // THE IMPORTED dma-buf IS THE DISPLAY HOST'S FRAME.  Measured, and the whole reason
+                    // this branch exists: kwin_wayland in the container imports the display daemon's
+                    // dma-buf as an EGLImage ("taking target 0x8d65 over an EGLImage of 1440x2937
+                    // fourcc 0x34324241") and builds a framebuffer over that texture - and a texture
+                    // that arrived this way has NO storage on this side, so the attachment was bound
+                    // as an empty texture and kwin refused its own framebuffer ("framebuffer for
+                    // dmabuf 0 is not complete").  The buffer it imports IS the frame the display
+                    // host handed this process (same memory, same size), and that frame's storage is
+                    // a RENDERBUFFER - a texture argument cannot name it - so the attachment is bound
+                    // to the frame itself.  The gate is the measured shape of that case: target
+                    // GL_TEXTURE_EXTERNAL_OES (0x8d65), which nothing else in this stack binds, and a
+                    // frame currently held.  Every other attachment - a normal GL_TEXTURE_2D, or any
+                    // moment with no frame - takes the ordinary path below, unchanged.
+                        g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
+                                                              g_hostFrameRenderbuffer);
+                    } else {
+                        g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
+                                                           backendTextureObject->GetBackendTextureId(),
+                                                           static_cast<GLint>(surface.Level));
+                    }
                 }
                 return true;
             }

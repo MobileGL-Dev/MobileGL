@@ -6,6 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
+// The role's own backend is resolved the way Utils.cpp (C6 / ID-52) resolves it; that needs this
+// header, and it has to be included at file scope - a header included inside this file's namespace
+// would nest its own namespace under it.
+#include <MG_Remote/Server/ServerLoop.h>
+#endif
 #include "BackendObject_DirectGLES.h"
 #include "MG_Backend/BackendObject.h"
 #include "MG_Backend/BackendObjects.h"
@@ -1036,6 +1042,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         constexpr Int kHostFrameWaitMs = 30000;
     }
 
+    Bool TakeHostFrameForExternalTexture(Uint width, Uint height) {
+        // THIS ROLE'S OWN BACKEND, resolved exactly the way ActiveBackendFormatCaps (Utils.cpp,
+        // C6 / ID-52) resolves it: under a live split session the SERVER's private backend owns the
+        // context on the apply thread, and pActiveBackendObject is the CLIENT's mirror there.
+        MG_Backend::BackendObject* backend = nullptr;
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            backend = MG_Remote::Server::ServerLoopInstance().Backend();
+        } else {
+            backend = MG_Backend::pActiveBackendObject.get();
+        }
+        if (backend == nullptr) return false;
+        return backend->InitHostFrameSurface(static_cast<EGLint>(width), static_cast<EGLint>(height));
+    }
+
     Bool BackendObject_DirectGLES::InitHostFrameSurface(EGLint width, EGLint height) {
         // The EGL context comes from the same place a pbuffer session's does.  What changes is not
         // how this side draws but what it draws INTO: a frame the display host allocated, bound as
@@ -1078,6 +1098,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // BEFORE the bind: every default-framebuffer bind the engine makes from here on has to
         // resolve to this frame, and that resolution is what this global is.
         g_hostFrameFramebufferId = m_hostFrameTarget.Framebuffer;
+        // Published together with the framebuffer, because they describe the same frame: the STORAGE
+        // an attachment is bound to when the client's texture has none of its own (the frame's own
+        // renderbuffer), and the SIZE that decides whether binding it is right at all.
+        g_hostFrameRenderbuffer = m_hostFrameTarget.Renderbuffer;
+        g_hostFrameWidth = m_hostFrameTarget.Width;
+        g_hostFrameHeight = m_hostFrameTarget.Height;
         FramebufferImpl::InvalidateFramebufferBindingCache();
         HostFrameTargetBind(m_hostFrameTarget);
         // AND ON TO THE CONTAINER, as the dma-buf descriptor behind it.  The Wayland compositor
@@ -1102,21 +1128,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::DestroyHostFrame() {
         g_hostFrameFramebufferId = 0;
+        g_hostFrameRenderbuffer = 0;
+        g_hostFrameWidth = 0;
+        g_hostFrameHeight = 0;
         HostFrameTargetDestroy(m_hostFrameTarget);
         if (m_hostFrameBuffer != nullptr) {
             AHardwareBuffer_release(m_hostFrameBuffer);
             m_hostFrameBuffer = nullptr;
         }
-        // THE CONNECTION THAT DESCRIBED IT GOES WITH IT.  Every frame this side drops is one the
-        // container was told to render into by descriptor, and a channel left open across that
-        // would go on describing frames as if the one it named were still the draw target - so
-        // the connection ends here, the container falls back to allocating frames of its own
-        // (the state it starts in), and the next frame taken opens the socket again and is
-        // offered to whoever dials.  Close() is idempotent and safe from a destructor, which is
-        // also what the member's own does at backend teardown, so this call costs the paths that
-        // drop nothing - a take that replaces the frame, a teardown before the first one - a
-        // handful of integer tests.
-        m_gbmFrameChannel.Close();
+        // AND NOTHING IS SAID TO THE CHANNEL HERE, which is the fix rather than an omission.  This
+        // runs once per presented frame: it used to Close() the channel (unlinking the container's
+        // socket node and dropping its connection sixty times a second - measured: connect()
+        // answered EAGAIN(11) on every attempt) and it used to tell the channel to forget the frame,
+        // which left the ONE window a compositor's first allocations arrive in - between this frame
+        // being presented and the host handing the next one over, i.e. inside Complete() above -
+        // with nothing to answer a dialer with.  A compositor allocates its swapchain ONCE and keeps
+        // those buffers for the life of the process, so a dialer that finds nothing here renders
+        // its whole life into buffers nobody displays.  The frame the channel remembers is the last
+        // one the host handed over: the next offer replaces it and Close() releases it.
     }
 
     Bool BackendObject_DirectGLES::PresentHostFrame() {
@@ -1146,6 +1175,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #else  // !(MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__)
+
+    // The other arm's half: on a build with no host frames there is no frame to take, and the
+    // attach site's ordinary path (a storage-less external texture, exactly as before) is the honest
+    // behaviour there rather than a link error.
+    Bool TakeHostFrameForExternalTexture(Uint, Uint) { return false; }
 
     Bool BackendObject_DirectGLES::InitHostFrameSurface(EGLint width, EGLint height) {
         (void)width;
@@ -1188,13 +1222,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
             return false;
         }
-        if (!m_eglSurfaceInitialized) {
-            MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
-            return false;
+        // EGL_KHR_surfaceless_context, WHICH IS THE SHAPE A COMPOSITOR ASKS FOR.  Its context has no
+        // draw surface of its own - every frame goes into a framebuffer it binds itself, and under
+        // this project that framebuffer is one of the display host's frames - so the surface checks
+        // below describe a surface that legitimately does not exist.  What the server still needs is
+        // its own GL context current on this thread for the records that follow, and that is what
+        // the native bind underneath them does.
+        const Bool surfaceless = draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT;
+        if (surfaceless && !m_eglSurfaceInitialized) {
+            // A DRAWABLE OF THIS SIDE'S OWN, WHICH IS WHAT A SURFACELESS CLIENT LEAVES TO US.  The
+            // backend's native context has to be current on a surface of some kind before a single
+            // record of the client's can run - that is what the Init*Surface calls establish - and a
+            // client that makes its context current with no surface at all supplies none of its own.
+            // A pbuffer is the one that costs nothing to keep: it is never scanned out and never
+            // read, because every frame the client draws goes into a framebuffer it binds itself.
+            // The client is NOT told it has a surface - m_eglSurface stays EGL_NO_SURFACE - so a
+            // swap on one is still the refusal it was.
+            if (!InitPbufferSurface(1, 1)) {
+                MGLOG_E("MakeEGLCurrent failed: the backend's own drawable for a surfaceless context could not "
+                        "be created");
+                return false;
+            }
+            m_eglSurface = EGL_NO_SURFACE;
+            m_eglSurfaceInitialized = true;
+            m_eglSurfaceKind = SurfaceKind::Pbuffer;
+            m_eglCurrentThreads.clear();
+            m_backendCapabilitiesInitialized = false;
         }
-        if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT) {
-            MGLOG_E("MakeEGLCurrent failed: draw/read/context is invalid");
-            return false;
+        if (!surfaceless) {
+            if (!m_eglSurfaceInitialized) {
+                MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
+                return false;
+            }
+            if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT) {
+                MGLOG_E("MakeEGLCurrent failed: draw/read/context is invalid");
+                return false;
+            }
         }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1222,9 +1285,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // function table instead of 1), or make NativeBindCanBeSkippedFor answer true for any tuple
         // (the ID-67 control's different tuple stays at 1 native bind where 2 are required).
         const Bool nativelyCurrentAlready = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-                                            m_eglSurfaceInitialized && m_eglSurface == draw &&
                                             DirectGLES::IsBackendContextCurrentOnThisThread() &&
-                                            NativeBindCanBeSkippedFor(dpy, draw, read, ctx);
+                                            (surfaceless || (m_eglSurfaceInitialized && m_eglSurface == draw &&
+                                                             NativeBindCanBeSkippedFor(dpy, draw, read, ctx)));
         if (!nativelyCurrentAlready && !DirectGLES::MakeCurrent()) {
             NoteNativeContextGone();
             return false;
@@ -1408,7 +1471,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
-            E_GL_ARB_get_program_binary};
+            E_GL_ARB_get_program_binary,
+            // kwin_wayland 6.7.3 will not use a context it cannot drive, and it asks for these
+            // three names first: EglContext::checkSupported() (src/opengl/eglcontext.cpp) takes the
+            // DESKTOP-OpenGL branch for every context whose GL_VERSION is not an "OpenGL ES"
+            // string, and that branch requires GL_ARB_shader_objects, GL_ARB_fragment_shader and
+            // GL_ARB_vertex_shader. GL_VERSION here is "4.6.0 MobileGL ...", so with the names
+            // missing checkSupported() answered false, EglContext::create() returned nullptr,
+            // EglBackend::createContext() returned false, and kwin printed "Could not initialize
+            // rendering context" and quit before drawing a frame.
+            //
+            // The three are true statements about this backend now rather than a test unlock: every
+            // procedure they define is implemented in MG_Impl/GLImpl/Exporting/Definitions.cpp over
+            // the same shader and program objects the core entry points drive - the 39 of
+            // ARB_shader_objects, ARB_vertex_shader's three attrib-location entry points, and none
+            // at all for ARB_fragment_shader ("New Procedures and Functions: None" - it is the
+            // capability half, and the reason kwin's conjunction names it).
+            E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
+            // NPOT textures: core since GL 2.0, and every host this backend can run on provides
+            // them. Full non-power-of-two support - mipmapping and every wrap mode, not ES 2.0's
+            // CLAMP_TO_EDGE-only exception - is required from ES 3.0 on, and the entries this list
+            // already advertises without any gate (compute shaders, shader storage buffers,
+            // indirect draws) need an ES 3.1 host. Nothing in the texture path rejects or pads a
+            // non-power-of-two size - storage and sampling are forwarded to that host - so the
+            // string describes what an application actually gets.
+            E_GL_ARB_texture_non_power_of_two,
+            // GL_OES_EGL_image: the entry points are real (MG_Impl/GLImpl/Exporting/Definitions.cpp)
+            // and this name is what makes them reachable - libepoxy in kwin resolves
+            // glEGLImageTargetTexture2DOES BY NAME and refuses the import path without it, printing
+            // "No provider of glEGLImageTargetTexture2DOES found.  Requires one of: GL_OES_EGL_image".
+            // That import path is how the compositor's scene reaches the display daemon's dma-bufs.
+            // The render-server half of the import (fd over the GBM socket, then the server-side
+            // EGLImage) is the next change; until it lands an imported texture has no storage behind
+            // it, which is logged once at the entry point rather than left to look like a black frame.
+            E_GL_OES_EGL_image};
         // Minecraft 26.3 checks this prerequisite before it even considers
         // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader
         // folds the version and pointer checks into SupportsDrawIndirect.

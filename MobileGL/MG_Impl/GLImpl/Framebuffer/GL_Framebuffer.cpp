@@ -100,6 +100,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         Bool HasDefinedAttachment(const MG_State::GLState::FramebufferObject& framebufferObject) {
+            // NOT gated on the host frame, and that is deliberate: this only decides the ERROR CODE
+            // once completeness has already failed (CheckFramebufferStatus_State asks
+            // CheckCompleteness first), and the imported dma-buf's attachment is counted as valid
+            // THERE (MG_State/GLState/FramebufferState/FramebufferObject.cpp, whose gate lands before
+            // its own validity test for exactly this reason).  Touching it here would add a second
+            // place that has to know the backend's frame - and the frontend knowing that fact is the
+            // compromise the completeness comment already names the end of.
             for (const auto& attachment : framebufferObject.GetAllAttachmentObjects()) {
                 if (attachment.IsValid() && !attachment.IsEmpty()) {
                     return true;

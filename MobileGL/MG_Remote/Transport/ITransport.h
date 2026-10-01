@@ -46,6 +46,13 @@ namespace MobileGL::MG_Remote::Transport {
     class ITransport {
     public:
         virtual ~ITransport() = default;
+        // THE AUX DESCRIPTOR CHANNEL, IF THIS TRANSPORT HAS ONE.  SCM_RIGHTS needs a socket of its own
+        // (SocketTransport.h:77), and a caller that wants to hand a dma-buf to the server has to name it:
+        // the session's transport is held as an ITransport, so the seam has to answer here rather than in a
+        // downcast.  -1 means "this transport carries no descriptors", which is a legal state a caller must
+        // degrade on - the texture then simply has no storage rather than the process failing.
+        virtual int AuxFd() const { return -1; }
+
 
         ITransport(const ITransport&) = delete;
         ITransport& operator=(const ITransport&) = delete;

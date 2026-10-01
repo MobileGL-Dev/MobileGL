@@ -21,6 +21,36 @@
 #include <sstream>
 #include <type_traits>
 
+// The KHR spellings of the image entry points, exported by Exporting/Definitions.cpp.  Declared
+// here because the bundled EGL headers declare them only under EGL_EGLEXT_PROTOTYPES, which no
+// build of this library defines, and because eglGetProcAddress below answers them by name.
+extern "C" EGLImageKHR eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                         const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImageKHR image);
+
+// The swap-and-sync family the compositor resolves by name while bringing its EGL backend up; defined
+// in Exporting/Definitions.cpp and answered from GetProcAddress below (see the definitions).
+extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface surface, const EGLint* rects,
+                                                  EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface surface, const EGLint* rects,
+                                                  EGLint n_rects);
+extern "C" EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync);
+extern "C" EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
+extern "C" EGLBoolean eglWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
+extern "C" EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint* value);
+// THE DEVICE-QUERY FAMILY, exported by Exporting/Definitions.cpp and answered by name below: kwin
+// reaches eglQueryDisplayAttribEXT through libepoxy's pointer (that is how finding a render device
+// starts), and libepoxy asks for it by name.  See the definitions for why these had to exist.
+extern "C" EGLBoolean eglQueryDevicesEXT(EGLint max_devices, EGLDeviceEXT* devices, EGLint* num_devices);
+extern "C" EGLBoolean eglQueryDeviceAttribEXT(EGLDeviceEXT device, EGLint attribute, EGLAttrib* value);
+extern "C" const char* eglQueryDeviceStringEXT(EGLDeviceEXT device, EGLint name);
+extern "C" EGLBoolean eglQueryDisplayAttribEXT(EGLDisplay dpy, EGLint attribute, EGLAttrib* value);
+extern "C" EGLSurface eglCreatePlatformWindowSurfaceEXT(EGLDisplay dpy, EGLConfig config, void* native_window,
+                                                        const EGLAttrib* attrib_list);
+extern "C" EGLSurface eglCreatePlatformPixmapSurfaceEXT(EGLDisplay dpy, EGLConfig config, void* native_pixmap,
+                                                        const EGLAttrib* attrib_list);
+
 namespace MobileGL::MG_Impl::EGLImpl {
     namespace {
         using EGLStateContext = MG_State::EGLState::EGLContext;
@@ -243,7 +273,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
     EGLBoolean ChooseConfig(EGLDisplay dpy, const EGLint* attrib_list, EGLConfig* configs, EGLint config_size,
                             EGLint* num_config) {
-        auto* state = GetState();
+        // eglChooseConfig can be an application's first EGL call after eglGetPlatformDisplay + eglInitialize,
+        // and for a display built from an EGLDeviceEXT nothing has brought MobileGL up yet: GetState()
+        // then answers NULL and the call lands in EGLContext::ChooseConfig with a null this - measured as
+        // a crash inside that function (pc/lr both resolved to it) with kwin's own "pEGLContext is null.
+        // MG_State may not be initialized." as the only warning, and reported one layer up as
+        // "Could not initialize rendering context".
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_FALSE;
         }
@@ -251,11 +287,26 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLContext CreateContext(EGLDisplay dpy, EGLConfig config, EGLContext shareCtx, const EGLint* attrib_list) {
-        auto* state = GetState();
+        // WHICH CONTEXT IS BEING ASKED FOR, and what came back.  kwin's OpenGL compositing fails with
+        // "Could not initialize rendering context" while the same path succeeds from a probe against
+        // this same library (probe10: a 3.3 core context on a GBM surface, makeCurrent answered 1),
+        // so the difference has to be in this argument list - and an EGL vendor cannot see it from the
+        // outside.  The list is dumped in EGL_NONE-terminated pairs; EGL_NONE is 0x3038, not 0.
+        MGLOG_I("eglCreateContext(dpy=%p, config=%p, share=%p)", dpy, config, shareCtx);
+        if (attrib_list != nullptr) {
+            for (int index = 0; attrib_list[index] != EGL_NONE; index += 2) {
+                MGLOG_I("    attrib 0x%04x = %d", attrib_list[index], attrib_list[index + 1]);
+            }
+        } else {
+            MGLOG_I("    (no attribute list)");
+        }
+        auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_CONTEXT;
         }
-        return state->CreateContext(dpy, config, shareCtx, attrib_list);
+        EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+        MGLOG_I("eglCreateContext -> %p", static_cast<void*>(context));
+        return context;
     }
 
     EGLBoolean Initialize(EGLDisplay dpy, EGLint* major, EGLint* minor) {
@@ -714,6 +765,23 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return state->DestroyImage(dpy, image) ? EGL_TRUE : EGL_FALSE;
     }
 
+    EGLImageKHR CreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                               const EGLint* attrib_list) {
+        // EGL_KHR_image_base spells its attribute list in EGLint pairs and the core eglCreateImage
+        // in EGLAttrib pairs, and the two are not the same memory: on a 64-bit build one entry is
+        // twice the width of the other, so the caller's array cannot be handed over as it stands.
+        // Re-spelling it is therefore part of the entry point rather than a detail of the state.
+        Vector<EGLAttrib> attribs;
+        if (attrib_list != nullptr) {
+            for (SizeT i = 0; attrib_list[i] != EGL_NONE; i += 2) {
+                attribs.push_back(static_cast<EGLAttrib>(attrib_list[i]));
+                attribs.push_back(static_cast<EGLAttrib>(attrib_list[i + 1]));
+            }
+            attribs.push_back(static_cast<EGLAttrib>(EGL_NONE));
+        }
+        return CreateImage(dpy, ctx, target, buffer, attribs.empty() ? nullptr : attribs.data());
+    }
+
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list) {
         (void)attrib_list;
 
@@ -844,6 +912,72 @@ namespace MobileGL::MG_Impl::EGLImpl {
         MobileGL::EnsureInitialized();
 
         MGLOG_D("eglGetProcAddress(%s)", name);
+
+        // THE KHR SPELLINGS ARE ENTRY POINTS OF THEIR OWN, and by name is the only way anything
+        // asks for them.  Measured in the Fedora container that runs this library as the glvnd EGL
+        // vendor, before they were answered here: eglGetProcAddress("eglCreateImageKHR") -> NULL and
+        // eglGetProcAddress("eglDestroyImageKHR") -> NULL.  kwin_wayland's anland backend imports
+        // the display daemon's dma-bufs through exactly these two (AnlandEglLayer::importBuffers ->
+        // EglBackend::importDmaBufAsTexture -> EglDisplay::importBufferAsImage ->
+        // EglDisplay::createImage, which calls the pointer without a null check), so a NULL here is
+        // a compositor that cannot draw a single pixel into the frames the daemon hands it.  The
+        // core spellings were already in the table below; these are the same functions under the
+        // names EGL_KHR_image_base gives them, which is also why they answer in the glvnd vendor
+        // table beside them (Exporting/GlvndVendor.cpp).
+        if (std::strcmp(name, "eglCreateImageKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglCreateImageKHR);
+        }
+        if (std::strcmp(name, "eglDestroyImageKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglDestroyImageKHR);
+        }
+        // The device-query family and the EXT platform-surface spellings.  Measured in the container
+        // before they were answered here: eglGetProcAddress returned NULL for eglQueryDisplayAttribEXT,
+        // eglQueryDevicesEXT, eglQueryDeviceAttribEXT, eglQueryDeviceStringEXT and
+        // eglCreatePlatformWindowSurfaceEXT while the extension strings announced EGL_EXT_device_query -
+        // a NULL libepoxy then called (kwin crashed at pc=0), and withdrawing the announcement instead
+        // left kwin without a render device and its compositing inactive.
+        if (std::strcmp(name, "eglQueryDevicesEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglQueryDevicesEXT);
+        }
+        if (std::strcmp(name, "eglQueryDeviceAttribEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglQueryDeviceAttribEXT);
+        }
+        if (std::strcmp(name, "eglQueryDeviceStringEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglQueryDeviceStringEXT);
+        }
+        if (std::strcmp(name, "eglQueryDisplayAttribEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglQueryDisplayAttribEXT);
+        }
+        if (std::strcmp(name, "eglCreatePlatformWindowSurfaceEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglCreatePlatformWindowSurfaceEXT);
+        }
+        if (std::strcmp(name, "eglCreatePlatformPixmapSurfaceEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglCreatePlatformPixmapSurfaceEXT);
+        }
+        // The swap-and-sync spellings kwin resolves by name while it is still bringing its EGL backend
+        // up (see the definitions: EGL_KHR_fence_sync, the damage variants, EGL_EXT_buffer_age).
+        if (std::strcmp(name, "eglSwapBuffersWithDamageKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglSwapBuffersWithDamageKHR);
+        }
+        if (std::strcmp(name, "eglSwapBuffersWithDamageEXT") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglSwapBuffersWithDamageEXT);
+        }
+        if (std::strcmp(name, "eglCreateSyncKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglCreateSyncKHR);
+        }
+        if (std::strcmp(name, "eglDestroySyncKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglDestroySyncKHR);
+        }
+        if (std::strcmp(name, "eglClientWaitSyncKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglClientWaitSyncKHR);
+        }
+        if (std::strcmp(name, "eglWaitSyncKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglWaitSyncKHR);
+        }
+        if (std::strcmp(name, "eglGetSyncAttribKHR") == 0) {
+            return reinterpret_cast<__eglMustCastToProperFunctionPointerType>(eglGetSyncAttribKHR);
+        }
+
         void* proc = MG_Impl::GetProcAddress(name);
         if (!proc) {
             MGLOG_D("Failed to get function: %s", name);

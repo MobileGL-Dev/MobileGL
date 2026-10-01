@@ -22,6 +22,12 @@ namespace MobileGL {
                 using EGLSyncHandle = ::EGLSync;
                 using EGLImageHandle = ::EGLImage;
 
+                // How many planes EGL describes an imported buffer with: EGL_DMA_BUF_PLANE0_* comes
+                // from EGL_EXT_image_dma_buf_import, EGL_DMA_BUF_PLANE3_* and every MODIFIER pair
+                // from EGL_EXT_image_dma_buf_import_modifiers.  The reader in Core.cpp and the image
+                // object below have to agree on the count, so it is named once.
+                static constexpr Int kMaxImagePlanes = 4;
+
                 EGLContext() = default;
 
                 // Error
@@ -118,6 +124,57 @@ namespace MobileGL {
                 EGLContextHandle GetCurrentContext() const;
                 EGLDisplayHandle GetCurrentDisplay() const;
                 EGLSurfaceHandle GetCurrentSurface(EGLint readdraw) const;
+                // WHAT A HANDLE NAMES, for the GL side of GL_OES_EGL_image: the two entry points in
+                // MG_Impl/GLImpl/Exporting/Definitions.cpp are handed a GLeglImageOES and have to
+                // answer whether it is an image this display created, and with what geometry.  A
+                // read-only lookup belongs beside the other queries a caller outside this class
+                // makes, and it is the same object eglCreateImageKHR built and eglDestroyImage
+                // removes - the private one stays private for the class's own use.
+                // WHAT A HANDLE NAMES, for the GL side of GL_OES_EGL_image.  The two entry points in
+                // MG_Impl/GLImpl/Exporting/Definitions.cpp are handed a GLeglImageOES and have to
+                // answer (a) whether it is an image this display created and (b) what buffer it
+                // describes.  The numbers come back rather than the record itself: the image table and
+                // its layout are this class's own business, and a caller outside it has no use for
+                // either - which is also why this is a function and not a friend declaration.
+                Bool DescribeImage(EGLImageHandle image, EGLint* width, EGLint* height, EGLint* fourCc,
+                                   EGLint* planeCount) const {
+                    const ImageObject* imageObject = TryGetImage(image);
+                    if (imageObject == nullptr) {
+                        return false;
+                    }
+                    if (width != nullptr) *width = imageObject->Width;
+                    if (height != nullptr) *height = imageObject->Height;
+                    if (fourCc != nullptr) *fourCc = imageObject->FourCC;
+                    if (planeCount != nullptr) *planeCount = imageObject->PlaneCount;
+                    return true;
+                }
+
+                // THE PLANE DESCRIPTORS OF AN IMAGE THIS DISPLAY CREATED, for the one caller that has
+                // to hand them to the render server: the dma-buf import (a texture bound to an imported
+                // EGLImage has no storage on the server, so the server is told which buffer backs it -
+                // one descriptor per plane, over the session transport's SCM_RIGHTS channel).  The fd
+                // here is THIS side's dup(), owned by the image; the transport dups again for the
+                // sending process, which is why the caller does not close anything.
+                Bool DescribeImagePlanes(EGLImageHandle image, EGLint* planeCount, EGLint* fds, EGLint* offsets,
+                                         EGLint* pitches, Uint64* modifiers, Bool* hasModifiers, Int maxPlanes) const {
+                    const ImageObject* imageObject = TryGetImage(image);
+                    if (imageObject == nullptr) {
+                        return false;
+                    }
+                    Int count = imageObject->PlaneCount;
+                    if (count > maxPlanes) count = maxPlanes;
+                    if (count < 0) count = 0;
+                    if (planeCount != nullptr) *planeCount = count;
+                    for (Int plane = 0; plane < count; plane++) {
+                        const ImagePlane& described = imageObject->Planes[plane];
+                        if (fds != nullptr) fds[plane] = described.Fd;
+                        if (offsets != nullptr) offsets[plane] = described.Offset;
+                        if (pitches != nullptr) pitches[plane] = described.Pitch;
+                        if (modifiers != nullptr) modifiers[plane] = described.Modifier;
+                        if (hasModifiers != nullptr) hasModifiers[plane] = described.HasModifier;
+                    }
+                    return true;
+                }
                 Bool IsDoubleBufferedSurface(EGLSurfaceHandle surface) const;
 
                 // Sync
@@ -218,11 +275,39 @@ namespace MobileGL {
                     EGLenum Status = EGL_SIGNALED;
                 };
 
+                // ONE PLANE OF AN IMPORTED BUFFER.  The fd/offset/pitch triple is the same
+                // description drmModeAddFB2 takes, and the modifier is the DRM_FORMAT_MOD_* the
+                // caller declared; EGL carries up to four of these (EGL_DMA_BUF_PLANE0..3_*).
+                struct ImagePlane {
+                    // THIS library's descriptor, dup()ed from the caller's when the image was made
+                    // and closed when it dies: an EGLImage outlives the call that created it, and
+                    // the caller is free to close its own fd the moment eglCreateImage returns.
+                    EGLint Fd = -1;
+                    EGLint Offset = 0;
+                    EGLint Pitch = 0;
+                    // The two EGL_DMA_BUF_PLANEn_MODIFIER_LO/HI_EXT halves joined back into the
+                    // DRM_FORMAT_MOD_* they were cut from.
+                    Uint64 Modifier = 0;
+                    Bool HasModifier = false;
+                };
+
                 struct ImageObject {
                     EGLDisplayHandle Display = EGL_NO_DISPLAY;
                     EGLContextHandle Context = nullptr;
                     EGLenum Target = EGL_NONE;
                     EGLClientBuffer Buffer = nullptr;
+                    // WHAT AN EGL_LINUX_DMA_BUF_EXT IMAGE IS HOLDING, and zero for every other
+                    // target: the buffer's geometry and the fourcc that says what its samples mean.
+                    // It is kept here because the image is the only thing that outlives the call -
+                    // a caller that handed over an fd has nothing left to describe it with.
+                    EGLint Width = 0;
+                    EGLint Height = 0;
+                    EGLint FourCC = 0;
+                    EGLint PlaneCount = 0;
+                    // Planes 0..PlaneCount-1 are described, in order; index 0 is the plane every
+                    // import in this tree reads, the rest are carried because EGL describes them and
+                    // a consumer that understands a multi-plane format must be able to see them.
+                    ImagePlane Planes[kMaxImagePlanes];
                 };
 
                 struct ThreadCurrentState {
@@ -258,6 +343,9 @@ namespace MobileGL {
                 const SurfaceObject* TryGetSurface(EGLSurfaceHandle surface) const;
                 const SyncObject* TryGetSync(EGLSyncHandle sync) const;
                 const ImageObject* TryGetImage(EGLImageHandle image) const;
+                // Closes the descriptors an image owns.  Both places an image can die call it:
+                // eglDestroyImage, and eglTerminate, which drops a display's images wholesale.
+                static void ReleaseImageDescriptors(ImageObject& imageObject);
 
                 void ReleaseDisplayObjects(EGLDisplayHandle display);
                 void ReleaseThreadUnlocked(const std::thread::id& threadKey);

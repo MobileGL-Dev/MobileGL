@@ -869,6 +869,55 @@ namespace MobileGL::MG_Impl {
         GETPROC(glNamedBufferPageCommitmentARB, name);
         GETPROC(glTexPageCommitmentARB, name);
         GETPROC(glTexBufferARB, name);
+        // ARB_shader_objects and ARB_vertex_shader, by name, because a name is the only way an
+        // application ever asks for an extension entry point. Measured path: kwin_wayland resolves GL
+        // through libepoxy, and libepoxy asks eglGetProcAddress -> EGLImpl::GetProcAddress -> this
+        // table. Before these lines the callers that need the extension whose STRINGS make
+        // checkSupported() pass got a nullptr for every function of it - dlsym on the library found
+        // them, this table did not. The strings and the implementations are advertised from
+        // MG_Impl/GLImpl/Exporting/Definitions.cpp and the two BackendObject_* extension lists.
+        GETPROC(glDeleteObjectARB, name);
+        GETPROC(glGetHandleARB, name);
+        GETPROC(glDetachObjectARB, name);
+        GETPROC(glCreateShaderObjectARB, name);
+        GETPROC(glShaderSourceARB, name);
+        GETPROC(glCompileShaderARB, name);
+        GETPROC(glCreateProgramObjectARB, name);
+        GETPROC(glAttachObjectARB, name);
+        GETPROC(glLinkProgramARB, name);
+        GETPROC(glUseProgramObjectARB, name);
+        GETPROC(glValidateProgramARB, name);
+        GETPROC(glUniform1fARB, name);
+        GETPROC(glUniform2fARB, name);
+        GETPROC(glUniform3fARB, name);
+        GETPROC(glUniform4fARB, name);
+        GETPROC(glUniform1iARB, name);
+        GETPROC(glUniform2iARB, name);
+        GETPROC(glUniform3iARB, name);
+        GETPROC(glUniform4iARB, name);
+        GETPROC(glUniform1fvARB, name);
+        GETPROC(glUniform2fvARB, name);
+        GETPROC(glUniform3fvARB, name);
+        GETPROC(glUniform4fvARB, name);
+        GETPROC(glUniform1ivARB, name);
+        GETPROC(glUniform2ivARB, name);
+        GETPROC(glUniform3ivARB, name);
+        GETPROC(glUniform4ivARB, name);
+        GETPROC(glUniformMatrix2fvARB, name);
+        GETPROC(glUniformMatrix3fvARB, name);
+        GETPROC(glUniformMatrix4fvARB, name);
+        GETPROC(glGetObjectParameterfvARB, name);
+        GETPROC(glGetObjectParameterivARB, name);
+        GETPROC(glGetInfoLogARB, name);
+        GETPROC(glGetAttachedObjectsARB, name);
+        GETPROC(glGetUniformLocationARB, name);
+        GETPROC(glGetActiveUniformARB, name);
+        GETPROC(glGetUniformfvARB, name);
+        GETPROC(glGetUniformivARB, name);
+        GETPROC(glGetShaderSourceARB, name);
+        GETPROC(glBindAttribLocationARB, name);
+        GETPROC(glGetActiveAttribARB, name);
+        GETPROC(glGetAttribLocationARB, name);
         GETPROC(glDepthRangeArraydvNV, name);
         GETPROC(glDepthRangeIndexeddNV, name);
         GETPROC(glBlendBarrierKHR, name);
@@ -886,6 +935,8 @@ namespace MobileGL::MG_Impl {
         GETPROC(glBeginPerfMonitorAMD, name);
         GETPROC(glEndPerfMonitorAMD, name);
         GETPROC(glGetPerfMonitorCounterDataAMD, name);
+        GETPROC(glEGLImageTargetTexture2DOES, name);
+        GETPROC(glEGLImageTargetRenderbufferStorageOES, name);
         GETPROC(glEGLImageTargetTexStorageEXT, name);
         GETPROC(glEGLImageTargetTextureStorageEXT, name);
         GETPROC(glLabelObjectEXT, name);

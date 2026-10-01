@@ -8,6 +8,15 @@
 
 #include "Core.h"
 #include <EGL/eglext.h>
+// An imported buffer is held by descriptors, and the copy an image takes of one is the platform's
+// own dup()/close(): unistd.h's where the import exists, io.h's on the Windows build that compiles
+// this file but never sees EGL_LINUX_DMA_BUF_EXT.
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+#include <cerrno>
 
 namespace MobileGL {
     namespace MG_State {
@@ -28,6 +37,54 @@ namespace MobileGL {
                         }
                     }
                     return Nullopt;
+                }
+
+                // Taking and closing the descriptor an image owns, per platform.  Named rather
+                // than spelled inline so the ownership rule reads the same on both.
+#if defined(_WIN32)
+                Int DuplicateImageDescriptor(Int fd) { return _dup(fd); }
+                void CloseImageDescriptor(Int fd) { _close(fd); }
+#else
+                Int DuplicateImageDescriptor(Int fd) { return ::dup(fd); }
+                void CloseImageDescriptor(Int fd) { ::close(fd); }
+#endif
+
+                // ONE PLANE'S ATTRIBUTE SPELLINGS, in plane order.  Plane 0's fd/offset/pitch triple
+                // is EGL_EXT_image_dma_buf_import's; plane 3's triple and every MODIFIER_LO/HI pair
+                // belong to EGL_EXT_image_dma_buf_import_modifiers.
+                struct DmaBufPlaneAttributes {
+                    EGLint Fd;
+                    EGLint Offset;
+                    EGLint Pitch;
+                    EGLint ModifierLo;
+                    EGLint ModifierHi;
+                };
+
+                constexpr DmaBufPlaneAttributes kDmaBufPlaneAttributes[EGLContext::kMaxImagePlanes] = {
+                    {EGL_DMA_BUF_PLANE0_FD_EXT, EGL_DMA_BUF_PLANE0_OFFSET_EXT, EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                     EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT},
+                    {EGL_DMA_BUF_PLANE1_FD_EXT, EGL_DMA_BUF_PLANE1_OFFSET_EXT, EGL_DMA_BUF_PLANE1_PITCH_EXT,
+                     EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT},
+                    {EGL_DMA_BUF_PLANE2_FD_EXT, EGL_DMA_BUF_PLANE2_OFFSET_EXT, EGL_DMA_BUF_PLANE2_PITCH_EXT,
+                     EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT},
+                    {EGL_DMA_BUF_PLANE3_FD_EXT, EGL_DMA_BUF_PLANE3_OFFSET_EXT, EGL_DMA_BUF_PLANE3_PITCH_EXT,
+                     EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT, EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT},
+                };
+
+                // The EGL spelling of one plane attribute, for the single line a refused image gets:
+                // the attribute list is gone by the time the caller reads eglGetError.
+                String DmaBufPlaneAttributeName(Int plane, const char* role) {
+                    return std::format("EGL_DMA_BUF_PLANE{}_{}", plane, role);
+                }
+
+                // Whether the caller mentioned this plane at all, so that a description with a hole
+                // in it can be refused by name instead of silently losing the planes past the hole.
+                Bool HasAnyPlaneAttribute(const EGLAttrib* attribList, Int plane) {
+                    const DmaBufPlaneAttributes& attributes = kDmaBufPlaneAttributes[plane];
+                    return ParseAttribValue(attribList, attributes.Fd) || ParseAttribValue(attribList, attributes.Offset) ||
+                           ParseAttribValue(attribList, attributes.Pitch) ||
+                           ParseAttribValue(attribList, attributes.ModifierLo) ||
+                           ParseAttribValue(attribList, attributes.ModifierHi);
                 }
 
                 EGLint QueryDefaultX11VisualId() {
@@ -292,6 +349,9 @@ namespace MobileGL {
 
                 for (auto imageIt = m_images.begin(); imageIt != m_images.end();) {
                     if (imageIt->second.Display == display) {
+                        // The display is going away and takes its images with it, so the descriptors
+                        // they own go too: an image erased without this leaks an fd per plane.
+                        ReleaseImageDescriptors(imageIt->second);
                         imageIt = m_images.erase(imageIt);
                     } else {
                         ++imageIt;
@@ -417,6 +477,12 @@ namespace MobileGL {
                         for (SizeT i = 0; attribList[i] != EGL_NONE; i += 2) {
                             const EGLint attr = attribList[i];
                             const EGLint requested = attribList[i + 1];
+                            // WHAT DIES HERE, exactly: with an attribute list present this loop is where
+                            // eglChooseConfig faults (a NULL list survives it and answers two configs),
+                            // and the fault is one instruction inside the attribute switch.  These two
+                            // lines name the attribute and the config before either is dereferenced.
+                            MGLOG_I("chooseConfig: attr=0x%04x requested=%d config=%p", attr, requested,
+                                    static_cast<const void*>(cfg));
                             if (requested == EGL_DONT_CARE) {
                                 continue;
                             }
@@ -625,7 +691,13 @@ namespace MobileGL {
                     SetError(EGL_NOT_INITIALIZED);
                     return nullptr;
                 }
-                if (!ValidateConfigOnDisplay(display, config)) {
+                // EGL_KHR_no_config_context: a context with NO config of its own.  It is the shape a
+                // compositor asks for - its contexts are used with whatever framebuffer the frame
+                // needs, so pinning one config to the context would be a claim about the future the
+                // caller does not have - and EGL spells the request as this null handle.  A context
+                // that does name a config is validated exactly as before.
+                const Bool noConfigContext = (config == nullptr);
+                if (!noConfigContext && !ValidateConfigOnDisplay(display, config)) {
                     SetError(EGL_BAD_CONFIG);
                     return nullptr;
                 }
@@ -1250,7 +1322,13 @@ namespace MobileGL {
                         SetError(EGL_BAD_CONTEXT);
                         return false;
                     }
-                    if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE) {
+                    // EGL_KHR_surfaceless_context: BOTH surfaces absent is a context that draws into
+                    // framebuffers it binds itself, which is how a compositor draws the frames the
+                    // display host handed it.  One absent and one present stays refused - that is a
+                    // pair EGL gives no meaning to, and accepting it would record a draw target that
+                    // does not exist.
+                    const Bool surfaceless = (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE);
+                    if (!surfaceless && (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE)) {
                         SetError(EGL_BAD_MATCH);
                         return false;
                     }
@@ -1454,11 +1532,20 @@ namespace MobileGL {
                 return true;
             }
 
+            void EGLContext::ReleaseImageDescriptors(ImageObject& imageObject) {
+                for (Int plane = 0; plane < imageObject.PlaneCount; ++plane) {
+                    if (imageObject.Planes[plane].Fd >= 0) {
+                        CloseImageDescriptor(imageObject.Planes[plane].Fd);
+                        imageObject.Planes[plane].Fd = -1;
+                    }
+                }
+                imageObject.PlaneCount = 0;
+            }
+
             EGLContext::EGLImageHandle EGLContext::CreateImage(EGLDisplayHandle display, EGLContextHandle context,
                                                                EGLenum target, EGLClientBuffer buffer,
                                                                const EGLAttrib* attribList) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                (void)attribList;
                 if (!IsDisplayInitialized(display)) {
                     SetError(EGL_NOT_INITIALIZED);
                     return EGL_NO_IMAGE;
@@ -1468,13 +1555,149 @@ namespace MobileGL {
                     return EGL_NO_IMAGE;
                 }
 
-                const auto image = EncodeHandle<EGLImageHandle>(m_nextImageHandle++);
-                m_images[image] = ImageObject{
+                ImageObject imageObject = {
                     .Display = display,
                     .Context = context,
                     .Target = target,
                     .Buffer = buffer,
                 };
+
+                // EGL_LINUX_DMA_BUF_EXT: the caller handed over a DESCRIPTOR and described the
+                // memory behind it, and that description is the whole image - there is no handle to
+                // import later.  Every other target still names a buffer this state cannot see, so
+                // it stays what it was: the record of the target it was made for.
+                if (target == EGL_LINUX_DMA_BUF_EXT) {
+                    // ONE line per refusal, naming what was missing: a caller that gets
+                    // EGL_BAD_PARAMETER for a buffer it believes it described completely has
+                    // nowhere else to look - the attribute list is gone by the time eglGetError is
+                    // read, and the frame it wanted to draw into is the frame it cannot.
+                    const auto refuse = [&](const String& missing) {
+                        SetError(EGL_BAD_PARAMETER);
+                        MGLOG_E("eglCreateImage(EGL_LINUX_DMA_BUF_EXT): %s is missing; refusing the image "
+                                "(EGL_BAD_PARAMETER)",
+                                missing.c_str());
+                    };
+
+                    const auto width = ParseAttribValue(attribList, EGL_WIDTH);
+                    const auto height = ParseAttribValue(attribList, EGL_HEIGHT);
+                    const auto fourCC = ParseAttribValue(attribList, EGL_LINUX_DRM_FOURCC_EXT);
+                    if (!width) {
+                        refuse("EGL_WIDTH");
+                        return EGL_NO_IMAGE;
+                    }
+                    if (!height) {
+                        refuse("EGL_HEIGHT");
+                        return EGL_NO_IMAGE;
+                    }
+                    if (!fourCC) {
+                        refuse("EGL_LINUX_DRM_FOURCC_EXT");
+                        return EGL_NO_IMAGE;
+                    }
+
+                    // The planes, read and checked BEFORE one descriptor is duplicated, so that a
+                    // refusal leaves nothing behind to close.
+                    EGLint planeFd[EGLContext::kMaxImagePlanes] = {};
+                    EGLint planeOffset[EGLContext::kMaxImagePlanes] = {};
+                    EGLint planePitch[EGLContext::kMaxImagePlanes] = {};
+                    Uint64 planeModifier[EGLContext::kMaxImagePlanes] = {};
+                    Bool planeHasModifier[EGLContext::kMaxImagePlanes] = {};
+                    EGLint planeCount = 0;
+                    for (Int plane = 0; plane < EGLContext::kMaxImagePlanes; ++plane) {
+                        const DmaBufPlaneAttributes& attributes = kDmaBufPlaneAttributes[plane];
+                        const auto fd = ParseAttribValue(attribList, attributes.Fd);
+                        const auto offset = ParseAttribValue(attribList, attributes.Offset);
+                        const auto pitch = ParseAttribValue(attribList, attributes.Pitch);
+                        const auto modifierLo = ParseAttribValue(attribList, attributes.ModifierLo);
+                        const auto modifierHi = ParseAttribValue(attribList, attributes.ModifierHi);
+                        if (!fd && !offset && !pitch && !modifierLo && !modifierHi) {
+                            // The caller never mentioned this plane.  Planes are positional - the
+                            // description carries no plane index - so this ends the list, and a
+                            // plane past the hole is refused by name rather than dropped.
+                            for (Int higher = plane + 1; higher < EGLContext::kMaxImagePlanes; ++higher) {
+                                if (HasAnyPlaneAttribute(attribList, higher)) {
+                                    refuse(DmaBufPlaneAttributeName(plane, "FD_EXT"));
+                                    return EGL_NO_IMAGE;
+                                }
+                            }
+                            break;
+                        }
+                        // All three of fd/offset/pitch or none, and both halves of the modifier or
+                        // neither: a partial triple describes memory no importer could read.
+                        if (!fd) {
+                            refuse(DmaBufPlaneAttributeName(plane, "FD_EXT"));
+                            return EGL_NO_IMAGE;
+                        }
+                        if (!offset) {
+                            refuse(DmaBufPlaneAttributeName(plane, "OFFSET_EXT"));
+                            return EGL_NO_IMAGE;
+                        }
+                        if (!pitch) {
+                            refuse(DmaBufPlaneAttributeName(plane, "PITCH_EXT"));
+                            return EGL_NO_IMAGE;
+                        }
+                        if (modifierLo.has_value() != modifierHi.has_value()) {
+                            refuse(DmaBufPlaneAttributeName(plane, modifierLo ? "MODIFIER_HI_EXT" : "MODIFIER_LO_EXT"));
+                            return EGL_NO_IMAGE;
+                        }
+                        planeFd[plane] = static_cast<EGLint>(*fd);
+                        planeOffset[plane] = static_cast<EGLint>(*offset);
+                        planePitch[plane] = static_cast<EGLint>(*pitch);
+                        if (modifierLo) {
+                            // The modifier arrives in two halves and is one number: DRM cuts a
+                            // DRM_FORMAT_MOD_* where EGL takes an EGLint.
+                            planeModifier[plane] = (static_cast<Uint64>(static_cast<Uint32>(*modifierHi)) << 32) |
+                                                   static_cast<Uint32>(*modifierLo);
+                            planeHasModifier[plane] = true;
+                        }
+                        planeCount = plane + 1;
+                    }
+                    if (planeCount == 0) {
+                        // A dma-buf image with no plane at all: the description starts here, so
+                        // this is the attribute that is missing.
+                        refuse(DmaBufPlaneAttributeName(0, "FD_EXT"));
+                        return EGL_NO_IMAGE;
+                    }
+
+                    // THE IMAGE TAKES ITS OWN DESCRIPTORS.  The caller's fds stay the caller's -
+                    // kwin hands over a dup() of its DmaBufAttributes and closes it as soon as
+                    // eglCreateImage returns, and an image that had borrowed it would be holding a
+                    // number some other part of the process now owns.
+                    for (Int plane = 0; plane < planeCount; ++plane) {
+                        const Int ownedFd = DuplicateImageDescriptor(planeFd[plane]);
+                        if (ownedFd < 0) {
+                            SetError(EGL_BAD_ALLOC);
+                            MGLOG_E("eglCreateImage(EGL_LINUX_DMA_BUF_EXT): cannot take a copy of %s=%d (%s); "
+                                    "refusing the image (EGL_BAD_ALLOC)",
+                                    DmaBufPlaneAttributeName(plane, "FD_EXT").c_str(), planeFd[plane],
+                                    std::strerror(errno));
+                            ReleaseImageDescriptors(imageObject);
+                            return EGL_NO_IMAGE;
+                        }
+                        imageObject.Planes[plane] = ImagePlane{
+                            .Fd = ownedFd,
+                            .Offset = planeOffset[plane],
+                            .Pitch = planePitch[plane],
+                            .Modifier = planeModifier[plane],
+                            .HasModifier = planeHasModifier[plane],
+                        };
+                        // Counted as they are stored, so that a failure below releases exactly what
+                        // has been taken.
+                        imageObject.PlaneCount = plane + 1;
+                    }
+                    imageObject.Width = static_cast<EGLint>(*width);
+                    imageObject.Height = static_cast<EGLint>(*height);
+                    imageObject.FourCC = static_cast<EGLint>(*fourCC);
+
+                    MGLOG_D("eglCreateImage(EGL_LINUX_DMA_BUF_EXT): %dx%d fourcc=0x%08x planes=%d plane0(fd=%d "
+                            "offset=%d pitch=%d %s0x%016llx)",
+                            imageObject.Width, imageObject.Height, imageObject.FourCC, imageObject.PlaneCount,
+                            imageObject.Planes[0].Fd, imageObject.Planes[0].Offset, imageObject.Planes[0].Pitch,
+                            imageObject.Planes[0].HasModifier ? "modifier=" : "no-modifier=",
+                            static_cast<unsigned long long>(imageObject.Planes[0].Modifier));
+                }
+
+                const auto image = EncodeHandle<EGLImageHandle>(m_nextImageHandle++);
+                m_images[image] = imageObject;
                 return image;
             }
 
@@ -1489,6 +1712,9 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
+                // The descriptors this image owns die with it.  Nothing else in this process holds
+                // them: they are copies, and the caller's originals were never touched.
+                ReleaseImageDescriptors(imageIt->second);
                 m_images.erase(imageIt);
                 return true;
             }

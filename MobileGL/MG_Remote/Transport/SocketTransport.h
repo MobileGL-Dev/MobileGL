@@ -180,7 +180,7 @@ namespace MobileGL::MG_Remote::Transport {
         // For `sm`'s process discipline and for the arm-proof gate: the fds this
         // transport owns, so a test can assert the child inherited exactly these.
         int StreamFd() const { return m_streamFd; }
-        int AuxFd() const { return m_auxFd; }
+        int AuxFd() const override { return m_auxFd; }
         bool IsTcp() const { return m_tcp; }
         // TCP's second connection belongs exclusively to the data plane.
         // Taking it disables all descriptor passing on this transport.

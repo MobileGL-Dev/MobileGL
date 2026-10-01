@@ -83,6 +83,48 @@ namespace MobileGL::MG_Backend {
         Uint32 Seq;
     } __attribute__((packed));
 
+    // THE OTHER DIRECTION: A dma-buf THE CONTAINER WANTS THIS SIDE TO BACK A TEXTURE WITH.
+    //
+    // The compositor's scene reaches the display daemon's dma-bufs through glEGLImageTargetTexture2DOES
+    // (MG_Impl/GLImpl/Exporting/Definitions.cpp, MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp both
+    // name this half as the next change).  eglCreateImageKHR has already held a dup() of every plane's
+    // descriptor since the image was made; what was missing is the render server's half - telling THIS
+    // side which texture that dma-buf backs, over the one channel that can carry a descriptor across the
+    // container boundary.  This message is that half: the client names the texture target and the
+    // texture's own name, describes the buffer exactly as drmModeAddFB2 would, and the plane descriptors
+    // ride in the SCM_RIGHTS control data of the same sendmsg.  One message per import, as SEQPACKET
+    // requires, so a descriptor and its description are never read apart.
+    //
+    // The reply is what the client waits for before a framebuffer is allowed to be complete over the
+    // texture: Ok=0 means this side could not make the import real, and the client keeps treating the
+    // texture as having no storage rather than letting it render into nothing.
+    inline constexpr Uint32 kGbmImportRequestMagic = 0x4947474Du; // 'M','G','G','I' in memory order
+    inline constexpr Uint32 kGbmImportReplyMagic = 0x52474749u;   // 'I','G','G','R' in memory order
+    inline constexpr Uint32 kGbmImportVersion = 1u;
+    inline constexpr Uint32 kGbmImportMaxPlanes = 4u;
+
+    struct GbmImportRequest {
+        Uint32 Magic;
+        Uint32 Version;
+        Uint32 Target;      // the GL texture target the image was bound to (0x8D65 = GL_TEXTURE_EXTERNAL_OES)
+        Uint32 TexName;     // the CLIENT's texture name; this side resolves its twin
+        Uint32 Width;
+        Uint32 Height;
+        Uint32 FourCC;
+        Uint32 PlaneCount;  // 1..kGbmImportMaxPlanes; the descriptors are the message's control data
+        Int32 Stride[kGbmImportMaxPlanes];
+        Int32 Offset[kGbmImportMaxPlanes];
+        Uint64 Modifier[kGbmImportMaxPlanes];
+        Uint32 HasModifier[kGbmImportMaxPlanes];
+    } __attribute__((packed));
+
+    struct GbmImportReply {
+        Uint32 Magic;
+        Uint32 Version;
+        Uint32 Ok;
+        Uint32 Reserved;
+    } __attribute__((packed));
+
     // An AHardwareBuffer native handle as it appears on the wire: the platform's native_handle_t
     // (version, then the two counts, then the descriptor array followed by the integer array),
     // written by AHardwareBuffer_sendHandleToUnixSocket and read by the container's
@@ -94,11 +136,21 @@ namespace MobileGL::MG_Backend {
         Int32 NumInts;
     } __attribute__((packed));
 
-    // ONE CONTAINER, ONE LISTENING SOCKET, ONE THREAD.
+    // ONE CONTAINER, ONE LISTENING SOCKET, TWO THREADS: the render path's, and an acceptor's.
     //
-    // There is no lock in here on purpose: the channel is opened, offered to and closed from the
-    // apply thread, which is the one thread that takes the host's frames and draws them, so there
-    // is no second thread to order against - the same reason HostFrameBridge has none.
+    // A compositor dials ONCE - when it creates its GBM device - and keeps that connection for the
+    // life of the process, while this side offers a frame per drawn frame.  An accept that only ran
+    // inside OfferFrame therefore ran after the dial it was supposed to answer, and a dialer that
+    // nobody took kept the listener's queue full for every later one.  That is measured on the
+    // phone rather than argued: with accept() only on the offer path, connect() from the container
+    // answered EAGAIN(11) on four attempts out of four while the node sat there listening.
+    //
+    // So the accept has a thread of its own, started by Open() and stopped by Close(), and it
+    // adopts what it takes on the spot - including sending it the frame the host last handed over,
+    // because a compositor's first allocation is the one its swapchain is built from.  The
+    // connected socket, the frame that is remembered, the relay and the counters are shared between
+    // the two threads and guarded by the one mutex below; both entry points are non-blocking, so
+    // neither thread can park the other for longer than a syscall.
     class GbmFrameChannel {
     public:
         GbmFrameChannel() = default;
@@ -106,12 +158,13 @@ namespace MobileGL::MG_Backend {
         GbmFrameChannel& operator=(const GbmFrameChannel&) = delete;
         ~GbmFrameChannel();
 
-        // Creates the listening socket if it is not there yet, and does nothing otherwise.  It
-        // never waits for a container: the socket is bound, listen(1) is called, and the accept
-        // happens later, when a frame is actually offered.  A caller that wants the container to
-        // find the socket before the first frame - the container dials once at its own device
-        // creation and retries about once a second - can call this when the host-framed surface
-        // is initialized, beside HostFrameBridge::Open.
+        // Creates the listening socket if it is not there yet and starts the acceptor, and does
+        // nothing otherwise.  It never waits for a container: the socket is bound, a backlog is
+        // given to listen(), and the acceptor takes whoever dials from then on - whether or not a
+        // frame is being drawn.  A caller that wants the container to find the socket before the
+        // first frame - the container dials once at its own device creation and retries about once
+        // a second - can call this when the host-framed surface is initialized, beside
+        // HostFrameBridge::Open.
         Bool Open();
 
         // Offers one frame the host just handed over, as the dma-buf descriptor behind it.
@@ -126,14 +179,28 @@ namespace MobileGL::MG_Backend {
         // needs it if it wants releases drained on a path that has no new frame in it.
         void Poll();
 
+        // The frame the host handed over is gone - it was presented, or it was replaced - and this
+        // channel may no longer hold it or offer it to anybody.  THE CHANNEL ITSELF STAYS OPEN, and
+        // that is the point of the call: the listening socket, its node and the container's
+        // connection outlive every frame, and a channel that was closed and reopened per frame took
+        // the node away sixty times a second - a container dialling at the wrong moment got ENOENT
+        // for a socket that was there a millisecond earlier and would be there a millisecond later.
+        void DropFrame();
+
         // True while a container is connected and the frames are being offered to it.
-        Bool IsUp() const { return m_client >= 0; }
+        Bool IsUp() const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_client >= 0;
+        }
 
         // How many frames have been offered and not released, as a count of messages and not a
         // record of them.  It is here to be logged, and it is deliberately the only per-frame state
         // the channel keeps: a release that never arrives costs a number that is too high, and
         // nothing else, which is what makes a container that stops reading harmless.
-        Uint64 Outstanding() const { return m_outstanding; }
+        Uint64 Outstanding() const {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            return m_outstanding;
+        }
 
         // Closes the connection, the listening socket and the node it created.  Idempotent, safe
         // from a destructor, and safe to call while a container is connected: the container sees
@@ -150,9 +217,38 @@ namespace MobileGL::MG_Backend {
         Bool RelayHandle(struct AHardwareBuffer* buffer, Uint8* payload, SizeT capacity, SizeT& payloadBytes,
                          Int* fds, Int& fdCount);
 
-        // Takes the one container the protocol allows, and closes anyone else who dials while it
-        // is connected rather than leaving them to believe they are being served.
-        void AcceptDialer();
+        // Takes the one container the protocol allows, and closes anyone else who dials while a
+        // LIVE one is connected rather than leaving them to believe they are being served.  A
+        // connection whose peer has exited is not a live one: it is closed here and its dialer's
+        // replacement is taken, which is what a compositor that crashed and was restarted is.
+        void AdoptLocked(Int fd);
+
+        // True while the connected container is still there.  recvmsg with MSG_PEEK is what asks:
+        // zero bytes is the peer's close, EAGAIN is a peer that is between frames, and a release
+        // waiting in the socket is a peer that is alive - peeked at rather than read, because the
+        // render path is the one that spends releases.
+        Bool ClientAliveLocked();
+
+        // Takes the one container the protocol allows out of whoever dialled.
+        void AcceptLoop(Int listen);
+
+        // Sends the frame that is the draw target to a container that has just connected.
+        void ReofferFrameLocked();
+
+        // Remembers the frame the host last handed over, holding a reference to it so that a
+        // container which dials after the offer can still be given it.  The previous one is
+        // released here; nothing else in the channel holds a frame.
+        void RememberFrameLocked(struct AHardwareBuffer* buffer, const HostFrameOffer& offer, Uint32 seq);
+        void ReleaseFrameLocked();
+
+        // The offer itself: the handle relayed out of the buffer, the message built, one sendmsg.
+        // A frame that has already been offered once is sent again with the sequence number it was
+        // offered under and does not move the counters, because it is the same frame and not a new
+        // one.
+        Bool SendFrameLocked(struct AHardwareBuffer* buffer, const HostFrameOffer& offer, Uint32 seq, Bool counting);
+
+        // The body of Poll(), for a caller that is already holding the lock.
+        void PollLocked();
 
         // Closes the connection and says why, once.  The channel stays open for the next container.
         void MarkDown(const char* what, Int error);
@@ -167,5 +263,19 @@ namespace MobileGL::MG_Backend {
         Uint64 m_offered = 0;
         Uint64 m_released = 0;
         Uint64 m_outstanding = 0;
+        // The frame the host handed over most recently, held by this channel's own reference for as
+        // long as it is the draw target: it is what a container that dials late is sent.
+        struct AHardwareBuffer* m_frame = nullptr;
+        HostFrameOffer m_frameOffer = {};
+        Uint32 m_frameSeq = 0;
+        // The acceptor, and the flag that ends it.  The listening descriptor is handed to the thread
+        // as its own copy, so it is the only thing in here that thread reads without the lock - and
+        // Close() joins the thread before it closes that descriptor.
+        std::thread m_acceptor;
+        std::atomic<Bool> m_accepting{false};
+        // Guards every member above, from both threads.  Mutable because the two const questions a
+        // caller asks about the channel - is a container connected, how many frames are outstanding
+        // - are answers that have to be read under it.
+        mutable std::mutex m_mutex;
     };
 }

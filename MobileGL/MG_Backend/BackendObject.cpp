@@ -346,6 +346,29 @@ namespace MobileGL::MG_Backend {
             MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
             return false;
         }
+        // EGL_KHR_surfaceless_context.  A context whose draw and read surfaces are both absent has
+        // no framebuffer of its own to be bound to: the caller draws into framebuffers it binds
+        // itself, and this side only has to have its own GL context current on this thread for the
+        // records that follow.  Everything below this point describes a surface, so none of it
+        // applies - and what is recorded is exactly what was asked for, so a later swap on a
+        // surface that does not exist is never made to look like one that does.
+        if (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx != EGL_NO_CONTEXT) {
+            if (!m_backendCapabilitiesInitialized) {
+                if (!InitCapabilities()) {
+                    MGLOG_E("MakeEGLCurrent failed: InitCapabilities failed");
+                    return false;
+                }
+                m_backendCapabilitiesInitialized = true;
+            }
+            ReleaseEGLCurrentThread(threadKey);
+            m_eglCurrentThreads[threadKey] = EGLCurrentState{
+                .Display = dpy,
+                .DrawSurface = EGL_NO_SURFACE,
+                .ReadSurface = EGL_NO_SURFACE,
+                .Context = ctx,
+            };
+            return true;
+        }
         if (!m_eglSurfaceInitialized) {
             if (draw != read || !ActivateEGLSurface(draw)) {
                 MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");

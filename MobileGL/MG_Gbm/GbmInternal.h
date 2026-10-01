@@ -120,6 +120,43 @@ namespace MobileGL::MG_Gbm
     static constexpr uint32_t GbmFrameReleaseMagic = 0x5247474Du; // "MGGR"
     static constexpr uint32_t GbmHostProtocolVersion = 1;
 
+    // THE REVERSE DIRECTION: this end asking the render server to back one of its textures with a
+    // dma-buf.  The compositor's scene reaches the display daemon's buffers through
+    // glEGLImageTargetTexture2DOES, and the server has to be told which texture that dma-buf backs -
+    // over this same socket, because it is the one channel that can carry a descriptor across the
+    // container boundary.  Restated here rather than shared with MG_Backend/GbmFrameChannel.h for the
+    // same reason the two frame shapes are: the ends are built into different libraries from
+    // different build configurations (that file is the Android render server and never sees libgbm).
+    // Field for field, packing included; the plane descriptors ride in the SCM_RIGHTS control data of
+    // the same sendmsg, one message per import.
+    struct GbmImportRequest
+    {
+        uint32_t Magic; // 'M','G','G','I'
+        uint32_t Version;
+        uint32_t Target;     // the GL texture target the image was bound to (0x8D65 = GL_TEXTURE_EXTERNAL_OES)
+        uint32_t TexName;    // THIS side's texture name; the server resolves its twin
+        uint32_t Width;
+        uint32_t Height;
+        uint32_t FourCC;
+        uint32_t PlaneCount;
+        int32_t Stride[4];
+        int32_t Offset[4];
+        uint64_t Modifier[4];
+        uint32_t HasModifier[4];
+    } __attribute__((packed));
+
+    struct GbmImportReply
+    {
+        uint32_t Magic; // 'I','G','G','R'
+        uint32_t Version;
+        uint32_t Ok;
+        uint32_t Reserved;
+    } __attribute__((packed));
+
+    static constexpr uint32_t GbmImportRequestMagic = 0x4947474Du; // "MGGI"
+    static constexpr uint32_t GbmImportReplyMagic = 0x52474749u;   // "IGGR"
+    static constexpr uint32_t GbmImportMaxPlanes = 4;
+
     // An AHardwareBuffer native handle as it appears on the wire: three counts
     // followed by numFds file descriptors and numInts integers. The counts are
     // 32 bit even on 64 bit Android, which is why they are spelled out here

@@ -88,6 +88,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     MG_External::EGLFunctionsTable g_EGLFuncs;
     Uint g_hostFrameFramebufferId = 0;
+    Uint g_hostFrameRenderbuffer = 0;
+    Uint g_hostFrameWidth = 0;
+    Uint g_hostFrameHeight = 0;
     MG_External::GLESFunctionsTable g_GLESFuncs;
     MG_External::GLESCapabilities g_GLESCapabilities;
 

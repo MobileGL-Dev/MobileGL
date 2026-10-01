@@ -489,6 +489,11 @@ namespace MobileGL {
         E_GL_OES_fixed_point,
         E_GL_OES_single_precision,
         E_GL_OES_compressed_paletted_texture,
+        // GL_OES_EGL_image: taking a texture (or renderbuffer) over an EGLImage.  Named because
+        // libepoxy resolves glEGLImageTargetTexture2DOES by NAME and the entry points are now real
+        // (MG_Impl/GLImpl/Exporting/Definitions.cpp), with the render-server half of the import
+        // still to come - see the note there.
+        E_GL_OES_EGL_image,
         E_GL_OES_read_format,
         E_GL_OES_query_matrix,
         E_GL_EXT_depth_bounds_test,

@@ -19,6 +19,10 @@ namespace MobileGL {
             case GL_TEXTURE_2D:
             case GL_PROXY_TEXTURE_2D:
                 return TextureTarget::Texture2D;
+            // GL_TEXTURE_EXTERNAL_OES: what the compositor binds an imported dma-buf to. Spelled as
+            // the number because the GL headers this tree bundles do not define the token.
+            case 0x8D65:
+                return TextureTarget::TextureExternalOES;
             case GL_TEXTURE_3D:
             case GL_PROXY_TEXTURE_3D:
                 return TextureTarget::Texture3D;

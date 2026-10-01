@@ -254,6 +254,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // then - but on a host-framed surface the pixels belong to a frame the display host owns,
     // and drawing into the driver's 0 would draw into a pbuffer nobody ever sees.
     extern Uint g_hostFrameFramebufferId;
+    // WHAT THE HOST FRAME'S STORAGE IS, for the one caller that has to bind it in place of a
+    // storage-less attachment: an imported dma-buf is the display host's frame (same memory, same
+    // size), and the frame's storage is a RENDERBUFFER (HostFrameTarget.cpp binds it with
+    // glFramebufferRenderbuffer).  A texture argument cannot name it, which is why these exist and
+    // why g_hostFrameFramebufferId alone was not enough.  Zero whenever no frame is held.
+    extern Uint g_hostFrameRenderbuffer;
+    extern Uint g_hostFrameWidth;
+    extern Uint g_hostFrameHeight;
+    // TAKE THE FRAME WHEN NOTHING ELSE WILL.  On the anland route the container's compositor never
+    // creates a window surface, so ActivateEGLSurface never runs and InitHostFrameSurface is never
+    // reached: the FIRST proof that the display host's frame is wanted is an ATTACHMENT of an
+    // imported external texture (Managers.cpp's 0x8D65 arm), and that is where the frame has to be
+    // taken.  The host's own offer carries the width/height, so the numbers passed here are only
+    // what the bridge logs.  Answers false (and changes nothing) whenever no backend is up.
+    Bool TakeHostFrameForExternalTexture(Uint width, Uint height);
     extern MG_External::EGLFunctionsTable g_EGLFuncs;
     extern MG_External::GLESFunctionsTable g_GLESFuncs;
     extern MG_External::GLESCapabilities g_GLESCapabilities;

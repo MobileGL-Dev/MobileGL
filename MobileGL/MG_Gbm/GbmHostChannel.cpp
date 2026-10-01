@@ -160,6 +160,11 @@ namespace MobileGL::MG_Gbm
 
         String Path;
         Int SocketFd = -1;
+        // Set by a connection this process has just made, and read once by the allocation that
+        // follows it: the accept and the frame that answers the dial happen on the other side of
+        // this socket, so an allocation that reads immediately after connecting reads before the
+        // answer to its own connection has been written.  See TakeFrame.
+        Bool FreshConnection = false;
         // Bumped by every connection, so a frame taken from a connection which has since
         // died can be recognised as one that must not be released into its replacement.
         Uint64 Generation = 0;
@@ -306,6 +311,7 @@ namespace MobileGL::MG_Gbm
         }
 
         SocketFd = fd;
+        FreshConnection = true;
         // A new connection is a new session with its own frames, which is what makes the
         // generation a correct answer to "may this release be sent here".
         Generation++;
@@ -368,6 +374,17 @@ namespace MobileGL::MG_Gbm
         if (SocketFd < 0)
         {
             return false;
+        }
+        // THE FIRST ALLOCATION AFTER A DIAL WAITS FOR THE ANSWER TO IT. The accept and the offer that
+        // answers the connection this call has just made are written by the phone, a round trip
+        // behind the connect() that returns here — and what is allocated before that offer arrives
+        // is a local buffer, which is what a compositor builds its whole swapchain out of and then
+        // keeps for the life of the process. So a connection made on this path is given the same
+        // first-offer window device creation gives one, once, and only while it is new.
+        if (FreshConnection)
+        {
+            FreshConnection = false;
+            AwaitFirstOffer(device);
         }
         // Releases the socket would not take last time are retried here, because this is
         // the one call in the library that happens once per frame and therefore the

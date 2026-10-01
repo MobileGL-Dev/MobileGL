@@ -55,6 +55,17 @@ namespace MobileGL::MG_Backend {
         // loop to exhaustion: the messages left behind stay in the socket, whose buffer the kernel
         // bounds, and the next frame drains them.
         constexpr Int kDrainMax = 64;
+        // HOW MANY DIALERS THE KERNEL MAY HOLD FOR THIS LISTENER.  One container is the protocol,
+        // but the queue is not the connection: every compositor that was restarted dials once more,
+        // and a listener that only ever has one slot leaves its queue full for the next one.  With
+        // listen(fd, 1) that is exactly what was measured - connect() from the container answered
+        // EAGAIN(11) on four attempts out of four after two restarts, and no dialer reached this
+        // side again for as long as the server lived.
+        constexpr Int kDialerBacklog = 16;
+        // The acceptor's poll timeout.  It is a wake-up and not a schedule, so it only has to be
+        // short enough that a container dialling into a socket nothing else touches is taken
+        // promptly; a dialer that arrives while the thread is waiting wakes it at once.
+        constexpr Int kAcceptPollMs = 100;
         // How long the relay read waits for bytes the send one statement earlier has already put in
         // the socket.  It exists only so that an invariant broken somewhere else cannot park the
         // apply thread; on a local socketpair the wait is zero.
@@ -73,6 +84,7 @@ namespace MobileGL::MG_Backend {
     GbmFrameChannel::~GbmFrameChannel() { Close(); }
 
     Bool GbmFrameChannel::Open() {
+        const std::lock_guard<std::mutex> lock(m_mutex);
         if (m_listen >= 0) return true;
 
         const char* configured = ::getenv(kGbmFrameSocketEnv);
@@ -123,7 +135,7 @@ namespace MobileGL::MG_Backend {
                          "this socket",
                          path, std::strerror(errno));
         }
-        if (::listen(fd, 1) != 0) {
+        if (::listen(fd, kDialerBacklog) != 0) {
             MGLOG_E_ONCE("gbm frame channel: listen(%s): %s; the frames are drawn and presented without a container",
                          path, std::strerror(errno));
             ::unlink(path);
@@ -133,6 +145,22 @@ namespace MobileGL::MG_Backend {
 
         m_listen = fd;
         m_path = path;
+        // THE ACCEPTOR IS STARTED WITH THE SOCKET AND NOT WITH THE FIRST FRAME.  A compositor dials
+        // at its device creation and keeps the connection, so the dial a frame would have answered
+        // has already happened by the time that frame is offered: an accept on the offer path is an
+        // accept that runs after the thing it exists for.  The descriptor is copied into the thread
+        // as an argument - it is the one piece of this object the thread reads without the lock,
+        // which is what lets Close() join it before closing that descriptor.
+        m_accepting.store(true, std::memory_order_release);
+        try {
+            m_acceptor = std::thread(&GbmFrameChannel::AcceptLoop, this, fd);
+        } catch (...) {
+            // A thread that cannot be made is a phone that is out of them, not a reason to refuse
+            // the frames the container can still be given one at a time.
+            m_accepting.store(false, std::memory_order_release);
+            MGLOG_W_ONCE("gbm frame channel: the acceptor thread could not be started; a container is only taken in "
+                         "when a frame is offered, and one that dials between frames waits for the next one");
+        }
         MGLOG_I("gbm frame channel: listening on %s for one container (SOCK_SEQPACKET, one message per frame)", path);
         return true;
     }
@@ -276,41 +304,106 @@ namespace MobileGL::MG_Backend {
             return false;
         }
 
-        payloadBytes = (SizeT)got;
+        // THE BYTES THAT COME BACK ARE THE HANDLE'S INTEGER ARRAY, NOT A handle AND ITS COUNTS.
+        // Measured on the phone: parsing the front of this payload as {version, numFds, numInts}
+        // produced a NumFds taken from the buffer's own integer data, and every frame was refused
+        // with "its handle carries more descriptors than either end takes" - which is what the
+        // container saw as a connection that was accepted and then closed without a frame.  The two
+        // counts are known HERE and are not in those bytes: the descriptors came out of the control
+        // data (collected of them) and the payload is their integer array.  So the header is BUILT
+        // rather than copied, and what leaves this process is a real native_handle_t layout -
+        // version, numFds, numInts, then the ints - which is exactly what the container's parser
+        // reads (GbmInternal.h's AHBNativeHandleHeader).
+        if (payloadBytes + sizeof(GbmNativeHandleHeader) > capacity) {
+            MGLOG_W_ONCE("gbm frame channel: a handle's integer array does not fit in a frame message with its "
+                         "header; the frame is not offered to the container");
+            for (Int i = 0; i < collected; ++i) CloseQuietly(fds[i]);
+            DropRelay();
+            return false;
+        }
+        std::memmove(payload + sizeof(GbmNativeHandleHeader), payload, payloadBytes);
+        GbmNativeHandleHeader header = {};
+        header.Version = (Int32)sizeof(GbmNativeHandleHeader);
+        header.NumFds = (Int32)collected;
+        header.NumInts = (Int32)(payloadBytes / sizeof(Int32));
+        std::memcpy(payload, &header, sizeof(header));
+        payloadBytes += sizeof(header);
         fdCount = collected;
         return true;
     }
 
-    void GbmFrameChannel::AcceptDialer() {
-        if (m_listen < 0) return;
-        // accept4, so the connection is close-on-exec and non-blocking from the moment it exists: a
-        // container that stops reading must not be able to park a send on the apply thread.
-        const Int fd = ::accept4(m_listen, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
-        if (fd < 0) {
-            // EAGAIN is nobody dialling, which is the ordinary state of a phone whose container is
-            // not running.  The rest are worth one line between them: the listener outlives them and
-            // the next frame tries again.
-            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR && errno != ECONNABORTED) {
-                MGLOG_W_ONCE("gbm frame channel: accept on %s failed (%d: %s); a container cannot connect until the "
-                             "next frame tries again",
-                             m_path.c_str(), errno, std::strerror(errno));
+    // The acceptor.  It touches the listener - its own copy of the descriptor, which nothing else
+    // closes while this loop runs - and, once per dialer, the channel under its lock.
+    void GbmFrameChannel::AcceptLoop(Int listen) {
+        while (m_accepting.load(std::memory_order_acquire)) {
+            struct pollfd waiting = {};
+            waiting.fd = listen;
+            waiting.events = POLLIN;
+            const Int ready = ::poll(&waiting, 1, kAcceptPollMs);
+            if (ready < 0) {
+                if (errno == EINTR) continue;
+                MGLOG_W_ONCE("gbm frame channel: poll on the listening socket failed (%d: %s); no container can be "
+                             "taken in until the socket is opened again",
+                             errno, std::strerror(errno));
+                return;
             }
+            if (ready == 0) continue;
+            // accept4, so the connection is close-on-exec and non-blocking from the moment it
+            // exists: a container that stops reading must not be able to park a send on either
+            // thread.
+            const Int fd = ::accept4(listen, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+            if (fd < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED) continue;
+                MGLOG_W_ONCE("gbm frame channel: accept failed (%d: %s); no container can be taken in until the "
+                             "socket is opened again",
+                             errno, std::strerror(errno));
+                return;
+            }
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            AdoptLocked(fd);
+        }
+    }
+
+    void GbmFrameChannel::AdoptLocked(Int fd) {
+        if (ClientAliveLocked()) {
+            // ONE CLIENT, which is what the protocol is written for, and a dialer that arrives while
+            // a live one is connected is closed rather than left connected - it learns it is not the
+            // one being served instead of holding a connection whose frames nobody reads.
+            CloseQuietly(fd);
+            MGLOG_W_ONCE("gbm frame channel: a second peer dialled %s while a container is connected; it is closed "
+                         "and the frames stay with the connected one",
+                         m_path.c_str());
             return;
         }
-        if (m_client < 0) {
-            m_client = fd;
-            MGLOG_I("gbm frame channel: a container is connected on %s; every frame the host offers is sent to it as "
-                    "the dma-buf descriptor behind it",
-                    m_path.c_str());
-            return;
+        m_client = fd;
+        MGLOG_I("gbm frame channel: a container is connected on %s; every frame the host offers is sent to it as "
+                "the dma-buf descriptor behind it",
+                m_path.c_str());
+        // AND THE FRAME IT DIALED FOR GOES OUT FROM HERE.  A compositor creates its GBM device before
+        // it asks for a surface, so the frame that is the draw target right now was offered before
+        // this connection existed; a container that is not told about it allocates every buffer of
+        // its new swapchain locally, and keeps them for the life of the process.
+        ReofferFrameLocked();
+    }
+
+    Bool GbmFrameChannel::ClientAliveLocked() {
+        if (m_client < 0) return false;
+        Uint8 peek = 0;
+        // MSG_PEEK, because a release waiting in the socket belongs to the render path: this test
+        // only asks whether the peer is still there, and a release it consumed would be a frame the
+        // channel believed was still outstanding.
+        const ssize_t got = ::recv(m_client, &peek, sizeof(peek), MSG_DONTWAIT | MSG_PEEK);
+        if (got > 0) return true;
+        if (got == 0) {
+            // Zero bytes on a connected socket is the end of it, whether the container exited or
+            // the kernel gave up on it.  A compositor that crashed and is being restarted is
+            // exactly this, and its successor is the dialer standing right here.
+            MarkDown("the container closed the connection", 0);
+            return false;
         }
-        // ONE CLIENT, which is what the protocol is written for: a second dialer is closed rather
-        // than left connected, so that it learns it is not the one being served instead of holding a
-        // connection whose messages nobody reads.
-        CloseQuietly(fd);
-        MGLOG_W_ONCE("gbm frame channel: a second peer dialled %s while a container is connected; it is closed and "
-                     "the frames stay with the connected one",
-                     m_path.c_str());
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return true;
+        MarkDown("recv", errno);
+        return false;
     }
 
     void GbmFrameChannel::MarkDown(const char* what, Int error) {
@@ -332,13 +425,67 @@ namespace MobileGL::MG_Backend {
         if (buffer == nullptr) return false;
         // Open() does nothing once the socket exists, so this is an integer test in the common case.
         Open();
+        const std::lock_guard<std::mutex> lock(m_mutex);
 
-        // Releases first, and the accept after them: a container that has died is noticed and its
-        // replacement taken before this frame is handed to a socket the kernel has already given up
-        // on, which is what lets a compositor that restarted receive frames from the very next one
-        // rather than from the frame after it.
-        Poll();
-        AcceptDialer();
+        // The releases the container has sent since the last frame, which is also how a container
+        // that died is noticed.  Whoever replaced it was taken by the acceptor's own thread the
+        // moment it dialled: that thread is what makes a container's connect() succeed at all.
+        PollLocked();
+        // AND THE FRAME IS REMEMBERED BEFORE IT IS SENT.  A container that dials while this call is
+        // running is one the acceptor hands the frame it finds here to, so the two threads must not
+        // be able to disagree about which frame is the one being drawn into.
+        const Uint32 seq = m_nextSeq;
+        RememberFrameLocked(buffer, offer, seq);
+        if (m_client < 0) return false;
+        return SendFrameLocked(buffer, offer, seq, /*counting=*/true);
+    }
+
+    void GbmFrameChannel::RememberFrameLocked(struct AHardwareBuffer* buffer, const HostFrameOffer& offer, Uint32 seq) {
+        if (m_frame == buffer) {
+            // The host redrawing into the buffer it already handed over: the same frame under a new
+            // sequence number.  Acquiring it again would be a reference this channel takes and never
+            // gives back.
+            m_frameOffer = offer;
+            m_frameSeq = seq;
+            return;
+        }
+        // The reference is this channel's own, and it is what makes the frame a container that dials
+        // late is owed safe to hold: the backend drops its handle the moment the frame is presented,
+        // and a frame owed to a dialer arriving in the same millisecond may not be memory that has
+        // already gone back to the host's pool.
+        AHardwareBuffer_acquire(buffer);
+        ReleaseFrameLocked();
+        m_frame = buffer;
+        m_frameOffer = offer;
+        m_frameSeq = seq;
+    }
+
+    void GbmFrameChannel::ReleaseFrameLocked() {
+        if (m_frame == nullptr) return;
+        AHardwareBuffer_release(m_frame);
+        m_frame = nullptr;
+        m_frameOffer = {};
+        m_frameSeq = 0;
+    }
+
+    void GbmFrameChannel::DropFrame() {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        ReleaseFrameLocked();
+    }
+
+    void GbmFrameChannel::ReofferFrameLocked() {
+        if (m_frame == nullptr) return;
+        // The same frame, under the sequence number it was offered with: it IS the frame that is the
+        // draw target now, and a second number for it would be this channel claiming the host had
+        // handed over a frame it never handed over.
+        MGLOG_I("gbm frame channel: a container dialled after frame %u was offered; it is sent that frame, which is "
+                "still the draw target",
+                m_frameSeq);
+        SendFrameLocked(m_frame, m_frameOffer, m_frameSeq, /*counting=*/false);
+    }
+
+    Bool GbmFrameChannel::SendFrameLocked(struct AHardwareBuffer* buffer, const HostFrameOffer& offer, Uint32 seq,
+                                          Bool counting) {
         if (m_client < 0) return false;
 
         Uint8 payload[kMessageMax];
@@ -399,7 +546,7 @@ namespace MobileGL::MG_Backend {
             GbmFrameOffer out = {};
             out.Magic = kGbmFrameOfferMagic;
             out.Version = kGbmFrameVersion;
-            out.Seq = m_nextSeq;
+            out.Seq = seq;
             out.Index = offer.Index;
             out.Width = offer.Width;
             out.Height = offer.Height;
@@ -437,9 +584,15 @@ namespace MobileGL::MG_Backend {
             if (sent != (ssize_t)messageBytes) {
                 MarkDown("sendmsg", (sent < 0) ? errno : 0);
             } else {
-                m_nextSeq = out.Seq + 1;
-                ++m_offered;
-                ++m_outstanding;
+                // A frame offered for the first time is the next sequence number and one more frame
+                // outstanding.  The same frame sent again to a container that has just dialled is
+                // neither: the host handed over nothing new, and a count of frames waiting to be
+                // released may not be moved by a message that describes one already in it.
+                if (counting) {
+                    m_nextSeq = seq + 1;
+                    ++m_offered;
+                    ++m_outstanding;
+                }
                 offered = true;
                 // The first offer is the one worth a line, and it carries the host's own numbers:
                 // the format in particular is the field the two ends could disagree about without
@@ -461,6 +614,11 @@ namespace MobileGL::MG_Backend {
     }
 
     void GbmFrameChannel::Poll() {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        PollLocked();
+    }
+
+    void GbmFrameChannel::PollLocked() {
         if (m_client < 0) return;
         for (Int drained = 0; drained < kDrainMax; ++drained) {
             GbmFrameRelease release = {};
@@ -524,6 +682,17 @@ namespace MobileGL::MG_Backend {
     }
 
     void GbmFrameChannel::Close() {
+        // THE ACCEPTOR IS STOPPED AND JOINED FIRST, and outside the lock.  It may be inside that
+        // lock when this is called - a teardown that waited for it while holding it would wait for
+        // ever - and it polls the listening descriptor, which may not be closed under it: the next
+        // open() in this process hands out the descriptor number a moment later, and the thread
+        // would then be polling somebody else's socket.
+        m_accepting.store(false, std::memory_order_release);
+        if (m_acceptor.joinable()) m_acceptor.join();
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        // The frame is this channel's reference and is released with it: the backend has already
+        // dropped its own by the time a teardown here is a teardown of the frame as well.
+        ReleaseFrameLocked();
         // The connection is closed quietly rather than marked down: this is a teardown, not a
         // failure, and a warning about it would be noise in a log read for the failures.
         CloseQuietly(m_client);

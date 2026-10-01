@@ -124,6 +124,7 @@
 
 #include <cstdio>
 #include <string>
+#include <MG_Util/PlatformStubs.h>
 
 namespace MobileGL {
     namespace MG_Util {
