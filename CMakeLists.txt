@@ -677,6 +677,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # (the display Activity's SurfaceView on Android; nobody installs one on the host, so a
         # ServerOwned request is refused by name there).
         MobileGL/MG_Remote/Server/ServerDisplay.cpp
+        # Package-neutral C ABI for an APK that owns the server and its ANativeWindow.
+        MobileGL/MG_Remote/Server/EmbeddedServer.cpp
         # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
         # arms and the probe that measures the first against the second, shared by the
         # renderer's bring-up and the Vulkan POST. Wire-only - the monolith records neither arm -

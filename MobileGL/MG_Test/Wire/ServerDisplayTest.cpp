@@ -19,6 +19,7 @@
 // wait by name.
 
 #include <MG_Remote/Server/ServerDisplay.h>
+#include <MG_Remote/Server/EmbeddedServer.h>
 
 #include <gtest/gtest.h>
 
@@ -117,6 +118,77 @@ namespace {
     void* FakeWindow(int index) { return &g_windowStorage[index]; }
 
 } // namespace
+
+// The public embedding ABI must preserve the same ownership rules for an APK that supplies its
+// own Surface, including a late apply-thread release after its UI thread has stopped waiting.
+class EmbeddedServerTest : public ::testing::Test {
+protected:
+    FakePlatform platform;
+
+    mobilegl_server_display_hooks Hooks() {
+        return {&FakeAcquire, &FakeRelease, &FakeGeometry, &platform};
+    }
+    void TearDown() override {
+        ServerDisplayInstance().EndLease(this);
+        (void)mobilegl_server_display_uninstall(0);
+    }
+};
+
+TEST_F(EmbeddedServerTest, AHostsReferenceIsRetainedAndGeometryUpdatesDoNotRetainAgain) {
+    const auto hooks = Hooks();
+    ASSERT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_OK);
+    ASSERT_EQ(mobilegl_server_display_attach(FakeWindow(0), 32, 24), MOBILEGL_SERVER_DISPLAY_OK);
+    ASSERT_EQ(mobilegl_server_display_attach(FakeWindow(0), 64, 48), MOBILEGL_SERVER_DISPLAY_OK);
+    EXPECT_EQ(platform.acquires.load(), 1);
+    ServerWindowLease lease;
+    ASSERT_EQ(ServerDisplayInstance().AcquireFor(64, 48, 100, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::Acquired);
+    EXPECT_EQ(platform.lastWidth, 64u);
+    EXPECT_EQ(platform.lastHeight, 48u);
+    EXPECT_EQ(lease.width, 64u);
+    EXPECT_EQ(lease.height, 48u);
+    ServerDisplayInstance().EndLease(this);
+    EXPECT_EQ(mobilegl_server_display_detach(100), MOBILEGL_SERVER_WINDOW_RELEASED);
+    EXPECT_EQ(platform.releases.load(), 1);
+    EXPECT_EQ(mobilegl_server_display_uninstall(100), MOBILEGL_SERVER_WINDOW_NO_WINDOW);
+}
+
+TEST_F(EmbeddedServerTest, ATimeoutKeepsTheOriginalHooksUntilTheBackendLetsGo) {
+    const auto hooks = Hooks();
+    ASSERT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_OK);
+    ASSERT_EQ(mobilegl_server_display_attach(FakeWindow(0), 64, 48), MOBILEGL_SERVER_DISPLAY_OK);
+    ServerWindowLease lease;
+    // The holder deliberately has no lost callback: it is a wedged apply thread. Uninstall must
+    // remain bounded and retain the window until this holder explicitly releases its lease.
+    ASSERT_EQ(ServerDisplayInstance().AcquireFor(0, 0, 100, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::Acquired);
+    EXPECT_EQ(mobilegl_server_display_uninstall(1), MOBILEGL_SERVER_WINDOW_TIMED_OUT);
+    EXPECT_FALSE(ServerDisplayInstance().HasDisplay());
+    EXPECT_EQ(platform.releases.load(), 0);
+    EXPECT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_ALREADY_INSTALLED);
+    ServerDisplayInstance().EndLease(this);
+    EXPECT_EQ(platform.releases.load(), 1);
+    EXPECT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_OK);
+}
+
+TEST_F(EmbeddedServerTest, AnOwnerCannotReplaceLiveReferenceHooksOrAttachBeforeInstall) {
+    const auto hooks = Hooks();
+    EXPECT_EQ(mobilegl_server_display_attach(FakeWindow(0), 64, 48), MOBILEGL_SERVER_DISPLAY_NOT_INSTALLED);
+    EXPECT_EQ(mobilegl_server_display_install(nullptr), MOBILEGL_SERVER_DISPLAY_INVALID_ARGUMENT);
+    mobilegl_server_display_hooks incomplete{};
+    EXPECT_EQ(mobilegl_server_display_install(&incomplete), MOBILEGL_SERVER_DISPLAY_INVALID_ARGUMENT);
+    ASSERT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_OK);
+    EXPECT_EQ(mobilegl_server_display_install(&hooks), MOBILEGL_SERVER_DISPLAY_ALREADY_INSTALLED);
+    EXPECT_EQ(mobilegl_server_display_attach(nullptr, 64, 48), MOBILEGL_SERVER_DISPLAY_INVALID_ARGUMENT);
+}
+
+#if !defined(__ANDROID__)
+TEST_F(EmbeddedServerTest, AndroidWindowsAreRefusedByNameOnOtherPlatforms) {
+    EXPECT_EQ(mobilegl_server_display_install_android(nullptr, nullptr), MOBILEGL_SERVER_DISPLAY_UNSUPPORTED_PLATFORM);
+    EXPECT_EQ(mobilegl_server_display_attach_android(nullptr, 64, 48), MOBILEGL_SERVER_DISPLAY_UNSUPPORTED_PLATFORM);
+    EXPECT_FALSE(ServerDisplayInstance().HasDisplay());
+}
+#endif
 
 // Nobody installed a display: HasDisplay is false and a wait for a window answers NoDisplay at once
 // - the host server's and the exec'd supervisor's shape, and what makes a ServerOwned request a named
