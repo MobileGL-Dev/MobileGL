@@ -233,6 +233,11 @@ namespace MobileGL {
                         m_contextOwners.erase(ownerIt);
                     }
                 }
+                // P14 S3: the thread's GL state goes back to what it was before this EGL
+                // context was made current on it.
+                if (currentIt->second.RestoreThreadGLState) {
+                    pGLContext = Move(currentIt->second.RestoreThreadGLState);
+                }
                 m_threadCurrents.erase(currentIt);
                 DestroyPendingSurfaceIfUnused(drawSurface);
                 DestroyPendingSurfaceIfUnused(readSurface);
@@ -305,6 +310,12 @@ namespace MobileGL {
                             if (ownerIt != m_contextOwners.end() && ownerIt->second == threadIt->first) {
                                 m_contextOwners.erase(ownerIt);
                             }
+                        }
+                        // Only the CALLING thread's TLS is reachable from here - another
+                        // thread's current is dropped from the table, and its own next EGL
+                        // call re-establishes the binding.
+                        if (threadIt->first == CurrentThreadKey() && threadIt->second.RestoreThreadGLState) {
+                            pGLContext = Move(threadIt->second.RestoreThreadGLState);
                         }
                         threadIt = m_threadCurrents.erase(threadIt);
                     } else {
@@ -654,6 +665,30 @@ namespace MobileGL {
                     .MinorVersion = 0,
                 };
 
+                // P14 S1: the wire identity, minted where the context is born. A context that
+                // shares with an existing one joins ITS share group; EGL_NO_CONTEXT starts a new
+                // one. Both tokens are 0-free by construction (the counters start at 1), because
+                // 0 is the wire's "no context" on both planes.
+                contextObject.ClientContextToken = m_nextClientContextToken++;
+                SharedPtr<GLState::ShareGroupState> shareGroup;
+                if (shareCtx != nullptr) {
+                    const auto* shared = TryGetContext(shareCtx);
+                    if (shared != nullptr && shared->GLStateObject) {
+                        shareGroup = shared->GLStateObject->GetShareGroup();
+                        contextObject.ShareGroupToken = shared->ShareGroupToken;
+                    } else {
+                        contextObject.ShareGroupToken = m_nextShareGroupToken++;
+                    }
+                } else {
+                    contextObject.ShareGroupToken = m_nextShareGroupToken++;
+                }
+                if (!shareGroup) {
+                    shareGroup = MakeShared<GLState::ShareGroupState>(contextObject.ShareGroupToken);
+                }
+                // P14 S3: the context's own GL state, sharing the objects (and the name spaces)
+                // of the group above, with bindings, errors and the current program of its own.
+                contextObject.GLStateObject = MakeShared<GLState::GLContext>(shareGroup);
+
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_CLIENT_VERSION); value) {
                     contextObject.ClientVersion = *value;
                     contextObject.MajorVersion = *value;
@@ -777,6 +812,37 @@ namespace MobileGL {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* ctx = TryGetContext(context);
                 return ctx && ctx->Display == display;
+            }
+
+            // P14 S1. 0 for an unknown handle or a thread with no current context: 0 is the
+            // wire's "no context" on both planes, so an answer that cannot be given is given as
+            // the value that means "nothing is bound" rather than as a handle-shaped guess.
+            Uint64 EGLContext::GetContextClientToken(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->ClientContextToken : 0;
+            }
+
+            Uint64 EGLContext::GetContextShareGroupToken(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->ShareGroupToken : 0;
+            }
+
+            SharedPtr<GLState::GLContext> EGLContext::GetContextGLState(EGLContextHandle context) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr ? ctx->GLStateObject : nullptr;
+            }
+
+            Uint64 EGLContext::CurrentContextClientToken() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return 0;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx != nullptr ? ctx->ClientContextToken : 0;
             }
 
             Bool EGLContext::IsCurrentContextOpenGLCoreProfile() const {
@@ -1276,6 +1342,16 @@ namespace MobileGL {
                     }
                 }
 
+                // P14 S3: whatever this thread's GL state was before the first EGL context was
+                // bound to it is what a later release goes back to.
+                SharedPtr<GLState::GLContext> restoreThreadGLState;
+                if (const auto currentIt = m_threadCurrents.find(threadKey);
+                    currentIt != m_threadCurrents.end()) {
+                    restoreThreadGLState = currentIt->second.RestoreThreadGLState;
+                } else {
+                    restoreThreadGLState = pGLContext;
+                }
+
                 ReleaseThreadUnlocked(threadKey);
 
                 m_threadCurrents[threadKey] = ThreadCurrentState{
@@ -1283,9 +1359,15 @@ namespace MobileGL {
                     .DrawSurface = draw,
                     .ReadSurface = read,
                     .Context = context,
+                    .RestoreThreadGLState = Move(restoreThreadGLState),
                 };
                 if (context != nullptr) {
                     m_contextOwners[context] = threadKey;
+                    // P14 S3: this thread's GL calls land in this context's GLContext from here
+                    // on, and not before the switch above has been committed.
+                    if (const auto* contextObject = TryGetContext(context); contextObject != nullptr) {
+                        pGLContext = contextObject->GLStateObject;
+                    }
                 }
                 return true;
             }

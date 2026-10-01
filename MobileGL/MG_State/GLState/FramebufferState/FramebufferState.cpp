@@ -46,6 +46,14 @@ namespace MobileGL::MG_State::GLState {
         return framebufferObject;
     }
 
+    void FramebufferState::RegisterFramebufferObject(Uint index, SharedPtr<FramebufferObject> object) {
+        if (!object) return;
+        if (index == 0 && !m_indexGenerator.IsValid(0)) {
+            m_indexGenerator.Insert(0);
+        }
+        m_framebufferObjects[index] = Move(object);
+    }
+
     BindingSlot<FramebufferObject>& FramebufferState::GetBindingSlot(FramebufferTarget target) {
         for (auto& bindingSlot : m_bindingSlots) {
             if (bindingSlot.GetTarget() == target) {

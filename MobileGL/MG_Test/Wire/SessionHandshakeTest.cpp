@@ -261,22 +261,24 @@ TEST(SessionHandshakeTest, WireLayoutMismatchReturnsNamedRefuseWithoutAborting) 
     CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint() ^ 1, BuildFingerprint(),
                    ::MobileGL::Wire::DialMode::No, ::MobileGL::Wire::RefuseCode::WireFingerprint);
 }
-// P11 B2 (CONTRACT-P11 B2): CONTROL REVISION 5. A peer built at revision 4 - before
-// LinkTerms.adoptTier - carries the fingerprint its revision mixed, and is refused by name
-// (Refuse{WireFingerprint}), never read as a revision-5 Hello that happens to ask T2. The same shape
-// PAIR's 3 -> 4 had. RED ONCE by leaving MOBILEGL_PROTOCOL_CONTROL_REVISION at 4 with the schema
-// change: the two fingerprints are then equal and the Welcome goes out.
-TEST(SessionHandshakeTest, ARevisionFourPeerIsRefusedByNameAtRevisionFive) {
-    static_assert(MOBILEGL_PROTOCOL_CONTROL_REVISION == 5, "B2 bumped the control revision 4 -> 5");
+// P11 B2 (CONTRACT-P11 B2) AND P14 S1. CONTROL REVISION 6. A peer built at the revision before
+// the current one - revision 4 carried no LinkTerms.adoptTier, revision 5 no context-lifecycle
+// SurfaceOp kinds - carries the fingerprint its revision mixed, and is refused by name
+// (Refuse{WireFingerprint}), never read as a current-revision Hello that happens to ask T2 or to
+// send a SurfaceOpKind the receiver does not know. The same shape PAIR's 3 -> 4 had. RED ONCE by
+// leaving MOBILEGL_PROTOCOL_CONTROL_REVISION at 5 with the schema change: the two fingerprints
+// are then equal and the Welcome goes out.
+TEST(SessionHandshakeTest, ARevisionFivePeerIsRefusedByNameAtRevisionSix) {
+    static_assert(MOBILEGL_PROTOCOL_CONTROL_REVISION == 6, "S1 bumped the control revision 5 -> 6");
     auto inputs = CapsAbiFingerprintInputs();
 #if MOBILEGL_BUILD_DISAGGREGATED
-    inputs.ControlSchemaRevision = (static_cast<Uint64>(4) << 32) | MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
+    inputs.ControlSchemaRevision = (static_cast<Uint64>(5) << 32) | MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
 #else
-    inputs.ControlSchemaRevision = 4;
+    inputs.ControlSchemaRevision = 5;
 #endif
-    const Uint64 revisionFour = Transport::MixAbiFingerprint(inputs);
-    ASSERT_NE(revisionFour, WireFingerprint());
-    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, revisionFour, BuildFingerprint(), ::MobileGL::Wire::DialMode::Connect,
+    const Uint64 revisionFive = Transport::MixAbiFingerprint(inputs);
+    ASSERT_NE(revisionFive, WireFingerprint());
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, revisionFive, BuildFingerprint(), ::MobileGL::Wire::DialMode::Connect,
                    ::MobileGL::Wire::RefuseCode::WireFingerprint);
 }
 

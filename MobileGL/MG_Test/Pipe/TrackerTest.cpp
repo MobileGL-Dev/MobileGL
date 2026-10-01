@@ -163,7 +163,7 @@ namespace {
             }
         }
 
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
     TEST_F(TrackerAggregates, EveryAggregateStartsAtZero) {
@@ -238,7 +238,7 @@ namespace {
     }
 
     TEST_F(TrackerAggregates, ANoteWithoutALiveContextIsANoOp) {
-        UniquePtr<GLContext> held = Move(MG_State::pGLContext);
+        SharedPtr<GLContext> held = Move(MG_State::pGLContext);
         MGP_NOTE_AGGREGATE(BufferChange); // must not dereference a null context
         MG_State::pGLContext = Move(held);
         SUCCEED();
@@ -353,7 +353,7 @@ namespace {
         Uint64 m_payloadBytes = 0;
         Uint64 m_binds = 0;
         Uint64 m_savedPush = 0;
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
     TEST_F(TrackerWalk, EveryBitHasAName) {
@@ -988,7 +988,7 @@ namespace {
             return bits;
         }
 
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
     TEST_F(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) {
@@ -1075,7 +1075,7 @@ namespace {
         static const MGPipeCsoCache::Counters& Cso() { return MGPipeCsoCacheInstance().GetCounters(); }
 
         Uint64 m_savedPush = 0;
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
     TEST_F(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) {
@@ -1362,7 +1362,7 @@ namespace {
         // stand into the next verb. A draw with no context is a no-op; its argument must not
         // outlive it.
         MGPipeSetPendingBaseInstance(11);
-        UniquePtr<GLContext> parked = Move(MG_State::pGLContext);
+        SharedPtr<GLContext> parked = Move(MG_State::pGLContext);
         Draw();
         EXPECT_EQ(MGPipePendingBaseInstance(), 0u)
             << "the no-live-context exit left the draw's base instance standing for the next verb";

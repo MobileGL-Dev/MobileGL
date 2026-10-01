@@ -15,6 +15,11 @@
 #include "TextureUnit.h"
 
 namespace MobileGL::MG_State::GLState {
+    // The one place a texture object's concrete type is chosen for a target. Shared because the
+    // share group's texture table and the context's per-target default texture objects both
+    // build through it.
+    SharedPtr<ITextureObject> MakeTextureObjectForTarget(Uint index, TextureTarget target);
+
     struct ImageTextureBinding {
         SharedPtr<ITextureObject> Texture;
         GLint Level = 0;
@@ -45,6 +50,10 @@ namespace MobileGL::MG_State::GLState {
         }
     };
 
+    // The per-context half of the texture state: the texture units (and their per-target
+    // bindings), the image unit bindings, the active unit, and the default texture objects
+    // (name 0), which GL scopes to the context rather than the share group. The named texture
+    // objects and their name space belong to the share group (ShareGroupState).
     class TextureState {
     public:
         // Capacity of the combined texture-unit state arrays (indexed by glActiveTexture unit).
@@ -56,30 +65,20 @@ namespace MobileGL::MG_State::GLState {
         static constexpr int MAX_PER_STAGE_TEXTURE_IMAGE_UNITS = 32;
 
         TextureState();
-        void GenerateNames(Uint number, Vector<Uint>& textures);
-        const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
-        // glTextureView (GL 4.6 core 8.18). `storageOwner` must already be a texture with
-        // immutable storage and must NOT itself be a view - the caller composes a view-of-a-view
-        // onto the root first, and passes the composed (root-relative) level/layer range here.
-        const SharedPtr<ITextureObject>& CreateTextureViewObject(Uint index, TextureTarget target,
-                                                                 const SharedPtr<ITextureObject>& storageOwner,
-                                                                 Uint minLevel, Uint numLevels, Uint minLayer,
-                                                                 Uint numLayers);
-        const SharedPtr<ITextureObject>& GetTextureObject(Uint index);
         // The context's default texture object (name 0) for `target`. GL 3.3 core 3.8: texture
         // zero names a real, per-target texture object shared by every texture unit; binding 0
         // binds it, and image/parameter calls on it must work like on any texture. It is not a
-        // GenTextures name: it lives outside m_textureObjects (so glIsTexture(0) stays GL_FALSE
-        // and by-name lookups keep failing for 0) and can never be deleted.
+        // GenTextures name: it lives outside the share group's table (so glIsTexture(0) stays
+        // GL_FALSE and by-name lookups keep failing for 0) and can never be deleted.
         const SharedPtr<ITextureObject>& GetDefaultTextureObject(TextureTarget target) const;
         TextureUnit& GetUnitObject(Int unit);
         ImageTextureBinding& GetImageTextureBinding(Int unit);
         const ImageTextureBinding& GetImageTextureBinding(Int unit) const;
         Int GetActiveTextureUnit() const;
         void SetActiveTextureUnit(Int unit);
-        void MarkTextureObjectForDeletion(Uint index, Bool keepUnboundReservation);
-        Bool ValidateName(Uint index) const;
-        Bool ValidateTextureObject(Uint index) const;
+        // Rebinds every unit and image unit that names `textureObject` back to the target's
+        // default texture object; this context's half of a texture delete (GL 4.6 core 8.1).
+        void UnbindTextureFromUnits(const SharedPtr<ITextureObject>& textureObject);
 
         // High-water mark of texture units ever touched by a texture or sampler bind.
         // Units above it have provably-empty binding slots, so per-draw backend scans
@@ -209,8 +208,6 @@ namespace MobileGL::MG_State::GLState {
         Int m_activeTextureUnit = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;
         Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> m_imageTextureBindings;
-        IndexGenerator<Uint> m_indexGenerator;
-        UnorderedMap<GLuint, SharedPtr<ITextureObject>> m_textureObjects;
         // One default texture object (external name 0) per target, created with the context and
         // immortal for its lifetime; the initial binding of every unit/target slot.
         Array<SharedPtr<ITextureObject>, (int)TextureTarget::TextureTargetCount> m_defaultTextureObjects;

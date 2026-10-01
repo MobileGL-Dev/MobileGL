@@ -477,11 +477,173 @@ namespace MobileGL::MG_Pipe {
         static_assert(kCapabilityCount <= 64,
                       "ResidualValueBlock::CapabilityBits is a Uint64; 35 bits fit, 65 would not");
 
+        // ============================================================================
+        // P14 S5: THE APPLIER REGISTRY.
+        // ============================================================================
+        //
         // A REFERENCE TO A NEVER-DESTROYED BLOCK, for MGPipeSlots()' reason
         // (MG_Impl/Pipe/SlotAllocator.cpp): resource_destroy and delete_vertex_elements are
         // raised from ~BufferObject / ~VertexArrayObject, and those objects are released by
         // exit handlers that run after this translation unit's own globals are gone.
-        MGPipeApplierState& g_applier = *new MGPipeApplierState{};
+        //
+        // THE DEFAULT IS THE OLD SINGLETON, unrenamed in what it means: the applier of a thread
+        // that belongs to nobody - the client process, the monolith, the inproc one-process
+        // shape, every unit case. Its object records are the group it owns alone.
+        MGPipeObjectRecords& g_defaultObjects = *new MGPipeObjectRecords{};
+        MGPipeApplierState& g_defaultApplier = *new MGPipeApplierState(g_defaultObjects);
+
+        // Installed once by the session registry (MG_Remote/Server/SessionRuntime.cpp), never
+        // replaced. Null in every process that serves no session, which is what keeps the
+        // monolith's `MGPipeApplier()` a load and a branch.
+        MGPipeApplierKeyResolver g_applierKeyResolver = nullptr;
+
+        // One served session's appliers. Groups own object records; Contexts own working state
+        // and point at their group. Both are held through UniquePtr so a table's ADDRESS is
+        // stable across a rehash - MGPipeApplierState binds its group by reference - and the
+        // maps are std::unordered_map rather than the house UnorderedMap (a flat hash map) for
+        // that same reason at the map level: a reference into it may not be invalidated by an
+        // insert somewhere else in the same call.
+        struct ApplierSession {
+            std::unordered_map<Uint64, UniquePtr<MGPipeObjectRecords>> Groups;
+            std::unordered_map<Uint64, UniquePtr<MGPipeApplierState>> Contexts;
+            std::unordered_map<Uint64, Uint64> ContextGroup;
+            std::unordered_map<Uint64, Uint32> GroupContexts;
+        };
+        std::unordered_map<Uint64, ApplierSession> g_applierSessions;
+        std::mutex g_applierSessionsMutex;
+        // Bumped by EVERY registry mutation. A thread's cached applier pointer is only trusted
+        // while it was bound at this generation, which is what makes "a context was destroyed on
+        // another thread" unable to leave a dangling cache behind.
+        std::atomic<Uint64> g_applierRegistryGeneration{1};
+
+        // A context that started its own share group is keyed by its own token, in a namespace
+        // of its own: the frontend mints share-group tokens and context tokens from separate
+        // counters, so without this a group 7 and a context 7 would be one group.
+        constexpr Uint64 kMGPipeOwnShareGroupBit = Uint64{1} << 63;
+
+        // `shareGroupToken` 0 means "this context started its own group" - the sentinel S1's
+        // ContextRuntime documents and the one a caller that frames a context by hand (a test,
+        // the in-process server helpers) leaves behind.
+        Uint64 ApplierShareGroupKey(Uint64 contextToken, Uint64 shareGroupToken) {
+            return shareGroupToken != 0 ? shareGroupToken : (contextToken | kMGPipeOwnShareGroupBit);
+        }
+
+        // The three tables of the applier this thread's records are being applied through.
+        // `generation` is the registry's, read here so a caller can bind a pointer under one
+        // generation and publish it under the same one.
+        MGPipeApplierState* FindApplierForKey(const MGPipeApplierKey& key) {
+            std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+            ApplierSession& session = g_applierSessions[key.SessionKey];
+            const auto found = session.Contexts.find(key.ContextToken);
+            if (found != session.Contexts.end() && found->second) return found->second.get();
+            // A context the session never registered - a token that predates the first
+            // CreateContext, or the 0 of a session that has not bound one yet. It gets the same
+            // shape as any other: a working state in a group of its own.
+            const Uint64 groupKey = ApplierShareGroupKey(key.ContextToken, 0);
+            auto group = session.Groups.find(groupKey);
+            if (group == session.Groups.end()) {
+                group = session.Groups.emplace(groupKey, MakeUnique<MGPipeObjectRecords>()).first;
+            }
+            auto applier = MakeUnique<MGPipeApplierState>(*group->second);
+            MGPipeApplierState* const raw = applier.get();
+            session.Contexts.emplace(key.ContextToken, std::move(applier));
+            session.ContextGroup.emplace(key.ContextToken, groupKey);
+            ++session.GroupContexts[groupKey];
+            return raw;
+        }
+
+        thread_local MGPipeApplierState* t_applierCached = nullptr;
+        thread_local Uint64 t_applierCachedSession = 0;
+        thread_local Uint64 t_applierCachedContext = 0;
+        thread_local Uint64 t_applierCachedGeneration = 0;
+    } // namespace
+
+    MGPipeApplierState& MGPipeApplier() {
+        const MGPipeApplierKeyResolver resolve = g_applierKeyResolver;
+        if (resolve == nullptr) return g_defaultApplier;
+        MGPipeApplierKey key;
+        if (!resolve(&key)) return g_defaultApplier;
+        // THE FAST PATH, and the reason this is a cache rather than a lookup: this function is
+        // called from the backend per state read. A hit is three TLS loads, one atomic load and
+        // two compares; a miss is the registry, which only moves when a context is created,
+        // destroyed or made current.
+        const Uint64 generation = g_applierRegistryGeneration.load(std::memory_order_acquire);
+        if (t_applierCached != nullptr && t_applierCachedGeneration == generation &&
+            t_applierCachedSession == key.SessionKey && t_applierCachedContext == key.ContextToken) {
+            return *t_applierCached;
+        }
+        MGPipeApplierState* const applier = FindApplierForKey(key);
+        t_applierCached = applier;
+        t_applierCachedSession = key.SessionKey;
+        t_applierCachedContext = key.ContextToken;
+        t_applierCachedGeneration = generation;
+        return *applier;
+    }
+
+    void MGPipeSetApplierKeyResolver(MGPipeApplierKeyResolver resolver) { g_applierKeyResolver = resolver; }
+
+    void MGPipeApplierRegisterContext(Uint64 sessionKey, Uint64 contextToken, Uint64 shareGroupToken) {
+        std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+        ApplierSession& session = g_applierSessions[sessionKey];
+        const Uint64 groupKey = ApplierShareGroupKey(contextToken, shareGroupToken);
+        auto group = session.Groups.find(groupKey);
+        if (group == session.Groups.end()) {
+            group = session.Groups.emplace(groupKey, MakeUnique<MGPipeObjectRecords>()).first;
+        }
+        const auto existing = session.Contexts.find(contextToken);
+        if (existing != session.Contexts.end() && existing->second) {
+            // Idempotent: the same token registered twice keeps the state it already has. The
+            // session refuses a duplicate CreateContext before reaching here, so this arm is a
+            // caller that re-registers deliberately.
+            g_applierRegistryGeneration.fetch_add(1, std::memory_order_acq_rel);
+            return;
+        }
+        session.Contexts.emplace(contextToken, MakeUnique<MGPipeApplierState>(*group->second));
+        session.ContextGroup[contextToken] = groupKey;
+        ++session.GroupContexts[groupKey];
+        g_applierRegistryGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void MGPipeApplierUnregisterContext(Uint64 sessionKey, Uint64 contextToken) {
+        std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+        const auto sessionIt = g_applierSessions.find(sessionKey);
+        if (sessionIt == g_applierSessions.end()) return;
+        ApplierSession& session = sessionIt->second;
+        const auto context = session.Contexts.find(contextToken);
+        if (context == session.Contexts.end()) return;
+        const auto groupIt = session.ContextGroup.find(contextToken);
+        const Uint64 groupKey = groupIt != session.ContextGroup.end() ? groupIt->second : 0;
+        // The OBJECT RECORDS GO WITH THE LAST CONTEXT OF THE GROUP, which is the per-group
+        // spelling of MGPipeApplierReleaseObjectRecords' scope. A surviving context of the same
+        // group keeps every record - that is what sharing means.
+        const auto refs = session.GroupContexts.find(groupKey);
+        const Bool lastOfGroup = refs != session.GroupContexts.end() && refs->second <= 1;
+        session.Contexts.erase(context);
+        if (groupIt != session.ContextGroup.end()) session.ContextGroup.erase(groupIt);
+        if (lastOfGroup) {
+            if (refs != session.GroupContexts.end()) session.GroupContexts.erase(refs);
+            const auto group = session.Groups.find(groupKey);
+            if (group != session.Groups.end()) session.Groups.erase(group);
+        } else if (refs != session.GroupContexts.end()) {
+            --refs->second;
+        }
+        if (session.Contexts.empty()) g_applierSessions.erase(sessionIt);
+        g_applierRegistryGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void MGPipeApplierReleaseSession(Uint64 sessionKey) {
+        std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+        if (g_applierSessions.erase(sessionKey) == 0) return;
+        g_applierRegistryGeneration.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    Uint64 MGPipeApplierShareGroupCountForTesting(Uint64 sessionKey) {
+        std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+        const auto sessionIt = g_applierSessions.find(sessionKey);
+        return sessionIt == g_applierSessions.end() ? 0 : static_cast<Uint64>(sessionIt->second.Groups.size());
+    }
+
+    namespace {
 
         // The installed handle-shaped resource table. Null until a backend registers one,
         // which is what makes the client half landable on its own: with nothing here every
@@ -490,8 +652,8 @@ namespace MobileGL::MG_Pipe {
         const MGPipeResourceOps* g_resourceOps = nullptr;
 
         MGPipeRenderStateCsoRecord* FindCso(MGPipeHandle handle) {
-            if (handle.Slot >= g_applier.RenderStateCsos.size()) return nullptr;
-            MGPipeRenderStateCsoRecord& record = g_applier.RenderStateCsos[handle.Slot];
+            if (handle.Slot >= MGPipeApplier().RenderStateCsos.size()) return nullptr;
+            MGPipeRenderStateCsoRecord& record = MGPipeApplier().RenderStateCsos[handle.Slot];
             if (!record.Live || record.Gen != handle.Gen) return nullptr;
             return &record;
         }
@@ -527,15 +689,15 @@ namespace MobileGL::MG_Pipe {
         // that is not live, or a handle whose generation has moved on because the slot was
         // recycled under it. FindCso above is the same three questions for the CSO store.
         MGPipeResourceRecord* FindResource(MGPipeHandle res) {
-            if (res.Slot >= g_applier.Resources.size()) return nullptr;
-            MGPipeResourceRecord& record = g_applier.Resources[res.Slot];
+            if (res.Slot >= MGPipeApplier().Resources.size()) return nullptr;
+            MGPipeResourceRecord& record = MGPipeApplier().Resources[res.Slot];
             if (!record.Live || record.Gen != res.Gen) return nullptr;
             return &record;
         }
 
         MGPipeVertexElementsRecord* FindVertexElements(MGPipeHandle cso) {
-            if (cso.Slot >= g_applier.VertexElementsCsos.size()) return nullptr;
-            MGPipeVertexElementsRecord& record = g_applier.VertexElementsCsos[cso.Slot];
+            if (cso.Slot >= MGPipeApplier().VertexElementsCsos.size()) return nullptr;
+            MGPipeVertexElementsRecord& record = MGPipeApplier().VertexElementsCsos[cso.Slot];
             if (!record.Live || record.Gen != cso.Gen) return nullptr;
             return &record;
         }
@@ -562,15 +724,15 @@ namespace MobileGL::MG_Pipe {
         // respecify or destroy an unrelated LIVE object that happens to hold the same slot in
         // another kind's space, and that is the "act outside its own storage" class.
         Vector<MGPipeResourceRecord>* ResourceTableForTarget(Uint8 target) {
-            if (target == kMGPipeResourceTargetBuffer) return &g_applier.Resources;
+            if (target == kMGPipeResourceTargetBuffer) return &MGPipeApplier().Resources;
             if (target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer)) {
-                return &g_applier.RenderbufferResources;
+                return &MGPipeApplier().RenderbufferResources;
             }
             if (target < static_cast<Uint8>(MGPipeResourceTarget::Count)) {
                 // Every remaining enumerator is a texture target, and they share one table
                 // because they share one kind: MGPipeKind::Texture. Tex1D..TexCubeArray,
                 // Tex2DMS/MSArray, TexBuffer and TexRect are all one slot space.
-                return &g_applier.TextureResources;
+                return &MGPipeApplier().TextureResources;
             }
             return nullptr;
         }
@@ -579,11 +741,11 @@ namespace MobileGL::MG_Pipe {
         Vector<MGPipeResourceRecord>* ResourceTableForKind(Uint32 kind) {
             switch (static_cast<MGPipeKind>(kind)) {
             case MGPipeKind::Buffer:
-                return &g_applier.Resources;
+                return &MGPipeApplier().Resources;
             case MGPipeKind::Texture:
-                return &g_applier.TextureResources;
+                return &MGPipeApplier().TextureResources;
             case MGPipeKind::Renderbuffer:
-                return &g_applier.RenderbufferResources;
+                return &MGPipeApplier().RenderbufferResources;
             default:
                 return nullptr;
             }
@@ -710,7 +872,7 @@ namespace MobileGL::MG_Pipe {
             MGPipeResourceRecord* record = FindResource(res);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, res.Slot, res.Gen,
                             kResourceRefusalNote);
-            if (record == nullptr) ++g_applier.RefusedResourceCalls;
+            if (record == nullptr) ++MGPipeApplier().RefusedResourceCalls;
             return record;
         }
 
@@ -723,7 +885,7 @@ namespace MobileGL::MG_Pipe {
             MGPipeResourceRecord* record = FindIn(table, res);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, res.Slot, res.Gen,
                             kResourceRefusalNote);
-            if (record == nullptr) ++g_applier.RefusedResourceCalls;
+            if (record == nullptr) ++MGPipeApplier().RefusedResourceCalls;
             return record;
         }
 
@@ -736,7 +898,7 @@ namespace MobileGL::MG_Pipe {
             Record* record = FindIn(table, handle);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, handle.Slot,
                             handle.Gen, kResourceRefusalNote);
-            if (record == nullptr) ++g_applier.RefusedObjectCalls;
+            if (record == nullptr) ++MGPipeApplier().RefusedObjectCalls;
             return record;
         }
 
@@ -744,7 +906,7 @@ namespace MobileGL::MG_Pipe {
             MGPipeVertexElementsRecord* record = FindVertexElements(cso);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, cso.Slot, cso.Gen,
                             kResourceRefusalNote);
-            if (record == nullptr) ++g_applier.RefusedVertexInputCalls;
+            if (record == nullptr) ++MGPipeApplier().RefusedVertexInputCalls;
             return record;
         }
 
@@ -1198,7 +1360,7 @@ namespace MobileGL::MG_Pipe {
         // hook; the monolith shape of everything above them is unchanged.
         Bool ApplyTextureUpload(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
             MGPipeResourceRecord* stored =
-                ResolveResourceIn(g_applier.TextureResources, "resource_subdata", record.Res);
+                ResolveResourceIn(MGPipeApplier().TextureResources, "resource_subdata", record.Res);
             if (stored == nullptr) return false;
 
             const char* fault = SubDataTextureFault(record, regions);
@@ -1319,28 +1481,28 @@ namespace MobileGL::MG_Pipe {
         // ----------------------------------------------------------------------------
         MGPipeShaderCsoRecord* ShaderCsoRecordAt(Uint32 slot) {
             if (MGPipeIsCompositeShaderSlot(slot)) {
-                return RecordAt(g_applier.CompositeShaderCsos, slot - kMGPipeShaderCsoCompositeSlotBase,
+                return RecordAt(MGPipeApplier().CompositeShaderCsos, slot - kMGPipeShaderCsoCompositeSlotBase,
                                 kMGPipeShaderCsoSlotLimit - kMGPipeShaderCsoCompositeSlotBase);
             }
             // The ordinary table is bounded by the BAND'S BASE and not by the slot limit: an
             // ordinary program can never be handed a band slot (the allocator refuses it), so a
             // slot at or above the base that is not a composite is out of range by definition.
-            return RecordAt(g_applier.ShaderCsos, slot, kMGPipeShaderCsoCompositeSlotBase);
+            return RecordAt(MGPipeApplier().ShaderCsos, slot, kMGPipeShaderCsoCompositeSlotBase);
         }
 
         MGPipeShaderCsoRecord* FindShaderCso(MGPipeHandle cso) {
             if (MGPipeIsCompositeShaderSlot(cso.Slot)) {
-                return FindIn(g_applier.CompositeShaderCsos,
+                return FindIn(MGPipeApplier().CompositeShaderCsos,
                               MGPipeHandle{cso.Slot - kMGPipeShaderCsoCompositeSlotBase, cso.Gen});
             }
-            return FindIn(g_applier.ShaderCsos, cso);
+            return FindIn(MGPipeApplier().ShaderCsos, cso);
         }
 
         MGPipeShaderCsoRecord* ResolveShaderCso(const char* call, MGPipeHandle cso) {
             MGPipeShaderCsoRecord* record = FindShaderCso(cso);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, cso.Slot, cso.Gen,
                             kResourceRefusalNote);
-            if (record == nullptr) ++g_applier.RefusedObjectCalls;
+            if (record == nullptr) ++MGPipeApplier().RefusedObjectCalls;
             return record;
         }
 
@@ -1388,13 +1550,14 @@ namespace MobileGL::MG_Pipe {
 #endif
     } // namespace
 
-    MGPipeApplierState& MGPipeApplier() { return g_applier; }
+    // MGPipeApplier() is defined with the registry at the top of this file: it is the one
+    // function that has to know whose applier the calling thread is in.
 
     // P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answers. See
     // MGPipeApplierState::TextureShutterSerial / ContextSerial for the bump rule.
-    Uint64 MGPipeApplierTextureShutterSerial() { return g_applier.TextureShutterSerial; }
-    Uint64 MGPipeApplierContextSerial() { return g_applier.ContextSerial; }
-    void MGPipeApplierNoteTextureStateMoved() { ++g_applier.TextureShutterSerial; }
+    Uint64 MGPipeApplierTextureShutterSerial() { return MGPipeApplier().TextureShutterSerial; }
+    Uint64 MGPipeApplierContextSerial() { return MGPipeApplier().ContextSerial; }
+    void MGPipeApplierNoteTextureStateMoved() { ++MGPipeApplier().TextureShutterSerial; }
 
     void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
     const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
@@ -1427,7 +1590,7 @@ namespace MobileGL::MG_Pipe {
             }
 #endif
             if (g_resourceOps != nullptr) return false;
-            ++g_applier.RefusedNoConsumer;
+            ++MGPipeApplier().RefusedNoConsumer;
             return true;
         }
 
@@ -1438,11 +1601,11 @@ namespace MobileGL::MG_Pipe {
         // zero" rule is written out.
         void ClearShaderBufferWindows() {
             for (Uint32 cls = 0; cls < kMGPipeShaderBufferClassCount; ++cls) {
-                g_applier.BoundShaderBuffers[cls] = {};
-                g_applier.ShaderBufferStart[cls] = 0;
-                g_applier.ShaderBufferCount[cls] = 0;
+                MGPipeApplier().BoundShaderBuffers[cls] = {};
+                MGPipeApplier().ShaderBufferStart[cls] = 0;
+                MGPipeApplier().ShaderBufferCount[cls] = 0;
                 for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
-                    g_applier.ShaderBufferWritableMask[cls][w] = 0;
+                    MGPipeApplier().ShaderBufferWritableMask[cls][w] = 0;
                 }
             }
         }
@@ -1480,15 +1643,15 @@ namespace MobileGL::MG_Pipe {
             std::abort();
         }
 #endif
-        g_applier.RenderStateCsos.clear();
-        g_applier.BoundRenderStateCso = kMGPipeNullHandle;
-        g_applier.Residual = ResidualValueBlock{};
-        g_applier.HasResidual = false;
-        g_applier.ScatteredChunkBits = 0;
-        g_applier.ResidualCapabilitiesCompared = 0;
-        g_applier.ResidualDivergences = 0;
-        g_applier.PatchCarrierComparisons = 0;
-        g_applier.PatchCarrierDivergences = 0;
+        MGPipeApplier().RenderStateCsos.clear();
+        MGPipeApplier().BoundRenderStateCso = kMGPipeNullHandle;
+        MGPipeApplier().Residual = ResidualValueBlock{};
+        MGPipeApplier().HasResidual = false;
+        MGPipeApplier().ScatteredChunkBits = 0;
+        MGPipeApplier().ResidualCapabilitiesCompared = 0;
+        MGPipeApplier().ResidualDivergences = 0;
+        MGPipeApplier().PatchCarrierComparisons = 0;
+        MGPipeApplier().PatchCarrierDivergences = 0;
         // P3a. THIS RUNS AT EVERY CHANGE OF THE CURRENT CONTEXT, not once per fresh one:
         // MGPipeTracker::Update resets itself whenever the context pointer moves and the
         // emitter calls this from the walk that follows, so a make-current BACK to a context
@@ -1505,16 +1668,16 @@ namespace MobileGL::MG_Pipe {
         //
         // The OP TABLE is deliberately not cleared either - it is installed and uninstalled by
         // the backend's own bring-up and teardown, not by a state reset.
-        g_applier.RefusedResourceCalls = 0;
-        g_applier.RefusedVertexInputCalls = 0;
-        g_applier.RefusedObjectCalls = 0;
-        g_applier.RefusedNoConsumer = 0;
-        g_applier.BoundVertexElements = kMGPipeNullHandle;
-        g_applier.VertexBuffers = {};
-        g_applier.VertexBufferStart = 0;
-        g_applier.VertexBufferCount = 0;
-        g_applier.VertexFetchBaseInstance = 0;
-        g_applier.IndexBuffer = MGPIndexBuffer{};
+        MGPipeApplier().RefusedResourceCalls = 0;
+        MGPipeApplier().RefusedVertexInputCalls = 0;
+        MGPipeApplier().RefusedObjectCalls = 0;
+        MGPipeApplier().RefusedNoConsumer = 0;
+        MGPipeApplier().BoundVertexElements = kMGPipeNullHandle;
+        MGPipeApplier().VertexBuffers = {};
+        MGPipeApplier().VertexBufferStart = 0;
+        MGPipeApplier().VertexBufferCount = 0;
+        MGPipeApplier().VertexFetchBaseInstance = 0;
+        MGPipeApplier().IndexBuffer = MGPIndexBuffer{};
         // m6 / wire n6, written down rather than left to be rediscovered: THIS counter is
         // per-applier and is zeroed at every make-current, while MG_Util::PipeStats' `mpr` -
         // emitted from the CLIENT at MG_Impl/Pipe/PipeFill.cpp's MGPipeEmitMapPersistent - is
@@ -1529,7 +1692,7 @@ namespace MobileGL::MG_Pipe {
         // MG_IntegrationTest/Harness/PipeStatsWindow.h - they cannot link this symbol at all, on
         // Android or anywhere else - so a make-current inside a scenario cannot silently reset
         // what they measure. Nothing outside MG_Test reads the member below.
-        g_applier.MapPersistentRoundtrips = 0;
+        MGPipeApplier().MapPersistentRoundtrips = 0;
         // THE TWO SERIALS ADVANCE; THEY ARE NOT ZEROED. They are MGGens, and an MGGen that
         // walks backwards is not one. There are exactly three things a reset can do to a
         // version whose data it has just cleared:
@@ -1543,15 +1706,15 @@ namespace MobileGL::MG_Pipe {
         //     count is stable lands on a stamped value every time;
         //   - advance: the clearing is itself announced, no stamped value can ever recur, and
         //     the first compare after the switch is a mismatch, which is the safe direction.
-        ++g_applier.VertexBuffersSerial;
-        ++g_applier.IndexBufferSerial;
+        ++MGPipeApplier().VertexBuffersSerial;
+        ++MGPipeApplier().IndexBufferSerial;
         // P5c (rv): a make-current is a fresh server, and the two shutter serials are what the
         // PipeInputs texture-shutter accessors answer with - so both ADVANCE here, for the
         // serials' own reason: a counter that restarts walks back through values already
         // stamped into a memo that outlived the switch. ContextSerial's move is also
         // GetTextureContextId's whole job (the backends key their per-context memos on it).
-        ++g_applier.TextureShutterSerial;
-        ++g_applier.ContextSerial;
+        ++MGPipeApplier().TextureShutterSerial;
+        ++MGPipeApplier().ContextSerial;
 
         // ---- P4a's working state, cleared for the same reason and with the same serial rule
         // (D-J4). The OBJECT records - texture and renderbuffer resources, sampler CSOs,
@@ -1566,21 +1729,21 @@ namespace MobileGL::MG_Pipe {
         // a null Fbo. FramebufferRecords stays because a framebuffer that is only ever addressed
         // BY NAME - the DSA blit and clear entry points - has no re-emission trigger at all, so
         // dropping its record here would lose it for the life of the process.
-        g_applier.BoundFramebuffer = {};
-        g_applier.BoundSamplerViews = {};
-        g_applier.SamplerViewStart = 0;
-        g_applier.SamplerViewCount = 0;
-        g_applier.BoundSamplerStates = {};
-        g_applier.SamplerStateStart = 0;
-        g_applier.SamplerStateCount = 0;
-        g_applier.BoundShaderImages = {};
-        g_applier.ShaderImageStart = 0;
-        g_applier.ShaderImageCount = 0;
-        g_applier.DrawProgram = kMGPipeNullHandle;
-        g_applier.DispatchProgram = kMGPipeNullHandle;
-        g_applier.BoundShaderCso = kMGPipeNullHandle;
+        MGPipeApplier().BoundFramebuffer = {};
+        MGPipeApplier().BoundSamplerViews = {};
+        MGPipeApplier().SamplerViewStart = 0;
+        MGPipeApplier().SamplerViewCount = 0;
+        MGPipeApplier().BoundSamplerStates = {};
+        MGPipeApplier().SamplerStateStart = 0;
+        MGPipeApplier().SamplerStateCount = 0;
+        MGPipeApplier().BoundShaderImages = {};
+        MGPipeApplier().ShaderImageStart = 0;
+        MGPipeApplier().ShaderImageCount = 0;
+        MGPipeApplier().DrawProgram = kMGPipeNullHandle;
+        MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
+        MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        g_applier.BoundStreamOutputLifetimeId = 0;
+        MGPipeApplier().BoundStreamOutputLifetimeId = 0;
         // Begin is emitted once per span, not on make-current. Its immutable object
         // snapshot survives with the resource/program records until End or release;
         // set_context_values restores the returning context's bound lifetime id.
@@ -1595,12 +1758,12 @@ namespace MobileGL::MG_Pipe {
         // invalidates the three suppressor slots), or the first emission after a make-current
         // would be suppressed as unchanged and the server would draw with a cleared window.
         ClearShaderBufferWindows();
-        ++g_applier.FramebufferSerial;
-        ++g_applier.SamplerViewsSerial;
-        ++g_applier.SamplerStatesSerial;
-        ++g_applier.ShaderImagesSerial;
-        ++g_applier.ProgramBindingSerial;
-        ++g_applier.ShaderBuffersSerial;
+        ++MGPipeApplier().FramebufferSerial;
+        ++MGPipeApplier().SamplerViewsSerial;
+        ++MGPipeApplier().SamplerStatesSerial;
+        ++MGPipeApplier().ShaderImagesSerial;
+        ++MGPipeApplier().ProgramBindingSerial;
+        ++MGPipeApplier().ShaderBuffersSerial;
     }
 
     void MGPipeApplierReleaseObjectRecords() {
@@ -1615,37 +1778,37 @@ namespace MobileGL::MG_Pipe {
         // context, so nothing wires this - see PipeApply.h. The two serials advance here for
         // MGPipeApplierReset's reason: state was cleared, and a twin that outlives it must not
         // be able to match a value it has already seen.
-        g_applier.Resources.clear();
-        g_applier.VertexElementsCsos.clear();
-        g_applier.BoundVertexElements = kMGPipeNullHandle;
-        ++g_applier.VertexBuffersSerial;
-        ++g_applier.IndexBufferSerial;
+        MGPipeApplier().Resources.clear();
+        MGPipeApplier().VertexElementsCsos.clear();
+        MGPipeApplier().BoundVertexElements = kMGPipeNullHandle;
+        ++MGPipeApplier().VertexBuffersSerial;
+        ++MGPipeApplier().IndexBufferSerial;
         // P5c (rv): same rule for the shutter serials - the served context is going away, and
         // a memo that outlives it must not match a value these have already answered with.
-        ++g_applier.TextureShutterSerial;
-        ++g_applier.ContextSerial;
+        ++MGPipeApplier().TextureShutterSerial;
+        ++MGPipeApplier().ContextSerial;
         // P4a's five object tables go with them, and the working handles they could name go
         // too - a bound shader CSO whose record has just been dropped must not survive as a
         // handle the next call resolves against.
-        g_applier.TextureResources.clear();
-        g_applier.RenderbufferResources.clear();
-        g_applier.SamplerCsos.clear();
-        g_applier.SamplerViewCsos.clear();
-        g_applier.ShaderCsos.clear();
-        g_applier.CompositeShaderCsos.clear();
+        MGPipeApplier().TextureResources.clear();
+        MGPipeApplier().RenderbufferResources.clear();
+        MGPipeApplier().SamplerCsos.clear();
+        MGPipeApplier().SamplerViewCsos.clear();
+        MGPipeApplier().ShaderCsos.clear();
+        MGPipeApplier().CompositeShaderCsos.clear();
         // AND THE FRAMEBUFFER RECORDS, which MGPipeApplierReset above deliberately keeps. Here
         // there is nothing for them to outlive: the served context is going away and the
         // framebuffers it owned are container objects that go with it. A table left standing
         // would answer a lookup from the NEXT context on a slot the allocator has re-minted -
         // with the same generation, if the next context happens to reach the same one - and
         // that is the aliasing every other table is cleared to prevent.
-        g_applier.FramebufferRecords.clear();
-        g_applier.DrawProgram = kMGPipeNullHandle;
-        g_applier.DispatchProgram = kMGPipeNullHandle;
-        g_applier.BoundShaderCso = kMGPipeNullHandle;
+        MGPipeApplier().FramebufferRecords.clear();
+        MGPipeApplier().DrawProgram = kMGPipeNullHandle;
+        MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
+        MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        g_applier.BoundStreamOutputLifetimeId = 0;
-        g_applier.StreamOutputSpans.clear();
+        MGPipeApplier().BoundStreamOutputLifetimeId = 0;
+        MGPipeApplier().StreamOutputSpans.clear();
 #endif
         // AND "THE WORKING HANDLES THEY COULD NAME" IS ALL OF THEM, NOT JUST THE THREE ABOVE.
         // Every framebuffer record holds eleven MGPSurface::Res naming texture and renderbuffer
@@ -1657,35 +1820,35 @@ namespace MobileGL::MG_Pipe {
         // else's record. So this takes the same working state MGPipeApplierReset does - which is
         // the honest reading of the rule as well: Reset keeps the object records BECAUSE they
         // outlive a make-current, and here they do not outlive anything.
-        g_applier.BoundFramebuffer = {};
-        g_applier.BoundSamplerViews = {};
-        g_applier.SamplerViewStart = 0;
-        g_applier.SamplerViewCount = 0;
-        g_applier.BoundSamplerStates = {};
-        g_applier.SamplerStateStart = 0;
-        g_applier.SamplerStateCount = 0;
-        g_applier.BoundShaderImages = {};
-        g_applier.ShaderImageStart = 0;
-        g_applier.ShaderImageCount = 0;
+        MGPipeApplier().BoundFramebuffer = {};
+        MGPipeApplier().BoundSamplerViews = {};
+        MGPipeApplier().SamplerViewStart = 0;
+        MGPipeApplier().SamplerViewCount = 0;
+        MGPipeApplier().BoundSamplerStates = {};
+        MGPipeApplier().SamplerStateStart = 0;
+        MGPipeApplier().SamplerStateCount = 0;
+        MGPipeApplier().BoundShaderImages = {};
+        MGPipeApplier().ShaderImageStart = 0;
+        MGPipeApplier().ShaderImageCount = 0;
         // P5e (sb): and the three binding-point windows, for the paragraph above's reason in
         // its own words - every MGPBufferRange::Res names a resource record this function has
         // just dropped, so a window left populated here is a set of handles into an empty
         // table, which the next resolve either refuses or answers with somebody else's record
         // on a slot the next context re-mints.
         ClearShaderBufferWindows();
-        ++g_applier.FramebufferSerial;
-        ++g_applier.SamplerViewsSerial;
-        ++g_applier.SamplerStatesSerial;
-        ++g_applier.ShaderImagesSerial;
-        ++g_applier.ProgramBindingSerial;
-        ++g_applier.ShaderBuffersSerial;
+        ++MGPipeApplier().FramebufferSerial;
+        ++MGPipeApplier().SamplerViewsSerial;
+        ++MGPipeApplier().SamplerStatesSerial;
+        ++MGPipeApplier().ShaderImagesSerial;
+        ++MGPipeApplier().ProgramBindingSerial;
+        ++MGPipeApplier().ShaderBuffersSerial;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
         MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
                         "create_render_state named the reserved slot 0");
         MGPipeRenderStateCsoRecord* recordAt =
-            RecordAt(g_applier.RenderStateCsos, desc.Cso.Slot, kMGPipeMaxRenderStateCsoSlots);
+            RecordAt(MGPipeApplier().RenderStateCsos, desc.Cso.Slot, kMGPipeMaxRenderStateCsoSlots);
         if (recordAt == nullptr) {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MGPipeSessionFail(MGPipeFatalFamily::ProtocolCorruption,
@@ -1753,12 +1916,12 @@ namespace MobileGL::MG_Pipe {
         MGPipeScatterPipelineBytes(record->PipelineBytes.data(),
                                    MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateVersions(inputs, bind.Version, bind.PipelineVersion);
-        g_applier.BoundRenderStateCso = bind.Cso;
+        MGPipeApplier().BoundRenderStateCso = bind.Cso;
         // A bind scatters the WHOLE pipeline half - the record is always a complete one,
         // whatever mask minted it - so the pipeline chunks are all "moved" here, and all
         // enter the applier's ledger of the bytes it owns.
         const Uint32 moved = MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineChunks);
-        g_applier.ScatteredChunkBits |= moved;
+        MGPipeApplier().ScatteredChunkBits |= moved;
         MGPipeDeriveRenderStateFieldsForChunks(inputs, moved);
     }
 
@@ -1771,8 +1934,8 @@ namespace MobileGL::MG_Pipe {
         // The Gen stays: it is the CLIENT allocator that bumps it when the slot is handed
         // out again (MGPipeHandles.h: "Gen increments only when a SLOT IS REUSED"), and a
         // server-side bump here would put the two identities out of step.
-        if (g_applier.BoundRenderStateCso == handle.Handle) {
-            g_applier.BoundRenderStateCso = kMGPipeNullHandle;
+        if (MGPipeApplier().BoundRenderStateCso == handle.Handle) {
+            MGPipeApplier().BoundRenderStateCso = kMGPipeNullHandle;
         }
     }
 
@@ -1781,7 +1944,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeScatterDynamicChunks(chunkBytes, dyn.ChunkMask, MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateParametersVersion(inputs, dyn.Version);
         const Uint32 moved = MGPipeGlobalChunkBitsOfDynamicMask(dyn.ChunkMask);
-        g_applier.ScatteredChunkBits |= moved;
+        MGPipeApplier().ScatteredChunkBits |= moved;
         MGPipeDeriveRenderStateFieldsForChunks(inputs, moved);
     }
 
@@ -1805,9 +1968,9 @@ namespace MobileGL::MG_Pipe {
         // filling, so a predicate that read the answer out of THERE would be reading the very
         // memory the rule exists to stop it reading. One store, inert until the caps bit is
         // published, and it is what makes the two roles' third clause the same clause.
-        g_applier.IsTransformFeedbackActive = values.IsTransformFeedbackActive != 0;
+        MGPipeApplier().IsTransformFeedbackActive = values.IsTransformFeedbackActive != 0;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        g_applier.BoundStreamOutputLifetimeId = values.BoundTransformFeedbackLifetimeId;
+        MGPipeApplier().BoundStreamOutputLifetimeId = values.BoundTransformFeedbackLifetimeId;
 #endif
     }
 
@@ -1839,13 +2002,13 @@ namespace MobileGL::MG_Pipe {
         // It runs in the shipped push build too, because a wire that is compiled out of
         // every build a device runs is not a wire. The cost is a 24-byte memcmp on a call
         // that is emitted when the tessellation state CHANGES, i.e. about once per program.
-        if ((g_applier.ScatteredChunkBits & kChunksPatchTrio) == kChunksPatchTrio) {
-            ++g_applier.PatchCarrierComparisons;
+        if ((MGPipeApplier().ScatteredChunkBits & kChunksPatchTrio) == kChunksPatchTrio) {
+            ++MGPipeApplier().PatchCarrierComparisons;
             const Bool agrees = working.PatchVertices == patch.Vertices &&
                                 std::memcmp(&working.PatchDefaultOuterLevel, &outer, sizeof(outer)) == 0 &&
                                 std::memcmp(&working.PatchDefaultInnerLevel, &inner, sizeof(inner)) == 0;
             if (!agrees) {
-                ++g_applier.PatchCarrierDivergences;
+                ++MGPipeApplier().PatchCarrierDivergences;
                 MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipePatchCarriersDiffer")
                                      " set_patch_state says vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g); "
                                      "chunk P0 delivered vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g)",
@@ -1921,9 +2084,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplySetResidualValueState(const ResidualValueBlock& block) {
-        g_applier.Residual = block;
-        g_applier.HasResidual = true;
-        g_applier.ResidualCapabilitiesCompared = 0;
+        MGPipeApplier().Residual = block;
+        MGPipeApplier().HasResidual = true;
+        MGPipeApplier().ResidualCapabilitiesCompared = 0;
 
         // THE TRIP WIRE (ARCHITECTURE.md 9.4, P2 brief D9). CapabilityBits is redundant with
         // the assembled working block by design: every one of the 35 capabilities is
@@ -1953,16 +2116,16 @@ namespace MobileGL::MG_Pipe {
         // tautology. The redundancy this wire exists to check is between the CARRIED bits and
         // the ASSEMBLED block.
         const RenderStateParameters& working = MGPipeApplyAccess::RenderState(gPipeInputs);
-        const Uint32 owned = g_applier.ScatteredChunkBits;
+        const Uint32 owned = MGPipeApplier().ScatteredChunkBits;
         for (SizeT i = 0; i < kCapabilityCount; ++i) {
             const CapabilityInput cap = static_cast<CapabilityInput>(i);
             const Uint32 sources = CapabilitySourceChunks(cap);
             if ((owned & sources) != sources) continue;
-            ++g_applier.ResidualCapabilitiesCompared;
+            ++MGPipeApplier().ResidualCapabilitiesCompared;
             const Bool carried = ((block.CapabilityBits >> i) & 1ull) != 0;
             const Bool assembledBit = MGPipeApplyAccess::DeriveCapability(working, cap);
             if (carried == assembledBit) continue;
-            ++g_applier.ResidualDivergences;
+            ++MGPipeApplier().ResidualDivergences;
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeResidualDiverged, \"%s\"")
                                  " carried=%d assembled=%d",
                                  kCapabilityNames[i], static_cast<int>(carried),
@@ -2279,7 +2442,7 @@ namespace MobileGL::MG_Pipe {
 
     // THE FOUR BUFFER-ONLY CALLS, AND WHAT POLICES THAT. resource_flush_range,
     // resource_readback and map_persistent resolve through ResolveResource - i.e. against
-    // g_applier.Resources and never the texture or renderbuffer table - which is right, because
+    // MGPipeApplier().Resources and never the texture or renderbuffer table - which is right, because
     // a mapped range, a readback and a persistent donation exist for buffers only. They are
     // buffer-only BY CATALOGUE and not by check: MGPFlushRange and MGPReadback carry no kind
     // at all, and map_persistent's MGPHandleOnly is not asked for one, so there is nothing here
@@ -2428,7 +2591,7 @@ namespace MobileGL::MG_Pipe {
         // Defined that way the number is identical in both modes, equals "one per storage
         // definition", and is non-zero and assertable today; defined as "round trips actually
         // taken" it would be 0 by construction in monolith and could never go red.
-        ++g_applier.MapPersistentRoundtrips;
+        ++MGPipeApplier().MapPersistentRoundtrips;
 
         MGPipeResourceRecord* record = ResolveResource("map_persistent", handle.Handle);
         if (record == nullptr) return nullptr;
@@ -2586,7 +2749,7 @@ namespace MobileGL::MG_Pipe {
         }
 
         MGPipeVertexElementsRecord* recordAt =
-            RecordAt(g_applier.VertexElementsCsos, desc.Cso.Slot, kMGPipeMaxVertexElementsSlots);
+            RecordAt(MGPipeApplier().VertexElementsCsos, desc.Cso.Slot, kMGPipeMaxVertexElementsSlots);
         if (recordAt == nullptr) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
                                  " create_vertex_elements {slot=%u, gen=%u}: the slot is outside the record "
@@ -2634,14 +2797,14 @@ namespace MobileGL::MG_Pipe {
         // The null handle is legal and means "no vertex array bound" - GL's unbound state is a
         // state, not an error, and the backend has a branch for it.
         if (MGPipeHandleIsNull(handle.Handle)) {
-            g_applier.BoundVertexElements = kMGPipeNullHandle;
+            MGPipeApplier().BoundVertexElements = kMGPipeNullHandle;
             return;
         }
         // A dead handle leaves the PREVIOUS binding untouched, which is bind_render_state's
         // precedent for the same question, and is counted like every other refusal.
         const MGPipeVertexElementsRecord* record = ResolveVertexElements("bind_vertex_elements", handle.Handle);
         if (record == nullptr) return;
-        g_applier.BoundVertexElements = handle.Handle;
+        MGPipeApplier().BoundVertexElements = handle.Handle;
     }
 
     void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) {
@@ -2663,8 +2826,8 @@ namespace MobileGL::MG_Pipe {
         const Uint32 gen = record->Gen;
         *record = MGPipeVertexElementsRecord{};
         record->Gen = gen;
-        if (g_applier.BoundVertexElements == handle.Handle) {
-            g_applier.BoundVertexElements = kMGPipeNullHandle;
+        if (MGPipeApplier().BoundVertexElements == handle.Handle) {
+            MGPipeApplier().BoundVertexElements = kMGPipeNullHandle;
         }
     }
 
@@ -2692,10 +2855,10 @@ namespace MobileGL::MG_Pipe {
         // are not cleared: this record is "the last set as received", and a set that names
         // four entries has said nothing about the rest.
         for (Uint32 i = 0; i < hdr.Count; ++i) {
-            g_applier.VertexBuffers[hdr.Start + i] = tail[i];
+            MGPipeApplier().VertexBuffers[hdr.Start + i] = tail[i];
         }
-        g_applier.VertexBufferStart = hdr.Start;
-        g_applier.VertexBufferCount = hdr.Count;
+        MGPipeApplier().VertexBufferStart = hdr.Start;
+        MGPipeApplier().VertexBufferCount = hdr.Count;
 
         // THE RAW VALUE IS STORED, NOT A RESOLVED SHIFT, and the resolution is one step
         // further out on purpose. Whether the fetch shift has to be emulated at all is a
@@ -2710,8 +2873,8 @@ namespace MobileGL::MG_Pipe {
         // input: set_vertex_buffers is suppressed on an unchanged hash, so a base instance
         // that moved while the buffer set did not would otherwise never arrive and the server
         // would keep the previous shift.
-        g_applier.VertexFetchBaseInstance = hdr.BaseInstance;
-        ++g_applier.VertexBuffersSerial;
+        MGPipeApplier().VertexFetchBaseInstance = hdr.BaseInstance;
+        ++MGPipeApplier().VertexBuffersSerial;
     }
 
     void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record) {
@@ -2725,8 +2888,8 @@ namespace MobileGL::MG_Pipe {
         //   - it is an INDEPENDENT call and NOT a subset of the vertex-elements configuration
         //     (D5): a rebind of the index slot must move this serial without touching the
         //     configuration's, which is exactly what the backend's two separate compares need.
-        g_applier.IndexBuffer = record;
-        ++g_applier.IndexBufferSerial;
+        MGPipeApplier().IndexBuffer = record;
+        ++MGPipeApplier().IndexBufferSerial;
     }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
@@ -2839,7 +3002,7 @@ namespace MobileGL::MG_Pipe {
         if (NoP4aConsumer()) return;
 
         MGPipeFramebufferRecord* record =
-            RecordAt(g_applier.FramebufferRecords, state.Fbo.Slot, kMGPipeMaxFramebufferSlots);
+            RecordAt(MGPipeApplier().FramebufferRecords, state.Fbo.Slot, kMGPipeMaxFramebufferSlots);
         // Unreachable: the bound was checked above, before anything moved. The null check is
         // what makes that an argument rather than an assumption.
         if (record == nullptr) return;
@@ -2851,11 +3014,11 @@ namespace MobileGL::MG_Pipe {
         // target: "this record describes the framebuffer it names; no binding changes".
         if (state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Draw) ||
             state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Both)) {
-            g_applier.BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)] = state.Fbo;
+            MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)] = state.Fbo;
         }
         if (state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Read) ||
             state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Both)) {
-            g_applier.BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Read)] = state.Fbo;
+            MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Read)] = state.Fbo;
         }
         // ONE SERIAL FOR THE FAMILY, and it moves once per applied record - a Both record is one
         // record and a Named record is one record. It is what retires the four g_fboSynced*
@@ -2864,7 +3027,7 @@ namespace MobileGL::MG_Pipe {
         // serial still the server's". A Named record moves it for the same reason a bound one
         // does - a twin that memoised a framebuffer's attachments has to hear that they moved,
         // and whether the framebuffer happens to be bound is not that question.
-        ++g_applier.FramebufferSerial;
+        ++MGPipeApplier().FramebufferSerial;
     }
 
     // THE READ SIDE OF THE TABLE (ID-19(b)/(d)). Package D asks it by handle at every DSA entry
@@ -2941,7 +3104,7 @@ namespace MobileGL::MG_Pipe {
         }
 
         MGPipeSamplerCsoRecord* recordAt =
-            RecordAt(g_applier.SamplerCsos, desc.Cso.Slot, kMGPipeMaxSamplerCsoSlots);
+            RecordAt(MGPipeApplier().SamplerCsos, desc.Cso.Slot, kMGPipeMaxSamplerCsoSlots);
         if (recordAt == nullptr) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
                                  " create_sampler_state {slot=%u, gen=%u}: the slot is outside the record "
@@ -2978,7 +3141,7 @@ namespace MobileGL::MG_Pipe {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerCso),
                         "delete_sampler_state on kind %u", handle.Kind);
         MGPipeSamplerCsoRecord* record =
-            ResolveObject(g_applier.SamplerCsos, "delete_sampler_state", handle.Handle);
+            ResolveObject(MGPipeApplier().SamplerCsos, "delete_sampler_state", handle.Handle);
         if (record == nullptr) return;
 
         // Dropped whole, generation kept, for resource_destroy's reason: the client allocator
@@ -3000,7 +3163,7 @@ namespace MobileGL::MG_Pipe {
         if (view.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
         MGPipeSamplerViewRecord* recordAt =
-            RecordAt(g_applier.SamplerViewCsos, view.Cso.Slot, kMGPipeMaxSamplerViewSlots);
+            RecordAt(MGPipeApplier().SamplerViewCsos, view.Cso.Slot, kMGPipeMaxSamplerViewSlots);
         if (recordAt == nullptr) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
                                  " create_sampler_view {slot=%u, gen=%u}: the slot is outside the record "
@@ -3031,7 +3194,7 @@ namespace MobileGL::MG_Pipe {
         // arriving before - or without - the texture record is an ordering fact and not a
         // refusal. When the record is there this is the back-pointer that lets a sync reach a
         // texture's view without walking every view the applier holds.
-        MGPipeResourceRecord* texture = FindIn(g_applier.TextureResources, view.Texture);
+        MGPipeResourceRecord* texture = FindIn(MGPipeApplier().TextureResources, view.Texture);
         if (texture != nullptr) texture->ViewCso = view.Cso;
     }
 
@@ -3039,13 +3202,13 @@ namespace MobileGL::MG_Pipe {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerViewCso),
                         "delete_sampler_view on kind %u", handle.Kind);
         MGPipeSamplerViewRecord* record =
-            ResolveObject(g_applier.SamplerViewCsos, "delete_sampler_view", handle.Handle);
+            ResolveObject(MGPipeApplier().SamplerViewCsos, "delete_sampler_view", handle.Handle);
         if (record == nullptr) return;
 
         // The back-pointer goes first, while the record that names the texture still exists,
         // and only if that texture still names THIS view - a texture whose view has already
         // been re-minted must not have the new handle cleared out from under it.
-        MGPipeResourceRecord* texture = FindIn(g_applier.TextureResources, record->View.Texture);
+        MGPipeResourceRecord* texture = FindIn(MGPipeApplier().TextureResources, record->View.Texture);
         if (texture != nullptr && texture->ViewCso == handle.Handle) {
             texture->ViewCso = kMGPipeNullHandle;
         }
@@ -3066,7 +3229,7 @@ namespace MobileGL::MG_Pipe {
         // READ-attachment case reaches no parameter push at all today. The record exists the
         // moment the parameters move, whether or not anything is bound.
         MGPipeResourceRecord* record =
-            ResolveObject(g_applier.TextureResources, "set_texture_params", params.Res);
+            ResolveObject(MGPipeApplier().TextureResources, "set_texture_params", params.Res);
         if (record == nullptr) return false;
 
         // EVERY ITextureObject OWNS A SamplerObject, so the built-in sampler CSO is not
@@ -3121,11 +3284,11 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
         if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("set_sampler_views", hdr.Start, hdr.Count, hdr.ContentHash, tail,
-                             g_applier.BoundSamplerViews, g_applier.SamplerViewStart,
-                             g_applier.SamplerViewCount)) {
+                             MGPipeApplier().BoundSamplerViews, MGPipeApplier().SamplerViewStart,
+                             MGPipeApplier().SamplerViewCount)) {
             return;
         }
-        ++g_applier.SamplerViewsSerial;
+        ++MGPipeApplier().SamplerViewsSerial;
         // P5c (rv): a texture bind is what the bind-generation shutter guarded.
         MGPipeApplierNoteTextureStateMoved();
     }
@@ -3133,11 +3296,11 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail) {
         if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("bind_sampler_states", hdr.Start, hdr.Count, hdr.ContentHash, tail,
-                             g_applier.BoundSamplerStates, g_applier.SamplerStateStart,
-                             g_applier.SamplerStateCount)) {
+                             MGPipeApplier().BoundSamplerStates, MGPipeApplier().SamplerStateStart,
+                             MGPipeApplier().SamplerStateCount)) {
             return;
         }
-        ++g_applier.SamplerStatesSerial;
+        ++MGPipeApplier().SamplerStatesSerial;
         // P5c (rv): a sampler bind or parameter change is what the shutters guarded.
         MGPipeApplierNoteTextureStateMoved();
     }
@@ -3150,11 +3313,11 @@ namespace MobileGL::MG_Pipe {
         // formats on Adreno will accept is the backend's, not this applier's.
         if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("set_shader_images", hdr.Start, hdr.Count, hdr.ContentHash, tail,
-                             g_applier.BoundShaderImages, g_applier.ShaderImageStart,
-                             g_applier.ShaderImageCount)) {
+                             MGPipeApplier().BoundShaderImages, MGPipeApplier().ShaderImageStart,
+                             MGPipeApplier().ShaderImageCount)) {
             return;
         }
-        ++g_applier.ShaderImagesSerial;
+        ++MGPipeApplier().ShaderImagesSerial;
         // P5c (rv): an image bind moves the texture bind generation's guarded set too.
         MGPipeApplierNoteTextureStateMoved();
     }
@@ -3211,18 +3374,18 @@ namespace MobileGL::MG_Pipe {
         // unit sets and set_vertex_buffers work: the record is "the last set as received", and
         // a binding at or above Count means "nothing bound" to every reader (the frontend
         // array's default says the same thing, which is what makes the two pictures agree).
-        auto& destination = g_applier.BoundShaderBuffers[hdr.Class];
+        auto& destination = MGPipeApplier().BoundShaderBuffers[hdr.Class];
         for (Uint32 i = 0; i < hdr.Count; ++i) destination[hdr.Start + i] = tail[i];
-        g_applier.ShaderBufferStart[hdr.Class] = hdr.Start;
-        g_applier.ShaderBufferCount[hdr.Class] = hdr.Count;
+        MGPipeApplier().ShaderBufferStart[hdr.Class] = hdr.Start;
+        MGPipeApplier().ShaderBufferCount[hdr.Class] = hdr.Count;
         for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
-            g_applier.ShaderBufferWritableMask[hdr.Class][w] = hdr.WritableMask[w];
+            MGPipeApplier().ShaderBufferWritableMask[hdr.Class][w] = hdr.WritableMask[w];
         }
         // ONE SERIAL FOR ALL THREE CLASSES, and it moves on EVERY applied record - a backend
         // memo that asks "have the binding points moved since I last bound them" must hear
         // about a uniform set exactly as it hears about a storage set, and splitting the serial
         // per class would make each of the four consumers pick which one to read.
-        ++g_applier.ShaderBuffersSerial;
+        ++MGPipeApplier().ShaderBuffersSerial;
     }
 
     // P5e (pg) WRITES THE SECOND BODY. The three post-link mutable reflection fields -
@@ -3501,14 +3664,14 @@ namespace MobileGL::MG_Pipe {
         // error; a DEAD handle leaves the previous binding untouched and is counted, which is
         // bind_render_state's precedent for the same question.
         if (MGPipeHandleIsNull(handle.Handle)) {
-            g_applier.BoundShaderCso = kMGPipeNullHandle;
-            ++g_applier.ProgramBindingSerial;
+            MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
+            ++MGPipeApplier().ProgramBindingSerial;
             return;
         }
         const MGPipeShaderCsoRecord* record = ResolveShaderCso("bind_shader_state", handle.Handle);
         if (record == nullptr) return;
-        g_applier.BoundShaderCso = handle.Handle;
-        ++g_applier.ProgramBindingSerial;
+        MGPipeApplier().BoundShaderCso = handle.Handle;
+        ++MGPipeApplier().ProgramBindingSerial;
     }
 
     void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle) {
@@ -3532,19 +3695,19 @@ namespace MobileGL::MG_Pipe {
         // next verb resolving a binding to a record this applier no longer has, which is the
         // refusal counter firing for a state the applier itself created.
         Bool cleared = false;
-        if (g_applier.BoundShaderCso == handle.Handle) {
-            g_applier.BoundShaderCso = kMGPipeNullHandle;
+        if (MGPipeApplier().BoundShaderCso == handle.Handle) {
+            MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
             cleared = true;
         }
-        if (g_applier.DrawProgram == handle.Handle) {
-            g_applier.DrawProgram = kMGPipeNullHandle;
+        if (MGPipeApplier().DrawProgram == handle.Handle) {
+            MGPipeApplier().DrawProgram = kMGPipeNullHandle;
             cleared = true;
         }
-        if (g_applier.DispatchProgram == handle.Handle) {
-            g_applier.DispatchProgram = kMGPipeNullHandle;
+        if (MGPipeApplier().DispatchProgram == handle.Handle) {
+            MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
             cleared = true;
         }
-        if (cleared) ++g_applier.ProgramBindingSerial;
+        if (cleared) ++MGPipeApplier().ProgramBindingSerial;
     }
 
     // TWO CALLS AND NOT ONE, because the frontend has two joins and two PipeInputs slots: a
@@ -3555,14 +3718,14 @@ namespace MobileGL::MG_Pipe {
                         "set_draw_program on kind %u", handle.Kind);
         if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
-            g_applier.DrawProgram = kMGPipeNullHandle;
-            ++g_applier.ProgramBindingSerial;
+            MGPipeApplier().DrawProgram = kMGPipeNullHandle;
+            ++MGPipeApplier().ProgramBindingSerial;
             return;
         }
         const MGPipeShaderCsoRecord* record = ResolveShaderCso("set_draw_program", handle.Handle);
         if (record == nullptr) return;
-        g_applier.DrawProgram = handle.Handle;
-        ++g_applier.ProgramBindingSerial;
+        MGPipeApplier().DrawProgram = handle.Handle;
+        ++MGPipeApplier().ProgramBindingSerial;
     }
 
     void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) {
@@ -3570,14 +3733,14 @@ namespace MobileGL::MG_Pipe {
                         "set_dispatch_program on kind %u", handle.Kind);
         if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
-            g_applier.DispatchProgram = kMGPipeNullHandle;
-            ++g_applier.ProgramBindingSerial;
+            MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
+            ++MGPipeApplier().ProgramBindingSerial;
             return;
         }
         const MGPipeShaderCsoRecord* record = ResolveShaderCso("set_dispatch_program", handle.Handle);
         if (record == nullptr) return;
-        g_applier.DispatchProgram = handle.Handle;
-        ++g_applier.ProgramBindingSerial;
+        MGPipeApplier().DispatchProgram = handle.Handle;
+        ++MGPipeApplier().ProgramBindingSerial;
     }
 
     void MGPipeApplySetGlobalConstants(const MGPGlobalConstants& record, const void* bytes) {

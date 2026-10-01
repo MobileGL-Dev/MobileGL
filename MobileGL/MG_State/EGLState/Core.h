@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <type_traits>
+#include <MG_State/GLState/Core.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -68,6 +69,20 @@ namespace MobileGL {
                 Bool IsCurrentContextOpenGLCoreProfile() const;
                 Bool IsCurrentContextOpenGLCompatibilityProfile() const;
                 EGLint GetCurrentContextFlags() const;
+
+                // P14 S1. The wire identity of a context, and of the context the CALLING THREAD
+                // has current (0 when it has none - the release edge's value, and the value a
+                // session that never crossed a bind_context answers with). Read by MG_Impl's two
+                // producers: EGLImpl's CreateContext/DestroyContext control frames and PipeFill's
+                // bind_context emission at the make-current edge.
+                Uint64 GetContextClientToken(EGLContextHandle context) const;
+                Uint64 GetContextShareGroupToken(EGLContextHandle context) const;
+                Uint64 CurrentContextClientToken() const;
+
+                // P14 S3. The frontend GL state this context owns, so a caller outside MG_State
+                // can reach the other half of a context it just made current. Null for an
+                // unknown handle.
+                SharedPtr<GLState::GLContext> GetContextGLState(EGLContextHandle context) const;
 
                 // Surface
                 EGLSurfaceHandle CreateWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
@@ -180,6 +195,17 @@ namespace MobileGL {
                     EGLDisplayHandle Display = EGL_NO_DISPLAY;
                     EGLConfigHandle Config = nullptr;
                     EGLContextHandle SharedContext = nullptr;
+                    // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The wire identity of
+                    // this context: `ClientContextToken` is what bind_context carries and what the
+                    // server's per-session context table is keyed by, `ShareGroupToken` the group
+                    // it was derived into (ShareContext's group, or one of its own). Minted here,
+                    // in the one place a context is born, so no caller can invent a second one.
+                    Uint64 ClientContextToken = 0;
+                    Uint64 ShareGroupToken = 0;
+                    // P14 S3. The GL state of THIS EGL context. Its object registries live in the
+                    // share group's ShareGroupState (shared with every context that shares with
+                    // this one); its bindings, errors and current program are its own.
+                    SharedPtr<GLState::GLContext> GLStateObject;
                     EGLenum ClientAPI = EGL_OPENGL_API;
                     EGLint ClientVersion = 1;
                     EGLint MajorVersion = 1;
@@ -226,6 +252,10 @@ namespace MobileGL {
                     EGLSurfaceHandle DrawSurface = EGL_NO_SURFACE;
                     EGLSurfaceHandle ReadSurface = EGL_NO_SURFACE;
                     EGLContextHandle Context = nullptr;
+                    // P14 S3. What pGLContext held on this thread BEFORE the first eglMakeCurrent
+                    // bound an EGL context to it, so releasing restores exactly the binding the
+                    // thread had rather than a guessed default.
+                    SharedPtr<GLState::GLContext> RestoreThreadGLState;
                 };
 
                 template <typename HandleType>
@@ -269,6 +299,9 @@ namespace MobileGL {
                 Uint64 m_nextContextHandle = 1;
                 Uint64 m_nextSyncHandle = 1;
                 Uint64 m_nextImageHandle = 1;
+                // P14 S1. Dense from 1, never reused, never 0: 0 is "no context" on both planes.
+                Uint64 m_nextClientContextToken = 1;
+                Uint64 m_nextShareGroupToken = 1;
 
                 UnorderedMap<DisplayLookupKey, EGLDisplayHandle, DisplayLookupHasher> m_displayLookup;
                 UnorderedMap<EGLDisplayHandle, DisplayObject> m_displays;

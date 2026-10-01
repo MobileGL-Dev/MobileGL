@@ -14,28 +14,31 @@
 #include "ShaderPreprocessCache.h"
 
 namespace MobileGL::MG_State::GLState {
+    // The program and shader objects of one share group, and the name space they share. The
+    // program a context has in use is context state and lives on GLContext - the operations
+    // that need it (a delete of the current program, the deferred destroy UseProgram
+    // performs, the orphan test) take it as a parameter.
     class ProgramState {
     public:
         // This function WILL actually create the program object.
         // To retrieve created program object, use GetProgramObject()
         Uint CreateProgram();
         const SharedPtr<ProgramObject>& GetProgramObject(Uint id);
-        void MarkProgramObjectForDeletion(Uint program);
+        void MarkProgramObjectForDeletion(Uint program, const SharedPtr<ProgramObject>& currentProgram);
         Bool ValidateProgramObject(Uint program) const;
-
-        void UseProgram(Uint program);
+        // Whether `program` names a slot in the table at all, i.e. in range - not whether that
+        // slot currently holds an object.
+        Bool HasProgramSlot(Uint program) const;
 
         Uint CreateShader(ShaderStage stage);
         const SharedPtr<ShaderObject>& GetShaderObject(Uint shader);
-        void MarkShaderObjectForDeletion(Uint shader);
+        void MarkShaderObjectForDeletion(Uint shader, const SharedPtr<ProgramObject>& currentProgram);
         // Frees a deletion-flagged shader's name once no program holds a GL-visible
         // attachment to it (the deferred half of glDeleteShader-while-attached).
-        void ReleaseShaderNameIfOrphaned(Uint shader);
+        void ReleaseShaderNameIfOrphaned(Uint shader, const SharedPtr<ProgramObject>& currentProgram);
         Bool ValidateShaderObject(Uint shader) const;
 
-        const SharedPtr<ProgramObject>& GetCurrentProgram() const { return m_currentProgram; }
-
-        // Joins every outstanding compile and link this context still owns, publishing each
+        // Joins every outstanding compile and link this share group still owns, publishing each
         // one's artifacts through the ordinary gates. The single caller is
         // glMaxShaderCompilerThreadsKHR(0): GL_KHR_parallel_shader_compile requires a zero
         // count to leave nothing in flight, so that every subsequent
@@ -46,7 +49,7 @@ namespace MobileGL::MG_State::GLState {
         // compilation straight back. Nodes belonging to objects this context has already
         // dropped are not joined - nothing can observe them, and waiting on them would make
         // a GL call's cost depend on garbage.
-        void JoinAllPendingWork();
+        void JoinAllPendingWork(const SharedPtr<ProgramObject>& currentProgram);
 
         // P0b layer 2. Exposed for tests and diagnostics; the GL frontend never touches it
         // directly - shader objects reach it through the pointer they are handed at
@@ -59,10 +62,11 @@ namespace MobileGL::MG_State::GLState {
         ShaderCompileAdoptionMap& GetShaderCompileAdoptionMap() { return *m_shaderCompileAdoptionMap; }
 
     private:
-        Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject) const;
+        Bool ShaderHasGLVisibleAttachment(const SharedPtr<ShaderObject>& shaderObject,
+                                          const SharedPtr<ProgramObject>& currentProgram) const;
         // Frees the name slot and releases orphaned attached shaders; the immediate half
         // of glDeleteProgram (deferred while the program is current).
-        void DestroyProgramSlot(Uint program);
+        void DestroyProgramSlot(Uint program, const SharedPtr<ProgramObject>& currentProgram);
 
         template <typename T>
         static Bool CheckIndexAvail(const SizeT idx, const Vector<T>& vec) {
@@ -96,7 +100,5 @@ namespace MobileGL::MG_State::GLState {
 
         Vector<SharedPtr<ProgramObject>> m_programObjects;
         Vector<SharedPtr<ShaderObject>> m_shaderObjects;
-
-        SharedPtr<ProgramObject> m_currentProgram;
     };
 } // namespace MobileGL::MG_State::GLState

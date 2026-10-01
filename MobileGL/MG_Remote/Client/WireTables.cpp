@@ -1120,6 +1120,52 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 g_applierResetContextSerial = 0;
     } // namespace
 
+    // P14 S1: the EGL context lifecycle's two frames. NO SESSION IS AN ANSWER, not a Fatal:
+    // eglCreateContext/eglDestroyContext can legally run before ClientSession::Start (the
+    // bring-up window) and on the server role's own thread, and in both there is no wire for the
+    // frame to cross - the caller falls back to what it did before this slice, which is to keep
+    // the client's own EGL books and nothing else.
+    namespace {
+        // The window test both senders below open with, and the reason it is a function rather
+        // than two copies of the same if: a sender that answered Refused for "no wire" would make
+        // eglCreateContext return EGL_NO_CONTEXT during the bring-up, which is the exact failure
+        // the pre-Start exception exists to prevent.
+        Bool ContextFramesCanCross() {
+            ClientSession* session = ClientSession::Active();
+            return session != nullptr && session->Started() &&
+                   !g_clientTablesUninstalled.load(std::memory_order_acquire);
+        }
+    } // namespace
+
+    ContextFrameEmit SendCreateContextFrame(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags) {
+        if (!ContextFramesCanCross()) return ContextFrameEmit::NoWire;
+        return Server::ServerCreateEGLContext(clientContextToken, shareGroupToken, flags) ? ContextFrameEmit::Sent
+                                                                                         : ContextFrameEmit::Refused;
+    }
+
+    ContextFrameEmit SendDestroyContextFrame(Uint64 clientContextToken) {
+        if (!ContextFramesCanCross()) return ContextFrameEmit::NoWire;
+        return Server::ServerDestroyEGLContext(clientContextToken) ? ContextFrameEmit::Sent
+                                                                   : ContextFrameEmit::Refused;
+    }
+
+    // P14 S1: bind_context. The same four windows as EmitApplierResetRecord below answer false,
+    // and for the same reason: a binding that cannot cross leaves the session on the default it
+    // already has (one context per session, every record its own), which is what the server
+    // answers with no record at all. The token is minted by EGLState and passed in rather than
+    // read here, so this table holds no second opinion about which context is current.
+    Bool EmitBindContextRecord(Uint64 clientContextToken) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started()) return false;
+        if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
+        MG_Pipe::MGPBindContext record{};
+        record.ClientContextToken = clientContextToken;
+        session->EmitAndWait(MGPWireOp::BindContext, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                             nullptr);
+        ++g_emitted;
+        return true;
+    }
+
     Bool EmitApplierResetRecord() {
         // NO SESSION, NO RECORD - and false rather than the RequireSession Fatal, because a
         // validate can legitimately prime with a transport CONFIGURED but no live session:

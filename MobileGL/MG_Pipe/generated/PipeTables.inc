@@ -12,7 +12,7 @@
 // Regenerate with `python3 scripts/gen_pipe.py`; CI runs it and diffs the result.
 // This file is included from MG_Pipe/MGPipe.h inside namespace MobileGL::MG_Pipe.
 
-// share group: 12 calls. A null entry means the backend does not implement this
+// share group: 13 calls. A null entry means the backend does not implement this
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeScreen {
     void (*GetCaps)(const MGPCaps* payload, const void* blobBytes, Uint64 blobByteCount, MGPReplySlot* reply);
@@ -27,6 +27,7 @@ struct MGPipeScreen {
     void (*FenceDestroy)(const MGPHandleOnly* payload);
     void (*FenceWaitServer)(const MGPFenceWait* payload);
     void (*ApplierReset)(const MGPApplierReset* payload);
+    void (*BindContext)(const MGPBindContext* payload);
 };
 
 // context: 71 calls. A null entry means the backend does not implement this
@@ -105,9 +106,9 @@ struct MGPipeContext {
     void (*GetTextureImageToBuffer)(const MGPReadbackToBuffer* payload);
 };
 
-inline constexpr SizeT kMGPipeScreenCallCount = 12;
+inline constexpr SizeT kMGPipeScreenCallCount = 13;
 inline constexpr SizeT kMGPipeContextCallCount = 71;
-inline constexpr SizeT kMGPipeCallCount = 83;
+inline constexpr SizeT kMGPipeCallCount = 84;
 
 // A table that is not exactly its call count of function pointers has grown a
 // member that no generator knows about.

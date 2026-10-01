@@ -125,6 +125,43 @@ namespace MobileGL::MG_Remote::Client {
     // caller then makes the direct call the record replaced.
     Bool EmitApplierResetRecord();
 
+    // ---- P14 S1: the EGL context lifecycle's control-plane half -----------------------------
+    //
+    // NOT ring records and NOT routed rows: eglCreateContext/eglDestroyContext are the EGL
+    // lifecycle, which the catalogue deliberately keeps off the record plane (PipeCalls.def's
+    // "the eight EGL lifecycle entry points stay virtual functions on pActiveBackendObject"),
+    // so they cross as two SurfaceOp kinds through the same blocking frame channel the nine
+    // surface forwarders use. Called by MG_Impl's EGLImpl on the app thread, in the same order
+    // as the EGL calls themselves - which is the ordering the server's context table needs.
+    //
+    // THREE ANSWERS, NOT TWO, for the reason ObjectDeathEmit below has three: "the server said
+    // no" and "there is no wire for the question to cross" are different facts and the caller's
+    // answer to each is different. NoWire is the bring-up window before ClientSession::Start and
+    // the server role's own thread - in both, the pre-S1 shape (the client keeps its own EGL
+    // books and no server table exists) is the correct one and the context must be KEPT; Refused
+    // is a server that answered, and eglCreateContext turns it into EGL_NO_CONTEXT, because a
+    // context whose token the server did not table is one the first bind_context after it would
+    // be refused for.
+    enum class ContextFrameEmit : Uint8 { Sent, NoWire, Refused };
+    ContextFrameEmit SendCreateContextFrame(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags);
+    // A destroy has the same three answers; the client's EGL book is dropped either way (that is
+    // the caller's own state machine), and what a refusal changes is only what the server holds.
+    ContextFrameEmit SendDestroyContextFrame(Uint64 clientContextToken);
+
+    // P14 S1 (docs/Disaggregated/design/11-state-ownership.md): bind_context, opcode 84.
+    //
+    // Emitted on the GL thread from EGLImpl::MakeCurrent, after the switch has succeeded and
+    // before eglMakeCurrent returns - which puts it ahead of the applier_reset the NEXT GL call's
+    // validate emits (PipeFill.cpp's FreshlyPrimed arm), so the reset is already attributed to
+    // the context that primed. `clientContextToken` is the token
+    // EGLState minted for the context the calling thread now has current (0 = none, the release
+    // edge) - the caller reads it rather than this table owning a second copy, so the two planes
+    // cannot disagree about which context is bound. Returns false - nothing emitted - in exactly
+    // the windows EmitApplierResetRecord documents (no live session, the pre-Start bring-up, a
+    // server-role-only fixture, teardown), where there is no wire for the binding to cross and
+    // the session's single-context default is what the server already answers.
+    Bool EmitBindContextRecord(Uint64 clientContextToken);
+
     // P5c (rv), CONTRACT-P5C.md §5.3: whether set_context_values can cross right now (a live,
     // started session, tables not being torn down). PipeFill.cpp gates the record's emission
     // AND the residual-fill skip for its eight fields on this one answer, so the two halves

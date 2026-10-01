@@ -256,6 +256,25 @@ enum SurfaceOpKind : ubyte {
   // (Client/BackendObject_Remote.cpp). Without the tag the codec refused it by
   // name and every spawned eglMakeCurrent failed with InprocOnlyOpOnTheWire.
   InitCapabilities = 11,
+  // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE EGL CONTEXT LIFECYCLE, as two
+  // more ops on the same frame the nine surface ops ride - the shape §"wire changes" 2 prescribes,
+  // and deliberately NOT two new CtrlMsg tables: a context is created, destroyed and made current
+  // by the SAME caller on the SAME thread as a surface, through the same blocking frame channel,
+  // and a second channel would only be a second place for the two orderings to disagree.
+  //
+  //   CreateContext  `context` is the clientContextToken EGLState minted, `shareGroupToken` the
+  //                  group it was derived into (the sharing context's group, or a fresh one),
+  //                  `contextFlags` the frame's reserved extension word (0 today). `display` and
+  //                  `surface` are 0: a context is display-scoped in EGL but the server's display
+  //                  is the session's own, so nothing is named.
+  //   DestroyContext `context` is the token to drop. The server forgets it and, if it was the
+  //                  bound one, unbinds it.
+  //
+  // Both are answered by the ordinary SurfaceReply (ok, plus the refusal enum) - S1 creates a
+  // PLACEHOLDER runtime (token, share group, flags) and no native context, so there is nothing
+  // for the reply to carry that a Bool does not say already.
+  CreateContext = 12,
+  DestroyContext = 13,
 }
 
 enum WindowKind : ubyte {
@@ -303,6 +322,12 @@ table SurfaceOp {
   // ("no surface" / "no context") for every other op and for a ReleaseCurrent.
   readSurface: ulong;
   context: ulong;
+  // P14 S1, appended (a FlatBuffers table field's id IS its vtable slot - append only). The two
+  // values CreateContext carries beyond the token itself: the share group the new context was
+  // derived into, and a reserved flags word so a later context attribute (a profile, a robustness
+  // ask) has a slot to land in without moving the fields beside it. 0 on every other op.
+  shareGroupToken: ulong;
+  contextFlags: uint;
 }
 
 table SurfaceReply {

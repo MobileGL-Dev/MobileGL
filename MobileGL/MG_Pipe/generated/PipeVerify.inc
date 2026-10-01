@@ -114,6 +114,7 @@ inline Bool MGPipeVerify(const MGPStreamOutputBind& a, const MGPStreamOutputBind
 inline Bool MGPipeVerify(const MGPStorageBlockBinding& a, const MGPStorageBlockBinding& b, const char** outField);
 inline Bool MGPipeVerify(const MGPCopyFromFramebuffer& a, const MGPCopyFromFramebuffer& b, const char** outField);
 inline Bool MGPipeVerify(const MGPApplierReset& a, const MGPApplierReset& b, const char** outField);
+inline Bool MGPipeVerify(const MGPBindContext& a, const MGPBindContext& b, const char** outField);
 inline Bool MGPipeVerify(const MGPContextValues& a, const MGPContextValues& b, const char** outField);
 inline Bool MGPipeVerify(const MGPProgramBindings& a, const MGPProgramBindings& b, const char** outField);
 inline Bool MGPipeVerify(const MGPProgramSamplerUnit& a, const MGPProgramSamplerUnit& b, const char** outField);
@@ -268,6 +269,8 @@ template <>
 struct MGPipeHasFieldVerifier<MGPCopyFromFramebuffer> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPApplierReset> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPBindContext> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPContextValues> : std::true_type {};
 template <>
@@ -690,6 +693,11 @@ inline Bool MGPipeVerify(const MGPApplierReset& a, const MGPApplierReset& b, con
     return true;
 }
 
+inline Bool MGPipeVerify(const MGPBindContext& a, const MGPBindContext& b, const char** outField) {
+    MGP_FIELDS_MGPBindContext(MGP_VERIFY_FIELD)
+    return true;
+}
+
 inline Bool MGPipeVerify(const MGPContextValues& a, const MGPContextValues& b, const char** outField) {
     MGP_FIELDS_MGPContextValues(MGP_VERIFY_FIELD)
     return true;
@@ -757,4 +765,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 83;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 84;

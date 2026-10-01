@@ -148,7 +148,10 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     // 9 + P5c's object_death (§5.2), the framebuffer family's first wire delete opcode.
     // kCtxState is 17 + P5c rv's set_context_values (§5.3), the residual-value record, + P5e's
     // set_program_bindings (MG_Remote/CONTRACT-P5E.md §1), the post-link binding record.
-    EXPECT_EQ(ClassCount<kScreen>(), 12u);
+    // + P14 S1's bind_context (docs/Disaggregated/design/11-state-ownership.md), the in-band
+    // context binding - a kScreen row for applier_reset's reason: a context switch is a
+    // whole-session edge, not a context-family verb.
+    EXPECT_EQ(ClassCount<kScreen>(), 13u);
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 19u);
@@ -644,7 +647,12 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // opcodes 82..83, one payload, no flag at all - no reply slot, no blob, no tail.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ReadPixelsToBuffer), 82);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetTextureImageToBuffer), 83);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 84);
+    // P14 S1 (docs/Disaggregated/design/11-state-ownership.md) appended the in-band context
+    // binding, by the same rule: opcode 84, and nothing before it moved. bind_context is a
+    // kScreen control record with the applier_reset shape - one POD, no blob, no tail, no reply
+    // and no MGPipeApply* entry point - so the row beside it is pinned the same way.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindContext), 84);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 85);
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ReadPixelsToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::GetTextureImageToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(sizeof(MGPReadbackToBuffer), 104u);
@@ -653,6 +661,13 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ObjectDeath), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetContextValues), static_cast<Uint32>(kNone));
+    // P14 S1's row, pinned like the two control records it sits beside: no blob, no tail, no
+    // reply, and kWaitNone - the record's placement in the ring is the whole of its ordering, so
+    // the client publishes and moves on rather than parking on an apply that reads no client
+    // memory (PipeCalls.def's wait-class column).
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::BindContext), static_cast<Uint32>(kNone));
+    EXPECT_EQ(MGPipeCallClassFor(MGPWireOp::BindContext), kScreen);
+    EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::BindContext), kWaitNone);
     // And the P5b rows carry what their contract says: one blob (the block name) and nothing
     // else, and the extended draw row keeps its two flags.
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetStorageBlockBinding), static_cast<Uint32>(kHasBlob));
@@ -674,6 +689,10 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // padding. object_death REUSES MGPHandleOnly (CONTRACT-P5C.md §1), so there is no second
     // struct to pin - the 16 bytes are pinned above with the handle family.
     EXPECT_EQ(sizeof(MGPApplierReset), 8u);
+    // P14 S1: bind_context's POD. ONE Uint64 - the same width the control frame's token is, so
+    // the two planes cannot disagree about how much of a token is real.
+    EXPECT_EQ(sizeof(MGPBindContext), 8u);
+    EXPECT_EQ(sizeof(MGPBindContext::ClientContextToken), 8u);
     EXPECT_EQ(sizeof(MGPHandleOnly), 16u);
     // rv's two (§5.3/§7.6): the residual-value POD - 2 + 15 Uint32s, 2 Uint8s and 2 pad bytes,
     // then the three Uint64s - and the AMENDED attribute carrier, which grew 24 -> 56 to carry
@@ -1036,8 +1055,11 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // (MG_Remote/CONTRACT-P5E.md §1) - the tails are listed for the same reason MGPBufferRange
     // and MGPVertexAttribWire are: the comparator has to see INTO an element whose members
     // include an MGHostSpan and a pad word, or it would memcmp the padding: 82. P9 appended the
-    // pack-buffer readbacks' one payload, MGPReadbackToBuffer (CONTRACT-P9.md §1): 83.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 83u);
+    // pack-buffer readbacks' one payload, MGPReadbackToBuffer (CONTRACT-P9.md §1): 83. P14 S1
+    // appended bind_context's MGPBindContext (docs/Disaggregated/design/11-state-ownership.md):
+    // 84. A payload without a list here is one the comparator cannot see, so the row is not
+    // optional bookkeeping - gen_pipe.py refuses the build without it.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 84u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);

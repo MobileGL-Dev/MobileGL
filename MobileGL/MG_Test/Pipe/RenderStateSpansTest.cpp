@@ -568,7 +568,7 @@ namespace {
         // A live frontend context for the setters to write and the getters to answer from,
         // restored on the way out so the case stays independent (SanityTest's idiom).
         struct ContextGuard {
-            UniquePtr<GLContext> Previous;
+            SharedPtr<GLContext> Previous;
             ContextGuard() : Previous(Move(MG_State::pGLContext)) {
                 MG_State::pGLContext = MakeUnique<GLContext>();
                 MGPipeApplierReset();
@@ -786,7 +786,7 @@ namespace {
         GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 #else
         struct ContextGuard {
-            UniquePtr<GLContext> Previous;
+            SharedPtr<GLContext> Previous;
             ContextGuard() : Previous(Move(MG_State::pGLContext)) {
                 MG_State::pGLContext = MakeUnique<GLContext>();
                 MGPipeApplierReset();
@@ -950,7 +950,7 @@ namespace {
     // A live frontend context and a clean applier, restored on the way out (SanityTest's
     // idiom, and the same guard cases 3 and 5 declare inline).
     struct ApplierContextGuard {
-        UniquePtr<GLContext> Previous;
+        SharedPtr<GLContext> Previous;
         ApplierContextGuard() : Previous(Move(MG_State::pGLContext)) {
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeApplierReset();

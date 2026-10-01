@@ -65,13 +65,25 @@ namespace MobileGL::MG_Remote::Server {
         // every spawned eglMakeCurrent died at "surface op kind 11 cannot cross
         // the wire (InprocOnlyOpOnTheWire)", one call after the backend came up.
         InitCapabilities = 11,
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The EGL context lifecycle,
+        // appended to the schema and to this enum together so the identity cast below stays the
+        // whole mapping: the client's eglCreateContext/eglDestroyContext reach the server through
+        // THE SAME frame channel the nine surface forwarders use, on the same thread, in the same
+        // order - which is the property this slice needs and a second channel would not give.
+        CreateContext = 12,
+        DestroyContext = 13,
         // INPROC-ONLY kinds: legal inside this process's frame channel, NEVER encodable onto the
         // wire (SurfaceOpCodec refuses them by name). f0-egl's census found no production caller
         // for the two dead forwarders; they ride the same frame channel because the
         // function-pointer mailbox is GONE, not because they are wire ops.
-        SwapBuffersInprocOnly = 12,      // present travels as a record (the class-B Present emitter)
-        InitWindowSurfaceInprocOnly = 13,// a client-side no-op; kept for the inproc test lane
-        ProbeForTesting = 14,            // MG_Test's arbitrary-work seam through the same channel
+        //
+        // THEIR VALUES MOVED 12/13/14 -> 14/15/16 when P14 S1 appended the two context ops. That
+        // is safe by construction: these three never cross a process boundary and are named
+        // symbolically everywhere they are used, so nothing outside this build could have pinned
+        // them - where the eleven above and the two below are wire ABI and may never move.
+        SwapBuffersInprocOnly = 14,      // present travels as a record (the class-B Present emitter)
+        InitWindowSurfaceInprocOnly = 15,// a client-side no-op; kept for the inproc test lane
+        ProbeForTesting = 16,            // MG_Test's arbitrary-work seam through the same channel
     };
 
     // P12 (on-screen server window), D2. THE SERVER-OWNED WINDOW, AS A FRAME-LOCAL TAG.
@@ -119,6 +131,11 @@ namespace MobileGL::MG_Remote::Server {
         Int width = 0;
         Int height = 0;
         Int swapInterval = 0;
+        // P14 S1. CreateContext's two values beyond `context` (which is the client context token
+        // itself): the share group the context was derived into, and the reserved flags word the
+        // schema carries so a later attribute has a slot. 0 on every other op.
+        Uint64 shareGroupToken = 0;
+        Uint32 contextFlags = 0;
         // The reply half: written by the dispatch on the apply thread, read by the poster after
         // the blocking handshake returns. `ok` is the forwarder's Bool answer; eglMajor/eglMinor
         // are InitializeDisplay's out values.
@@ -144,14 +161,16 @@ namespace MobileGL::MG_Remote::Server {
             // Exhaustive by the language's aggregate decomposition rule: adding ANY member
             // without extending this binding is a compile error, so new fields cannot evade it.
             const auto& [kind, seq, display, surface, readSurface, context, windowBackend,
-                         nativeToken, width, height, swapInterval, ok, eglMajor, eglMinor, eventHead,
-                         refusal] = frame;
+                         nativeToken, width, height, swapInterval, shareGroupToken, contextFlags, ok,
+                         eglMajor, eglMinor, eventHead, refusal] = frame;
             return IsSurfaceControlValue<decltype(kind)> && IsSurfaceControlValue<decltype(seq)> &&
                    IsSurfaceControlValue<decltype(display)> && IsSurfaceControlValue<decltype(surface)> &&
                    IsSurfaceControlValue<decltype(readSurface)> && IsSurfaceControlValue<decltype(context)> &&
                    IsSurfaceControlValue<decltype(windowBackend)> && IsSurfaceControlValue<decltype(nativeToken)> &&
                    IsSurfaceControlValue<decltype(width)> && IsSurfaceControlValue<decltype(height)> &&
-                   IsSurfaceControlValue<decltype(swapInterval)> && IsSurfaceControlValue<decltype(ok)> &&
+                   IsSurfaceControlValue<decltype(swapInterval)> &&
+                   IsSurfaceControlValue<decltype(shareGroupToken)> &&
+                   IsSurfaceControlValue<decltype(contextFlags)> && IsSurfaceControlValue<decltype(ok)> &&
                    IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)> &&
                    IsSurfaceControlValue<decltype(eventHead)> && IsSurfaceControlValue<decltype(refusal)>;
         }

@@ -303,7 +303,7 @@ namespace {
         FramebufferScope(const FramebufferScope&) = delete;
         FramebufferScope& operator=(const FramebufferScope&) = delete;
 
-        UniquePtr<GLContext> m_previousContext;
+        SharedPtr<GLContext> m_previousContext;
         Uint64 m_previousPush = 0;
     };
 

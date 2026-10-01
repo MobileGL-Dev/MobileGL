@@ -10,6 +10,7 @@
 
 #include "../Transport/SocketTransport.h"
 #include "ServerSession.h"
+#include "SessionRuntime.h"
 #include <MG_Remote/FatalFunnel.h>
 
 #include "../CapsCodec.h"
@@ -528,11 +529,24 @@ namespace MobileGL::MG_Remote::Server {
         // One callback table and one process segment resolver: an in-progress Accept
         // reserves their owner too. CAS closes the race between distinct session objects
         // without making concurrent sessions a supported mode.
+        //
+        // P14 S2: THE TABLE IS STILL ONE PER PROCESS, and that is now deliberate rather than a
+        // limit. Its entries are the same five functions for every session; what makes them route
+        // to the right session is that they resolve it per calling thread
+        // (ServerSession::Active()), and every one of them is called by a backend that runs on a
+        // session's own apply thread. So the owner word below is a CLAIM on a shared, idempotent
+        // installation, not a claim on "the session".
         std::atomic<ServerSession*> g_sessionOwner{nullptr};
+        // P14 S2: accepted and not yet closed. The claim above is released by a Close only when
+        // this reaches zero - one session ending may not uninstall the table another is using.
+        std::atomic<Uint32> g_liveSessions{0};
 
     } // namespace
 
+    Uint32 ServerSessionCount() { return g_liveSessions.load(std::memory_order_acquire); }
+
     ServerSession& ServerSessionInstance() {
+        if (ServerSession* const own = Detail::CurrentSession()) return *own;
         // Leak at exit, deliberately and per ID-8: frontend destructors reach pipe and backend
         // state from exit handlers, and a session destroyed before them would be a
         // use-after-free rather than a tidy teardown.
@@ -540,7 +554,10 @@ namespace MobileGL::MG_Remote::Server {
         return *instance;
     }
 
-    ServerSession* ServerSession::Active() { return g_active.load(std::memory_order_acquire); }
+    ServerSession* ServerSession::Active() {
+        if (ServerSession* const own = Detail::CurrentSession()) return own;
+        return g_active.load(std::memory_order_acquire);
+    }
 
     ServerSession::ServerSession() {
         m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ServerConsumer);
@@ -584,8 +601,17 @@ namespace MobileGL::MG_Remote::Server {
 
     MobileGLResult ServerSession::Accept(Transport::ITransport& transport,
                                         const std::vector<Uint8>* firstFrame) {
+        // P14 S2: A SERVED SESSION DOES NOT CLAIM THE PROCESS TABLE, because the table is SHARED.
+        // Its entries are the same five functions for every session and they route by the calling
+        // thread (ServerSession::Active()), so a second session installing them is the idempotent
+        // repeat InstallReverseCallback already allows - and a second session REFUSING to install
+        // them is what a one-session process would have. The claim below therefore belongs to the
+        // shapes whose process really is one session (the inproc client+server role, FvSession and
+        // its peers in ServerLoopTest): there a second ServerSession object is still the named
+        // Fatal{callback-double-install} the single-session ruling asks for.
+        const Bool sharedTable = Detail::CurrentSession() == this;
         ServerSession* expectedOwner = nullptr;
-        if (!g_sessionOwner.compare_exchange_strong(expectedOwner, this,
+        if (!sharedTable && !g_sessionOwner.compare_exchange_strong(expectedOwner, this,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
             if (expectedOwner == this) return MOBILEGL_ERR_INVALID_ARGUMENT;
             SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
@@ -702,6 +728,19 @@ namespace MobileGL::MG_Remote::Server {
         m_t0Stores = m_t0Bytes = m_t0Declined = m_t0Refusals = 0;
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(&transport);
+        // P14 S1: the context registry is the session's, so it is emptied with the rest of the
+        // per-session state this Accept resets. A session that never crossed a bind_context
+        // leaves the current token at 0, which is the single-context shape's answer.
+        //
+        // P14 S5: the APPLIERS of those contexts go with them - one registry entry per context
+        // and one per share group, released here because a session that is re-accepted must not
+        // inherit the previous client's object records. Accept can run on the control thread
+        // while nothing is applying (this is the accept path, before the first Hello is
+        // answered), so the release is safe here in a way it would not be mid-session.
+        MG_Pipe::MGPipeApplierReleaseSession(reinterpret_cast<Uint64>(this));
+        m_contexts.clear();
+        m_currentContextToken.store(0, std::memory_order_release);
+        m_contextsCreated = m_contextsDestroyed = m_contextBinds = 0;
 
         // ---- 3. the four segments, both control pages, the rings.
         MobileGLResult created = MOBILEGL_ERR_UNSUPPORTED;
@@ -844,6 +883,10 @@ namespace MobileGL::MG_Remote::Server {
         m_segments.InstallProcessResolver();
 
         m_accepted = true;
+        m_closed = false;
+        // P14 S2: this session is live. The reverse-channel table and the segment resolver are
+        // process-wide and shared; they are released by whichever Close finds this back at zero.
+        g_liveSessions.fetch_add(1, std::memory_order_acq_rel);
 
         // ---- P5c ev: the four reverse-channel producers are THIS session's (CONTRACT-P5C
         // §4.1), installed before the apply thread can apply a record that produces one and
@@ -1006,29 +1049,41 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     void ServerSession::Close() {
+        // P14 S2: idempotent (ServerSession.h). A served session is a stack object whose owner
+        // closes it explicitly and whose destructor closes it again.
+        if (m_closed) return;
+        m_closed = true;
         ServerSession* expectedActive = this;
         g_active.compare_exchange_strong(expectedActive, nullptr,
             std::memory_order_acq_rel, std::memory_order_acquire);
         if (m_accepted) {
-            // Uninstall AFTER the apply thread has joined, never before: a record still in
-            // flight can still resolve a segment offset (table 3's fourth column).
-            Wire::SegmentTable::UninstallProcessResolver();
-            // The reverse-channel producers go with the session that owns them - release
-            // only the entries that are still OURS, never one a later owner installed.
-            if (MG_Pipe::gMGPipeCallbacks.OnGlError == &ServerOnGlError) {
-                MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
-            }
-            if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == &ServerOnBufferWriteback) {
-                MG_Pipe::gMGPipeCallbacks.OnBufferWriteback = nullptr;
-            }
-            if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten == &ServerOnGpuWritten) {
-                MG_Pipe::gMGPipeCallbacks.OnGpuWritten = nullptr;
-            }
-            if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == &ServerOnSurfaceChanged) {
-                MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged = nullptr;
-            }
-            if (MG_Pipe::gMGPipeEventRingCapacityBytes == &ServerEventRingCapacityBytes) {
-                MG_Pipe::gMGPipeEventRingCapacityBytes = nullptr;
+            // P14 S2: DROP THIS SESSION FIRST, THEN ASK WHETHER ANY IS LEFT. The two process-wide
+            // hooks below (the segment resolver and the reverse-channel table) are shared by every
+            // session in the process, so a session that ends while another is live must leave both
+            // installed - its own threads are done with them (the apply thread is joined above and
+            // this control thread unbinds its own binding on the way out of RunSession).
+            const Uint32 remaining = g_liveSessions.fetch_sub(1, std::memory_order_acq_rel) - 1;
+            if (remaining == 0) {
+                // Uninstall AFTER the apply thread has joined, never before: a record still in
+                // flight can still resolve a segment offset (table 3's fourth column).
+                Wire::SegmentTable::UninstallProcessResolver();
+                // The reverse-channel producers go with the session that owns them - release
+                // only the entries that are still OURS, never one a later owner installed.
+                if (MG_Pipe::gMGPipeCallbacks.OnGlError == &ServerOnGlError) {
+                    MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
+                }
+                if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == &ServerOnBufferWriteback) {
+                    MG_Pipe::gMGPipeCallbacks.OnBufferWriteback = nullptr;
+                }
+                if (MG_Pipe::gMGPipeCallbacks.OnGpuWritten == &ServerOnGpuWritten) {
+                    MG_Pipe::gMGPipeCallbacks.OnGpuWritten = nullptr;
+                }
+                if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged == &ServerOnSurfaceChanged) {
+                    MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged = nullptr;
+                }
+                if (MG_Pipe::gMGPipeEventRingCapacityBytes == &ServerEventRingCapacityBytes) {
+                    MG_Pipe::gMGPipeEventRingCapacityBytes = nullptr;
+                }
             }
         }
         // P11 B2: the T0 arm's proof for this session, then the inbox's leftovers (an Offer whose
@@ -1202,6 +1257,61 @@ namespace MobileGL::MG_Remote::Server {
                 handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(offer.size),
                 static_cast<unsigned long long>(seq), static_cast<unsigned long long>(m_t0Stores),
                 static_cast<unsigned long long>(m_t0Bytes));
+        return true;
+    }
+
+    // ---- P14 S1: the context registry ------------------------------------------------------
+    //
+    // ALL THREE RUN ON THE APPLY THREAD. CreateContext/DestroyContext are the control plane's
+    // frames, dispatched through RunSurfaceControlFrame; BindContext is a ring record, dispatched
+    // through the decoder's verb sink. Neither ever runs anywhere else, which is what makes the
+    // map lock-free here.
+    Bool ServerSession::CreateContext(Uint64 token, Uint64 shareGroupToken, Uint32 flags) {
+        if (token == 0) return false;
+        if (m_contexts.find(token) != m_contexts.end()) return false;
+        ContextRuntime runtime;
+        runtime.Token = token;
+        runtime.ShareGroupToken = shareGroupToken;
+        runtime.Flags = flags;
+        m_contexts.emplace(token, runtime);
+        ++m_contextsCreated;
+        // P14 S5: and the applier this context's records are applied through - its own working
+        // state, in the share group `shareGroupToken` names (0 = one it starts itself). The key
+        // is THIS object's address, which is what the session's key resolver
+        // (SessionRuntime.cpp) hands back, so registration and lookup agree by construction.
+        // Registering here rather than inferring at lookup time is what keeps the resolver a
+        // two-word read: this runs on the apply thread, where the frame channel delivers, and
+        // is the only writer of the contexts map.
+        MG_Pipe::MGPipeApplierRegisterContext(reinterpret_cast<Uint64>(this), token, shareGroupToken);
+        return true;
+    }
+
+    Bool ServerSession::DestroyContext(Uint64 token) {
+        if (token == 0) return false;
+        const auto it = m_contexts.find(token);
+        if (it == m_contexts.end()) return false;
+        m_contexts.erase(it);
+        ++m_contextsDestroyed;
+        // P14 S5: the working state goes with it, and this group's object records go when its
+        // last context does.
+        MG_Pipe::MGPipeApplierUnregisterContext(reinterpret_cast<Uint64>(this), token);
+        // A destroyed context cannot stay current: leaving the token bound would attribute every
+        // record after the destroy to a context the session no longer has. The client's own
+        // eglDestroyContext is refused while the context is current (EGL_BAD_ACCESS), so this
+        // arm is reached with the token already released in the well-behaved sequence - and with
+        // the release MISSING it is still the safe direction.
+        Uint64 expected = token;
+        m_currentContextToken.compare_exchange_strong(expected, 0, std::memory_order_acq_rel);
+        return true;
+    }
+
+    Bool ServerSession::BindContext(Uint64 token) {
+        // 0 is the release edge and is always legal: the client has context A current, releases
+        // it, and a verb on the app thread follows - the session binds "nothing" rather than
+        // answering to a stale token.
+        if (token != 0 && m_contexts.find(token) == m_contexts.end()) return false;
+        m_currentContextToken.store(token, std::memory_order_release);
+        ++m_contextBinds;
         return true;
     }
 

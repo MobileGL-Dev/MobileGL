@@ -263,7 +263,8 @@ namespace MobileGL::MG_Remote::Wire {
     X(SetProgramBindings, MGPProgramBindings)                                                  \
     X(DeleteStreamOutput, MGPStreamOutputBind)                                                 \
     X(ReadPixelsToBuffer, MGPReadbackToBuffer)                                                 \
-    X(GetTextureImageToBuffer, MGPReadbackToBuffer)
+    X(GetTextureImageToBuffer, MGPReadbackToBuffer)                                            \
+    X(BindContext, MGPBindContext)
 
     namespace {
 
@@ -375,9 +376,19 @@ namespace MobileGL::MG_Remote::Wire {
 
         // The process resolver is a plain function pointer with no user datum
         // (MGPipeHostSpan.h:46), so the table it resolves through has to be found here.
+        //
+        // P14 S2: TWO PLACES, IN THIS ORDER. The CALLING THREAD's binding is the authoritative one
+        // - a served session's threads are bound to that session's table (ThreadSessionScope), so
+        // two sessions in one process never resolve each other's segments. The process-wide table
+        // below is the fallback for a thread with no binding, which is every shape that has only
+        // one session (and is what the thread-bound call reduces to there).
         SegmentTable* g_processResolverTable = nullptr;
+        thread_local SegmentTable* t_threadResolverTable = nullptr;
 
         const void* ProcessResolverThunk(Uint32 seg, Uint64 offset, Uint64 size) {
+            if (SegmentTable* const bound = t_threadResolverTable) {
+                return bound->Resolve(seg, offset, size);
+            }
             if (g_processResolverTable == nullptr) {
                 return nullptr;
             }
@@ -484,24 +495,35 @@ namespace MobileGL::MG_Remote::Wire {
         return static_cast<const Uint8*>(view.Base) + offset;
     }
 
+    void SegmentTable::BindThreadResolver() { t_threadResolverTable = this; }
+
+    void SegmentTable::UnbindThreadResolver() { t_threadResolverTable = nullptr; }
+
     void SegmentTable::InstallProcessResolver() {
-        if (MG_Pipe::gMGPipeSegmentResolver != nullptr && g_processResolverTable != this) {
-            // Table 3: there is exactly ONE gMGPipeSegmentResolver per process, the SERVER
-            // role installs it before the apply thread starts, and the client never resolves a
-            // span at all. Two roles racing on one inline variable is loud rather than silent
-            // because of this line.
+        if (t_threadResolverTable != nullptr && t_threadResolverTable != this) {
+            // Table 3, P14 S2: one thread resolves through ONE table. Two tables on one thread is
+            // the shape this line exists to make loud - a session's threads are per session, so a
+            // well-formed process never reaches it, while a second SESSION (its own threads, its
+            // own table) is exactly what the per-thread binding is for and does not.
             WireProtocolFatal("SegmentTable::InstallProcessResolver",
-                              "a process segment resolver is already installed; the server role "
-                              "installs it once, before the apply thread starts");
+                              "a process segment resolver is already installed ON THIS THREAD for "
+                              "another session's table; a served session's threads belong to one "
+                              "session");
+        }
+        if (MG_Pipe::gMGPipeSegmentResolver == nullptr) {
+            MG_Pipe::gMGPipeSegmentResolver = &ProcessResolverThunk;
         }
         g_processResolverTable = this;
-        MG_Pipe::gMGPipeSegmentResolver = &ProcessResolverThunk;
+        BindThreadResolver();
     }
 
     void SegmentTable::UninstallProcessResolver() {
         // Teardown order (table 3): uninstall AFTER the join, never before - a record still in
-        // flight can still resolve.
-        MG_Pipe::gMGPipeSegmentResolver = nullptr;
+        // flight can still resolve. P14 S2: this unbinds the calling thread and drops the
+        // process-wide fallback only; the hook stays installed because another session of this
+        // process may still be decoding records (ServerSession::Close gates this call on the last
+        // session).
+        UnbindThreadResolver();
         g_processResolverTable = nullptr;
     }
 
@@ -2532,6 +2554,16 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::ObjectDeath:
             return m_verbs != nullptr &&
                    m_verbs->OnObjectDeath(*static_cast<const MGPHandleOnly*>(payload));
+
+        // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): bind_context, opcode 84.
+        //
+        // The third control record, and the applier_reset shape exactly: a fixed-size POD with
+        // no blob, no tail and no reply, so the generated bounds gate is the whole validation
+        // and the arm hands over. What the sink does with the token - "this session's current
+        // context" - is a session fact, not a shape.
+        case MGPWireOp::BindContext:
+            return m_verbs != nullptr &&
+                   m_verbs->OnBindContext(*static_cast<const MGPBindContext*>(payload));
 
         // ---- P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, opcode 79 -------------
         //

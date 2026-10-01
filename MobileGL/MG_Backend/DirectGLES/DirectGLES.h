@@ -204,6 +204,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void SetEGLFuncsTable(const MG_External::EGLFunctionsTable& eglFuncs);
     void SetGLESFuncsTable(const MG_External::GLESFunctionsTable& glesFuncs);
     void SetGLESCapabilities(const MG_External::GLESCapabilities& capabilities);
+
+    // ---------------------------------------------------------------------------------
+    // P14 S4 (docs/Disaggregated/design/11-state-ownership.md): THE NATIVE TUPLE IS PER CONTEXT
+    // ---------------------------------------------------------------------------------
+    //
+    // The display is process state and stays one object (eglInitialize once per process, terminated
+    // when the last native context leaves). The native EGLContext, the config it was created with
+    // and the native surfaces are keyed by (session, client context token) - the identity S1 put on
+    // the wire and S2 gave a per-thread owner. Creating a second context therefore no longer tears
+    // the first one's native context down, which is what lets two contexts (and two share groups)
+    // be live at once in one process.
+
+    // Answers, for the CALLING THREAD, which session it belongs to and which client context token
+    // that session has bound. Installed once by the server layer; with no resolver installed -
+    // monolith, a frontend-only process, a unit case - the answer is the single key {0, 0}, which is
+    // exactly the process singleton this replaces. `false` also means {0,0}.
+    using NativeContextKeyResolver = Bool (*)(Uint64* outSessionKey, Uint64* outContextToken);
+    void SetNativeContextKeyResolver(NativeContextKeyResolver resolver);
+
+    // Builds the native context for `contextToken` under the calling thread's session. A
+    // `shareGroupToken` whose group already has a live native context in this session hands that
+    // context to eglCreateContext as the share argument - which is what makes two contexts see one
+    // set of buffer/texture objects. Idempotent: a token that already has one answers true.
+    Bool CreateNativeContextFor(Uint64 contextToken, Uint64 shareGroupToken);
+    // Destroys ONE context's native tuple (the DestroyContext control frame). The session's other
+    // contexts are untouched; the display is terminated only when the last context in the process
+    // has gone.
+    void DestroyNativeContextFor(Uint64 contextToken);
+
+    // P14 S4. THE NATIVE HALF OF A CONTEXT SWITCH. `bind_context` moves which context the session's
+    // records belong to; this makes the calling thread's native tuple follow it, binding the
+    // session's current surface to the newly named context's native EGLContext. A no-op when the
+    // named context has no native context yet (the session never sent CreateContext) or when the
+    // native context already current on this thread IS that one - so the single-context world pays
+    // nothing for it. Called from the bind_context path on the apply thread.
+    Bool MakeNativeContextCurrentForBoundToken();
+    // How many native contexts this process holds, and how many of them belong to one session. The
+    // test observables for "a second context did not tear the first one down".
+    Uint64 NativeContextCount();
+    Uint64 NativeContextCountForSession(Uint64 sessionKey);
+
+    // The calling thread's session, as the resolver above reports it (0 with no resolver).
+    Uint64 CurrentNativeSessionKey();
+
+    // ---- Test observables (P14 S4). EGL exposes no "which EGLContext does this client context
+    // hold" query and no way to ask a context for its share group, so a case that must tell "the
+    // same native context still serves" from "a fresh one was built", or a sharing pair from two
+    // unrelated contexts, reads it here. These are pure reads plus one key override; neither is on
+    // a production path and neither changes behaviour.
+    EGLContext NativeContextHandleFor(Uint64 sessionKey, Uint64 contextToken);
+    // Overrides the key the calling thread resolves to, for the life of the call. The backend's
+    // ordinary answer comes from the server layer's probe; this is how a case drives exactly the
+    // tuple it means when no session runtime is installed.
+    void ForceNativeContextKeyForTesting(Uint64 sessionKey, Uint64 contextToken);
+
     void DestroyEGLContext();
 
     // Transform feedback capture spans, performed by the real ES driver. The

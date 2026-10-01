@@ -348,3 +348,7 @@ inline void MGP_ReadPixelsToBuffer(const MGPReadbackToBuffer* payload) {
 inline void MGP_GetTextureImageToBuffer(const MGPReadbackToBuffer* payload) {
     gMGPipeContext.GetTextureImageToBuffer(payload);
 }
+
+inline void MGP_BindContext(const MGPBindContext* payload) {
+    gMGPipeScreen.BindContext(payload);
+}

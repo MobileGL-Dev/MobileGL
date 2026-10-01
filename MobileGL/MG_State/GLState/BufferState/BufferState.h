@@ -28,13 +28,12 @@ namespace MobileGL::MG_State::GLState {
     // costs the unused tail of three arrays.
     constexpr SizeT BufferBindingPointCount = 84;
 
+    // The per-context half of the buffer state: which buffer is bound where. The objects
+    // themselves and their names belong to the share group (ShareGroupState).
     class BufferState {
     public:
         BufferState();
 
-        const SharedPtr<BufferObject>& GetBufferObject(Uint index);
-        void GenerateNames(Uint number, Vector<Uint>& buffers);
-        const SharedPtr<BufferObject>& CreateBufferObject(Uint index);
         BindingSlot<BufferObject>& GetBindingSlot(BufferTarget target);
         // For glBindBufferBase / glBindBufferRange
         BindingSlotRange1D<BufferObject>& GetBindingPoint(BufferTarget target, Uint index);
@@ -60,9 +59,9 @@ namespace MobileGL::MG_State::GLState {
             if (it == BufferBindPointTargets.end()) return 0;
             return m_touchedBindPointCount[std::distance(BufferBindPointTargets.begin(), it)];
         }
-        void MarkBufferObjectForDeletion(Uint index);
-        Bool ValidateName(Uint index) const;
-        Bool ValidateBufferObject(Uint index) const;
+        // Detaches a deleted buffer from THIS context's bindings only (GL 4.6 core 6.1: a delete
+        // resets the deleting context's bindings, and other contexts keep their own).
+        void UnbindBufferObject(const SharedPtr<BufferObject>& bufferObject);
 
 #if MOBILEGL_PIPE_PUSH
     // P2 brief D4: "did the contents of ANY buffer object move". One counter for every
@@ -110,8 +109,6 @@ namespace MobileGL::MG_State::GLState {
     Uint64 m_anyBufferChangeGeneration = 0;
     Array<Uint64, BufferBindPointTargets.size()> m_bindPointGeneration{};
 #endif
-        UnorderedMap<Uint, SharedPtr<BufferObject>> m_bufferObjects;
-        IndexGenerator<Uint> m_indexGenerator;
         Array<BindingSlot<BufferObject>, GlobalBufferTargets.size()> m_bindingSlots;
         // TODO: query the count somewhere globally?
         // For glBindBufferBase / glBindBufferRange

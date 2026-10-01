@@ -65,6 +65,10 @@ namespace MobileGL::MG_Remote::Server {
 
     class ServerSession {
     public:
+        // P14 S2: THE SESSION OF THE CALLING THREAD, else the process's active one. Every
+        // server-role caller that matters (the reverse-channel producers, the applier's role
+        // guards, the decoder, ServerMain's control loop) runs on a session's own thread and
+        // therefore gets ITS session - which is what makes one process able to serve several.
         static ServerSession* Active();
 
         ServerSession();
@@ -190,6 +194,11 @@ namespace MobileGL::MG_Remote::Server {
         Bool PeerSharedSegments() const { return m_peerSharedSegments; }
         // Teardown: after the apply thread has been joined, never before - a record still in
         // flight can still resolve a segment offset (table 3's fourth column).
+        //
+        // P14 S2: AND IT IS IDEMPOTENT, because a served session is now a stack object. A session
+        // that has been closed once (RunSession closes it explicitly) is closed again by its
+        // destructor; the second call must not run the teardown twice. Accept re-opens it, so the
+        // in-process display server's accept/close/accept cycle is unchanged.
         void Close();
 
         Transport::SessionSegments& Shm();
@@ -322,6 +331,45 @@ namespace MobileGL::MG_Remote::Server {
         Bool AdoptT0Quiet() const { return m_adoptT0Quiet; }
         AdoptInbox& T0Inbox() { return m_adoptInbox; }
 
+        // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): the session's contexts -
+        //
+        // THE PLACEHOLDER TABLE. `CreateContext`/`DestroyContext` on the control plane build and
+        // destroy an entry per client token; `BindContext` on the ring makes one of them the
+        // session's current context. What lives in an entry in THIS slice is the token and the
+        // share group it was derived from - no native EGLContext, no GLContext, no working state
+        // (that is S4's). The table exists so that a token the client names can be proved to
+        // have been created before anything is attributed to it, and so that the S4 slice has a
+        // place to put the runtime it will own.
+        //
+        // WRITES ARE THE APPLY THREAD'S. CreateContext/DestroyContext arrive as control frames
+        // dispatched through the frame channel, BindContext as a record through the decoder, and
+        // both run on mgl-srv-apply - so the table needs no lock. CurrentContextToken() is
+        // atomic because a test reads it from the case's own thread.
+        struct ContextRuntime {
+            Uint64 Token = 0;           // the client's context token, dense from 1
+            Uint64 ShareGroupToken = 0; // 0 = this context started a share group
+            Uint32 Flags = 0;           // reserved; the control frame's `flags` field, carried verbatim
+        };
+
+        // False when a context with this token already exists, or when the token is 0 (0 is
+        // "no context" everywhere on both planes and is never a creatable context).
+        Bool CreateContext(Uint64 token, Uint64 shareGroupToken, Uint32 flags);
+        // False when no such token exists - a destroy the peer did not create is the control
+        // frame's own refusal to make, not a silent no-op.
+        Bool DestroyContext(Uint64 token);
+        // Binds the session's current context. Token 0 is legal and means "no context" (the
+        // release edge); any other token must have been created, or this is a named refusal.
+        Bool BindContext(Uint64 token);
+        // 0 = no context is bound. Every record the session has applied so far belongs to this
+        // token; a session that never crossed a bind_context has never bound one.
+        Uint64 CurrentContextToken() const { return m_currentContextToken.load(std::memory_order_acquire); }
+        Bool HasContext(Uint64 token) const { return m_contexts.find(token) != m_contexts.end(); }
+        Uint64 ContextCount() const { return static_cast<Uint64>(m_contexts.size()); }
+        Uint64 ContextsCreated() const { return m_contextsCreated; }
+        Uint64 ContextsDestroyed() const { return m_contextsDestroyed; }
+        // The per-session tallies the sink keeps for the two control frames it dispatched.
+        Uint64 ContextBinds() const { return m_contextBinds; }
+
     private:
         MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link,
                                           const Uint8* nonce);
@@ -347,6 +395,9 @@ namespace MobileGL::MG_Remote::Server {
         Bool m_consumedSet = false;
         Bool m_sizesSet = false;
         Bool m_accepted = false;
+        // P14 S2: Close() has run for the current accept. Cleared by Accept, which is what keeps
+        // the in-process display server's accept/close/accept cycle working.
+        Bool m_closed = false;
         ApplyPeer m_peer = ApplyPeer::InProcess;
         Bool m_peerSharedSegments = true;
         // PH-6. Written by the apply thread (the only SEG_EVENT producer), reset by Accept.
@@ -369,10 +420,27 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_t0Bytes = 0;
         Uint64 m_t0Declined = 0;
         Uint64 m_t0Refusals = 0;
+        // P14 S1. Apply-thread-only map (see ContextRuntime); the current token is atomic for
+        // the reader on a test thread. Reset by Accept.
+        UnorderedMap<Uint64, ContextRuntime> m_contexts;
+        std::atomic<Uint64> m_currentContextToken{0};
+        Uint64 m_contextsCreated = 0;
+        Uint64 m_contextsDestroyed = 0;
+        Uint64 m_contextBinds = 0;
     };
 
     // Leak-at-exit like every other MG_Remote singleton (ID-8): no frontend destructor may
     // reach pipe or backend state from an exit handler.
+    //
+    // P14 S2 (SessionRuntime.h): THE SINGLETON IS THE FALLBACK, NOT THE SESSION. On a thread that
+    // belongs to a served session (ServerMain::RunSession's control thread, or that session's
+    // mgl-srv-apply) this answers with THAT session; every other thread - the client process, the
+    // inproc one-process client+server shape, a unit case - keeps getting the leaked instance.
     ServerSession& ServerSessionInstance();
+
+    // P14 S2: sessions accepted and not yet closed in this process. A process-wide fact that must
+    // outlive one session (the reverse-channel callback table, the segment resolver) is released
+    // only when this reaches zero.
+    Uint32 ServerSessionCount();
 
 } // namespace MobileGL::MG_Remote::Server

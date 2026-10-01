@@ -14,6 +14,7 @@
 #include "ServerDisplay.h"
 #include "ServerLoop.h"
 #include "ServerSession.h"
+#include "SessionRuntime.h"
 #include "SurfaceControlFrame.h"
 #include <Config.h>
 #include <Init.h>
@@ -343,7 +344,7 @@ std::atomic<int> g_inProcessBackendPin{-1};
 // in the disaggregated server, does nothing unless set, and says so when it is.
 void DelaySessionHandshakeForTest() {
     const char* text = std::getenv("MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS");
-    if (text == nullptr || *text == '\0') return;
+    if (text == nullptr || text[0] == 0) return;
     const long ms = std::strtol(text, nullptr, 10);
     if (ms <= 0) return;
     WireLogError("MG_Remote server: pid=%d MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS=%ld - this session child "
@@ -468,14 +469,25 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     // else: inproc keeps every Fatal (client and server share that process), and the supervisor
     // that forked this child never applies a record.
     //
-    // P12 (D5): and the in-process display server arms it for EVERY session, here, the same way;
-    // its supervisor resets it between sessions (ResetSessionLatch), so a session that latched does
-    // not decline the next one.
+    // P12 (D5): and the in-process display server arms it for EVERY session, here, the same way.
+    // P14 S2: "IT" IS PER SESSION NOW - the scope below binds this thread to this session's latch
+    // domain (FatalFunnel.h), so the arm that follows arms THAT domain and no other: a session
+    // that latched cannot decline its neighbour, and the supervisor's ResetSessionLatch touches
+    // only its own (process-default) domain.
+    // P14 S2: THIS SESSION'S OWN RUNTIME, AND BOTH OF ITS THREADS ON IT. The object holds the
+    // session, the apply loop and the PipeInputs block; the scope makes them what this thread's
+    // reads of ServerSessionInstance()/ServerLoopInstance()/gPipeInputs resolve to, and binds this
+    // session's latch domain and segment resolver. Everything below - the backend bring-up, the
+    // arm, the EGL frames - therefore runs against THIS session, which is what lets one process
+    // serve several at once. The apply thread opens the same scope as its first act
+    // (ServerLoop::ApplyThreadMain, via SetRuntime below).
+    auto runtime = std::make_unique<Server::SessionRuntime>();
+    Server::Detail::ThreadSessionScope threadScope(*runtime);
     ArmSessionLatch();
     // The child bypasses MobileGL::Initialize: arm its own role counters.
     MobileGL::MG_Util::PipeStats::Init();
-    auto& session = Server::ServerSessionInstance();
-    auto& loop = Server::ServerLoopInstance();
+    auto& session = runtime->Session();
+    auto& loop = runtime->Loop();
     // P12 (D5): WHAT A PROCESS EXIT CLEANED UP FOR FREE, THE IN-PROCESS SHAPE CLEANS UP BY HAND,
     // on every way out from here - so the next session in this process starts where a fresh
     // session child would. A no-op for every forked / single-session shape: those `_exit` with the
@@ -659,6 +671,9 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     // below) and is the one that says "still running" while the apply thread runs it. Cleared
     // after the loop, on this same thread, so no post can be in flight when it goes.
     loop.SetControlProgressSink(&SendSurfaceProgress, control.get());
+    // P14 S2: the apply thread opens the same scope this thread is on, so its reads of the
+    // session, this loop and the PipeInputs block resolve to THIS session's.
+    loop.SetRuntime(*runtime);
     if (loop.Start(session) != MOBILEGL_OK) return endSession(70);
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
                  selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
@@ -1327,17 +1342,44 @@ private:
 // shm segments' descriptors cross by SCM_RIGHTS, so there is no DataBind to route and no pre-auth
 // gate - both are TCP exposure machinery, and a unix peer is local by construction (the forked
 // unix supervisor runs without either). Sessions take the TCP in-process shape's thread hand-off:
-// one at a time, Busy for a second client, the latch reset between sessions, stop by
-// g_inProcessStop.
+// a thread per session, up to MOBILEGL_IPC_INPROC_MAX_SESSIONS (default 16) and Refuse{Busy}
+// over it, the latch per session, stop by
+// g_inProcessStop. P14 S2: THE SESSIONS ARE CONCURRENT - each one owns its ServerSession, its
+// ServerLoop and its PipeInputs block through its own ThreadSessionScope (SessionRuntime.h), so a
+// session's close, latch or fault reaches no other, and the server's own stop waits for all of
+// them rather than for the one.
 class UnixInProcessSupervisor {
 public:
-    UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted)
-        : m_listener(listener), m_pairs(listener), m_sessionsFaulted(sessionsFaulted) {}
+    // P14 S2: MAX SESSIONS AT ONCE. Each live session is one control thread (RunSession) plus its
+    // own mgl-srv-apply, both carrying their own ServerSession/ServerLoop/PipeInputs block, so the
+    // cap is a resource limit and not a correctness one. The default is the display server's
+    // (mobilegl_server_serve_inprocess), which is where this class is used.
+    static constexpr unsigned kDefaultMaxSessions = 16;
+
+    // MOBILEGL_IPC_INPROC_MAX_SESSIONS, capped, 0/unset/invalid = the default. An environment
+    // knob rather than a new argument to mobilegl_server_serve_inprocess: the embedded ABI has one
+    // parameter (the endpoint) and the display server passes none of this, exactly as it passes
+    // none of the transport knobs.
+    static unsigned MaxSessionsFromEnvironment() {
+        const char* text = std::getenv("MOBILEGL_IPC_INPROC_MAX_SESSIONS");
+        if (text == nullptr || text[0] == 0) return kDefaultMaxSessions;
+        char* end = nullptr;
+        const long parsed = std::strtol(text, &end, 10);
+        if (end == text || parsed <= 0) return kDefaultMaxSessions;
+        return static_cast<unsigned>(std::min<long>(parsed, 256));
+    }
+
+    UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted,
+                            unsigned maxSessions = kDefaultMaxSessions)
+        : m_listener(listener), m_pairs(listener), m_sessionsFaulted(sessionsFaulted),
+          m_maxSessions(maxSessions == 0 ? kDefaultMaxSessions : maxSessions) {}
 
     ~UnixInProcessSupervisor() {
-        // Run() only returns with the session thread joined; a listener failure (73) is the
-        // one way out with it live, and it is never left running behind the supervisor.
-        if (m_sessionThread.joinable()) m_sessionThread.join();
+        // Run() only returns with every session thread joined; a listener failure (73) is the one
+        // way out with one live, and a session is never left running behind the supervisor.
+        for (auto& session : m_live) {
+            if (session->thread.joinable()) session->thread.join();
+        }
     }
 
     int Run() {
@@ -1352,15 +1394,11 @@ public:
                              static_cast<int>(accepted));
                 return 73;
             }
-            // exit_group's close window, as the forked loop's: a client reconnecting the moment
-            // its session ended must not be told Busy by a session that is exiting.
-            const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
-            while (m_active > 0 && std::chrono::steady_clock::now() < reapDeadline) {
-                if (Reap()) break;
-                ::usleep(1000);
-            }
-            if (m_active > 0) {
-                RefuseBusy(*control, "one session is already active");
+            // P14 S2: THE CAP, NOT "ONE AT A TIME". A peer over the limit is refused by the same
+            // words the forked `--max-sessions` supervisor uses, and is not a latch: the sessions
+            // already running carry on and the connection is simply closed.
+            if (m_live.size() >= m_maxSessions) {
+                RefuseBusy(*control, "the session limit is reached");
                 continue;
             }
             StartSessionThread(std::move(control));
@@ -1368,48 +1406,71 @@ public:
     }
 
 private:
-    // The same reap as the TCP shape's ReapSessionThread: join, count faults, reset the latch
-    // for the next session in this process.
-    bool Reap() {
-        if (m_active <= 0 || !m_sessionDone.load(std::memory_order_acquire)) return false;
-        if (m_sessionThread.joinable()) m_sessionThread.join();
-        const int code = m_sessionExit.load(std::memory_order_acquire);
-        m_active = -1;
-        if (code != 0) ++m_sessionsFaulted;
-        ResetSessionLatch();
-        WireLogError("MG_Remote server: in-process unix session #%lu pid=%d reaped exit=%d%s sessionsFaulted=%lu",
-                     m_sessionOrdinal, static_cast<int>(::getpid()), code,
-                     code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted);
-        return true;
+    // One live session: its control thread, and the two facts the reap needs from it. The session
+    // itself (its ServerSession, its apply thread, its PipeInputs block) is owned by RunSession's
+    // own frame, on that thread - nothing here reaches into it.
+    struct LiveSession {
+        std::thread thread;
+        std::atomic<bool> done{false};
+        std::atomic<int> exit{0};
+        unsigned long long ordinal = 0;
+    };
+
+    // The same reap as the TCP shape's ReapSessionThread: join, count faults, reset the latch for
+    // the next session in this process. Every finished session is reaped, in whatever order they
+    // finished.
+    void Reap() {
+        for (auto session = m_live.begin(); session != m_live.end();) {
+            LiveSession& live = **session;
+            if (!live.done.load(std::memory_order_acquire)) {
+                ++session;
+                continue;
+            }
+            if (live.thread.joinable()) live.thread.join();
+            const int code = live.exit.load(std::memory_order_acquire);
+            if (code != 0) ++m_sessionsFaulted;
+            ResetSessionLatch();
+            WireLogError("MG_Remote server: in-process unix session #%llu pid=%d reaped exit=%d%s "
+                         "sessionsFaulted=%lu (live %zu)",
+                         static_cast<unsigned long long>(live.ordinal),
+                         static_cast<int>(::getpid()), code,
+                         code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted,
+                         m_live.size() - 1);
+            session = m_live.erase(session);
+        }
     }
 
     void StartSessionThread(std::unique_ptr<SocketTransport> connection) {
-        if (m_sessionThread.joinable()) m_sessionThread.join(); // reaped already; never live here
-        m_sessionDone.store(false, std::memory_order_release);
-        m_sessionExit.store(0, std::memory_order_release);
-        ++m_sessionOrdinal;
+        // No hand-off pair and no pre-read Hello: the session reads its own first frame and binds
+        // its shm segments from the fds the pair's second connection carries.
+        auto live = std::make_unique<LiveSession>();
+        live->ordinal = ++m_sessionOrdinal;
         try {
-            // No hand-off pair and no pre-read Hello: the session reads its own first frame and
-            // binds its shm segments from the fds the pair's second connection carries.
-            m_sessionThread = std::thread([this, conn = std::move(connection)]() mutable {
+            live->thread = std::thread([live = live.get(), conn = std::move(connection)]() mutable {
                 const int code = RunSession(std::move(conn), {}, {}, -1, DataSource::None, 10000,
                                             /*inProcess=*/true);
-                m_sessionExit.store(code, std::memory_order_release);
-                m_sessionDone.store(true, std::memory_order_release);
+                live->exit.store(code, std::memory_order_release);
+                live->done.store(true, std::memory_order_release);
             });
         } catch (...) {
             WireLogError("MG_Remote server: could not start the in-process unix session thread; the "
                          "connection is closed (it cannot be refused: it moved into the failed thread)");
             return;
         }
-        m_active = ::getpid();
-        WireLogError("MG_Remote server: in-process unix session #%lu started on a thread (pid=%d)",
-                     m_sessionOrdinal, static_cast<int>(::getpid()));
+        m_live.push_back(std::move(live));
+        WireLogError("MG_Remote server: in-process unix session #%llu started on a thread (pid=%d, "
+                     "%zu live of at most %u; %u accepted in this process)",
+                     static_cast<unsigned long long>(m_sessionOrdinal),
+                     static_cast<int>(::getpid()), m_live.size(), m_maxSessions,
+                     Server::LiveServerSessionCount());
     }
 
     int StopServing() {
-        while (m_active > 0) {
-            if (!Reap()) ::usleep(10000);
+        // P14 S2: EVERY live session, not one. Each reads g_inProcessStop on its own control
+        // slice, so this is the same orderly end the single-session shape had, N times over.
+        while (!m_live.empty()) {
+            Reap();
+            if (!m_live.empty()) ::usleep(10000);
         }
         WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
         return 0;
@@ -1419,11 +1480,10 @@ private:
     // The connections that have not been paired yet live here between Accept calls.
     Server::PairAcceptor m_pairs;
     unsigned long& m_sessionsFaulted;
-    std::thread m_sessionThread;
-    std::atomic<bool> m_sessionDone{false};
-    std::atomic<int> m_sessionExit{0};
-    unsigned long m_sessionOrdinal = 0;
-    pid_t m_active = -1;
+    unsigned m_maxSessions;
+    // P14 S2: every live session, not one. Reaped by Run()'s Reap and by StopServing.
+    std::vector<std::unique_ptr<LiveSession>> m_live;
+    unsigned long long m_sessionOrdinal = 0;
 };
 
 // The server's environment preconditions, shared by the exec'd supervisor and the in-process
@@ -1638,7 +1698,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_serve_inpr
                                  TcpSupervisor::Handoff::Thread, &g_inProcessStop);
         result = supervisor.Run();
     } else {
-        UnixInProcessSupervisor supervisor(listener, sessionsFaulted);
+        UnixInProcessSupervisor supervisor(listener, sessionsFaulted,
+                                           UnixInProcessSupervisor::MaxSessionsFromEnvironment());
         result = supervisor.Run();
     }
     LogSupervisorSummary(sessionsFaulted);

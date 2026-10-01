@@ -197,6 +197,73 @@ TEST(SurfaceControlFrameTest, TheEleventhFramedOpIsInitCapabilitiesAndItCrossesT
     EXPECT_EQ(EncodeSurfaceOpFrame(frame, &builder), SurfaceWireError::None);
 }
 
+// P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The two context-lifecycle ops get
+// their own case rather than two rows in the ten-op table above, for the reason InitCapabilities
+// has its own: that case's name is a statement about ten, and a name is not traded for another
+// (G14). What this one states instead is the pair's whole contract - the values are wire ABI
+// (12/13, append-only), they have wire kinds (a spawned client's eglCreateContext has to cross),
+// and the identity cast between the two enums covers them.
+TEST(SurfaceControlFrameTest, TheContextLifecycleFramedOpsAreCreateContextAndDestroyContext) {
+    static_assert(static_cast<unsigned>(SurfaceControlOp::CreateContext) == 12u);
+    static_assert(static_cast<unsigned>(SurfaceControlOp::DestroyContext) == 13u);
+    EXPECT_EQ(static_cast<unsigned>(::MobileGL::Wire::SurfaceOpKind::CreateContext), 12u)
+        << "wire ABI: append-only, and 12 is the next free value. A renumbering here is a "
+           "protocol break no other case would see";
+    EXPECT_EQ(static_cast<unsigned>(::MobileGL::Wire::SurfaceOpKind::DestroyContext), 13u);
+
+    const SurfaceControlOp wired[] = {SurfaceControlOp::CreateContext,
+                                      SurfaceControlOp::DestroyContext};
+    for (const SurfaceControlOp op : wired) {
+        ::MobileGL::Wire::SurfaceOpKind kind;
+        ASSERT_TRUE(WireKindForSurfaceControlOp(op, &kind))
+            << Server::SurfaceControlOpName(op) << " may never leave the process, so a spawned "
+                                                   "client's eglCreateContext/eglDestroyContext "
+                                                   "cannot reach the server";
+        EXPECT_EQ(static_cast<unsigned>(kind), static_cast<unsigned>(op))
+            << Server::SurfaceControlOpName(op) << ": the frame and wire enums drifted apart";
+        SurfaceControlOp back;
+        ASSERT_TRUE(SurfaceControlOpForWireKind(kind, &back))
+            << "the decode range's upper bound did not move with the append, so the new tag "
+               "reads as out-of-range - Fatal{ProtocolCorruption}, not the missing row it is";
+        EXPECT_EQ(back, op);
+    }
+
+    // THE OP'S VALUES REALLY CROSS: the two fields a context creation adds to the frame's own
+    // four-tuple, past an encode/decode round trip. A field appended to the schema and never
+    // written by the encoder is exactly the silent disagreement the codec exists to prevent.
+    SurfaceControlFrame frame;
+    frame.kind = SurfaceControlOp::CreateContext;
+    frame.seq = 0x99;
+    frame.context = 7;            // the client context token
+    frame.shareGroupToken = 3;
+    frame.contextFlags = 0x5;
+    flatbuffers::FlatBufferBuilder builder(256);
+    const ::MobileGL::Wire::SurfaceOp* wireOp = EncodeAndParse(frame, &builder);
+    ASSERT_NE(wireOp, nullptr) << "a context creation failed to encode";
+    EXPECT_EQ(wireOp->context(), 7ull);
+    EXPECT_EQ(wireOp->shareGroupToken(), 3ull);
+    EXPECT_EQ(wireOp->contextFlags(), 5u);
+    SurfaceControlFrame back;
+    ASSERT_EQ(DecodeWireSurfaceOp(*wireOp, &back), SurfaceWireError::None);
+    EXPECT_EQ(back.kind, SurfaceControlOp::CreateContext);
+    EXPECT_EQ(back.context, 7ull) << "the client context token must survive the codec";
+    EXPECT_EQ(back.shareGroupToken, 3ull);
+    EXPECT_EQ(back.contextFlags, 5u);
+
+    // A destroy carries the token and nothing else: the share group is not something a destroy
+    // may name, and leaving a stale group token in the frame would be a second answer to a
+    // question only a creation asks.
+    SurfaceControlFrame destroy;
+    destroy.kind = SurfaceControlOp::DestroyContext;
+    destroy.context = 7;
+    builder.Clear();
+    const ::MobileGL::Wire::SurfaceOp* wireDestroy = EncodeAndParse(destroy, &builder);
+    ASSERT_NE(wireDestroy, nullptr);
+    EXPECT_EQ(wireDestroy->context(), 7ull);
+    EXPECT_EQ(wireDestroy->shareGroupToken(), 0ull);
+    EXPECT_EQ(wireDestroy->contextFlags(), 0u);
+}
+
 TEST(SurfaceControlFrameTest, WindowBackendAndWireWindowKindMapExplicitlyBothWays) {
     using MG_Backend::WindowBackend;
     const struct {
@@ -241,6 +308,11 @@ TEST(SurfaceControlFrameTest, EveryFramedOpRoundTripsThroughTheWireEnvelope) {
         SurfaceControlOp::ReleaseSurface, SurfaceControlOp::MakeCurrent,
         SurfaceControlOp::ReleaseCurrent, SurfaceControlOp::SetSwapInterval,
         SurfaceControlOp::ReleaseResources, SurfaceControlOp::SetWindowHandle,
+        // P5f cp's append and P14 S1's two. This case's name is a claim about EVERY framed op,
+        // which is what makes it the one place an append cannot be forgotten: a new kind that
+        // encodes but does not decode fails here even if the ten-op case above was left alone.
+        SurfaceControlOp::InitCapabilities,
+        SurfaceControlOp::CreateContext, SurfaceControlOp::DestroyContext,
     };
     for (const SurfaceControlOp op : wired) {
         SurfaceControlFrame frame;
@@ -277,6 +349,10 @@ TEST(SurfaceControlFrameTest, EveryFramedOpRoundTripsThroughTheWireEnvelope) {
         EXPECT_EQ(back.windowBackend, frame.windowBackend)
             << Server::SurfaceControlOpName(op);
         EXPECT_EQ(back.nativeToken, frame.nativeToken);
+        // P14 S1: the two appended fields travel with every op, 0 included - a field that only
+        // survives on the op that uses it is a field the codec has quietly made op-dependent.
+        EXPECT_EQ(back.shareGroupToken, frame.shareGroupToken);
+        EXPECT_EQ(back.contextFlags, frame.contextFlags);
     }
 }
 

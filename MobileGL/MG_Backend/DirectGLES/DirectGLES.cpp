@@ -16180,10 +16180,225 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESCapabilities = capabilities;
     }
 
+    // ---------------------------------------------------------------------------------
+    // P14 S4 (docs/Disaggregated/design/11-state-ownership.md): the native tuple is per context.
+    //
+    // THE DISPLAY STAYS ONE OBJECT. eglInitialize is once per process and eglTerminate runs when the
+    // last native context has gone, so a second context - or a second session - never terminates the
+    // display the first one is still using.
+    //
+    // EVERYTHING ELSE THAT WAS A FILE-LEVEL SINGLETON IS KEYED. A native EGLContext, the config it
+    // was created with and the native surfaces are keyed by (session, client context token): the
+    // identity S1 put on the wire (bind_context / SurfaceOp.context) and S2 gave a per-thread owner.
+    // The key is resolved on the calling thread through a probe the server layer installs
+    // (SetNativeContextKeyResolver); with none installed the answer is the single key {0, 0}, which
+    // is byte-for-byte the process singleton this replaces - monolith, a frontend-only process and
+    // every unit case keep exactly one tuple.
+    //
+    // WHY THE SURFACES ARE KEYED BY SESSION AND NOT BY CONTEXT: an EGLSurface is not owned by an
+    // EGLContext (EGL has no such relationship - only the draw/read BINDING is per context), so a
+    // session's surfaces are one set and each context records which of them it currently draws to.
+    // That is also what makes pbuffer -> window -> pbuffer keep its objects: creating the second
+    // surface does not touch the context, so the twins the first surface's draws built are still
+    // there when the third one is bound.
+
     static EGLDisplay g_Display = EGL_NO_DISPLAY;
-    static EGLContext g_Context = EGL_NO_CONTEXT;
-    static EGLSurface g_Surface = EGL_NO_SURFACE;
-    static EGLConfig g_Config = nullptr;
+    // eglInitialize/eglTerminate pairing: the display is terminated only when the count drops to 0.
+    static Uint32 g_displayUsers = 0;
+
+    struct NativeContextTuple {
+        Uint64 SessionKey = 0;
+        Uint64 ContextToken = 0;
+        Uint64 ShareGroupToken = 0;
+        EGLContext Context = EGL_NO_CONTEXT;
+        EGLConfig Config = nullptr;
+        // The session surface this context draws to / reads from, as last made current for it.
+        EGLSurface Draw = EGL_NO_SURFACE;
+        EGLSurface Read = EGL_NO_SURFACE;
+    };
+
+    struct NativeSessionState {
+        Uint64 SessionKey = 0;
+        // Every native surface this session created, so its teardown destroys its own and only its own.
+        Vector<EGLSurface> Surfaces;
+        // The surface the session currently draws to / reads from - what a bind to another context
+        // re-makes current, and what Present/eglSwapBuffers names.
+        EGLSurface Draw = EGL_NO_SURFACE;
+        EGLSurface Read = EGL_NO_SURFACE;
+    };
+
+    static std::mutex g_nativeRegistryMutex;
+    // Bumped on every registry mutation. The per-thread active-tuple cache below is keyed on it, so
+    // a destroyed tuple can never be handed out from a stale cache entry.
+    static std::atomic<Uint64> g_nativeRegistryEpoch{1};
+    // Never erased while the process lives: a context teardown marks its tuple dead (Context =
+    // EGL_NO_CONTEXT) instead of freeing it, so a cached pointer is never dangling between the
+    // epoch bump and the next resolution.
+    static Vector<NativeContextTuple*>& NativeContexts() {
+        static Vector<NativeContextTuple*>* contexts = new Vector<NativeContextTuple*>();
+        return *contexts;
+    }
+    static Vector<NativeSessionState*>& NativeSessions() {
+        static Vector<NativeSessionState*>* sessions = new Vector<NativeSessionState*>();
+        return *sessions;
+    }
+
+    static std::atomic<NativeContextKeyResolver> g_nativeContextKeyResolver{nullptr};
+
+    // A one-way override for a case that drives the registry with no session runtime installed:
+    // when `t_forcedNativeKeyValid` is set, the key is the forced pair instead of the probe's
+    // answer. The setter clears the active-tuple cache, which is keyed on the effective key.
+    thread_local Bool t_forcedNativeKeyValid = false;
+    thread_local Uint64 t_forcedNativeSession = 0;
+    thread_local Uint64 t_forcedNativeToken = 0;
+
+    void SetNativeContextKeyResolver(NativeContextKeyResolver resolver) {
+        g_nativeContextKeyResolver.store(resolver, std::memory_order_release);
+    }
+
+    static void ResolveNativeKey(Uint64& outSession, Uint64& outToken) {
+        if (t_forcedNativeKeyValid) {
+            outSession = t_forcedNativeSession;
+            outToken = t_forcedNativeToken;
+            return;
+        }
+        outSession = 0;
+        outToken = 0;
+        const NativeContextKeyResolver resolver = g_nativeContextKeyResolver.load(std::memory_order_acquire);
+        if (resolver != nullptr) (void)resolver(&outSession, &outToken);
+    }
+
+    Uint64 CurrentNativeSessionKey() {
+        Uint64 session = 0;
+        Uint64 token = 0;
+        ResolveNativeKey(session, token);
+        return session;
+    }
+
+    namespace {
+        // The active tuple for this thread. The fast path is a key compare against a thread-local
+        // cache, because IsBackendContextCurrentOnThisThread sits under every draw; the slow path
+        // (a first call, a bind_context switch, or any registry mutation) walks the registry, which
+        // holds one tuple per live client context.
+        thread_local NativeContextTuple* t_activeNativeTuple = nullptr;
+        thread_local Uint64 t_activeNativeEpoch = 0;
+        thread_local Uint64 t_activeNativeSession = 0;
+        thread_local Uint64 t_activeNativeToken = 0;
+        // The native context THIS THREAD last made current. An EGLContext can be current on only one
+        // thread, and MakeCurrent is the only writer, so a plain thread-local is exact - and it is
+        // what makes MakeNativeContextCurrentForBoundToken a no-op when the bind did not actually
+        // change the native context (the single-context world's every bind).
+        thread_local EGLContext t_boundNativeContext = EGL_NO_CONTEXT;
+    } // namespace
+
+    static NativeSessionState& AcquireNativeSession(Uint64 sessionKey) {
+        for (auto* session : NativeSessions()) {
+            if (session->SessionKey == sessionKey) return *session;
+        }
+        auto* created = new NativeSessionState{};
+        created->SessionKey = sessionKey;
+        NativeSessions().push_back(created);
+        g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        return *created;
+    }
+
+    static NativeSessionState& ActiveNativeSession() {
+        Uint64 session = 0;
+        Uint64 token = 0;
+        ResolveNativeKey(session, token);
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        return AcquireNativeSession(session);
+    }
+
+    // The tuple the calling thread works on, created on first use. Lazy creation is what keeps the
+    // pre-S4 shapes working unchanged: a session that never crossed a CreateContext - the whole
+    // single-context world, and every existing fixture - resolves to its token-0 tuple and gets
+    // exactly the one native context it always had.
+    static NativeContextTuple& ActiveNativeContext() {
+        Uint64 session = 0;
+        Uint64 token = 0;
+        ResolveNativeKey(session, token);
+        const Uint64 epoch = g_nativeRegistryEpoch.load(std::memory_order_acquire);
+        if (t_activeNativeTuple != nullptr && t_activeNativeEpoch == epoch &&
+            t_activeNativeSession == session && t_activeNativeToken == token) {
+            return *t_activeNativeTuple;
+        }
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        NativeContextTuple* found = nullptr;
+        for (auto* tuple : NativeContexts()) {
+            if (tuple->SessionKey == session && tuple->ContextToken == token) {
+                found = tuple;
+                break;
+            }
+        }
+        if (found == nullptr) {
+            found = new NativeContextTuple{};
+            found->SessionKey = session;
+            found->ContextToken = token;
+            NativeContexts().push_back(found);
+            (void)AcquireNativeSession(session);
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+        t_activeNativeTuple = found;
+        t_activeNativeEpoch = g_nativeRegistryEpoch.load(std::memory_order_acquire);
+        t_activeNativeSession = session;
+        t_activeNativeToken = token;
+        return *found;
+    }
+
+    static NativeContextTuple* FindNativeContext(Uint64 sessionKey, Uint64 contextToken) {
+        for (auto* tuple : NativeContexts()) {
+            if (tuple->SessionKey == sessionKey && tuple->ContextToken == contextToken) return tuple;
+        }
+        return nullptr;
+    }
+
+    Uint64 NativeContextCount() {
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        Uint64 count = 0;
+        for (auto* tuple : NativeContexts()) {
+            if (tuple->Context != EGL_NO_CONTEXT) ++count;
+        }
+        return count;
+    }
+
+    Uint64 NativeContextCountForSession(Uint64 sessionKey) {
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        Uint64 count = 0;
+        for (auto* tuple : NativeContexts()) {
+            if (tuple->SessionKey == sessionKey && tuple->Context != EGL_NO_CONTEXT) ++count;
+        }
+        return count;
+    }
+
+    EGLContext NativeContextHandleFor(Uint64 sessionKey, Uint64 contextToken) {
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        const NativeContextTuple* tuple = FindNativeContext(sessionKey, contextToken);
+        return tuple != nullptr ? tuple->Context : EGL_NO_CONTEXT;
+    }
+
+    void ForceNativeContextKeyForTesting(Uint64 sessionKey, Uint64 contextToken) {
+        t_forcedNativeSession = sessionKey;
+        t_forcedNativeToken = contextToken;
+        t_forcedNativeKeyValid = true;
+        // The cache is keyed on the effective key, so drop it rather than let a stale entry answer.
+        t_activeNativeTuple = nullptr;
+        t_activeNativeEpoch = 0;
+    }
+
+    // The display's one-time initialization. Returns false only when there is no EGL to talk to.
+    static Bool EnsureDisplayInitialized() {
+        if (g_Display != EGL_NO_DISPLAY) return true;
+        if (!g_EGLFuncs.eglGetDisplay) return false;
+        g_Display = g_EGLFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (g_Display == EGL_NO_DISPLAY) return false;
+        if (!g_EGLFuncs.eglInitialize(g_Display, nullptr, nullptr)) {
+            g_Display = EGL_NO_DISPLAY;
+            return false;
+        }
+        if (g_EGLFuncs.eglBindAPI) g_EGLFuncs.eglBindAPI(EGL_OPENGL_ES_API);
+        return true;
+    }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P12 (on-screen server window), D3: true only while InitWindowSurface publishes the default
@@ -16195,14 +16410,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight) {
         outWidth = 0;
         outHeight = 0;
-        if (!g_EGLFuncs.eglQuerySurface || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE) {
+        // P14 S4: the surface is the SESSION's, not the process's - the tuple that draws to it is
+        // one of the session's contexts.
+        const EGLSurface surface = ActiveNativeSession().Draw;
+        if (!g_EGLFuncs.eglQuerySurface || g_Display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) {
             return false;
         }
 
         EGLint width = 0;
         EGLint height = 0;
-        if (!g_EGLFuncs.eglQuerySurface(g_Display, g_Surface, EGL_WIDTH, &width) ||
-            !g_EGLFuncs.eglQuerySurface(g_Display, g_Surface, EGL_HEIGHT, &height) ||
+        if (!g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_WIDTH, &width) ||
+            !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &height) ||
             width <= 0 || height <= 0) {
             return false;
         }
@@ -16273,15 +16491,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
         // A driver that refuses the query leaves both at 0. Fall back to what the EGL config
-        // was chosen with, which is what the surface actually has.
+        // was chosen with, which is what the surface actually has. P14 S4: the config belongs to the
+        // context the surface is bound to, so it is the active tuple's.
+        const EGLConfig activeConfig = ActiveNativeContext().Config;
         if (depthBits == 0 && stencilBits == 0 && g_EGLFuncs.eglGetConfigAttrib && g_Display != EGL_NO_DISPLAY &&
-            g_Config != nullptr) {
+            activeConfig != nullptr) {
             EGLint eglDepth = 0;
             EGLint eglStencil = 0;
-            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, g_Config, EGL_DEPTH_SIZE, &eglDepth)) {
+            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, activeConfig, EGL_DEPTH_SIZE, &eglDepth)) {
                 depthBits = static_cast<GLint>(eglDepth);
             }
-            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, g_Config, EGL_STENCIL_SIZE, &eglStencil)) {
+            if (g_EGLFuncs.eglGetConfigAttrib(g_Display, activeConfig, EGL_STENCIL_SIZE, &eglStencil)) {
                 stencilBits = static_cast<GLint>(eglStencil);
             }
         }
@@ -16291,9 +16511,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PREVIOUS surface published in place, which would be stale - this function runs
             // once per surface activation, not once per process. It is written this way anyway
             // because the branch is unreachable for a surface MobileGL chose itself:
-            // InitDisplayAndContext asks eglChooseConfig for EGL_DEPTH_SIZE 24 and
-            // EGL_STENCIL_SIZE 8, and so does its alpha-free retry, so g_Config always has both
-            // and the EGL fallback above always answers. A caller that supplies its own
+            // ChooseConfigForSurface asks eglChooseConfig for EGL_DEPTH_SIZE 24 and
+            // EGL_STENCIL_SIZE 8, and so does its alpha-free retry, so the context's config always
+            // has both and the EGL fallback above always answers. A caller that supplies its own
             // depth-less config would keep the previous surface's description; publishing a
             // guess instead would be a different lie, and the placeholder attachment model has
             // no way to say "this buffer does not exist" short of detaching it.
@@ -16565,32 +16785,54 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-    static Bool InitDisplayAndContext(EGLint surfaceBit, NativeWindowType window = static_cast<NativeWindowType>(0)) {
-        DestroyEGLContext();
-
+    // P14 S4. THE CONTEXT FOR `tuple`, AND THE SURFACE'S CONFIG, WITH NO TEARDOWN IN FRONT.
+    //
+    // The S4 deletion is the first statement this function used to begin with: `DestroyEGLContext()`
+    // ran UNCONDITIONALLY, so creating a second surface (let alone a second context) destroyed the
+    // native context the first one's objects lived in. A tuple that already has a native context
+    // keeps it and only (re)chooses the config the new surface is created with; a tuple that has
+    // none builds one, sharing with the group leader when CreateNativeContextFor named a group.
+    //
+    // A CONFIG THAT IS ALREADY SET IS NOT RE-CHOSEN FOR A DIFFERENT SURFACE KIND, and that is the
+    // deliberate trade: an EGLSurface's config must be compatible with the context's, so re-choosing
+    // would mean recreating the context - exactly the teardown this slice deletes. A driver that
+    // refuses the resulting eglCreate*Surface refuses it by name, which is the honest failure.
+    // P14 S4. THE BRING-UP DIAGNOSIS, in one place because BOTH surface paths owe it (it used to be
+    // the first statement of InitDisplayAndContext, which both went through). Extracted rather than
+    // duplicated when that function was replaced by the per-tuple EnsureNativeContext.
+    //
+    // Diagnose, and deliberately NOT resolve: resolving raises
+    // Fatal{PipeLegacyMemosDisabled}, and this function runs inside eglMakeCurrent, which
+    // the integration harness pre-flights in a FORKED CHILD
+    // (MG_IntegrationTest/Harness/HeadlessGL.cpp). A child that dies on a signal is reported
+    // to the parent as "no usable GPU/display/ICD" and every scenario in the lane is
+    // SKIPPED - so the stop became a green lane that ran nothing, on exactly the two env
+    // vars the D14/D18 A/B is driven with (ROADMAP.md:7). The stop now belongs to the first
+    // twin lookup, which happens in a scenario body where a crash IS a test failure.
+    static void DiagnoseEsprytSlotArmAtBringUp() {
 #if MOBILEGL_PIPE_PUSH
-        // DIAGNOSE the twin-table arm here, at backend startup, so an operator who set
-        // MOBILEGL_PIPE_PUSH and MOBILEGL_PIPE_LEGACY_MEMOS into a combination that leaves no
-        // arm at all is told so by name, in the log, before the first draw.
-        //
-        // Diagnose, and deliberately NOT resolve: resolving raises
-        // Fatal{PipeLegacyMemosDisabled}, and this function runs inside eglMakeCurrent, which
-        // the integration harness pre-flights in a FORKED CHILD
-        // (MG_IntegrationTest/Harness/HeadlessGL.cpp). A child that dies on a signal is reported
-        // to the parent as "no usable GPU/display/ICD" and every scenario in the lane is
-        // SKIPPED - so the stop became a green lane that ran nothing, on exactly the two env
-        // vars the D14/D18 A/B is driven with (ROADMAP.md:7). The stop now belongs to the first
-        // twin lookup, which happens in a scenario body where a crash IS a test failure.
         DiagnoseEsprytSlotArm();
 #endif
+    }
 
-        g_Display = g_EGLFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
-        if (g_Display == EGL_NO_DISPLAY) return false;
+    static Bool EnsureNativeContext(NativeContextTuple& tuple, EGLint surfaceBit, NativeWindowType window) {
+        if (!EnsureDisplayInitialized()) return false;
+        if (tuple.Context != EGL_NO_CONTEXT) return true;
 
-        if (!g_EGLFuncs.eglInitialize(g_Display, nullptr, nullptr)) return false;
-        g_EGLFuncs.eglBindAPI(EGL_OPENGL_ES_API);
+        if (tuple.Config == nullptr && !ChooseConfigForSurface(surfaceBit, tuple.Config, window)) return false;
 
-        if (!ChooseConfigForSurface(surfaceBit, g_Config, window)) return false;
+        // A share group whose leader has a live native context hands it to eglCreateContext: this is
+        // the whole of "shared contexts see the same objects" on the server. The group is recorded
+        // by CreateNativeContextFor before this runs; a tuple nobody named a group for starts one.
+        EGLContext share = EGL_NO_CONTEXT;
+        for (auto* other : NativeContexts()) {
+            if (other != &tuple && other->SessionKey == tuple.SessionKey &&
+                other->Context != EGL_NO_CONTEXT && tuple.ShareGroupToken != 0 &&
+                other->ShareGroupToken == tuple.ShareGroupToken) {
+                share = other->Context;
+                break;
+            }
+        }
 
         // Negotiate the highest ES 3.x context. Version-strict EGL implementations
         // (ANGLE) return exactly the requested minor, and a bare CLIENT_VERSION 3
@@ -16601,15 +16843,83 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
                                              EGL_CONTEXT_MINOR_VERSION, minorVersion,
                                              EGL_NONE};
-            g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, contextAttribs);
-            if (g_Context != EGL_NO_CONTEXT) {
+            tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, contextAttribs);
+            if (tuple.Context != EGL_NO_CONTEXT) {
+                ++g_displayUsers;
                 return true;
             }
         }
 
         const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-        g_Context = g_EGLFuncs.eglCreateContext(g_Display, g_Config, EGL_NO_CONTEXT, legacyContextAttribs);
-        return g_Context != EGL_NO_CONTEXT;
+        tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, legacyContextAttribs);
+        if (tuple.Context == EGL_NO_CONTEXT) return false;
+        ++g_displayUsers;
+        return true;
+    }
+
+    Bool CreateNativeContextFor(Uint64 contextToken, Uint64 shareGroupToken) {
+        if (contextToken == 0) return false;
+        const Uint64 sessionKey = CurrentNativeSessionKey();
+        NativeContextTuple* tuple = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            AcquireNativeSession(sessionKey);
+            for (auto* candidate : NativeContexts()) {
+                if (candidate->SessionKey == sessionKey && candidate->ContextToken == contextToken) {
+                    tuple = candidate;
+                    break;
+                }
+            }
+            if (tuple == nullptr) {
+                tuple = new NativeContextTuple{};
+                tuple->SessionKey = sessionKey;
+                tuple->ContextToken = contextToken;
+                NativeContexts().push_back(tuple);
+                g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+            }
+        }
+        if (tuple->Context != EGL_NO_CONTEXT) return true; // idempotent
+        tuple->ShareGroupToken = shareGroupToken;
+        return EnsureNativeContext(*tuple, EGL_PBUFFER_BIT, static_cast<NativeWindowType>(0));
+    }
+
+    void DestroyNativeContextFor(Uint64 contextToken) {
+        const Uint64 sessionKey = CurrentNativeSessionKey();
+        if (contextToken == 0) return;
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        NativeContextTuple* tuple = FindNativeContext(sessionKey, contextToken);
+        if (tuple == nullptr || tuple->Context == EGL_NO_CONTEXT) return;
+        if (g_EGLFuncs.eglDestroyContext && g_Display != EGL_NO_DISPLAY) {
+            // The context may be current on this very thread; unbinding first is what EGL requires
+            // (eglDestroyContext of a current context is EGL_BAD_ACCESS).
+            if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() == tuple->Context &&
+                g_EGLFuncs.eglMakeCurrent) {
+                g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            }
+            g_EGLFuncs.eglDestroyContext(g_Display, tuple->Context);
+        }
+        tuple->Context = EGL_NO_CONTEXT;
+        tuple->Config = nullptr;
+        tuple->Draw = EGL_NO_SURFACE;
+        tuple->Read = EGL_NO_SURFACE;
+        g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        if (g_displayUsers > 0) --g_displayUsers;
+        if (g_displayUsers == 0 && g_Display != EGL_NO_DISPLAY && g_EGLFuncs.eglTerminate) {
+            g_EGLFuncs.eglTerminate(g_Display);
+            g_Display = EGL_NO_DISPLAY;
+        }
+    }
+
+    // P14 S4. THE NATIVE HALF OF A CONTEXT SWITCH. See DirectGLES.h; in one line, `bind_context`
+    // moves the session's context attribution and this makes the calling thread's native tuple
+    // follow it, binding the session's current surface to the newly named context's EGLContext.
+    Bool MakeNativeContextCurrentForBoundToken() {
+        NativeContextTuple& tuple = ActiveNativeContext();
+        // Nothing to switch to: a session that never sent CreateContext has no native context for
+        // this token, and building one here would bind a context the client does not know it has.
+        if (tuple.Context == EGL_NO_CONTEXT) return true;
+        if (t_boundNativeContext == tuple.Context) return true;
+        return MakeCurrent();
     }
 
     namespace {
@@ -16620,7 +16930,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void ApplyRequestedSwapInterval() {
             if (g_requestedSwapInterval < 0) return;
-            if (!g_EGLFuncs.eglSwapInterval || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE) return;
+            const EGLSurface surface = ActiveNativeSession().Draw;
+            if (!g_EGLFuncs.eglSwapInterval || g_Display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) return;
             const EGLBoolean ok = g_EGLFuncs.eglSwapInterval(g_Display, g_requestedSwapInterval);
             MGLOG_D("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval,
                     ok ? "ok" : "failed");
@@ -16639,10 +16950,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool InitWindowSurface(NativeWindowType window) {
         if (!window) return false;
 
-        if (!InitDisplayAndContext(EGL_WINDOW_BIT, window)) return false;
+        DiagnoseEsprytSlotArmAtBringUp();
 
-        g_Surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, g_Config, window, nullptr);
-        if (g_Surface == EGL_NO_SURFACE) return false;
+        NativeContextTuple& tuple = ActiveNativeContext();
+        if (!EnsureNativeContext(tuple, EGL_WINDOW_BIT, window)) return false;
+
+        const EGLSurface surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, tuple.Config, window, nullptr);
+        if (surface == EGL_NO_SURFACE) return false;
+        NativeSessionState& session = ActiveNativeSession();
+        session.Surfaces.push_back(surface);
+        session.Draw = surface;
+        session.Read = surface;
+        tuple.Draw = surface;
+        tuple.Read = surface;
 
         if (!MakeCurrent()) return false;
 
@@ -16659,25 +16979,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PublishDefaultFramebufferDepthStencilFormat();
 #endif
 
-        MGLOG_D("EGL context created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display, g_Surface,
-                g_Context, window);
+        MGLOG_D("EGL window surface created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display,
+                surface, tuple.Context, window);
         return true;
     }
 
     Bool InitPbufferSurface(EGLint width, EGLint height) {
         if (width <= 0 || height <= 0) return false;
-        if (!InitDisplayAndContext(EGL_PBUFFER_BIT)) return false;
+
+        DiagnoseEsprytSlotArmAtBringUp();
+
+        NativeContextTuple& tuple = ActiveNativeContext();
+        if (!EnsureNativeContext(tuple, EGL_PBUFFER_BIT, static_cast<NativeWindowType>(0))) return false;
 
         const EGLint surfaceAttribs[] = {EGL_WIDTH, width, EGL_HEIGHT, height, EGL_NONE};
-        g_Surface = g_EGLFuncs.eglCreatePbufferSurface(g_Display, g_Config, surfaceAttribs);
-        if (g_Surface == EGL_NO_SURFACE) return false;
+        const EGLSurface surface = g_EGLFuncs.eglCreatePbufferSurface(g_Display, tuple.Config, surfaceAttribs);
+        if (surface == EGL_NO_SURFACE) return false;
+        NativeSessionState& session = ActiveNativeSession();
+        session.Surfaces.push_back(surface);
+        session.Draw = surface;
+        session.Read = surface;
+        tuple.Draw = surface;
+        tuple.Read = surface;
 
         if (!MakeCurrent()) return false;
 
         PublishDefaultFramebufferDepthStencilFormat();
 
-        MGLOG_D("EGL pbuffer context created successfully: display=%p, surface=%p, context=%p. size=%dx%d", g_Display,
-                g_Surface, g_Context, width, height);
+        MGLOG_D("EGL pbuffer surface created successfully: display=%p, surface=%p, context=%p. size=%dx%d", g_Display,
+                surface, tuple.Context, width, height);
         return true;
     }
 
@@ -16745,17 +17075,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void InvalidateEglVerifiedStamp();
 
     Bool MakeCurrent() {
-        if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || g_Surface == EGL_NO_SURFACE ||
-            g_Context == EGL_NO_CONTEXT) {
+        // P14 S4: the context comes from the calling thread's tuple (the session's bound token),
+        // the surface from the session. Both halves used to be file-level singletons.
+        NativeContextTuple& tuple = ActiveNativeContext();
+        NativeSessionState& session = ActiveNativeSession();
+        tuple.Draw = session.Draw;
+        tuple.Read = session.Read;
+        if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY || session.Draw == EGL_NO_SURFACE ||
+            tuple.Context == EGL_NO_CONTEXT) {
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: EGL display/surface/context is not initialized");
             return false;
         }
-        if (!g_EGLFuncs.eglMakeCurrent(g_Display, g_Surface, g_Surface, g_Context)) {
+        if (!g_EGLFuncs.eglMakeCurrent(g_Display, session.Draw, session.Draw, tuple.Context)) {
             const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
         InvalidateEglVerifiedStamp();
+        t_boundNativeContext = tuple.Context;
         g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
@@ -16798,6 +17135,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // legally arrive on a thread other than the current owner); erring towards
         // "not current" only defers buffer ops, which is always safe.
         InvalidateEglVerifiedStamp();
+        t_boundNativeContext = EGL_NO_CONTEXT;
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
@@ -16828,7 +17166,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool IsBackendContextCurrentOnThisThread() {
-        if (g_Context == EGL_NO_CONTEXT) {
+        const NativeContextTuple& tuple = ActiveNativeContext();
+        if (tuple.Context == EGL_NO_CONTEXT) {
             return false;
         }
         if (g_backendContextOwnerThread.load(std::memory_order_acquire) != std::this_thread::get_id()) {
@@ -16846,7 +17185,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_eglVerifiedContextGeneration.load(std::memory_order_relaxed) == g_syncContextGeneration) {
             return true;
         }
-        if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() != g_Context) {
+        if (g_EGLFuncs.eglGetCurrentContext && g_EGLFuncs.eglGetCurrentContext() != tuple.Context) {
             return false;
         }
         g_eglVerifiedFrameSerial.store(frameSerial, std::memory_order_relaxed);
@@ -17263,7 +17602,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             slot = {g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), g_syncContextGeneration, serial};
         }
 
-        g_EGLFuncs.eglSwapBuffers(g_Display, g_Surface);
+        // P14 S4: the session's surface, not the process's.
+        g_EGLFuncs.eglSwapBuffers(g_Display, ActiveNativeSession().Draw);
 
         if (canFence && g_GLESFuncs.glGetSynciv) {
             // Fences signal in submission order within one context, so the highest
@@ -17297,6 +17637,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    // P14 S4: THE FULL TEARDOWN, SCOPED TO THE CALLING THREAD'S SESSION.
+    //
+    // This used to destroy the process's one context, its one surface and terminate the display.
+    // The callers (ReleaseEGLResources, ~BackendObject_DirectGLES) mean "this session's EGL world
+    // goes away", so under S4 it destroys EVERY native context that session holds, its surfaces, and
+    // terminates the display only when no context anywhere in the process is left - which is what
+    // keeps a second live session (S2) serving while this one closes. With no resolver installed
+    // there is exactly one session (key 0) and this is the old statement, byte for word.
+    //
+    // ONE CONTEXT's teardown is DestroyNativeContextFor (the DestroyContext control frame); this is
+    // the session's.
     void DestroyEGLContext() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
@@ -17328,16 +17679,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
         for (FrameFence& slot : g_frameFenceRing) slot = {};
         g_completedFrameSerial.store(g_currentFrameSerial.load(std::memory_order_relaxed),
                                      std::memory_order_relaxed);
-        if (g_Display != EGL_NO_DISPLAY) {
-            g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            if (g_Context != EGL_NO_CONTEXT) {
-                g_EGLFuncs.eglDestroyContext(g_Display, g_Context);
-                g_Context = EGL_NO_CONTEXT;
+
+        const Uint64 sessionKey = CurrentNativeSessionKey();
+        if (g_Display == EGL_NO_DISPLAY) return;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            if (g_EGLFuncs.eglMakeCurrent) {
+                g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             }
-            if (g_Surface != EGL_NO_SURFACE) {
-                g_EGLFuncs.eglDestroySurface(g_Display, g_Surface);
-                g_Surface = EGL_NO_SURFACE;
+            for (auto* tuple : NativeContexts()) {
+                if (tuple->SessionKey != sessionKey || tuple->Context == EGL_NO_CONTEXT) continue;
+                if (g_EGLFuncs.eglDestroyContext) g_EGLFuncs.eglDestroyContext(g_Display, tuple->Context);
+                tuple->Context = EGL_NO_CONTEXT;
+                tuple->Config = nullptr;
+                tuple->Draw = EGL_NO_SURFACE;
+                tuple->Read = EGL_NO_SURFACE;
+                if (g_displayUsers > 0) --g_displayUsers;
             }
+            for (auto* session : NativeSessions()) {
+                if (session->SessionKey != sessionKey) continue;
+                if (g_EGLFuncs.eglDestroySurface) {
+                    for (const EGLSurface surface : session->Surfaces) {
+                        if (surface != EGL_NO_SURFACE) g_EGLFuncs.eglDestroySurface(g_Display, surface);
+                    }
+                }
+                session->Surfaces.clear();
+                session->Draw = EGL_NO_SURFACE;
+                session->Read = EGL_NO_SURFACE;
+            }
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+        // THE LAST CONTEXT ANYWHERE IN THE PROCESS IS WHAT TERMINATES THE DISPLAY. A session that
+        // closes while another is rendering must not take eglTerminate with it.
+        if (g_displayUsers == 0 && g_EGLFuncs.eglTerminate) {
             g_EGLFuncs.eglTerminate(g_Display);
             g_Display = EGL_NO_DISPLAY;
         }

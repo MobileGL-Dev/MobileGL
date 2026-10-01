@@ -112,81 +112,44 @@ namespace MobileGL::MG_Remote::Server {
     // window in which a live-but-exiting apply thread answers true is byte-for-byte the old
     // one. The ServerLoop object still OWNS the key - nothing but ApplyThreadMain writes it -
     // it simply no longer has to be reached through the singleton to be read.
+    // P14 S2: AND THE ANSWER IS PER THREAD NOW, NOT PER PROCESS. One word cannot hold N apply
+    // threads: two sessions' threads would each publish their own key and the second store would
+    // make the FIRST thread answer "no" to every role guard it owns - which is not a slower guard
+    // but a dead one (a draw would take the client arm on the apply thread, and
+    // RunSurfaceControlFrame would lose its re-entrancy shortcut and deadlock the EGL teardown).
+    // The question is "am I an apply thread", a fact about the CALLER, so it is asked in the
+    // caller's own TLS - one constant-initialized word, no guard, no atomic:
+    //
+    //   t_onApplyThread   the calling thread IS an apply thread.
+    //   g_applyThreadKey  HOW MANY are running in this process. Kept because
+    //                     MG_Backend/DirectGLES/Managers.cpp (outside this package's file set)
+    //                     reads this name `!= 0` - "an apply thread is running somewhere" - which
+    //                     is the count's zero-ness exactly. It is no longer a key and nothing on
+    //                     the hot paths reads it.
+    //
+    // ZERO MEANS "NO APPLY THREAD IS RUNNING" still: t_onApplyThread is raised as the apply
+    // thread's FIRST act and lowered in the same m_controlMutex critical section that clears
+    // m_running on the way out, so the window in which a live-but-exiting apply thread answers
+    // true is byte-for-byte the old one.
+    //
+    // WHAT WENT WITH IT, so nobody re-derives it: the aarch64 TPIDR_EL0 fast path, the
+    // std::thread::id fallback with its no-padding static_assert, the MOBILEGL_DETAIL_
+    // APPLY_THREAD_POINTER build knob and the relaxed-load argument about a recycled TLS block.
+    // They existed to make "is the process's one apply thread mine" cheap; the question is now
+    // "is the caller an apply thread", whose cheap answer is the caller's own word - and a word
+    // cannot be recycled, because the thread that inherits a dead apply thread's TLS block is
+    // not an apply thread until it runs ApplyThreadMain.
     namespace Detail {
-        // RELAXED ON BOTH SIDES, and that is a claim about recycling, not a shrug. The only
-        // dangerous outcome would be a NEW thread that reuses the exited apply thread's TLS
-        // block (hence its thread pointer) while still reading the pre-clear key. It cannot
-        // happen: the clear is sequenced before the apply thread's exit, the exit releases the
-        // TLS block under libc's own lock, and the thread that later receives that block takes
-        // the same lock - so the clear happens-before any load the new thread performs, and
-        // coherence forbids a relaxed load from reading a value that a happens-before store
-        // overwrote. A stale ZERO is harmless in the other direction: a thread that is not the
-        // apply thread wants "false" anyway, and the apply thread always reads its own store.
-        //
-        // No acquire is needed for a second reason: this is an IDENTITY, not a handshake. No
-        // caller publishes data through it; the real ordering lives in the ring, the doorbell
-        // and m_controlMutex.
-        inline std::atomic<Uint64> g_applyThreadKey{0};
+        // A fresh thread's TLS word is zero-initialized, so a thread that inherits the exited
+        // apply thread's TLS block - the recycling case the old relaxed-load argument was about -
+        // starts out answering false and can only become the apply thread by running
+        // ApplyThreadMain. There is no stale value to read and nothing to order.
+        inline thread_local Bool t_onApplyThread = false;
 
-        // The calling thread's identity as the same integer. aarch64 - the split's only
-        // measured target - reads TPIDR_EL0 with a single instruction and no call. Everywhere
-        // else falls back to std::this_thread::get_id() memcpy'd into the key: still one libc
-        // call, but the atomic<thread::id> load and the out-of-line pthread_equal that
-        // dominated the old body are gone either way. x86_64 is deliberately NOT on the
-        // builtin path - __builtin_thread_pointer only grew x86 support in clang 17 / GCC 11
-        // and older toolchains accept __has_builtin for it and then fail in codegen, which is
-        // a build break on the desktop ctest lane for a target whose frame rate nobody
-        // measures.
-        //
-        // A LIVE THREAD'S KEY IS NEVER 0 on either path (a thread pointer is a real TLS
-        // address; std::this_thread::get_id() on a running thread is never the
-        // default-constructed id, whose object representation is the all-zero one on every
-        // library in scope), which is what lets 0 mean "nobody".
-        //
-        // THE SELECTOR IS A BUILD KNOB, NOT A HEADER SECRET (review round 3). This header is
-        // pulled into MG_State, MG_Impl and MG_Test translation units now, so the name carries
-        // the MOBILEGL_DETAIL_ prefix to read as internal, it is #ifndef-guarded so a toolchain
-        // whose __has_builtin(__builtin_thread_pointer) answers 1 and then fails in codegen can
-        // be steered off the path with -DMOBILEGL_DETAIL_APPLY_THREAD_POINTER=0 instead of a
-        // header edit, and it is always DEFINED - to 0 when unavailable - and tested with #if
-        // rather than #ifdef, so that a -D...=0 really disables it instead of being ignored.
-#ifndef MOBILEGL_DETAIL_APPLY_THREAD_POINTER
-#if defined(__aarch64__) && defined(__has_builtin)
-#if __has_builtin(__builtin_thread_pointer)
-#define MOBILEGL_DETAIL_APPLY_THREAD_POINTER 1
-#endif
-#endif
-#endif
-#ifndef MOBILEGL_DETAIL_APPLY_THREAD_POINTER
-#define MOBILEGL_DETAIL_APPLY_THREAD_POINTER 0
-#endif
-        inline Uint64 CurrentThreadKey() {
-#if MOBILEGL_DETAIL_APPLY_THREAD_POINTER
-            return static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(__builtin_thread_pointer()));
-#else
-            const std::thread::id id = std::this_thread::get_id();
-            static_assert(sizeof(std::thread::id) <= sizeof(Uint64),
-                          "std::thread::id does not fit the apply-thread key; this fallback has "
-                          "to hash rather than copy on that platform");
-            // AND IT MUST HAVE NO PADDING (review round 3). Copying the OBJECT REPRESENTATION of
-            // a type that has padding bytes would let two calls ON THE SAME THREAD return
-            // different keys, and OnApplyThread() would then answer FALSE ON THE APPLY THREAD -
-            // a role guard that has stopped guarding, which is the one direction CONTRACT-P5C
-            // rule E says a guard may never fail in (RunSurfaceControlFrame would also lose its
-            // re-entrancy shortcut and the EGL teardown post would deadlock on m_controlDone).
-            // Every library this fallback is built against today wraps a single scalar
-            // (libstdc++ __gthread_t, libc++ __libcpp_thread_id, MSVC unsigned int) and
-            // satisfies this; one that did not is a BUILD ERROR here rather than a silently
-            // dead guard at run time.
-            static_assert(std::has_unique_object_representations_v<std::thread::id>,
-                          "std::thread::id has padding on this platform: copying its object "
-                          "representation would make the apply-thread key unstable within one "
-                          "thread. Hash the id (std::hash<std::thread::id>) instead.");
-            Uint64 key = 0;
-            std::memcpy(&key, &id, sizeof(id));
-            return key;
-#endif
-        }
+        // The count of live apply threads, as a relaxed atomic: an identity-like gauge, not a
+        // handshake (the real ordering lives in the ring, the doorbell and m_controlMutex), and
+        // its one reader wants "is it zero".
+        inline std::atomic<Uint64> g_applyThreadKey{0};
     } // namespace Detail
 
     // ---------------------------------------------------------------------------------
@@ -200,10 +163,25 @@ namespace MobileGL::MG_Remote::Server {
     // session NOT latched). Windows the client names itself (the X11/Win32/None tokens CONTRACT-P6
     // D8 has yet to close) are neither kind and neither latch nor are refused: nothing about them
     // changes here. Reset by ServerLoop::Start, i.e. per session.
+    //
+    // P14 S2: AND THE LATCH IS PER SESSION, WHICH IS ALL THIS SLICE NEEDS. The mode is a member of
+    // the loop and a served session owns its loop, so two sessions in one process latch
+    // independently and neither's first surface decides the other's - the semantics above are
+    // otherwise unchanged (design/11-state-ownership.md §4.5: the latch stays at the session layer
+    // and is never hoisted to the process). A mode DECLARED before a session's first surface would
+    // have to travel on the wire - the Hello, or a SurfaceOp the client sends - because one
+    // process's MOBILEGL_IPC_SURFACE cannot speak for the several sessions a unified server runs;
+    // that is P14d's. Reading that env here instead refused a dialled-in ServerOwned client with
+    // SurfaceModeMismatch before the display was ever consulted (ServerOwnedSurfaceTest).
     enum class SessionSurfaceMode : Uint8 { None, OnScreen, Offscreen };
     const char* SessionSurfaceModeName(SessionSurfaceMode mode);
     // The decision, pure, so a unit case can drive all six pairs without a backend.
     Bool SessionSurfaceModeAdmits(SessionSurfaceMode current, Bool serverOwnedWindow);
+
+    // P14 S2 (SessionRuntime.h): WHICH SESSION THIS LOOP IS, when it is one of several served by
+    // the process. Set by ServerMain::RunSession before Start(); null for every other shape (the
+    // inproc one-process client+server, a unit case), which is what keeps those byte-for-byte.
+    class SessionRuntime;
 
     class ServerLoop {
     public:
@@ -213,6 +191,11 @@ namespace MobileGL::MG_Remote::Server {
         // from one that worked, and the split's whole performance claim rests on both halves
         // landing on fast cores.
         MobileGLResult Start(ServerSession& session);
+
+        // P14 S2. The session this loop belongs to, so its apply thread can open the same thread
+        // scope the control thread has (session/loop/inputs/latch domain/segment resolver).
+        void SetRuntime(SessionRuntime& runtime) { m_runtime = &runtime; }
+        SessionRuntime* Runtime() const { return m_runtime; }
 
         // Kill the doorbell, join the thread (bounded), then destroy the private backend object
         // ON THAT THREAD before it exits. Blocking by contract - see the header note.
@@ -327,11 +310,9 @@ namespace MobileGL::MG_Remote::Server {
         // or more per draw, so the call itself - a cross-library PLT hop - was a measurable
         // share of the cost of the answer.
         static Bool OnApplyThread() {
-            const Uint64 key = Detail::g_applyThreadKey.load(std::memory_order_relaxed);
-            // Short-circuit ON PURPOSE: with TransportMode::Monolith, and in every process
-            // before Start() and after Stop(), the key is 0 and the caller pays one relaxed
-            // load and one branch - it never even reads its own identity.
-            return key != 0 && key == Detail::CurrentThreadKey();
+            // P14 S2: the caller's own TLS word. One constant-initialized load, no atomic, no
+            // comparison and - unlike the process-wide key - the right answer with N sessions.
+            return Detail::t_onApplyThread;
         }
 
         // The CPU mask MOBILEGL_IPC_SERVER_AFFINITY resolved to and sched_setaffinity accepted.
@@ -476,8 +457,11 @@ namespace MobileGL::MG_Remote::Server {
         static void ServerWindowLostThunk(void* self);
         // AcquireFor's cancel predicate: the loop is stopping, or the session latched.
         static Bool ServerWindowWaitCancelled(void* self);
-        // D4: latched at the session's first successful surface creation; reset by Start().
+        // D4: latched at the session's first successful surface creation; reset by Start(). Per
+        // session, because the loop is (P14 S2).
         SessionSurfaceMode m_surfaceMode = SessionSurfaceMode::None;
+        // P14 S2: the session this loop serves, when the process serves several; see SetRuntime.
+        SessionRuntime* m_runtime = nullptr;
         // Apply thread only: this loop holds the display's lease.
         Bool m_holdsWindowLease = false;
         // Set by ServerWindowLostThunk (any thread), taken by the apply thread. Part of the park
@@ -576,6 +560,18 @@ namespace MobileGL::MG_Remote::Server {
         // C7 / ID-54: the (dpy, draw, read, ctx) currently bound on the apply thread. Written and
         // read ONLY on the apply thread inside ApplyMakeCurrent, so it needs no lock; the two
         // counters beside it are atomic because a test reads them from another thread.
+        //
+        // P14 S4 LOOKED AT MAKING THIS A PER-CONTEXT TABLE AND DID NOT, with the reason recorded
+        // here rather than in a review thread: ID-67's pinned control
+        // (ServerLoopEglTest.ADifferentTupleBindsNativelyAndRepublishesAnIdenticalRepeatDoesNeither)
+        // defines "a different tuple" as a change of the CURRENTLY BOUND tuple, and asserts that
+        // A -> B -> A costs three native binds. A table that remembered each context's tuple would
+        // make the third one a RepeatNoOp - and it would be wrong for a real reason, not just for
+        // the assertion: only ONE EGLContext can be current on the apply thread, so coming back to A
+        // really does have to run the driver call that DirectGLES' seven frontend-context
+        // invalidations hang off. "Each context holds its own native triple" is satisfied by the
+        // backend's per-(session, token) registry; the dedup here is about the thread's CURRENT
+        // binding and stays one tuple.
         Bool m_haveCurrentTuple = false;
         EGLDisplay m_curDpy = EGL_NO_DISPLAY;
         EGLSurface m_curDraw = EGL_NO_SURFACE;
@@ -668,6 +664,15 @@ namespace MobileGL::MG_Remote::Server {
     // and a SECOND arrival IS the invalidation signal, which is how DirectGLES, which has no
     // OnCapsInvalidated producer at all, tells the client without a dev-shaped backend edit.
     Bool ServerMakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
+    // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The EGL CONTEXT LIFECYCLE's two
+    // frames, on the same channel and with the same blocking handshake as the twelve above.
+    // `clientContextToken` is the token EGLState minted for the new context (never 0), and
+    // `shareGroupToken` the group it joins - the sharing context's group, or a fresh one.
+    // S1 creates a PLACEHOLDER server-side runtime: the token enters the session's table and
+    // nothing native is built (S4 is what gives the entry a native context). DestroyContext
+    // drops the entry and unbinds it if it was the current one.
+    Bool ServerCreateEGLContext(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags);
+    Bool ServerDestroyEGLContext(Uint64 clientContextToken);
     Bool ServerSwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
     void ServerSetEGLSwapInterval(Int interval);
     void ServerReleaseEGLSurface(EGLSurface surface);

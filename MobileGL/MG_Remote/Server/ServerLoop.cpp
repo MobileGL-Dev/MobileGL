@@ -10,12 +10,14 @@
 
 #include "ServerLoop.h"
 #include "ApplyThreadPolicy.h"
+#include "SessionRuntime.h"
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
@@ -284,6 +286,8 @@ namespace MobileGL::MG_Remote::Server {
         m_haveCurrentTuple = false;
         // P12 (D4, D6): a new session decides its own surface mode, holds no window lease yet and
         // has no window-lost request pending. The apply thread that reads these is not started yet.
+        // P14 S2: and it is THIS session's latch - the loop is the session's, so a second session
+        // in the same process starts here too and neither's first surface decides the other's.
         m_surfaceMode = SessionSurfaceMode::None;
         m_holdsWindowLease = false;
         m_serverOwnedSurfaces.clear();
@@ -345,6 +349,11 @@ namespace MobileGL::MG_Remote::Server {
         // Apply thread only (RunSurfaceControlFrame's dispatch put us here), so
         // m_haveCurrentTuple/m_cur* need no
         // lock. The counters are atomic for the reader on the test thread.
+        //
+        // P14 S4 left this classification alone on purpose - ServerLoop.h states the argument (the
+        // currently bound tuple IS the unit ID-67 is about, and only one EGLContext can be current on
+        // this thread). What S4 changed is one layer down: the tuple now names the (session, context)
+        // registry's native context instead of the process's one.
         MakeCurrentOutcome outcome;
         const EglBindAction action = ClassifyEglMakeCurrent(m_haveCurrentTuple, m_curDpy, m_curDraw,
                                                             m_curRead, m_curCtx, dpy, draw, read, ctx);
@@ -409,9 +418,18 @@ namespace MobileGL::MG_Remote::Server {
         // THE IDENTITY IS PUBLISHED FIRST, BEFORE THE THREAD HAS A NAME OR AN AFFINITY. Every
         // role guard in the tree reads it, and the very first record this thread applies must
         // already answer "yes" to OnApplyThread() - otherwise the applier's own reads would
-        // look like client reads to the guards. Relaxed for the reason stated beside the key's
-        // declaration: it is an identity, not a handshake, and this thread is the only writer.
-        Detail::g_applyThreadKey.store(Detail::CurrentThreadKey(), std::memory_order_relaxed);
+        // look like client reads to the guards.
+        //
+        // P14 S2: two words, both about THIS thread. t_onApplyThread is the guard's answer; the
+        // process counter beside it is what MG_Backend/DirectGLES/Managers.cpp reads as "an apply
+        // thread is running" (ServerLoop.h's block). The scope is opened BEFORE either, because
+        // every read below - the session's peer, its rings, the applier it attaches - must already
+        // resolve to this session rather than to the process's default.
+        ServerSession& session = *m_session;
+        std::unique_ptr<Detail::ThreadSessionScope> scope;
+        if (m_runtime != nullptr) scope = std::make_unique<Detail::ThreadSessionScope>(*m_runtime);
+        Detail::t_onApplyThread = true;
+        Detail::g_applyThreadKey.fetch_add(1, std::memory_order_relaxed);
         NameThisThread("mgl-srv-apply");
         // P6: THIS THREAD IS THE SERVER, and saying so is what sends its lines to the server's
         // own log. Under spawn the process role already answers this; under INPROC it is the
@@ -426,7 +444,6 @@ namespace MobileGL::MG_Remote::Server {
         // "an affinity that silently did nothing looks exactly like one that worked"
         // (CONTRACT-P5 5). P11 B1: `auto` now depends on who the client is (ApplyThreadPolicy.h),
         // and so does the spin before each park.
-        ServerSession& session = *m_session;
         const char* raw = AffinityStringFromConfig();
         const Bool automatic = raw == nullptr || raw[0] == '\0' || std::strcmp(raw, "auto") == 0;
         Uint64 bigCores = 0, primeCores = 0;
@@ -691,7 +708,12 @@ namespace MobileGL::MG_Remote::Server {
             // thread could ever give. The integration lane - a real EGL teardown - is the only
             // thing that would catch that, and it would catch it as a hang, not as a failed
             // assertion.
-            Detail::g_applyThreadKey.store(0, std::memory_order_relaxed);
+            //
+            // P14 S2: the guard's own word is lowered here too, and for the same reason - with
+            // N sessions it can only ever have been this thread's, and the thread is about to
+            // stop being an apply thread. The scope is destroyed by this function's frame.
+            Detail::t_onApplyThread = false;
+            Detail::g_applyThreadKey.fetch_sub(1, std::memory_order_relaxed);
         }
         m_controlDone.notify_all();
 
@@ -1189,6 +1211,10 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     ServerLoop& ServerLoopInstance() {
+        // P14 S2: the session of the CALLING THREAD, else the process's one instance. The client
+        // process (the forwarders, whose sink makes them cross the wire), the inproc one-process
+        // client+server shape and every unit case have no thread session and keep this instance.
+        if (ServerLoop* const own = Detail::CurrentLoop()) return *own;
         // ID-8: leak at exit, like every MG_Remote singleton.
         static ServerLoop& instance = *new ServerLoop{};
         return instance;
@@ -1360,7 +1386,9 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_OK;
         case SurfaceControlOp::CreatePbufferSurface:
             // P12 (D4): a pbuffer in a session that went on-screen is the other mode, refused by
-            // name and not latched - the session and its window surface carry on.
+            // name and not latched - the session and its window surface carry on. P14 S2: the mode
+            // is the session's own - latched by its first surface, on its own loop - and never
+            // another session's.
             if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/false)) {
                 frame.ok = false;
                 frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
@@ -1435,6 +1463,48 @@ namespace MobileGL::MG_Remote::Server {
                 ApplyMakeCurrent(backend, HandleFromToken<EGLDisplay>(frame.display),
                                  EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             frame.ok = outcome.ok;
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::CreateContext: {
+            // P14 S1 built the session's table entry; P14 S4 gives it its NATIVE context. The
+            // share group is what makes two client contexts see one set of buffer/texture objects:
+            // a group whose leader already has a native EGLContext hands it to eglCreateContext as
+            // the share argument, so this arm is the whole of "server-side sharing".
+            //
+            // An `ok = false` here is a named refusal the client's eglCreateContext turns into
+            // EGL_NO_CONTEXT, which is what a server that declined to table the token must produce -
+            // a token the server never heard of is worse than no context at all. A native context
+            // that could not be built rolls the table entry back, or the session would hold a token
+            // whose every MakeCurrent fails one layer down.
+            ServerSession* session = ServerSession::Active();
+            if (session == nullptr) {
+                frame.ok = false;
+                return MOBILEGL_ERR_NOT_INITIALIZED;
+            }
+            frame.ok = session->CreateContext(frame.context, frame.shareGroupToken, frame.contextFlags);
+            if (frame.ok && backend != nullptr &&
+                backend->GetBackendType() == BackendType::DirectGLES) {
+                if (!MG_Backend::DirectGLES::CreateNativeContextFor(frame.context, frame.shareGroupToken)) {
+                    (void)session->DestroyContext(frame.context);
+                    frame.ok = false;
+                }
+            }
+            return MOBILEGL_OK;
+        }
+        case SurfaceControlOp::DestroyContext: {
+            ServerSession* session = ServerSession::Active();
+            if (session == nullptr) {
+                frame.ok = false;
+                return MOBILEGL_ERR_NOT_INITIALIZED;
+            }
+            frame.ok = session->DestroyContext(frame.context);
+            // P14 S4: the native context goes with the entry, and ONLY that one - the session's
+            // other contexts, and every other session's, are untouched. The display is terminated
+            // only when the last native context in the process has gone.
+            if (frame.ok && backend != nullptr &&
+                backend->GetBackendType() == BackendType::DirectGLES) {
+                MG_Backend::DirectGLES::DestroyNativeContextFor(frame.context);
+            }
             return MOBILEGL_OK;
         }
         case SurfaceControlOp::SetSwapInterval:
@@ -1590,10 +1660,17 @@ namespace MobileGL::MG_Remote::Server {
             break;
         }
         if (refusal != nullptr) *refusal = SurfaceRefusalCode::NoServerWindow;
+        // P14 S2: LeasedElsewhere IS NOT A BUG ANY MORE. The display's window has one holder at a
+        // time and a session per holder, so a second ON-SCREEN session asking for it is refused -
+        // by name, not latched, exactly as a display with no window up. Offscreen (pbuffer)
+        // sessions take no lease at all and are unaffected.
         MGLOG_E("MG_Remote server: Refuse ServerOwned: this server owns a display but no window for a %ux%u surface "
-                "(%s after at most %u ms) - the display's surface is not up. Refused (NoServerWindow); the "
-                "session is not latched",
-                width, height, ServerWindowAcquireName(acquired), timeoutMs);
+                "(%s after at most %u ms)%s. Refused (NoServerWindow); the session is not latched",
+                width, height, ServerWindowAcquireName(acquired), timeoutMs,
+                acquired == ServerWindowAcquire::LeasedElsewhere
+                    ? " - the server's window is leased by another session, and one on-screen session at a time is "
+                      "the display's own rule"
+                    : " - the display's surface is not up");
         return MOBILEGL_ERR_TIMEOUT;
     }
 
@@ -1603,7 +1680,9 @@ namespace MobileGL::MG_Remote::Server {
         frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::None);
         const Uint32 wantWidth = frame.width > 0 ? static_cast<Uint32>(frame.width) : 0u;
         const Uint32 wantHeight = frame.height > 0 ? static_cast<Uint32>(frame.height) : 0u;
-        // D4 FIRST: an offscreen session may not go on-screen, display or no display.
+        // D4 FIRST: an offscreen session may not go on-screen, display or no display. P14 S2: the
+        // refusal is against THIS session's own latch - a second on-screen session in the same
+        // process is a different refusal (no free window), never a mode mismatch.
         if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/true)) {
             frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
             MGLOG_E("MG_Remote server: SurfaceModeMismatch - a ServerOwned CreateWindowSurface (seq %llu, %ux%u) in a "
@@ -1820,6 +1899,30 @@ namespace MobileGL::MG_Remote::Server {
         frame.surface = TokenFromHandle(draw);
         frame.readSurface = TokenFromHandle(read);
         frame.context = TokenFromHandle(ctx);
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
+    }
+
+    // P14 S1. A context creation is a frame like any other: `context` IS the client token (the
+    // schema's field, not a bit-cast handle - a context has no handle the server could name),
+    // `shareGroupToken` and `contextFlags` the two values CreateContext adds to it. Same blocking
+    // handshake, so eglCreateContext cannot return a token the server has not tabled - which is
+    // what keeps bind_context's "this session never created that token" refusal unreachable on
+    // the well-behaved path.
+    Bool ServerCreateEGLContext(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags) {
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::CreateContext;
+        frame.context = clientContextToken;
+        frame.shareGroupToken = shareGroupToken;
+        frame.contextFlags = flags;
+        const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
+        return rc == MOBILEGL_OK && frame.ok;
+    }
+
+    Bool ServerDestroyEGLContext(Uint64 clientContextToken) {
+        SurfaceControlFrame frame;
+        frame.kind = SurfaceControlOp::DestroyContext;
+        frame.context = clientContextToken;
         const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
         return rc == MOBILEGL_OK && frame.ok;
     }

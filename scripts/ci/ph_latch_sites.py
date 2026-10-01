@@ -117,8 +117,11 @@ MECHANICS = [
     (REMOTE / "Server" / "PipeApplier.cpp", "ApplyOne: the pre-gate runs before the verb stamp and the barrier read",
      r"if \(!m_decoder\.AdmitOrDecline\(record\)\) return false;\s*const Bool wireSaysBarriered",
      [("ServerLoopTest.cpp", "ARecordShorterThanItsTypeIsLatchedBeforeTheApplierStampsIt")]),
+    # P14 S2: the latch is the CALLING THREAD'S DOMAIN now (FatalFunnel.h), so the unarmed arm
+    # reads the domain's own word instead of the process's - the mechanism and every case below
+    # are unchanged, and a session's domain being unarmed is still SessionFail byte for byte.
     (REMOTE / "FatalFunnel.cpp", "SessionLatch: first fault wins, every fault counted, one SessionFault; unarmed it dies",
-     r"if \(!g_latchArmed\.load\(std::memory_order_acquire\)\) \{\s*SessionFail\(",
+     r"if \(!latch\.armed\.load\(std::memory_order_acquire\)\) \{\s*SessionFail\(",
      [("ServerLoopTest.cpp", "AnArmedSessionLatchKeepsTheFirstFaultCountsEveryOneAndPublishesOnce"),
       ("ServerLoopTest.cpp", "AnUnarmedSessionLatchDiesWithItsLineLikeSessionFail")]),
 ]

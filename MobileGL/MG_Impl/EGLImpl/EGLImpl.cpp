@@ -17,6 +17,13 @@
 // MG_Config::ServerOwnedWindowSurfaces (P12, MOBILEGL_IPC_SURFACE). Split-only: the pull build's
 // translation unit is unchanged (G1).
 #include <Config.h>
+// P14 S1 (docs/Disaggregated/design/11-state-ownership.md). The EGL context lifecycle's
+// client half: eglCreateContext/eglDestroyContext cross as two control frames, and a
+// context switch emits the in-band bind_context record. Reached through MG_Remote::Client
+// because that is the seam MG_Impl already uses for its other wire producers
+// (PipeFill.cpp's emitters) and because the frame channel belongs to the server role - this
+// file must not name ServerLoop's forwarders directly.
+#include <MG_Remote/Client/WireTables.h>
 #endif
 #include <mutex>
 #include <sstream>
@@ -51,6 +58,35 @@ namespace MobileGL::MG_Impl::EGLImpl {
             }
             return backendObject;
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE CONTEXT BINDING, AND
+        // THE ONE PLACE IT IS EMITTED.
+        //
+        // `bind_context` is the ring's half of eglMakeCurrent: the MakeCurrent control frame
+        // tells the server which native tuple to hold, and this record tells it which CONTEXT
+        // every record after it belongs to - the attribution the session table was built for.
+        //
+        // IT IS EMITTED AFTER THE SWITCH HAS SUCCEEDED AND BEFORE eglMakeCurrent RETURNS, and
+        // that is the whole ordering argument: the app thread cannot publish a record of the
+        // new context until this call has returned, and the ring is FIFO, so the binding is
+        // behind no verb of the context it names and ahead of every one that follows. Waiting
+        // for the first verb instead would need the emitter to know which context the tracker
+        // is about to prime; this needs only the token EGLState already holds.
+        //
+        // An unchanged token emits NOTHING: an identical eglMakeCurrent is a legal no-op in
+        // EGL and the session is already bound to that context.
+        void EmitContextBinding(EGLStateContext* state, EGLContext switched, Uint64 previousToken) {
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            // The apply thread IS the server in this process; a record emitted there would
+            // wait on the thread that has to apply it (EmitAndWait), which is a deadlock and
+            // not a slow path.
+            if (MG_Remote::Client::RunsAsTheServerRole()) return;
+            const Uint64 token = switched == EGL_NO_CONTEXT ? 0 : state->GetContextClientToken(switched);
+            if (token == previousToken) return;
+            (void)MG_Remote::Client::EmitBindContextRecord(token);
+        }
+#endif
 
         std::recursive_mutex& EGLOperationMutex() {
             static std::recursive_mutex mutex;
@@ -329,7 +365,35 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_CONTEXT;
         }
-        return state->CreateContext(dpy, config, shareCtx, attrib_list);
+        const EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+        if (context == EGL_NO_CONTEXT) {
+            return EGL_NO_CONTEXT;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE TOKEN CROSSES BEFORE
+        // eglCreateContext RETURNS. EGLState minted it, together with the share group it was
+        // derived into (the sharing context's group, or a fresh one), and the server tables it
+        // here through the same blocking handshake the surface forwarders use - so the first
+        // bind_context after this call names a context the session already has, and the
+        // sink's "this session never created that token" refusal is unreachable on the
+        // well-behaved path.
+        //
+        // A REFUSAL DROPS THE CLIENT'S CONTEXT AGAIN. Keeping it would hand the application a
+        // handle whose first verb the server refuses - a late failure where an early one is
+        // available, and EGL_NO_CONTEXT with EGL_BAD_ACCESS is the early one. NoWire (the
+        // pre-Start bring-up, the server role) keeps it: there is no server to refuse.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            !MG_Remote::Client::RunsAsTheServerRole()) {
+            const auto emitted = MG_Remote::Client::SendCreateContextFrame(
+                state->GetContextClientToken(context), state->GetContextShareGroupToken(context), 0);
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
+                state->DestroyContext(dpy, context);
+                state->SetError(EGL_BAD_ACCESS);
+                return EGL_NO_CONTEXT;
+            }
+        }
+#endif
+        return context;
     }
 
     EGLBoolean Initialize(EGLDisplay dpy, EGLint* major, EGLint* minor) {
@@ -380,6 +444,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         const auto oldDraw = state->GetCurrentSurface(EGL_DRAW);
         const auto oldRead = state->GetCurrentSurface(EGL_READ);
         const auto oldContext = state->GetCurrentContext();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1. The context the calling thread had current BEFORE this call, as the wire
+        // knows it. Read here because `state->MakeCurrent` below has already committed the
+        // new one by the time the emission points are reached.
+        const Uint64 oldContextToken = state->GetContextClientToken(oldContext);
+#endif
         const String threadId = CurrentThreadIdString();
 
         MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
@@ -404,6 +474,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 }
             }
             MGLOG_D("eglMakeCurrent release succeeded thread=%s", threadId.c_str());
+#if MOBILEGL_BUILD_DISAGGREGATED
+            EmitContextBinding(state, EGL_NO_CONTEXT, oldContextToken);
+#endif
             return EGL_TRUE;
         }
 
@@ -422,6 +495,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         MGLOG_D("eglMakeCurrent attach succeeded thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(), dpy, draw,
                 read, ctx);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EmitContextBinding(state, ctx, oldContextToken);
+#endif
         return EGL_TRUE;
     }
 
@@ -430,7 +506,29 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->DestroyContext(dpy, ctx) ? EGL_TRUE : EGL_FALSE;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S1. Read BEFORE the client's own book drops the context: after DestroyContext
+        // the handle no longer resolves and the token is unrecoverable. The frame is sent
+        // AFTER the client's state machine has accepted the destroy, so one EGL refused (a
+        // context still current on some thread, EGL_BAD_ACCESS) never reaches the server - the
+        // two ends stay in step without the server having to guess why a token vanished.
+        const Uint64 contextToken = state->GetContextClientToken(ctx);
+#endif
+        if (!state->DestroyContext(dpy, ctx)) {
+            return EGL_FALSE;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (contextToken != 0 && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            !MG_Remote::Client::RunsAsTheServerRole()) {
+            const auto emitted = MG_Remote::Client::SendDestroyContextFrame(contextToken);
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
+                MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "
+                             "session's table and this client's EGL book have drifted apart",
+                             static_cast<unsigned long long>(contextToken));
+            }
+        }
+#endif
+        return EGL_TRUE;
     }
 
     EGLBoolean DestroySurface(EGLDisplay dpy, EGLSurface surface) {
@@ -468,6 +566,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // re-initializes lazily via GetStateEnsureInitialized(); process exit
         // then has nothing left to destroy.
         if (!state->HasAnyInitializedDisplay() && !state->HasAnyCurrentContext()) {
+            // P14 S3: the process default context (and with it the GL objects the frontend
+            // built while no EGL context was current) goes before Destroy() does, so nothing
+            // it owns outlives glslang::FinalizeProcess() through a thread's fallback binding.
+            MG_State::ReleaseProcessDefaultGLContext();
             MobileGL::Destroy();
         }
         return EGL_TRUE;

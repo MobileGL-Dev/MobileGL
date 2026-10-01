@@ -144,3 +144,22 @@ if (MSVC)
 endif()
 
 gtest_discover_tests(MipmapFootprintTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
+        ContextStateOwnershipTest
+        ContextStateOwnershipTest.cpp
+)
+
+target_include_directories(ContextStateOwnershipTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ContextStateOwnershipTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+include(GoogleTest)
+gtest_discover_tests(ContextStateOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

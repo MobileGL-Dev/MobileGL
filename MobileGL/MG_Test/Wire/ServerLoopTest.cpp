@@ -1623,7 +1623,7 @@ namespace {
         // The backend's draw-shaped paths (ReadPixels syncs the bound textures and the read
         // framebuffer) walk the process's frontend GLContext, which a bare unit process does not
         // have; installed for the case's life and put back afterwards (SplitBufferTest's shape).
-        UniquePtr<MG_State::GLState::GLContext> savedContext;
+        SharedPtr<MG_State::GLState::GLContext> savedContext;
 
         // Empty on success, else the step that failed - the harness's SkipReason shape.
         std::string BringUp() {
@@ -3535,6 +3535,103 @@ TEST(ServerLoopTest, SessionSurfaceModeAdmitsOnlyTheModeTheFirstSurfaceChose) {
     EXPECT_FALSE(Server::SessionSurfaceModeAdmits(SessionSurfaceMode::Offscreen, true))
         << "a ServerOwned window in an offscreen session is SurfaceModeMismatch";
 }
+#endif
+
+// =====================================================================================
+// P14 S4 (docs/Disaggregated/design/11-state-ownership.md): THE NATIVE TUPLE IS PER CONTEXT
+// =====================================================================================
+//
+// WHAT THESE CASES OWN. Before S4 the backend held ONE native EGLContext, one config and one
+// surface as file-level statics, and `InitDisplayAndContext` began with an unconditional
+// `DestroyEGLContext()` - so creating a second surface (or a second context) destroyed the first
+// one's native context and every GL object that lived in it. The three cases below pin the three
+// halves of the replacement, each at the driver:
+//
+//   * A SECOND CONTEXT DOES NOT TAKE THE FIRST ONE'S NATIVE CONTEXT WITH IT. Three client context
+//     tokens are created in one session and all three native contexts are alive AT THE SAME TIME,
+//     holding three different EGLContext handles. Red once by restoring the unconditional teardown:
+//     the third CreateContext leaves one live native context, not three.
+//
+//   * A SURFACE SWITCH KEEPS THE CONTEXT. Creating a second pbuffer surface leaves the tuple's
+//     native EGLContext the SAME object it was - which is what "pbuffer -> window -> pbuffer does
+//     not lose resources" means at this layer, since the objects live in the native context.
+//     Red once by restoring `DestroyEGLContext()` in CreateEGLPbufferSurface: the handle changes.
+//
+//   * (A THIRD CASE - "a share group is a sharing pair, proven at the driver" - was drafted and is
+//     NOT LANDED. See the S4 section of docs/Disaggregated/design/11-state-ownership.md: the
+//     sharing argument is wired (CreateNativeContextFor hands the group leader's EGLContext to
+//     eglCreateContext), but the headless probe that would prove object visibility across the pair
+//     did not produce a usable control on this box and is left to its own change rather than
+//     shipped as a green that ran nothing.)
+//
+// THE KEY OVERRIDE IS HOW A CASE NAMES A TUPLE. This fixture has no SessionRuntime, so the backend's
+// resolver answers {0,0} for every thread; ForceNativeContextKeyForTesting is the pure-key override
+// that lets a case drive exactly the tuple it means. It is a test-only seam and reaches no
+// production path (DirectGLES.h).
+//
+// NO USABLE EGL IS A SKIP (MGL_EGL_BRING_UP_OR_BAIL), the same rule as every case in this section.
+#if !defined(_WIN32)
+namespace {
+    namespace DirectGLES = MobileGL::MG_Backend::DirectGLES;
+
+    // A client context token that never collides with the fixture's token-0 tuple.
+    constexpr Uint64 kTokenA = 101;
+    constexpr Uint64 kTokenB = 102;
+    constexpr Uint64 kGroupA = 5001;
+    constexpr Uint64 kGroupB = 5002;
+
+} // namespace
+
+// The three-native-contexts control: creating contexts must ADD native contexts, never replace one.
+TEST(ServerLoopEglTest, CreatingASecondContextLeavesTheFirstNativeContextAlive) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    const EGLContext default0 = DirectGLES::NativeContextHandleFor(0, 0);
+    ASSERT_NE(default0, EGL_NO_CONTEXT)
+        << "the surface's own creation did not build a native context for the session's default tuple";
+
+    ASSERT_TRUE(Server::ServerCreateEGLContext(kTokenA, kGroupA, 0));
+    ASSERT_TRUE(Server::ServerCreateEGLContext(kTokenB, kGroupB, 0));
+
+    const EGLContext contextA = DirectGLES::NativeContextHandleFor(0, kTokenA);
+    const EGLContext contextB = DirectGLES::NativeContextHandleFor(0, kTokenB);
+    EXPECT_NE(contextA, EGL_NO_CONTEXT) << "CreateContext built no native context for token A";
+    EXPECT_NE(contextB, EGL_NO_CONTEXT) << "CreateContext built no native context for token B";
+    EXPECT_NE(contextA, contextB) << "two client contexts ended up sharing one EGLContext object";
+    EXPECT_NE(contextA, default0) << "token A reused the default tuple's native context";
+    EXPECT_NE(contextB, default0) << "token B reused the default tuple's native context";
+    EXPECT_EQ(DirectGLES::NativeContextHandleFor(0, 0), default0)
+        << "creating a context destroyed and rebuilt the default tuple's native context";
+    EXPECT_EQ(DirectGLES::NativeContextCountForSession(0), 3u)
+        << "not all three contexts are live at once - the pre-S4 shape kept exactly one";
+
+    fixture.TearDown();
+}
+
+// pbuffer -> a second pbuffer -> the same context. The native EGLContext is the tuple's, not the
+// surface's, so a surface switch must leave it alone.
+TEST(ServerLoopEglTest, CreatingAnotherSurfaceKeepsTheSameNativeContext) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+
+    const EGLContext before = DirectGLES::NativeContextHandleFor(0, 0);
+    ASSERT_NE(before, EGL_NO_CONTEXT);
+
+    // A SECOND, DIFFERENT surface handle, exactly as a client's second eglCreatePbufferSurface would
+    // name it (EGLService-style small integers).
+    const EGLSurface second = reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x2));
+    ASSERT_TRUE(Server::ServerCreateEGLPbufferSurface(second, 32, 32));
+
+    EXPECT_EQ(DirectGLES::NativeContextHandleFor(0, 0), before)
+        << "creating a second pbuffer surface replaced the native context: every buffer, texture and "
+           "program the application had built in it went with the old one (the pre-S4 teardown)";
+    EXPECT_EQ(DirectGLES::NativeContextCountForSession(0), 1u)
+        << "a surface switch left a second native context behind";
+
+    fixture.TearDown();
+}
+
 #endif
 
 int main(int argc, char** argv) {

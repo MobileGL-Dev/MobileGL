@@ -820,6 +820,10 @@ namespace MobileGL::MG_Pipe {
     // The single global the backends read through MGB_CTX (ARCHITECTURE.md 9.2). An inline
     // variable: no .cpp is needed for the definition.
     //
+    // P14 S2: IT IS THE PROCESS-WIDE BLOCK, and `gPipeInputs` below is the name every reader
+    // spells - now one reference per THREAD, resolving to a served session's own block when the
+    // calling thread belongs to one. See the block after it.
+    //
     // LEAK-AT-EXIT STORAGE, and it is the same rule Init.cpp and GlobalObjects.cpp state for
     // pGLContext and pActiveBackendObject: "a process that exits without eglTerminate simply
     // leaks the global singletons to the OS instead of running destructors during static
@@ -834,7 +838,48 @@ namespace MobileGL::MG_Pipe {
     // about to be. So the reference is never dropped: nothing here can start such a chain.
     // A live context releases these SharedPtrs the ordinary way, at the fill point.
     // (P3a; the exit-time heap corruption this closes is p3a-results/exit-order-v1.md.)
-    inline PipeInputs& gPipeInputs = *new PipeInputs();
+    inline PipeInputs& gPipeInputsDefault = *new PipeInputs();
+
+    // ============================================================================
+    // P14 S2: WHOSE BLOCK IS `gPipeInputs`?
+    // ============================================================================
+    //
+    // ONE PROCESS, SEVERAL SERVED SESSIONS. The applier writes this block and the backend reads it
+    // through MGB_CTX, both on the SAME apply thread - the block IS "the state the record in hand
+    // carries". Two sessions applying concurrently on two apply threads through one block would
+    // read each other's render state, which is the cross-talk a multi-session server must not
+    // have. Nothing about the block's contents changed; what changed is that the name resolves to
+    // the SESSION'S block on a thread that belongs to one.
+    //
+    // WHY A THREAD-LOCAL REFERENCE, AND NOT SOMETHING CLEVERER. MGB_CTX is
+    // `(&::MobileGL::MG_Pipe::gPipeInputs)` (MG_Pipe/PipeInputsSwitch.h) and is spelled at ~380
+    // sites in MG_Backend/MG_Impl; a reference whose TARGET varies with the calling thread is the
+    // only shape that keeps all of them compiling and all of them correct. The cost is one TLS
+    // address computation per access site - not one per field, and with no guard: the reference is
+    // bound once per thread on its first use.
+    //
+    // THE RESOLVER IS A HOOK because this header may not know about sessions (MG_Remote/Server
+    // owns them and includes THIS header, not the other way round). It is installed once by the
+    // server's session registry and never replaced; null - the client process, the pull build, a
+    // unit case - makes every thread resolve to gPipeInputsDefault, which is the old behaviour
+    // byte for byte.
+    //
+    // BINDING IS PER THREAD AND HAPPENS AT FIRST USE, so a thread must be inside its session's
+    // scope before it touches the block. Both of a session's threads are: the control thread opens
+    // its scope before it reads a byte of the Hello, and the apply thread opens it as its first
+    // act (ServerLoop::ApplyThreadMain).
+    using PipeInputsThreadResolver = PipeInputs* (*)();
+    inline PipeInputsThreadResolver g_pipeInputsThreadResolver = nullptr;
+
+    inline PipeInputs& MGPipeServerInputsForCallingThread() {
+        const PipeInputsThreadResolver resolve = g_pipeInputsThreadResolver;
+        if (resolve != nullptr) {
+            if (PipeInputs* const block = resolve()) return *block;
+        }
+        return gPipeInputsDefault;
+    }
+
+    inline thread_local PipeInputs& gPipeInputs = MGPipeServerInputsForCallingThread();
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // ============================================================================

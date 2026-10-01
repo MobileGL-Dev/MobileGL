@@ -84,7 +84,7 @@ namespace {
             MGPipeSetPoisonOmission(nullptr, nullptr);
             MG_State::pGLContext = Move(m_previous);
         }
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
 #if MOBILEGL_PIPE_POISON

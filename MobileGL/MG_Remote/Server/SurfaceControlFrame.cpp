@@ -24,6 +24,8 @@ namespace MobileGL::MG_Remote::Server {
         case SurfaceControlOp::ReleaseResources: return "ReleaseResources";
         case SurfaceControlOp::SetWindowHandle: return "SetWindowHandle";
         case SurfaceControlOp::InitCapabilities: return "InitCapabilities";
+        case SurfaceControlOp::CreateContext: return "CreateContext";
+        case SurfaceControlOp::DestroyContext: return "DestroyContext";
         case SurfaceControlOp::SwapBuffersInprocOnly: return "SwapBuffersInprocOnly";
         case SurfaceControlOp::InitWindowSurfaceInprocOnly: return "InitWindowSurfaceInprocOnly";
         case SurfaceControlOp::ProbeForTesting: return "ProbeForTesting";
@@ -47,6 +49,11 @@ namespace MobileGL::MG_Remote::Server {
         // frame, which is why this row was missing; the request still has to
         // cross, because under spawn the apply thread is in another process.
         case SurfaceControlOp::InitCapabilities:
+        // P14 S1: the context lifecycle. The client's eglCreateContext/eglDestroyContext have a
+        // live caller under spawn (EGLImpl), so unlike the inproc-only trio beside them these two
+        // MUST cross - the server it is asking is in another process.
+        case SurfaceControlOp::CreateContext:
+        case SurfaceControlOp::DestroyContext:
             return true;
         default:
             return false;

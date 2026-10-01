@@ -328,9 +328,18 @@ namespace {
             return true;
         }
 
-        // A HEALTHY SESSION: one record applied and, with headless EGL, a green clear read back -
-        // PeerLatchTest's session B, verbatim in what it sends.
-        inline void HealthySession(Remote::Client::ClientSession& client, PeerReport& r) {
+        // A HEALTHY SESSION: one record applied and, with headless EGL, a clear read back -
+        // PeerLatchTest's session B, verbatim in what it sends. P14 S2: the clear's colour is
+        // HealthySessionWithColor's parameter so a suite that runs several sessions can tell whose
+        // read-back it is reading; HealthySession keeps the two-argument shape every existing
+        // caller takes its address of.
+        //
+        // THE PACKING IS THE READ-BACK'S OWN, A<<24|B<<16|G<<8|R - a GL_RGBA/GL_UNSIGNED_BYTE
+        // texel little-endian in a Uint32, which is how PeerReport::pixel comes back and how every
+        // expectation on it is written (green (0,1,0,1) is 0xFF00FF00). Decoding it in the other
+        // order would clear the complement of the colour the caller asked for.
+        inline void HealthySessionWithColor(Remote::Client::ClientSession& client, PeerReport& r,
+                                            Uint32 rgba) {
             P::MGPMemoryBarrier barrier{};
             barrier.Bits = 0x2000u;
             r.applied = Emit(client, P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)) ? 1 : 0;
@@ -384,8 +393,11 @@ namespace {
             clear.DrawBufferIndex = 0;
             clear.BufferMask = GL_COLOR_BUFFER_BIT;
             clear.ValueClass = P::kMGPipeClearValueClassFloat;
-            const float green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
-            std::memcpy(clear.ColorValue, green, sizeof(green));
+            const float color[4] = {static_cast<float>(rgba & 0xFFu) / 255.0f,
+                                    static_cast<float>((rgba >> 8) & 0xFFu) / 255.0f,
+                                    static_cast<float>((rgba >> 16) & 0xFFu) / 255.0f,
+                                    static_cast<float>((rgba >> 24) & 0xFFu) / 255.0f};
+            std::memcpy(clear.ColorValue, color, sizeof(color));
             if (!Emit(client, P::MGPWireOp::Clear, &clear, sizeof(clear))) return Note(r, "clear not applied");
             P::MGPReadbackInfo read{};
             read.Res = P::kMGPipeNullHandle;
@@ -401,6 +413,12 @@ namespace {
             r.status = status;
             if (seq == Remote::Wire::kInvalidSeq || replySize != sizeof(texel)) return Note(r, "no read-back");
             std::memcpy(&r.pixel, texel, sizeof(r.pixel));
+        }
+
+        // The green every existing caller asked for, with the two-argument signature a
+        // `std::function<void(ClientSession&, PeerReport&)>` can be built from.
+        inline void HealthySession(Remote::Client::ClientSession& client, PeerReport& r) {
+            HealthySessionWithColor(client, r, 0xFF00FF00u);
         }
     } // namespace P12
 

@@ -1226,6 +1226,20 @@ namespace {
              reset.ContextSerial = 7777;
              return Forge(c, r, P::MGPWireOp::ApplierReset, Bytes(reset));
          }},
+        // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). A bind_context that names a
+        // context this session never created. NOT the ApplierReset shape one row up: that serial
+        // is asserted against a count both ends hold, while a context token is minted by the
+        // client and the server's only knowledge of it is the CreateContext frame's table - so a
+        // token the client invented is exactly the corruption this site is for. No EGL context is
+        // needed to reach it (the record binds "nothing" the session never created, and the site
+        // is in the sink, ahead of any verb), which is why needsEgl is false.
+        {"BindContextUnknownToken", "PipeApplier.cpp", "BindContext.ClientContextToken", Outcome::Latched,
+         "Fatal{ProtocolCorruption, \"BindContext.ClientContextToken\"} - the record binds token 999", false,
+         [](Client::ClientSession& c, PeerReport& r) {
+             P::MGPBindContext bind{};
+             bind.ClientContextToken = 999;
+             return Forge(c, r, P::MGPWireOp::BindContext, Bytes(bind));
+         }},
         {"ObjectDeathNullHandle", "PipeApplier.cpp", "ObjectDeath.Handle", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {

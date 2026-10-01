@@ -268,7 +268,7 @@ namespace {
         MobileGL::Vector<TextureBindCall> bindCalls;
 
     private:
-        MobileGL::UniquePtr<MobileGL::MG_State::GLState::GLContext> previousContext;
+        MobileGL::SharedPtr<MobileGL::MG_State::GLState::GLContext> previousContext;
         MobileGL::MG_External::GLESFunctionsTable previousFunctions;
         MobileGL::Uint previousActiveUnit;
         decltype(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache) previousCache;
@@ -5320,7 +5320,14 @@ TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotT
     // THE PUBLISHED STATE: attribute 0 fetches from A, attribute 1 from B, attribute 2 from A
     // again (the dedupe), attribute 3 is a client-memory array (null Res, nothing to ensure).
     MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
-    const MG_Pipe::MGPipeApplierState saved = st;
+    // P14 S5: the applier is not copyable any more (its object tables are references into the
+    // share group it belongs to), so the case saves the WORKING fields it is about to move
+    // instead of the whole object - which is also the smaller blast radius: nothing here
+    // touches a record.
+    const Uint32 savedVertexBufferStart = st.VertexBufferStart;
+    const Uint32 savedVertexBufferCount = st.VertexBufferCount;
+    const Array<MG_Pipe::MGPVertexBuffer, VertexArrayObject::MAX_VERTEX_ATTRIBS> savedVertexBuffers =
+        st.VertexBuffers;
     st.VertexBufferStart = 0;
     st.VertexBufferCount = 4;
     for (Uint32 i = 0; i < 4; ++i) {
@@ -5338,7 +5345,7 @@ TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotT
     // this case exists to catch - MGB_CTX->GetBoundVertexArray()->GetAllAttributes() - has
     // anything to read at all; a free-standing object would make the revert crash instead of
     // disagree, which is a red for the wrong reason.
-    UniquePtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    SharedPtr<GLContext> previousContext = Move(MG_State::pGLContext);
     MG_State::pGLContext = MakeUnique<GLContext>();
     MG_State::pGLContext->CreateVertexArrayObject(1);
     MG_State::pGLContext->BindVertexArray(1);
@@ -5369,7 +5376,9 @@ TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotT
                "run-ahead client has already moved on from";
     }
 
-    st = saved;
+    st.VertexBufferStart = savedVertexBufferStart;
+    st.VertexBufferCount = savedVertexBufferCount;
+    st.VertexBuffers = savedVertexBuffers;
     MG_State::pGLContext.reset();
     MG_State::pGLContext = Move(previousContext);
     MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, a);
@@ -5399,14 +5408,15 @@ TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheReco
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(publishedHandle));
 
     MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
-    const MG_Pipe::MGPipeApplierState saved = st;
+    const MG_Pipe::MGPIndexBuffer savedIndexBuffer = st.IndexBuffer;
+    const Uint64 savedIndexBufferSerial = st.IndexBufferSerial;
     st.IndexBuffer = MG_Pipe::MGPIndexBuffer{};
     st.IndexBuffer.Res = publishedHandle;
     st.IndexBufferSerial = 11;
 
     // The frontend's element slot has moved to another buffer with nothing emitted, in a real
     // context for the reason the case above gives.
-    UniquePtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    SharedPtr<GLContext> previousContext = Move(MG_State::pGLContext);
     MG_State::pGLContext = MakeUnique<GLContext>();
     MG_State::pGLContext->CreateVertexArrayObject(1);
     MG_State::pGLContext->BindVertexArray(1);
@@ -5428,7 +5438,8 @@ TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheReco
         << "a re-emitted set_index_buffer on the SAME handle is invisible to this arm without "
            "the serial, and the memo would read clean over it";
 
-    st = saved;
+    st.IndexBuffer = savedIndexBuffer;
+    st.IndexBufferSerial = savedIndexBufferSerial;
     MG_State::pGLContext.reset();
     MG_State::pGLContext = Move(previousContext);
     MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, publishedHandle);

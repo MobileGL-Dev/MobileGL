@@ -285,11 +285,13 @@ enum class SurfaceOpKind : uint8_t {
   ReleaseResources = 9,
   SetWindowHandle = 10,
   InitCapabilities = 11,
+  CreateContext = 12,
+  DestroyContext = 13,
   MIN = None,
-  MAX = InitCapabilities
+  MAX = DestroyContext
 };
 
-inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[12] {
+inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[14] {
   static const SurfaceOpKind values[] = {
     SurfaceOpKind::None,
     SurfaceOpKind::InitializeDisplay,
@@ -302,13 +304,15 @@ inline const SurfaceOpKind (&EnumValuesSurfaceOpKind())[12] {
     SurfaceOpKind::SetSwapInterval,
     SurfaceOpKind::ReleaseResources,
     SurfaceOpKind::SetWindowHandle,
-    SurfaceOpKind::InitCapabilities
+    SurfaceOpKind::InitCapabilities,
+    SurfaceOpKind::CreateContext,
+    SurfaceOpKind::DestroyContext
   };
   return values;
 }
 
 inline const char * const *EnumNamesSurfaceOpKind() {
-  static const char * const names[13] = {
+  static const char * const names[15] = {
     "None",
     "InitializeDisplay",
     "CreateWindowSurface",
@@ -321,13 +325,15 @@ inline const char * const *EnumNamesSurfaceOpKind() {
     "ReleaseResources",
     "SetWindowHandle",
     "InitCapabilities",
+    "CreateContext",
+    "DestroyContext",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameSurfaceOpKind(SurfaceOpKind e) {
-  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::InitCapabilities)) return "";
+  if (::flatbuffers::IsOutRange(e, SurfaceOpKind::None, SurfaceOpKind::DestroyContext)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesSurfaceOpKind()[index];
 }
@@ -1809,7 +1815,9 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
     VT_HEIGHT = 18,
     VT_SWAPINTERVAL = 20,
     VT_READSURFACE = 22,
-    VT_CONTEXT = 24
+    VT_CONTEXT = 24,
+    VT_SHAREGROUPTOKEN = 26,
+    VT_CONTEXTFLAGS = 28
   };
   uint64_t seq() const {
     return GetField<uint64_t>(VT_SEQ, 0);
@@ -1844,6 +1852,12 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
   uint64_t context() const {
     return GetField<uint64_t>(VT_CONTEXT, 0);
   }
+  uint64_t shareGroupToken() const {
+    return GetField<uint64_t>(VT_SHAREGROUPTOKEN, 0);
+  }
+  uint32_t contextFlags() const {
+    return GetField<uint32_t>(VT_CONTEXTFLAGS, 0);
+  }
   template <bool B = false>
   bool Verify(::flatbuffers::VerifierTemplate<B> &verifier) const {
     return VerifyTableStart(verifier) &&
@@ -1858,6 +1872,8 @@ struct SurfaceOp FLATBUFFERS_FINAL_CLASS : private ::flatbuffers::Table {
            VerifyField<int32_t>(verifier, VT_SWAPINTERVAL, 4) &&
            VerifyField<uint64_t>(verifier, VT_READSURFACE, 8) &&
            VerifyField<uint64_t>(verifier, VT_CONTEXT, 8) &&
+           VerifyField<uint64_t>(verifier, VT_SHAREGROUPTOKEN, 8) &&
+           VerifyField<uint32_t>(verifier, VT_CONTEXTFLAGS, 4) &&
            verifier.EndTable();
   }
 };
@@ -1899,6 +1915,12 @@ struct SurfaceOpBuilder {
   void add_context(uint64_t context) {
     fbb_.AddElement<uint64_t>(SurfaceOp::VT_CONTEXT, context, 0);
   }
+  void add_shareGroupToken(uint64_t shareGroupToken) {
+    fbb_.AddElement<uint64_t>(SurfaceOp::VT_SHAREGROUPTOKEN, shareGroupToken, 0);
+  }
+  void add_contextFlags(uint32_t contextFlags) {
+    fbb_.AddElement<uint32_t>(SurfaceOp::VT_CONTEXTFLAGS, contextFlags, 0);
+  }
   explicit SurfaceOpBuilder(::flatbuffers::FlatBufferBuilder &_fbb)
         : fbb_(_fbb) {
     start_ = fbb_.StartTable();
@@ -1922,14 +1944,18 @@ inline ::flatbuffers::Offset<SurfaceOp> CreateSurfaceOp(
     int32_t height = 0,
     int32_t swapInterval = 0,
     uint64_t readSurface = 0,
-    uint64_t context = 0) {
+    uint64_t context = 0,
+    uint64_t shareGroupToken = 0,
+    uint32_t contextFlags = 0) {
   SurfaceOpBuilder builder_(_fbb);
+  builder_.add_shareGroupToken(shareGroupToken);
   builder_.add_context(context);
   builder_.add_readSurface(readSurface);
   builder_.add_nativeToken(nativeToken);
   builder_.add_surface(surface);
   builder_.add_display(display);
   builder_.add_seq(seq);
+  builder_.add_contextFlags(contextFlags);
   builder_.add_swapInterval(swapInterval);
   builder_.add_height(height);
   builder_.add_width(width);

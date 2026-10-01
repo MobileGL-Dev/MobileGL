@@ -513,7 +513,88 @@ namespace MobileGL::MG_Pipe {
         MGPFramebufferState State{};
     };
 
-    struct MGPipeApplierState {
+    // =====================================================================================
+    // P14 S5: THE SHARE-GROUP HALF OF THE APPLIER'S STATE.
+    // =====================================================================================
+    //
+    // THE TWO HALVES HAVE DIFFERENT LIVES, and until this slice they were one struct with one
+    // owner (the process), which is what made a second served context either share working state
+    // it must not share or lose object records it must not lose. They are two structs now because
+    // they are two OWNERS:
+    //
+    //   MGPipeObjectRecords  a GL object lives in a SHARE GROUP, so these records are keyed by
+    //                        {session, share group}: two contexts of one group see one set, two
+    //                        NON-shared contexts of one session see two sets - which is the whole
+    //                        reason the frontend gives each context its own name space
+    //                        (MG_State/GLState/ShareGroupState). A GL object survives a
+    //                        make-current and its record is the only thing the backend has left to
+    //                        read that object's storage extent and mutation serial out of (D-A4
+    //                        re-keys IsBufferDrawClean onto exactly those two); dropping them at a
+    //                        make-current made every subsequent glBufferSubData on a pre-existing
+    //                        buffer resolve to nothing.
+    //
+    //   MGPipeWorkingState   what the next draw fetches with - bindings, current program, the unit
+    //                        windows, the CSO store, the serials. Keyed by {session, context}: a
+    //                        returning context may not inherit another's bindings, and two
+    //                        contexts of one share group may not overwrite each other's.
+    //
+    // THEY ARE CLEARED BY DIFFERENT EVENTS. A record here is cleared by the object's OWN death
+    // signal - resource_destroy, delete_vertex_elements, which is what D-L makes the buffer's death
+    // crossing - and by the share group's own teardown (MGPipeApplierReleaseGroupRecords) when its
+    // last context goes away. MGPipeApplierReset does NOT touch this struct; MGPipeApplierState's
+    // working half is what a make-current resets.
+    struct MGPipeObjectRecords {
+        // ---- object records: indexed by MGPipeHandle::Slot of kind Buffer /
+        // VertexElementsCso, and NOT part of the working state. They are cleared by the object's
+        // OWN death signal and by the group's teardown. Nothing else.
+        Vector<MGPipeResourceRecord> Resources;
+        Vector<MGPipeVertexElementsRecord> VertexElementsCsos;
+
+        // ---- P4a's object records. FIVE MORE TABLES, and the two resource ones are separate
+        // Vectors rather than more rows of `Resources` above because the slot space is PER
+        // KIND: a Buffer, a Texture and a Renderbuffer can all hold slot 7 at once, so a
+        // single slot-indexed table would alias three different objects onto one record. The
+        // record TYPE is shared - one discriminated descriptor for buffers, every texture
+        // target and renderbuffers - and the bound is shared; only the table is per kind.
+        //
+        // Like the two above they are share-group state: MGPipeApplierReset does not touch
+        // them, and only the object's own death signal and the group's teardown clear them.
+        Vector<MGPipeResourceRecord> TextureResources;
+        Vector<MGPipeResourceRecord> RenderbufferResources;
+        Vector<MGPipeSamplerCsoRecord> SamplerCsos;
+        Vector<MGPipeSamplerViewRecord> SamplerViewCsos;
+        Vector<MGPipeShaderCsoRecord> ShaderCsos;
+        // The ShaderCso COMPOSITE band's records, indexed by (slot - the band's base), for the
+        // same reason MGPipeSlotAllocator keeps the band in a table of its own: the band
+        // starts at 983040, so one program-pipeline composite in the slot-indexed vector above
+        // would grow it to ~983k records of ~240 bytes each. THE SERVER STILL NEVER LEARNS IT
+        // IS A COMPOSITE - the split is an indexing detail on this side of the wire, the
+        // handle is an ordinary ShaderCso handle, and create/bind/delete_shader_state name it
+        // exactly as they name any other program.
+        Vector<MGPipeShaderCsoRecord> CompositeShaderCsos;
+        // AND THE SIXTH, WHICH IS THE ONE ID-19 ADDED. Keyed by the FRAMEBUFFER HANDLE's slot,
+        // for the reason MGPipeFramebufferRecord states: the two bound-target records the phase
+        // started with could not describe a framebuffer that is bound to neither binding, and
+        // the five DSA entry points (BlitNamedFramebuffer, the four ClearNamedFramebuffer*) hand
+        // Espryt exactly that.
+        //
+        // IT IS AN OBJECT TABLE AND IT LIVES WHERE THE OTHER OBJECT TABLES LIVE, which is also
+        // its make-current rule: MGPipeApplierReset does NOT clear it. An FBO is not shared
+        // between contexts, but its record is addressed by a slot out of one global allocator,
+        // so nothing aliases across a switch - and dropping the table would leave a
+        // DSA-only framebuffer with no record and no event that would ever re-emit one (the
+        // client's suppressor invalidation re-emits the two BOUND records and nothing else).
+        //
+        // P14 S5 keys it by SHARE GROUP like its siblings, which is safe for the reason just
+        // given: the slot space is global, so a group's table can only ever answer for handles
+        // its own contexts minted, and a shared group holding both contexts' records is a wider
+        // table rather than an aliasing one.
+        Vector<MGPipeFramebufferRecord> FramebufferRecords;
+    };
+
+    // The per-context half. Everything here is cleared by MGPipeApplierReset, EXCEPT the serials,
+    // which only ever advance (see there).
+    struct MGPipeWorkingState {
         // Indexed by slot; slot 0 is the reserved null handle and is never live
         // (MGPipeHandles.h kMGPipeFirstAllocatableSlot).
         Vector<MGPipeRenderStateCsoRecord> RenderStateCsos;
@@ -552,69 +633,6 @@ namespace MobileGL::MG_Pipe {
         Uint32 ResidualDivergences = 0;          // cumulative
         Uint32 PatchCarrierComparisons = 0;      // cumulative, armed set_patch_state calls only
         Uint32 PatchCarrierDivergences = 0;      // cumulative
-
-        // ---- P3a (D-G4). ----
-        //
-        // THE TWO HALVES BELOW HAVE DIFFERENT LIVES, and MGPipeApplierReset is where the
-        // difference is spent: the OBJECT RECORDS describe GL objects and outlive a
-        // make-current; the WORKING STATE describes what the next draw fetches with and does
-        // not. Reading the whole block as "per context" is what dropped a shared buffer's
-        // record at every context switch and made the write that followed it disappear.
-
-        // ---- object records: indexed by MGPipeHandle::Slot of kind Buffer /
-        // VertexElementsCso, and NOT part of the working state.
-        //
-        // A GL object lives in a SHARE GROUP, not in a context: a buffer created before a
-        // make-current is the same buffer, with the same storage, after it, and its record is
-        // the only thing the backend has left to read that storage's extent and mutation
-        // serial out of (D-A4 re-keys IsBufferDrawClean onto exactly those two). Dropping the
-        // records at a make-current would therefore make every subsequent glBufferSubData on a
-        // pre-existing buffer resolve to nothing and be refused - a lost write, in a build
-        // where the refusal's assertion has compiled out.
-        //
-        // They are cleared by the object's OWN death signal - resource_destroy,
-        // delete_vertex_elements, which is what D-L makes the buffer's death crossing - and by
-        // MGPipeApplierReleaseObjectRecords when the served context and its applier go away.
-        // Nothing else.
-        Vector<MGPipeResourceRecord> Resources;
-        Vector<MGPipeVertexElementsRecord> VertexElementsCsos;
-
-        // ---- P4a's object records. FIVE MORE TABLES, and the two resource ones are separate
-        // Vectors rather than more rows of `Resources` above because the slot space is PER
-        // KIND: a Buffer, a Texture and a Renderbuffer can all hold slot 7 at once, so a
-        // single slot-indexed table would alias three different objects onto one record. The
-        // record TYPE is shared - one discriminated descriptor for buffers, every texture
-        // target and renderbuffers - and the bound is shared; only the table is per kind.
-        //
-        // Like the two above they are share-group state: MGPipeApplierReset does not touch
-        // them, and only the object's own death signal and MGPipeApplierReleaseObjectRecords
-        // clear them.
-        Vector<MGPipeResourceRecord> TextureResources;
-        Vector<MGPipeResourceRecord> RenderbufferResources;
-        Vector<MGPipeSamplerCsoRecord> SamplerCsos;
-        Vector<MGPipeSamplerViewRecord> SamplerViewCsos;
-        Vector<MGPipeShaderCsoRecord> ShaderCsos;
-        // The ShaderCso COMPOSITE band's records, indexed by (slot - the band's base), for the
-        // same reason MGPipeSlotAllocator keeps the band in a table of its own: the band
-        // starts at 983040, so one program-pipeline composite in the slot-indexed vector above
-        // would grow it to ~983k records of ~240 bytes each. THE SERVER STILL NEVER LEARNS IT
-        // IS A COMPOSITE - the split is an indexing detail on this side of the wire, the
-        // handle is an ordinary ShaderCso handle, and create/bind/delete_shader_state name it
-        // exactly as they name any other program.
-        Vector<MGPipeShaderCsoRecord> CompositeShaderCsos;
-        // AND THE SIXTH, WHICH IS THE ONE ID-19 ADDED. Keyed by the FRAMEBUFFER HANDLE's slot,
-        // for the reason MGPipeFramebufferRecord states: the two bound-target records the phase
-        // started with could not describe a framebuffer that is bound to neither binding, and
-        // the five DSA entry points (BlitNamedFramebuffer, the four ClearNamedFramebuffer*) hand
-        // Espryt exactly that.
-        //
-        // IT IS AN OBJECT TABLE AND IT LIVES WHERE THE OTHER OBJECT TABLES LIVE, which is also
-        // its make-current rule: MGPipeApplierReset does NOT clear it. An FBO is not shared
-        // between contexts, but its record is addressed by a slot out of one global allocator,
-        // so nothing aliases across a switch - and dropping the table would leave a
-        // DSA-only framebuffer with no record and no event that would ever re-emit one (the
-        // client's suppressor invalidation re-emits the two BOUND records and nothing else).
-        Vector<MGPipeFramebufferRecord> FramebufferRecords;
 
         // Every call this applier REFUSED because it named a record this applier does not
         // have: an unknown slot, a slot that is not live, or a generation that has moved on
@@ -911,6 +929,53 @@ namespace MobileGL::MG_Pipe {
         }
 #endif
 
+    };
+
+    // =====================================================================================
+    // P14 S5: ONE CONTEXT'S APPLIER = ITS OWN WORKING STATE + ITS SHARE GROUP'S RECORDS.
+    // =====================================================================================
+    //
+    // THE INHERITANCE IS THE POINT AND NOT A SHORTCUT: everything the backend spells as
+    // `MGPipeApplier().X` for a WORKING field keeps working unchanged (there are ~380 such reads
+    // in MG_Backend), and every read of an OBJECT record moves to `MGPipeApplier().Objects.X` -
+    // which is what makes the two lifetimes visible at exactly the sites where confusing them
+    // would be a defect. The reference is to a MGPipeObjectRecords that OUTLIVES this object by
+    // construction: the registry owns the group's records and this context's applier together,
+    // and drops them in that order.
+    //
+    // A context that started its own share group still has one - a group of one - so every
+    // applier has somewhere for its objects to live and there is no "no group" case.
+    struct MGPipeApplierState : MGPipeWorkingState {
+        // The share group this context's objects live in.
+        MGPipeObjectRecords& Objects;
+
+        // ---- THE OBJECT TABLES, UNDER THE NAMES EVERY CALLER ALREADY SPELLS. --------------
+        //
+        // These nine are the group's tables, not copies of them: ~200 call sites in
+        // MG_Backend, MG_IntegrationTest and MG_Test read `st.Resources`, `state.TextureResources`
+        // and their siblings, and the name they use has ALWAYS meant "the share group's record
+        // for this object". Binding them here keeps every one of those reads correct by
+        // construction - through the group its own context belongs to - instead of turning a
+        // keying change into a renaming change. `Objects.X` and `X` therefore name the same
+        // vector; this file spells the group half explicitly where it CREATES the two halves,
+        // the backend keeps the name it has.
+        Vector<MGPipeResourceRecord>& Resources;
+        Vector<MGPipeVertexElementsRecord>& VertexElementsCsos;
+        Vector<MGPipeResourceRecord>& TextureResources;
+        Vector<MGPipeResourceRecord>& RenderbufferResources;
+        Vector<MGPipeSamplerCsoRecord>& SamplerCsos;
+        Vector<MGPipeSamplerViewRecord>& SamplerViewCsos;
+        Vector<MGPipeShaderCsoRecord>& ShaderCsos;
+        Vector<MGPipeShaderCsoRecord>& CompositeShaderCsos;
+        Vector<MGPipeFramebufferRecord>& FramebufferRecords;
+
+        explicit MGPipeApplierState(MGPipeObjectRecords& objects)
+            : Objects(objects), Resources(objects.Resources), VertexElementsCsos(objects.VertexElementsCsos),
+              TextureResources(objects.TextureResources), RenderbufferResources(objects.RenderbufferResources),
+              SamplerCsos(objects.SamplerCsos), SamplerViewCsos(objects.SamplerViewCsos),
+              ShaderCsos(objects.ShaderCsos), CompositeShaderCsos(objects.CompositeShaderCsos),
+              FramebufferRecords(objects.FramebufferRecords) {}
+
         // ---- THE THREE FRAMEBUFFER ACCESSORS (ID-19(b)/(d)). They are functions rather than
         // members because the storage moved under them and their callers must not have to know
         // it did: `DrawFramebuffer()` / `ReadFramebuffer()` answer the question the two members
@@ -932,8 +997,64 @@ namespace MobileGL::MG_Pipe {
         const MGPFramebufferState* ReadFramebuffer() const;
     };
 
-    // The monolith's single applier. Under split there is one per served context.
+    // The calling thread's applier. On a thread that belongs to a served session this is that
+    // session's CURRENT CONTEXT's working state bound to its share group's object records; on
+    // every other thread - the client process, the in-process client+server shape, a unit case,
+    // the whole monolith - it is the process-wide applier, which is what it has always been and
+    // is byte-for-byte the old behaviour.
     MGPipeApplierState& MGPipeApplier();
+
+    // =====================================================================================
+    // P14 S5 (docs/Disaggregated/design/11-state-ownership.md): WHOSE APPLIER IS IT?
+    // =====================================================================================
+    //
+    // THE SAME SHAPE AS P14 S2's gPipeInputs RESOLVER AND S4's NATIVE TUPLE KEY, one level down:
+    // a process-wide hook the server's session registry installs ONCE, which answers for the
+    // CALLING thread. Nothing in MG_Backend or MG_Impl names a session, and no call site moved.
+    //
+    // THE KEY IS TWO PAIRS, because the two halves have two owners:
+    //
+    //   {SessionKey, ContextToken}   the WORKING state, one per served context;
+    //   {SessionKey, ShareGroupKey}  the OBJECT records, one per share group within the session.
+    //
+    // A SHARE GROUP DOES NOT CROSS A SESSION, and this is not a limitation: an EGL share group
+    // is a property of one client's connection (EGL 1.5 3.7.1 - contexts of one share group must
+    // belong to one display), and the two sessions are two connections. Cross-session sharing is
+    // an explicit non-goal of the phase, so keying the first by session is the whole of the rule.
+    //
+    // REGISTRATION, NOT INFERENCE. The session layer registers a context the moment the
+    // CreateContext control frame reaches the apply thread (ServerSession::CreateContext) and
+    // unregisters it at DestroyContext, so the resolver above stays a two-word read of state the
+    // session already keeps (its current token) and never has to reach into the session's map
+    // from a thread that does not own it. A context that was never registered resolves to its
+    // session's "no context" applier, which is the same object the session's bring-up reads.
+    struct MGPipeApplierKey {
+        Uint64 SessionKey = 0;
+        Uint64 ContextToken = 0;
+    };
+    // Answers false for "this thread is not a session's" (the process-wide applier). Installed by
+    // the session registry; null in every process that serves no session.
+    using MGPipeApplierKeyResolver = Bool (*)(MGPipeApplierKey* outKey);
+    void MGPipeSetApplierKeyResolver(MGPipeApplierKeyResolver resolver);
+
+    // Mints (or finds) the working state for {session, context} and the object records of the
+    // share group it belongs to. `shareGroupToken` is the frontend's own share-group identity
+    // (EGLState::CreateContext mints it, a sharing context inherits its parent's); 0 means this
+    // context started its own group, and is keyed by the context token in a namespace of its own
+    // so it cannot alias a group that happens to carry that number.
+    void MGPipeApplierRegisterContext(Uint64 sessionKey, Uint64 contextToken, Uint64 shareGroupToken);
+    // Drops {session, context}'s working state, and its share group's object records when the
+    // last context of that group has gone (MGPipeApplierReleaseObjectRecords' scope, per group
+    // instead of per process).
+    void MGPipeApplierUnregisterContext(Uint64 sessionKey, Uint64 contextToken);
+    // Every context of a served session, at session teardown.
+    void MGPipeApplierReleaseSession(Uint64 sessionKey);
+
+    // The observables that make the keying testable without reading a private map: how many
+    // groups one context's session holds, and how many object records the group the CALLING
+    // thread is in holds. Both are the numbers a case asserts on to tell "isolated" from
+    // "shared" apart from the behaviour they exist to explain.
+    Uint64 MGPipeApplierShareGroupCountForTesting(Uint64 sessionKey);
 
     // ---------------------------------------------------------------------------------
     // P5e: THE BARRIERED PREDICATE (MG_Remote/CONTRACT-P5E.md §2.1, ruling 3)

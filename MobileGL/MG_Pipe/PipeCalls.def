@@ -72,8 +72,9 @@
 // that the expansion, the two generated tables and this number agree.
 //
 //   class       entries   group (as the plan tabulates it)
-//   kScreen        12     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
-//                         appended server-side fence wait 1 and P5c's applier_reset 1
+//   kScreen        13     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
+//                         appended server-side fence wait 1 and P5c's applier_reset 1 and
+//                         P14 S1's bind_context 1
 //   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      19     16 of the 18 set_* calls + the temporary set_residual_value_state
@@ -84,7 +85,7 @@
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
 //                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
-//   total          80
+//   total          81
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
@@ -145,9 +146,16 @@
 //     read_pixels_to_buffer and get_texture_image_to_buffer, the pack-buffer halves of the two
 //     readbacks, answered by nothing (ID-57's fire-and-forget). Like P5b's five they reach
 //     WireVerbSink only and have no monolith producer. 83 unique records.
+//   - P14 S1 (docs/Disaggregated/design/11-state-ownership.md) appended ONE more (opcode 84):
+//     bind_context, the in-band record that carries the client's CURRENT context token. It has
+//     the applier_reset shape - a kScreen control record, no MGPipeApply* entry point, no
+//     monolith producer - because what it moves is session attribution, not context state. The
+//     design's per-record ContextSlot was NOT taken here: the token is announced at the edge
+//     (a context change) instead of stamped on every verb, which costs one record per
+//     make-current and leaves the 71 context-family payloads untouched. 84 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 83
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 84
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -355,7 +363,18 @@
     /* ---- has an MGPipeApply* entry point or a monolith producer: monolith reads into its    ---- */ \
     /* ---- driver PBO inside the backend's own ReadPixels, as before (G1).                   ---- */ \
     X(ReadPixelsToBuffer,       MGPReadbackToBuffer,        kCtxVerb,   kNone,                      kWaitNone)        \
-    X(GetTextureImageToBuffer,  MGPReadbackToBuffer,        kCtxObject, kNone,                      kWaitNone)
+    X(GetTextureImageToBuffer,  MGPReadbackToBuffer,        kCtxObject, kNone,                      kWaitNone)        \
+    /* ---- APPENDED BY P14 S1 (docs/Disaggregated/design/11-state-ownership.md), opcode 84:  ---- */ \
+    /* ---- the in-band context binding. THE WHOLE RECORD IS ONE Uint64: the client's current   ---- */ \
+    /* ---- context token, 0 meaning "no context" (a release). It is emitted at the make-current ---- */ \
+    /* ---- edge, ahead of the block's client-side resets and ahead of applier_reset, so the     ---- */ \
+    /* ---- server attributes every record that follows to the context that produced it - the     ---- */ \
+    /* ---- multi-context shape the final design reaches without stamping a slot on all 71       ---- */ \
+    /* ---- context-family rows. kScreen like applier_reset: it is a whole-session edge, not a    ---- */ \
+    /* ---- context-family verb, and it has no MGPipeApply* entry point and no monolith producer. ---- */ \
+    /* ---- kWaitNone: the apply reads no client memory and the record's placement in the ring    ---- */ \
+    /* ---- is the whole of its ordering.                                                        ---- */ \
+    X(BindContext,              MGPBindContext,            kScreen,    kNone,                      kWaitNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

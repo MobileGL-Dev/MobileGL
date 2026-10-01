@@ -431,6 +431,8 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"MGPCopyFromFramebuffer.SubImage", offsetof(MGPCopyFromFramebuffer, SubImage), sizeof(((MGPCopyFromFramebuffer*)nullptr)->SubImage)},
     {"MGPApplierReset", 0, sizeof(MGPApplierReset)},
     {"MGPApplierReset.ContextSerial", offsetof(MGPApplierReset, ContextSerial), sizeof(((MGPApplierReset*)nullptr)->ContextSerial)},
+    {"MGPBindContext", 0, sizeof(MGPBindContext)},
+    {"MGPBindContext.ClientContextToken", offsetof(MGPBindContext, ClientContextToken), sizeof(((MGPBindContext*)nullptr)->ClientContextToken)},
     {"MGPContextValues", 0, sizeof(MGPContextValues)},
     {"MGPContextValues.ActiveTextureUnit", offsetof(MGPContextValues, ActiveTextureUnit), sizeof(((MGPContextValues*)nullptr)->ActiveTextureUnit)},
     {"MGPContextValues.MaxTouchedTextureUnit", offsetof(MGPContextValues, MaxTouchedTextureUnit), sizeof(((MGPContextValues*)nullptr)->MaxTouchedTextureUnit)},
@@ -762,4 +764,5 @@ inline constexpr WireCallLayout kMGPipeWireCallLayouts[] = {
     {"DeleteStreamOutput", "MGPStreamOutputBind", static_cast<Uint64>(MGPWireOp::DeleteStreamOutput), static_cast<Uint64>(kNone), static_cast<Uint64>(kWaitNone)},
     {"ReadPixelsToBuffer", "MGPReadbackToBuffer", static_cast<Uint64>(MGPWireOp::ReadPixelsToBuffer), static_cast<Uint64>(kNone), static_cast<Uint64>(kWaitNone)},
     {"GetTextureImageToBuffer", "MGPReadbackToBuffer", static_cast<Uint64>(MGPWireOp::GetTextureImageToBuffer), static_cast<Uint64>(kNone), static_cast<Uint64>(kWaitNone)},
+    {"BindContext", "MGPBindContext", static_cast<Uint64>(MGPWireOp::BindContext), static_cast<Uint64>(kNone), static_cast<Uint64>(kWaitNone)},
 };

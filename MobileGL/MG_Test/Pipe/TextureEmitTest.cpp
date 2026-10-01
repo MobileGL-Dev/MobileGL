@@ -309,7 +309,7 @@ namespace {
         TextureScope(const TextureScope&) = delete;
         TextureScope& operator=(const TextureScope&) = delete;
 
-        UniquePtr<GLContext> m_previousContext;
+        SharedPtr<GLContext> m_previousContext;
         Uint64 m_previousPush = 0;
     };
 

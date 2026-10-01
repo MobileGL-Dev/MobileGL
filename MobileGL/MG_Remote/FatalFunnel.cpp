@@ -19,6 +19,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <unordered_map>
 
 #include <flatbuffers/flatbuffers.h>
 
@@ -96,37 +97,92 @@ namespace MobileGL::MG_Remote {
         // PH-1 (3): the latch's state. Armed once, by the session child; latched once, by the
         // first fault. The line is written under the mutex BEFORE the release store that
         // publishes `g_latched`, so a reader that saw true reads a whole line.
-        std::atomic<bool> g_latchArmed{false};
-        std::atomic<bool> g_latched{false};
-        std::atomic<std::uint64_t> g_latchCount{0};
-        std::mutex g_latchMutex;
-        MGFatalFamily g_latchedFamily = MGFatalFamily::ProtocolCorruption;
-        char g_latchedLine[512] = {};
+        //
+        // P14 S2: ONE OF THESE PER SESSION (FatalFunnel.h's domain block). A domain's storage is
+        // heap-allocated by FatalLatchDomainOpen and lives until FatalLatchDomainClose; domain 0
+        // is this process-wide one, which is what every thread that binds nothing uses.
+        struct LatchState {
+            int id = 0;
+            std::atomic<bool> armed{false};
+            std::atomic<bool> latched{false};
+            std::atomic<std::uint64_t> count{0};
+            std::mutex mutex;
+            MGFatalFamily latchedFamily = MGFatalFamily::ProtocolCorruption;
+            char latchedLine[512] = {};
+        };
+
+        LatchState g_defaultLatch;
+
+        thread_local LatchState* t_latch = &g_defaultLatch;
+
+        std::mutex g_domainsMutex;
+        std::unordered_map<int, LatchState*> g_domains;
+        int g_nextDomain = 1;
+
+        LatchState& Latch() { return *t_latch; }
     } // namespace
 
-    void ArmSessionLatch() { g_latchArmed.store(true, std::memory_order_release); }
+    int FatalLatchDomainOpen() {
+        const std::lock_guard<std::mutex> lock(g_domainsMutex);
+        if (g_nextDomain <= 0 || g_nextDomain > kMaxLatchDomains) return 0;
+        LatchState* state = new LatchState{};
+        state->id = g_nextDomain++;
+        g_domains.emplace(state->id, state);
+        return state->id;
+    }
+
+    void FatalLatchDomainClose(int domain) {
+        if (domain == 0) return;
+        LatchState* state = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(g_domainsMutex);
+            const auto found = g_domains.find(domain);
+            if (found == g_domains.end()) return;
+            state = found->second;
+            g_domains.erase(found);
+        }
+        delete state;
+    }
+
+    int FatalLatchDomainBind(int domain) {
+        LatchState* const previous = t_latch;
+        if (domain == 0) {
+            t_latch = &g_defaultLatch;
+            return previous->id;
+        }
+        {
+            const std::lock_guard<std::mutex> lock(g_domainsMutex);
+            const auto found = g_domains.find(domain);
+            t_latch = found == g_domains.end() ? &g_defaultLatch : found->second;
+        }
+        return previous->id;
+    }
+
+    void ArmSessionLatch() { Latch().armed.store(true, std::memory_order_release); }
 
     void ResetSessionLatch() {
-        const std::lock_guard<std::mutex> lock(g_latchMutex);
-        g_latchArmed.store(false, std::memory_order_release);
-        g_latchCount.store(0, std::memory_order_relaxed);
-        g_latchedFamily = MGFatalFamily::ProtocolCorruption;
-        g_latchedLine[0] = '\0';
-        g_latched.store(false, std::memory_order_release);
+        LatchState& latch = Latch();
+        const std::lock_guard<std::mutex> lock(latch.mutex);
+        latch.armed.store(false, std::memory_order_release);
+        latch.count.store(0, std::memory_order_relaxed);
+        latch.latchedFamily = MGFatalFamily::ProtocolCorruption;
+        latch.latchedLine[0] = '\0';
+        latch.latched.store(false, std::memory_order_release);
     }
 
-    bool SessionLatchArmed() { return g_latchArmed.load(std::memory_order_acquire); }
+    bool SessionLatchArmed() { return Latch().armed.load(std::memory_order_acquire); }
 
-    bool SessionLatched() { return g_latched.load(std::memory_order_acquire); }
+    bool SessionLatched() { return Latch().latched.load(std::memory_order_acquire); }
 
     MGFatalFamily SessionLatchedFamily() {
-        const std::lock_guard<std::mutex> lock(g_latchMutex);
-        return g_latchedFamily;
+        LatchState& latch = Latch();
+        const std::lock_guard<std::mutex> lock(latch.mutex);
+        return latch.latchedFamily;
     }
 
-    const char* SessionLatchedLine() { return g_latchedLine; }
+    const char* SessionLatchedLine() { return Latch().latchedLine; }
 
-    std::uint64_t SessionLatchCount() { return g_latchCount.load(std::memory_order_relaxed); }
+    std::uint64_t SessionLatchCount() { return Latch().count.load(std::memory_order_relaxed); }
 
     bool SessionLatch(MGFatalFamily family, const char* fmt, ...) {
         char line[512];
@@ -135,23 +191,25 @@ namespace MobileGL::MG_Remote {
         FormatFaultLine(line, fmt, args);
         va_end(args);
 
+        LatchState& latch = Latch();
+
         // UNARMED IS SessionFail, byte for byte: the inproc server, the client and every unit
         // death test keep the death they had (FatalFunnel.h's block says why inproc must).
-        if (!g_latchArmed.load(std::memory_order_acquire)) {
+        if (!latch.armed.load(std::memory_order_acquire)) {
             SessionFail(family, "%s", line);
         }
 
         g_sessionFaultCount.fetch_add(1, std::memory_order_relaxed);
-        g_latchCount.fetch_add(1, std::memory_order_relaxed);
+        latch.count.fetch_add(1, std::memory_order_relaxed);
         LogFaultLine(line);
 
         bool first = false;
         {
-            const std::lock_guard<std::mutex> lock(g_latchMutex);
-            if (!g_latched.load(std::memory_order_relaxed)) {
-                std::snprintf(g_latchedLine, sizeof(g_latchedLine), "%s", line);
-                g_latchedFamily = family;
-                g_latched.store(true, std::memory_order_release);
+            const std::lock_guard<std::mutex> lock(latch.mutex);
+            if (!latch.latched.load(std::memory_order_relaxed)) {
+                std::snprintf(latch.latchedLine, sizeof(latch.latchedLine), "%s", line);
+                latch.latchedFamily = family;
+                latch.latched.store(true, std::memory_order_release);
                 first = true;
             }
         }

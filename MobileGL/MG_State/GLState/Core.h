@@ -16,6 +16,7 @@
 #include "ProgramState/ProgramState.h"
 #include "ProgramState/ProgramPipelineObject.h"
 #include "SamplerState/SamplerState.h"
+#include "ShareGroupState.h"
 #include "TextureState/TextureState.h"
 #include "FramebufferState/FramebufferState.h"
 #include "VertexArrayState/VertexArrayState.h"
@@ -76,7 +77,19 @@ namespace MobileGL {
 
             class GLContext {
             public:
+                // A context with a share group of its own. Created through EGL, a context
+                // either starts a new group or joins the one its share context belongs to;
+                // this constructor is the standalone shape the tests and the process default
+                // context use.
                 GLContext();
+                explicit GLContext(SharedPtr<ShareGroupState> shareGroup);
+
+                // The GL objects this context shares with every context that shares with it.
+                const SharedPtr<ShareGroupState>& GetShareGroup() const { return m_shareGroup; }
+
+                // Installs the process-wide default framebuffer (GL name 0) into this context:
+                // its table entry and the Draw/Read bindings the context starts with.
+                void InstallDefaultFramebuffer(const SharedPtr<FramebufferObject>& framebuffer);
 
                 // Error
                 void RecordError(ErrorCode code, UniquePtr<ErrorInfo> info);
@@ -188,7 +201,7 @@ namespace MobileGL {
                 // P1 stage 6: the per-context index of adoptable compile nodes, for its
                 // adoption counter. Diagnostics and tests only - no GL entry point reads it.
                 ShaderCompileAdoptionMap& GetShaderCompileAdoptionMap() {
-                    return m_programState.GetShaderCompileAdoptionMap();
+                    return Group().Programs().GetShaderCompileAdoptionMap();
                 }
                 void UseProgram(Uint program);
                 const SharedPtr<ProgramObject>& GetCurrentProgram();
@@ -606,6 +619,10 @@ namespace MobileGL {
                 void InvalidateCompileEnv();
 
             private:
+                ShareGroupState& Group() const { return *m_shareGroup; }
+
+                // The GL objects shared with every context that shares with this one.
+                SharedPtr<ShareGroupState> m_shareGroup;
                 // State Components
                 ErrorState m_errorState;
                 BufferState m_bufferState;
@@ -685,10 +702,11 @@ namespace MobileGL {
                 IndexGenerator<Uint> m_programPipelineNames;
                 Uint m_boundProgramPipeline = 0;
                 TextureState m_textureState;
-                ProgramState m_programState;
+                // The program this context has in use. Program STATE (the objects) belongs to
+                // the share group; which of them is current does not.
+                SharedPtr<ProgramObject> m_currentProgram;
                 RenderState m_renderState;
                 FramebufferState m_framebufferState;
-                SamplerState m_samplerState;
                 RenderbufferState m_renderbufferState;
 
                 mutable SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> m_compileEnv;
@@ -698,7 +716,32 @@ namespace MobileGL {
             };
         } // namespace GLState
 
-        extern UniquePtr<GLState::GLContext>& pGLContext;
+        // P14 S3 (docs/Disaggregated/design/11-state-ownership.md): the GL state the CALLING
+        // THREAD's GL entry points read and write. eglMakeCurrent points it at that EGL
+        // context's GLContext, and the EGL release edge puts it back to whatever it was, so a
+        // thread that never crossed an eglMakeCurrent keeps the process default MG_State::Init()
+        // gave it. NULL on a thread for which neither has happened, the same answer a process
+        // that never reached MG_State::Init() (the spawn server image) has always given.
+        extern thread_local SharedPtr<GLState::GLContext> pGLContext;
+
+        // The fallback pGLContext starts at and an EGL release edge restores to: the process's
+        // one context for every thread that never bound an EGL context to itself, created on
+        // demand and owned here (leak-at-exit, like every other process global).
+        const SharedPtr<GLState::GLContext>& ProcessDefaultGLContext();
+
+        // Drops the process default context and this thread's binding to it, and the default
+        // framebuffer with them. Called on the teardown edge (the last eglTerminate, before
+        // MobileGL::Destroy()) so the objects MG_State::Init() built do not outlive
+        // glslang::FinalizeProcess() through a thread that kept its fallback binding.
+        void ReleaseProcessDefaultGLContext();
+
+        // P14 S3. GL framebuffer 0, built by MG_Impl once the backend is up (it needs texture
+        // objects, which need the backend's resource plumbing) and handed back here so every
+        // GLContext a later eglCreateContext builds starts with the same default framebuffer
+        // bound. Until the backend grows per-context native tuples there is exactly one such
+        // object, which is what the backend's own default-framebuffer identity tests assume.
+        void SetDefaultFramebuffer(SharedPtr<GLState::FramebufferObject> framebuffer);
+        const SharedPtr<GLState::FramebufferObject>& DefaultFramebuffer();
 
         // True when relaxed GL semantics apply. Strict core rules are enforced only when the
         // current EGL context explicitly requested a core profile (core bit in

@@ -70,7 +70,9 @@ extern "C" {
 //   4  P11 PAIR: the PairBind message - a socket client's control and aux connections pair by
 //      the nonce each presents first, not by arrival order.
 //   5  P11 B2: LinkTerms.adoptTier - the client's persistent-map adoption tier ask (T0 or T2).
-#define MOBILEGL_PROTOCOL_CONTROL_REVISION 5
+//   6  P14 S1 (docs/Disaggregated/design/11-state-ownership.md): SurfaceOpKind.CreateContext /
+//      DestroyContext, plus SurfaceOp.shareGroupToken and SurfaceOp.contextFlags.
+#define MOBILEGL_PROTOCOL_CONTROL_REVISION 6
 
 #define MOBILEGL_ABI_VERSION(major, minor) (((uint32_t)(major) << 16) | (uint32_t)(minor))
 #define MOBILEGL_ABI_MAJOR_OF(version) ((uint32_t)(version) >> 16)

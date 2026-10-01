@@ -95,10 +95,23 @@ namespace MobileGL::MG_Remote::Wire {
         const void* Resolve(Uint32 seg, Uint64 offset, Uint64 size) const;
 
         // Points MG_Pipe::gMGPipeSegmentResolver at this table. Server role only; asserts if
-        // a resolver is already installed, because two roles racing on one inline variable is
-        // the failure this function exists to make loud.
+        // a DIFFERENT table is already installed ON THE CALLING THREAD, because one thread
+        // serving two sessions at once is the failure this function exists to make loud.
+        //
+        // P14 S2: THE TABLE IS PER THREAD, THE HOOK IS PER PROCESS. Several sessions in one
+        // process each have their own table and their own threads, so a second session's install
+        // is neither a race nor an error: it installs the one process-wide thunk (idempotent) and
+        // binds the calling thread to ITS table. g_processResolverTable stays as the fallback for
+        // a thread that bound nothing - the inproc one-process client+server shape, whose apply
+        // thread is created after the app thread's Accept and does not bind.
         void InstallProcessResolver();
+        // Unbinds the CALLING thread and clears the process-wide fallback. The hook itself stays
+        // installed: another session may still be live, and a null answer from a table-less thunk
+        // is exactly what a null hook answered.
         static void UninstallProcessResolver();
+        // P14 S2: binds the CALLING thread to this table (ThreadSessionScope's two calls).
+        void BindThreadResolver();
+        static void UnbindThreadResolver();
 
     private:
         Transport::ILink* m_link = nullptr;
@@ -659,6 +672,19 @@ namespace MobileGL::MG_Remote::Wire {
         }
         virtual Bool OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) {
             (void)death;
+            return false;
+        }
+
+        // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): bind_context, opcode 84.
+        //
+        // The applier_reset hand-over shape, one plane over: a fixed-size POD the bounds gate has
+        // already proved, no blob, no tail, no reply, so the codec validates nothing further and
+        // the SERVER'S sink does the work - the session's current context token becomes the
+        // record's. It is not an assertion like OnApplierReset's serial: the token is minted by
+        // the client's EGL layer and the server has no independent count of it, so an unknown
+        // token is the sink's own refusal to make and not a shape the codec can check.
+        virtual Bool OnBindContext(const MG_Pipe::MGPBindContext& bind) {
+            (void)bind;
             return false;
         }
     };

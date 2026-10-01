@@ -33,3 +33,4 @@
 | 14–15 | 帧节奏与线程；进程、握手、EGL、Android（含上屏 server）、崩溃处理 | [`design/08-runtime-and-platform.md`](design/08-runtime-and-platform.md) |
 | 16、附 A、附 B | 源码目录与构建选项；全部开关；边界计数器 | [`design/09-build-switches-counters.md`](design/09-build-switches-counters.md) |
 | 17 | 各阶段落地时的形状与仍生效的规则（链到 `notes/`） | [`design/10-phase-shapes.md`](design/10-phase-shapes.md) |
+| — | 状态归属：多 session / 多 context / share group（anland 统一 server 前置） | [`design/11-state-ownership.md`](design/11-state-ownership.md) |

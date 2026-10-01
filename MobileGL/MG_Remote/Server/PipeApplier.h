@@ -245,11 +245,21 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnApplierReset(const MG_Pipe::MGPApplierReset& reset) override;
         Bool OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) override;
 
+        // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): bind_context, opcode 84.
+        //
+        // The session's current context token becomes the record's, on the apply thread. Unlike
+        // OnApplierReset's serial the token is NOT an assertion about a count the two ends both
+        // hold - the client mints it and the server keeps the table CreateContext built - so the
+        // refusal here is "this session never created that token", a named ProtocolCorruption
+        // rather than a silent bind. Token 0 (the release) is always legal.
+        Bool OnBindContext(const MG_Pipe::MGPBindContext& bind) override;
+
         // P5c ct's tallies, for the same reason every other row's tally exists (R-16: a probe
         // may not arm against a stub). ApplierResets counts the records ACCEPTED (serial
         // checked, reset run); ObjectDeaths counts every record the sink dispatched.
         Uint64 ApplierResets() const { return m_applierResets; }
         Uint64 ObjectDeaths() const { return m_objectDeaths; }
+        Uint64 BindContexts() const { return m_bindContexts; }
         // The ContextSerial the NEXT applier_reset record must carry. Exposed so a case can
         // assert the sequence rather than only the count.
         Uint64 ExpectedApplierResetSerial() const { return m_applierResetSerial; }
@@ -377,6 +387,11 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_applierResetSerial = 0;
         Uint64 m_applierResets = 0;
         Uint64 m_objectDeaths = 0;
+        // P14 S1. BindContexts counts the records the sink dispatched and bound on the session;
+        // the token itself lives on the session (ServerSession::CurrentContextToken), which is
+        // the object the control plane's CreateContext/DestroyContext also own - one table, one
+        // owner, and the sink is only the ring's door into it.
+        Uint64 m_bindContexts = 0;
         // ReadPixels' destination. The pixels go into the reply slot, but GLFunctionsTable::
         // ReadPixels writes into a caller buffer, so one staging vector per session sits
         // between them. Grown, never shrunk, and never handed out past the call.

@@ -62,8 +62,10 @@ namespace MobileGL::MG_Remote {
     // crash (ID-P7-1: "下一连接照常服务" is the supervisor's, not the latch's).
     //
     // WHERE IT IS ARMED, AND WHY ONLY THERE. ArmSessionLatch() is called by exactly one site:
-    // ServerMain::RunSession, i.e. the spawn / TCP session child (with or without --serve), whose
-    // process IS the session. Unarmed, SessionLatch IS SessionFail - same line, same abort - and
+    // ServerMain::RunSession, i.e. a served session - the spawn / TCP session child (with or
+    // without --serve), whose process IS the session, and (P14 S2) each session the in-process
+    // display server runs, which arms ITS OWN latch domain so a fault there ends that session and
+    // no other. Unarmed, SessionLatch IS SessionFail - same line, same abort - and
     // that is the answer everywhere else, deliberately:
     //   * INPROC keeps Fatal. CONTRACT-P5's R-2 arms (rules A/B/C, the four honesty arms) are
     //     Fatal{ProtocolCorruption} in the formal wording, and under inproc the client and the
@@ -85,6 +87,10 @@ namespace MobileGL::MG_Remote {
     // Between sessions the latch is unarmed, so a fault there is a SessionFail - which in the
     // in-process shape takes the display Activity's process down with it: the crash isolation a
     // forked session child gave is what running in-process gives up (documented, D5).
+    //
+    // P14 S2: it now clears the CALLING THREAD'S DOMAIN (below), which between sessions is the
+    // process default - a session that opened its own domain cannot leave a latch behind for the
+    // next one to inherit, because the next one does not read that domain at all.
     void ResetSessionLatch();
     // True once the first fault has latched. One acquire load: DrainRing asks it before every pop.
     bool SessionLatched();
@@ -94,6 +100,31 @@ namespace MobileGL::MG_Remote {
     const char* SessionLatchedLine();
     // Every fault this armed process latched or declined after the first (>= 1 once latched).
     ::std::uint64_t SessionLatchCount();
+
+    // ---- P14 S2: ONE LATCH DOMAIN PER SERVED SESSION ------------------------------------
+    //
+    // THE LATCH IS PER SESSION NOW, and that is a correctness requirement of serving several in
+    // one process, not a tidy-up. Its three readers sit on a session's own threads - the apply
+    // loop's park, DrainRing's per-pop check, ServerMain's control loop - so a latch raised by
+    // session A used to stop session B's apply thread mid-ring and end B's control loop: one
+    // peer's bad bytes took down its neighbours. ResetSessionLatch had the mirror problem: the
+    // reap of a finished session cleared the latch a live one was standing on.
+    //
+    // A DOMAIN is the latch state, and a THREAD IS BOUND TO ONE. SessionRuntime opens a domain per
+    // served session and ThreadSessionScope binds both of that session's threads to it. A thread
+    // that has bound nothing uses DOMAIN 0, the process default - which is exactly the old
+    // behaviour, and is what the client, the inproc one-process shape and every unit case get.
+    //
+    // 0 IS RESERVED FOR THE PROCESS DEFAULT and FatalLatchDomainOpen never returns it (0 on
+    // exhaustion, which degrades to "shares the default" rather than to a crash).
+    inline constexpr int kMaxLatchDomains = 64;
+    int FatalLatchDomainOpen();
+    // The domain's state goes; no thread may still be bound to it (the session's apply thread is
+    // joined and its control thread's scope has been destroyed by then).
+    void FatalLatchDomainClose(int domain);
+    // Binds the CALLING THREAD to `domain`, returning the domain it was bound to before so a
+    // scope can put it back.
+    int FatalLatchDomainBind(int domain);
 
     // The session child's exit status when its session ended on a latched fault. Distinct from
     // RunSession's other codes (64-74) so the supervisor's reap line names it; nonzero, so it is

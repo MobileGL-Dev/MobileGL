@@ -1966,6 +1966,19 @@ namespace MobileGL::MG_Pipe {
     // object (§5.2), so a null handle arriving is Fatal{ProtocolCorruption,
     // "ObjectDeath.Handle"} at the sink.
 
+    // bind_context = opcode 84, P14 S1 (docs/Disaggregated/design/11-state-ownership.md).
+    // The client's CURRENT context token, minted by EGLState::CreateContext and carried to the
+    // server by the matching CreateContext control frame. 0 means "no context": a release, and
+    // it is the value a session that never bound one already has - so the single-context shape
+    // P5c shipped (one context per session, every record implicitly its own) needs no record at
+    // all and no server change. The token is Uint64 because the control frame's is: one width
+    // on both planes, or the two would have to be narrowed at one end.
+    struct MGPBindContext {
+        Uint64 ClientContextToken;
+    };
+    MGP_ASSERT_POD(MGPBindContext, 8);
+
+
     // set_context_values = opcode 79, P5c rv (CONTRACT-P5C.md §5.3): the rv field table as
     // ONE fixed-width POD. It carries every value-class field that no set_* call supplies -
     // the two texture-unit counters, the per-target touched-buffer-binding high-water marks

@@ -1946,7 +1946,7 @@ namespace {
 
         MGPipeResourceOps m_ops{};
         Uint64 m_previousPush = 0;
-        UniquePtr<GLContext> m_previousContext;
+        SharedPtr<GLContext> m_previousContext;
     };
 
     GLContext& Ctx() { return *MG_State::pGLContext; }

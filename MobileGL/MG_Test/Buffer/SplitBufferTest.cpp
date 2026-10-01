@@ -105,7 +105,7 @@ namespace {
         Uint32 m_blockKb = 64;
         Uint32 m_adoptTier = 2;
         Bool m_pipeStats = false;
-        UniquePtr<MG_State::GLState::GLContext> m_context;
+        SharedPtr<MG_State::GLState::GLContext> m_context;
     };
 #endif
 

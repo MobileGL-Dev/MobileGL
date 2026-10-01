@@ -174,7 +174,7 @@ namespace {
         EmitterScope(const EmitterScope&) = delete;
         EmitterScope& operator=(const EmitterScope&) = delete;
 
-        UniquePtr<GLContext> m_previousContext;
+        SharedPtr<GLContext> m_previousContext;
     };
 
     GLContext& Ctx() { return *MG_State::pGLContext; }

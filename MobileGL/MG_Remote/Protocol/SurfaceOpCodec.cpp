@@ -51,10 +51,20 @@ namespace MobileGL::MG_Remote {
         // cp's one schema addition, on the same append-only terms.
         static_assert(static_cast<Uint8>(SurfaceControlOp::InitCapabilities) ==
                           static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities));
+        // P14 S1's two appends, on the same append-only terms. The VALUES are pinned because they
+        // are wire ABI, and pinned SEPARATELY from the identity cast beside them: the cast would
+        // stay green if both enums moved together to 20/21, and a peer built before the move
+        // would then read the two ops as two others.
+        static_assert(static_cast<Uint8>(SurfaceControlOp::CreateContext) ==
+                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateContext));
+        static_assert(static_cast<Uint8>(SurfaceControlOp::DestroyContext) ==
+                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::DestroyContext));
         static_assert(static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetSwapInterval) == 8 &&
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources) == 9 &&
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle) == 10 &&
-                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities) == 11);
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities) == 11 &&
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateContext) == 12 &&
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::DestroyContext) == 13);
         static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer) == 6);
         // P12's append, on the same terms: the value is wire ABI.
         static_assert(static_cast<Uint8>(::MobileGL::Wire::WindowKind::ServerOwned) == 7);
@@ -112,7 +122,7 @@ namespace MobileGL::MG_Remote {
         // Fatal{ProtocolCorruption} at ServerApplyWireSurfaceOp rather than as
         // the missing row it is.
         if (::flatbuffers::IsOutRange(kind, ::MobileGL::Wire::SurfaceOpKind::InitializeDisplay,
-                                      ::MobileGL::Wire::SurfaceOpKind::InitCapabilities)) {
+                                      ::MobileGL::Wire::SurfaceOpKind::DestroyContext)) {
             return false;
         }
         const SurfaceControlOp op = static_cast<SurfaceControlOp>(static_cast<Uint8>(kind));
@@ -174,7 +184,8 @@ namespace MobileGL::MG_Remote {
         }
         const auto op = ::MobileGL::Wire::CreateSurfaceOp(
             *builder, frame.seq, kind, frame.display, frame.surface, windowKind, nativeToken,
-            frame.width, frame.height, frame.swapInterval, frame.readSurface, frame.context);
+            frame.width, frame.height, frame.swapInterval, frame.readSurface, frame.context,
+            frame.shareGroupToken, frame.contextFlags);
         const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(*builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(*builder, envelope);
         return SurfaceWireError::None;
@@ -195,6 +206,8 @@ namespace MobileGL::MG_Remote {
         decoded.width = op.width();
         decoded.height = op.height();
         decoded.swapInterval = op.swapInterval();
+        decoded.shareGroupToken = op.shareGroupToken();
+        decoded.contextFlags = op.contextFlags();
         if (OpNeedsAWindowBackend(kind)) {
             if (op.windowKind() == ::MobileGL::Wire::WindowKind::ServerOwned) {
                 // P12 (D2). Asked BEFORE the Android refusal below, which it is not: the window is

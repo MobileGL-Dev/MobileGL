@@ -109,7 +109,7 @@ namespace {
 #endif
             MG_State::pGLContext = Move(m_previous);
         }
-        UniquePtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_previous;
     };
 
     SizeT Index(MGPipeInputField field) { return static_cast<SizeT>(field); }

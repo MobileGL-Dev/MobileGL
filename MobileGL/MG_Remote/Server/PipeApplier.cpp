@@ -1462,6 +1462,53 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
+    // P14 S1. THE RING'S DOOR INTO THE SESSION'S CONTEXT TABLE.
+    //
+    // The record carries the client's current context token and this is where a session's
+    // attribution moves. It is deliberately NOT an assertion like OnApplierReset's serial: the
+    // client's EGL layer mints the token and the server has no second count to compare against,
+    // so what is checked is a FACT ABOUT THIS SESSION'S OWN TABLE - a token that CreateContext
+    // never created is corruption, not a late record. Token 0 is the release edge and is always
+    // legal (a session whose client released its context has no context, which is exactly the
+    // value a session that never bound one already answers).
+    Bool ServerVerbSink::OnBindContext(const MG_Pipe::MGPBindContext& bind) {
+        // NO SESSION IS A DECLINE, NOT A FAULT, and it is the one case here that a peer's bytes
+        // cannot cause: a bind is answered by the session's own table, so with no accepted
+        // session there is nothing to attribute the record to and nothing to refuse. (The window
+        // is Close() clearing the active session while the apply thread is still draining.)
+        ServerSession* session = ServerSession::Active();
+        if (session == nullptr) return false;
+        // PH-1 (3): the refusal latches in an armed session child (the peer wrote the token);
+        // unarmed it dies, like every other contract fact about a peer.
+        if (!session->BindContext(bind.ClientContextToken)) {
+            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindContext.ClientContextToken\"} - the "
+                    "record binds token %llu, which this session never created; a bind_context "
+                    "names a context CreateContext put in the session's table, and 0 (the "
+                    "release) is the only token that needs no entry",
+                    static_cast<unsigned long long>(bind.ClientContextToken));
+        }
+        ++m_bindContexts;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14 S4 (docs/Disaggregated/design/11-state-ownership.md). THE NATIVE HALF OF THE SWITCH.
+        //
+        // `bind_context` is where the session's context attribution moves, and it is also the ONLY
+        // point at which the apply thread's native context may move: the MakeCurrent control frame
+        // that precedes it still carries the OLD context (the client emits the binding after the
+        // binding has taken effect, which is the ordering S1 chose on purpose), so a native switch
+        // driven from there would bind the context the client just left. Frontend GL state is the
+        // backend's per-tuple business; this call makes the tuple the resolver now names current.
+        //
+        // It is a no-op for the shapes S4 did not change: with no resolver installed (monolith, a
+        // unit case, the inproc one-process shape) the key is {0,0}, and the single-context world's
+        // bind does not move the native context - MakeNativeContextCurrentForBoundToken returns
+        // without a driver call when the context it resolves to is already the one bound here.
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            (void)MG_Backend::DirectGLES::MakeNativeContextCurrentForBoundToken();
+        }
+#endif
+        return true;
+    }
+
     Bool ServerVerbSink::OnObjectDeath(const MG_Pipe::MGPHandleOnly& death) {
         // §1's zero ruling: a null handle means "the object never crossed", and the client
         // emits NOTHING in that case (§5.2) - so a null handle arriving here is corruption,

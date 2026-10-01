@@ -20,6 +20,9 @@ namespace MobileGL::MG_State::GLState {
         const SharedPtr<FramebufferObject>& GetFramebufferObject(Uint index);
         void GenerateNames(Uint number, Vector<Uint>& framebuffers);
         const SharedPtr<FramebufferObject>& CreateFramebufferObject(Uint index);
+        // Puts an already-built object at `index` without the "name 0 is created once" rule,
+        // so a context can adopt the process-wide default framebuffer.
+        void RegisterFramebufferObject(Uint index, SharedPtr<FramebufferObject> object);
         BindingSlot<FramebufferObject>& GetBindingSlot(FramebufferTarget target);
         void MarkFramebufferObjectForDeletion(Uint index);
         Bool ValidateName(Uint index) const;

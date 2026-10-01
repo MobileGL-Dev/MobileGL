@@ -464,6 +464,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.cpp
 
     MobileGL/MG_State/GLState/Core.cpp
+    MobileGL/MG_State/GLState/ShareGroupState.cpp
     MobileGL/MG_State/EGLState/Core.cpp
     MobileGL/MG_State/GLState/ErrorState/Error.cpp
     MobileGL/MG_State/GLState/BufferState/BufferState.cpp
@@ -662,6 +663,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/ServerSession.cpp
         MobileGL/MG_Remote/Server/PipeApplier.cpp
         MobileGL/MG_Remote/Server/ServerLoop.cpp
+        # P14 S2: the per-session runtime and the thread routing that lets one process serve
+        # several sessions (the real session a singleton accessor answers with on that
+        # session's own threads).
+        MobileGL/MG_Remote/Server/SessionRuntime.cpp
         MobileGL/MG_Remote/Server/ServerMain.cpp
         # P11 PAIR: a socket client's control and aux connections paired by the nonce each
         # presents first (PairBind), not by arrival order - both unix supervisors take pairs here.

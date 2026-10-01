@@ -976,8 +976,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // ---- P14 S4: A SECOND SURFACE NO LONGER TEARS THE CONTEXT DOWN. ----
+        //
+        // This used to be `DestroyEGLContext(); ResetEGLRuntimeState();` whenever a surface was
+        // created while another was active, i.e. every pbuffer -> window -> pbuffer switch destroyed
+        // the native context - and with it every buffer, texture and program the application had
+        // built. The native context now belongs to the (session, context token) tuple the backend
+        // resolves, and creating a surface for it only adds a surface: the tuple keeps its context
+        // and its objects. ResetEGLRuntimeState still runs because the base class's per-surface
+        // bookkeeping (which surface is active, which threads made it current) does describe the
+        // surface that is being replaced.
         if (m_eglSurfaceInitialized) {
-            DestroyEGLContext();
             ResetEGLRuntimeState();
         }
 
@@ -1008,8 +1017,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // P14 S4: as for the window surface above - the native context is the (session, context
+        // token) tuple's and survives a surface switch. This used to be DestroyEGLContext().
         if (m_eglSurfaceInitialized) {
-            DestroyEGLContext();
             ResetEGLRuntimeState();
         }
 
