@@ -30,6 +30,7 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -139,7 +140,15 @@ namespace MobileGL::MG_Gbm
                              device.HeapPath.c_str(), alignedSize, heapErrno, strerror(heapErrno));
             }
 
+#if defined(__ANDROID__) && __ANDROID_API__ < 30
+            // BIONIC ONLY DECLARES memfd_create FROM API 30, and this library builds against 26.
+            // The kernel call is far older than the declaration - it has been there since 3.17 - so
+            // asking for it by number is not a workaround for a missing feature, it is the same call
+            // with the name the headers of this API level do not carry yet.
+            const Int fd = static_cast<Int>(::syscall(__NR_memfd_create, "mobilegl-gbm", MFD_CLOEXEC));
+#else
             const Int fd = memfd_create("mobilegl-gbm", MFD_CLOEXEC);
+#endif
             if (fd < 0)
             {
                 MGLOG_E_ONCE("gbm: memfd_create failed (%d: %s) and no dma-heap node is usable, so no "

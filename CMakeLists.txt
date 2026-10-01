@@ -1240,3 +1240,10 @@ if (ANDROID AND MOBILEGL_BUILD_EXTMEM_PROBE)
         endif()
     endif()
 endif()
+
+# The GBM library carries the tree's logger, which reaches Android's own log.  The main target gets
+# these libraries in its own Android block; a library built from the same sources needs them for the
+# same reason, and without them it is the LINK that fails rather than anything in the code.
+if (ANDROID)
+    target_link_libraries(MobileGLGbm PRIVATE log android)
+endif()
