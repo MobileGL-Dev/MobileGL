@@ -29,6 +29,9 @@
 // names is an object eglCreateImageKHR built (its geometry, its fourcc and the descriptors it owns),
 // and that object lives in the EGL state.  Same include the other GLImpl files that touch it use.
 #include <MG_State/EGLState/Core.h>
+// The compositor's frame boundary: glFlush presents the display host's frame when the surfaceless
+// bind hook took one (see EGLImpl.cpp).  The EGL side declares the pair and the swap entry.
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
@@ -132,6 +135,17 @@ MOBILEGL_GL_API void glFlush() {
 #if MOBILEGL_BUILD_DISAGGREGATED
     MobileGL::MG_Pipe::MGPipeClientFlush();
 #endif
+    // A COMPOSITOR'S FRAME BOUNDARY.  kwin binds the display host's frame surface and draws the
+    // desktop into it, then calls glFlush - and glFlush alone.  It never calls eglSwapBuffers, so
+    // without this the stream reached the server and the server drew, but the display host was
+    // never told a frame was done: the host's own present loop (AHardwareBuffer_acquire ->
+    // draw -> notify) is what puts pixels on the glass, and its notify is exactly this swap.
+    // Guarded by whether the surfaceless-bind hook actually took the host frame.
+    if (MobileGL::MG_Impl::EGLImpl::g_hostFramePresentSurface != nullptr &&
+        MobileGL::MG_Impl::EGLImpl::g_hostFramePresentDisplay != nullptr) {
+        MobileGL::MG_Impl::EGLImpl::SwapBuffers(MobileGL::MG_Impl::EGLImpl::g_hostFramePresentDisplay,
+                                                MobileGL::MG_Impl::EGLImpl::g_hostFramePresentSurface);
+    }
 }
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferRenderbuffer, GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferRenderbuffer, target, attachment, renderbuffertarget, renderbuffer)
 DECLARE_GL_FUNCTION_HEAD(void, FramebufferTexture2D, GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) DECLARE_GL_FUNCTION_END_NO_RETURN(void, FramebufferTexture2D, target, attachment, textarget, texture, level)

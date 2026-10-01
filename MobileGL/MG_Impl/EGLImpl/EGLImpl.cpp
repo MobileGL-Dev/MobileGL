@@ -254,6 +254,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
         if (!state->ValidateSurfaceOnDisplay(dpy, draw)) {
+            MGLOG_E_ONCE("eglSwapBuffers: surface %p is not a surface of display %p (EGL_BAD_SURFACE)", draw, dpy);
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
