@@ -513,6 +513,18 @@ namespace MobileGL::MG_Remote::Client {
             if (CreateIsSuspect(handle) || g_createSuspects.size() >= kCreateSuspectMax) return;
             g_createSuspects.push_back(handle);
         }
+        // THE WINDOW IS A SESSION'S, NOT THE PROCESS'S.  Every entry names a sequence number of the
+        // session that wrote it, and a process can run several sessions one after another (eglinfo
+        // terminates one display and initializes the next).  An entry left by the previous session
+        // made the new session's first create wait for a sequence number the new server would not
+        // reach for a long time (measured: the second session hung on its first texture create, in
+        // DrainCreateWindow's blocking WaitForApplied).  Its answer, and the object it was about,
+        // died with that session; the suspects are that session's handles too.
+        void ForgetPreviousSessionCreates() {
+            g_createWindowHead = 0;
+            g_createWindowCount = 0;
+            g_createSuspects.clear();
+        }
         void ClearCreateSuspect(MG_Pipe::MGPipeHandle handle) {
             for (SizeT i = 0; i < g_createSuspects.size(); ++i) {
                 if (g_createSuspects[i].Slot != handle.Slot || g_createSuspects[i].Gen != handle.Gen)
@@ -1209,6 +1221,7 @@ namespace MobileGL::MG_Remote::Client {
 
     void InstallClientWireTables() {
         using namespace MG_Pipe;
+        ForgetPreviousSessionCreates();
 
         // DirectGLES normally installs this notice while creating its handle
         // backend. An independent client never creates that backend: without a
