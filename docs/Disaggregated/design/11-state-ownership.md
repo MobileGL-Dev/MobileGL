@@ -188,13 +188,24 @@ S4 留下的最后一块：`PipeApply.cpp` 的进程级 `g_applier` 现在是一
   **负控**（必做，否则是空绿）：把测试装的解析探针改成 null（即回到 S5 前的「谁都拿进程级 applier」），5 个用例**全红**；换回即全绿。
 - `MultiSessionTest.TwoSessionsInterleaveTwoContextsEachWithoutCrossTalk`：真实 `--serve` 前身（in-process unix supervisor）上两个 session，各自两个 context（同名 token 与同名 group token），**8 轮交错**：每轮先各发一条 `bind_context` 切 context，再跑一整趟 clear + 真读回。绿/红两种颜色互为证人；日志里 0 条 `SessionLatch{`。这条用例同时压的是**生产**解析链（`ThreadSessionScope` 装的探针）与并发（两个 apply 线程同时跑）。
 - 既有集合零回归：本切片点名的 97 个用例与 `MultiSessionFixture` 原有的 4 个全绿（含 `ServerLoopEglTest` 的 11 个、`ContextStateOwnershipTest` 6 个）。`SanityTest` 的两个用例因 `MGPipeApplierState` 不再可拷贝改为保存/恢复它真正改动的 working 字段。
+- **全量 host ctest 与基线的逐名对比**（不是"看起来差不多"）：先 `git stash` 掉本切片的全部改动、重建、跑一遍全量（`ctest -j 8`，2735 个用例）留下失败名单，再恢复本切片、重建、跑同一遍，两份名单 `comm`：
+
+  | | 数量 |
+  |---|---|
+  | 基线失败 | 266 |
+  | 本切片失败 | 265 |
+  | **本切片新增失败** | **0** |
+  | 基线失败而本切片不失败 | 1（`ProgramTest.CompileVertex`，glslang 那批的已知抖动） |
+
+  失败名单全部落在 glslang / 着色器编译族（`ProgramTest`、`ProgramInterfaceTest`、`AsyncLinkTest`、`GlslangCaptureProbeTest`、`TranslationCacheTest`…），与 `3rdparty/glslang` 这个 dirty submodule 的既有基线一致。
 
 **S5 明确没做（下一层的账）**：
 
-- **六个 twin registry 与 twin 键 `{shareGroup, slot, gen}` 仍未改**（`Managers.cpp`）。后果是 S5 **不能**声称「两个 nonshared context 的同名 handle 在驱动层是两个对象」：applier 的两条记录是对的（已有测试），但 twin 表按 handle 键，`Ensure(handle)` 会给两个 context 的同一个 handle 值返回同一个 twin。`ServerLoopTest` 里那条 `glIsBuffer` 探针仍然没有可用控制，所以**驱动级共享/隔离的证据仍是缺的**，本次没有以「跑了个空的绿」收进来。
-- **wire 第 1 条的逐记录 `ContextSlot`** 仍未做，仍是 S1 的边沿宣告 + `bind_context`。这意味着「同一 ring 上两个 context 的记录交错」只在 client 按 make-current 顺序发射时正确。
+- **六个 twin registry 与 twin 键仍未改**（`MG_Backend/DirectGLES/Managers.cpp` 的六个 `g_backend*` 静态注册表；键在 `Managers.h:315` 的 `StateBackendObjectRegistry` → `SlotTables.h` 的 `BackendSlotTable<MGPipeHandle{Slot,Gen}>`）。**这是 S5 之后"两个 nonshared context 的同名 handle"剩下的那一半**：applier 里两条记录是对的（有测试），但 twin 层按 `{slot, gen}` 键，两个 context 的同一个 handle 值会解析到同一个 twin；反向也一样，跨 context 复用 twin 的路径没有按 share group 分组。S4 报告里那条 `glIsBuffer` 探针本机仍无可用控制，所以**驱动级的 shared / nonshared 证据仍然是缺的**，本次没有以"跑了个空的绿"收进来（这是本切片最该被下一刀补上的证据）。改形状是把 `BackendSlotTable` 加一个 group 维度或按组实例化那六个注册表，触及 `Managers.cpp` 里全部调用点，不是本轮时间能稳妥做完的一刀。
+- **pbuffer→pbuffer→pbuffer 的资源保留**只到 S4 已落地的程度（`ServerLoopEglTest.CreatingAnotherSurfaceKeepsTheSameNativeContext`：换 surface 不动 tuple 的 `EGLContext` 句柄）。真正的"三个 pbuffer 之间来回且资源都在"要 window 半边，本机 headless 验不了；按 S4 的口径只记录。
+- **wire 第 1 条的逐记录 `ContextSlot`** 仍未做，仍是 S1 的边沿宣告 + `bind_context`。所以"同一 ring 上两个 context 的记录交错"只在 client 按 make-current 顺序发射时成立（本轮的交错压力用例走的正是这个顺序）。
 - **`MGPipeApplierShareGroupCountForTesting`** 是测试观测面，不是生产 API。
-- **`MGPipeApplierState` 的九张表名与 `Objects.X` 两种拼法并存**，是刻意换取 ~200 个读点不动的代价；改名的机会在 twin registry 一起做的那一刀。
+- **`MGPipeApplierState` 的九张表名与 `Objects.X` 两种拼法并存**是刻意换取 ~200 个读点不动的代价；改名的机会在 twin registry 一起做的那一刀。
 - **`g_backendContextGeneration`/`g_syncContextGeneration`、ServerLoop 的 MakeCurrent 去重**同 S4 一节所列，仍未动。
 
 
