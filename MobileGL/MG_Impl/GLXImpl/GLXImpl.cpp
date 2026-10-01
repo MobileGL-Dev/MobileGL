@@ -12,6 +12,7 @@
 #include "../EGLImpl/EGLImpl.h"
 #include "../GetProcAddress.h"
 #include <Init.h>
+#include <Config.h>
 
 namespace MobileGL::MG_Impl::GLXImpl {
     namespace {
@@ -187,6 +188,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             Uint32 Width = 0;
             Uint32 Height = 0;
             std::chrono::steady_clock::time_point LastSizePoll{};
+            Bool RemotePbuffer = false;
         };
 
         std::recursive_mutex& RegistryMutex() {
@@ -294,6 +296,10 @@ namespace MobileGL::MG_Impl::GLXImpl {
             if (width == surface.Width && height == surface.Height) {
                 return;
             }
+            // A remote X drawable is backed by a pbuffer; an XID has no meaning
+            // to the Android worker. Its allocation cannot be resized by the
+            // native-window hook. Keep the current allocation until recreated.
+            if (surface.RemotePbuffer) return;
             if (EGLImpl::ResizePlatformWindowSurface(surface.Display, surface.Surface,
                                                      static_cast<EGLint>(width),
                                                      static_cast<EGLint>(height))) {
@@ -323,8 +329,13 @@ namespace MobileGL::MG_Impl::GLXImpl {
                 EGL_HEIGHT, static_cast<EGLAttrib>(height),
                 EGL_NONE,
             };
-            EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(
-                context.Display, context.Config, reinterpret_cast<void*>(drawable), attribs);
+            const Bool remotePbuffer = MG_Config::Transport == MG_Config::TransportMode::Spawn;
+            const EGLint pbufferAttribs[] = {EGL_WIDTH, static_cast<EGLint>(width),
+                                             EGL_HEIGHT, static_cast<EGLint>(height), EGL_NONE};
+            EGLSurface surface = remotePbuffer
+                ? EGLImpl::CreatePbufferSurface(context.Display, context.Config, pbufferAttribs)
+                : EGLImpl::CreatePlatformWindowSurface(
+                    context.Display, context.Config, reinterpret_cast<void*>(drawable), attribs);
             if (surface == EGL_NO_SURFACE) {
                 MGLOG_E_ONCE("glx: failed to create window surface for drawable 0x%lx (%ux%u)", drawable,
                         width, height);
@@ -336,6 +347,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             record.Surface = surface;
             record.Width = width;
             record.Height = height;
+            record.RemotePbuffer = remotePbuffer;
             record.LastSizePoll = std::chrono::steady_clock::now();
             auto [inserted, _] = surfaces.emplace(drawable, record);
             return &inserted->second;
