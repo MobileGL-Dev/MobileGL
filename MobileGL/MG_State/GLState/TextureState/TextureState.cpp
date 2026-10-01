@@ -35,6 +35,14 @@ namespace MobileGL::MG_State::GLState {
             return MakeShared<TextureObject2DCube>(index);
         case TextureTarget::Texture2D:
             return MakeShared<TextureObject2D>(index);
+        // GL_TEXTURE_EXTERNAL_OES: an external texture IS a 2D texture whose storage comes from an
+        // imported EGLImage (the compositor's display-daemon dma-buf).  The object is the 2D one; what
+        // differs is where the storage comes from, and the import path records that.  Without this row
+        // the factory asserted "Unimplemented texture type when creating texture object!" the moment
+        // kwin bound one (measured: the compositor died on Trace/breakpoint trap right after the bind
+        // was accepted).
+        case TextureTarget::TextureExternalOES:
+            return MakeShared<TextureObject2D>(index, TextureTarget::TextureExternalOES);
         case TextureTarget::Texture3D:
             return MakeShared<TextureObject3D>(index);
         case TextureTarget::TextureBuffer:

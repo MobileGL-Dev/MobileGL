@@ -404,6 +404,14 @@ namespace MobileGL {
                 return TextureUploadTarget::Texture1D;
             case GL_TEXTURE_2D:
                 return TextureUploadTarget::Texture2D;
+            // GL_TEXTURE_EXTERNAL_OES (0x8D65), an upload target of its own right: the compositor
+            // attaches the imported dma-buf texture to a framebuffer through this enum, and the attach
+            // path validates the target here.  Left unmapped it became Unknown, the validation failed,
+            // the attachment was never recorded, and the compositor's own check then read
+            // GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT.  External textures ARE two-dimensional, so
+            // the upload target is the 2D one.
+            case 0x8D65:
+                return TextureUploadTarget::Texture2D;
             case GL_TEXTURE_3D:
                 return TextureUploadTarget::Texture3D;
             case GL_PROXY_TEXTURE_2D:

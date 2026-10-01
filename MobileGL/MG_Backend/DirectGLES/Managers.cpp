@@ -3183,6 +3183,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray: return TextureTarget::Texture2DMultisampleArray;
                 case MG_Pipe::MGPipeResourceTarget::TexRect: return TextureTarget::TextureRectangle;
                 case MG_Pipe::MGPipeResourceTarget::TexBuffer: return TextureTarget::TextureBuffer;
+                case MG_Pipe::MGPipeResourceTarget::TexExternalOES: return TextureTarget::TextureExternalOES;
                 default: return TextureTarget::Unknown;
                 }
             }

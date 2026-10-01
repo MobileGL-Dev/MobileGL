@@ -618,7 +618,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             const auto expectedTextureTarget = MG_Util::ConvertTextureUploadTargetToTextureTarget(textureUploadTarget);
             if (expectedTextureTarget == TextureTarget::Unknown ||
-                textureObject->GetTarget() != expectedTextureTarget) {
+                (textureObject->GetTarget() != expectedTextureTarget &&
+                 !(textureObject->GetTarget() == TextureTarget::TextureExternalOES &&
+                   expectedTextureTarget == TextureTarget::Texture2D))) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>(
@@ -1389,7 +1391,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto expectedTextureTarget = MG_Util::ConvertTextureUploadTargetToTextureTarget(textureUploadTarget);
         if (expectedTextureTarget == TextureTarget::Unknown ||
-            textureObject->GetTarget() != expectedTextureTarget) {
+            (textureObject->GetTarget() != expectedTextureTarget &&
+             !(textureObject->GetTarget() == TextureTarget::TextureExternalOES &&
+               expectedTextureTarget == TextureTarget::Texture2D))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
@@ -1539,7 +1543,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto expectedTextureTarget = MG_Util::ConvertTextureUploadTargetToTextureTarget(textureUploadTarget);
         if (expectedTextureTarget == TextureTarget::Unknown ||
-            textureObject->GetTarget() != expectedTextureTarget) {
+            (textureObject->GetTarget() != expectedTextureTarget &&
+             !(textureObject->GetTarget() == TextureTarget::TextureExternalOES &&
+               expectedTextureTarget == TextureTarget::Texture2D))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(

@@ -15,6 +15,9 @@ namespace MobileGL {
             class TextureObject2D : public TextureObjectWithOneMipmap {
             public:
                 explicit TextureObject2D(Uint externalIndex);
+                // An external texture (GL_TEXTURE_EXTERNAL_OES) is a 2D texture whose storage is an
+                // imported EGLImage; it keeps that target so the render server can tell it apart.
+                TextureObject2D(Uint externalIndex, TextureTarget target);
                 const Vector<TextureUploadTarget>& GetUploadTargets() const override { return m_uploadTargets; }
 
             protected:

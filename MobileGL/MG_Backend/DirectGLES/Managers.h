@@ -1879,6 +1879,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return TextureTarget::Texture2D;
             case TextureTarget::Texture1DArray:
                 return TextureTarget::Texture2DArray;
+            // An external texture's storage is an imported EGLImage; to the driver it is 2D.
+            case TextureTarget::TextureExternalOES:
+                return TextureTarget::Texture2D;
             default:
                 return target;
             }
