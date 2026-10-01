@@ -1095,17 +1095,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_hostFrameTarget = target;
         m_hostFrameBuffer = frame;
         m_hostFrameOffer = offer;
+        // The canvas is made at the first frame's size and kept; a failure leaves the frame itself
+        // as the draw target, which is how this path behaved before the canvas existed.
+        if (!EnsureHostFrameCanvas(target.Width, target.Height))
+            MGLOG_E_ONCE("TakeHostFrame: no canvas in front of the host frames; drawing into the frame itself");
+        const HostFrameTarget& drawTarget = HostFrameDrawTarget();
         // BEFORE the bind: every default-framebuffer bind the engine makes from here on has to
-        // resolve to this frame, and that resolution is what this global is.
-        g_hostFrameFramebufferId = m_hostFrameTarget.Framebuffer;
-        // Published together with the framebuffer, because they describe the same frame: the STORAGE
-        // an attachment is bound to when the client's texture has none of its own (the frame's own
-        // renderbuffer), and the SIZE that decides whether binding it is right at all.
-        g_hostFrameRenderbuffer = m_hostFrameTarget.Renderbuffer;
-        g_hostFrameWidth = m_hostFrameTarget.Width;
-        g_hostFrameHeight = m_hostFrameTarget.Height;
+        // resolve to this target, and that resolution is what this global is.
+        g_hostFrameFramebufferId = drawTarget.Framebuffer;
+        // Published together with the framebuffer, because they describe the same target: the STORAGE
+        // an attachment is bound to when the client's texture has none of its own, and the SIZE that
+        // decides whether binding it is right at all.
+        g_hostFrameRenderbuffer = drawTarget.Renderbuffer;
+        g_hostFrameWidth = drawTarget.Width;
+        g_hostFrameHeight = drawTarget.Height;
         FramebufferImpl::InvalidateFramebufferBindingCache();
-        HostFrameTargetBind(m_hostFrameTarget);
+        HostFrameTargetBind(drawTarget);
         // AND ON TO THE CONTAINER, as the dma-buf descriptor behind it.  The Wayland compositor
         // over there renders into THESE frames - it runs this project's own GBM, whose
         // gbm_bo_create answers with the phone's frame instead of an allocation of its own - so
@@ -1127,10 +1132,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BackendObject_DirectGLES::DestroyHostFrame() {
-        g_hostFrameFramebufferId = 0;
-        g_hostFrameRenderbuffer = 0;
-        g_hostFrameWidth = 0;
-        g_hostFrameHeight = 0;
+        // The canvas outlives the frame, so with one the globals keep naming it: the attachments
+        // made over it stay valid between this frame being handed back and the next one arriving.
+        g_hostFrameFramebufferId = m_hostFrameCanvas.Framebuffer;
+        g_hostFrameRenderbuffer = m_hostFrameCanvas.Renderbuffer;
+        g_hostFrameWidth = m_hostFrameCanvas.Width;
+        g_hostFrameHeight = m_hostFrameCanvas.Height;
         HostFrameTargetDestroy(m_hostFrameTarget);
         if (m_hostFrameBuffer != nullptr) {
             AHardwareBuffer_release(m_hostFrameBuffer);
@@ -1152,6 +1159,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // When this returns, the pixels are complete: glFinish is the fence the host is told
         // about, and the host's own readback - which Complete reads - is what proves the drawing
         // landed where the screen will look.
+        BlitHostFrameCanvas();
         if (g_GLESFuncs.glFinish != nullptr) g_GLESFuncs.glFinish();
         // WHAT THE CONTAINER SAID WHILE THIS FRAME WAS BEING DRAWN.  This is the one place the
         // server's apply loop passes through the host channel - the swap it runs lands here for a
@@ -1174,6 +1182,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return TakeHostFrame();
     }
 
+    Bool BackendObject_DirectGLES::EnsureHostFrameCanvas(Uint width, Uint height) {
+        if (m_hostFrameCanvas.Framebuffer != 0) return true;
+        if (width == 0 || height == 0 || !g_GLESFuncs.glRenderbufferStorage || !g_GLESFuncs.glBlitFramebuffer ||
+            !g_GLESFuncs.glGenRenderbuffers || !g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glCheckFramebufferStatus)
+            return false;
+        // RAW binds, as HostFrameTargetCreate makes them: the caller invalidates the engine's
+        // framebuffer shadow and binds through it right after.
+        GLuint renderbuffer = 0;
+        g_GLESFuncs.glGenRenderbuffers(1, &renderbuffer);
+        g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        // The frames are R8G8B8A8_UNORM (the display host allocates them so), and so is this.
+        g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, static_cast<GLsizei>(width),
+                                          static_cast<GLsizei>(height));
+        GLuint framebuffer = 0;
+        g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
+        g_GLESFuncs.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        g_GLESFuncs.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+        const GLenum status = g_GLESFuncs.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            MGLOG_E("host frame canvas %ux%u: framebuffer status 0x%04x", width, height, status);
+            g_GLESFuncs.glDeleteFramebuffers(1, &framebuffer);
+            g_GLESFuncs.glDeleteRenderbuffers(1, &renderbuffer);
+            return false;
+        }
+        m_hostFrameCanvas.Renderbuffer = renderbuffer;
+        m_hostFrameCanvas.Framebuffer = framebuffer;
+        m_hostFrameCanvas.Width = width;
+        m_hostFrameCanvas.Height = height;
+        MGLOG_I("host frame canvas: %ux%u as framebuffer %u (renderbuffer %u), copied into each frame at present",
+                width, height, framebuffer, renderbuffer);
+        return true;
+    }
+
+    void BackendObject_DirectGLES::BlitHostFrameCanvas() {
+        if (m_hostFrameCanvas.Framebuffer == 0 || m_hostFrameTarget.Framebuffer == 0) return;
+        // Whatever the compositor had bound is put back as it was, raw for raw, so the engine's
+        // shadow (which never saw this) is still right afterwards.  The scissor test and
+        // rasterizer discard both apply to a blit, so they are lifted for it.
+        GLint readBinding = 0;
+        GLint drawBinding = 0;
+        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readBinding);
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawBinding);
+        const GLboolean scissor = g_GLESFuncs.glIsEnabled(GL_SCISSOR_TEST);
+        const GLboolean discard = g_GLESFuncs.glIsEnabled(GL_RASTERIZER_DISCARD);
+        if (scissor) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+        if (discard) g_GLESFuncs.glDisable(GL_RASTERIZER_DISCARD);
+        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, m_hostFrameCanvas.Framebuffer);
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_hostFrameTarget.Framebuffer);
+        const Bool sameSize = m_hostFrameCanvas.Width == m_hostFrameTarget.Width &&
+                              m_hostFrameCanvas.Height == m_hostFrameTarget.Height;
+        g_GLESFuncs.glBlitFramebuffer(0, 0, static_cast<GLint>(m_hostFrameCanvas.Width),
+                                      static_cast<GLint>(m_hostFrameCanvas.Height), 0, 0,
+                                      static_cast<GLint>(m_hostFrameTarget.Width),
+                                      static_cast<GLint>(m_hostFrameTarget.Height), GL_COLOR_BUFFER_BIT,
+                                      sameSize ? GL_NEAREST : GL_LINEAR);
+        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readBinding));
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(drawBinding));
+        if (scissor) g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
+        if (discard) g_GLESFuncs.glEnable(GL_RASTERIZER_DISCARD);
+    }
+
 #else  // !(MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__)
 
     // The other arm's half: on a build with no host frames there is no frame to take, and the
@@ -1190,6 +1259,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Bool BackendObject_DirectGLES::TakeHostFrame() { return false; }
     void BackendObject_DirectGLES::DestroyHostFrame() {}
+    Bool BackendObject_DirectGLES::EnsureHostFrameCanvas(Uint, Uint) { return false; }
+    void BackendObject_DirectGLES::BlitHostFrameCanvas() {}
 
     Bool BackendObject_DirectGLES::PresentHostFrame() {
         MGLOG_E("PresentHostFrame: host frames are a disaggregated Android path");
@@ -1313,7 +1384,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // every draw lands in a pbuffer nobody sees.
         if (m_eglSurfaceKind == SurfaceKind::HostFrame && m_hostFrameTarget.Framebuffer != 0) {
             FramebufferImpl::InvalidateFramebufferBindingCache();
-            HostFrameTargetBind(m_hostFrameTarget);
+            HostFrameTargetBind(HostFrameDrawTarget());
         }
         return true;
     }

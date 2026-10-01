@@ -69,6 +69,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Takes the next frame from the host and makes it this context's framebuffer.
         Bool TakeHostFrame();
         void DestroyHostFrame();
+        // The canvas the compositor draws into, made once at the first frame's size.
+        Bool EnsureHostFrameCanvas(Uint width, Uint height);
+        // Copies the canvas into the frame about to be presented.
+        void BlitHostFrameCanvas();
+        // What draws resolve to: the canvas when there is one, the frame itself otherwise.
+        const HostFrameTarget& HostFrameDrawTarget() const {
+            return m_hostFrameCanvas.Framebuffer != 0 ? m_hostFrameCanvas : m_hostFrameTarget;
+        }
         void OnEGLSurfaceReleased(EGLSurface surface) override;
 
         // MOBILEGL_IPC_SURFACE=host: the frames the display host owns, one at a time, which
@@ -80,6 +88,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // descriptor this channel offers per frame and reads a release back from.
         MG_Backend::GbmFrameChannel m_gbmFrameChannel;
         HostFrameTarget m_hostFrameTarget;
+        // A STABLE TARGET IN FRONT OF THE FRAMES.  Every present hands the frame back and takes
+        // a different one, and its renderbuffer is deleted with it - but a compositor attaches
+        // its framebuffers ONCE (kwin: one per daemon buffer, for the life of the process), so
+        // attachments bound to a frame's own renderbuffer named a deleted object from the second
+        // frame on.  The attachments name this instead, and each present copies it into the
+        // frame.  No EGLImage behind it (Image stays null).
+        HostFrameTarget m_hostFrameCanvas;
         struct AHardwareBuffer* m_hostFrameBuffer = nullptr;
         MG_Backend::HostFrameOffer m_hostFrameOffer{};
         Bool m_hostFrameBridgeOpen = false;
