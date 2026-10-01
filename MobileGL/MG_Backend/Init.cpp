@@ -14,6 +14,7 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h> // MGPipeForgetAllPublications, at the end of ShutdownSplitRoles
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/FatalFunnel.h> // InstallPipeSessionFailHook, installed at step 0 below
 #include <MG_Remote/Server/ServerLoop.h>
@@ -398,6 +399,9 @@ namespace MobileGL::MG_Backend {
         // and every later split bring-up in the process fails at CreateBackend's m_backend!=null
         // guard.
         MG_Remote::Server::ServerLoopInstance().Stop();
+        // The server's twins died with the session; the frontend objects that are destroyed after
+        // this (the GL context's) have nothing left on the other side to delete.
+        MG_Pipe::MGPipeForgetAllPublications();
     }
 #endif
 

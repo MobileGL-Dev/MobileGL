@@ -341,6 +341,12 @@ namespace MobileGL::MG_Pipe {
     void MGPipeNoteHandlePublished(MGPipeKind kind, MGPipeHandle handle);
     Bool MGPipeHandleIsPublished(MGPipeKind kind, MGPipeHandle handle);
     void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle);
+    // THE SESSION IS GONE, AND EVERYTHING IT HELD WITH IT.  Called once the split roles are shut
+    // down: every object the server twinned died with the session, so nothing is published any
+    // more - and the frontend objects that die after it (MobileGL::Destroy resets the GL context
+    // after ShutdownSplitRoles, by design) must not route a delete for a twin that no longer
+    // exists to whichever applier is installed now, which asserts on the unknown handle.
+    void MGPipeForgetAllPublications();
 
     // ---- the four mints (pure allocator work, no family knowledge) ----
     //

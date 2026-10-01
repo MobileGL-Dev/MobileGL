@@ -1828,6 +1828,11 @@ namespace MobileGL::MG_Pipe {
                 *entry = Entry{};
             }
 
+            void Clear() {
+                for (auto& table : m_kinds) table.clear();
+                m_band.clear();
+            }
+
         private:
             struct Entry {
                 Uint32 Gen = 0;
@@ -1891,6 +1896,8 @@ namespace MobileGL::MG_Pipe {
         if (MGPipeHandleIsNull(handle)) return;
         PublicationLatch().NoteUnpublished(kind, handle);
     }
+
+    void MGPipeForgetAllPublications() { PublicationLatch().Clear(); }
 
     // THE GATE ITSELF, AS AN OBSERVABLE (ID-39, widened by S-3 / ID-41). Every P4a birth hook
     // below and every `wants()` row in the walk resolve through FamilyIsLive /
