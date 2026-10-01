@@ -38,6 +38,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约 `MG_Remote/CONTRACT-P11.md`；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
+| **P14** | **状态归属：同进程多 session / 多 context / share group**（统一 server 的前提，anland 内置渲染器不做按进程隔离） | 设计 ✅ [`design/11-state-ownership.md`](design/11-state-ownership.md)，实现待做 |
 
 ## 另见
 
