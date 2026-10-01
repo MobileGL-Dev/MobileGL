@@ -11283,7 +11283,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const Bool isCubeFace = glTextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
                                             glTextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
                     backendTextureObject->Bind(isCubeFace ? GL_TEXTURE_CUBE_MAP : glTextureTarget);
-                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer == 0) {
+                    // THE TEXTURE'S OWN TARGET, not the attach target: an external texture is attached
+                    // through the GL_TEXTURE_2D upload target (TextureEnumConverter maps 0x8D65 there so the
+                    // attach validates), so glTextureTarget is never 0x8D65 here and the arms below were
+                    // dead - kwin's framebuffers got a storage-less texture and every draw into them failed
+                    // with GL_INVALID_FRAMEBUFFER_OPERATION.
+                    const Bool externalTexture =
+                        glTextureTarget == 0x8D65 || textureObject->GetTarget() == TextureTarget::TextureExternalOES;
+                    if (externalTexture && g_hostFrameRenderbuffer == 0) {
                         // NOBODY ELSE TAKES THE FRAME ON THIS ROUTE (DirectGLES.h): the compositor
                         // here never creates a window surface, so this attachment is the first place
                         // the display host's frame is known to be wanted.  A failed take leaves the
@@ -11294,7 +11301,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // this route exists to fill.
                         (void)TakeHostFrameForExternalTexture(1440, 3200);
                     }
-                    if (glTextureTarget == 0x8D65 && g_hostFrameRenderbuffer != 0) {
+                    if (externalTexture && g_hostFrameRenderbuffer != 0) {
                     // THE IMPORTED dma-buf IS THE DISPLAY HOST'S FRAME.  Measured, and the whole reason
                     // this branch exists: kwin_wayland in the container imports the display daemon's
                     // dma-buf as an EGLImage ("taking target 0x8d65 over an EGLImage of 1440x2937
@@ -11629,6 +11636,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // An empty point: the caller detached it on exactly this test, so attaching
                 // nothing here is the whole of the agreement. (The legacy arm does the same.)
                 return true;
+            }
+            // AN IMPORTED dma-buf AT A COLOUR POINT IS THE DISPLAY HOST'S FRAME.  The client marks the
+            // texture it bound an imported EGLImage to as GL_TEXTURE_EXTERNAL_OES (TextureObject2D's
+            // target), the server never received that dma-buf's storage, and the compositor's
+            // framebuffer over it was incomplete (measured: status 0x8cd7, every draw
+            // GL_INVALID_FRAMEBUFFER_OPERATION).  It is bound to the host frame canvas instead - the
+            // storage the display host's frames are copied out of at present - before any twin or
+            // storage sync, which have nothing to offer a texture with no storage.
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture &&
+                surface.TextureTarget ==
+                    static_cast<decltype(surface.TextureTarget)>(TextureTarget::TextureExternalOES)) {
+                if (g_hostFrameRenderbuffer == 0) (void)TakeHostFrameForExternalTexture(1440, 3200);
+                if (g_hostFrameRenderbuffer != 0) {
+                    g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
+                                                          g_hostFrameRenderbuffer);
+                    return true;
+                }
             }
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
                 // The record's handle is validated BEFORE the frontend is consulted (N-3): it is
