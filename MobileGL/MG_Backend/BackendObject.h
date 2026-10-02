@@ -692,6 +692,25 @@ namespace MobileGL {
             virtual void ReleaseEGLSurface(EGLSurface surface);
             virtual void ReleaseEGLResources();
 
+            // ---- the server's own display window going away and coming back -------------------
+            //
+            // `window` (a window surface's native window) is about to be destroyed - the display's
+            // screen went off. Release ONLY what is bound to it: every window surface on it keeps its
+            // client handle and draws into a placeholder from here on, and every context, object and
+            // device stays. Called on the thread that runs this backend; nothing may reference the
+            // window once it returns true. False: not supported (the caller ends the session instead).
+            virtual Bool SuspendServerWindow(void* window) {
+                (void)window;
+                return false;
+            }
+            // The surfaces SuspendServerWindow parked are rebuilt on `window` (a new native window,
+            // `width`x`height`), and their new extent is published as a creation publishes it. False:
+            // they could not be (the caller ends the session).
+            virtual Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
+                (void)window, (void)width, (void)height;
+                return false;
+            }
+
             void SetWindowHandle(const WindowHandle& handle);
 
             virtual const RendererInfo& GetRendererInfo() const = 0;

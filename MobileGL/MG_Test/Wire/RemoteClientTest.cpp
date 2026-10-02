@@ -3076,6 +3076,94 @@ TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAb
     ExpectChildSuccess(child);
 }
 
+#include <MG_State/EGLState/Core.h>
+
+// THE SERVER WINDOW'S EXTENT AFTER THE CREATION. A server whose window changed size republishes its
+// extent - Espryt at the present after the change (RepublishServerWindowExtentIfMoved), Magma when its
+// swapchain is rebuilt for it - as one surface-changed event carrying the new size. The client's drain
+// must then make eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) answer it for the server-owned window surface
+// (what a headless compositor sizes its output from) and reallocate the default framebuffer's
+// attachments at it; a format-only event must change no size. Red with the drain's
+// ApplyServerOwnedSurfaceExtent call deleted (exit 93: the query keeps 1920x1080) and with
+// ApplySurfaceChangedToClient's extent arm deleted (exit 94: the colour stays at the placeholder's).
+TEST(RemoteRunAhead, ARepublishedServerWindowExtentResizesTheServerOwnedSurfaceAndTheDefaultFramebuffer) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        // The client's EGL state with one server-owned window surface, as its creation leaves it.
+        MG_State::pEGLContext = MakeUnique<MG_State::EGLState::EGLContext>();
+        const EGLDisplay dpy = MG_State::pEGLContext->GetDisplay(EGL_DEFAULT_DISPLAY);
+        EGLint major = 0;
+        EGLint minor = 0;
+        (void)MG_State::pEGLContext->InitializeDisplay(dpy, &major, &minor);
+        const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_NONE};
+        EGLConfig config = nullptr;
+        EGLint count = 0;
+        (void)MG_State::pEGLContext->ChooseConfig(dpy, configAttribs, &config, 1, &count);
+        const EGLSurface surface =
+            MG_State::pEGLContext->CreateServerOwnedWindowSurface(dpy, config, nullptr, 1920, 1080, false);
+        if (surface == EGL_NO_SURFACE) ::_exit(90);
+        ClientSessionInstance().NoteServerOwnedWindowSurface(surface, 1920, 1080);
+        // The default framebuffer's placeholder attachments (MG_Impl::Init's shape).
+        const auto placeholder = [](TextureInternalFormat format) {
+            auto texture = MakeShared<MG_State::GLState::TextureObject2D>(0);
+            texture->SetInternalFormat(format);
+            texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, {{512, 512, 1}, 0});
+            return texture;
+        };
+        auto& defaultFramebuffer = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
+        defaultFramebuffer = MakeUnique<MG_Impl::GLImpl::FramebufferImpl::DefaultFramebufferInfo>(
+            MG_Impl::GLImpl::FramebufferImpl::DefaultFramebufferInfo{
+                nullptr, placeholder(TextureInternalFormat::RGBA8),
+                placeholder(TextureInternalFormat::Depth32FStencil8),
+                placeholder(TextureInternalFormat::Depth32FStencil8)});
+        const auto query = [&](EGLint attribute) {
+            EGLint value = -1;
+            (void)MG_State::pEGLContext->QuerySurface(dpy, surface, attribute, &value);
+            return value;
+        };
+        if (query(EGL_WIDTH) != 1920 || query(EGL_HEIGHT) != 1080) ::_exit(91);
+
+        // The server's republish, from the apply thread like the backend's own.
+        static MG_Pipe::MGPSurfaceInfo s_info{};
+        s_info = MG_Pipe::MGPSurfaceInfo{};
+        s_info.Width = 2560;
+        s_info.Height = 1600;
+        s_info.InternalFormat = static_cast<Uint32>(TextureInternalFormat::Depth24Stencil8);
+        s_info.Samples = 1;
+        s_info.Layers = 1;
+        s_info.IsDefault = 1;
+        const auto republish = [] {
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                +[](void*) -> MobileGLResult {
+                    MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&s_info);
+                    return MOBILEGL_OK;
+                },
+                nullptr);
+        };
+        republish();
+        if (ClientSessionInstance().DrainPublishedEvents() < 1u) ::_exit(92);
+        if (query(EGL_WIDTH) != 2560 || query(EGL_HEIGHT) != 1600) ::_exit(93);
+        const IntVec3 colour =
+            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->colorAttachment.get())->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
+        const IntVec3 depth =
+            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->depthAttachment.get())->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
+        if (colour.x() != 2560 || colour.y() != 1600 || depth.x() != 2560 || depth.y() != 1600) ::_exit(94);
+
+        // A format-only event (a pbuffer's, a client-named window's) says nothing about the size.
+        s_info.Width = 0;
+        s_info.Height = 0;
+        republish();
+        if (ClientSessionInstance().DrainPublishedEvents() < 1u) ::_exit(95);
+        if (query(EGL_WIDTH) != 2560 || query(EGL_HEIGHT) != 1600) ::_exit(96);
+
+        defaultFramebuffer.reset();
+        ClientSessionInstance().ForgetServerOwnedWindowSurface(surface);
+        MG_State::pEGLContext.reset();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
 // ===========================================================================================
 // PH-6 (ID-P7-2): a client that does not drain SEG_EVENT FORFEITS the reverse channel
 // ===========================================================================================

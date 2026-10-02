@@ -366,6 +366,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     BackendObject_DirectVulkan::BackendObject_DirectVulkan() : m_rendererInfo{GetRendererIdentity()} {}
 
     Bool BackendObject_DirectVulkan::InitWindowSurface() {
+        // A suspended surface activates its placeholder - never the window, which is gone.
+        const auto suspended = m_suspendedWindowSurfaces.find(m_activatingSurface);
+        if (suspended != m_suspendedWindowSurfaces.end()) {
+            if (UsesSurfaceTargets() && pVulkanRenderer) {
+                ActivateSuspendedPlaceholder(m_activatingSurface, suspended->second);
+                return true;
+            }
+            return InitPbufferSurface(static_cast<EGLint>(suspended->second.Width),
+                                      static_cast<EGLint>(suspended->second.Height));
+        }
         if (!m_windowHandle.Handle) {
             MGLOG_E("Cannot initialize DirectVulkan window surface: native window handle is null");
             return false;
@@ -596,7 +606,91 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The reflection cache is file-scope, not renderer-owned; without this the
         // deleted programs' reflection strings survive full context teardown.
         ClearProgramResourceCaches();
+        m_suspendedWindowSurfaces.clear();
         BackendObject::ReleaseEGLResources();
+    }
+
+    void BackendObject_DirectVulkan::ActivateSuspendedPlaceholder(EGLSurface surface,
+                                                                  const SuspendedWindowSurface& extent) {
+        // A pbuffer target at the window's extent: every default-framebuffer path (render passes,
+        // read-back, the shared-image blit, the acquire and the present) keeps a live swapchain to
+        // work on, and the extent it publishes is the one the client already has.
+        VulkanRendererConfig config;
+        config.SurfaceWidth = std::max<Uint32>(extent.Width, 1);
+        config.SurfaceHeight = std::max<Uint32>(extent.Height, 1);
+        pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+    }
+
+    Bool BackendObject_DirectVulkan::SuspendServerWindow(void* window) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        // The monolith's one renderer IS its window; only surface targets can be swapped under it.
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        Vector<EGLSurface> onWindow;
+        for (const auto& [client, state] : m_eglSurfaces) {
+            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+            if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
+            onWindow.push_back(client);
+        }
+        for (const EGLSurface client : onWindow) {
+            const auto state = m_eglSurfaces.find(client);
+            SuspendedWindowSurface extent;
+            extent.Width = static_cast<Uint32>(std::max<EGLint>(state->second.Width, 1));
+            extent.Height = static_cast<Uint32>(std::max<EGLint>(state->second.Height, 1));
+            if (pVulkanRenderer) {
+                const Uint64 key = SurfaceTargetKey(client);
+                const VkExtent2D built = pVulkanRenderer->SurfaceTargetExtent(key);
+                if (built.width != 0 && built.height != 0) {
+                    extent.Width = built.width;
+                    extent.Height = built.height;
+                }
+                const Bool active = pVulkanRenderer->IsActiveSurfaceTarget(key);
+                // Flushes, waits the device idle, purges the render passes on the target and drops its
+                // swapchain and VkSurfaceKHR - nothing references the window after this.
+                pVulkanRenderer->DestroySurfaceTarget(key);
+                m_suspendedWindowSurfaces[client] = extent;
+                if (active) ActivateSuspendedPlaceholder(client, extent);
+            } else {
+                m_suspendedWindowSurfaces[client] = extent;
+            }
+        }
+        MGLOG_I("DirectVulkan: %zu window surface(s) on server window %p now draw into placeholder pbuffer targets; "
+                "the renderer, the device and every object stay",
+                onWindow.size(), window);
+        return true;
+    }
+
+    Bool BackendObject_DirectVulkan::ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        UnorderedMap<EGLSurface, SuspendedWindowSurface> suspended;
+        suspended.swap(m_suspendedWindowSurfaces);
+        for (const auto& [client, extent] : suspended) {
+            (void)extent;
+            const auto state = m_eglSurfaces.find(client);
+            if (state == m_eglSurfaces.end()) continue; // released while suspended
+            state->second.Window.Handle = window;
+            state->second.Window.Width = width;
+            state->second.Window.Height = height;
+            state->second.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
+            state->second.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
+            if (m_eglSurface == client) m_windowHandle = state->second.Window;
+            if (!pVulkanRenderer) continue;
+            const Uint64 key = SurfaceTargetKey(client);
+            const Bool active = pVulkanRenderer->IsActiveSurfaceTarget(key);
+            pVulkanRenderer->DestroySurfaceTarget(key); // the placeholder
+            // A parked surface is built on the new window when it is next activated (InitWindowSurface).
+            if (!active) continue;
+            // The creation's own path: a new VkSurfaceKHR and swapchain with the surface's current
+            // pre-transform, a new target serial (render passes rebuilt), and the extent published.
+            VulkanRendererConfig config;
+            config.SurfaceWidth = std::max<Uint32>(width, 1);
+            config.SurfaceHeight = std::max<Uint32>(height, 1);
+            config.SwapInterval = GetRequestedSwapInterval();
+            pVulkanRenderer->ActivateSurfaceTarget(key, reinterpret_cast<NativeWindowType>(window), config);
+        }
+        MGLOG_I("DirectVulkan: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
+                window, width, height);
+        return true;
     }
 
     Bool BackendObject_DirectVulkan::UsesSurfaceTargets() const {
@@ -604,6 +698,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::OnEGLSurfaceForgotten(EGLSurface surface) {
+        m_suspendedWindowSurfaces.erase(surface);
         if (UsesSurfaceTargets() && pVulkanRenderer) pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
     }
 

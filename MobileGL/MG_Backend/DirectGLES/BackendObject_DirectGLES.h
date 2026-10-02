@@ -47,6 +47,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
+        // The server window going and coming back: each window surface on it swaps its native EGL
+        // window surface for a placeholder pbuffer and back (DirectGLES::Suspend/ResumeSessionWindowSurface).
+        Bool SuspendServerWindow(void* window) override;
+        Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
@@ -75,6 +79,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // on every later one. A multi-window client switches surfaces every frame; making a new
         // native surface each time leaked them and lost what the window had drawn.
         UnorderedMap<EGLSurface, EGLSurface> m_nativeSurfaces;
+        // Window surfaces whose window is gone (SuspendServerWindow): their native surface is a
+        // placeholder pbuffer until ResumeServerWindow.
+        Vector<EGLSurface> m_suspendedWindowSurfaces;
         MG_External::EGLFunctionsTable m_EGLFunctions;
         MG_External::GLESFunctionsTable m_GLESFunctions;
         MG_External::GLESCapabilities m_GLESCapabilities;

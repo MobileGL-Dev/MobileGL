@@ -35,11 +35,17 @@
 // reference is kept and released when the lease finally ends - and Detach returns TimedOut, by
 // name, so the UI thread is never held longer than its bound.
 //
+// SUSPEND, NOT END (screen off / lock). A holder whose backend can let go of the window and keep
+// everything else - its contexts, objects and device - ends its lease with SuspendLease instead of
+// EndLease and names a second hook: the next Attach of a NEW window calls it, so the holder can
+// lease that window (AcquireFor) and rebuild its surface on it. The registration lasts until that
+// AcquireFor succeeds or the holder cancels it (CancelResume, at the session's end).
+//
 // THREADS. Every method is thread-safe. The hooks are called from the thread that called the
 // method: acquire from Attach's caller, release from Detach's / EndLease's caller, requestGeometry
-// from the apply thread (AcquireFor), the lost hook from Detach's caller WITH THIS OBJECT'S LOCK
-// HELD - so it must not block and must not call back into this object (ServerLoop's sets an atomic
-// and rings its doorbell).
+// from the apply thread (AcquireFor), the lost hook from Detach's caller and the attached hook from
+// Attach's (or SuspendLease's) caller, both WITH THIS OBJECT'S LOCK HELD - so they must not block and
+// must not call back into this object (ServerLoop's set an atomic and ring its doorbell).
 
 #pragma once
 #include <Includes.h>
@@ -63,6 +69,9 @@ namespace MobileGL::MG_Remote::Server {
 
     // Called with the display's lock held: must not block, must not re-enter the display.
     using ServerWindowLostHook = void (*)(void* holder);
+    // A new window was attached while `holder` was suspended (SuspendLease). Same rules as the lost
+    // hook: called with the display's lock held.
+    using ServerWindowAttachedHook = void (*)(void* holder);
     // Asked about every 50 ms while AcquireFor waits; true ends the wait (Cancelled).
     using ServerWindowWaitCancel = Bool (*)(void* user);
 
@@ -138,6 +147,13 @@ namespace MobileGL::MG_Remote::Server {
         // whole backend). Wakes a waiting Detach; releases a reference Detach left behind on timeout.
         // A holder that holds no lease is a no-op.
         void EndLease(void* holder);
+        // EndLease for a holder that only SUSPENDED its use of the window (its backend let go of the
+        // window and kept everything else). Also registers `onAttached`, which the next Attach of a
+        // new window calls - at once when a window is already attached. The registration ends when
+        // the same holder's AcquireFor succeeds, or at CancelResume.
+        void SuspendLease(void* holder, ServerWindowAttachedHook onAttached);
+        // The holder is going away: no attached hook is called for it once this returns.
+        void CancelResume(void* holder);
         // Wakes every AcquireFor waiter with Interrupted (the in-process server is stopping).
         void Interrupt();
 
@@ -145,9 +161,17 @@ namespace MobileGL::MG_Remote::Server {
         Bool Attached() const;
         Bool Leased() const;
         Uint64 Generation() const;
+        // How many holders wait for a window to resume on (SuspendLease).
+        Uint32 SuspendedHolders() const;
 
     private:
         void ReleaseOutsideLock(const ServerDisplayHooks& hooks, void* window) const;
+        // m_mutex held: ends `holder`'s lease (false when it holds none); the references a timed-out
+        // Detach left behind are moved to `releases`, to be released outside the lock with `hooks`.
+        Bool EndLeaseLocked(void* holder, std::vector<void*>* releases, ServerDisplayHooks* hooks);
+        void ReleaseAfterLease(const ServerDisplayHooks& hooks, const std::vector<void*>& releases) const;
+        // m_mutex held: a new window is attached; every suspended holder is told.
+        void NotifySuspendedLocked() const;
         // m_mutex held: an Attach reported `width`x`height` (see m_extentReports).
         void NoteExtentReportLocked(Uint32 width, Uint32 height);
 
@@ -175,6 +199,12 @@ namespace MobileGL::MG_Remote::Server {
         Bool m_lostRequested = false;
         // References a timed-out Detach could not release yet; EndLease releases them.
         std::vector<void*> m_releaseAfterLease;
+        // SuspendLease's registrations, told about the next new window.
+        struct SuspendedHolder {
+            void* holder = nullptr;
+            ServerWindowAttachedHook onAttached = nullptr;
+        };
+        std::vector<SuspendedHolder> m_suspended;
     };
 
     // The process's one display (leaked at exit, like every MG_Remote singleton).

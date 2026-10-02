@@ -431,8 +431,20 @@ namespace MobileGL::MG_Remote::Server {
                                            ServerWindowLease* out, SurfaceRefusalCode* refusal);
         // APPLY THREAD ONLY: this session's surface mode (D4).
         SessionSurfaceMode SurfaceMode() const { return m_surfaceMode; }
-        // How many times this loop released a lost server window and latched ServerWindowLost (D6).
+        // How many times this loop released a lost server window and latched ServerWindowLost (D6) -
+        // the path of a backend that cannot suspend.
         Uint64 ServerWindowsLost() const { return m_serverWindowsLost.load(std::memory_order_acquire); }
+        // SUSPEND, NOT END. How many times a lost server window SUSPENDED this session (its backend let
+        // go of the window and kept everything else) and how many times a new window resumed it. A
+        // suspended session holds no lease and keeps applying records; its window surfaces draw into
+        // a placeholder until the display attaches a window again.
+        Uint64 ServerWindowsSuspended() const { return m_serverWindowsSuspended.load(std::memory_order_acquire); }
+        Uint64 ServerWindowsResumed() const { return m_serverWindowsResumed.load(std::memory_order_acquire); }
+        Bool ServerWindowSuspended() const { return m_serverWindowSuspended.load(std::memory_order_acquire); }
+
+        // TEST SEAM: the backend this loop owns, instead of CreateBackend's (a fake that can or cannot
+        // suspend, for the window-loss cases). Before Start(); fails when one is already installed.
+        MobileGLResult InstallBackendForTesting(UniquePtr<MG_Backend::BackendObject> backend);
 
     private:
         RemoteControlSink m_remoteSink = nullptr;
@@ -440,11 +452,26 @@ namespace MobileGL::MG_Remote::Server {
 
         // P12. The ServerOwned arm of the CreateWindowSurface dispatch (D3, D4).
         MobileGLResult ApplyServerOwnedWindowSurface(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
-        // P12 (D6), apply thread: the lost window's backend surface goes, the lease ends, and the
-        // session latches ServerWindowLost. Runs from PumpControlRequest when Detach asked.
+        // P12 (D6), apply thread: the lost window is let go of before the lease ends. A backend that
+        // can suspend releases only what is bound to the window and the session carries on, waiting
+        // for the next window (SuspendLease); otherwise the backend's EGL resources go and the session
+        // latches ServerWindowLost. Runs from PumpControlRequest / DrainRing when Detach asked.
         void ReleaseLostServerWindow();
+        // The old ending: the backend's EGL resources go, the session latches ServerWindowLost by
+        // name with `why`, the lease ends.
+        void LatchServerWindowLost(const char* why);
+        // Apply thread: the window requests ServerWindowLostThunk / ServerWindowAttachedThunk posted.
+        void HandleServerWindowRequests();
+        // Apply thread: a suspended session leases the display's new window and its backend
+        // rebuilds the suspended surfaces on it.
+        void ResumeSuspendedServerWindow();
+        // Apply thread, holding a fresh lease on `lease.window`: the backend rebuilds what it
+        // suspended. False: it could not, and the session latched (LatchServerWindowLost).
+        Bool ResumeServerWindowOnLease(const ServerWindowLease& lease);
         // Ends this loop's display lease if it holds one (after the backend let go of the window).
         void EndServerWindowLease();
+        // The session's end: the lease, and any wait for a window to resume on.
+        void ForgetServerWindow();
         // Review fix: the ResizeWindowSurface arm for a server-owned surface - a geometry request to
         // the display, the backend surface at the window's real extent, that extent in the reply.
         MobileGLResult ApplyServerOwnedWindowResize(MG_Backend::BackendObject* backend, SurfaceControlFrame& frame);
@@ -455,6 +482,8 @@ namespace MobileGL::MG_Remote::Server {
         // ServerDisplay's lost hook: called under the display's lock from Detach's thread. Sets the
         // request and rings the apply thread's bell; never blocks.
         static void ServerWindowLostThunk(void* self);
+        // ServerDisplay's attached hook for a suspended session: the same discipline as the lost one.
+        static void ServerWindowAttachedThunk(void* self);
         // AcquireFor's cancel predicate: the loop is stopping, or the session latched.
         static Bool ServerWindowWaitCancelled(void* self);
         // D4: latched at the session's first successful surface creation; reset by Start(). Per
@@ -462,12 +491,25 @@ namespace MobileGL::MG_Remote::Server {
         SessionSurfaceMode m_surfaceMode = SessionSurfaceMode::None;
         // P14 S2: the session this loop serves, when the process serves several; see SetRuntime.
         SessionRuntime* m_runtime = nullptr;
-        // Apply thread only: this loop holds the display's lease.
+        // Apply thread only: this loop holds the display's lease, on this window.
         Bool m_holdsWindowLease = false;
-        // Set by ServerWindowLostThunk (any thread), taken by the apply thread. Part of the park
-        // predicate, so a parked apply thread wakes for it.
-        std::atomic<Bool> m_windowLostRequested{false};
+        void* m_leasedWindow = nullptr;
+        // The window requests: kWindowLost set by ServerWindowLostThunk, kWindowAttached by
+        // ServerWindowAttachedThunk (any thread), taken by the apply thread. ONE word, so the idle
+        // poll and DrainRing's per-pop check stay one load. Part of the park predicate, so a parked
+        // apply thread wakes for it.
+        static constexpr Uint32 kWindowLost = 1u;
+        static constexpr Uint32 kWindowAttached = 2u;
+        std::atomic<Uint32> m_windowRequests{0};
         std::atomic<Uint64> m_serverWindowsLost{0};
+        // Written by the apply thread, read by tests.
+        std::atomic<Bool> m_serverWindowSuspended{false};
+        std::atomic<Uint64> m_serverWindowsSuspended{0};
+        std::atomic<Uint64> m_serverWindowsResumed{0};
+        // Apply thread only: the geometry this session last asked the display for (0/0 = the
+        // layout's), which a resume asks for again.
+        Uint32 m_serverWindowWantWidth = 0;
+        Uint32 m_serverWindowWantHeight = 0;
 
         void ApplyThreadMain();
         // Runs a posted control frame, if there is one. Returns true if it ran one.

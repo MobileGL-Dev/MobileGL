@@ -125,10 +125,20 @@ namespace MobileGL::MG_Remote::Server {
         NoteExtentReportLocked(width, height);
         ++m_generation;
         const Uint64 generation = m_generation;
+        // A suspended session (screen off, lock) rebuilds its surface on this window.
+        const Uint32 suspended = static_cast<Uint32>(m_suspended.size());
+        NotifySuspendedLocked();
         lock.unlock();
         m_cv.notify_all();
-        MGLOG_I("MG_Remote server: server window %p attached at %ux%u (generation %llu)", window, width, height,
-                static_cast<unsigned long long>(generation));
+        MGLOG_I("MG_Remote server: server window %p attached at %ux%u (generation %llu)%s", window, width, height,
+                static_cast<unsigned long long>(generation),
+                suspended != 0 ? "; a suspended session is told to resume on it" : "");
+    }
+
+    void ServerDisplay::NotifySuspendedLocked() const {
+        for (const SuspendedHolder& entry : m_suspended) {
+            if (entry.onAttached != nullptr) entry.onAttached(entry.holder);
+        }
     }
 
     ServerWindowDetach ServerDisplay::Detach(Uint32 timeoutMs) {
@@ -231,6 +241,12 @@ namespace MobileGL::MG_Remote::Server {
                     m_leaseHolder = holder;
                     m_onLost = onLost;
                     m_lostRequested = false;
+                    // A suspended holder that leased a window again waits for no other.
+                    m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
+                                                     [holder](const SuspendedHolder& entry) {
+                                                         return entry.holder == holder;
+                                                     }),
+                                      m_suspended.end());
                     if (out != nullptr) {
                         out->window = m_window;
                         out->width = m_width;
@@ -261,26 +277,70 @@ namespace MobileGL::MG_Remote::Server {
         }
     }
 
-    void ServerDisplay::EndLease(void* holder) {
-        std::vector<void*> releases;
-        ServerDisplayHooks hooks{};
-        {
-            const std::lock_guard<std::mutex> lock(m_mutex);
-            if (holder == nullptr || m_leaseHolder != holder) return;
-            m_leaseHolder = nullptr;
-            m_onLost = nullptr;
-            m_lostRequested = false;
-            releases.swap(m_releaseAfterLease);
-            hooks = m_hooks;
-            // An Uninstall that ran while this lease still owed releases kept the hooks for them.
-            if (!m_installed) m_hooks = ServerDisplayHooks{};
-        }
-        m_cv.notify_all();
+    Bool ServerDisplay::EndLeaseLocked(void* holder, std::vector<void*>* releases, ServerDisplayHooks* hooks) {
+        if (holder == nullptr || m_leaseHolder != holder) return false;
+        m_leaseHolder = nullptr;
+        m_onLost = nullptr;
+        m_lostRequested = false;
+        releases->swap(m_releaseAfterLease);
+        *hooks = m_hooks;
+        // An Uninstall that ran while this lease still owed releases kept the hooks for them.
+        if (!m_installed) m_hooks = ServerDisplayHooks{};
+        return true;
+    }
+
+    void ServerDisplay::ReleaseAfterLease(const ServerDisplayHooks& hooks, const std::vector<void*>& releases) const {
         for (void* window : releases) {
             ReleaseOutsideLock(hooks, window);
             MGLOG_I("MG_Remote server: server window %p released after its session let go (a late Detach)",
                     window);
         }
+    }
+
+    void ServerDisplay::EndLease(void* holder) {
+        std::vector<void*> releases;
+        ServerDisplayHooks hooks{};
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            if (!EndLeaseLocked(holder, &releases, &hooks)) return;
+        }
+        m_cv.notify_all();
+        ReleaseAfterLease(hooks, releases);
+    }
+
+    void ServerDisplay::SuspendLease(void* holder, ServerWindowAttachedHook onAttached) {
+        if (holder == nullptr) return;
+        std::vector<void*> releases;
+        ServerDisplayHooks hooks{};
+        {
+            // ONE LOCK HOLD for the lease's end and the registration, so no Attach can fall between
+            // them and go unheard.
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            (void)EndLeaseLocked(holder, &releases, &hooks);
+            Bool registered = false;
+            for (SuspendedHolder& entry : m_suspended) {
+                if (entry.holder != holder) continue;
+                entry.onAttached = onAttached;
+                registered = true;
+            }
+            if (!registered) m_suspended.push_back(SuspendedHolder{holder, onAttached});
+            // A window that is already up (a Detach that raced an Attach) is the one to resume on.
+            if (m_window != nullptr && onAttached != nullptr) onAttached(holder);
+        }
+        m_cv.notify_all();
+        ReleaseAfterLease(hooks, releases);
+    }
+
+    void ServerDisplay::CancelResume(void* holder) {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
+                                         [holder](const SuspendedHolder& entry) { return entry.holder == holder; }),
+                          m_suspended.end());
+    }
+
+    Uint32 ServerDisplay::SuspendedHolders() const {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return static_cast<Uint32>(m_suspended.size());
     }
 
     void ServerDisplay::Interrupt() {

@@ -36,6 +36,7 @@
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
+#include <android/native_window.h>
 #include <unistd.h>
 #endif
 #endif
@@ -16275,6 +16276,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // re-makes current, and what Present/eglSwapBuffers names.
         EGLSurface Draw = EGL_NO_SURFACE;
         EGLSurface Read = EGL_NO_SURFACE;
+        // The server window's extent this session last published to its client (0x0: none yet).
+        // Present compares the window against it (RepublishServerWindowExtentIfMoved).
+        Int PublishedWidth = 0;
+        Int PublishedHeight = 0;
     };
 
     static std::mutex g_nativeRegistryMutex;
@@ -16516,6 +16521,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // framebuffer's shape, so that publish - and no pbuffer's - may carry the surface's extent.
     // Split builds only: the pull build's publish is unchanged (G1).
     static Bool g_publishWindowExtent = false;
+    // The extent that publish carries when the caller already knows it (a republish from the window's
+    // own size, which the surface's buffers follow from the next frame on); 0x0 = ask the surface.
+    static Int g_publishExtentWidth = 0;
+    static Int g_publishExtentHeight = 0;
 #endif
 
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight) {
@@ -16680,11 +16689,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // (ClientSession.cpp ApplySurfaceChangedToClient), so it is deliberately NOT published
             // for a pbuffer, nor under inproc / monolith: those keep the format-only shape above.
             if (g_publishWindowExtent && MG_Config::Transport == MG_Config::TransportMode::Spawn) {
-                Int extentWidth = 0;
-                Int extentHeight = 0;
-                if (QueryCurrentSurfaceSize(extentWidth, extentHeight)) {
+                Int extentWidth = g_publishExtentWidth;
+                Int extentHeight = g_publishExtentHeight;
+                if ((extentWidth > 0 && extentHeight > 0) || QueryCurrentSurfaceSize(extentWidth, extentHeight)) {
                     info.Width = static_cast<Uint32>(extentWidth);
                     info.Height = static_cast<Uint32>(extentHeight);
+                    // What Present compares the window against from here on.
+                    NativeSessionState& session = ActiveNativeSession();
+                    session.PublishedWidth = extentWidth;
+                    session.PublishedHeight = extentHeight;
                 }
             }
 #endif
@@ -17209,6 +17222,157 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ForgetRequestedSwapInterval() { g_requestedSwapInterval = -1; }
 #endif
 
+    // A crashed predecessor session may have left its surface bound to this window (the
+    // server-owned display window is one ANativeWindow for the process's lifetime, and
+    // several drivers refuse a second eglCreateWindowSurface on it with EGL_BAD_NATIVE_WINDOW).
+    // Teardown is keyed on the session the surface belongs to, so a session that died without
+    // one leaks it; find and destroy those before asking the driver.
+    static void DestroyStaleSurfacesOnWindow(NativeWindowType window) {
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        for (auto* session : NativeSessions()) {
+            auto& entries = session->Surfaces;
+            for (auto it = entries.begin(); it != entries.end();) {
+                if (it->Window == window) {
+                    if (g_EGLFuncs.eglDestroySurface) g_EGLFuncs.eglDestroySurface(g_Display, it->Surface);
+                    if (session->Draw == it->Surface) session->Draw = EGL_NO_SURFACE;
+                    if (session->Read == it->Surface) session->Read = EGL_NO_SURFACE;
+                    it = entries.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    // The default framebuffer's shape after a window surface was bound - with its extent when the
+    // window is the server's own (see the push arm of the publish).
+    static void PublishWindowSurfaceShape(NativeWindowType window) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P12 (D3): this publish may carry the window's extent (see the push arm of the publish) -
+        // review fix: only when the window is the SERVER's own (a headless client's ServerOwned
+        // surface). A window the client named keeps the format-only publish without the knob.
+        g_publishWindowExtent = MG_Pipe::MGPipeServerOwnedWindow() != nullptr &&
+                                reinterpret_cast<const void*>(window) == MG_Pipe::MGPipeServerOwnedWindow();
+        PublishDefaultFramebufferDepthStencilFormat();
+        g_publishWindowExtent = false;
+#else
+        (void)window;
+        PublishDefaultFramebufferDepthStencilFormat();
+#endif
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // The window's own extent, which the surface's buffers take from the next frame on - not the
+    // surface's, which on some drivers still reports the buffer just presented.
+    static Bool CurrentWindowExtent(NativeWindowType window, EGLSurface surface, Int& outWidth, Int& outHeight) {
+#if defined(__ANDROID__)
+        (void)surface;
+        auto* nativeWindow = reinterpret_cast<ANativeWindow*>(window);
+        outWidth = static_cast<Int>(ANativeWindow_getWidth(nativeWindow));
+        outHeight = static_cast<Int>(ANativeWindow_getHeight(nativeWindow));
+#else
+        (void)window;
+        EGLint width = 0;
+        EGLint height = 0;
+        if (!g_EGLFuncs.eglQuerySurface || !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_WIDTH, &width) ||
+            !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &height))
+            return false;
+        outWidth = static_cast<Int>(width);
+        outHeight = static_cast<Int>(height);
+#endif
+        return outWidth > 0 && outHeight > 0;
+    }
+
+    // THE SERVER WINDOW CHANGED SIZE UNDER ITS SURFACE (the app's layout moved the view: a bar shown
+    // or hidden, a rotation). Its extent used to be published once, at the surface's creation, so the
+    // client kept sizing its viewport and default framebuffer for the old one while the window's
+    // buffers took the new one. Asked at every present of the session's server-owned window surface -
+    // one size query - and republished, as the creation publishes it, when it moved.
+    static void RepublishServerWindowExtentIfMoved(EGLSurface drawSurface) {
+        const void* const serverWindow = MG_Pipe::MGPipeServerOwnedWindow();
+        if (serverWindow == nullptr || drawSurface == EGL_NO_SURFACE ||
+            MG_Config::Transport != MG_Config::TransportMode::Spawn)
+            return;
+        NativeSessionState& session = ActiveNativeSession();
+        NativeWindowType window = static_cast<NativeWindowType>(0);
+        for (const auto& entry : session.Surfaces) {
+            if (entry.Surface != drawSurface) continue;
+            window = entry.Window;
+            break;
+        }
+        if (reinterpret_cast<const void*>(window) != serverWindow) return;
+        Int width = 0;
+        Int height = 0;
+        if (!CurrentWindowExtent(window, drawSurface, width, height)) return;
+        if (width == session.PublishedWidth && height == session.PublishedHeight) return;
+        MGLOG_I("DirectGLES: the server window is now %dx%d (last published %dx%d); its extent is republished to "
+                "the client",
+                width, height, session.PublishedWidth, session.PublishedHeight);
+        g_publishExtentWidth = width;
+        g_publishExtentHeight = height;
+        PublishWindowSurfaceShape(window);
+        g_publishExtentWidth = 0;
+        g_publishExtentHeight = 0;
+        // Asked once per size, whatever the publish managed: a publish that could not run is not
+        // retried - and logged - every frame.
+        session.PublishedWidth = width;
+        session.PublishedHeight = height;
+    }
+#endif
+
+    EGLSurface SuspendSessionWindowSurface(EGLSurface windowSurface) {
+        if (windowSurface == EGL_NO_SURFACE || g_Display == EGL_NO_DISPLAY) return EGL_NO_SURFACE;
+        if (!SessionOwnsSurface(ActiveNativeSession(), windowSurface)) return EGL_NO_SURFACE;
+        // 1x1: nothing is shown while the window is gone, and nothing is published for it - the
+        // client keeps the extent it has until the resume publishes the new window's.
+        const EGLSurface placeholder = CreateSessionPbuffer(1, 1);
+        if (placeholder == EGL_NO_SURFACE) {
+            const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+            MGLOG_E("DirectGLES: no placeholder pbuffer could stand in for the window surface %p (EGL error 0x%x)",
+                    reinterpret_cast<void*>(windowSurface), static_cast<unsigned>(error));
+            return EGL_NO_SURFACE;
+        }
+        ReplaceSessionSurface(windowSurface, placeholder);
+        // The rebind onto the placeholder failed and the window surface is still current here - EGL
+        // destroys a current surface only once it is not, and the window goes when this returns.
+        if (t_boundNativeDraw == windowSurface) (void)ReleaseCurrent();
+        return placeholder;
+    }
+
+    EGLSurface ResumeSessionWindowSurface(EGLSurface placeholder, NativeWindowType window) {
+        if (!window || g_Display == EGL_NO_DISPLAY) return EGL_NO_SURFACE;
+        NativeContextTuple& tuple = ActiveNativeContext();
+        if (!EnsureNativeContext(tuple, EGL_WINDOW_BIT, window)) return EGL_NO_SURFACE;
+        DestroyStaleSurfacesOnWindow(window);
+        const EGLSurface surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, tuple.Config, window, nullptr);
+        if (surface == EGL_NO_SURFACE) {
+            const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+            MGLOG_E("DirectGLES: eglCreateWindowSurface(window=%p) failed with EGL error 0x%x on resume",
+                    reinterpret_cast<void*>(window), static_cast<unsigned>(error));
+            return EGL_NO_SURFACE;
+        }
+        NativeSessionState& session = ActiveNativeSession();
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            session.Surfaces.push_back({window, surface});
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+        if (placeholder != EGL_NO_SURFACE && SessionOwnsSurface(session, placeholder)) {
+            ReplaceSessionSurface(placeholder, surface);
+        }
+        // Bound, because the publish below reads the default framebuffer.
+        if (!BindSessionSurface(surface) || t_boundNativeDraw != surface) {
+            MGLOG_E("DirectGLES: the resumed window surface %p could not be made current; its extent is published "
+                    "at its next bind",
+                    reinterpret_cast<void*>(surface));
+            return surface;
+        }
+        ApplyRequestedSwapInterval();
+        PublishWindowSurfaceShape(window);
+        return surface;
+    }
+
     Bool InitWindowSurface(NativeWindowType window) {
         if (!window) return false;
 
@@ -17217,28 +17381,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeContextTuple& tuple = ActiveNativeContext();
         if (!EnsureNativeContext(tuple, EGL_WINDOW_BIT, window)) return false;
 
-        // A crashed predecessor session may have left its surface bound to this window (the
-        // server-owned display window is one ANativeWindow for the process's lifetime, and
-        // several drivers refuse a second eglCreateWindowSurface on it with EGL_BAD_NATIVE_WINDOW).
-        // Teardown is keyed on the session the surface belongs to, so a session that died without
-        // one leaks it; find and destroy those before asking the driver.
-        {
-            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
-            for (auto* session : NativeSessions()) {
-                auto& entries = session->Surfaces;
-                for (auto it = entries.begin(); it != entries.end();) {
-                    if (it->Window == window) {
-                        if (g_EGLFuncs.eglDestroySurface) g_EGLFuncs.eglDestroySurface(g_Display, it->Surface);
-                        if (session->Draw == it->Surface) session->Draw = EGL_NO_SURFACE;
-                        if (session->Read == it->Surface) session->Read = EGL_NO_SURFACE;
-                        it = entries.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
-            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
-        }
+        DestroyStaleSurfacesOnWindow(window);
 
         const EGLSurface surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, tuple.Config, window, nullptr);
         if (surface == EGL_NO_SURFACE) {
@@ -17257,17 +17400,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!MakeCurrent()) return false;
 
         ApplyRequestedSwapInterval();
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P12 (D3): this publish may carry the window's extent (see the push arm of the publish) -
-        // review fix: only when the window is the SERVER's own (a headless client's ServerOwned
-        // surface). A window the client named keeps the format-only publish without the knob.
-        g_publishWindowExtent = MG_Pipe::MGPipeServerOwnedWindow() != nullptr &&
-                                reinterpret_cast<const void*>(window) == MG_Pipe::MGPipeServerOwnedWindow();
-        PublishDefaultFramebufferDepthStencilFormat();
-        g_publishWindowExtent = false;
-#else
-        PublishDefaultFramebufferDepthStencilFormat();
-#endif
+        PublishWindowSurfaceShape(window);
 
         MGLOG_D("EGL window surface created successfully: display=%p, surface=%p, context=%p. window=%p", g_Display,
                 surface, tuple.Context, window);
@@ -18001,6 +18134,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         if (canFence) PollFrameFences();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The frame is out; the next one is drawn into the window's current buffers.
+        RepublishServerWindowExtentIfMoved(drawSurface);
+#endif
 
         // After the watermark advanced: retire grown-away ring stores and record the
         // frame's ring high-water marks for slot reclamation.

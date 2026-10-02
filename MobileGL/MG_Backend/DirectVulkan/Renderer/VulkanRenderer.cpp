@@ -16791,9 +16791,17 @@ void main() {
         DestroyDeferredDepthMipmapCleanup();
         m_deferredDepthMipmapCleanup.assign(m_frameContext.GetFrameCount(), {});
 
+        const VkExtent2D previousExtent = m_swapchainObject.GetSurfaceExtent();
         ShutdownSwapchain();
 
+        // The new swapchain publishes its extent (SwapchainObject::Create), which is how a client
+        // sizing its viewport from eglQuerySurface learns that the window moved.
         CreateSwapchain();
+        const VkExtent2D extent = m_swapchainObject.GetSurfaceExtent();
+        if (extent.width != previousExtent.width || extent.height != previousExtent.height) {
+            MGLOG_I("DirectVulkan: swapchain rebuilt at %ux%u (was %ux%u); the new extent is published", extent.width,
+                    extent.height, previousExtent.width, previousExtent.height);
+        }
         // Every image of the fresh swapchain holds garbage, so the default framebuffer restarts
         // at index 0: the next write into it re-points the GL-visible index at whatever the next
         // acquire returns (see m_defaultFramebufferImageIndex). Without this the index could name
@@ -17036,6 +17044,18 @@ void main() {
         InvalidateSetupDrawSnapshots();
         DestroyParkedTarget(parked->second);
         m_parkedTargets.erase(parked);
+    }
+
+    VkExtent2D VulkanRenderer::SurfaceTargetExtent(Uint64 key) const {
+        if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) {
+            return m_swapchainObject.GetHandle() != VK_NULL_HANDLE ? m_swapchainObject.GetSurfaceExtent()
+                                                                   : VkExtent2D{0, 0};
+        }
+        const auto parked = m_parkedTargets.find(key);
+        if (parked == m_parkedTargets.end() || parked->second.swapchain.GetHandle() == VK_NULL_HANDLE) {
+            return VkExtent2D{0, 0};
+        }
+        return parked->second.swapchain.GetSurfaceExtent();
     }
 
     VkInstance VulkanRenderer::GetInstance() const {

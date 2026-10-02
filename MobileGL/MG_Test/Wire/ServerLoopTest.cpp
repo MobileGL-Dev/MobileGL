@@ -3282,7 +3282,9 @@ namespace {
     // D6 ON THE REAL APPLY THREAD. The session holds the display's window (a lease taken on the apply
     // thread, as the ServerOwned arm takes it); the UI thread's surfaceDestroyed (Detach) must get the
     // apply thread to release it, see the session latch ServerWindowLost, and only then release the
-    // window's reference - all while the apply thread was PARKED when the request came.
+    // window's reference - all while the apply thread was PARKED when the request came. This session
+    // has NO backend, so nothing can suspend it: the latch is the path of a backend that cannot (the
+    // suspend contract's own cases are below, with a backend double).
     enum : int {
         kLostNotLeased = 1,     // the probe could not take the lease
         kLostDetach = 2,        // Detach did not answer ReleasedBySession
@@ -3435,6 +3437,306 @@ TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedMidBatchWhileTheClientStrea
         << "bits: 1 = the lease was not taken; 2 = Detach did not answer ReleasedBySession; 4 = Detach took "
            "1 s or more; 8 = more than two records applied after the window went; 16 = no ServerWindowLost "
            "latch; 32 = the apply thread stayed (64+ = setup)";
+}
+
+// =====================================================================================
+// SUSPEND, NOT END: the server window going away (screen off, lock) and coming back
+// =====================================================================================
+
+namespace {
+    // A backend double for the window cases. It takes the server's window the way a real backend
+    // does (CreateEGLWindowSurface on the substituted handle) and, when it CAN suspend, answers
+    // SuspendServerWindow / ResumeServerWindow the way Espryt and Magma do: by letting go of the
+    // window - presents from then on reach no window - and by taking the new one. Its Present counts
+    // the frames and the ones that came while no window was held. Statics, because the loop owns
+    // (and destroys) the object and each case runs in its own death-test child.
+    class WindowBackendDouble final : public MG_Backend::BackendObject {
+    public:
+        explicit WindowBackendDouble(Bool canSuspend) : m_canSuspend(canSuspend) { m_functions.Present = &Present; }
+
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        Bool CreateEGLWindowSurface(EGLSurface, const MG_Backend::WindowHandle& handle) override {
+            window.store(handle.Handle, std::memory_order_release);
+            creates.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool SuspendServerWindow(void* lost) override {
+            if (!m_canSuspend) return false;
+            suspendedOn.store(lost, std::memory_order_release);
+            suspendOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            window.store(nullptr, std::memory_order_release);
+            suspends.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool ResumeServerWindow(void* fresh, Uint32 width, Uint32 height) override {
+            resumeOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            resumeWidth.store(width, std::memory_order_release);
+            resumeHeight.store(height, std::memory_order_release);
+            window.store(fresh, std::memory_order_release);
+            resumes.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        void ReleaseEGLResources() override {
+            releases.fetch_add(1, std::memory_order_acq_rel);
+            BackendObject::ReleaseEGLResources();
+        }
+        const RendererInfo& GetRendererInfo() const override { return m_info; }
+        String GetBackendAPIVersionString() const override { return "window double"; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override { return m_functions; }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+        static void Present() {
+            presents.fetch_add(1, std::memory_order_acq_rel);
+            if (window.load(std::memory_order_acquire) == nullptr) presentsWithoutWindow.fetch_add(1, std::memory_order_acq_rel);
+        }
+
+        static inline std::atomic<void*> window{nullptr};
+        static inline std::atomic<void*> suspendedOn{nullptr};
+        static inline std::atomic<int> creates{0};
+        static inline std::atomic<int> suspends{0};
+        static inline std::atomic<int> resumes{0};
+        static inline std::atomic<int> releases{0};
+        static inline std::atomic<int> presents{0};
+        static inline std::atomic<int> presentsWithoutWindow{0};
+        static inline std::atomic<Bool> suspendOnApplyThread{false};
+        static inline std::atomic<Bool> resumeOnApplyThread{false};
+        static inline std::atomic<Uint32> resumeWidth{0};
+        static inline std::atomic<Uint32> resumeHeight{0};
+
+    private:
+        Bool m_canSuspend = false;
+        MG_Backend::GlobalBackendFunctionsTable m_functions{};
+        MG_Backend::DynamicBackendParameters m_params{};
+        RendererInfo m_info{.RendererName = "Test",
+                            .BackendName = "WindowBackendDouble",
+                            .ExtraVendor = Nullopt,
+                            .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
+                                               .TargetGLSLVersion = {4, 6, 0},
+                                               .Extensions = {},
+                                               .IsCompatibilityProfile = false},
+                            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+    };
+
+    int g_secondFakeServerWindow = 0;
+    const EGLSurface kServerOwnedSurface = reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x51));
+
+    // Handshake, the double installed, the loop started and parked, a display with a window, and the
+    // session's first surface created on that window through the ServerOwned arm (as a headless
+    // client's eglCreateWindowSurface reaches it). False on any setup failure.
+    bool BringUpAnOnScreenSession(ServerFixture& fixture, Bool canSuspend) {
+        if (!fixture.Handshake()) return false;
+        if (Server::ServerLoopInstance().InstallBackendForTesting(MakeUnique<WindowBackendDouble>(canSuspend)) !=
+            MOBILEGL_OK)
+            return false;
+        if (!fixture.StartLoop() || !fixture.WaitUntilTrulyParked()) return false;
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        const Server::ServerOwnedWindowReply reply =
+            Server::ServerCreateServerOwnedWindowSurface(kServerOwnedSurface, 64, 48);
+        return reply.ok && reply.width == 64 && reply.height == 48 &&
+               WindowBackendDouble::window.load() == &g_fakeServerWindow && display.Leased() &&
+               fixture.WaitUntilTrulyParked();
+    }
+
+    // `count` presents under ONE publish, serials from `firstSerial`; true once all are applied.
+    bool PresentAndWait(ServerFixture& fixture, Uint64 firstSerial, int count, Uint32 timeoutMs = 5000) {
+        Uint64 last = Codec::kInvalidSeq;
+        for (int i = 0; i < count; ++i) {
+            MG_Pipe::MGPPresent present{};
+            present.FrameSerial = firstSerial + static_cast<Uint64>(i);
+            last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+            if (last == Codec::kInvalidSeq) return false;
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        return fixture.producer.WaitForApplied(last, timeoutMs) == Transport::SessionWait::Reached;
+    }
+
+    enum : int {
+        kSuspendDetach = 1,        // Detach did not answer ReleasedBySession
+        kSuspendLatched = 2,       // the session latched, or the apply thread left
+        kSuspendBackend = 4,       // the backend was not asked to suspend exactly once, on the apply thread, for the lost window
+        kSuspendState = 8,         // the loop's counters / the display's lease and wait are not the suspended state
+        kSuspendRecords = 16,      // presents after the loss were not applied (all of them, none reaching a window)
+        kSuspendResume = 32,       // a new window did not resume the session on it, on the apply thread
+        kSuspendAgain = 64,        // the resumed session did not suspend again on the next loss
+        kSuspendNotCancelled = 128, // the session's end left it waiting for a window
+    };
+
+    [[noreturn]] void SuspendResumeAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        int failed = 0;
+
+        // The screen goes off: surfaceDestroyed.
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession) failed |= kSuspendDetach;
+        if (CountingWindowHooks::releases.load() != 1) failed |= kSuspendDetach;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendLatched;
+        if (WindowBackendDouble::suspends.load() != 1 || WindowBackendDouble::suspendedOn.load() != &g_fakeServerWindow ||
+            !WindowBackendDouble::suspendOnApplyThread.load() || WindowBackendDouble::releases.load() != 0)
+            failed |= kSuspendBackend;
+        if (loop.ServerWindowsSuspended() != 1 || loop.ServerWindowsLost() != 0 || !loop.ServerWindowSuspended() ||
+            display.Leased() || display.SuspendedHolders() != 1)
+            failed |= kSuspendState;
+
+        // The client keeps drawing: its frames are applied - and their credit returned - with no window.
+        if (!PresentAndWait(fixture, 1, 3) || WindowBackendDouble::presents.load() != 3 ||
+            WindowBackendDouble::presentsWithoutWindow.load() != 3)
+            failed |= kSuspendRecords;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendLatched;
+
+        // The screen comes back: a NEW window.
+        display.Attach(&g_secondFakeServerWindow, 64, 48);
+        if (!PollUntil([&] { return loop.ServerWindowsResumed() == 1; }, 3000) ||
+            WindowBackendDouble::resumes.load() != 1 || WindowBackendDouble::window.load() != &g_secondFakeServerWindow ||
+            WindowBackendDouble::resumeWidth.load() != 64 || WindowBackendDouble::resumeHeight.load() != 48 ||
+            !WindowBackendDouble::resumeOnApplyThread.load() || loop.ServerWindowSuspended() || !display.Leased() ||
+            display.SuspendedHolders() != 0)
+            failed |= kSuspendResume;
+        if (!PresentAndWait(fixture, 4, 1) || WindowBackendDouble::presentsWithoutWindow.load() != 3)
+            failed |= kSuspendRecords;
+
+        // And again: the cycle holds.
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(251);
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession ||
+            WindowBackendDouble::suspends.load() != 2 ||
+            WindowBackendDouble::suspendedOn.load() != &g_secondFakeServerWindow || loop.ServerWindowsSuspended() != 2 ||
+            Remote::SessionLatched())
+            failed |= kSuspendAgain;
+
+        fixture.Stop();
+        if (display.SuspendedHolders() != 0) failed |= kSuspendNotCancelled;
+        std::fprintf(stderr, "[suspend] suspends=%d resumes=%d presents=%d (%d without a window) lost=%llu\n",
+                     WindowBackendDouble::suspends.load(), WindowBackendDouble::resumes.load(),
+                     WindowBackendDouble::presents.load(), WindowBackendDouble::presentsWithoutWindow.load(),
+                     static_cast<unsigned long long>(loop.ServerWindowsLost()));
+        ::_exit(failed);
+    }
+
+    // THE NEGATIVE CONTROL: the same session over a backend that cannot suspend (the BackendObject
+    // default) still ends the old way - its EGL resources released, ServerWindowLost latched by name.
+    enum : int {
+        kNoSuspendDetach = 1,     // Detach did not answer ReleasedBySession
+        kNoSuspendNotLatched = 2, // no ServerWindowLost latch
+        kNoSuspendRelease = 4,    // the backend's EGL resources were not released exactly once
+        kNoSuspendCounters = 8,   // ServerWindowsLost() != 1 or a suspend was counted
+        kNoSuspendStayed = 16,    // the apply thread was still running 3 s after the latch
+    };
+
+    [[noreturn]] void ABackendThatCannotSuspendLatchesAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/false)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        int failed = 0;
+        if (Server::ServerDisplayInstance().Detach(3000) != Server::ServerWindowDetach::ReleasedBySession)
+            failed |= kNoSuspendDetach;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::ServerWindowLost)
+            failed |= kNoSuspendNotLatched;
+        if (WindowBackendDouble::releases.load() != 1) failed |= kNoSuspendRelease;
+        if (loop.ServerWindowsLost() != 1 || loop.ServerWindowsSuspended() != 0 || loop.ServerWindowSuspended())
+            failed |= kNoSuspendCounters;
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kNoSuspendStayed;
+        fixture.Stop();
+        ::_exit(failed);
+    }
+
+    // The mid-stream case's suspend twin: the loss lands in the middle of a 4 s stream of presents,
+    // Detach is answered within the stream, and the stream is then applied to its end - not cut.
+    std::atomic<int> g_suspendStreamRecords{0};
+    std::thread g_suspendStreamDetachThread;
+    std::atomic<int> g_suspendStreamDetachResult{-1};
+    std::atomic<long long> g_suspendStreamDetachMs{-1};
+
+    void StreamOnePresentAndLoseTheWindowAfterTheFirst() {
+        if (g_suspendStreamRecords.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            g_suspendStreamDetachThread = std::thread([] {
+                const auto started = std::chrono::steady_clock::now();
+                const Server::ServerWindowDetach detached = Server::ServerDisplayInstance().Detach(3000);
+                g_suspendStreamDetachMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                  std::chrono::steady_clock::now() - started)
+                                                  .count(),
+                                              std::memory_order_release);
+                g_suspendStreamDetachResult.store(static_cast<int>(detached), std::memory_order_release);
+            });
+            (void)PollUntil([] { return !Server::ServerDisplayInstance().Attached(); }, 1000);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kStreamRecordMs));
+    }
+
+    enum : int {
+        kSuspendStreamDetach = 1,     // Detach did not answer ReleasedBySession
+        kSuspendStreamSlow = 2,       // Detach took 1 s or more
+        kSuspendStreamCut = 4,        // the stream was not applied to its end
+        kSuspendStreamLatched = 8,    // the session latched or the apply thread left
+        kSuspendStreamNotSuspended = 16, // the session is not suspended exactly once
+    };
+
+    [[noreturn]] void SuspendMidStreamAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StreamOnePresentAndLoseTheWindowAfterTheFirst);
+        const Uint64 drainedBefore = loop.DrainedRecords();
+        int failed = 0;
+        if (!PresentAndWait(fixture, 1, kStreamRecords, 15000)) failed |= kSuspendStreamCut;
+        if (!PollUntil([] { return g_suspendStreamDetachResult.load(std::memory_order_acquire) >= 0; }, 8000)) ::_exit(251);
+        if (g_suspendStreamDetachThread.joinable()) g_suspendStreamDetachThread.join();
+        if (g_suspendStreamDetachResult.load() != static_cast<int>(Server::ServerWindowDetach::ReleasedBySession))
+            failed |= kSuspendStreamDetach;
+        if (g_suspendStreamDetachMs.load() >= 1000) failed |= kSuspendStreamSlow;
+        if (loop.DrainedRecords() - drainedBefore != static_cast<Uint64>(kStreamRecords) ||
+            WindowBackendDouble::presents.load() != kStreamRecords)
+            failed |= kSuspendStreamCut;
+        if (Remote::SessionLatched() || !loop.Running()) failed |= kSuspendStreamLatched;
+        if (loop.ServerWindowsSuspended() != 1 || !loop.ServerWindowSuspended()) failed |= kSuspendStreamNotSuspended;
+        std::fprintf(stderr, "[suspend-stream] Detach answered %s in %lld ms; %llu of %d presents applied\n",
+                     Server::ServerWindowDetachName(
+                         static_cast<Server::ServerWindowDetach>(g_suspendStreamDetachResult.load())),
+                     g_suspendStreamDetachMs.load(),
+                     static_cast<unsigned long long>(loop.DrainedRecords() - drainedBefore), kStreamRecords);
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// THE CONTRACT. Red with ReleaseLostServerWindow's suspend arm deleted (the old latch for every
+// backend): the session latches and its loop is gone before the second loss (exit 251); red with
+// Attach no longer calling the attached hooks AND ForgetServerWindow's CancelResume deleted: nothing
+// resumes and the ended session is still registered (bits 16|32|64|128).
+TEST(ServerLoopSuspendTest, ALostServerWindowSuspendsTheSessionAndTheNextWindowResumesIt) {
+    EXPECT_EXIT(SuspendResumeAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = the session latched or left; 4 = the "
+           "backend was not suspended once, on the apply thread, for the lost window; 8 = the suspended state "
+           "(counters, lease, wait) is wrong; 16 = presents after the loss were not applied; 32 = the new window "
+           "did not resume the session; 64 = the resumed session did not suspend again; 128 = the ended session "
+           "still waits for a window (250+ = setup)";
+}
+
+// The negative control: a backend that cannot suspend keeps today's ending. Red with the suspend arm
+// taken whatever the backend answers: no latch (bits 2|4|8|16).
+TEST(ServerLoopSuspendTest, ABackendThatCannotSuspendStillLatchesServerWindowLost) {
+    EXPECT_EXIT(ABackendThatCannotSuspendLatchesAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = no ServerWindowLost latch; 4 = the EGL "
+           "resources were not released once; 8 = the counters are wrong; 16 = the apply thread stayed (250+ = "
+           "setup)";
+}
+
+// Mid-stream: answered within the stream (DrainRing's per-pop check) and the stream goes on. Red with
+// the suspend arm deleted: the stream is cut at the latch (bits 4|8|16).
+TEST(ServerLoopSuspendTest, ALostServerWindowMidStreamSuspendsPromptlyAndTheStreamCarriesOn) {
+    EXPECT_EXIT(SuspendMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = Detach did not answer ReleasedBySession; 2 = Detach took 1 s or more; 4 = the stream was "
+           "cut; 8 = the session latched or left; 16 = not suspended exactly once (250+ = setup)";
 }
 
 namespace {

@@ -456,6 +456,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ActivateSurfaceTarget(Uint64 key, NativeWindowType window, const VulkanRendererConfig& surfaceConfig);
         // Drops a surface's target, active or parked. A no-op for a key that has none.
         void DestroySurfaceTarget(Uint64 key);
+        // The default framebuffer's extent (surface space, what PublishDefaultFramebufferInfo
+        // publishes) of `key`'s target, active or parked; 0x0 when it has none or no swapchain.
+        VkExtent2D SurfaceTargetExtent(Uint64 key) const;
+        // Whether `key` names the active target.
+        Bool IsActiveSurfaceTarget(Uint64 key) const { return key == m_activeTargetKey && m_surface != VK_NULL_HANDLE; }
 
     private:
         // The presentation half of the renderer, parked while another surface is active. Its

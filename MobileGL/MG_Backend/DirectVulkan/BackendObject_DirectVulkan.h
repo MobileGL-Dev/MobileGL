@@ -41,6 +41,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
+        // The server window going and coming back: the window surface's target (VkSurfaceKHR,
+        // swapchain) is destroyed and a pbuffer target of the same extent stands in for it, and back.
+        Bool SuspendServerWindow(void* window) override;
+        Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
@@ -69,6 +73,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<MagmaSession> m_magmaSession;
         // The binding each client context was last made current with, for OnClientContextBound.
         UnorderedMap<EGLContext, EGLCurrentState> m_contextBindings;
+        // Window surfaces whose window is gone (SuspendServerWindow), with the extent their
+        // placeholder pbuffer target is built at - the window's, so the default framebuffer the
+        // client knows keeps its size.
+        struct SuspendedWindowSurface {
+            Uint32 Width = 1;
+            Uint32 Height = 1;
+        };
+        UnorderedMap<EGLSurface, SuspendedWindowSurface> m_suspendedWindowSurfaces;
+        // The placeholder pbuffer target of a suspended surface, made active.
+        void ActivateSuspendedPlaceholder(EGLSurface surface, const SuspendedWindowSurface& extent);
     };
 
     // Single-source-of-truth helpers shared with the driver POST

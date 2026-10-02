@@ -936,6 +936,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Bool BackendObject_DirectGLES::InitWindowSurface() {
         if (RebindNativeSurfaceFor(m_activatingSurface)) return true;
+        // A suspended surface whose placeholder went: another placeholder - never the window, which
+        // is gone.
+        if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), m_activatingSurface) !=
+            m_suspendedWindowSurfaces.end()) {
+            const EGLSurface placeholder = DirectGLES::CreateSessionPbuffer(1, 1);
+            if (placeholder == EGL_NO_SURFACE || !DirectGLES::BindSessionSurface(placeholder)) {
+                MGLOG_E("DirectGLES: no placeholder for the suspended window surface %p",
+                        reinterpret_cast<void*>(m_activatingSurface));
+                return false;
+            }
+            m_nativeSurfaces[m_activatingSurface] = placeholder;
+            return true;
+        }
         // Only use EGL for now
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
         if (!DirectGLES::InitWindowSurface(nativeWindow)) {
@@ -1223,7 +1236,69 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
         NoteNativeContextGone();
 #endif
+        m_suspendedWindowSurfaces.clear();
         BackendObject::ReleaseEGLResources();
+    }
+
+    Bool BackendObject_DirectGLES::SuspendServerWindow(void* window) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (window == nullptr) return false;
+        Vector<EGLSurface> onWindow;
+        for (const auto& [client, state] : m_eglSurfaces) {
+            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+            if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), client) !=
+                m_suspendedWindowSurfaces.end())
+                continue;
+            onWindow.push_back(client);
+        }
+        for (const EGLSurface client : onWindow) {
+            // A surface never activated has no native surface: only its record names the window.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native != m_nativeSurfaces.end()) {
+                const EGLSurface placeholder = DirectGLES::SuspendSessionWindowSurface(native->second);
+                if (placeholder == EGL_NO_SURFACE) return false;
+                native->second = placeholder;
+            }
+            m_suspendedWindowSurfaces.push_back(client);
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The native binding moved onto the placeholder: the next make-current binds for real.
+        NoteNativeContextGone();
+#endif
+        MGLOG_I("DirectGLES: %zu window surface(s) on server window %p now draw into placeholder pbuffers; the "
+                "contexts and their objects stay",
+                onWindow.size(), window);
+        return true;
+    }
+
+    Bool BackendObject_DirectGLES::ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (window == nullptr) return false;
+        Vector<EGLSurface> suspended;
+        suspended.swap(m_suspendedWindowSurfaces);
+        for (const EGLSurface client : suspended) {
+            const auto state = m_eglSurfaces.find(client);
+            if (state == m_eglSurfaces.end()) continue; // released while suspended
+            state->second.Window.Handle = window;
+            state->second.Window.Width = width;
+            state->second.Window.Height = height;
+            state->second.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
+            state->second.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
+            if (m_eglSurface == client) m_windowHandle = state->second.Window;
+            // Never activated: its first activation creates it on the new window.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native == m_nativeSurfaces.end()) continue;
+            const EGLSurface surface =
+                DirectGLES::ResumeSessionWindowSurface(native->second, reinterpret_cast<NativeWindowType>(window));
+            if (surface == EGL_NO_SURFACE) return false;
+            native->second = surface;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        NoteNativeContextGone();
+#endif
+        MGLOG_I("DirectGLES: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
+                window, width, height);
+        return true;
     }
 
     void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
@@ -1238,6 +1313,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BackendObject_DirectGLES::OnEGLSurfaceForgotten(EGLSurface surface) {
+        m_suspendedWindowSurfaces.erase(
+            std::remove(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), surface),
+            m_suspendedWindowSurfaces.end());
         const auto it = m_nativeSurfaces.find(surface);
         if (it == m_nativeSurfaces.end()) return;
         const EGLSurface native = it->second;

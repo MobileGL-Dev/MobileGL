@@ -428,3 +428,60 @@ TEST(ServerDisplayTest, InterruptAndTheCancelPredicateEndAWaitByName) {
     uninstaller.join();
     EXPECT_FALSE(display.HasDisplay());
 }
+
+// SUSPEND, NOT END. A holder that suspends (its backend let go of the window and kept the rest) ends
+// its lease - a waiting Detach returns, the reference is released - and is told about the next NEW
+// window: not about a geometry change of the same one, once per new window, until it leases a window
+// again or cancels. Red with Attach not calling the hooks (attached stays 0), with AcquireFor keeping
+// the registration (SuspendedHolders stays 1), or with CancelResume a no-op (the last window
+// calls it again).
+TEST(ServerDisplayTest, ASuspendedHolderIsToldAboutTheNextNewWindowUntilItLeasesOneOrCancels) {
+    FakePlatform platform;
+    ServerDisplay display;
+    display.Install(HooksFor(platform));
+    display.Attach(FakeWindow(0), 64, 48);
+    static std::atomic<int> attached{0};
+    attached.store(0);
+    const auto onAttached = [](void*) { attached.fetch_add(1); };
+    static std::atomic<int> lost{0};
+    lost.store(0);
+    const auto onLost = [](void*) { lost.fetch_add(1); };
+    int holder = 0;
+    ServerWindowLease lease;
+    ASSERT_EQ(display.AcquireFor(64, 48, 100, &holder, onLost, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+
+    // The screen goes off; the "apply thread" suspends instead of ending.
+    std::thread session([&] {
+        while (lost.load() == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        display.SuspendLease(&holder, onAttached);
+    });
+    EXPECT_EQ(display.Detach(3000), ServerWindowDetach::ReleasedBySession);
+    session.join();
+    EXPECT_EQ(platform.releases.load(), 1);
+    EXPECT_FALSE(display.Leased());
+    EXPECT_EQ(display.SuspendedHolders(), 1u);
+    EXPECT_EQ(attached.load(), 0) << "no window is up: nothing to resume on yet";
+
+    // The screen comes back: a new window, then its size settling (the same window again).
+    display.Attach(FakeWindow(1), 64, 48);
+    EXPECT_EQ(attached.load(), 1);
+    display.Attach(FakeWindow(1), 80, 60);
+    EXPECT_EQ(attached.load(), 1) << "a geometry change of the same window is not a new window";
+
+    // The holder leases it: the registration is over.
+    ASSERT_EQ(display.AcquireFor(0, 0, 100, &holder, onLost, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    EXPECT_EQ(lease.window, FakeWindow(1));
+    EXPECT_EQ(display.SuspendedHolders(), 0u);
+
+    // Suspended again while a window is ALREADY up (a Detach that raced an Attach): told at once.
+    display.SuspendLease(&holder, onAttached);
+    EXPECT_EQ(attached.load(), 2);
+    EXPECT_FALSE(display.Leased());
+    // The session ends: no hook after CancelResume.
+    display.CancelResume(&holder);
+    EXPECT_EQ(display.SuspendedHolders(), 0u);
+    EXPECT_EQ(display.Detach(100), ServerWindowDetach::Released);
+    display.Attach(FakeWindow(2), 64, 48);
+    EXPECT_EQ(attached.load(), 2);
+    display.Uninstall(100);
+}

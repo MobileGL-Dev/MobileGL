@@ -130,6 +130,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Every context of the session that drew to `previous` draws to `replacement` instead, and
     // `previous` is destroyed (a pbuffer-backed window's resize).
     void ReplaceSessionSurface(EGLSurface previous, EGLSurface replacement);
+    // The server window going away (screen off): every context of the session that drew to the
+    // window surface `windowSurface` draws to a new 1x1 placeholder pbuffer instead, and the window
+    // surface is destroyed - no longer current anywhere once this returns. The contexts and their
+    // objects stay. Returns the placeholder, or EGL_NO_SURFACE (nothing changed) when none could be
+    // made.
+    EGLSurface SuspendSessionWindowSurface(EGLSurface windowSurface);
+    // The way back: a window surface on `window` replaces `placeholder` (EGL_NO_SURFACE: none to
+    // replace) for every context that drew to it, is bound, and its extent is published as a
+    // creation publishes it. Returns the new surface, or EGL_NO_SURFACE.
+    EGLSurface ResumeSessionWindowSurface(EGLSurface placeholder, NativeWindowType window);
     Bool MakeCurrent();
     Bool ReleaseCurrent();
     // True when the backend ES context is current on the calling thread, i.e.
