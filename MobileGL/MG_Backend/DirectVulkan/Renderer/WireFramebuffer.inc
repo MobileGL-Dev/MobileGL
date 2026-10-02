@@ -381,7 +381,13 @@
     void VulkanRenderer::ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                         GLenum format, GLenum type, void* pixels) {
         if (width <= 0 || height <= 0) return;
-        if (HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("wire-verb-flush");
+        if (MG_Pipe::MGPipeDebugDeviceLossDue()) NoteDeviceLoss(VK_ERROR_DEVICE_LOST, "the debug knob (read-pixels)");
+        if (m_deviceLost && LatchWireDeviceLoss("read-pixels")) return;
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) {
+            // A lost device: the session is latched and closing, the pixels stay unfilled.
+            if (LatchWireDeviceLoss("wire-verb-flush")) return;
+            MagmaWireFatal("wire-verb-flush");
+        }
         const auto* fbo = MG_Pipe::MGPipeApplier().ReadFramebuffer();
         if (!fbo) MagmaWireFatal("read-framebuffer-record");
         VkImageAspectFlags aspect = format == GL_DEPTH_COMPONENT ? VK_IMAGE_ASPECT_DEPTH_BIT :
@@ -446,7 +452,10 @@
         auto& frame = m_frameContext.GetCurrent();
         vkCmdCopyImageToBuffer(frame.commandBuffer,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                               buffer.GetHandle(),1,&region);
-        if (!SubmitReadbackCommandsAndWait(frame)) MagmaWireFatal("read-submit");
+        if (!SubmitReadbackCommandsAndWait(frame)) {
+            if (LatchWireDeviceLoss("read-submit")) return;
+            MagmaWireFatal("read-submit");
+        }
         const auto* bytes = static_cast<const Uint8*>(buffer.Map());
         if (!bytes || !buffer.Invalidate(size)) MagmaWireFatal("read-map");
         Vector<Uint8> remapped;

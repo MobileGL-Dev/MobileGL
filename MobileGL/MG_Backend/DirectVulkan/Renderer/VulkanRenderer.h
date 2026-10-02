@@ -376,6 +376,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // one is retired until the frame slot's fence is next waited. Returns
         // true when a submission was made.
         Bool FlushPendingCommands();
+        // DEVICE LOSS. A GPU fault or hang the driver reset leaves this renderer's VkDevice lost:
+        // every later submit and wait answers VK_ERROR_DEVICE_LOST. NoteDeviceLoss records it at
+        // the submit/wait sites (cheap, any result); IsDeviceLost answers from the record and,
+        // when nothing was recorded, asks the device once (only failure paths call it, so the
+        // probe's wait costs nothing on a healthy frame). Each session owns its own VkDevice, so a
+        // loss here is this session's alone.
+        void NoteDeviceLoss(VkResult result, const char* where);
+        Bool IsDeviceLost();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // For a wire site whose submit or wait just failed: true when the failure is a lost
+        // device, in which case this session has been latched (MGPipeSessionLatch - it ends, the
+        // display server's other sessions do not) and the caller must return from its verb
+        // without recording or submitting anything more. False: an ordinary failure, the site
+        // keeps the death it had. `site` names it in the latch line.
+        Bool LatchWireDeviceLoss(const char* site);
+#endif
         // Flush gated on usefulness: only flushes when `submitIndex` is still
         // unsubmitted, so poll loops on already-submitted fences do not split
         // the frame's render pass (a full tile load/store on TBDR GPUs).
@@ -589,6 +605,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         void QueueClearBufferPayload(GLenum buffer, GLint drawbuffer, const ClearAttachmentPayload& clearPayload);
+        // See NoteDeviceLoss. Set once, never cleared: a lost VkDevice stays lost.
+        Bool m_deviceLost = false;
+        Bool m_deviceLossLatched = false;
 #if MOBILEGL_BUILD_DISAGGREGATED
         struct WireImage {
             VkImage image = VK_NULL_HANDLE;
@@ -843,7 +862,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P8-SV: glDispatchComputeIndirect on the wire arm - vkCmdDispatchIndirect from the
         // dispatch-indirect store, as the monolith arm issues it (WireDraw.inc).
         void DispatchWireComputeIndirect(GLintptr offset);
-        void RewindWireDescriptorSetsIfDue();
+        // False: the device was lost and the session latched; the caller drops its draw/dispatch.
+        Bool RewindWireDescriptorSetsIfDue();
         UniquePtr<RenderPassEntry> m_wireDrawPass;
         Vector<VkImageView> m_wireDrawViews;
         VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,

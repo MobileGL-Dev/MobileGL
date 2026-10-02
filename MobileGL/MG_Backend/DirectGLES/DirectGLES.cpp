@@ -34,6 +34,8 @@
 #include <MG_Remote/Server/StagedTextureStore.h>
 // Shared images: the registry the EGLImages are built from (SharedImageImpl below).
 #include <MG_Remote/Server/SharedImageRegistry.h>
+// Device loss ends the session through MG_Pipe's latch seam (LatchIfDeviceLost).
+#include <MG_Pipe/PipeSessionFail.h>
 #if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
 #include <unistd.h>
@@ -15606,6 +15608,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MGLOG_D("ReadPixels: x=%d y=%d w=%d h=%d format=%s type=%s pixels=%p", x, y, width, height,
                 MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(), pixels);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A reset context reads back nothing it rendered: the session is latched and the read declined.
+        if (LatchIfDeviceLost("read-pixels")) return;
+#endif
 
         // Combinations the ES driver has always handled directly keep the native path; other color layouts go
         // through the wide-format conversion path. Anything still uncovered degrades to a logged no-op instead
@@ -18034,7 +18040,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return CompletedFrameSerial() >= serial;
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool LatchIfDeviceLost(const char* site, Bool debugKnob) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        // Once per thread: a latched session declines everything after this verb anyway, and the
+        // apply thread is the session's own.
+        static thread_local Bool latched = false;
+        if (latched) return true;
+        GLenum status = GL_NO_ERROR;
+        if (g_GLESFuncs.glGetGraphicsResetStatus != nullptr && IsBackendContextCurrentOnThisThread()) {
+            status = g_GLESFuncs.glGetGraphicsResetStatus();
+        }
+        if (status == GL_NO_ERROR && debugKnob && MG_Pipe::MGPipeDebugDeviceLossDue()) status = GL_UNKNOWN_CONTEXT_RESET;
+        if (status == GL_NO_ERROR) return false;
+        latched = true;
+        (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                          "MGPipe: Fatal{BackendDeviceLost, \"Espryt:%s\"} - this session's EGL "
+                                          "context was reset (glGetGraphicsResetStatus 0x%x); the session ends "
+                                          "and its client reads a lost context, every other session keeps running",
+                                          site != nullptr ? site : "?", static_cast<unsigned>(status));
+        return true;
+    }
+#endif
+
     void Present() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (LatchIfDeviceLost("present", /*debugKnob=*/false)) return;
+#endif
         // Insert one fence per frame BEFORE the swap (eglSwapBuffers' implicit flush
         // makes it reachable), then non-blocking-poll prior frames' fences AFTER to
         // advance the completed-frame watermark that gates buffer-pool recycling.
@@ -18636,6 +18668,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("Shared image present: no backend context is current on the calling thread");
                 return false;
             }
+            if (LatchIfDeviceLost("shared-image-present")) return false;
             const EGLSurface surface = CurrentContextDrawSurface();
             EGLint sourceWidth = 0;
             EGLint sourceHeight = 0;

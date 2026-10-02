@@ -57,6 +57,9 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // A malformed peer record rejected by the server-side applier.
         ProtocolCorruption,
+        // The GPU device a session's backend renders with is lost (a GPU fault or hang the driver
+        // reset). Raised only through MGPipeSessionLatch below: it ends THAT session.
+        DeviceLost,
 #endif
     };
 
@@ -81,5 +84,44 @@ namespace MobileGL::MG_Pipe {
     __attribute__((format(printf, 2, 3)))
 #endif
     void MGPipeSessionFail(MGPipeFatalFamily family, const char* fmt, ...);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- THE LATCH TWIN: A LOST GPU DEVICE ENDS ITS SESSION, NOT THE PROCESS ----------------
+    //
+    // MGPipeSessionFail is for a verb the backend cannot honour, and it does not return. A device
+    // loss is different in kind: nothing about the peer's bytes was wrong, the GPU faulted or hung
+    // and the driver reset it, and every session the process serves except the one whose device
+    // went is still healthy. The display server runs every session in ONE process, so dying here
+    // takes the compositor and every other client down with the one that lost its device.
+    //
+    // So a backend that sees its device lost calls this instead, and then RETURNS from the verb
+    // it was applying without touching the GPU again. The hook MG_Remote installs latches the
+    // calling thread's session (SessionLatch): the session declines everything after it, closes,
+    // and its client reads a lost context. Where no latch is armed - the inproc client+server
+    // shape, where the process IS the session - the hook dies exactly as MGPipeSessionFail does,
+    // and with no hook at all this is MGPipeSessionFail. Returns false, so a Bool site can read
+    // `return MGPipeSessionLatch(...);`.
+    using MGPipeSessionLatchHook = bool (*)(MGPipeFatalFamily family, const char* line);
+    // Whether the calling thread's session HAS a latch to raise. A backend that notices its
+    // device lost outside a site that would die anyway (a submit whose failure it used to only
+    // log) latches at once when this is true - so the session stops at its next record however
+    // the current verb unwinds - and keeps its old behaviour when it is false.
+    using MGPipeSessionLatchArmedHook = bool (*)();
+    void MGPipeInstallSessionLatchHook(MGPipeSessionLatchHook hook, MGPipeSessionLatchArmedHook armed);
+    MGPipeSessionLatchHook MGPipeSessionLatchHookInstalled();
+    bool MGPipeSessionLatchArmed();
+    bool
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 2, 3)))
+#endif
+        MGPipeSessionLatch(MGPipeFatalFamily family, const char* fmt, ...);
+
+    // A DEBUG KNOB THAT MAKES ONE DEVICE CHECK REPORT A LOSS, so the containment above can be
+    // driven without a GPU that faults on demand. MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT=N (or, on
+    // Android, the property debug.mobilegl.inject_device_lost_at) makes the N-th device check the
+    // backends make after the knob was first seen nonzero answer "lost", once per process. The
+    // backends ask at their frame boundaries and readbacks; unset (the default) it is one getenv.
+    bool MGPipeDebugDeviceLossDue();
+#endif
 
 } // namespace MobileGL::MG_Pipe

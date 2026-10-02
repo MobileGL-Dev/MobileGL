@@ -425,7 +425,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset),
                                                 static_cast<SizeT>(size));
             }
-            if (!uploaded && !WaitForWireBufferHostAccess(*resource)) WireBufferSyncFatal("host-write");
+            if (!uploaded && !WaitForWireBufferHostAccess(*resource)) {
+                if (LatchedOnDeviceLoss("buffer-host-write")) return;
+                WireBufferSyncFatal("host-write");
+            }
         }
         if (!uploaded) {
             uploaded = resource->buffer.Upload(bytes, size, offset);
@@ -434,6 +437,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         if (!uploaded) {
+            if (LatchedOnDeviceLoss("buffer-upload")) return;
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-upload\"}");
             std::abort();
         }
@@ -604,6 +608,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool t0 = resource != nullptr && resource->imported;
         Vector<Uint8> bytes(t0 ? 0 : static_cast<SizeT>(size));
         if (t0 ? !WaitForWireBufferHostAccess(*resource) : !ReadWireBuffer(res, offset, size, bytes.data())) {
+            // A lost device: the session is latched and closing; its client reads a lost context.
+            if (LatchedOnDeviceLoss("buffer-readback")) return;
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-readback\"} {slot=%u, gen=%u}", res.Slot, res.Gen);
             std::abort();
         }
@@ -1074,6 +1080,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // budget's worth of orphans, not one per glBufferData.
         if (pVulkanRenderer == nullptr ||
             !pVulkanRenderer->WaitForSubmitIndex(pVulkanRenderer->GetSyncPointSubmitIndex(), UINT64_MAX, true)) {
+            if (LatchedOnDeviceLoss("buffer-deferred-watermark")) return;
             WireBufferSyncFatal("deferred-watermark");
         }
         ++m_wireDeferredSyncs;
@@ -1092,6 +1099,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MG_Util::PipeStats::PublishGauge(Gauge::WireStoresPeak, m_wireStoreCountPeak);
         MG_Util::PipeStats::PublishGauge(Gauge::WireDeferredBytesPeak, m_deferredWireBytesPeak);
         MG_Util::PipeStats::PublishGauge(Gauge::WireDeferredSyncs, m_wireDeferredSyncs);
+    }
+
+    Bool VkBufferManager::LatchedOnDeviceLoss(const char* site) {
+        return pVulkanRenderer != nullptr && pVulkanRenderer->LatchWireDeviceLoss(site);
     }
 
     void VkBufferManager::WireBufferSyncFatal(const char* site) {

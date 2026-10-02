@@ -362,6 +362,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // for the census to count), shared by the host write that cannot wait for the GPU and
         // the watermark that cannot. `site` says which.
         [[noreturn]] static void WireBufferSyncFatal(const char* site);
+        // True when the wait or copy that just failed failed because the device is lost: the
+        // session has been latched (VulkanRenderer::LatchWireDeviceLoss) and the caller returns
+        // instead of taking its Fatal.
+        static Bool LatchedOnDeviceLoss(const char* site);
         // The wbuf[] gauges (PipeStats.h, Gauge::WireBuffers..WireDeferredSyncs). The peaks are
         // taken at the two points the numbers can rise - a park and a mint - and published when
         // the stats channel is on; MagmaWireReclaimScenario reads them off the server's line.

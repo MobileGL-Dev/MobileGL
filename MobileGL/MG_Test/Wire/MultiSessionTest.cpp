@@ -519,3 +519,62 @@ TEST_F(MultiSessionFixture, TwoSessionsInterleaveTwoContextsEachWithoutCrossTalk
     EXPECT_TRUE(WIFEXITED(server.exitStatus) && WEXITSTATUS(server.exitStatus) == 0)
         << "the in-process server did not stop cleanly: status 0x" << std::hex << server.exitStatus;
 }
+
+// A LOST GPU DEVICE ENDS ITS OWN SESSION AND NO OTHER.
+//
+// The display server serves every client in one process, so a backend that met a device loss on
+// one session's apply thread and died (Magma's wire funnels did: a failed submit took
+// Fatal{UnmigratedVerb, "Magma:wire-verb-flush"} and SIGABRT) took the compositor and every other
+// client down with it. A backend now hands a loss to MGPipeSessionLatch: that session latches
+// Fatal{BackendDeviceLost}, declines what it was doing and closes (exit 75), and its neighbours
+// keep applying. The loss is the debug knob's (MGPipeDebugDeviceLossDue) - the same device check
+// the backends make at their readbacks and frame boundaries - because no GPU here faults on
+// demand: the 2nd check in the process (session A's read-back, after B's) reports "lost".
+//
+// Red once by routing the latch seam through SessionFail (FatalFunnel.cpp's adapter): the whole
+// server process aborts at A's read-back and session B's next record is never answered.
+TEST_F(MultiSessionFixture, ADeviceLossEndsOnlyItsOwnSession) {
+    ServerProcess server;
+    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "2", 1);
+    const bool launched = LaunchUnixInProcessServer(&server, "devlost");
+    ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT");
+    ASSERT_TRUE(launched) << "the in-process unix server did not start:\n" << server.Log();
+
+    Peer a = StartPeer(server.endpoint);
+    Peer b = StartPeer(server.endpoint);
+    ASSERT_GT(a.pid, 0);
+    ASSERT_GT(b.pid, 0);
+    ASSERT_EQ(a.ready.started, 1) << a.ready.note << "\n" << server.Log();
+    ASSERT_EQ(b.ready.started, 1) << b.ready.note << "\n" << server.Log();
+
+    // Check #1: B's read-back is answered.
+    const StepReport bFirst = b.Step(kOpHealthySession, kGreen);
+    ASSERT_EQ(bFirst.session.egl, 1) << "no headless EGL for session B: " << bFirst.session.note << "\n" << server.Log();
+    ASSERT_EQ(bFirst.session.pixel, kGreen) << bFirst.session.note << "\n" << server.Log();
+
+    // Check #2: A's device is "lost" at its read-back. A's session latches and ends.
+    const StepReport aLost = a.Step(kOpHealthySession, kRed);
+    EXPECT_NE(aLost.session.pixel, kRed) << "session A read back a frame from a lost device";
+    ASSERT_TRUE(WaitFor([&] { return server.Log().find("reaped exit=75") != std::string::npos; }, 5000))
+        << "session A did not end on a latched fault:\n" << server.Log();
+    const std::string log = server.Log();
+    EXPECT_NE(log.find("Fatal{BackendDeviceLost, \"Espryt:read-pixels\"}"), std::string::npos) << log;
+    EXPECT_NE(log.find("SessionLatch{BackendDeviceLost}"), std::string::npos) << log;
+    EXPECT_TRUE(server.pid > 0 && ::kill(server.pid, 0) == 0) << "the server process died with session A";
+
+    // B IS STILL SERVED, records and read-backs alike.
+    for (int record = 0; record < 3; ++record) {
+        const StepReport after = b.Step(kOpApplyRecord);
+        ASSERT_EQ(after.applied, 1) << "session B stopped applying after session A's device loss (record "
+                                    << record << "): " << after.note << "\n" << server.Log();
+    }
+    const StepReport bAgain = b.Step(kOpHealthySession, kGreen);
+    EXPECT_EQ(bAgain.session.pixel, kGreen) << bAgain.session.note << "\n" << server.Log();
+    EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 1u) << "a session other than A latched:\n" << server.Log();
+
+    b.Close();
+    a.Close();
+    server.Stop();
+    EXPECT_TRUE(WIFEXITED(server.exitStatus) && WEXITSTATUS(server.exitStatus) == 0)
+        << "the in-process server did not stop cleanly: status 0x" << std::hex << server.exitStatus;
+}

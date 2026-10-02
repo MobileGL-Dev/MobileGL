@@ -72,6 +72,9 @@
 
     Bool VulkanRenderer::BlitDefaultFramebufferToSharedImage(const SharedImageView& view) {
         if (m_device == VK_NULL_HANDLE || view.Width == 0 || view.Height == 0) return false;
+        // The debug knob's device check (MGPipeDebugDeviceLossDue) rides the frame boundary here.
+        if (MG_Pipe::MGPipeDebugDeviceLossDue()) NoteDeviceLoss(VK_ERROR_DEVICE_LOST, "the debug knob (shared-image present)");
+        if (m_deviceLost && LatchWireDeviceLoss("shared-image-present")) return false;
         DestroySharedImagePresentTargets(true);
 
         // The default framebuffer's image is stored in display orientation (row 0 is the top of

@@ -203,3 +203,50 @@ TEST(FatalFamily, TheSessionFaultFrameCarriesTheFamilyAndItsCode) {
         EXPECT_EQ(decoded->code(), FatalCodeForFamily(family));
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// THE LATCH TWIN (MGPipeSessionLatch): how a backend's device loss reaches the session latch
+// instead of SessionFail. The display server runs every session in one process, so the twin must
+// RETURN on an armed session - only that session ends - and die exactly as the fail seam does
+// where nothing is armed. Red once by pointing FatalFunnel.cpp's latch adapter at SessionFail: the
+// armed case dies instead of returning.
+
+TEST(FatalFunnelSeam, ADeviceLossLatchesAnArmedSessionAndTheProcessLives) {
+#if defined(_WIN32)
+    GTEST_SKIP() << "POSIX only, as above";
+#else
+    using namespace MobileGL;
+    EXPECT_EXIT(
+        {
+            MG_Remote::InstallPipeSessionFailHook();
+            MG_Remote::ArmSessionLatch();
+            const bool answered = MG_Pipe::MGPipeSessionLatch(
+                MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"} - unit probe", "wire-verb-flush");
+            const bool ok = !answered && MG_Remote::SessionLatched() &&
+                            MG_Remote::SessionLatchedFamily() == MG_Remote::MGFatalFamily::BackendDeviceLost &&
+                            MG_Pipe::MGPipeSessionLatchArmed();
+            std::fflush(nullptr);
+            std::_Exit(ok ? 0 : 3);
+        },
+        ::testing::ExitedWithCode(0), "Fatal\\{BackendDeviceLost, \"Magma:wire-verb-flush\"\\}")
+        << "an armed session's device loss did not latch and return";
+#endif
+}
+
+TEST(FatalFunnelSeam, ADeviceLossWithNoArmedSessionDiesThroughSessionFail) {
+#if defined(_WIN32)
+    GTEST_SKIP() << "POSIX only, as above";
+#else
+    using namespace MobileGL;
+    EXPECT_EXIT(
+        {
+            std::signal(SIGABRT, &ReportFaultCountAndExit);
+            MG_Remote::InstallPipeSessionFailHook();
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"}", "unarmed");
+        },
+        ::testing::ExitedWithCode(kFaultExitBase + 1), "Fatal\\{BackendDeviceLost, \"Magma:unarmed\"\\}")
+        << "an unarmed device loss must keep the inproc shape's death";
+#endif
+}

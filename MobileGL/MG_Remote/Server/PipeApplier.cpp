@@ -578,7 +578,9 @@ namespace MobileGL::MG_Remote::Server {
         MG_Pipe::MGPPixelPackState restorePack{};
         restorePack.Pack = savedPack;
         MG_Pipe::MGPipeApplySetPixelPackState(restorePack);
-        return true;
+        // A backend that found its device lost latched this session and returned without filling
+        // the scratch: the read is declined rather than answered with stale bytes.
+        return !SessionLatched();
     }
 
     Bool ServerVerbSink::ReadTextureImageTight(const MG_Pipe::MGPReadbackInfo& image, Vector<Uint8>& bytes) {

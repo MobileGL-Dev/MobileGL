@@ -45,28 +45,41 @@ namespace MobileGL::MG_Remote {
         // The line is forwarded through "%s" rather than re-used as a format: it has already been
         // vsnprintf'd once, and a detail string that happened to contain a `%` would otherwise be
         // read as a conversion the second time round.
-        [[noreturn]] void PipeSessionFailAdapter(MG_Pipe::MGPipeFatalFamily family,
-                                                 const char* line) {
-            MGFatalFamily mapped = MGFatalFamily::ProtocolCorruption;
+        MGFatalFamily MapPipeFamily(MG_Pipe::MGPipeFatalFamily family) {
             switch (family) {
             case MG_Pipe::MGPipeFatalFamily::UnmigratedVerb:
-                mapped = MGFatalFamily::UnmigratedVerb;
-                break;
+                return MGFatalFamily::UnmigratedVerb;
             case MG_Pipe::MGPipeFatalFamily::RoleViolation:
-                mapped = MGFatalFamily::RoleViolation;
-                break;
+                return MGFatalFamily::RoleViolation;
 #if MOBILEGL_BUILD_DISAGGREGATED
             case MG_Pipe::MGPipeFatalFamily::ProtocolCorruption:
-                mapped = MGFatalFamily::ProtocolCorruption;
-                break;
+                return MGFatalFamily::ProtocolCorruption;
+            case MG_Pipe::MGPipeFatalFamily::DeviceLost:
+                return MGFatalFamily::BackendDeviceLost;
 #endif
             }
-            SessionFail(mapped, "%s", line);
+            return MGFatalFamily::ProtocolCorruption;
         }
+
+        [[noreturn]] void PipeSessionFailAdapter(MG_Pipe::MGPipeFatalFamily family,
+                                                 const char* line) {
+            SessionFail(MapPipeFamily(family), "%s", line);
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The latch twin (PipeSessionFail.h): the calling thread's session latches the fault and
+        // the backend returns from its verb; unarmed, SessionLatch is SessionFail.
+        bool PipeSessionLatchAdapter(MG_Pipe::MGPipeFatalFamily family, const char* line) {
+            return SessionLatch(MapPipeFamily(family), "%s", line);
+        }
+#endif
     } // namespace
 
     void InstallPipeSessionFailHook() {
         MG_Pipe::MGPipeInstallSessionFailHook(&PipeSessionFailAdapter);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MG_Pipe::MGPipeInstallSessionLatchHook(&PipeSessionLatchAdapter, &SessionLatchArmed);
+#endif
     }
 
     namespace {

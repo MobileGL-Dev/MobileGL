@@ -7123,7 +7123,7 @@ void main() {
         SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            RewindWireDescriptorSetsIfDue();
+            if (!RewindWireDescriptorSetsIfDue()) return false;
             // The wire route returns before the monolith branch's draw-gated
             // sweep. Dead wire texture/renderbuffer records otherwise live
             // until the next frame boundary, which a long trace may not reach.
@@ -7760,7 +7760,7 @@ void main() {
         SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            RewindWireDescriptorSetsIfDue();
+            if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
             DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
             return;
@@ -7823,7 +7823,7 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-            RewindWireDescriptorSetsIfDue();
+            if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
             DispatchWireComputeIndirect(indirect);
             return;
@@ -10614,7 +10614,10 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
         MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
-        if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) MagmaWireFatal("copy-image-flush");
+        if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) {
+            if (LatchWireDeviceLoss("copy-image-flush")) return;
+            MagmaWireFatal("copy-image-flush");
+        }
 #endif
         MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
                         "CopyImageSubData requires valid source and destination images.");
@@ -11169,6 +11172,7 @@ void main() {
         VkResult result = vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX);
 #endif
         if (result != VK_SUCCESS) {
+            NoteDeviceLoss(result, "readback vkWaitForFences");
             MGLOG_E_ONCE("DirectVulkan readback: vkWaitForFences returned %d", result);
             return false;
         }
@@ -13749,6 +13753,7 @@ void main() {
         // the in-flight frame count) but never deadlocks.
         const VkResult result = vkQueueWaitIdle(m_graphicsQueue);
         if (result != VK_SUCCESS) {
+            NoteDeviceLoss(result, "WaitForFrameSerial vkQueueWaitIdle");
             MGLOG_E_ONCE("WaitForFrameSerial: vkQueueWaitIdle returned %d", result);
             return false;
         }
@@ -13784,24 +13789,29 @@ void main() {
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    void VulkanRenderer::RewindWireDescriptorSetsIfDue() {
-        if (!m_uniformManager || m_frameContext.GetFrameCount() == 0) return;
+    Bool VulkanRenderer::RewindWireDescriptorSetsIfDue() {
+        if (!m_uniformManager || m_frameContext.GetFrameCount() == 0) return true;
         const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
-        if (!m_uniformManager->WireDescriptorSetBudgetReached(frameIndex)) return;
+        if (!m_uniformManager->WireDescriptorSetBudgetReached(frameIndex)) return true;
 
         // A set cannot be rewritten while a recorded or submitted command
         // buffer might still read it. This wire-only boundary first submits
         // the current recording, then idles the graphics queue before reuse.
-        if (HasPendingRecordedWork() && !FlushPendingCommands())
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) {
+            if (LatchWireDeviceLoss("descriptor-rewind-flush")) return false;
             MagmaWireFatal("descriptor-rewind-flush");
+        }
         const Uint64 through = m_submitCounter;
         if (through > m_completedSubmitCounter) {
             // B4 has not yet made every old retirement site aggregate-safe.
             // Queue idle proves even a submission a previous single-fence path
             // prematurely removed from m_inFlightSubmits has finished; only
             // then may any layout cursor be rewound and its sets rewritten.
-            if (vkQueueWaitIdle(m_graphicsQueue) != VK_SUCCESS)
+            if (const VkResult idle = vkQueueWaitIdle(m_graphicsQueue); idle != VK_SUCCESS) {
+                NoteDeviceLoss(idle, "descriptor rewind vkQueueWaitIdle");
+                if (LatchWireDeviceLoss("descriptor-rewind-wait")) return false;
                 MagmaWireFatal("descriptor-rewind-wait");
+            }
             OnSubmitsCompletedUpTo(through);
         }
         if (HasPendingRecordedWork() || m_completedSubmitCounter < through)
@@ -13810,6 +13820,7 @@ void main() {
         MGLOG_I("Magma descriptor rewind: frame=%u retiredSubmit=%llu budget=%u cached=%zu",
                 frameIndex, static_cast<unsigned long long>(through),
                 UniformManager::kWireDescriptorSetBudget, cachedSets);
+        return true;
     }
 #endif
 
@@ -13859,6 +13870,7 @@ void main() {
             OnSubmitsCompletedUpTo(submitIndex);
             return true;
         }
+        NoteDeviceLoss(result, "WaitForSubmitsUpTo vkWaitForFences");
         if (result != VK_TIMEOUT)
             MGLOG_E_ONCE("WaitForSubmitsUpTo: vkWaitForFences returned %d", result);
         return false;
@@ -14157,6 +14169,7 @@ void main() {
 #endif
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
         if (result != VK_SUCCESS) {
+            NoteDeviceLoss(result, "SubmitPendingCommandBuffer vkQueueSubmit");
             MGLOG_E_ONCE("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
             return false;
         }
@@ -14248,6 +14261,45 @@ void main() {
         return true;
     }
 
+    void VulkanRenderer::NoteDeviceLoss(VkResult result, const char* where) {
+        if (result != VK_ERROR_DEVICE_LOST || m_deviceLost) return;
+        m_deviceLost = true;
+        MGLOG_E("DirectVulkan: the VkDevice is LOST - %s returned VK_ERROR_DEVICE_LOST (the driver reset a GPU "
+                "fault or hang); nothing this renderer recorded or submits from here on will execute",
+                where != nullptr ? where : "a Vulkan call");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Latch NOW where a session latch exists, so the session stops at its next record however
+        // the verb in hand unwinds - including through a caller that only logs a failed submit.
+        if (MG_Pipe::MGPipeSessionLatchArmed()) (void)LatchWireDeviceLoss(where);
+#endif
+    }
+
+    Bool VulkanRenderer::IsDeviceLost() {
+        // Only failure paths ask, so the probe's wait never lands on a healthy frame: a device
+        // that is merely slow answers VK_SUCCESS once its work drains, a lost one answers at once.
+        if (!m_deviceLost && m_device != VK_NULL_HANDLE) {
+            NoteDeviceLoss(vkDeviceWaitIdle(m_device), "the device-loss probe's vkDeviceWaitIdle");
+        }
+        return m_deviceLost;
+    }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Bool VulkanRenderer::LatchWireDeviceLoss(const char* site) {
+        if (!IsDeviceLost()) return false;
+        if (!m_deviceLossLatched) {
+            m_deviceLossLatched = true;
+            // Returns (latched) on a served session; dies, as the site's own Fatal would have,
+            // where no session latch is armed.
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"} - this session's "
+                                              "VkDevice was lost to a GPU fault or hang; the session ends and its "
+                                              "client reads a lost context, every other session keeps running",
+                                              site != nullptr ? site : "?");
+        }
+        return true;
+    }
+#endif
+
     Bool VulkanRenderer::FlushForSyncPoint(Uint64 submitIndex) {
         // A flush only helps a sync point whose commands are not submitted
         // yet; for an already-submitted index it would just split the frame's
@@ -14300,6 +14352,7 @@ void main() {
             }
             const VkResult waitResult = vkWaitForFences(m_device, 1, &oldest.fence, VK_TRUE, UINT64_MAX);
             if (waitResult != VK_SUCCESS) {
+                NoteDeviceLoss(waitResult, "SplitOversizedRecording vkWaitForFences");
                 MGLOG_E_ONCE("SplitOversizedRecording: vkWaitForFences returned %d", waitResult);
                 break;
             }
@@ -14465,6 +14518,8 @@ void main() {
 
     void VulkanRenderer::Present() {
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // A lost device presents nothing (its session is latched and closing).
+        if (m_deviceLost && LatchWireDeviceLoss("present")) return;
         // Present has its own submit path. Tag its last wire pass before that
         // submission, rather than retaining it until a draw in the next frame.
         RetireWireDrawPass();
@@ -14507,8 +14562,10 @@ void main() {
             // free its retired command buffers and reset the slot fence.
             const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
             if (slotSubmit > m_completedSubmitCounter &&
-                !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX))
+                !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
+                if (LatchWireDeviceLoss("deferred-acquire-submit-wait")) return;
                 MagmaWireFatal("deferred-acquire-submit-wait");
+            }
 #endif
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
@@ -14591,7 +14648,12 @@ void main() {
         SharedImageSubmitSync sharedImageSync;
         AttachSharedImageSync(submitPacket.submitInfo, sharedImageSync);
 #endif
-        VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
+        const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
+        NoteDeviceLoss(presentSubmit, "Present vkQueueSubmit");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (presentSubmit != VK_SUCCESS && LatchWireDeviceLoss("present-submit")) return;
+#endif
+        VK_VERIFY(presentSubmit);
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
         frame.lastSubmitIndex = m_submitCounter;
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -14627,6 +14689,10 @@ void main() {
             m_swapchainResizeRequested = false;
             result = VK_SUCCESS;
         }
+        NoteDeviceLoss(result, "vkQueuePresentKHR");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (result != VK_SUCCESS && LatchWireDeviceLoss("present-queue")) return;
+#endif
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
         // EGL swap semantics: the presented color buffer's content is undefined the
         // next time this image is acquired (EGL_BUFFER_DESTROYED, the default swap
@@ -14677,8 +14743,10 @@ void main() {
         // slot's prefix BEFORE the reset/free happens.
         const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
         if (slotSubmit > m_completedSubmitCounter &&
-            !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX))
+            !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
+            if (LatchWireDeviceLoss("present-slot-submit-wait")) return;
             MagmaWireFatal("present-slot-submit-wait");
+        }
 #endif
         // 4) Wait/reset/acquire for next frame.
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
@@ -14703,6 +14771,10 @@ void main() {
             result =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
+        NoteDeviceLoss(result, "vkAcquireNextImageKHR");
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (result != VK_SUCCESS && LatchWireDeviceLoss("present-acquire")) return;
+#endif
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
         // Pull keeps its historical slot-fence inference. In a disaggregated
         // build the aggregate wait above already retired the registered prefix

@@ -147,6 +147,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // True when the backend ES context is current on the calling thread, i.e.
     // immediate buffer ops may issue GL calls right now.
     Bool IsBackendContextCurrentOnThisThread();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // DEVICE LOSS, Espryt's half (Magma's is VulkanRenderer::LatchWireDeviceLoss). Asks the
+    // driver whether the calling thread's context was reset (glGetGraphicsResetStatus); a reset -
+    // or the debug knob MGPipeDebugDeviceLossDue - latches THIS session through
+    // MGPipeSessionLatch and answers true, and the caller returns from its verb without issuing
+    // more GL. Asked at the frame boundaries (Present, a shared-image present) and before a
+    // readback, never per draw. The contexts keep the driver's default reset strategy: asking
+    // every context to lose itself on reset would also end the INNOCENT ones - the compositor's
+    // among them - on any other client's GPU fault.
+    // `debugKnob` false: the knob is not consulted here (the on-screen Present, so an injected loss
+    // lands on an offscreen client's shared-image present or readback, never on the compositor's).
+    Bool LatchIfDeviceLost(const char* site, Bool debugKnob = true);
+#endif
     // GL fence sync objects, backed by native ES fences. FenceSync returns null
     // (the frontend then falls back to an always-signaled sync) when the calling
     // thread does not own the ES context. Waits/queries degrade to "signaled" in

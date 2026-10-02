@@ -53,12 +53,16 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 
 // THE VERDICT OF EVERY TRIP WIRE IN THIS FILE, IN ONE PLACE.
 //
@@ -153,6 +157,58 @@ namespace MobileGL::MG_Pipe {
         // fatal_census.py's FUNNEL_SITES names this function for that reason.
         MGLOG_F("%s", line);
         std::abort();
+    }
+
+    namespace {
+        MGPipeSessionLatchHook g_sessionLatchHook = nullptr;
+        MGPipeSessionLatchArmedHook g_sessionLatchArmedHook = nullptr;
+    } // namespace
+
+    void MGPipeInstallSessionLatchHook(MGPipeSessionLatchHook hook, MGPipeSessionLatchArmedHook armed) {
+        g_sessionLatchHook = hook;
+        g_sessionLatchArmedHook = armed;
+    }
+
+    MGPipeSessionLatchHook MGPipeSessionLatchHookInstalled() { return g_sessionLatchHook; }
+
+    bool MGPipeSessionLatchArmed() { return g_sessionLatchArmedHook != nullptr && g_sessionLatchArmedHook(); }
+
+    bool MGPipeDebugDeviceLossDue() {
+        long at = 0;
+        if (const char* value = std::getenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT")) {
+            at = std::strtol(value, nullptr, 10);
+        }
+#if defined(__ANDROID__)
+        else {
+            char property[PROP_VALUE_MAX] = {};
+            if (__system_property_get("debug.mobilegl.inject_device_lost_at", property) > 0) {
+                at = std::strtol(property, nullptr, 10);
+            }
+        }
+#endif
+        if (at <= 0) return false;
+        static std::atomic<long> seen{0};
+        static std::atomic<bool> fired{false};
+        if (fired.load(std::memory_order_acquire)) return false;
+        if (seen.fetch_add(1, std::memory_order_acq_rel) + 1 < at) return false;
+        if (fired.exchange(true, std::memory_order_acq_rel)) return false;
+        MGLOG_E("MGPipe: debug knob inject_device_lost_at=%ld - this device check reports the device LOST", at);
+        return true;
+    }
+
+    bool MGPipeSessionLatch(MGPipeFatalFamily family, const char* fmt, ...) {
+        char line[512];
+        va_list args;
+        va_start(args, fmt);
+        const int written = std::vsnprintf(line, sizeof(line), fmt, args);
+        va_end(args);
+        if (written < 0) {
+            std::snprintf(line, sizeof(line),
+                          "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
+        }
+        if (g_sessionLatchHook != nullptr) return g_sessionLatchHook(family, line);
+        // NO HOOK: no session to latch, so the death the fail seam would have given.
+        MGPipeSessionFail(family, "%s", line);
     }
 #endif
 

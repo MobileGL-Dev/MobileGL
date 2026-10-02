@@ -57,6 +57,11 @@
 // server-side resource its session had to have is gone - so it reads a clean device loss. Not
 // DeviceLost: that code is the latch's own, never a family's projection (see its bucket above).
 //
+// BackendDeviceLost: the GPU device (Magma's VkDevice, Espryt's EGL context) a session renders
+// with was lost to a GPU fault or hang. It is only ever LATCHED (MGPipeSessionLatch), so the one
+// session ends and the display server's other sessions keep running; the waiting client is told
+// what ServerCrashed says and reads a lost context. Not DeviceLost, for ServerWindowLost's reason.
+//
 // Two words were NOT given rows, they were collapsed instead: `InitialBytesNotCarried`
 // (MG_Impl/Pipe/PipeFill.cpp) said the same thing as `UncarriedInitialBytes` (Client/
 // WireTables.cpp) about the same record - a respecify that crossed with no initial bytes - and
@@ -113,6 +118,7 @@
     X(ApplyThreadJoinTimeout,        ServerCrashed,      "the apply thread did not join within its bound at teardown") \
     X(ApplyThreadNotRunning,         ServerCrashed,      "an operation needed the apply thread and it was not running") \
     X(ResourceUnavailable,           ServerCrashed,      "the server could not obtain a native GL/Vulkan resource it had to have") \
-    X(ServerWindowLost,              ServerCrashed,      "the server's own display window was destroyed under a live on-screen session (P12)")
+    X(ServerWindowLost,              ServerCrashed,      "the server's own display window was destroyed under a live on-screen session (P12)") \
+    X(BackendDeviceLost,             ServerCrashed,      "the GPU device a session's backend renders with was lost (fault or hang reset)")
 
 // clang-format on
