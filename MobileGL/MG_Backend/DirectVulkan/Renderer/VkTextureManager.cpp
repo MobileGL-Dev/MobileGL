@@ -707,6 +707,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Destroy images while the device/allocator still exist, including after context death.
         m_wireTextureResources.clear();
         m_wireRenderbufferResources.clear();
+        m_sharedImageUses.clear();
 #endif
         m_aliveObjects.clear();
         m_storageImageTextures.clear();
@@ -2946,42 +2947,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return SharedImageBind::Unresolved;
         }
 
-        // ACQUIRE FROM THE FOREIGN FAMILY. The writer (a client session's Present, on its own
-        // device) leaves the image released to VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL, which is
-        // also the layout every wire descriptor samples in. Submitted on its own and waited, like
-        // the preserve copy: it runs once per attach, before any recorded use of the image.
-        VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-        allocInfo.commandPool = m_commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
-        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        VK_VERIFY(vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer),
-                  "vkAllocateCommandBuffers(shared image acquire)");
-        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        VK_VERIFY(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer(shared image acquire)");
-        VkImageMemoryBarrier acquire{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        acquire.srcAccessMask = 0;
-        acquire.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-        acquire.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        acquire.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-        acquire.dstQueueFamilyIndex = imported.queueFamily;
-        acquire.image = imported.image;
-        acquire.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &acquire);
-        VK_VERIFY(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(shared image acquire)");
-        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VkFence fence = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateFence(m_device, &fenceInfo, nullptr, &fence), "vkCreateFence(shared image acquire)");
-        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
-        VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence), "vkQueueSubmit(shared image acquire)");
-        VK_VERIFY(vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(shared image acquire)");
-        vkDestroyFence(m_device, fence, nullptr);
-        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
+        // NOT ACQUIRED HERE. The writer (a client session's present, on its own device) releases
+        // the image to VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL - also the layout every wire
+        // descriptor samples in - once per frame it writes. Each use acquires it again when the
+        // write generation moved, waiting for that write's fence on the GPU, and the frame boundary
+        // releases it back (VulkanRenderer::AcquireSharedImage, WireSharedImage.inc).
 
         TextureResource replacement;
         replacement.image = imported.image;
@@ -3087,6 +3057,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 handle.Slot, handle.Gen);
             return nullptr;
         }
+        resource.sharedImageKey = resource.sharedImageId != 0 ? key : 0;
         resource.syncedWireSerial = record.Serial;
         return &resource;
     }

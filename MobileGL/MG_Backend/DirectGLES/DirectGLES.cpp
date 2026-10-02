@@ -36,6 +36,7 @@
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
+#include <unistd.h>
 #endif
 #endif
 #include <MG_State/GLState/ErrorState/Error.h>
@@ -17025,6 +17026,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
         NativeContextTuple* tuple = FindNativeContext(sessionKey, contextToken);
         if (tuple == nullptr || tuple->Context == EGL_NO_CONTEXT) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Its last shared-image reads, fenced while it is still current.
+        if (t_boundNativeContext == tuple->Context) SharedImageImpl::PublishPendingReads();
+#endif
         if (g_EGLFuncs.eglDestroyContext && g_Display != EGL_NO_DISPLAY) {
             // The context may be current on this very thread; unbinding first is what EGL requires
             // (eglDestroyContext of a current context is EGL_BAD_ACCESS).
@@ -17406,6 +17411,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: EGL display/surface/context is not initialized");
             return false;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Shared-image reads can only be fenced from the context that made them.
+        if (t_boundNativeContext != EGL_NO_CONTEXT && t_boundNativeContext != tuple.Context) {
+            SharedImageImpl::PublishPendingReads();
+        }
+#endif
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, session.Draw, session.Draw, tuple.Context)) {
             const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
@@ -17448,6 +17459,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
             return true;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (t_boundNativeContext != EGL_NO_CONTEXT) SharedImageImpl::PublishPendingReads();
+#endif
         if (!g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT)) {
             const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
             MGLOG_E_ONCE("DirectGLES::ReleaseCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
@@ -17964,6 +17978,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             slot = {g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), g_syncContextGeneration, serial};
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The session's frame boundary: the shared images its frame sampled get the frame's fence,
+        // so their producers' next copies wait for it.
+        SharedImageImpl::PublishPendingReads();
+#endif
+
         // P14 S4: the session's surface, not the process's.
         //
         // EXT -> KHR -> plain. The loader fills eglSwapBuffersWithDamageEXT from whichever
@@ -18069,6 +18089,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // This session's native contexts and surfaces, and the display when they were the last.
     static void DestroyNativeStateOfSession(Uint64 sessionKey) {
         if (g_Display == EGL_NO_DISPLAY) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (t_boundNativeContext != EGL_NO_CONTEXT) SharedImageImpl::PublishPendingReads();
+#endif
         {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (g_EGLFuncs.eglMakeCurrent) {
@@ -18127,6 +18150,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             using DestroyImageKhrFn = EGLBoolean (*)(EGLDisplay, void*);
             using ImageTargetFn = void (*)(GLenum, void*);
 
+            // EGL_KHR_fence_sync / EGL_KHR_wait_sync / EGL_ANDROID_native_fence_sync, likewise.
+            constexpr EGLenum kEglSyncNativeFenceAndroid = 0x3144;
+            constexpr EGLint kEglSyncNativeFenceFdAndroid = 0x3145;
+            constexpr EGLint kEglConditionSatisfiedKhr = 0x30F6;
+            using CreateSyncKhrFn = void* (*)(EGLDisplay, EGLenum, const EGLint*);
+            using DestroySyncKhrFn = EGLBoolean (*)(EGLDisplay, void*);
+            using WaitSyncKhrFn = EGLint (*)(EGLDisplay, void*, EGLint);
+            using ClientWaitSyncKhrFn = EGLint (*)(EGLDisplay, void*, EGLint, Uint64);
+            using DupNativeFenceFdFn = EGLint (*)(EGLDisplay, void*);
+
             struct EntryPoints {
                 Bool Resolved = false;
                 Bool Usable = false;
@@ -18136,6 +18169,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 DestroyImageKhrFn DestroyImage = nullptr;
                 ImageTargetFn TargetTexture2D = nullptr;
                 ImageTargetFn TargetRenderbuffer = nullptr;
+                // Fences as sync_files: what lets one session's GPU wait for another's without a
+                // CPU in between. Without them every wait below is a CPU wait.
+                Bool FencesUsable = false;
+                CreateSyncKhrFn CreateSync = nullptr;
+                DestroySyncKhrFn DestroySync = nullptr;
+                WaitSyncKhrFn WaitSync = nullptr;
+                ClientWaitSyncKhrFn ClientWaitSync = nullptr;
+                DupNativeFenceFdFn DupNativeFenceFd = nullptr;
             };
 
             Bool HasExtensionWord(const char* list, const char* word) {
@@ -18170,6 +18211,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return *entry; // asked again on the next call
                 }
                 entry->Resolved = true;
+                if (HasExtensionWord(egl, "EGL_KHR_fence_sync") && HasExtensionWord(egl, "EGL_KHR_wait_sync") &&
+                    HasExtensionWord(egl, "EGL_ANDROID_native_fence_sync")) {
+                    entry->CreateSync =
+                        reinterpret_cast<CreateSyncKhrFn>(g_EGLFuncs.eglGetProcAddress("eglCreateSyncKHR"));
+                    entry->DestroySync =
+                        reinterpret_cast<DestroySyncKhrFn>(g_EGLFuncs.eglGetProcAddress("eglDestroySyncKHR"));
+                    entry->WaitSync = reinterpret_cast<WaitSyncKhrFn>(g_EGLFuncs.eglGetProcAddress("eglWaitSyncKHR"));
+                    entry->ClientWaitSync =
+                        reinterpret_cast<ClientWaitSyncKhrFn>(g_EGLFuncs.eglGetProcAddress("eglClientWaitSyncKHR"));
+                    entry->DupNativeFenceFd = reinterpret_cast<DupNativeFenceFdFn>(
+                        g_EGLFuncs.eglGetProcAddress("eglDupNativeFenceFDANDROID"));
+                    entry->FencesUsable = entry->CreateSync && entry->DestroySync && entry->WaitSync &&
+                                          entry->ClientWaitSync && entry->DupNativeFenceFd;
+                }
+                if (!entry->FencesUsable) {
+                    MGLOG_I("Shared images: no EGL native fence sync / wait sync; sessions order their access "
+                            "to an image with CPU waits");
+                }
                 if (!HasExtensionWord(egl, "EGL_KHR_image_base") ||
                     !HasExtensionWord(egl, "EGL_ANDROID_image_native_buffer") ||
                     !HasExtensionWord(egl, "EGL_ANDROID_get_native_client_buffer")) {
@@ -18214,6 +18273,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             EGLDisplay Display = EGL_NO_DISPLAY;
             Uint64 DisplayTerminations = 0;
             DestroyImageKhrFn Destroy = nullptr;
+            // AcquireForSampling's memory, touched only by the session whose twin holds this: the
+            // write generation last waited for and the native context the wait was queued in (a
+            // GPU wait orders that context alone), and the read frame the image was last noted in.
+            Uint64 WaitedGeneration = 0;
+            Uint64 WaitedContext = 0;
+            Uint64 NotedFrame = 0;
 
             ~EglImage() {
                 // eglDestroyImageKHR needs the display, not a context, so a session's twin teardown
@@ -18354,8 +18419,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return renderbuffer;
             }
 
-            // The present returns once the copy completed (the client attaches the buffer to its
-            // wl_surface right after and nothing else orders the compositor's read).
+            // Everything the current context has submitted, waited out on the CPU: the fallback for
+            // a driver that cannot hand a fence to another session.
             Bool WaitForCompletion() {
                 if (g_GLESFuncs.glFenceSync && g_GLESFuncs.glClientWaitSync && g_GLESFuncs.glDeleteSync) {
                     if (GLsync fence = g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)) {
@@ -18369,7 +18434,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glDeleteSync(fence);
                         if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) return true;
                         if (status == GL_TIMEOUT_EXPIRED) {
-                            MGLOG_E("Shared image present: the copy did not complete within 10 s");
+                            MGLOG_E("Shared images: the submitted work did not complete within 10 s");
                             return false;
                         }
                         // GL_WAIT_FAILED: glFinish is the same promise without the object.
@@ -18378,7 +18443,116 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glFinish();
                 return true;
             }
+
+            // How long a CPU wait on another session's fence may take before the order is given up
+            // on (logged): a session whose GPU work never completes must not wedge its peers.
+            constexpr Uint32 kFenceCpuWaitMs = 2000;
+
+            void CloseFd(int fd) {
+                if (fd >= 0) ::close(fd);
+            }
+
+            // The current context's LATER commands wait for `fence` (a sync_file) on the GPU; a CPU
+            // wait when the driver cannot. Takes ownership of `fence`: a native fence sync owns it
+            // from a successful create on, every other path closes it here.
+            void WaitForFenceBeforeLaterCommands(int fence) {
+                if (fence < 0) return;
+                const EntryPoints& entry = ResolvedEntryPoints();
+                if (entry.FencesUsable) {
+                    const EGLint attribs[] = {kEglSyncNativeFenceFdAndroid, fence, EGL_NONE};
+                    if (void* sync = entry.CreateSync(g_Display, kEglSyncNativeFenceAndroid, attribs)) {
+                        if (entry.WaitSync(g_Display, sync, 0) != EGL_TRUE) {
+                            constexpr Uint64 kWaitNs = Uint64{kFenceCpuWaitMs} * 1000 * 1000;
+                            if (entry.ClientWaitSync(g_Display, sync, 0, kWaitNs) != kEglConditionSatisfiedKhr) {
+                                MGLOG_E_ONCE("Shared images: a peer session's fence could not be waited for");
+                            }
+                        }
+                        // A pending server wait keeps the sync alive past this (EGL_KHR_wait_sync).
+                        entry.DestroySync(g_Display, sync);
+                        return;
+                    }
+                }
+                if (!SI::SyncFile::Wait(fence, kFenceCpuWaitMs)) {
+                    MGLOG_E_ONCE("Shared images: a peer session's fence did not signal within %u ms",
+                                 static_cast<unsigned>(kFenceCpuWaitMs));
+                }
+                CloseFd(fence);
+            }
+
+            // A sync_file for everything the current context has submitted so far (flushed, so it
+            // will signal), in `*fence`. False when the driver cannot export one; the caller then
+            // waits on the CPU and publishes -1.
+            Bool ExportFence(int* fence) {
+                *fence = -1;
+                const EntryPoints& entry = ResolvedEntryPoints();
+                if (!entry.FencesUsable) return false;
+                const EGLint attribs[] = {EGL_NONE};
+                void* sync = entry.CreateSync(g_Display, kEglSyncNativeFenceAndroid, attribs);
+                if (sync == nullptr) return false;
+                // The fence has no descriptor until its command reaches the driver's queue.
+                g_GLESFuncs.glFlush();
+                const EGLint fd = entry.DupNativeFenceFd(g_Display, sync);
+                entry.DestroySync(g_Display, sync);
+                if (fd < 0) return false;
+                *fence = fd;
+                return true;
+            }
+
+            // ONE READ FRAME PER SESSION: what the session has sampled since its last frame
+            // boundary. A session is served by exactly one apply thread, so the thread owns it -
+            // nothing about it is process-wide, and a session's end (its thread's) drops it. `Id`
+            // is drawn from one counter across all sessions and renewed at every boundary, so an
+            // EglImage's NotedFrame is a once-per-frame gate no other session's frame can match.
+            struct ReadFrame {
+                Uint64 Id = 0;
+                SI::ReadTracker Tracker;
+            };
+            std::atomic<Uint64> g_readFrameIds{0};
+
+            ReadFrame& CurrentReadFrame() {
+                thread_local ReadFrame frame;
+                if (frame.Id == 0) frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
+                return frame;
+            }
         } // namespace
+
+        void AcquireForSampling(const EglImageRef& image) {
+            if (image == nullptr || image->Image == nullptr) return;
+            EglImage& state = *image;
+            // Steady state: one lock and a compare (the write fence, once signaled, is dropped by
+            // the registry and nothing is duplicated any more).
+            Uint64 generation = 0;
+            int fence = SI::DupWriteFence(*state.Image, &generation);
+            const Uint64 context = CurrentNativeContextSerial();
+            if (generation != state.WaitedGeneration || context != state.WaitedContext) {
+                state.WaitedGeneration = generation;
+                state.WaitedContext = context;
+                WaitForFenceBeforeLaterCommands(fence);
+                fence = -1;
+            }
+            CloseFd(fence);
+            ReadFrame& frame = CurrentReadFrame();
+            if (state.NotedFrame != frame.Id) {
+                frame.Tracker.NoteRead(state.Image);
+                state.NotedFrame = frame.Id;
+            }
+        }
+
+        void PublishPendingReads() {
+            ReadFrame& frame = CurrentReadFrame();
+            if (frame.Tracker.Pending() == 0) return;
+            int fence = -1;
+            // No context current: the reads' context is gone (and its work with it), and there is
+            // nothing to fence or wait from - the frame is only forgotten.
+            if (t_boundNativeContext != EGL_NO_CONTEXT && !ExportFence(&fence)) {
+                // FALLBACK: there is no fence to hand a writer, so the frame's reads are waited out
+                // here instead - once this session moves on (and, say, releases the buffer to its
+                // producer), nothing it submitted still samples the image.
+                (void)WaitForCompletion();
+            }
+            frame.Tracker.PublishFrame(fence);
+            frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
 
         Bool BlitDefaultFramebufferTo(const SharedImageView& view) {
             if (view.Id == 0 || view.Width == 0 || view.Height == 0 || view.NativeBuffer == nullptr) return false;
@@ -18395,6 +18569,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 sourceHeight <= 0) {
                 MGLOG_E_ONCE("Shared image present: the current context has no default framebuffer to copy");
                 return false;
+            }
+            const SI::ImageRef image = SI::Find(view.Id);
+            if (image == nullptr) {
+                MGLOG_E_ONCE("Shared image present: image %llu is no longer live",
+                             static_cast<unsigned long long>(view.Id));
+                return false;
+            }
+
+            // WRITE AFTER READ: the frames that still sample the image finish before the copy
+            // overwrites it - queued on this context's GPU timeline, or waited out on the CPU when
+            // the driver has no fence to queue. Outside the targets' lock, which every session's
+            // present takes.
+            if (ResolvedEntryPoints().FencesUsable) {
+                for (const int fence : SI::DupPendingReadFences(*image)) WaitForFenceBeforeLaterCommands(fence);
+            } else if (!SI::WaitForReads(*image, kFenceCpuWaitMs)) {
+                MGLOG_E_ONCE("Shared image present: image %llu's readers did not finish within %u ms",
+                             static_cast<unsigned long long>(view.Id), static_cast<unsigned>(kFenceCpuWaitMs));
             }
 
             Bool copied = false;
@@ -18475,7 +18666,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
             }
-            return copied && WaitForCompletion();
+            if (!copied) return false;
+
+            // The copy's completion goes to the readers as a fence and the present returns at once;
+            // a reader that binds the image waits for it on its own GPU. Without fence export the
+            // copy is waited out here and published as already complete.
+            int fence = -1;
+            if (!ExportFence(&fence) && !WaitForCompletion()) return false;
+            SI::PublishWrite(*image, fence);
+            // A session that samples images and presents into one (a nested compositor) closes its
+            // read frame here too.
+            PublishPendingReads();
+            return true;
         }
 
         void ForgetPresentTargetsAfterTerminate() {
@@ -18499,6 +18701,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             (void)view;
             return false;
         }
+        void AcquireForSampling(const EglImageRef& image) { (void)image; }
+        void PublishPendingReads() {}
         void ForgetPresentTargetsAfterTerminate() {}
 #endif
     } // namespace SharedImageImpl

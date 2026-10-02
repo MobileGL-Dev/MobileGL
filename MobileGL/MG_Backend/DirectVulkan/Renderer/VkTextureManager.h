@@ -365,6 +365,13 @@ public:
         Uint64 sharedImageId = 0;
         SharedPtr<const void> sharedImageOwner;
         Bool sharedImageAlphaOne = false;
+        // The reading side's ownership of the image (VulkanRenderer::AcquireSharedImage): whether
+        // this device holds it now - acquired from the foreign family and not yet released back at
+        // the frame boundary - the writer's generation it last acquired, and the
+        // m_wireTextureResources key it lives under, by which the frame boundary finds it again.
+        Bool sharedImageHeld = false;
+        Uint64 sharedImageGeneration = 0;
+        Uint64 sharedImageKey = 0;
 #endif
 
         TextureResource() = default;
@@ -405,6 +412,9 @@ public:
             std::swap(this->sharedImageId, that.sharedImageId);
             std::swap(this->sharedImageOwner, that.sharedImageOwner);
             std::swap(this->sharedImageAlphaOne, that.sharedImageAlphaOne);
+            std::swap(this->sharedImageHeld, that.sharedImageHeld);
+            std::swap(this->sharedImageGeneration, that.sharedImageGeneration);
+            std::swap(this->sharedImageKey, that.sharedImageKey);
 #endif
         }
 
@@ -452,6 +462,9 @@ public:
             sharedImageId = 0;
             sharedImageOwner.reset();
             sharedImageAlphaOne = false;
+            sharedImageHeld = false;
+            sharedImageGeneration = 0;
+            sharedImageKey = 0;
 #endif
             fullView = VK_NULL_HANDLE;
             sampledView = VK_NULL_HANDLE;
@@ -631,6 +644,24 @@ public:
     static Bool ImportSharedImage(void* nativeBuffer, Uint32 width, Uint32 height, ImportedSharedImage& out,
                                   String& why);
     static void DestroyImportedSharedImage(VkDevice device, ImportedSharedImage& image);
+    // The reading side's per-use hook: PrepareWireTextureResources notes every shared-image
+    // texture a draw or dispatch samples, and the renderer takes the list right after
+    // (VulkanRenderer::AcquireNotedSharedImages) to acquire each one ahead of the sampling.
+    void NoteSharedImageUse(const TextureResource& resource) {
+        if (std::find(m_sharedImageUses.begin(), m_sharedImageUses.end(), resource.sharedImageKey) ==
+            m_sharedImageUses.end())
+            m_sharedImageUses.push_back(resource.sharedImageKey);
+    }
+    Bool HasNotedSharedImageUses() const { return !m_sharedImageUses.empty(); }
+    void TakeNotedSharedImageUses(Vector<Uint64>& out) {
+        out.clear();
+        std::swap(out, m_sharedImageUses);
+    }
+    // The live handle-keyed texture resource under `key`, or null.
+    TextureResource* FindWireTextureResource(Uint64 key) {
+        const auto it = m_wireTextureResources.find(key);
+        return it != m_wireTextureResources.end() && it->second.image != VK_NULL_HANDLE ? &it->second : nullptr;
+    }
 #endif
     VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
@@ -827,6 +858,8 @@ private:
     // Node-based for the same reason m_renderbufferResources is: callers hold TextureResource*
     // across map-touching calls.
     std::unordered_map<Uint64, TextureResource> m_wireTextureResources;
+    // Shared-image textures sampled since the renderer last took the list (NoteSharedImageUse).
+    Vector<Uint64> m_sharedImageUses;
     // Handles are per-kind; a renderbuffer and texture may have identical slot/gen.
     std::unordered_map<Uint64, TextureResource> m_wireRenderbufferResources;
 #endif

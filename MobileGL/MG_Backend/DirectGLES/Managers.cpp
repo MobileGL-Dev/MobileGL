@@ -8975,6 +8975,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // them, and the storage path would allocate fresh, empty storage over the image.
             if (pushedStorage != nullptr && (pushedStorage->SharedImageId != 0 || m_sharedImageId != 0) &&
                 SyncSharedImageStorage(*pushedStorage)) {
+                // EVERY use, not only the attach (the draw-clean gates never pass a bound image):
+                // a write that landed since the last one is waited for on this context's GPU
+                // before the command this sync is for, and the session's frame notes the read.
+                if (m_sharedImage != nullptr) SharedImageImpl::AcquireForSampling(m_sharedImage);
                 return;
             }
             // P5e (tx2), CONTRACT-P5E §5.2 (scout G-S2-2): THE VIEW TEST MOVES BEHIND THE
@@ -16933,6 +16937,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PipeTextureStorageRecordForRecord and CONTRACT-P5E.md §5.2.
             const MG_Pipe::MGPipeResourceRecord* storage = PipeTextureStorageRecordForRecord(record);
             if (storage == nullptr) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Never clean while bound to a shared image: see IsDrawSyncClean.
+            if (m_sharedImage != nullptr) return false;
+#endif
             // SyncMipmapsToBackend's own early-out, verbatim.
             if (!m_isInitialized || m_syncedResourceSerial == 0 || m_syncedResourceSerial != storage->Serial ||
                 !storage->PendingUploads.empty()) {

@@ -485,6 +485,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool TargetBoundTexture2D(const EglImageRef& image);
         // BackendObject::BlitDefaultFramebufferToSharedImage, for the calling thread's context.
         Bool BlitDefaultFramebufferTo(const SharedImageView& image);
+
+        // THE READER'S HALF of the image's sync state (SharedImageRegistry.h). Called on every use
+        // of a name whose level 0 is `image`, before the command that samples it: when a write
+        // landed since this context last waited, the context's later commands wait for its fence
+        // on the GPU; and the image is noted as read by the calling session's current frame.
+        void AcquireForSampling(const EglImageRef& image);
+        // The calling session's frame boundary for what it has read: hands a fence for everything
+        // the current context has submitted to every image noted since the last boundary. Called
+        // at Present and wherever the current native context stops being current (its reads can
+        // only be fenced from it). Nothing noted = nothing done.
+        void PublishPendingReads();
     } // namespace SharedImageImpl
 #endif
 

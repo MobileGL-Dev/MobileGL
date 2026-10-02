@@ -67,6 +67,9 @@
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED && !defined(_WIN32)
+#include <unistd.h> // close(): shared-image sync_file descriptors (WireSharedImage.inc)
+#endif
 
 #if defined(__APPLE__)
 #include <CoreGraphics/CoreGraphics.h>
@@ -3513,6 +3516,7 @@ void main() {
         DestroyWireDepthMipmapResources();
         DestroyWireMultisampleResolveResources();
         DestroySharedImagePresentTargets(false);
+        DestroySharedImageSync();
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -13960,6 +13964,7 @@ void main() {
         m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);
 #if MOBILEGL_BUILD_DISAGGREGATED
         CollectWireObjects(m_completedSubmitCounter);
+        RecycleSharedImageSemaphores(m_completedSubmitCounter);
 #endif
     }
 
@@ -14144,6 +14149,11 @@ void main() {
         }
         submitInfo.commandBufferCount = commandBufferCount;
         submitInfo.pCommandBuffers = commandBuffers;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Shared-image fences staged for the work recorded since the last submission.
+        SharedImageSubmitSync sharedImageSync;
+        AttachSharedImageSync(submitInfo, sharedImageSync);
+#endif
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
         if (result != VK_SUCCESS) {
             MGLOG_E_ONCE("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
@@ -14154,6 +14164,9 @@ void main() {
         frame.hasPreCommandBufferRecorded = false;
         RegisterSubmit(fence, pooledFence);
         frame.lastSubmitIndex = m_submitCounter;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        CommitSharedImageSync(sharedImageSync);
+#endif
         return true;
     }
 
@@ -14473,6 +14486,9 @@ void main() {
                 suspendedFrame.isCommandRecording = false;
                 suspendedFrame.hasCommandBufferRecorded = false;
                 InvalidatePipelineMemo();
+#if MOBILEGL_BUILD_DISAGGREGATED
+                AbandonSharedImageReads();
+#endif
                 // The dropped recording is never submitted, so once the fence
                 // poll shows the pre-suspension submissions complete the frame
                 // transients (descriptor sets, transient arenas, deferred
@@ -14532,6 +14548,14 @@ void main() {
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
         if (activeRenderPass)
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The frame boundary of the shared images this frame read (WireSharedImage.inc): handed
+        // back to the foreign family in this recording, and this submission signals the read
+        // fence their next writer waits for.
+        ReleaseHeldSharedImages();
+        if (m_sharedImageSyncFd && m_sharedImageReads.Pending() > 0 && m_sharedImageSignal == VK_NULL_HANDLE)
+            m_sharedImageSignal = TakeSharedImageSemaphore(/*exportable=*/true);
+#endif
 
         // Transition while this frame's recording is still open. A frame that
         // rendered only into FBOs has no default-framebuffer render pass, and that
@@ -14562,9 +14586,17 @@ void main() {
             m_textureManager->FlushPendingUploads();
         }
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        SharedImageSubmitSync sharedImageSync;
+        AttachSharedImageSync(submitPacket.submitInfo, sharedImageSync);
+#endif
         VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence));
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
         frame.lastSubmitIndex = m_submitCounter;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        CommitSharedImageSync(sharedImageSync);
+        PublishSharedImageReads();
+#endif
         frame.isCommandRecording = false;
         frame.hasCommandBufferRecorded = false;
         frame.hasPreCommandBufferRecorded = false;
@@ -15380,6 +15412,7 @@ void main() {
         // 1.1 this device is created at, and are enabled too when advertised (the spike's set).
         m_wireAhbImport = false;
         m_wireGetAhbProperties = nullptr;
+        m_sharedImageSyncFd = false;
 #if defined(__ANDROID__)
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
@@ -15395,6 +15428,37 @@ void main() {
                 if (IsExtensionSupported(availableExtensions, name))
                     EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, name);
             }
+            // Shared-image fences (WireSharedImage.inc) cross sessions as sync_files, which this
+            // device waits on and signals through SYNC_FD binary semaphores - imported for a wait,
+            // exported for a signal. Both directions, or the CPU fallback.
+            if (IsExtensionSupported(availableExtensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+                auto getExternalSemaphoreProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
+                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphoreProperties"));
+                if (getExternalSemaphoreProperties == nullptr) {
+                    getExternalSemaphoreProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
+                        vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR"));
+                }
+                VkExternalSemaphoreProperties properties{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
+                if (getExternalSemaphoreProperties != nullptr) {
+                    VkPhysicalDeviceExternalSemaphoreInfo query{
+                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO};
+                    query.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+                    getExternalSemaphoreProperties(m_physicalDevice.handle, &query, &properties);
+                }
+                constexpr VkExternalSemaphoreFeatureFlags both =
+                    VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT | VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT;
+                if ((properties.externalSemaphoreFeatures & both) == both) {
+                    m_sharedImageSyncFd = true;
+                    for (const char* name : {VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+                                             VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME}) {
+                        if (IsExtensionSupported(availableExtensions, name))
+                            EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, name);
+                    }
+                }
+            }
+            MGLOG_I("DirectVulkan: shared-image fences %s",
+                    m_sharedImageSyncFd ? "wait and signal on the GPU (SYNC_FD semaphores)"
+                                        : "are waited for on the CPU (no SYNC_FD semaphore import and export)");
         }
 #endif
 #endif
@@ -15960,6 +16024,17 @@ void main() {
             m_wireGetAhbProperties =
                 reinterpret_cast<void*>(vkGetDeviceProcAddr(m_device, "vkGetAndroidHardwareBufferPropertiesANDROID"));
             if (m_wireGetAhbProperties == nullptr) m_wireAhbImport = false;
+        }
+        if (m_sharedImageSyncFd) {
+            m_importSemaphoreFd =
+                reinterpret_cast<PFN_vkImportSemaphoreFdKHR>(vkGetDeviceProcAddr(m_device, "vkImportSemaphoreFdKHR"));
+            m_getSemaphoreFd =
+                reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(vkGetDeviceProcAddr(m_device, "vkGetSemaphoreFdKHR"));
+            if (m_importSemaphoreFd == nullptr || m_getSemaphoreFd == nullptr) {
+                MGLOG_W("DirectVulkan: VK_KHR_external_semaphore_fd is missing an entry point; shared-image fences "
+                        "are waited for on the CPU");
+                m_sharedImageSyncFd = false;
+            }
         }
 #endif
 

@@ -3195,7 +3195,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     // preparing the texture would decline a storage-less one and lose the pass.
                     if (storage && WireShaderImageNamesNoTexel(*m_textureManager, state.BoundShaderImages[unit]))
                         continue;
-                    if (!m_textureManager->SyncTextureResourceByHandle(handle, false, storage)) return false;
+                    const auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
+                    if (resource == nullptr) return false;
+                    // Another session writes it: the renderer acquires it before this use.
+                    if (resource->sharedImageId != 0) m_textureManager->NoteSharedImageUse(*resource);
                 }
             }
         }

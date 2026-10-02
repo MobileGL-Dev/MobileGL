@@ -240,6 +240,9 @@
             MGL_WIRE_DECLINE_AT(TextureResourcesUnprepared, "a sampled/storage image could not be made ready; see the Tex* tally");
             return false;
         }
+        // Shared images another session writes: acquired ahead of the recording that samples them
+        // (WireSharedImage.inc).
+        AcquireNotedSharedImages();
         // Lazy image uploads/promotions can submit the old recording. Resolve
         // ALL attachments before descriptor binding captures the current cmd.
         for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
@@ -776,6 +779,7 @@
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
+        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.inc)
         const auto pipeline = GetOrCreateComputePipeline(programObj);
         if (!pipeline) {
             MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");
@@ -847,6 +851,7 @@
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
+        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.inc)
         const auto pipeline = GetOrCreateComputePipeline(programObj);
         if (!pipeline) {
             MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");

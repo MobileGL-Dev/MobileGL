@@ -42,7 +42,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
         // Shared images: a GL blit of default framebuffer 0 into a renderbuffer whose storage is
-        // the image's EGLImage, then a wait on its fence (DirectGLES.h, SharedImageImpl).
+        // the image's EGLImage, ordered after the image's pending reads and published as a native
+        // fence without a CPU wait (DirectGLES.h, SharedImageImpl).
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;

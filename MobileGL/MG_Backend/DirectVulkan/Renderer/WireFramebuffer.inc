@@ -160,6 +160,8 @@
         if (MG_Pipe::MGPipeHandleIsNull(out.storage)) MagmaWireFatal("framebuffer-view-record");
         auto* resource = m_textureManager->SyncTextureResourceByHandle(out.storage, renderbuffer);
         if (!resource) MagmaWireFatal("framebuffer-resource");
+        // Another session writes it: acquired (WireSharedImage.inc) before the layout is read below.
+        if (resource->sharedImageId != 0) AcquireSharedImage(*resource);
         out.image = resource->image;
         out.format = viewFormat != VK_FORMAT_UNDEFINED ? viewFormat : resource->format;
         out.extent = {std::max(resource->extent.width >> level, 1u),

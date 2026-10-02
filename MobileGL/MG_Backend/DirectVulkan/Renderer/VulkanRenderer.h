@@ -24,6 +24,7 @@
 #include "VkTimerQueryManager.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include "WireRenderPassCompatibility.h"
+#include <MG_Remote/Server/SharedImageRegistry.h>
 #endif
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
@@ -181,9 +182,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool GetWireAhbImport(WireAhbImport& out) const;
         // SHARED IMAGES (BackendObject::BlitDefaultFramebufferToSharedImage): the active surface
         // target's default framebuffer, copied into `image` top row first and scaled to its
-        // extent. Returns once the copy completed on the GPU. False (logged) when it cannot be
-        // done here: no AHardwareBuffer import, a quarter-turned surface, an unblittable format.
+        // extent. Returns once the copy is submitted, with its fence published to the image
+        // (SharedImages::PublishWrite); waits for it on the CPU only on a device without sync_file
+        // export. False (logged) when it cannot be done here: no AHardwareBuffer import, a
+        // quarter-turned surface, an unblittable format.
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image);
+        // The reading side's per-use hook (WireSharedImage.inc): every shared-image texture the
+        // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
+        // acquired from the foreign family before it, when it moved or is not held.
+        void AcquireNotedSharedImages() {
+            if (m_textureManager && m_textureManager->HasNotedSharedImageUses()) AcquireNotedSharedImagesSlow();
+        }
+        // One shared-image texture, before a use: a new write generation, or an image released at
+        // the last frame boundary, is acquired here - an ownership barrier recorded ahead of the
+        // use, the write's fence a wait of the submission carrying it - and noted as read.
+        void AcquireSharedImage(VkTextureManager::TextureResource& resource);
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
@@ -649,13 +662,75 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* m_wireGetAhbProperties = nullptr;
         // Shared images this session presents into, imported once each and keyed by the image's
         // id (monotonic, never reused). `owner` watches the registry's image: an entry whose image
-        // died is dropped at the next present, every earlier present having completed.
+        // died is dropped at a later present once `lastSubmit`, its last copy, has completed.
         struct SharedImagePresentTarget {
             VkTextureManager::ImportedSharedImage image;
             WeakPtr<const void> owner;
+            Uint64 lastSubmit = 0;
         };
         UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
         void DestroySharedImagePresentTargets(Bool onlyDead);
+
+        // SHARED-IMAGE SYNCHRONISATION (WireSharedImage.inc). The sync_file fences other sessions
+        // publish become binary semaphores: a temporary SYNC_FD import is a WAIT, an exportable
+        // semaphore a SIGNAL, of the next frame submission - whichever of SubmitPendingCommandBuffer
+        // and Present's submit comes first, which is the one carrying what was recorded since.
+        // Each semaphore is recycled once the submission that used it has completed.
+        // m_sharedImageSyncFd: the device imports and exports SYNC_FD binary semaphores; without
+        // it the waits happen on the CPU and nothing is exported (see WireSharedImage.inc).
+        Bool m_sharedImageSyncFd = false;
+        PFN_vkImportSemaphoreFdKHR m_importSemaphoreFd = nullptr;
+        PFN_vkGetSemaphoreFdKHR m_getSemaphoreFd = nullptr;
+        struct SharedImageWait {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            VkPipelineStageFlags stages = 0;
+        };
+        Vector<SharedImageWait> m_sharedImageWaits;                // staged for the next submission
+        VkSemaphore m_sharedImageSignal = VK_NULL_HANDLE;          // staged for the next submission
+        VkSemaphore m_sharedImageSignalSubmitted = VK_NULL_HANDLE; // the last one submitted, to export
+        struct SharedImageSemaphoreInFlight {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            Uint64 submitIndex = 0;
+            Bool exportable = false;
+            Bool exported = false; // a signal whose sync_file was taken (which unsignals it)
+        };
+        Vector<SharedImageSemaphoreInFlight> m_sharedImageSemaphoresInFlight; // submit order
+        Vector<VkSemaphore> m_freeSharedImageWaitSemaphores;
+        Vector<VkSemaphore> m_freeSharedImageSignalSemaphores;
+        // The reading side, per session: the shared-image textures this frame holds (acquired, not
+        // yet released; keyed as in VkTextureManager's handle map, with the submission that carries
+        // the acquire), and the frame's ReadTracker, published at Present.
+        struct SharedImageHold {
+            Uint64 key = 0;
+            Uint64 acquireSubmit = 0;
+        };
+        Vector<SharedImageHold> m_sharedImagesHeld;
+        MG_Remote::Server::SharedImages::ReadTracker m_sharedImageReads;
+        Vector<Uint64> m_sharedImageUseScratch;
+        // What one vkQueueSubmit carries beyond its own semaphores (AttachSharedImageSync).
+        struct SharedImageSubmitSync {
+            Bool attached = false;
+            Vector<VkSemaphore> waits;
+            Vector<VkPipelineStageFlags> stages;
+            Vector<VkSemaphore> signals;
+        };
+        void AttachSharedImageSync(VkSubmitInfo& info, SharedImageSubmitSync& storage);
+        // After the submission `storage` was attached to was submitted and registered.
+        void CommitSharedImageSync(const SharedImageSubmitSync& storage);
+        // Takes ownership of `fence` (a sync_file; -1 = nothing to wait for).
+        void StageSharedImageWait(int fence, VkPipelineStageFlags stages);
+        VkSemaphore TakeSharedImageSemaphore(Bool exportable);
+        // The submitted signal's sync_file (-1: it has already signaled). False: not exported.
+        Bool ExportSharedImageSignal(VkSemaphore semaphore, int& fence);
+        void RecycleSharedImageSemaphores(Uint64 completedSubmit);
+        void DestroySharedImageSync();
+        void AcquireNotedSharedImagesSlow();
+        // The reading side's frame boundary: release every held image back to the foreign family
+        // in the open recording, and - after the submission carrying it - publish its fence.
+        void ReleaseHeldSharedImages();
+        void PublishSharedImageReads();
+        // A frame dropped unsubmitted (Present with no usable swapchain).
+        void AbandonSharedImageReads();
         // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
         // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
         void ArmWireDepthResolveOrder();
