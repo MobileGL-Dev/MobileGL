@@ -645,6 +645,21 @@ TEST_F(RenderStateTest, TheFirstScissorWriteBumpsTheVersionEvenWhenTheValueDoesN
 // were absent too, which is what KHR-GL4x.tessellation_shader.single.
 // default_values_of_context_wide_properties dies on.
 
+// GL 4.6 core table 23.24 / ES 3.2 table 21.13: GL_COLOR_CLEAR_VALUE starts at (0, 0, 0, 0). An
+// opaque-black default made every glClear of an application that relies on the initial value -
+// a layer that caches GL state and skips the redundant glClearColor(0, 0, 0, 0) - write alpha 1,
+// so offscreen layers meant to be transparent composited as solid black squares.
+TEST_F(RenderStateTest, ClearColorStartsAtTransparentBlack) {
+    const SharedPtr<MG_State::GLState::GLContext> previous = MG_State::pGLContext;
+    MG_State::pGLContext = MakeShared<MG_State::GLState::GLContext>();
+    GLfloat clear[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    MG_Impl::GLImpl::GetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+    const GLenum error = MG_Impl::GLImpl::GetError();
+    MG_State::pGLContext = previous;
+    EXPECT_EQ(error, GL_NO_ERROR);
+    for (const GLfloat channel : clear) EXPECT_FLOAT_EQ(channel, 0.0f);
+}
+
 TEST_F(RenderStateTest, PatchDefaultLevelsStartAtTheGLDefault) {
     GLfloat outer[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
     MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);

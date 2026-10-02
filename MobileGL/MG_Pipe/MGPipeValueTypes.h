@@ -304,8 +304,10 @@ namespace MobileGL {
         Bool DepthClampEnabled = false;
         Bool TextureCubeMapSeamlessEnabled = false;
 
-        // Clear State
-        FloatVec4 ClearColor = FloatVec4(0.0f, 0.0f, 0.0f, 1.0f);
+        // Clear State. GL's initial clear colour is (0, 0, 0, 0) (GL 4.6 core table 23.24): an
+        // application that never calls glClearColor - or caches it and skips the redundant call -
+        // clears to transparent, and offscreen layers depend on it.
+        FloatVec4 ClearColor = FloatVec4(0.0f, 0.0f, 0.0f, 0.0f);
         Float ClearDepth = 1.0f;
         Uint32 ClearStencil = 0;
         FloatVec4 BlendColor = FloatVec4(0.0f, 0.0f, 0.0f, 0.0f);
