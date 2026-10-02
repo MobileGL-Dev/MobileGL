@@ -288,4 +288,47 @@ namespace {
         EXPECT_EQ(table.BucketCount(), 0u);
     }
 
+    // AN OBJECT'S DEATH IS ITS OWN SESSION'S. Every client numbers its objects with its own
+    // allocator, so the same {slot, gen} is live in other sessions at the same time and names
+    // their objects. The object_death release used to walk every holder of the kind: a client
+    // deleting a texture released the compositor's twin with the same handle - its driver
+    // texture was deleted while it was still drawn from (the lock screen exiting turned the
+    // desktop's windows to noise).
+    TEST_F(TwinOwnershipTest, AnObjectDeathReleasesOnlyItsOwnSessionsTwins) {
+        RegistryShapedTable table;
+        const P::MGPipeHandle handle{23u, 1u};
+        const auto mint = [&](Uint64 session, Uint64 group, Uint64 stamp) {
+            BindKey(session, group);
+            MobileGL::SharedPtr<Twin>* slot = table.GetOrCreateByHandle(handle);
+            ASSERT_NE(slot, nullptr);
+            *slot = MobileGL::MakeShared<Twin>();
+            (*slot)->SyncedSerial = stamp;
+        };
+        mint(kSessionA, kGroupOne, 1u);
+        mint(kSessionA, kGroupTwo, 2u);
+        mint(kSessionB, kGroupOne, 3u);
+
+        // Session A's client deleted its object; the death is applied on A's thread.
+        BindKey(kSessionA, kGroupOne);
+        EXPECT_TRUE(RegistryShapedTable::ReleaseByHandle(handle));
+        EXPECT_EQ(table.FindByHandle(handle), nullptr) << "the dying object's twin survived its death";
+        // A handle is unique across one client's share groups, so the session's other group lets go too.
+        BindKey(kSessionA, kGroupTwo);
+        EXPECT_EQ(table.FindByHandle(handle), nullptr);
+
+        BindKey(kSessionB, kGroupOne);
+        const MobileGL::SharedPtr<Twin>* const survivor = table.FindByHandle(handle);
+        ASSERT_NE(survivor, nullptr) << "another session's live object was released by this session's death";
+        EXPECT_EQ((*survivor)->SyncedSerial, 3u);
+
+        // A thread that belongs to no session (the in-library backend) keeps the process-wide walk.
+        BindKey(0, 0);
+        EXPECT_TRUE(RegistryShapedTable::ReleaseByHandle(handle));
+        BindKey(kSessionB, kGroupOne);
+        EXPECT_EQ(table.FindByHandle(handle), nullptr);
+
+        table.DropBucketsOfSession(kSessionA);
+        table.DropBucketsOfSession(kSessionB);
+    }
+
 } // namespace

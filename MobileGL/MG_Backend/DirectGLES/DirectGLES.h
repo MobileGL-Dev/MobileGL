@@ -293,6 +293,98 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // has gone.
     void DestroyNativeContextFor(Uint64 contextToken);
 
+    // ---- objects that belong to ONE native context ----
+    //
+    // Framebuffers, vertex arrays, transform feedbacks and queries are container objects: GL never
+    // shares them, not even between contexts of one share group, and every context numbers its own
+    // from 1. A process-wide scratch FBO id minted in one context and bound in another therefore
+    // names THAT context's own framebuffer - often an application's - and the scratch path's
+    // attach/scrub then rewires it onto staging textures. With one process serving several
+    // sessions (each with its own native contexts) that silently corrupted other clients' frames.
+    //
+    // The calling thread's current native context as a lifetime serial: assigned when the context
+    // is created and never reused (a recycled EGLContext address is a new serial). 0 when none was
+    // made current through MakeCurrent.
+    Uint64 CurrentNativeContextSerial();
+
+    class PerNativeContextBase {
+    public:
+        PerNativeContextBase();
+        PerNativeContextBase(const PerNativeContextBase&) = delete;
+        PerNativeContextBase& operator=(const PerNativeContextBase&) = delete;
+        // The context died, and its names with it: forget them (no GL call - there is no context
+        // left to make one in).
+        virtual void ForgetContext(Uint64 serial) = 0;
+
+    protected:
+        ~PerNativeContextBase();
+    };
+
+    // Called where a native context is destroyed.
+    void ForgetNativeContextObjects(Uint64 serial);
+    // Moves whenever any per-context entry is dropped; a thread's cached entry is valid while
+    // it has not moved.
+    Uint64 PerNativeContextEpoch();
+    void BumpPerNativeContextEpoch();
+
+    // One T per native context, created on first use from that context.
+    template <typename T>
+    class PerNativeContext final : public PerNativeContextBase {
+    public:
+        T& Current() {
+            const Uint64 serial = CurrentNativeContextSerial();
+            // The draw path asks for the same entry over and over from one thread: a one-entry
+            // thread-local cache, invalidated by any drop anywhere (rare).
+            thread_local CurrentCache cache;
+            const Uint64 epoch = PerNativeContextEpoch();
+            if (cache.Owner == this && cache.Serial == serial && cache.Epoch == epoch) return *cache.Entry;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            T& entry = m_bySerial[serial]; // node-based: the reference survives other contexts' inserts
+            cache = {this, serial, epoch, &entry};
+            return entry;
+        }
+        template <typename F>
+        void ForEach(F&& visit) {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            for (auto& entry : m_bySerial) visit(entry.second);
+        }
+        void Clear() {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            BumpPerNativeContextEpoch();
+            m_bySerial.clear();
+        }
+        void ForgetContext(Uint64 serial) override {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            BumpPerNativeContextEpoch();
+            m_bySerial.erase(serial);
+        }
+
+    private:
+        struct CurrentCache {
+            const PerNativeContext* Owner = nullptr;
+            Uint64 Serial = 0;
+            Uint64 Epoch = 0;
+            T* Entry = nullptr;
+        };
+        std::mutex m_mutex;
+        std::unordered_map<Uint64, T> m_bySerial;
+    };
+
+    // The GL name of one per-context object, spelled like the plain `GLuint` it replaces: it reads
+    // as the CURRENT context's name, `= 0` resets that one, and `&name` is where glGen* writes it.
+    class NativeContextName {
+    public:
+        operator GLuint() const { return m_names.Current(); }
+        NativeContextName& operator=(GLuint name) {
+            m_names.Current() = name;
+            return *this;
+        }
+        GLuint* operator&() { return &m_names.Current(); }
+
+    private:
+        mutable PerNativeContext<GLuint> m_names;
+    };
+
     // P14 S4. THE NATIVE HALF OF A CONTEXT SWITCH. `bind_context` moves which context the session's
     // records belong to; this makes the calling thread's native tuple follow it, binding the
     // session's current surface to the newly named context's native EGLContext. A no-op when the

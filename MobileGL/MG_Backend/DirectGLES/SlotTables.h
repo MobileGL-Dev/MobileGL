@@ -224,6 +224,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return found->second;
             }
             SharedPtr<Table> fresh = MakeShared<Table>();
+            fresh->SetOwnerSession(key.SessionKey);
             m_buckets.emplace(key, fresh);
             m_memoKey = key;
             m_memoTable = fresh;
@@ -458,6 +459,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ENTRIES and the memo; the links are the table's own and are never copied.
         BackendSlotTable() { LinkHolder(); }
         BackendSlotTable(const BackendSlotTable& other):
+            m_ownerSession(other.m_ownerSession),
             m_slots(other.m_slots),
             m_band(other.m_band),
             m_nullTwin(other.m_nullTwin),
@@ -466,6 +468,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             LinkHolder();
         }
         BackendSlotTable(BackendSlotTable&& other) noexcept:
+            m_ownerSession(other.m_ownerSession),
             m_slots(std::move(other.m_slots)),
             m_band(std::move(other.m_band)),
             m_nullTwin(std::move(other.m_nullTwin)),
@@ -500,6 +503,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return *this;
         }
         ~BackendSlotTable() { UnlinkHolder(); }
+
+        // The served session whose bucket this table is (SlotTableRegistry::Shared), 0 for a
+        // table that belongs to none (the process-wide registry on a sessionless thread, a
+        // fixture's copy of one).
+        void SetOwnerSession(Uint64 session) { m_ownerSession = session; }
+        Uint64 OwnerSession() const { return m_ownerSession; }
 
         // Resolve-or-create. The handle comes from the client allocator keyed on the frontend
         // object's lifetime id, so two calls for the same live object always land on the same
@@ -802,12 +811,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // double Free would be refused by generation anyway. Idempotent against the kind's
         // own delete opcode, exactly as the notice arm is: a twin the delete already released
         // fails ReleaseTwinAt's generation check and the walk moves on.
+        //
+        // ONE SESSION'S HOLDERS, WHEN THE DEATH IS ONE SESSION'S. A handle is numbered by its own
+        // client's allocator, so with several clients served by one process the same {slot, gen}
+        // names a live, unrelated object in every other session: walking every holder released
+        // THOSE twins too - a client deleting a texture (or exiting) deleted the compositor's
+        // driver texture with the same handle, and its windows sampled freed memory. On a thread
+        // that belongs to a session only that session's buckets answer; a sessionless thread
+        // (the in-library backend, a unit fixture) keeps the process-wide walk.
         static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
+            TwinKey key;
+            const Bool sessionScoped = CurrentTwinKey(&key) && key.SessionKey != 0;
             Bool released = false;
             for (BackendSlotTable* holder = s_firstHolder; holder != nullptr;) {
                 BackendSlotTable* const next = holder->m_nextHolder;
-                released = holder->ReleaseTwinAt(handle) || released;
+                if (!sessionScoped || holder->m_ownerSession == key.SessionKey) {
+                    released = holder->ReleaseTwinAt(handle) || released;
+                }
                 holder = next;
             }
             return released;
@@ -1012,6 +1033,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static inline BackendSlotTable* s_firstHolder = nullptr;
         BackendSlotTable* m_prevHolder = nullptr;
         BackendSlotTable* m_nextHolder = nullptr;
+        Uint64 m_ownerSession = 0;
 
         // Indexed by MGPipeHandle::Slot; [0] is the reserved slot and is never live.
         Vector<Entry> m_slots;

@@ -1083,14 +1083,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const char* label = "";
             };
 
-            PersistentRing g_uboRing{{}, {}, {}, kUboRingInitialBytes, kUboRingMaxBytes, 0, "Global-UBO ring"};
-            PersistentRing g_unpackRing{{},
-                                        {},
-                                        {},
-                                        kUnpackRingInitialBytes,
-                                        kUnpackRingMaxBytes,
-                                        kUnpackRingAlignment,
-                                        "Texture unpack ring"};
+            // THE RINGS ARE PER NATIVE CONTEXT. Their slots are reclaimed by frame marks recorded at
+            // Present, which say "everything this context wrote before its fence N is done once N is".
+            // One process-wide set used to be shared by every session's contexts: a fence from one
+            // context retired bytes another context's not-yet-executed copies still had to read
+            // (a glTexSubImage from the unpack ring is a deferred GPU read), and the next session's
+            // staging overwrote them - its pixels landed, at the wrong offsets, in the first one's
+            // textures. With one set per context, a context's bytes wait for that context's own
+            // fence. (The buffers themselves are shared objects; only who stages into them is split.)
             // Staging ring for app buffer updates whose destination store may still be
             // referenced by in-flight GPU work. Mali's glBufferSubData resolves that WAR
             // hazard by BLOCKING in the call (osup_sync_object_wait) until every
@@ -1099,13 +1099,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // chunks stream in). Staging the bytes here and issuing a
             // glCopyBufferSubData instead keeps the hazard on the GPU timeline where it
             // is just job ordering, and the CPU never waits.
-            PersistentRing g_uploadRing{{},
-                                        {},
-                                        {},
-                                        kUploadRingInitialBytes,
-                                        kUploadRingMaxBytes,
-                                        kUploadRingAlignment,
-                                        "Buffer upload ring"};
+            struct RingSet {
+                PersistentRing ubo{{}, {}, {}, kUboRingInitialBytes, kUboRingMaxBytes, 0, "Global-UBO ring"};
+                PersistentRing unpack{{},
+                                      {},
+                                      {},
+                                      kUnpackRingInitialBytes,
+                                      kUnpackRingMaxBytes,
+                                      kUnpackRingAlignment,
+                                      "Texture unpack ring"};
+                PersistentRing upload{{},
+                                      {},
+                                      {},
+                                      kUploadRingInitialBytes,
+                                      kUploadRingMaxBytes,
+                                      kUploadRingAlignment,
+                                      "Buffer upload ring"};
+                RingSet();
+                ~RingSet();
+                RingSet(const RingSet&) = delete;
+                RingSet& operator=(const RingSet&) = delete;
+            };
+
+            // A dead context's ring buffers: shared objects, so they outlive it; deleted at the next
+            // Present of any context of the same share-group generation.
+            struct OrphanRingBuffer {
+                Uint id = 0;
+                Uint contextGeneration = 0;
+            };
+            std::mutex g_orphanRingBuffersMutex;
+            Vector<OrphanRingBuffer>& OrphanRingBuffers() {
+                static auto* orphans = new Vector<OrphanRingBuffer>();
+                return *orphans;
+            }
+
+            // Each set's generations start in a range of their own: a per-program slot cache keyed
+            // by (generation, offset) must never take one context's ring for another's.
+            std::atomic<Uint32> g_ringGenerationBases{0};
+
+            RingSet::RingSet() {
+                const Uint32 base = (g_ringGenerationBases.fetch_add(1, std::memory_order_relaxed) + 1) << 12;
+                ubo.store.generation = base;
+                unpack.store.generation = base;
+                upload.store.generation = base;
+            }
+
+            RingSet::~RingSet() {
+                const std::lock_guard<std::mutex> lock(g_orphanRingBuffersMutex);
+                for (const PersistentRing* ring : {&ubo, &unpack, &upload}) {
+                    if (ring->store.id != 0) {
+                        OrphanRingBuffers().push_back({ring->store.id, ring->store.contextGeneration});
+                    }
+                    for (const auto& retired : ring->retired) {
+                        if (retired.id != 0) OrphanRingBuffers().push_back({retired.id, retired.contextGeneration});
+                    }
+                }
+            }
+
+            DirectGLES::PerNativeContext<RingSet> g_ringSets;
+            PersistentRing& UboRing() { return g_ringSets.Current().ubo; }
+            PersistentRing& UnpackRing() { return g_ringSets.Current().unpack; }
+            PersistentRing& UploadRing() { return g_ringSets.Current().upload; }
 
             // The ES context the ring's id/map belonged to is gone (or was never
             // seen): drop every handle without GL calls and re-arm creation. The
@@ -1383,7 +1437,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool UploadRingUsableNow() {
                 if (MG_Config::Features.EsprytDisableUploadRing) return false;
                 if (!g_GLESFuncs.glCopyBufferSubData) return false;
-                return RingAvailable(g_uploadRing);
+                return RingAvailable(UploadRing());
             }
 
             // A partial range below this goes through the staging ring instead of a
@@ -1532,9 +1586,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(g_uploadRing, size, ringOffset)) {
-                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, hostBase + start, size);
-                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        RingAllocate(UploadRing(), size, ringOffset)) {
+                        Memcpy(UploadRing().store.mappedPtr + ringOffset, hostBase + start, size);
+                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
@@ -1611,9 +1665,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(g_uploadRing, size, ringOffset)) {
-                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, write.bytes.data(), size);
-                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        RingAllocate(UploadRing(), size, ringOffset)) {
+                        Memcpy(UploadRing().store.mappedPtr + ringOffset, write.bytes.data(), size);
+                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)write.offset,
@@ -1714,7 +1768,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool UploadRingUsableNow() {
                 if (MG_Config::Features.EsprytDisableUploadRing) return false;
                 if (!g_GLESFuncs.glCopyBufferSubData) return false;
-                return RingAvailable(g_uploadRing);
+                return RingAvailable(UploadRing());
             }
 
             // A partial range below this goes through the staging ring instead of a
@@ -1820,9 +1874,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(g_uploadRing, size, ringOffset)) {
-                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, bufferObject.MappedData() + start, size);
-                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        RingAllocate(UploadRing(), size, ringOffset)) {
+                        Memcpy(UploadRing().store.mappedPtr + ringOffset, bufferObject.MappedData() + start, size);
+                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
@@ -1866,9 +1920,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(g_uploadRing, size, ringOffset)) {
-                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, write.bytes.data(), size);
-                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        RingAllocate(UploadRing(), size, ringOffset)) {
+                        Memcpy(UploadRing().store.mappedPtr + ringOffset, write.bytes.data(), size);
+                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
                         BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
                         g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
                                                         (GLintptr)ringOffset, (GLintptr)write.offset,
@@ -3895,8 +3949,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             InvalidatePixelBufferBindingCaches();
             // The rings' ids and persistent maps died with the context; drop the
             // handles (no GL) and let the next draw / texture upload recreate them.
-            ResetRingForNewContext(g_uboRing);
-            ResetRingForNewContext(g_unpackRing);
+            ResetRingForNewContext(UboRing());
+            ResetRingForNewContext(UnpackRing());
 #if MOBILEGL_PIPE_PUSH
             // R-11's server copies die with the context for the same reason the rings' ids do:
             // the resource twins they are keyed by are about to be rebuilt against a new
@@ -4905,9 +4959,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return true;
             }
 
+            void DeleteOrphanRingBuffers() {
+                const std::lock_guard<std::mutex> lock(g_orphanRingBuffersMutex);
+                auto& orphans = OrphanRingBuffers();
+                if (orphans.empty()) return;
+                for (const OrphanRingBuffer& orphan : orphans) {
+                    // A buffer of a share group that is gone was reclaimed with it.
+                    if (orphan.contextGeneration != g_bufferContextGeneration) continue;
+                    ScrubBufferBindingShadowsForId(orphan.id);
+                    g_GLESFuncs.glDeleteBuffers(1, &orphan.id);
+                }
+                orphans.clear();
+            }
+
             // Present()-time upkeep shared by both rings.
             void RingOnPresent(PersistentRing& ring) {
                 if (!CanTouchGLNow()) return;
+                DeleteOrphanRingBuffers();
 
                 // Delete grown-away stores the GPU is provably done with.
                 const Uint64 completed = DirectGLES::CompletedFrameSerial();
@@ -4952,36 +5020,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool UboRingAvailable() {
             if (MG_Config::Features.EsprytDisableUboRing) return false;
-            return RingAvailable(g_uboRing);
+            return RingAvailable(UboRing());
         }
 
-        Bool UboRingAllocate(SizeT size, SizeT& outOffset) { return RingAllocate(g_uboRing, size, outOffset); }
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset) { return RingAllocate(UboRing(), size, outOffset); }
 
-        void* UboRingMappedPtr() { return g_uboRing.store.mappedPtr; }
-        Uint UboRingBufferId() { return g_uboRing.store.id; }
-        Uint32 UboRingGeneration() { return g_uboRing.store.generation; }
+        void* UboRingMappedPtr() { return UboRing().store.mappedPtr; }
+        Uint UboRingBufferId() { return UboRing().store.id; }
+        Uint32 UboRingGeneration() { return UboRing().store.generation; }
 
-        void UboRingOnPresent() { RingOnPresent(g_uboRing); }
+        void UboRingOnPresent() { RingOnPresent(UboRing()); }
 
         Bool UnpackRingAvailable() {
             if (MG_Config::Features.EsprytDisableUnpackRing) return false;
-            return RingAvailable(g_unpackRing);
+            return RingAvailable(UnpackRing());
         }
 
         Bool UnpackRingAllocate(SizeT size, SizeT& outOffset) {
             // A request the ring could never satisfy even empty would otherwise walk
             // the whole grow/drain ladder before failing.
             if (size > kUnpackRingMaxBytes) return false;
-            return RingAllocate(g_unpackRing, size, outOffset);
+            return RingAllocate(UnpackRing(), size, outOffset);
         }
 
-        void* UnpackRingMappedPtr() { return g_unpackRing.store.mappedPtr; }
-        Uint UnpackRingBufferId() { return g_unpackRing.store.id; }
+        void* UnpackRingMappedPtr() { return UnpackRing().store.mappedPtr; }
+        Uint UnpackRingBufferId() { return UnpackRing().store.id; }
         SizeT UnpackRingMaxBytes() { return kUnpackRingMaxBytes; }
 
-        void UnpackRingOnPresent() { RingOnPresent(g_unpackRing); }
+        void UnpackRingOnPresent() { RingOnPresent(UnpackRing()); }
 
-        void UploadRingOnPresent() { RingOnPresent(g_uploadRing); }
+        void UploadRingOnPresent() { RingOnPresent(UploadRing()); }
     } // namespace BufferImpl
 
 #if MOBILEGL_PIPE_PUSH
@@ -12891,11 +12959,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace ScratchFBOImpl {
         namespace {
-            ScratchFramebuffer g_tempFramebuffer;
-            ScratchFramebuffer g_blitReadFramebuffer;
-            ScratchFramebuffer g_blitDrawFramebuffer;
-            Uint g_completeTinyFBOId = 0;
-            Uint g_completeTinyRBOId = 0;
+            // ONE SET PER NATIVE CONTEXT: a framebuffer belongs to the context that made it
+            // (DirectGLES.h, PerNativeContext), and so does the attachment shadow kept for it.
+            struct ScratchSet {
+                ScratchFramebuffer temp;
+                ScratchFramebuffer blitRead;
+                ScratchFramebuffer blitDraw;
+                Uint completeTinyFBOId = 0;
+                Uint completeTinyRBOId = 0;
+            };
+            PerNativeContext<ScratchSet> g_scratchSets;
 
             // Detach every point the shadow no longer vouches for. Used when the
             // shadow is unknown (context reset, texture id deleted while attached).
@@ -12950,13 +13023,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } // namespace
 
         ScratchFramebuffer& TempFramebuffer() {
-            return g_tempFramebuffer;
+            return g_scratchSets.Current().temp;
         }
         ScratchFramebuffer& BlitReadFramebuffer() {
-            return g_blitReadFramebuffer;
+            return g_scratchSets.Current().blitRead;
         }
         ScratchFramebuffer& BlitDrawFramebuffer() {
-            return g_blitDrawFramebuffer;
+            return g_scratchSets.Current().blitDraw;
         }
 
         Uint EnsureId(ScratchFramebuffer& fb) {
@@ -13125,6 +13198,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Uint EnsureCompleteTinyFramebufferId() {
+            ScratchSet& set = g_scratchSets.Current();
+            Uint& g_completeTinyFBOId = set.completeTinyFBOId;
+            Uint& g_completeTinyRBOId = set.completeTinyRBOId;
             if (g_completeTinyFBOId != 0) {
                 return g_completeTinyFBOId;
             }
@@ -13152,19 +13228,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (textureId == 0) {
                 return;
             }
-            for (ScratchFramebuffer* fb : {&g_tempFramebuffer, &g_blitReadFramebuffer, &g_blitDrawFramebuffer}) {
-                if (fb->colorTex == textureId || fb->depthTex == textureId) {
-                    fb->attachmentsKnown = false;
+            // Textures ARE shared, so the deleted id may sit in any context's scratch FBO.
+            g_scratchSets.ForEach([textureId](ScratchSet& set) {
+                for (ScratchFramebuffer* fb : {&set.temp, &set.blitRead, &set.blitDraw}) {
+                    if (fb->colorTex == textureId || fb->depthTex == textureId) {
+                        fb->attachmentsKnown = false;
+                    }
                 }
-            }
+            });
         }
 
         void OnBackendContextDestroyed() {
-            g_tempFramebuffer = {};
-            g_blitReadFramebuffer = {};
-            g_blitDrawFramebuffer = {};
-            g_completeTinyFBOId = 0;
-            g_completeTinyRBOId = 0;
+            g_scratchSets.Clear();
         }
     } // namespace ScratchFBOImpl
 

@@ -10169,7 +10169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // that second one is single-sample on both sides, where ES does allow conversion.
     static Bool ResolveThenBlit(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                 GLint dstX1, GLint dstY1, GLenum filter) {
-        static Uint s_resolveFramebuffer = 0;
+        static NativeContextName s_resolveFramebuffer; // per context: a framebuffer is never shared
         static Uint s_resolveRenderbuffer = 0;
         static GLenum s_resolveFormat = 0;
         static GLsizei s_resolveWidth = 0;
@@ -10204,8 +10204,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (s_resolveFramebuffer == 0) {
             g_GLESFuncs.glGenFramebuffers(1, &s_resolveFramebuffer);
+            if (s_resolveFramebuffer == 0) return false;
+        }
+        if (s_resolveRenderbuffer == 0) {
             g_GLESFuncs.glGenRenderbuffers(1, &s_resolveRenderbuffer);
-            if (s_resolveFramebuffer == 0 || s_resolveRenderbuffer == 0) return false;
+            if (s_resolveRenderbuffer == 0) return false;
             s_resolveFormat = 0;
         }
 
@@ -10485,12 +10488,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace ReplicateBlitImpl {
         static Uint s_contextGeneration = ~0u;
-        static GLuint s_framebuffer = 0;
+        static NativeContextName s_framebuffer; // per context, as is the vertex array below
         static GLuint s_texture = 0;
         static GLenum s_textureFormat = 0;
         static GLsizei s_textureWidth = 0;
         static GLsizei s_textureHeight = 0;
-        static GLuint s_vertexArray = 0;
+        static NativeContextName s_vertexArray;
         static GLuint s_depthProgram = 0;
         static GLuint s_stencilProgram = 0;
         static GLint s_depthUvTransform = -1;
@@ -14138,11 +14141,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // caller. No flip anywhere.
     namespace DepthStencilSamplingReadImpl {
         static Uint s_contextGeneration = ~0u;
-        static GLuint s_colorFramebuffer = 0;
+        static NativeContextName s_colorFramebuffer; // per context, as are the vertex array and the
+                                                     // slots' framebuffers below
         static GLuint s_colorTexture = 0;
         static GLsizei s_colorWidth = 0;
         static GLsizei s_colorHeight = 0;
-        static GLuint s_vertexArray = 0;
+        static NativeContextName s_vertexArray;
         static GLuint s_depthProgram = 0;
         static GLuint s_stencilProgram = 0;
         static GLint s_depthUvTransform = -1;
@@ -14162,7 +14166,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // other aspect attaches its own (differently formatted) texture to its own point
             // and the framebuffer is then incomplete - which reads as "no candidate format
             // worked" and writes nothing at all.
-            GLuint framebuffer = 0;
             GLuint texture = 0;
             GLenum format = 0;
             GLsizei width = 0;
@@ -14173,6 +14176,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum defaultFramebufferFormat = 0;
         };
         static StageSlot s_slots[2]; // [0] depth, [1] stencil
+        // Each slot's own framebuffer (see StageSlot), one per native context.
+        static NativeContextName s_slotFramebuffers[2];
+        static NativeContextName& SlotFramebuffer(const StageSlot& slot) { return s_slotFramebuffers[&slot - s_slots]; }
 
         // `precision highp int` is not decoration: ESSL 3.00 defaults integers to mediump in
         // the fragment language, which is allowed to be 16 bits - it would saw the top half
@@ -14214,6 +14220,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 s_programsFailed = false;
                 s_slots[0] = StageSlot{};
                 s_slots[1] = StageSlot{};
+                s_slotFramebuffers[0] = 0;
+                s_slotFramebuffers[1] = 0;
                 s_contextGeneration = g_backendContextGeneration;
             }
             if (s_programsFailed) {
@@ -14233,10 +14241,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 s_depthUvTransform = g_GLESFuncs.glGetUniformLocation(s_depthProgram, "uUvTransform");
                 s_stencilUvTransform = g_GLESFuncs.glGetUniformLocation(s_stencilProgram, "uUvTransform");
             }
-            for (StageSlot& slot : s_slots) {
-                if (slot.framebuffer == 0) {
-                    g_GLESFuncs.glGenFramebuffers(1, &slot.framebuffer);
-                    if (slot.framebuffer == 0) return false;
+            for (NativeContextName& framebuffer : s_slotFramebuffers) {
+                if (framebuffer == 0) {
+                    g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
+                    if (framebuffer == 0) return false;
                 }
             }
             if (s_colorFramebuffer == 0) {
@@ -14519,7 +14527,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             StageSlot& slot = s_slots[stencilAspect ? 1 : 0];
 
-            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, slot.framebuffer);
+            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, SlotFramebuffer(slot));
             if (!StageAspect(slot, candidates, stencilAspect, isDefault, x, y, width, height)) {
                 MGLOG_E_ONCE("ReadPixels: no ES-compatible scratch format for the %s source",
                         stencilAspect ? "stencil" : "depth");
@@ -16221,6 +16229,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint64 ContextToken = 0;
         Uint64 ShareGroupToken = 0;
         EGLContext Context = EGL_NO_CONTEXT;
+        // Context's lifetime serial (CurrentNativeContextSerial); a new one per eglCreateContext.
+        Uint64 Serial = 0;
         EGLConfig Config = nullptr;
         // The session surface this context draws to / reads from, as last made current for it.
         EGLSurface Draw = EGL_NO_SURFACE;
@@ -16330,7 +16340,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // And the surface it was made current with: a bind to the same context on a different
         // surface (one client context drawing to several windows) is a real switch.
         thread_local EGLSurface t_boundNativeDraw = EGL_NO_SURFACE;
+        // ...and that context's lifetime serial, the key of its container objects.
+        thread_local Uint64 t_boundNativeSerial = 0;
+        std::atomic<Uint64> g_nativeContextSerials{0};
+
+        std::mutex& PerNativeContextRegistryMutex() {
+            static auto* mutex = new std::mutex();
+            return *mutex;
+        }
+        Vector<PerNativeContextBase*>& PerNativeContextRegistry() {
+            static auto* registry = new Vector<PerNativeContextBase*>();
+            return *registry;
+        }
     } // namespace
+
+    Uint64 CurrentNativeContextSerial() { return t_boundNativeSerial; }
+
+    namespace {
+        std::atomic<Uint64> g_perNativeContextEpoch{1};
+    }
+    Uint64 PerNativeContextEpoch() { return g_perNativeContextEpoch.load(std::memory_order_acquire); }
+    void BumpPerNativeContextEpoch() { g_perNativeContextEpoch.fetch_add(1, std::memory_order_acq_rel); }
+
+    PerNativeContextBase::PerNativeContextBase() {
+        const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
+        PerNativeContextRegistry().push_back(this);
+    }
+
+    PerNativeContextBase::~PerNativeContextBase() {
+        const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
+        auto& registry = PerNativeContextRegistry();
+        registry.erase(std::remove(registry.begin(), registry.end(), this), registry.end());
+    }
+
+    void ForgetNativeContextObjects(Uint64 serial) {
+        if (serial == 0) return;
+        const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
+        for (PerNativeContextBase* holder : PerNativeContextRegistry()) holder->ForgetContext(serial);
+    }
 
     static NativeSessionState& AcquireNativeSession(Uint64 sessionKey) {
         for (auto* session : NativeSessions()) {
@@ -16910,6 +16957,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              EGL_NONE};
             tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, contextAttribs);
             if (tuple.Context != EGL_NO_CONTEXT) {
+                tuple.Serial = g_nativeContextSerials.fetch_add(1, std::memory_order_relaxed) + 1;
                 ++g_displayUsers;
                 return true;
             }
@@ -16918,6 +16966,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
         tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, legacyContextAttribs);
         if (tuple.Context == EGL_NO_CONTEXT) return false;
+        tuple.Serial = g_nativeContextSerials.fetch_add(1, std::memory_order_relaxed) + 1;
         ++g_displayUsers;
         return true;
     }
@@ -16963,6 +17012,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             g_EGLFuncs.eglDestroyContext(g_Display, tuple->Context);
         }
+        // This thread no longer has it current either way; a context created later at the same
+        // address must not read as "already bound".
+        if (t_boundNativeContext == tuple->Context) {
+            t_boundNativeContext = EGL_NO_CONTEXT;
+            t_boundNativeDraw = EGL_NO_SURFACE;
+            t_boundNativeSerial = 0;
+        }
+        ForgetNativeContextObjects(tuple->Serial);
+        tuple->Serial = 0;
         tuple->Context = EGL_NO_CONTEXT;
         tuple->Config = nullptr;
         tuple->Draw = EGL_NO_SURFACE;
@@ -17241,7 +17299,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the allocate path.
         std::atomic<Uint64> g_currentFrameSerial{0};
         std::atomic<Uint64> g_completedFrameSerial{0};
-        constexpr int kFrameFenceRingDepth = 4;
+        // Deep enough for several sessions presenting in turn: a slot is only reused once its
+        // fence has signaled (InsertFrameFence waits for it rather than dropping it).
+        constexpr int kFrameFenceRingDepth = 32;
         struct FrameFence {
             GLsync sync = nullptr;
             Uint contextGeneration = 0;
@@ -17331,6 +17391,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         InvalidateEglVerifiedStamp();
         t_boundNativeContext = tuple.Context;
         t_boundNativeDraw = session.Draw;
+        t_boundNativeSerial = tuple.Serial;
         g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
@@ -17375,6 +17436,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         InvalidateEglVerifiedStamp();
         t_boundNativeContext = EGL_NO_CONTEXT;
         t_boundNativeDraw = EGL_NO_SURFACE;
+        t_boundNativeSerial = 0;
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
@@ -17800,31 +17862,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Uint64 CurrentFrameSerial() { return g_currentFrameSerial.load(std::memory_order_relaxed); }
     Uint64 CompletedFrameSerial() { return g_completedFrameSerial.load(std::memory_order_relaxed); }
 
+    namespace {
+        // THE WATERMARK IS CONTIGUOUS. Fences signal in submission order only within ONE context,
+        // and the serials are handed out to every native context of every session in turn, so the
+        // highest signaled serial says nothing about an older fence of another context still
+        // pending. A serial is complete when no live fence at or below it is pending.
+        void PollFrameFences() {
+            if (!g_GLESFuncs.glGetSynciv) return;
+            Uint64 lowestPending = ~Uint64{0};
+            for (FrameFence& slot : g_frameFenceRing) {
+                if (!slot.sync) continue;
+                if (slot.contextGeneration != g_syncContextGeneration) {
+                    slot.sync = nullptr; // its context reclaimed it, and its work is over
+                    continue;
+                }
+                GLint status = GL_SIGNALED;
+                GLsizei length = 0;
+                g_GLESFuncs.glGetSynciv(slot.sync, GL_SYNC_STATUS, 1, &length, &status);
+                if (status == GL_SIGNALED) {
+                    if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(slot.sync);
+                    slot.sync = nullptr;
+                } else if (slot.serial < lowestPending) {
+                    lowestPending = slot.serial;
+                }
+            }
+            const Uint64 completed =
+                lowestPending == ~Uint64{0} ? g_currentFrameSerial.load(std::memory_order_relaxed) : lowestPending - 1;
+            if (completed > g_completedFrameSerial.load(std::memory_order_relaxed)) {
+                g_completedFrameSerial.store(completed, std::memory_order_relaxed);
+            }
+        }
+
+        FrameFence* OldestPendingFrameFence() {
+            FrameFence* oldest = nullptr;
+            for (FrameFence& slot : g_frameFenceRing) {
+                if (!slot.sync || slot.contextGeneration != g_syncContextGeneration) continue;
+                if (!oldest || slot.serial < oldest->serial) oldest = &slot;
+            }
+            return oldest;
+        }
+    } // namespace
+
     Bool WaitForFrameSerialCompleted(Uint64 serial, Uint64 timeoutNs) {
         if (CompletedFrameSerial() >= serial) return true;
         if (!IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glClientWaitSync) return false;
-        // Fences signal in submission order, so the live fence with the SMALLEST
-        // serial at or past the target is the earliest event that proves the
-        // target frame retired. A recycled slot (GPU more than ring-depth frames
-        // behind) leaves no usable fence; report failure and let the caller pick
-        // its own fallback rather than draining the whole queue here.
-        FrameFence* best = nullptr;
-        for (FrameFence& slot : g_frameFenceRing) {
-            if (!slot.sync || slot.contextGeneration != g_syncContextGeneration) continue;
-            if (slot.serial < serial) continue;
-            if (!best || slot.serial < best->serial) best = &slot;
+        // Oldest pending fence first: the watermark can only pass a serial once every older fence
+        // (of any context) has signaled. Each fence was flushed when it was made (Present's swap),
+        // so waiting from this context needs no flush of the other.
+        for (int guard = 0; guard < kFrameFenceRingDepth + 1; ++guard) {
+            PollFrameFences();
+            if (CompletedFrameSerial() >= serial) return true;
+            FrameFence* oldest = OldestPendingFrameFence();
+            if (!oldest) return false;
+            const GLenum status = g_GLESFuncs.glClientWaitSync(oldest->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeoutNs);
+            if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) return false;
         }
-        if (!best) return false;
-        const GLenum status =
-            g_GLESFuncs.glClientWaitSync(best->sync, GL_SYNC_FLUSH_COMMANDS_BIT, timeoutNs);
-        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED) return false;
-        Uint64 completed = g_completedFrameSerial.load(std::memory_order_relaxed);
-        if (best->serial > completed) {
-            g_completedFrameSerial.store(best->serial, std::memory_order_relaxed);
-        }
-        if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(best->sync);
-        best->sync = nullptr;
-        return true;
+        PollFrameFences();
+        return CompletedFrameSerial() >= serial;
     }
 
     void Present() {
@@ -17835,8 +17929,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (canFence) {
             const Uint64 serial = g_currentFrameSerial.fetch_add(1, std::memory_order_relaxed) + 1;
             FrameFence& slot = g_frameFenceRing[serial % kFrameFenceRingDepth];
-            if (slot.sync && slot.contextGeneration == g_syncContextGeneration && g_GLESFuncs.glDeleteSync) {
-                g_GLESFuncs.glDeleteSync(slot.sync);
+            if (slot.sync && slot.contextGeneration == g_syncContextGeneration) {
+                // The slot's fence is a ring-depth of serials old and may be another context's:
+                // dropping it unsignaled would let the watermark pass work nobody waited for.
+                if (g_GLESFuncs.glClientWaitSync) {
+                    constexpr Uint64 kOldFenceWaitNs = 100ull * 1000 * 1000;
+                    (void)g_GLESFuncs.glClientWaitSync(slot.sync, GL_SYNC_FLUSH_COMMANDS_BIT, kOldFenceWaitNs);
+                }
+                if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(slot.sync);
             }
             slot = {g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0), g_syncContextGeneration, serial};
         }
@@ -17857,23 +17957,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
 
-        if (canFence && g_GLESFuncs.glGetSynciv) {
-            // Fences signal in submission order within one context, so the highest
-            // signaled serial is a valid contiguous completion watermark.
-            Uint64 completed = g_completedFrameSerial.load(std::memory_order_relaxed);
-            for (FrameFence& slot : g_frameFenceRing) {
-                if (!slot.sync || slot.contextGeneration != g_syncContextGeneration) continue;
-                GLint status = GL_SIGNALED;
-                GLsizei length = 0;
-                g_GLESFuncs.glGetSynciv(slot.sync, GL_SYNC_STATUS, 1, &length, &status);
-                if (status == GL_SIGNALED) {
-                    if (slot.serial > completed) completed = slot.serial;
-                    if (g_GLESFuncs.glDeleteSync) g_GLESFuncs.glDeleteSync(slot.sync);
-                    slot.sync = nullptr;
-                }
-            }
-            g_completedFrameSerial.store(completed, std::memory_order_relaxed);
-        }
+        if (canFence) PollFrameFences();
 
         // After the watermark advanced: retire grown-away ring stores and record the
         // frame's ring high-water marks for slot reclamation.
@@ -17969,8 +18053,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             t_boundNativeContext = EGL_NO_CONTEXT;
             t_boundNativeDraw = EGL_NO_SURFACE;
+            t_boundNativeSerial = 0;
             for (auto* tuple : NativeContexts()) {
                 if (tuple->SessionKey != sessionKey || tuple->Context == EGL_NO_CONTEXT) continue;
+                ForgetNativeContextObjects(tuple->Serial);
+                tuple->Serial = 0;
                 if (g_EGLFuncs.eglDestroyContext) g_EGLFuncs.eglDestroyContext(g_Display, tuple->Context);
                 tuple->Context = EGL_NO_CONTEXT;
                 tuple->Config = nullptr;
