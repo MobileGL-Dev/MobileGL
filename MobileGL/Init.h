@@ -26,7 +26,18 @@ namespace MobileGL {
 
     namespace MG_ConfigLoader {
         void Init();
+        // One setting resolved the way Init() resolves it - the environment, then the system
+        // configuration files (ConfigLoader.cpp) - for the few readers that must decide something
+        // before MobileGL initializes. False when neither names it.
+        Bool LookupSetting(const char* key, String& outValue);
     } // namespace MG_ConfigLoader
+
+    // Whether this process can be served right now. False only when MobileGL is configured to
+    // reach a server that is not there (or a split session already failed to come up), so a
+    // caller that can choose another implementation - the system's EGL/GLX/GBM loaders - should
+    // decline rather than hand out something that cannot draw. Cheap: once true it stays true
+    // until the library is torn down, and a probe is one non-blocking connect with a short bound.
+    Bool ImplementationAvailable();
 
     namespace MG_Backend {
         void Init();

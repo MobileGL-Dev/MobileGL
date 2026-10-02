@@ -100,6 +100,10 @@ MOBILEGL_EXPORT int mobilegl_shared_image_import(int fd, uint32_t width, uint32_
     return 0;
 }
 
+MOBILEGL_EXPORT int mobilegl_server_available(void) {
+    return MobileGL::ImplementationAvailable() ? 1 : 0;
+}
+
 MOBILEGL_EXPORT int mobilegl_shared_image_release(uint64_t id) {
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(false);

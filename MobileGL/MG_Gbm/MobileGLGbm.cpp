@@ -73,11 +73,14 @@ namespace {
         PFN_mobilegl_shared_image_allocate allocate = nullptr;
         PFN_mobilegl_shared_image_import import = nullptr;
         PFN_mobilegl_shared_image_release release = nullptr;
+        PFN_mobilegl_server_available serverAvailable = nullptr; // optional (older libraries lack it)
     };
 
     // The library the process already has (by its soname: glvnd loads it by path, which records
-    // the soname too), else MOBILEGL_GBM_LIBRARY, else the loader's search path. Never closed:
-    // libMobileGL leaks its globals at exit by design and must not be unloaded under them.
+    // the soname too), else MOBILEGL_GBM_LIBRARY, else the loader's search path, else the GLX vendor
+    // name it is installed under in the system library directory (the same file, so the same
+    // instance if glvnd loads it later). Never closed: libMobileGL leaks its globals at exit by
+    // design and must not be unloaded under them.
     const SharedImageApi* Api() {
         static std::once_flag once;
         static SharedImageApi api;
@@ -88,6 +91,7 @@ namespace {
                 const char* path = std::getenv("MOBILEGL_GBM_LIBRARY");
                 lib = dlopen(path != nullptr && path[0] != '\0' ? path : "libMobileGL.so", RTLD_NOW | RTLD_LOCAL);
             }
+            if (lib == nullptr) lib = dlopen("libGLX_mobilegl.so.0", RTLD_NOW | RTLD_LOCAL);
             if (lib == nullptr) {
                 std::fprintf(stderr, "mobilegl_gbm: libMobileGL.so could not be loaded: %s\n", dlerror());
                 return;
@@ -97,6 +101,7 @@ namespace {
             api.allocate = reinterpret_cast<PFN_mobilegl_shared_image_allocate>(dlsym(lib, "mobilegl_shared_image_allocate"));
             api.import = reinterpret_cast<PFN_mobilegl_shared_image_import>(dlsym(lib, "mobilegl_shared_image_import"));
             api.release = reinterpret_cast<PFN_mobilegl_shared_image_release>(dlsym(lib, "mobilegl_shared_image_release"));
+            api.serverAvailable = reinterpret_cast<PFN_mobilegl_server_available>(dlsym(lib, "mobilegl_server_available"));
             if (version == nullptr || version() < 1 || api.allocate == nullptr || api.import == nullptr ||
                 api.release == nullptr) {
                 std::fprintf(stderr, "mobilegl_gbm: this libMobileGL.so has no shared-image ABI\n");
@@ -341,7 +346,17 @@ namespace {
 
     void SurfaceDestroy(gbm_surface*) {}
 
+    // THE DEVICE IS DECLINED WHEN NOTHING COULD SERVE ITS BUFFERS. The loader takes this backend
+    // because GBM_BACKEND names it, and when its create_device fails it goes on to the backend the
+    // device's own driver names - so declining is what lets one system-wide GBM_BACKEND=mobilegl
+    // coexist with processes that run while no MobileGL server is reachable. Asked before any
+    // buffer exists, with one bounded connect (mobilegl_server_available), never a session bring-up.
     gbm_device* CreateDevice(int fd, uint32_t backendVersion) {
+        const SharedImageApi* api = Api();
+        if (api == nullptr || (api->serverAvailable != nullptr && api->serverAvailable() == 0)) {
+            errno = ENODEV;
+            return nullptr;
+        }
         auto* device = new (std::nothrow) Device{};
         if (device == nullptr) return nullptr;
         gbm_device_v0& v0 = device->base.v0;

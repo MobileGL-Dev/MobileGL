@@ -25,6 +25,7 @@
 #if defined(__linux__) && !defined(__ANDROID__)
 #include "../GLXImpl.h"
 #include "../../GetProcAddress.h"
+#include <Init.h>
 
 namespace {
     using namespace MobileGL;
@@ -111,6 +112,13 @@ extern "C" MOBILEGL_API int __glx_Main(Uint32 version, const void* exportsTable,
     const auto* exports = static_cast<const GLXApiExports*>(exportsTable);
     auto* imports = static_cast<GLXApiImports*>(importsTable);
     if ((version >> 16) != kGLXVendorABIMajor || exports == nullptr || imports == nullptr) return 0;
+    // Declining here is the only way this vendor can step aside: libGLX takes the vendor that
+    // __GLX_VENDOR_LIBRARY_NAME names without asking it about the screen, and only a vendor that
+    // fails to load sends it on to the one the X server names. So with no MobileGL server
+    // reachable (or a split session that did not come up) this answers 0, and X clients get the
+    // system's GLX instead of contexts that cannot draw. libGLX loads a vendor on the first GLX
+    // call that needs one, so this runs once per process, not at library load.
+    if (!MobileGL::ImplementationAvailable()) return 0;
     g_glxExports = exports;
     g_glxVendor = static_cast<GLXVendorInfo*>(vendor);
     imports->isScreenSupported = &VendorIsScreenSupported;

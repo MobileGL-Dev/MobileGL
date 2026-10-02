@@ -132,6 +132,14 @@ namespace MobileGL::MG_Remote::Transport {
         // socket the Welcome's descriptors cross), and since P11 PAIR they too are matched by a
         // value - the client's PairBind nonce - not by order.
 
+        // Is anything listening at `path` (a ConnectTo endpoint: an AF_UNIX path, '@' + an abstract
+        // name, or tcp://host:port)? One non-blocking connect per address, bounded by `timeoutMs`
+        // in total and never retried, then closed without a byte written - the server's pairing
+        // drops a connection that closes before presenting a PairBind. For deciding whether to
+        // offer a display at all, so it must not stall: a refused or absent endpoint answers at
+        // once, and only an unresponsive TCP peer can take the whole bound.
+        static bool Probe(const std::string& path, std::uint32_t timeoutMs);
+
         // Connects the control connection only on `tcp://`; identical to ConnectTo otherwise.
         static MobileGLResult ConnectControl(const std::string& path, std::uint32_t timeoutMs,
                                              std::unique_ptr<SocketTransport>& outClient);

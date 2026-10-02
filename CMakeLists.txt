@@ -646,6 +646,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/FatalFunnel.cpp
         MobileGL/MG_Remote/Wire/PipeWireCodec.cpp
         MobileGL/MG_Remote/Client/ClientSession.cpp
+        # Whether the configured server is there at all, asked before a display is offered so the
+        # system's EGL/GLX/GBM loaders can move on to another implementation when it is not.
+        MobileGL/MG_Remote/Client/ServerProbe.cpp
         MobileGL/MG_Remote/Client/EmitTables.cpp
         MobileGL/MG_Remote/Client/CapsMirror.cpp
         # P5 c1: the client role's BackendObject. pActiveBackendObject holds one of these

@@ -530,6 +530,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLDisplay GetDisplay(NativeDisplayType display) {
+        // Before the bring-up, which would wait for a configured server that is not there: no
+        // display is better than one that cannot draw, and the caller may have another EGL.
+        if (!MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;
@@ -1187,6 +1192,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list) {
         (void)attrib_list;
 
+        // As GetDisplay.
+        if (!MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return EGL_NO_DISPLAY;

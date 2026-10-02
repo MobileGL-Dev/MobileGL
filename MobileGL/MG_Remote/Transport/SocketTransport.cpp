@@ -512,6 +512,54 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
+    namespace {
+        // One non-blocking connect to `address`, waited on until `deadline`.
+        bool ProbeOne(int family, const sockaddr* address, socklen_t length,
+                      std::chrono::steady_clock::time_point deadline) {
+            const int fd = ::socket(family, SOCK_STREAM, 0);
+            if (fd < 0) return false;
+            ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+            bool reachable = ::connect(fd, address, length) == 0;
+            if (!reachable && family == AF_UNIX && errno == EAGAIN) {
+                // A unix listener whose backlog is full: it exists and is busy, which is a server.
+                reachable = true;
+            } else if (!reachable && errno == EINPROGRESS) {
+                pollfd pfd{fd, POLLOUT, 0};
+                int rc;
+                do {
+                    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        deadline - std::chrono::steady_clock::now()).count();
+                    rc = ::poll(&pfd, 1, static_cast<int>(std::max<std::int64_t>(0, remaining)));
+                } while (rc < 0 && errno == EINTR);
+                int error = 0;
+                socklen_t size = sizeof(error);
+                reachable = rc > 0 && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 && error == 0;
+            }
+            ::close(fd);
+            return reachable;
+        }
+    } // namespace
+
+    bool SocketTransport::Probe(const std::string& path, std::uint32_t timeoutMs) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(1u, timeoutMs));
+        if (TcpName(path)) {
+            addrinfo* addresses = nullptr;
+            if (!TcpAddress(path, &addresses)) return false;
+            bool reachable = false;
+            for (auto* address = addresses; address != nullptr && !reachable; address = address->ai_next) {
+                reachable = ProbeOne(address->ai_family, address->ai_addr, address->ai_addrlen, deadline);
+                if (std::chrono::steady_clock::now() >= deadline) break;
+            }
+            ::freeaddrinfo(addresses);
+            return reachable;
+        }
+        sockaddr_un address{};
+        socklen_t length = 0;
+        if (!FillAddress(path, &address, &length)) return false;
+        return ProbeOne(AF_UNIX, reinterpret_cast<const sockaddr*>(&address), length, deadline);
+    }
+
     MobileGLResult SocketTransport::ConnectControl(const std::string& path, std::uint32_t timeoutMs,
                                                    std::unique_ptr<SocketTransport>& outClient) {
         if (!TcpName(path)) return ConnectTo(path, timeoutMs, outClient);
@@ -905,6 +953,8 @@ namespace MobileGL::MG_Remote::Transport {
         WireLogError("MG_Remote SocketTransport: the fd: endpoint is POSIX only (CONTRACT-P11 B1)");
         return MOBILEGL_ERR_UNSUPPORTED;
     }
+
+    bool SocketTransport::Probe(const std::string&, std::uint32_t) { return false; }
 
     SocketTransport::SocketTransport(int, int, TransportRole role) : m_role(role) {}
     SocketTransport::~SocketTransport() = default;

@@ -71,8 +71,27 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# The system configuration files under the environment: the precedence MG_ConfigLoader::Init()
+# and its pre-init LookupSetting readers share. No GL context, no driver.
+add_executable(
+        ConfigFileTest
+        ConfigFileTest.cpp
+)
+
+target_include_directories(ConfigFileTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ConfigFileTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 include(GoogleTest)
 gtest_discover_tests(JobNodeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeStatsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(DamageTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(ConfigFileTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

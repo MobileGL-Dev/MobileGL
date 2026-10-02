@@ -81,7 +81,15 @@ int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32
 /* Drops this process's reference (an allocation's or an import's). */
 int mobilegl_shared_image_release(uint64_t id);
 
+/* 1 when this process can be served: its session is up, or the server it is configured to dial
+ * answers (one bounded non-blocking connect, cached once true); 0 when not. Never brings the
+ * session up. A component that a system loader picked on MobileGL's behalf (the GBM backend) asks
+ * this first and declines, so the loader moves on to another implementation. Optional: a library
+ * without it is assumed available. */
+int mobilegl_server_available(void);
+
 /* dlsym-friendly signatures. */
+typedef int (*PFN_mobilegl_server_available)(void);
 typedef uint32_t (*PFN_mobilegl_shared_image_abi_version)(void);
 typedef int (*PFN_mobilegl_shared_image_formats)(uint32_t*, uint32_t);
 typedef int (*PFN_mobilegl_shared_image_allocate)(uint32_t, uint32_t, uint32_t, struct mobilegl_shared_image*);

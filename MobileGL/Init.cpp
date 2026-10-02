@@ -24,6 +24,9 @@
 #if MOBILEGL_PIPE_VERIFY
 #include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeVerifyFlushSummary, before Debug::Close in DestroyImpl
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Client/ServerProbe.h>
+#endif
 
 #include <atomic>
 #include <mutex>
@@ -102,6 +105,10 @@ namespace MobileGL {
             MG_State::GLState::ClearProgramTranslationCache();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A later re-initialization asks whether the server is there again.
+            MG_Remote::Client::ResetServerProbeCache();
+#endif
 #if MOBILEGL_PIPE_VERIFY
             // BEFORE Close, and from here rather than from a static destructor (V1 fix round 2):
             // Close() nulls the role's sink and Log.cpp's next write reopens it with "w", so the
@@ -218,6 +225,25 @@ namespace MobileGL {
 
     void Destroy() {
         DestroyImpl(true);
+    }
+
+    Bool ImplementationAvailable() {
+        if (g_isInitialized.load(std::memory_order_acquire)) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // Initialized: under a split transport the session either came up (a backend object
+            // exists) or it did not, and a display on a session that never came up cannot draw.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                return MG_Backend::pActiveBackendObject != nullptr;
+            }
+#endif
+            return true;
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Not yet: the bring-up would dial the configured server and wait for it. Ask first.
+        return MG_Remote::Client::ConfiguredServerAvailable();
+#else
+        return true;
+#endif
     }
 
     // MobileGL's lifecycle is owned entirely by the host-API layers

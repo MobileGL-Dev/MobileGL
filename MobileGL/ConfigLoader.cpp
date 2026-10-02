@@ -18,12 +18,10 @@
 #endif
 
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
-#if MOBILEGL_BUILD_DISAGGREGATED
-// std::strcmp, for InitIpc's server-role check (P12). Split-only, so the pull build's TU is
-// unchanged (G1).
+// std::strcmp: InitIpc's server-role check (P12) and the system configuration's.
 #include <cstring>
-#endif
 
 #ifndef _WIN32
 extern char** environ;
@@ -50,6 +48,115 @@ namespace MobileGL::MG_ConfigLoader {
 
     static Bool IsAcceptedPrefix(const String& key) {
         return (key.compare(0, 6, "LIBGL_") == 0 || key.compare(0, 9, "MOBILEGL_") == 0);
+    }
+
+    // ---- the system configuration -----------------------------------------------------------
+    //
+    // A library that is every process's GL implementation (installed as the system's EGL/GLX
+    // vendor) cannot rely on each process having been started with MOBILEGL_* in its environment:
+    // most are started by something that has never heard of it. So the settings a whole machine
+    // shares live in files, and the environment only overrides them:
+    //
+    //     environment  >  /etc/mobilegl/backend (MOBILEGL_BACKEND_TYPE only)  >  client.conf  >  built-in
+    //
+    // client.conf is `KEY=value` lines; blank lines and lines starting with '#' are skipped, the
+    // key and the value are trimmed, and one pair of matching quotes around the value is removed.
+    // Only MOBILEGL_* / LIBGL_* keys are taken, exactly as from the environment. The backend file
+    // holds just the backend's name (the file the backend switch rewrites), and names it over a
+    // MOBILEGL_BACKEND_TYPE line in client.conf so that switch cannot be silently shadowed.
+    //
+    // MOBILEGL_CONFIG_FILE / MOBILEGL_BACKEND_FILE name other files; set to empty they turn the
+    // file off. The defaults exist only on desktop Linux: an Android app configures its process
+    // itself, and a server process (MOBILEGL_IPC_ROLE=server) never reads the clients' file.
+    namespace {
+#if defined(__linux__) && !defined(__ANDROID__)
+        constexpr const char* kDefaultConfigFile = "/etc/mobilegl/client.conf";
+        constexpr const char* kDefaultBackendFile = "/etc/mobilegl/backend";
+#else
+        constexpr const char* kDefaultConfigFile = "";
+        constexpr const char* kDefaultBackendFile = "";
+#endif
+
+        String FilePathSetting(const char* variable, const char* fallback) {
+            const char* value = std::getenv(variable);
+            return value != nullptr ? String(value) : String(fallback);
+        }
+
+        String Trimmed(const String& text) {
+            const auto first = text.find_first_not_of(" \t\r\n");
+            if (first == String::npos) return String();
+            const auto last = text.find_last_not_of(" \t\r\n");
+            return text.substr(first, last - first + 1);
+        }
+
+        Bool IsServerProcess() {
+            const char* role = std::getenv("MOBILEGL_IPC_ROLE");
+            return role != nullptr && std::strcmp(role, "server") == 0;
+        }
+
+        // Reads `path` into `out` without replacing what `out` already holds. A missing file is
+        // not an error: the defaults are the absence of one.
+        void ReadConfigFile(const String& path, UnorderedMap<String, String>& out, Bool log) {
+            if (path.empty()) return;
+            std::FILE* file = std::fopen(path.c_str(), "r");
+            if (file == nullptr) return;
+            char buffer[4096];
+            Uint32 lineNumber = 0;
+            while (std::fgets(buffer, sizeof(buffer), file) != nullptr) {
+                ++lineNumber;
+                const String line = Trimmed(buffer);
+                if (line.empty() || line[0] == '#') continue;
+                const auto equals = line.find('=');
+                const String key = equals == String::npos ? String() : Trimmed(line.substr(0, equals));
+                if (key.empty() || !IsAcceptedPrefix(key)) {
+                    if (log) {
+                        MGLOG_W("Config: %s:%u is not a MOBILEGL_*/LIBGL_* KEY=value line; ignored", path.c_str(),
+                                lineNumber);
+                    }
+                    continue;
+                }
+                String value = Trimmed(line.substr(equals + 1));
+                if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.back() == value.front()) {
+                    value = value.substr(1, value.size() - 2);
+                }
+                out.emplace(key, value);
+            }
+            std::fclose(file);
+        }
+
+        void ReadBackendFile(const String& path, UnorderedMap<String, String>& out) {
+            if (path.empty()) return;
+            std::FILE* file = std::fopen(path.c_str(), "r");
+            if (file == nullptr) return;
+            char buffer[256];
+            const Bool read = std::fgets(buffer, sizeof(buffer), file) != nullptr;
+            std::fclose(file);
+            if (!read) return;
+            const String name = Trimmed(buffer);
+            if (!name.empty()) out.emplace("MOBILEGL_BACKEND_TYPE", name);
+        }
+
+        // Everything the system files say, the backend file ahead of client.conf (first emplace
+        // wins). Re-read on every call: callers are few (Init, and a handful of lookups before it),
+        // and a file that changed between two processes' starts must not be served stale.
+        void ReadSystemConfig(UnorderedMap<String, String>& out, Bool log) {
+            if (IsServerProcess()) return;
+            ReadBackendFile(FilePathSetting("MOBILEGL_BACKEND_FILE", kDefaultBackendFile), out);
+            ReadConfigFile(FilePathSetting("MOBILEGL_CONFIG_FILE", kDefaultConfigFile), out, log);
+        }
+    } // namespace
+
+    Bool LookupSetting(const char* key, String& outValue) {
+        if (const char* value = std::getenv(key)) {
+            outValue = value;
+            return true;
+        }
+        UnorderedMap<String, String> system;
+        ReadSystemConfig(system, false);
+        const auto it = system.find(key);
+        if (it == system.end()) return false;
+        outValue = it->second;
+        return true;
     }
 
     inline void InitializeAcceptedEnvVariables() {
@@ -80,6 +187,15 @@ namespace MobileGL::MG_ConfigLoader {
                     (*acceptedEnvVariablesMap)[key] = value;
                     MGLOG_D("Config: Accepted env variable: %s=%s", key.c_str(), value.c_str());
                 }
+            }
+        }
+
+        // Below the environment: a key the environment set is never replaced.
+        UnorderedMap<String, String> system;
+        ReadSystemConfig(system, true);
+        for (const auto& [key, value] : system) {
+            if (acceptedEnvVariablesMap->emplace(key, value).second) {
+                MGLOG_D("Config: Accepted system setting: %s=%s", key.c_str(), value.c_str());
             }
         }
     }

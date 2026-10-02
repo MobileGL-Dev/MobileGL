@@ -77,6 +77,10 @@ if (NOT WIN32)
     # supervisor over loopback TCP (P12ServerRig.h): refused by name once per session on the side
     # that names it, map_persistent DECLINED, never a Fatal. Needs the server image too.
     list(APPEND MOBILEGL_WIRE_TESTS AdoptTierStreamTest)
+    # Declining when no server is there (Client/ServerProbe.h): the probe over unix/abstract/TCP
+    # listeners, and the EGL/glvnd/GLX entry points in forked clients, with no server (they decline
+    # inside a second) and against a real `--serve` supervisor (a display). Needs the server image.
+    list(APPEND MOBILEGL_WIRE_TESTS ServerProbeTest)
 endif()
 
 include(GoogleTest)
@@ -95,7 +99,7 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
             ${MGL_ROOT}/3rdparty/flatbuffers/include
     )
     if (test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR test STREQUAL "ServerOwnedSurfaceTest" OR
-        test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest")
+        test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest" OR test STREQUAL "ServerProbeTest")
         # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
         # the way the codec suites do. (P12's two server suites share PeerLatchTest's healthy
         # session, P12ServerRig.h, and so its include paths.)
@@ -116,8 +120,13 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
         target_compile_definitions(${test} PRIVATE MOBILEGL_SOURCE_ROOT="${MGL_ROOT}")
     endif ()
 
+    if (test STREQUAL "ServerProbeTest")
+        # It calls the glvnd vendor entry point the way libEGL does.
+        target_include_directories(${test} PRIVATE ${MGL_ROOT}/3rdparty/glvnd/include)
+    endif ()
+
     if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR
-        test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "AdoptTierStreamTest")
+        test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "ServerProbeTest")
         # It execs the real image, so it must be built first and must be told
         # where it is. MOBILEGL_TEST_SERVER_PATH is read by the test's
         # ServerImage() helper; without it the test would depend on the working

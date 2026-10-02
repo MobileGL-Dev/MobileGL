@@ -31,6 +31,9 @@
 
 #include "../EGLImpl.h"
 #include "../EGLPlatformExtensions.h"
+#include <Init.h>
+
+#include <mutex>
 
 // Defined in Definitions.cpp; eglext.h declares them only under EGL_EGLEXT_PROTOTYPES.
 extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
@@ -65,14 +68,27 @@ namespace {
         return MG_Impl::EGLImpl::QueryString(dpy, name);
     }
 
+    // DECLINING IS HOW THIS VENDOR STEPS ASIDE. glvnd asks its vendors for a display in order and
+    // takes the first that answers, so a vendor installed ahead of the system's own one must answer
+    // EGL_NO_DISPLAY whenever it cannot actually serve: no MobileGL server reachable (asked before
+    // the bring-up, so an absent server costs one refused connect rather than the bring-up's wait),
+    // or a split session that was tried and did not come up. The application then gets the next
+    // vendor's display instead of one of ours that fails at eglInitialize.
     EGLDisplay EGLAPIENTRY VendorGetPlatformDisplay(EGLenum platform, void* native_display,
                                                     const EGLAttrib* attrib_list) {
+        if (!MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
+        }
         // EGL_NONE means the application called eglGetDisplay(EGL_DEFAULT_DISPLAY): the vendor is
         // being asked to name its own default display.
-        if (platform == EGL_NONE) {
-            return MG_Impl::EGLImpl::GetDisplay(EGL_DEFAULT_DISPLAY);
+        const EGLDisplay display = platform == EGL_NONE
+                                       ? MG_Impl::EGLImpl::GetDisplay(EGL_DEFAULT_DISPLAY)
+                                       : MG_Impl::EGLImpl::GetPlatformDisplay(platform, native_display, attrib_list);
+        // The bring-up above may itself have failed (a server that refused this client).
+        if (display != EGL_NO_DISPLAY && !MobileGL::ImplementationAvailable()) {
+            return EGL_NO_DISPLAY;
         }
-        return MG_Impl::EGLImpl::GetPlatformDisplay(platform, native_display, attrib_list);
+        return display;
     }
 
     EGLBoolean EGLAPIENTRY VendorGetSupportsAPI(EGLenum api) {
@@ -111,8 +127,16 @@ namespace {
     const char* DrmRenderNode() {
         // MOBILEGL_DEVICE_DRM_NODE names another node: a machine with more than one GPU, or a test
         // that wants the mismatch refused rather than papered over.
-        const char* configured = std::getenv("MOBILEGL_DEVICE_DRM_NODE");
-        return (configured != nullptr && configured[0] != '\0') ? configured : "/dev/dri/renderD128";
+        // Read like every other setting (environment over the system configuration), once: the
+        // answer is handed out as a pointer.
+        static std::once_flag once;
+        static String node;
+        std::call_once(once, [] {
+            if (!MG_ConfigLoader::LookupSetting("MOBILEGL_DEVICE_DRM_NODE", node) || node.empty()) {
+                node = "/dev/dri/renderD128";
+            }
+        });
+        return node.c_str();
     }
 
     // One device, one identity.  A pointer to a private object rather than a number, so that a
@@ -123,6 +147,12 @@ namespace {
     EGLBoolean EGLAPIENTRY VendorQueryDevicesEXT(EGLint max_devices, EGLDeviceEXT* devices, EGLint* num_devices) {
         if (num_devices == nullptr) {
             return EGL_FALSE;
+        }
+        // No server, no device: a device this vendor could never open a display on would only lead
+        // the caller to it (glvnd merges every vendor's list; an error here would fail the merge).
+        if (!MobileGL::ImplementationAvailable()) {
+            *num_devices = 0;
+            return EGL_TRUE;
         }
         *num_devices = 1;
         if (devices != nullptr && max_devices >= 1) {
