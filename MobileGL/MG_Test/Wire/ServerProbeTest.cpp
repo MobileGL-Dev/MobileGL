@@ -194,7 +194,7 @@ namespace {
         Int64 elapsedMs = -1;      // all of the above, end to end
     };
 
-    EntryReport RunEntryPoints(const std::string& control, const std::string& logBase) {
+    EntryReport RunEntryPoints(const std::string& control, const std::string& logBase, bool software = false) {
         EntryReport report{};
         int fds[2] = {-1, -1};
         if (::pipe(fds) != 0) return report;
@@ -206,6 +206,8 @@ namespace {
             ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
             ::setenv("MOBILEGL_IPC_CONTROL", control.c_str(), 1);
             ::setenv("MOBILEGL_BACKEND_TYPE", "DirectGLES", 1);
+            if (software) ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+            else ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
             EntryReport r{};
             const auto start = std::chrono::steady_clock::now();
 
@@ -311,6 +313,13 @@ namespace {
         EXPECT_EQ(r.getDisplay, 1);
         EXPECT_EQ(r.vendorDevices, 1);
         EXPECT_EQ(r.glxLoaded, 1);
+
+        // A process that asked for software rendering is left to the system's other GL, server or not.
+        const EntryReport software = RunEntryPoints(server.endpoint, logBase, true);
+        EXPECT_EQ(software.vendorDisplay, 0);
+        EXPECT_EQ(software.getDisplay, 0);
+        EXPECT_EQ(software.vendorDevices, 0);
+        EXPECT_EQ(software.glxLoaded, 0);
         std::error_code ec;
         std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
     }

@@ -238,6 +238,18 @@ namespace MobileGL {
 #endif
             return true;
         }
+#if defined(__linux__) && !defined(__ANDROID__)
+        // LIBGL_ALWAYS_SOFTWARE is how a process (or whoever launched it) asks the system's GL for a
+        // software renderer. MobileGL is a GPU forwarder, so it steps aside and lets the system's
+        // other implementation give the process what it asked for.
+        {
+            String software;
+            if (MG_ConfigLoader::LookupSetting("LIBGL_ALWAYS_SOFTWARE", software) && !software.empty() &&
+                software != "0" && software != "false") {
+                return false;
+            }
+        }
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Not yet: the bring-up would dial the configured server and wait for it. Ask first.
         return MG_Remote::Client::ConfiguredServerAvailable();
