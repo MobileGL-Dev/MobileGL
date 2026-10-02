@@ -552,6 +552,18 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outFormat = GL_DEPTH_STENCIL;
                 break;
 
+            // Stencil-only. GL_STENCIL_INDEX8 is the one storage ES has (glRenderbufferStorage
+            // accepts it outright, and a texture takes it under EXT/OES_texture_stencil8), and
+            // GL_STENCIL_INDEX is the transfer format that goes with it - the same pairing the
+            // frontend's validator demands (Validators.cpp:
+            // "STENCIL_INDEX requires a stencil-only internal format") and the same one the
+            // stencil readback path hands the driver. The unsized spelling is here for the same
+            // reason the unsized depth and colour formats are: it resolves to this storage.
+            case GL_STENCIL_INDEX8:
+            case GL_STENCIL_INDEX:
+                *outFormat = GL_STENCIL_INDEX;
+                break;
+
             default:
                 MGLOG_E_ONCE("NormalizePixelFormat: outFormat: unhandled internalFormat: %s",
                         MG_Util::ConvertGLEnumToString(internalFormat).c_str());
@@ -774,6 +786,14 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_DEPTH24_STENCIL8:
             case GL_DEPTH_STENCIL:
                 *outType = GL_UNSIGNED_INT_24_8;
+                break;
+
+            // Stencil-only: eight unsigned index bits per texel, which is the layout the
+            // canonical shadow holds for it (PixelStoreProcessor's StencilIndex8 row: one
+            // UInt8 component) and the type the stencil readback path uses.
+            case GL_STENCIL_INDEX8:
+            case GL_STENCIL_INDEX:
+                *outType = GL_UNSIGNED_BYTE;
                 break;
 
             default:

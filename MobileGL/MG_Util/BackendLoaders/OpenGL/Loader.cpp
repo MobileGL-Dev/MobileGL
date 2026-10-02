@@ -127,6 +127,57 @@ namespace MobileGL::MG_Util::BackendLoader {
 #endif
     }
 
+    // True when a symbol resolved through dlsym lives in the module this code is compiled into.
+    //
+    // That happens when MobileGL is installed under a GLES soname (a drop-in libGLESv2.so, which
+    // is how a replacement driver reaches an application), and there dlsym hands back MobileGL's
+    // OWN exported entry point: the backend would call it as if it were the driver's and land
+    // straight back in the frontend, once per call, for ever. Such a symbol is not the driver's.
+    static Bool ResolvesIntoOwnModule(void* symbol) {
+#if defined(_WIN32)
+        (void)symbol;
+        return false;
+#else
+        Dl_info symbolInfo{};
+        Dl_info ownInfo{};
+        if (dladdr(symbol, &symbolInfo) == 0 ||
+            dladdr(reinterpret_cast<const void*>(&ResolvesIntoOwnModule), &ownInfo) == 0) {
+            return false;
+        }
+        return symbolInfo.dli_fname != nullptr && ownInfo.dli_fname != nullptr &&
+               std::strcmp(symbolInfo.dli_fname, ownInfo.dli_fname) == 0;
+#endif
+    }
+
+    // The GLES library the dlsym fallback in AcquireGLESFunctions reads from. Only ever opened
+    // once, and only when eglGetProcAddress has already failed for something: on a driver that
+    // answers eglGetProcAddress completely this handle is never taken.
+    static void* OpenFallbackGlesLibrary() {
+        if (UseAngle()) {
+            // The same library AcquireEGLFunctions loaded the EGL functions from: resolving an
+            // entry point off the vendor's driver while the current context is ANGLE's would
+            // hand the backend two different implementations.
+            return OpenLib({"libGLESv2_angle.so"});
+        }
+#if defined(__ANDROID__)
+        // Android's soname; the libGLESv3.so of older releases aliases the same library.
+        return OpenLib({"libGLESv2.so", "libGLESv3.so"});
+#else
+        // Versioned first: the unversioned name is a development symlink and is absent from
+        // runtime-only images, the same trap the libEGL lookup documents.
+        return OpenLib({"libGLESv2.so.2", "libGLESv2.so", "libGLESv3.so"});
+#endif
+    }
+
+    MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR
+    ResolveSwapBuffersWithDamage(MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ext,
+                                 MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR khr) {
+        if (ext != nullptr) {
+            return ext;
+        }
+        return (MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR)khr;
+    }
+
     void AcquireGLESFunctions(MG_External::GLESFunctionsTable& funcs,
                               MG_External::EGL::eglGetProcAddress_PTR procAddress) {
         if (!procAddress) {
@@ -134,19 +185,53 @@ namespace MobileGL::MG_Util::BackendLoader {
             return;
         }
 
+        // THE SECOND CHANCE. eglGetProcAddress is the mechanism the spec defines for finding an
+        // entry point, and it is what this loader used to use exclusively - but it is not
+        // complete on every driver. Measured on an Adreno 750 (ES 3.2, 125 extensions):
+        // eglGetProcAddress("glShaderStorageBlockBinding") - an ES 3.1 core function - answers
+        // NULL, while the driver's own libGLESv2.so exports the symbol. The load failure that
+        // produced was reported for a function the driver actually has, on every session.
+        //
+        // So anything eglGetProcAddress does not answer gets one more look through dlsym on the
+        // GLES library itself, opened lazily and only if some entry point needed it.
+        void* fallbackLib = nullptr;
+        Bool fallbackLibOpened = false;
+        const auto dlsymFallback = [&fallbackLib, &fallbackLibOpened](const char* name) -> void* {
+            if (!fallbackLibOpened) {
+                fallbackLibOpened = true;
+                fallbackLib = OpenFallbackGlesLibrary();
+            }
+            if (fallbackLib == nullptr) {
+                return nullptr;
+            }
+            void* symbol = ProcAddress(fallbackLib, name);
+            if (symbol != nullptr && ResolvesIntoOwnModule(symbol)) {
+                return nullptr;
+            }
+            return symbol;
+        };
+
 #define INIT_GLES_FUNC(name)                                                                                           \
     do {                                                                                                               \
         funcs.name = (MG_External::GLES::name##_PTR)procAddress(#name);                                                \
+        if (!funcs.name) {                                                                                             \
+            funcs.name = (MG_External::GLES::name##_PTR)dlsymFallback(#name);                                          \
+        }                                                                                                              \
         if (!funcs.name) {                                                                                             \
             MGLOG_E("Failed to load GLES function: %s", #name);                                                        \
         }                                                                                                              \
     } while (0);
 
 // Optional (extension-provided) entry points: a null pointer is expected on drivers that lack the
-// extension, so absence is not an error. The call site null-checks before use.
+// extension, so absence is not an error. The call site null-checks before use. The dlsym fallback
+// applies here too - an extension entry point is exactly the kind a vendor's eglGetProcAddress is
+// most likely to hide.
 #define INIT_GLES_FUNC_OPTIONAL(name)                                                                                  \
     do {                                                                                                               \
         funcs.name = (MG_External::GLES::name##_PTR)procAddress(#name);                                                \
+        if (!funcs.name) {                                                                                             \
+            funcs.name = (MG_External::GLES::name##_PTR)dlsymFallback(#name);                                          \
+        }                                                                                                              \
     } while (0);
 
         {
@@ -407,7 +492,15 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC(glFramebufferParameteri)
             INIT_GLES_FUNC(glGetFramebufferParameteriv)
             INIT_GLES_FUNC(glGetProgramInterfaceiv)
-            INIT_GLES_FUNC(glShaderStorageBlockBinding)
+            // ES 3.1 core, but NOT every driver answers eglGetProcAddress for it: measured on
+            // an Adreno 750, the call returns NULL here while the driver's own libGLESv2.so
+            // exports the symbol - which the dlsym fallback in this function now finds. A
+            // driver that genuinely lacks it is not a load failure either: the only caller
+            // (ApplyShaderStorageBlockBinding in DirectGLES/Managers.cpp) null-checks, and
+            // DirectGLES's actual mechanism for moving a storage block's binding is the
+            // layout(binding=) qualifier it prints into the generated ESSL - this call can
+            // only ever add a redundant rebinding on a driver that does expose it.
+            INIT_GLES_FUNC_OPTIONAL(glShaderStorageBlockBinding)
             INIT_GLES_FUNC(glGetProgramResourceIndex)
             INIT_GLES_FUNC(glGetProgramResourceName)
             INIT_GLES_FUNC(glGetProgramResourceiv)
@@ -608,6 +701,18 @@ namespace MobileGL::MG_Util::BackendLoader {
             return;
         }
 
+        // THE EXTENSION MECHANISM, RESOLVED BEFORE THE TABLE. The EGL 1.x core entry points are
+        // exported symbols of the library, so dlsym finds them; the EXTENSION ones are not.
+        // Android's libEGL.so exports none of eglSwapBuffersWithDamageEXT/KHR or
+        // eglUnlockSurfaceKHR even though the Adreno driver behind it implements them - the
+        // spec has extension entry points reached through eglGetProcAddress, never through the
+        // library's symbol table. Resolving them by dlsym alone therefore reported them missing
+        // on a driver that has them, at FATAL, on every session bring-up. So dlsym stays the
+        // first leg (an eglGetProcAddress dispatch stub would be wrong for the core functions)
+        // and eglGetProcAddress is the second.
+        MG_External::EGL::eglGetProcAddress_PTR getProcAddress =
+            reinterpret_cast<MG_External::EGL::eglGetProcAddress_PTR>(ProcAddress(eglLib, "eglGetProcAddress"));
+
         auto resolveEGLProc = [&](const char* name) -> void* {
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
             if (UseAngle()) {
@@ -615,10 +720,18 @@ namespace MobileGL::MG_Util::BackendLoader {
                 // resolve its forwarding target from the verified variant.
                 String target = "EGL_";
                 target += name + 3;
-                return ProcAddress(angleGlesLib, target.c_str());
+                if (void* resolved = ProcAddress(angleGlesLib, target.c_str())) {
+                    return resolved;
+                }
             }
 #endif
-            return ProcAddress(eglLib, name);
+            if (void* resolved = ProcAddress(eglLib, name)) {
+                return resolved;
+            }
+            if (getProcAddress != nullptr) {
+                return reinterpret_cast<void*>(getProcAddress(name));
+            }
+            return nullptr;
         };
 
 #define INIT_EGL_FUNC(name)                                                                                            \
@@ -629,6 +742,18 @@ namespace MobileGL::MG_Util::BackendLoader {
             /* point is a crash waiting for its first caller, and MGLOG_E is compiled  */                              \
             /* out at the INFO level every shipping and CI build uses.                 */                              \
             MGLOG_F("Failed to load EGL function: %s", #name);                                                         \
+        }                                                                                                              \
+    } while (0);
+
+// Extension-provided entry points. A driver that has neither the extension nor a forwarding
+// alias answers NULL, which is the ordinary answer there rather than a defect, so it is
+// reported at INFO and left to the caller - which null-checks (see Present's swap in
+// DirectGLES.cpp). Reached through eglGetProcAddress by resolveEGLProc's second leg.
+#define INIT_EGL_FUNC_OPTIONAL(name)                                                                                   \
+    do {                                                                                                               \
+        funcs.name = (MG_External::EGL::name##_PTR)resolveEGLProc(#name);                                              \
+        if (!funcs.name) {                                                                                             \
+            MGLOG_I("Optional EGL entry point not provided by this driver: %s", #name);                                \
         }                                                                                                              \
     } while (0);
 
@@ -665,10 +790,9 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_EGL_FUNC(eglReleaseThread)
             INIT_EGL_FUNC(eglSurfaceAttrib)
             INIT_EGL_FUNC(eglSwapBuffers)
-            INIT_EGL_FUNC(eglSwapBuffersWithDamageEXT)
             INIT_EGL_FUNC(eglSwapInterval)
             INIT_EGL_FUNC(eglTerminate)
-            INIT_EGL_FUNC(eglUnlockSurfaceKHR)
+            INIT_EGL_FUNC_OPTIONAL(eglUnlockSurfaceKHR)
             INIT_EGL_FUNC(eglWaitClient)
             INIT_EGL_FUNC(eglWaitGL)
             INIT_EGL_FUNC(eglWaitNative)
@@ -680,6 +804,26 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_EGL_FUNC(eglDestroyImage)
             INIT_EGL_FUNC(eglGetPlatformDisplay)
             INIT_EGL_FUNC(eglWaitSync)
+        }
+
+        {
+            // One slot, two names. EGL_EXT_swap_buffers_with_damage and
+            // EGL_KHR_swap_buffers_with_damage define the same entry point with the same
+            // signature, and a driver may expose either, both or neither - Adreno exposes only
+            // the KHR spelling - so the winner of the EXT -> KHR chain lands in the EXT slot.
+            // Null when the driver offers neither, which is the normal "no damage-based present
+            // here" answer: the caller keeps plain eglSwapBuffers (and note that a call with
+            // n_rects == 0 is defined to be equivalent to eglSwapBuffers anyway).
+            funcs.eglSwapBuffersWithDamageEXT = ResolveSwapBuffersWithDamage(
+                reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR>(
+                    resolveEGLProc("eglSwapBuffersWithDamageEXT")),
+                reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR>(
+                    resolveEGLProc("eglSwapBuffersWithDamageKHR")));
+            if (funcs.eglSwapBuffersWithDamageEXT == nullptr) {
+                MGLOG_I_ONCE("This driver has no damage-based present entry point (neither "
+                             "eglSwapBuffersWithDamageEXT nor eglSwapBuffersWithDamageKHR); "
+                             "present calls fall back to eglSwapBuffers");
+            }
         }
     }
 

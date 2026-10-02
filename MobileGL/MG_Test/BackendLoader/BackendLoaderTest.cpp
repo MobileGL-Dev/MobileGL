@@ -1588,3 +1588,34 @@ TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
     EXPECT_GT(caps.MaxComputeWorkGroupCount[0], 65535);
     EXPECT_GT(caps.MaxComputeWorkGroupSize[2], 64);
 }
+
+namespace {
+    EGLBoolean FakeSwapBuffersWithDamage(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint nRects) {
+        (void)dpy;
+        (void)surface;
+        (void)rects;
+        (void)nRects;
+        return EGL_TRUE;
+    }
+} // namespace
+
+// EXT -> KHR -> nothing, the whole policy behind the loader's single damage-present slot.
+//
+// EGL_EXT_swap_buffers_with_damage and EGL_KHR_swap_buffers_with_damage define the same entry
+// point with the same signature, and a driver may expose either, both or neither - Adreno
+// exposes only the KHR spelling, which is why resolving the EXT name alone reported the entry
+// point missing on a driver that has one. A null answer is not a failure either: the caller
+// (DirectGLES::Present) reads it as "present with plain eglSwapBuffers", and a zero-rectangle
+// call to either spelling is defined to be equivalent to that anyway.
+TEST(SwapBuffersWithDamageResolution, PrefersExtThenKhrThenAnswersNothing) {
+    using namespace MobileGL;
+    MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ext = &FakeSwapBuffersWithDamage;
+    MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR khr = &FakeSwapBuffersWithDamage;
+
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(ext, khr), ext)
+        << "a driver that exports both spellings is answered with the EXT one";
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(nullptr, khr), khr)
+        << "the KHR spelling alone must still fill the slot";
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(nullptr, nullptr), nullptr)
+        << "neither spelling stays null, so the caller keeps eglSwapBuffers";
+}

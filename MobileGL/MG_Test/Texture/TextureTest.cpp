@@ -3389,6 +3389,33 @@ TEST_F(TextureTest, NormalizePixelFormatKeepsPackedTransferTypesForPackedSizedFo
     }
 }
 
+// Stencil-only storage is the third single-channel case NormalizePixelFormat has to answer for
+// (the depth and RED families are the others), and the one the format-capability probe asks
+// about on every session bring-up: PopulateFormatCapabilities walks the whole logical-format
+// table through BuildNativeProbeFormatInfo, which takes this function's format/type pair and
+// hands it to glTexImage2D. Left to the switch defaults, GL_STENCIL_INDEX8 was reported as an
+// unhandled internal format and answered with GL_RGBA/GL_UNSIGNED_BYTE - a pair no driver can
+// pair with stencil-only storage - so every probe and every upload of it was an error whose
+// cause the log blamed on the format table instead of on the pair.
+//
+// GL_STENCIL_INDEX / GL_UNSIGNED_BYTE is the pair the rest of the pipeline already uses for
+// this storage: the frontend's ValidateTextureInternalFormatCompatibleWithInput requires
+// STENCIL_INDEX to pair with a stencil-only internal format, the canonical shadow layout for
+// StencilIndex8 is one UInt8 component, and the stencil readback path issues exactly this pair.
+TEST_F(TextureTest, NormalizePixelFormatMapsStencilOnlyStorageToStencilIndex) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    // GL_STENCIL_INDEX is the unsized spelling that resolves to the same storage (see
+    // ConvertGLEnumToTextureInternalFormat), so both must answer together.
+    for (const GLenum internalFormat : {GL_STENCIL_INDEX8, GL_STENCIL_INDEX}) {
+        GLenum outInternal = 0, outFormat = 0, outType = 0;
+        NormalizePixelFormat(internalFormat, PixelFormatNormalizeOptionBit::None, &outInternal, &outFormat,
+                             &outType);
+        EXPECT_EQ(outInternal, internalFormat) << "internalformat 0x" << std::hex << internalFormat;
+        EXPECT_EQ(outFormat, GL_STENCIL_INDEX) << "internalformat 0x" << std::hex << internalFormat;
+        EXPECT_EQ(outType, GL_UNSIGNED_BYTE) << "internalformat 0x" << std::hex << internalFormat;
+    }
+}
+
 // The packed16 field-order quirk (PixelFormatNormalizeOptionBit::WidenPacked16Norm): where the
 // driver stores some packed16 allocations with a mirrored field order (the Mali defect
 // behind the KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* failures), the
