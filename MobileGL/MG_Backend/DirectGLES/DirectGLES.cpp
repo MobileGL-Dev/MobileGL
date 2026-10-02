@@ -41,6 +41,9 @@
 #include <unistd.h>
 #endif
 #endif
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -17150,6 +17153,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // session's apply) thread; the present ends the frame.
         thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
 
+        // A WINDOW SURFACE'S BUFFER AGE IS OPT-IN (MOBILEGL_ESPRYT_WINDOW_AGE=1, or on Android the
+        // property debug.mobilegl.espryt_window_age=1); off, a window answers 0 and its client
+        // repaints whole frames. Measured on Adreno 750 with the compositor repainting by age: with a
+        // client presenting far faster than the display (hundreds of frames a second), about one run
+        // in six ended with part of a window showing a frame two or three presents old, with the
+        // driver's partial-update age and with EGL_BUFFER_PRESERVED alike, and never at sixty frames
+        // a second or with whole repaints. Whole repaints hide whatever goes stale; until that is
+        // found, they stay the default here. Pbuffers (client windows) are not affected.
+        Bool WindowBufferAgeEnabled() {
+            static const Bool enabled = [] {
+                if (const char* env = std::getenv("MOBILEGL_ESPRYT_WINDOW_AGE")) return std::strcmp(env, "1") == 0;
+#if defined(__ANDROID__)
+                char property[PROP_VALUE_MAX] = {};
+                if (__system_property_get("debug.mobilegl.espryt_window_age", property) > 0)
+                    return std::strcmp(property, "1") == 0;
+#endif
+                return false;
+            }();
+            return enabled;
+        }
+
         // The calling session's record of `surface`; the registry lock is held by the caller (another
         // session's window bring-up may erase stale entries of this one).
         NativeSessionState::SurfaceEntry* FindSessionSurfaceLocked(NativeSessionState& session, EGLSurface surface) {
@@ -17174,6 +17198,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             presents = entry->Presents;
         }
         if (!window) return presents > 0 ? 1 : 0;
+        if (!WindowBufferAgeEnabled()) return 0;
         // The driver's answer. On Android the query dequeues the buffer the next frame draws into -
         // what the frame's first draw would do anyway, and the client asks before it draws.
         const NativeBufferAge& support = NativeBufferAgeSupport();
@@ -17195,7 +17220,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (entry == nullptr || entry->Window == static_cast<NativeWindowType>(0)) return true;
         }
         const NativeBufferAge& support = NativeBufferAgeSupport();
-        if (!support.Partial) return true;
+        if (!support.Partial || !WindowBufferAgeEnabled()) return true;
         // EGL_KHR_partial_update wants the age asked in this frame before the region is set; a client
         // that was answered 0 without the driver being asked (its first frame) repaints everything.
         if (t_ageAskedSurface != surface) {
