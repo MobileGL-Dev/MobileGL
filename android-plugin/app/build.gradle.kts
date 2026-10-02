@@ -74,7 +74,7 @@ val releaseSigningReady = signingStoreFile.exists()
 val debuggableRelease = (findProperty("mobilegl.debuggableRelease") ?: "false").toString().toBoolean()
 
 val mobileGlVersionMajor = 26
-val mobileGlVersionMinor = 9
+val mobileGlVersionMinor = 10
 val mobileGlGitShortHash = runGit("rev-parse", "--short=7", "HEAD") ?: "nogit"
 val mobileGlMonthlyRevision = runGit(
     "rev-list",
