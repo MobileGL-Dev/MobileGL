@@ -16,6 +16,7 @@
 
 #include "../Server/ServerLoop.h"
 
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_Util/Debug/Log.h>
 
@@ -427,6 +428,78 @@ namespace MobileGL::MG_Remote::Client {
         // the context until the apply thread has run it.
         Server::ServerReleaseEGLResources();
         MG_Backend::BackendObject::ReleaseEGLResources();
+    }
+
+    // ---- shared images ----------------------------------------------------------------------
+    //
+    // One shared_image record each (ClientSession::EmitSharedImage). Allocate/Import/Release are
+    // table operations and order against nothing; Present and Attach ride the ring behind the GL
+    // calls they follow, which is the order they need.
+    Bool BackendObject_Remote::AllocateSharedImage(Uint32 width, Uint32 height, Uint32 fourcc,
+                                                   MG_Backend::SharedImageExport* out) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || out == nullptr) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageAllocate;
+        op.Format = fourcc;
+        op.Width = width;
+        op.Height = height;
+        MG_Pipe::MGPSharedImageReply reply{};
+        int fd = -1;
+        if (!session->EmitSharedImage(op, -1, &reply, &fd)) return false;
+        out->Id = reply.ImageId;
+        out->Fd = fd;
+        out->Width = reply.Width;
+        out->Height = reply.Height;
+        out->Fourcc = reply.Format;
+        out->Stride = reply.Stride;
+        out->Offset = reply.Offset;
+        out->Modifier = reply.Modifier;
+        return true;
+    }
+
+    Bool BackendObject_Remote::ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || fd < 0) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageImport;
+        op.Format = fourcc;
+        op.Width = width;
+        op.Height = height;
+        MG_Pipe::MGPSharedImageReply reply{};
+        if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
+        if (outId != nullptr) *outId = reply.ImageId;
+        return true;
+    }
+
+    Bool BackendObject_Remote::ReleaseSharedImage(Uint64 id) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started()) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageRelease;
+        op.ImageId = id;
+        return session->EmitSharedImage(op, -1, nullptr, nullptr);
+    }
+
+    Bool BackendObject_Remote::PresentToSharedImage(Uint64 id) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImagePresent;
+        op.ImageId = id;
+        return session->EmitSharedImage(op, -1, nullptr, nullptr);
+    }
+
+    Bool BackendObject_Remote::AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageAttach;
+        op.ImageId = id;
+        // The handle the texture's resource records were published under (TextureEmit's own
+        // AcquireTexture is this call on the same lifetime id).
+        op.Texture = MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, textureLifetimeId);
+        return session->EmitSharedImage(op, -1, nullptr, nullptr);
     }
 
     // NO strong CreateRemoteBackendObject() lives here, and the reason is a link fact, not an

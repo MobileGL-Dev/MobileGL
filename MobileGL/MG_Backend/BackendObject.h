@@ -583,9 +583,81 @@ namespace MobileGL {
             Uint32 Height = 0;
         };
 
+        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): server-allocated colour
+        // buffers exported to clients as dma-buf descriptors.
+        //
+        // The server-side view of one image, as a backend sees it: `NativeBuffer` is the image's
+        // AHardwareBuffer (null where there is none), `Fourcc` a DRM fourcc - ABGR8888 (R, G, B, A in
+        // memory, GL RGBA8) or XBGR8888 (alpha ignored).
+        struct SharedImageView {
+            Uint64 Id = 0;
+            Uint32 Width = 0;
+            Uint32 Height = 0;
+            Uint32 Fourcc = 0;
+            void* NativeBuffer = nullptr;
+        };
+
+        // The client-side answer of an allocation: the image's id and its exported descriptor
+        // (`Fd`, owned by the caller), with the plane layout a linux-dmabuf wl_buffer is created with.
+        struct SharedImageExport {
+            Uint64 Id = 0;
+            int Fd = -1;
+            Uint32 Width = 0;
+            Uint32 Height = 0;
+            Uint32 Fourcc = 0;
+            Uint32 Stride = 0;
+            Uint32 Offset = 0;
+            Uint64 Modifier = 0;
+        };
+
         class BackendObject {
         public:
             virtual ~BackendObject() = default;
+
+            // ---- shared images, SERVER side (a backend implements these) ---------------------
+            //
+            // Copies the default framebuffer of the surface current on this (the apply) thread into
+            // `image`, rows TOP FIRST - GL's top row (y = height-1) lands in the image's first memory
+            // row, which is what a wl_buffer's first row is - scaled to the image's extent if the two
+            // differ. Returns once the copy has COMPLETED on the GPU (the client attaches the buffer
+            // to a wl_surface right after, and nothing else orders the compositor's read). The
+            // application's GL state is untouched. False = not supported / failed (logged).
+            virtual Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
+                (void)image;
+                return false;
+            }
+
+            // ---- shared images, CLIENT side (BackendObject_Remote implements these) ----------
+            //
+            // A new image, allocated by the server; `out->Fd` is the caller's to close.
+            virtual Bool AllocateSharedImage(Uint32 width, Uint32 height, Uint32 fourcc, SharedImageExport* out) {
+                (void)width, (void)height, (void)fourcc, (void)out;
+                return false;
+            }
+            // Names the image `fd` was exported from (the caller keeps `fd`). False: not one of this
+            // server's images, or the size/format disagree.
+            virtual Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) {
+                (void)fd, (void)width, (void)height, (void)fourcc, (void)outId;
+                return false;
+            }
+            // Drops this client's reference (an allocation's or an import's).
+            virtual Bool ReleaseSharedImage(Uint64 id) {
+                (void)id;
+                return false;
+            }
+            // In the GL stream: the current context's default framebuffer, copied top row first into
+            // the image (BlitDefaultFramebufferToSharedImage on the server). Returns when it completed.
+            virtual Bool PresentToSharedImage(Uint64 id) {
+                (void)id;
+                return false;
+            }
+            // In the GL stream: the texture whose lifetime id is `textureLifetimeId` takes the image as
+            // its level-0 storage (glEGLImageTargetTexture2DOES), until its next storage definition.
+            // The caller has already defined level 0 as Width x Height RGBA8 with no data.
+            virtual Bool AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) {
+                (void)textureLifetimeId, (void)id;
+                return false;
+            }
 
             virtual void Initialize() = 0;
             virtual Bool InitCapabilities() = 0;

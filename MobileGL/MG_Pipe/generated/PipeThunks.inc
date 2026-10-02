@@ -352,3 +352,7 @@ inline void MGP_GetTextureImageToBuffer(const MGPReadbackToBuffer* payload) {
 inline void MGP_BindContext(const MGPBindContext* payload) {
     gMGPipeScreen.BindContext(payload);
 }
+
+inline void MGP_SharedImage(const MGPSharedImageOp* payload, MGPReplySlot* reply) {
+    gMGPipeScreen.SharedImage(payload, reply);
+}

@@ -675,6 +675,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/PairAcceptor.cpp
         # P11 B2: T0's Offers on the aux socket, matched to their map_persistent records by seq.
         MobileGL/MG_Remote/Server/AdoptInbox.cpp
+        # Shared images: server-allocated AHardwareBuffers exported to clients as dma-buf descriptors
+        # (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+        MobileGL/MG_Remote/Server/SharedImageRegistry.cpp
         MobileGL/MG_Remote/Server/ServerSpawn.cpp
         # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
         # and its codec against protocol.fbs's SurfaceOp/SurfaceReply (the spawn arm's seam).

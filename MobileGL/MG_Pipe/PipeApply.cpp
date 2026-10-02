@@ -2238,6 +2238,16 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
+    Bool MGPipeApplyAttachSharedImage(MGPipeHandle texture, Uint64 imageId) {
+        MGPipeResourceRecord* record = FindIn(MGPipeApplier().TextureResources, texture);
+        if (record == nullptr) return false;
+        record->SharedImageId = imageId;
+        // The storage moved, so every twin's synced serial is stale, and the sampling answer with it.
+        ++record->Serial;
+        MGPipeApplierNoteTextureStateMoved();
+        return true;
+    }
+
     Bool MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                       const MGPRespecifiedLevel* level) {
         Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
@@ -2291,6 +2301,8 @@ namespace MobileGL::MG_Pipe {
         // asking a frontend object for them. A metadata update replaces it too - that is how
         // the mask arrives - and by construction only the non-storage fields differ.
         record->Desc = desc;
+        // A shared image is the storage this call replaces - unless the call replaces none.
+        if (level != nullptr || !metadataOnly) record->SharedImageId = 0;
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (level != nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
             // Scope and BufOffset/BufSize are transient respecify carriers, not resource state.

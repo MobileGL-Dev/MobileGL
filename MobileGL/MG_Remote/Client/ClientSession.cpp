@@ -2857,6 +2857,59 @@ namespace MobileGL::MG_Remote::Client {
         return nullptr;
     }
 
+    Bool ClientSession::EmitSharedImage(const MG_Pipe::MGPSharedImageOp& op, int sendFd,
+                                        MG_Pipe::MGPSharedImageReply* reply, int* receivedFd) {
+        if (receivedFd != nullptr) *receivedFd = -1;
+        MobileGLResult shared = MOBILEGL_OK;
+        if (sendFd >= 0) {
+            m_prePublish = [&](Uint64 seq) {
+                MG_Pipe::MGPSharedImageFdOffer offer{MG_Pipe::kMGPSharedImageFdMagic, 1, seq, op.ImageId, 0};
+                shared = m_transport != nullptr ? m_transport->ShareFd(sendFd, MobileGLByteSpan{&offer, sizeof(offer)})
+                                                : MOBILEGL_ERR_NOT_INITIALIZED;
+            };
+        }
+        MG_Pipe::MGPSharedImageReply answer{};
+        Int32 status = Wire::ReplySink::kStatusError;
+        Uint64 returned = 0;
+        const Uint64 seq = EmitAndWait(MG_Pipe::MGPWireOp::SharedImage, &op, sizeof(op), nullptr, 0, &answer,
+                                       sizeof(answer), &status, &returned);
+        m_prePublish = nullptr;
+        if (shared != MOBILEGL_OK) {
+            MGLOG_E("MG_Remote client: a shared-image descriptor could not be queued on the aux socket (rc=%d)",
+                    static_cast<int>(shared));
+        }
+        if (status != Wire::ReplySink::kStatusOk || returned != sizeof(answer)) return false;
+        if (reply != nullptr) *reply = answer;
+        if (receivedFd == nullptr) return true;
+#if defined(_WIN32)
+        return false;
+#else
+        if (m_transport == nullptr) return false;
+        for (;;) {
+            int fd = -1;
+            Uint8 sideband[Transport::FdPassing::kMaxSidebandBytes] = {};
+            std::uint64_t sidebandSize = 0;
+            const MobileGLResult received =
+                m_transport->ReceiveFd(&fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &sidebandSize, 2000);
+            if (received != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote client: shared image %llu was answered but its descriptor did not arrive (rc=%d)",
+                        static_cast<unsigned long long>(answer.ImageId), static_cast<int>(received));
+                return false;
+            }
+            MG_Pipe::MGPSharedImageFdOffer offer{};
+            if (sidebandSize == sizeof(offer)) std::memcpy(&offer, sideband, sizeof(offer));
+            if (offer.Magic == MG_Pipe::kMGPSharedImageFdMagic && offer.Seq == seq && offer.ImageId == answer.ImageId) {
+                *receivedFd = fd;
+                return true;
+            }
+            // An earlier record's descriptor whose answer was never taken: not this one.
+            MGLOG_W("MG_Remote client: an aux descriptor for record %llu arrived while record %llu's was awaited; closed",
+                    static_cast<unsigned long long>(offer.Seq), static_cast<unsigned long long>(seq));
+            ::close(fd);
+        }
+#endif
+    }
+
     void ClientSession::ReleaseT0Store(MG_Pipe::MGPipeHandle handle) {
         auto it = m_t0Stores.find(T0Key(handle));
         if (it == m_t0Stores.end()) return;

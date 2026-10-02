@@ -687,6 +687,17 @@ namespace MobileGL::MG_Remote::Wire {
             (void)bind;
             return false;
         }
+
+        // ---- shared images, opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+        // `seq` is the record's reply-slot id, which an Import's descriptor names on the aux
+        // socket. True fills `reply`; false is a DECLINED answer.
+        virtual Bool OnSharedImage(const MG_Pipe::MGPSharedImageOp& op, Uint64 seq,
+                                   MG_Pipe::MGPSharedImageReply& reply) {
+            (void)op;
+            (void)seq;
+            (void)reply;
+            return false;
+        }
     };
 
     // Not thread safe: one decoder on the apply thread, by construction.

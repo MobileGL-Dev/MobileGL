@@ -58,6 +58,7 @@
 #include "../Transport/SessionRings.h"
 #include "../Wire/PipeWireCodec.h"
 #include "AdoptInbox.h"
+#include "SharedImageRegistry.h"
 #include "ApplyThreadPolicy.h"
 #include "PipeApplier.h"
 
@@ -331,6 +332,12 @@ namespace MobileGL::MG_Remote::Server {
         Bool AdoptT0Quiet() const { return m_adoptT0Quiet; }
         AdoptInbox& T0Inbox() { return m_adoptInbox; }
 
+        // ---- shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) -------------
+        // The images this session allocated or imported and has not released; emptied when the
+        // session closes. The control transport is where an allocation's descriptor goes out.
+        SharedImages::SessionHolder& SharedImageHolder() { return m_sharedImages; }
+        Transport::ITransport* ControlTransport() const { return m_transport; }
+
         // ---- P14 S1 (docs/Disaggregated/design/11-state-ownership.md): the session's contexts -
         //
         // THE PLACEHOLDER TABLE. `CreateContext`/`DestroyContext` on the control plane build and
@@ -416,6 +423,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool m_adoptT0Settled = false;
         Bool m_adoptT0 = false;
         AdoptInbox m_adoptInbox;
+        SharedImages::SessionHolder m_sharedImages;
         Uint64 m_t0Stores = 0;
         Uint64 m_t0Bytes = 0;
         Uint64 m_t0Declined = 0;

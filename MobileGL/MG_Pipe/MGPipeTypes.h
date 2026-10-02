@@ -1978,6 +1978,65 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPBindContext, 8);
 
+    // shared_image = opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Colour
+    // buffers the SERVER allocates and exports as dma-buf descriptors, so one client's frames
+    // reach another client's textures without leaving GPU memory. One row, five operations, all
+    // answered through the reply slot with an MGPSharedImageReply:
+    //
+    //   Allocate  a new Width x Height Format image; the reply names it, and its descriptor
+    //             reaches the client on the aux socket BEFORE the reply is posted.
+    //   Import    the descriptor the client queued on the aux socket (sideband: a
+    //             MGPSharedImageFdOffer naming this record's seq) is identified as an image this
+    //             server exported; the reply names it. Width/Height/Format must match it.
+    //   Release   the session's reference to ImageId goes.
+    //   Present   the current context's default framebuffer is copied, top row first, into
+    //             ImageId (a window frame becoming a wl_buffer's contents); the reply is posted
+    //             when the copy has completed on the GPU.
+    //   Attach    the texture Texture's storage becomes ImageId (glEGLImageTargetTexture2DOES);
+    //             it lasts until the texture's next storage-defining respecify.
+    //
+    // ImageId is a server-minted id, never reused within the server's life.
+    enum MGPSharedImageOpKind : Uint32 {
+        kMGPSharedImageAllocate = 1,
+        kMGPSharedImageImport = 2,
+        kMGPSharedImageRelease = 3,
+        kMGPSharedImagePresent = 4,
+        kMGPSharedImageAttach = 5,
+    };
+
+    struct MGPSharedImageOp {
+        Uint32 Op;
+        Uint32 Format; // DRM fourcc
+        Uint32 Width;
+        Uint32 Height;
+        Uint64 ImageId;
+        MGPipeHandle Texture; // Attach only
+    };
+    MGP_ASSERT_POD(MGPSharedImageOp, 32);
+
+    struct MGPSharedImageReply {
+        Uint64 ImageId;
+        Uint64 Modifier;
+        Uint32 Width;
+        Uint32 Height;
+        Uint32 Format;
+        Uint32 Stride;
+        Uint32 Offset;
+        Uint32 Pad0;
+    };
+    MGP_ASSERT_POD(MGPSharedImageReply, 40);
+
+    // The aux-socket sideband an Import's descriptor travels with (and an Allocate's answer).
+    inline constexpr Uint32 kMGPSharedImageFdMagic = 0x49534D47u; // 'MGSI'
+    struct MGPSharedImageFdOffer {
+        Uint32 Magic;
+        Uint32 Version;
+        Uint64 Seq;
+        Uint64 ImageId;
+        Uint64 Reserved;
+    };
+    MGP_ASSERT_POD(MGPSharedImageFdOffer, 32);
+
 
     // set_context_values = opcode 79, P5c rv (CONTRACT-P5C.md §5.3): the rv field table as
     // ONE fixed-width POD. It carries every value-class field that no set_* call supplies -

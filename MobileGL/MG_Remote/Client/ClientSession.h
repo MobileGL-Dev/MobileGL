@@ -242,6 +242,13 @@ namespace MobileGL::MG_Remote::Client {
         // server's inbox relies on), and wait for the answer. The held pointer on OK - the caller
         // adopts it as the store's mapping - or null on DECLINED (the store stays T2).
         void* AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
+        // shared_image (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): emits `op` and waits
+        // for its answer. `sendFd` >= 0 (an Import) is queued on the aux socket for the record's
+        // seq BEFORE the record is published; `receivedFd` non-null (an Allocate) takes the
+        // descriptor the server queued before its answer. False = DECLINED (the server's log says
+        // why) or the descriptor did not travel.
+        Bool EmitSharedImage(const MG_Pipe::MGPSharedImageOp& op, int sendFd, MG_Pipe::MGPSharedImageReply* reply,
+                             int* receivedFd);
         // The client's reference to buffer `handle`'s T0 store ends because the buffer was
         // respecified or destroyed: unlock and release it. The server's import holds its own
         // reference until its own fence for the store's last use has completed. No-op for a

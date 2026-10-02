@@ -264,7 +264,8 @@ namespace MobileGL::MG_Remote::Wire {
     X(DeleteStreamOutput, MGPStreamOutputBind)                                                 \
     X(ReadPixelsToBuffer, MGPReadbackToBuffer)                                                 \
     X(GetTextureImageToBuffer, MGPReadbackToBuffer)                                            \
-    X(BindContext, MGPBindContext)
+    X(BindContext, MGPBindContext)                                                             \
+    X(SharedImage, MGPSharedImageOp)
 
     namespace {
 
@@ -2564,6 +2565,20 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::BindContext:
             return m_verbs != nullptr &&
                    m_verbs->OnBindContext(*static_cast<const MGPBindContext*>(payload));
+
+        // ---- shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md), opcode 85.
+        //
+        // A fixed-size POD; every operation is answered, and a refusal is an answer (DECLINED,
+        // the sink logs why) rather than a fault: an import of a descriptor this server never
+        // exported is something a compositor is allowed to try.
+        case MGPWireOp::SharedImage: {
+            MGPSharedImageReply result{};
+            const Bool ok = m_verbs != nullptr &&
+                            m_verbs->OnSharedImage(*static_cast<const MGPSharedImageOp*>(payload), seq, result);
+            PostReply(op, seq, ok ? ReplySink::kStatusOk : ReplySink::kStatusDeclined, ok ? &result : nullptr,
+                      ok ? sizeof(result) : 0);
+            return ok;
+        }
 
         // ---- P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, opcode 79 -------------
         //

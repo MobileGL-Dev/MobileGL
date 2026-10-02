@@ -254,6 +254,12 @@ namespace MobileGL::MG_Remote::Server {
         // rather than a silent bind. Token 0 (the release) is always legal.
         Bool OnBindContext(const MG_Pipe::MGPBindContext& bind) override;
 
+        // shared_image, opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): the
+        // session's image table (allocate / import / release) and the two GL-ordered operations
+        // (present the default framebuffer into an image, attach an image to a texture).
+        Bool OnSharedImage(const MG_Pipe::MGPSharedImageOp& op, Uint64 seq,
+                           MG_Pipe::MGPSharedImageReply& reply) override;
+
         // P5c ct's tallies, for the same reason every other row's tally exists (R-16: a probe
         // may not arm against a stub). ApplierResets counts the records ACCEPTED (serial
         // checked, reset run); ObjectDeaths counts every record the sink dispatched.

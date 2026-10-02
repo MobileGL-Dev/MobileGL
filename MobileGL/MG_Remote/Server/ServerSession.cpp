@@ -728,6 +728,7 @@ namespace MobileGL::MG_Remote::Server {
         m_t0Stores = m_t0Bytes = m_t0Declined = m_t0Refusals = 0;
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(&transport);
+        m_sharedImages.Clear();
         // P14 S1: the context registry is the session's, so it is emptied with the rest of the
         // per-session state this Accept resets. A session that never crossed a bind_context
         // leaves the current token at 0, which is the single-context shape's answer.
@@ -1110,6 +1111,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(nullptr);
+        m_sharedImages.Clear();
         m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = m_adoptT0Quiet = false;
         m_adoptAsk = 2;
         m_consumer.Detach();

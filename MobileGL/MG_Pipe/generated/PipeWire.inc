@@ -154,7 +154,8 @@ enum class MGPWireOp : Uint16 {
     ReadPixelsToBuffer = 82,
     GetTextureImageToBuffer = 83,
     BindContext = 84,
-    kOpCount = 85,
+    SharedImage = 85,
+    kOpCount = 86,
 };
 
 // THE FLAGS, EXPORTED ONCE, INDEXED BY OPCODE (P5 R-13.4). MGPWireRecHeader::Flags is
@@ -260,6 +261,7 @@ inline constexpr Uint32 kMGPipeCallFlags[static_cast<SizeT>(MGPWireOp::kOpCount)
     /* 82 ReadPixelsToBuffer      */ static_cast<Uint32>(kNone),
     /* 83 GetTextureImageToBuffer */ static_cast<Uint32>(kNone),
     /* 84 BindContext             */ static_cast<Uint32>(kNone),
+    /* 85 SharedImage             */ static_cast<Uint32>(kReplySlot),
 };
 static_assert(sizeof(kMGPipeCallFlags) / sizeof(kMGPipeCallFlags[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -364,6 +366,7 @@ inline constexpr Uint8 kMGPipeCallClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 82 ReadPixelsToBuffer      */ static_cast<Uint8>(kCtxVerb),
     /* 83 GetTextureImageToBuffer */ static_cast<Uint8>(kCtxObject),
     /* 84 BindContext             */ static_cast<Uint8>(kScreen),
+    /* 85 SharedImage             */ static_cast<Uint8>(kScreen),
 };
 static_assert(sizeof(kMGPipeCallClasses) / sizeof(kMGPipeCallClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -472,6 +475,7 @@ inline constexpr Uint8 kMGPipeWaitClasses[static_cast<SizeT>(MGPWireOp::kOpCount
     /* 82 ReadPixelsToBuffer      */ static_cast<Uint8>(kWaitNone),
     /* 83 GetTextureImageToBuffer */ static_cast<Uint8>(kWaitNone),
     /* 84 BindContext             */ static_cast<Uint8>(kWaitNone),
+    /* 85 SharedImage             */ static_cast<Uint8>(kWaitReply),
 };
 static_assert(sizeof(kMGPipeWaitClasses) / sizeof(kMGPipeWaitClasses[0]) ==
                   static_cast<SizeT>(MGPWireOp::kOpCount),
@@ -1210,6 +1214,14 @@ static_assert(sizeof(MGPWireRec_BindContext) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPBindContext) + 7u) & ~SizeT(7u)),
               "MGPWireRec_BindContext gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_SharedImage {
+    MGPWireRecHeader Header;
+    MGPSharedImageOp Payload;
+};
+static_assert(sizeof(MGPWireRec_SharedImage) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPSharedImageOp) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_SharedImage gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -1510,6 +1522,9 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         break;
     case MGPWireOp::BindContext:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_BindContext, "BindContext");
+        break;
+    case MGPWireOp::SharedImage:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SharedImage, "SharedImage");
         break;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:

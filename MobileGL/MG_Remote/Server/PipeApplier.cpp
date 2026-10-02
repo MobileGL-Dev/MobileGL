@@ -31,6 +31,9 @@
 #include <MG_Util/Metrics/TextureMetrics.h>
 
 #include <cstdlib>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <cstring>
 #include <limits>
 
@@ -1472,6 +1475,109 @@ namespace MobileGL::MG_Remote::Server {
     // never created is corruption, not a late record. Token 0 is the release edge and is always
     // legal (a session whose client released its context has no context, which is exactly the
     // value a session that never bound one already answers).
+    Bool ServerVerbSink::OnSharedImage(const MG_Pipe::MGPSharedImageOp& op, Uint64 seq,
+                                       MG_Pipe::MGPSharedImageReply& reply) {
+        namespace SI = SharedImages;
+        ServerSession* session = ServerSession::Active();
+        if (session == nullptr) return false;
+        SI::SessionHolder& holder = session->SharedImageHolder();
+        const auto fill = [&reply](const SI::Image& image) {
+            reply.ImageId = image.Id;
+            reply.Modifier = image.Modifier;
+            reply.Width = image.Width;
+            reply.Height = image.Height;
+            reply.Format = image.Fourcc;
+            reply.Stride = image.Stride;
+            reply.Offset = image.Offset;
+        };
+        switch (op.Op) {
+        case MG_Pipe::kMGPSharedImageAllocate: {
+            std::string why;
+            SI::ImageRef image = SI::Allocate(op.Width, op.Height, op.Format, why);
+            if (image == nullptr) {
+                MGLOG_E("MG_Remote server: shared image %ux%u (fourcc 0x%08x) not allocated: %s", op.Width, op.Height,
+                        op.Format, why.c_str());
+                return false;
+            }
+            Transport::ITransport* transport = session->ControlTransport();
+            // The descriptor goes out BEFORE the reply is posted, so the client finds it queued.
+            MG_Pipe::MGPSharedImageFdOffer offer{MG_Pipe::kMGPSharedImageFdMagic, 1, seq, image->Id, 0};
+            const MobileGLResult shared = transport != nullptr
+                                              ? transport->ShareFd(image->Fd, MobileGLByteSpan{&offer, sizeof(offer)})
+                                              : MOBILEGL_ERR_NOT_INITIALIZED;
+            if (shared != MOBILEGL_OK) {
+                MGLOG_E("MG_Remote server: shared image %llu could not be sent on the aux socket (rc=%d)",
+                        static_cast<unsigned long long>(image->Id), static_cast<int>(shared));
+                return false;
+            }
+            holder.Hold(image);
+            fill(*image);
+            MGLOG_D("MG_Remote server: shared image %llu allocated, %ux%u stride %u",
+                    static_cast<unsigned long long>(image->Id), image->Width, image->Height, image->Stride);
+            return true;
+        }
+        case MG_Pipe::kMGPSharedImageImport: {
+            int fd = -1;
+            std::string why;
+            if (session->T0Inbox().TakeSharedImageFd(seq, Transport::AdoptT0::kOfferWaitMs, &fd, why) !=
+                AdoptInbox::Outcome::Taken) {
+                MGLOG_E("MG_Remote server: shared-image import (record %llu) has no descriptor: %s",
+                        static_cast<unsigned long long>(seq), why.c_str());
+                return false;
+            }
+            SI::ImageRef image = SI::Identify(fd, why);
+#if !defined(_WIN32)
+            ::close(fd);
+#endif
+            if (image == nullptr) {
+                MGLOG_W_ONCE("MG_Remote server: a dma-buf import was refused: %s", why.c_str());
+                return false;
+            }
+            if (image->Width != op.Width || image->Height != op.Height || !SI::FourccSupported(op.Format)) {
+                MGLOG_W("MG_Remote server: a dma-buf import of image %llu (%ux%u) as %ux%u fourcc 0x%08x was refused",
+                        static_cast<unsigned long long>(image->Id), image->Width, image->Height, op.Width, op.Height,
+                        op.Format);
+                return false;
+            }
+            holder.Hold(image);
+            fill(*image);
+            return true;
+        }
+        case MG_Pipe::kMGPSharedImageRelease:
+            reply.ImageId = op.ImageId;
+            return holder.Release(op.ImageId);
+        case MG_Pipe::kMGPSharedImagePresent: {
+            SI::ImageRef image = holder.Get(op.ImageId);
+            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
+            if (image == nullptr || backend == nullptr) return false;
+            MG_Backend::SharedImageView view;
+            view.Id = image->Id;
+            view.Width = image->Width;
+            view.Height = image->Height;
+            view.Fourcc = image->Fourcc;
+            view.NativeBuffer = image->Native;
+            if (!backend->BlitDefaultFramebufferToSharedImage(view)) return false;
+            fill(*image);
+            return true;
+        }
+        case MG_Pipe::kMGPSharedImageAttach: {
+            SI::ImageRef image = holder.Get(op.ImageId);
+            if (image == nullptr) return false;
+            if (!MG_Pipe::MGPipeApplyAttachSharedImage(op.Texture, image->Id)) {
+                MGLOG_E("MG_Remote server: shared image %llu could not be attached to texture {slot=%u, gen=%u}: the "
+                        "texture has no record",
+                        static_cast<unsigned long long>(image->Id), op.Texture.Slot, op.Texture.Gen);
+                return false;
+            }
+            fill(*image);
+            return true;
+        }
+        default:
+            MGLOG_E("MG_Remote server: shared_image operation %u is not one this server knows", op.Op);
+            return false;
+        }
+    }
+
     Bool ServerVerbSink::OnBindContext(const MG_Pipe::MGPBindContext& bind) {
         // NO SESSION IS A DECLINE, NOT A FAULT, and it is the one case here that a peer's bytes
         // cannot cause: a bind is answered by the session's own table, so with no accepted

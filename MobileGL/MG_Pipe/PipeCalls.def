@@ -72,9 +72,9 @@
 // that the expansion, the two generated tables and this number agree.
 //
 //   class       entries   group (as the plan tabulates it)
-//   kScreen        13     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
+//   kScreen        14     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
 //                         appended server-side fence wait 1 and P5c's applier_reset 1 and
-//                         P14 S1's bind_context 1
+//                         P14 S1's bind_context 1 and the shared-image row 1
 //   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      19     16 of the 18 set_* calls + the temporary set_residual_value_state
@@ -153,9 +153,11 @@
 //     design's per-record ContextSlot was NOT taken here: the token is announced at the edge
 //     (a context change) instead of stamped on every verb, which costs one record per
 //     make-current and leaves the 71 context-family payloads untouched. 84 unique records.
+//     shared_image (85), the server-allocated colour buffers exported as dma-bufs. 85 unique
+//     records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 84
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 85
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -374,7 +376,14 @@
     /* ---- context-family verb, and it has no MGPipeApply* entry point and no monolith producer. ---- */ \
     /* ---- kWaitNone: the apply reads no client memory and the record's placement in the ring    ---- */ \
     /* ---- is the whole of its ordering.                                                        ---- */ \
-    X(BindContext,              MGPBindContext,            kScreen,    kNone,                      kWaitNone)
+    X(BindContext,              MGPBindContext,            kScreen,    kNone,                      kWaitNone)        \
+    /* ---- APPENDED FOR SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md),    ---- */ \
+    /* ---- opcode 85: allocate / import / release / present / attach of a server-allocated    ---- */ \
+    /* ---- colour buffer exported as a dma-buf. kScreen: the image table is the server's, and  ---- */ \
+    /* ---- present / attach act on the session's current context the way bind_context does.   ---- */ \
+    /* ---- kWaitReply: every operation's answer is acted on (an id, a descriptor, a fence).    ---- */ \
+    /* ---- No MGPipeApply* entry point and no monolith producer.                               ---- */ \
+    X(SharedImage,              MGPSharedImageOp,          kScreen,    kReplySlot,                 kWaitReply)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

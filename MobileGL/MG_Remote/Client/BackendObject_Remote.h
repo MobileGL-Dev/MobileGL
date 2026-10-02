@@ -78,6 +78,14 @@ namespace MobileGL::MG_Remote::Client {
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 
+        // ---- shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) -------------
+        Bool AllocateSharedImage(Uint32 width, Uint32 height, Uint32 fourcc,
+                                 MG_Backend::SharedImageExport* out) override;
+        Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) override;
+        Bool ReleaseSharedImage(Uint64 id) override;
+        Bool PresentToSharedImage(Uint64 id) override;
+        Bool AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) override;
+
         // Copies the caps mirror's FormatCapabilityCache into the base class's
         // m_formatCapabilities. Public because CapsMirror's adoption hook is a free function
         // and this is what it calls; it is the whole of trap 2's answer.

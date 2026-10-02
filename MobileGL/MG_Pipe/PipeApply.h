@@ -294,6 +294,13 @@ namespace MobileGL::MG_Pipe {
         // DirectGLESBufferDrawProbe pair now pins from both sides.
         Bool HasLiveHostWrites = false;
 
+        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Nonzero: this
+        // texture's level-0 storage IS the server's shared image of this id (an EGLImage target),
+        // set by shared_image's Attach and cleared by the next respecify that redefines storage.
+        // The backend resolves the id at its texture sync (MG_Remote::Server::SharedImages::Find)
+        // and binds that buffer instead of allocating storage; Serial moves with it.
+        Uint64 SharedImageId = 0;
+
         // ---- P4a. Only a record of kind Texture ever carries these; a buffer's stay at
         // their defaults, which is what keeps ONE record type for the discriminated
         // descriptor rather than a second one that would have to be kept in step with it.
@@ -1392,6 +1399,10 @@ namespace MobileGL::MG_Pipe {
     // Returns true when the descriptor was stored - metadata updates included, since the record
     // did move - and false when the call was refused: a descriptor whose target names no
     // resource kind, or a handle this applier has no live record for at that generation.
+    // SHARED IMAGES: the texture `texture`'s level-0 storage becomes shared image `imageId`
+    // (MGPipeResourceRecord::SharedImageId). False when the texture has no live record.
+    Bool MGPipeApplyAttachSharedImage(MGPipeHandle texture, Uint64 imageId);
+
     Bool MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                       const MGPRespecifiedLevel* level = nullptr);
     // resource_subdata, buffer half: the destination range rides in the record's box through
