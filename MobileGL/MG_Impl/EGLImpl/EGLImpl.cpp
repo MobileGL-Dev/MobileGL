@@ -82,6 +82,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // may have moved it since this one last bound. The caller holds EGLOperationMutex.
         thread_local Uint64 t_threadContextToken = 0;
         Uint64 g_boundContextToken = 0; // guarded by EGLOperationMutex
+        // P14: the share groups of the two tokens above, kept beside them so the client can say
+        // which group's object records a record written now lands in (StreamBoundShareGroupToken).
+        thread_local Uint64 t_threadShareGroupToken = 0;
+        Uint64 g_boundShareGroupToken = 0; // guarded by EGLOperationMutex
 
         void EmitContextBinding(EGLStateContext* state, EGLContext switched, Uint64 previousToken) {
             (void)previousToken;
@@ -91,6 +95,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             // not a slow path.
             if (MG_Remote::Client::RunsAsTheServerRole()) return;
             t_threadContextToken = switched == EGL_NO_CONTEXT ? 0 : state->GetContextClientToken(switched);
+            t_threadShareGroupToken = switched == EGL_NO_CONTEXT ? 0 : state->GetContextShareGroupToken(switched);
             StreamBindCallingThreadLocked();
         }
 #endif
@@ -113,7 +118,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
     void StreamBindCallingThreadLocked() {
         const Uint64 token = t_threadContextToken;
         if (token == g_boundContextToken) return;
-        if (MG_Remote::Client::EmitBindContextRecord(token)) g_boundContextToken = token;
+        if (MG_Remote::Client::EmitBindContextRecord(token)) {
+            g_boundContextToken = token;
+            g_boundShareGroupToken = t_threadShareGroupToken;
+        }
+    }
+
+    Bool StreamBoundShareGroupToken(Uint64* outToken) {
+        if (!StreamGateActive()) return false;
+        *outToken = g_boundShareGroupToken;
+        return true;
     }
 
     namespace {
@@ -593,7 +607,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
             // The server drops its binding to 0 when the current context is destroyed
             // (ServerSession::DestroyContext's compare-and-swap); the gate mirrors it so the next
             // write re-binds.
-            if (g_boundContextToken == contextToken) g_boundContextToken = 0;
+            if (g_boundContextToken == contextToken) {
+                g_boundContextToken = 0;
+                g_boundShareGroupToken = 0;
+            }
             const auto emitted = MG_Remote::Client::SendDestroyContextFrame(contextToken);
             if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
                 MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "

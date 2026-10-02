@@ -1888,6 +1888,93 @@ TEST(TextureEmit, ATextureBornBeforeTheConsumerRegisteredGetsItsRecordFromItsFir
     EXPECT_EQ(Textures().RefusedParamCount(), 0u);
 }
 
+// ============================ P14: textures of two share groups ============================
+//
+// THE SHAPE BEHIND A SERVED APPLICATION's BLACK TEXTURES. Two non-shared contexts each give a
+// texture the same sampler parameters. The server files texture and sampler-CSO records per
+// share group, while the client's sampler CSO cache is one per process - so the second texture's
+// set_texture_params named a built-in sampler handle that only the FIRST group's applier had a
+// record for. Magma sampled that texture with default parameters and Espryt declined the push,
+// leaving the driver's incomplete-texture default. Red without the per-group re-issue in
+// MGPipeSamplerCsoCache::AcquireCanonical.
+namespace {
+    thread_local Uint64 t_pairSession = 0;
+    thread_local Uint64 t_pairContext = 0;
+
+    Bool PairKeyResolver(MGPipeApplierKey* outKey) {
+        if (t_pairSession == 0) return false;
+        outKey->SessionKey = t_pairSession;
+        outKey->ContextToken = t_pairContext;
+        return true;
+    }
+
+    // Two contexts of one served session in two share groups, made current in turn on both halves
+    // a served client keeps in step: the frontend's GL state and the server's bound context
+    // (GLStreamScope rebinds the session before a GL entry point writes).
+    struct ShareGroupPair {
+        static constexpr Uint64 kSession = 0x5A3E7E50C0000000ull;
+        ShareGroupPair() : m_previous(MG_State::pGLContext) {
+            for (Uint64 i = 0; i < 2; ++i) {
+                m_contexts[i] = MakeShared<GLContext>(MakeShared<MG_State::GLState::ShareGroupState>(0x61 + i));
+                MGPipeApplierRegisterContext(kSession, i + 1, 0x61 + i);
+            }
+            MGPipeSetApplierKeyResolver(&PairKeyResolver);
+        }
+        ~ShareGroupPair() {
+            t_pairSession = 0;
+            t_pairContext = 0;
+            MGPipeSetApplierKeyResolver(nullptr);
+            MGPipeApplierReleaseSession(kSession);
+            MG_State::pGLContext = m_previous;
+        }
+        ShareGroupPair(const ShareGroupPair&) = delete;
+        ShareGroupPair& operator=(const ShareGroupPair&) = delete;
+
+        void MakeCurrent(Uint32 index) {
+            MG_State::pGLContext = m_contexts[index];
+            t_pairSession = kSession;
+            t_pairContext = index + 1;
+        }
+
+        SharedPtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_contexts[2];
+    };
+} // namespace
+
+TEST(TextureEmit, ATextureInASecondShareGroupNamesABuiltinSamplerItsOwnGroupHolds) {
+    TextureScope scope;
+    ShareGroupPair groups;
+    const auto makeCurrent = [&](Uint32 index) { groups.MakeCurrent(index); };
+
+    makeCurrent(0);
+    auto first = MakeTexture2D(301, 8);
+    first->GetSamplerObject()->SetLodBias(1.25f);
+    MG_Pipe::MGPipeEmitTextureParams(*first);
+
+    makeCurrent(1);
+    auto second = MakeTexture2D(302, 8);
+    second->GetSamplerObject()->SetLodBias(1.25f);
+    MG_Pipe::MGPipeEmitTextureParams(*second);
+
+    const MGPipeResourceRecord* record = AppliedTexture(Textures().FindTexture(*second));
+    ASSERT_NE(record, nullptr) << "the second group holds no record for its own texture";
+    const MGPipeHandle sampler = record->Params.BuiltinSampler;
+    const auto& samplers = MGPipeApplier().SamplerCsos;
+    ASSERT_FALSE(MGPipeHandleIsNull(sampler));
+    ASSERT_LT(sampler.Slot, samplers.size())
+        << "the texture names built-in sampler {" << sampler.Slot << ", " << sampler.Gen
+        << "}, which its share group's applier was never sent";
+    EXPECT_TRUE(samplers[sampler.Slot].Live && samplers[sampler.Slot].Gen == sampler.Gen)
+        << "the texture names built-in sampler {" << sampler.Slot << ", " << sampler.Gen
+        << "}, which its share group's applier was never sent";
+    EXPECT_EQ(samplers[sampler.Slot].Params.lodBias, 1.25f);
+
+    // Each texture dies in its own group, where its record is.
+    second.reset();
+    makeCurrent(0);
+    first.reset();
+}
+
 #endif // MOBILEGL_PIPE_PUSH
 
 // =========================================================================================

@@ -795,6 +795,119 @@ namespace {
         EXPECT_EQ(Cache().GetCounters().Collisions, 0u);
     }
 
+    // ============================ P14: one cache, many share groups ============================
+
+    // The calling thread's {session, context} for the applier's key resolver - the shape the
+    // server's own resolver (SessionRuntime.cpp) fills in from the session's bound context.
+    thread_local Uint64 t_groupSession = 0;
+    thread_local Uint64 t_groupContext = 0;
+
+    Bool TwoGroupKeyResolver(MGPipeApplierKey* outKey) {
+        if (t_groupSession == 0) return false;
+        outKey->SessionKey = t_groupSession;
+        outKey->ContextToken = t_groupContext;
+        return true;
+    }
+
+    // Two contexts of one session in two share groups (or one, with `shared`), made current in
+    // turn on BOTH halves a served client keeps in step: the frontend's pGLContext and the
+    // server's bound context (GLStreamScope rebinds the session before a GL entry point writes).
+    struct ShareGroupPair {
+        static constexpr Uint64 kSession = 0x5A3E5C50C0000000ull;
+        explicit ShareGroupPair(Bool shared) {
+            m_previous = MG_State::pGLContext;
+            for (Uint64 i = 0; i < 2; ++i) {
+                const Uint64 group = shared ? 0x51 : 0x51 + i;
+                m_contexts[i] = MakeShared<GLContext>(MakeShared<MG_State::GLState::ShareGroupState>(group));
+                MGPipeApplierRegisterContext(kSession, i + 1, group);
+            }
+            MGPipeSetApplierKeyResolver(&TwoGroupKeyResolver);
+        }
+        ~ShareGroupPair() {
+            t_groupSession = 0;
+            t_groupContext = 0;
+            MGPipeSetApplierKeyResolver(nullptr);
+            MGPipeApplierReleaseSession(kSession);
+            MG_State::pGLContext = m_previous;
+        }
+        ShareGroupPair(const ShareGroupPair&) = delete;
+        ShareGroupPair& operator=(const ShareGroupPair&) = delete;
+
+        void MakeCurrent(Uint32 index) {
+            MG_State::pGLContext = m_contexts[index];
+            t_groupSession = kSession;
+            t_groupContext = index + 1;
+        }
+
+        SharedPtr<GLContext> m_previous;
+        SharedPtr<GLContext> m_contexts[2];
+    };
+
+    // The record the applier the calling thread is bound to holds for `cso`, or null.
+    const MGPipeSamplerCsoRecord* BoundGroupSamplerRecord(MGPipeHandle cso) {
+        const auto& table = MGPipeApplier().SamplerCsos;
+        if (MGPipeHandleIsNull(cso) || cso.Slot >= table.size()) return nullptr;
+        const MGPipeSamplerCsoRecord& record = table[cso.Slot];
+        return record.Live && record.Gen == cso.Gen ? &record : nullptr;
+    }
+
+    // THE CACHE IS PROCESS-WIDE AND THE RECORD IS PER SHARE GROUP. A value minted while one
+    // non-shared context was current is a cache hit for the next one, and before the fix that hit
+    // handed back a handle the second group's applier had never been sent: the texture naming it
+    // sampled with default parameters on Magma and with none at all on Espryt. Red without the
+    // re-issue in AcquireCanonical: the second group has no record and GroupPublishes stays 0.
+    TEST(SamplerEmit, AValueMintedInOneShareGroupIsPublishedIntoTheNextGroupThatAcquiresIt) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/false);
+        Cache().ResetCounters();
+        const SamplerParameters params = DistinctParameters();
+        Uint64 payload = 0;
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle first = Cache().Acquire(params, payload);
+        ASSERT_NE(BoundGroupSamplerRecord(first), nullptr) << "the minting group was not sent the create";
+
+        groups.MakeCurrent(1);
+        const MGPipeHandle second = Cache().Acquire(params, payload);
+        EXPECT_EQ(second, first) << "one value is still one CSO across groups";
+        const MGPipeSamplerCsoRecord* record = BoundGroupSamplerRecord(second);
+        ASSERT_NE(record, nullptr) << "the second share group names a sampler CSO its applier never received";
+        EXPECT_EQ(record->Params.magFilter, params.magFilter);
+        EXPECT_EQ(record->Params.borderColorForm, params.borderColorForm);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 1u);
+
+        // Once per group, not once per acquire: a second hit in either group sends nothing.
+        const MGPipeHandle again = Cache().Acquire(params, payload);
+        groups.MakeCurrent(0);
+        const MGPipeHandle back = Cache().Acquire(params, payload);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 1u);
+        EXPECT_NE(BoundGroupSamplerRecord(back), nullptr);
+
+        for (const MGPipeHandle held : {first, second, again, back}) Cache().Release(held);
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases + Cache().GetCounters().UnderflowedReleases, 0u);
+    }
+
+    // The control: contexts that SHARE a group share the record too, so a hit from the second
+    // re-issues nothing.
+    TEST(SamplerEmit, ASharingContextReusesTheRecordItsGroupAlreadyHolds) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/true);
+        Cache().ResetCounters();
+        const SamplerParameters params = DistinctParameters();
+        Uint64 payload = 0;
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle first = Cache().Acquire(params, payload);
+        groups.MakeCurrent(1);
+        const MGPipeHandle second = Cache().Acquire(params, payload);
+        EXPECT_EQ(second, first);
+        EXPECT_NE(BoundGroupSamplerRecord(second), nullptr);
+        EXPECT_EQ(Cache().GetCounters().GroupPublishes, 0u);
+        Cache().Release(first);
+        Cache().Release(second);
+    }
+
     // ============================ D-F2: the sampler view ============================
 
     TEST(SamplerEmit, AnUnchangedTextureReIssuesNothing) {

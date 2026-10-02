@@ -38,6 +38,9 @@
 //
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
 #if MOBILEGL_PIPE_PUSH
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Impl/EGLImpl/EGLImpl.h>
+#endif
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/Tracker.h>
@@ -209,6 +212,30 @@ namespace MobileGL::MG_Pipe {
                   "a cache that cannot hold one whole emission pass would mint over capacity on "
                   "every pass; correctness against eviction is the reference count, not this bound");
 
+    // P14 (docs/Disaggregated/design/11-state-ownership.md): THE SHARE GROUP A RECORD EMITTED NOW
+    // LANDS IN. The server files object records - create_sampler_state's among them - per
+    // {session, share group}, under the context the stream is bound to. That is the stream's own
+    // answer and not the calling thread's: a GL entry point rebinds to the caller first
+    // (GLStreamScope), but an EGL operation does not, and eglCreateContext's birth hooks mint.
+    // Without a stream (a monolith, a unit case) the caller's GLContext is the answer. Group
+    // tokens are minted once and never reused (EGLState::CreateContext), which is what makes them
+    // usable as an identity; 0 is "no EGL context", the server's "no context" applier.
+    inline Uint64 MGPipeCurrentShareGroupToken() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Uint64 bound = 0;
+        if (MG_Impl::EGLImpl::StreamBoundShareGroupToken(&bound)) return bound;
+#endif
+        const auto& context = MG_State::pGLContext;
+        if (!context) return 0;
+        const auto& group = context->GetShareGroup();
+        return group ? group->GetToken() : 0;
+    }
+
+    // How many share groups one entry remembers having published into. Forgetting one is always
+    // safe - the next Acquire there re-issues the create on the same handle, which the applier
+    // takes as a serial bump - so this bounds memory, not correctness.
+    inline constexpr SizeT kMGPipeSamplerCsoPublishedGroups = 8;
+
     class MGPipeSamplerCsoCache {
     public:
         struct Counters {
@@ -244,6 +271,9 @@ namespace MobileGL::MG_Pipe {
             // choice structurally guarantees it stays 0; it is what would say so in a shipped
             // build if a second caller of Evict ever appeared.
             Uint64 ReferencedEvictions = 0;
+            // create_sampler_state RE-ISSUED on an existing handle because the bound share group
+            // had not been sent it - see AcquireCanonical.
+            Uint64 GroupPublishes = 0;
         };
 
         // The handle for `params`' value, AND A REFERENCE ON IT. Mints and emits
@@ -376,7 +406,48 @@ namespace MobileGL::MG_Pipe {
             // THE CANONICAL BYTES, not the caller's. This is the memcmp's other operand and it
             // has to have the same deterministic padding the probe's copy has.
             SamplerParameters Params{};
+            // THE SHARE GROUPS whose object records hold this handle's create_sampler_state
+            // (MGPipeCurrentShareGroupToken). The entry is process-wide but the applier's record
+            // is per group, so a hit from a group not listed here re-issues the create before
+            // the caller names the handle there. Full -> the oldest is overwritten.
+            Uint64 PublishedGroups[kMGPipeSamplerCsoPublishedGroups] = {};
+            Uint32 PublishedGroupCount = 0;
+            Uint32 NextPublishedGroup = 0;
         };
+
+        static Bool IsPublishedIn(const Entry& entry, Uint64 group) {
+            for (Uint32 i = 0; i < entry.PublishedGroupCount; ++i) {
+                if (entry.PublishedGroups[i] == group) return true;
+            }
+            return false;
+        }
+
+        static void NotePublishedIn(Entry& entry, Uint64 group) {
+            if (IsPublishedIn(entry, group)) return;
+            if (entry.PublishedGroupCount < kMGPipeSamplerCsoPublishedGroups) {
+                entry.PublishedGroups[entry.PublishedGroupCount++] = group;
+                return;
+            }
+            entry.PublishedGroups[entry.NextPublishedGroup] = group;
+            entry.NextPublishedGroup = (entry.NextPublishedGroup + 1) % kMGPipeSamplerCsoPublishedGroups;
+        }
+
+        // The create Mint sends, re-issued on an entry that already exists: same handle, same
+        // canonical bytes.
+        void EmitCreate(Entry& entry, Uint64& payloadBytes) {
+            MGPSamplerDesc desc{};
+            desc.Cso = entry.Cso;
+            desc.Parameters.Seg = kMGHostSpanSegNone;
+            desc.Parameters.Offset = 0;
+            desc.Parameters.Size = 0;
+            MGPipeRouteCreateSamplerState(desc, &entry.Params);
+            NotePublishedIn(entry, MGPipeCurrentShareGroupToken());
+            payloadBytes += sizeof(MGPSamplerDesc) + sizeof(SamplerParameters);
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes,
+                                             sizeof(SamplerParameters));
+            }
+        }
 
         MGPipeHandle AcquireCanonical(Uint64 hash, const SamplerParameters& canon, Uint64& payloadBytes) {
             ++m_counters.Acquisitions;
@@ -397,6 +468,17 @@ namespace MobileGL::MG_Pipe {
                 m_entries[i].LastUsed = ++m_clock;
                 ++m_entries[i].RefCount;
                 ++m_counters.Hits;
+                // A HIT IS ONLY A HIT IN THE GROUPS THAT WERE SENT THE CREATE. Two non-shared
+                // contexts asking for one value get one handle, but the server holds the record
+                // in the first one's share group only; naming the handle from the second (a
+                // set_texture_params, a bind_sampler_states) resolved to nothing there and the
+                // texture sampled with default parameters. The re-issue lands the record in this
+                // group under the same handle, which is safe because the slot space is
+                // process-wide: another group's table holding it is wider, never aliased.
+                if (!IsPublishedIn(m_entries[i], MGPipeCurrentShareGroupToken())) {
+                    EmitCreate(m_entries[i], payloadBytes);
+                    ++m_counters.GroupPublishes;
+                }
                 return m_entries[i].Cso;
             }
             return Mint(hash, canon, payloadBytes);
@@ -457,6 +539,7 @@ namespace MobileGL::MG_Pipe {
             // call and the bytes it stores are provably the bytes the memcmp will confirm
             // against later.
             MGPipeRouteCreateSamplerState(desc, &m_entries.back().Params);
+            NotePublishedIn(m_entries.back(), MGPipeCurrentShareGroupToken());
             // THE CREATE ACTUALLY WENT OUT, so the publication latch is taken here and nowhere
             // else (contract-v2 §3.1). It is what the six death helpers read, and without it a
             // delete_sampler_state can never go out for this kind.
@@ -491,7 +574,15 @@ namespace MobileGL::MG_Pipe {
             // only then does the slot go back. There is no NotifyStateObjectDestroyed step
             // here - a content-addressed CSO has no frontend object whose death is being
             // announced, which is precisely why this eviction is the only death path it has.
-            MGPipeRouteDeleteSamplerState(handle);
+            //
+            // THE DELETE REACHES THE BOUND SHARE GROUP ONLY, so it is sent only when that group
+            // holds the record; a group that was never sent the create would count
+            // it as a refused object call. Other groups keep an unreferenced record at this slot
+            // (nothing may name it: the count is 0) until a create for the slot's next
+            // generation is published there and starts it over, or the group is torn down.
+            if (IsPublishedIn(m_entries[index], MGPipeCurrentShareGroupToken())) {
+                MGPipeRouteDeleteSamplerState(handle);
+            }
             // AND THE LATCH GOES WITH THE DELETE. This is the "an emitter that drops a record
             // for its own reasons calls MGPipeNoteHandleUnpublished" half of the publication
             // protocol (contract-v2 §3.1): the record is gone, so a death helper reaching this

@@ -91,6 +91,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
     Bool StreamGateActive();
     std::recursive_mutex& StreamMutex();
     void StreamBindCallingThreadLocked();
+    // P14: the share-group token of the context the stream is bound to - the group whose object
+    // records anything written right now lands in on the server. False while the gate is inactive
+    // (a monolith, the server's own apply thread), where no binding crosses. Read under
+    // StreamMutex(), like the binding itself.
+    Bool StreamBoundShareGroupToken(Uint64* outToken);
 
     class GLStreamScope {
     public:
