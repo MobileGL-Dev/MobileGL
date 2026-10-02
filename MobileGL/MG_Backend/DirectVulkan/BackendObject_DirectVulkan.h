@@ -81,8 +81,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 Height = 1;
         };
         UnorderedMap<EGLSurface, SuspendedWindowSurface> m_suspendedWindowSurfaces;
-        // The placeholder pbuffer target of a suspended surface, made active.
-        void ActivateSuspendedPlaceholder(EGLSurface surface, const SuspendedWindowSurface& extent);
+        // The placeholder pbuffer target of a suspended surface, made active. False: it could not be built.
+        Bool ActivateSuspendedPlaceholder(EGLSurface surface, const SuspendedWindowSurface& extent);
     };
 
     // Single-source-of-truth helpers shared with the driver POST

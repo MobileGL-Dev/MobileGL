@@ -8,6 +8,7 @@
 
 #include "VulkanRenderer.h"
 #include "SubmitFencePrefix.h"
+#include "OffscreenSurfaceRoute.h"
 
 #include "MG_Backend/DirectVulkan/SubgroupSupportPolicy.h"
 #include "MG_Backend/DirectGLES/Utils.h"
@@ -3267,7 +3268,7 @@ void main() {
         MagmaPipeValidateSubsystemConfiguration();
 #endif
         CreateInstance();
-        CreateSurface();
+        if (!CreateSurface()) throw RuntimeError("DirectVulkan: the initial surface could not be created");
         PickPhysicalDevice();
         CreateLogicalDeviceAndQueues();
         CreateAllocator();
@@ -14807,6 +14808,7 @@ void main() {
                 MGLOG_I("%s not available; falling back to an AImageReader %s surface for the pbuffer context.",
                         VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
                 exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+                m_androidSurfaceEnabled = true;
             }
 #elif defined VK_USE_PLATFORM_XLIB_KHR
             // An offscreen surface has ZERO window-system dependence, by design and on
@@ -14833,6 +14835,7 @@ void main() {
         } else {
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
             exts.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+            m_androidSurfaceEnabled = true;
 #elif defined VK_USE_PLATFORM_WIN32_KHR
             exts.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #elif defined VK_USE_PLATFORM_METAL_EXT
@@ -16438,42 +16441,66 @@ void main() {
         MGLOG_I("Command pool created");
     }
 
-    void VulkanRenderer::CreateSurface() {
+    Bool VulkanRenderer::CreateSurface() {
         if (!m_window) {
 #if defined VK_USE_PLATFORM_METAL_EXT
             m_window = reinterpret_cast<NativeWindowType>(
                 CreateInternalMetalLayer(m_config.SurfaceWidth, m_config.SurfaceHeight, &m_platformDisplay));
             m_platformLibrary = reinterpret_cast<void*>(m_window);
 #elif defined VK_USE_PLATFORM_ANDROID_KHR
-            if (m_headlessSurfaceSupported) {
-                auto* createHeadlessSurface = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
-                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
-                MOBILEGL_ASSERT(createHeadlessSurface != nullptr,
-                                "VK_EXT_headless_surface is not available for DirectVulkan pbuffer surface");
+            // EVERY ENTRY POINT HERE IS OPTIONAL, and each refusal is a `return false`, not
+            // MOBILEGL_ASSERT: that macro is compiled out at the INFO level every shipping build uses,
+            // and a renderer created for a WINDOW never enabled the headless extension - asking its
+            // instance for vkCreateHeadlessSurfaceEXT answers null, and calling that crashed the server
+            // the first time such a renderer needed an offscreen target.
+            auto* createHeadlessSurface =
+                m_headlessSurfaceSupported ? reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                                                 vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"))
+                                           : nullptr;
+            const OffscreenSurfaceRoute route = ChooseOffscreenSurfaceRoute(
+                m_headlessSurfaceSupported, createHeadlessSurface != nullptr, m_androidSurfaceEnabled);
+            if (route == OffscreenSurfaceRoute::Headless) {
                 VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
-                VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
-                          "vkCreateHeadlessSurfaceEXT failed");
-                return;
+                const VkResult result = createHeadlessSurface(m_instance, &sci, nullptr, &m_surface);
+                if (result != VK_SUCCESS) {
+                    MGLOG_E("DirectVulkan: vkCreateHeadlessSurfaceEXT failed (%d) for an offscreen target",
+                            static_cast<int>(result));
+                    m_surface = VK_NULL_HANDLE;
+                    return false;
+                }
+                return true;
+            }
+            if (route == OffscreenSurfaceRoute::Unavailable) {
+                MGLOG_E("DirectVulkan: no offscreen surface route on this instance (neither %s nor %s enabled)",
+                        VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME, VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+                return false;
             }
             // Windowless context on a driver without VK_EXT_headless_surface: give
             // the WSI an AImageReader's ANativeWindow. It is a real, valid producer
             // surface that is attached to no display and whose images this code never
             // acquires, which is exactly the "drawable nobody sees" the Xlib fallback
             // below builds out of an unmapped window. libmediandk is dlopen'd rather
-            // than linked so a device without it degrades to the old error instead of
+            // than linked so a device without it degrades to a refusal instead of
             // failing to load the library at all.
             {
                 void* mediaLib = dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
-                MOBILEGL_ASSERT(mediaLib != nullptr,
-                                "VK_EXT_headless_surface is unavailable and libmediandk.so could not be loaded "
-                                "for the pbuffer surface fallback");
+                if (mediaLib == nullptr) {
+                    MGLOG_E("DirectVulkan: libmediandk.so could not be loaded for an offscreen target");
+                    return false;
+                }
                 using AImageReaderNewFn = int (*)(int32_t, int32_t, int32_t, int32_t, void**);
                 using AImageReaderGetWindowFn = int (*)(void*, void**);
+                using AImageReaderDeleteFn = void (*)(void*);
                 auto* imageReaderNew = reinterpret_cast<AImageReaderNewFn>(dlsym(mediaLib, "AImageReader_new"));
                 auto* imageReaderGetWindow =
                     reinterpret_cast<AImageReaderGetWindowFn>(dlsym(mediaLib, "AImageReader_getWindow"));
-                MOBILEGL_ASSERT(imageReaderNew != nullptr && imageReaderGetWindow != nullptr,
-                                "libmediandk.so is missing AImageReader_new/AImageReader_getWindow");
+                auto* imageReaderDelete =
+                    reinterpret_cast<AImageReaderDeleteFn>(dlsym(mediaLib, "AImageReader_delete"));
+                if (imageReaderNew == nullptr || imageReaderGetWindow == nullptr || imageReaderDelete == nullptr) {
+                    MGLOG_E("DirectVulkan: libmediandk.so is missing AImageReader_new/getWindow/delete");
+                    dlclose(mediaLib);
+                    return false;
+                }
 
                 constexpr int32_t kAndroidFormatRgba8888 = 0x1; // AIMAGE_FORMAT_RGBA_8888
                 const int32_t width = static_cast<int32_t>(std::max<Uint32>(m_config.SurfaceWidth, 1));
@@ -16482,12 +16509,16 @@ void main() {
                 // maxImages must cover the swapchain's images; the reader never
                 // acquires any, so this only sizes its buffer queue.
                 const int status = imageReaderNew(width, height, kAndroidFormatRgba8888, 8, &reader);
-                MOBILEGL_ASSERT(status == 0 && reader != nullptr,
-                                "AImageReader_new failed (%d) for the pbuffer surface fallback", status);
                 void* nativeWindow = nullptr;
-                const int windowStatus = imageReaderGetWindow(reader, &nativeWindow);
-                MOBILEGL_ASSERT(windowStatus == 0 && nativeWindow != nullptr,
-                                "AImageReader_getWindow failed (%d) for the pbuffer surface fallback", windowStatus);
+                const int windowStatus =
+                    (status == 0 && reader != nullptr) ? imageReaderGetWindow(reader, &nativeWindow) : -1;
+                if (windowStatus != 0 || nativeWindow == nullptr) {
+                    MGLOG_E("DirectVulkan: no AImageReader window for an offscreen target (new %d, getWindow %d)",
+                            status, windowStatus);
+                    if (reader != nullptr) imageReaderDelete(reader);
+                    dlclose(mediaLib);
+                    return false;
+                }
                 m_fallbackImageReader = reader;
                 m_platformLibrary = mediaLib;
                 m_window = reinterpret_cast<NativeWindowType>(nativeWindow);
@@ -16510,7 +16541,7 @@ void main() {
             VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
             VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
                       "vkCreateHeadlessSurfaceEXT failed");
-            return;
+            return true;
 #else
             auto* createHeadlessSurface =
                 reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
@@ -16526,7 +16557,7 @@ void main() {
             VkHeadlessSurfaceCreateInfoEXT sci{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
             VK_VERIFY(createHeadlessSurface(m_instance, &sci, nullptr, &m_surface),
                       "vkCreateHeadlessSurfaceEXT failed");
-            return;
+            return true;
 #endif
         }
 #if defined VK_USE_PLATFORM_ANDROID_KHR
@@ -16535,7 +16566,12 @@ void main() {
 
         VkAndroidSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR};
         sci.window = nativeWindow;
-        VK_VERIFY(vkCreateAndroidSurfaceKHR(m_instance, &sci, nullptr, &m_surface), "vkCreateAndroidSurfaceKHR failed");
+        const VkResult androidSurfaceResult = vkCreateAndroidSurfaceKHR(m_instance, &sci, nullptr, &m_surface);
+        if (androidSurfaceResult != VK_SUCCESS) {
+            MGLOG_E("DirectVulkan: vkCreateAndroidSurfaceKHR failed (%d)", static_cast<int>(androidSurfaceResult));
+            m_surface = VK_NULL_HANDLE;
+            return false;
+        }
 #elif defined VK_USE_PLATFORM_WIN32_KHR
         auto hwnd = static_cast<HWND>(m_window);
         MOBILEGL_ASSERT(hwnd, "HWND is null");
@@ -16606,6 +16642,7 @@ void main() {
         MGLOG_W("VulkanRenderer::Initialize called on a platform which is not supported yet"); // TODO: support more
                                                                                                // platforms
 #endif
+        return true;
     }
 
     Vector<VkQueueFamilyProperties> VulkanRenderer::GetQueueFamilyFromPhysicalDevice(VkPhysicalDevice device) {
@@ -16947,9 +16984,9 @@ void main() {
         InvalidateSetupDrawSnapshots();
     }
 
-    void VulkanRenderer::ActivateSurfaceTarget(Uint64 key, NativeWindowType window,
+    Bool VulkanRenderer::ActivateSurfaceTarget(Uint64 key, NativeWindowType window,
                                                const VulkanRendererConfig& surfaceConfig) {
-        if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) return;
+        if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) return true;
         ParkActiveTarget();
         auto parked = m_parkedTargets.find(key);
         if (parked != m_parkedTargets.end()) {
@@ -16967,7 +17004,17 @@ void main() {
             m_swapchainSwapInterval.reset();
             m_swapchainResizeRequested = false;
             m_presentSuspended = false;
-            CreateSurface();
+            if (!CreateSurface()) {
+                // Nothing of the half-built target stays active: its image reader and library go
+                // with it, and the renderer has no target until the caller activates another.
+                SurfaceTarget failed;
+                ExchangeActiveTarget(failed);
+                DestroyParkedTarget(failed);
+                m_activeTargetKey = 0;
+                MGLOG_E("DirectVulkan: surface target for key %llu could not be built (%s)",
+                        static_cast<unsigned long long>(key), window != NativeWindowType{} ? "window" : "pbuffer");
+                return false;
+            }
             CreateSwapchain();
             m_defaultFramebufferImageIndex = 0;
             VK_VERIFY(m_frameContext.InitializeSwapchainSemaphores(
@@ -16988,6 +17035,7 @@ void main() {
         }
         m_activeTargetKey = key;
         OnActiveTargetChanged();
+        return true;
     }
 
     void VulkanRenderer::DestroyParkedTarget(SurfaceTarget& target) {

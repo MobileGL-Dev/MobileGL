@@ -453,7 +453,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Activating another key parks the active target - its recorded work submitted, its
         // pending acquire consumed - and brings the other back, or builds it on first use.
         void SetActiveSurfaceTargetKey(Uint64 key) { m_activeTargetKey = key; }
-        void ActivateSurfaceTarget(Uint64 key, NativeWindowType window, const VulkanRendererConfig& surfaceConfig);
+        // False when a NEW target's surface could not be built (logged); the renderer is then left
+        // with no active target - every present drops its frame - and the caller refuses by name.
+        Bool ActivateSurfaceTarget(Uint64 key, NativeWindowType window, const VulkanRendererConfig& surfaceConfig);
         // Drops a surface's target, active or parked. A no-op for a key that has none.
         void DestroySurfaceTarget(Uint64 key);
         // The default framebuffer's extent (surface space, what PublishDefaultFramebufferInfo
@@ -944,7 +946,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // a substituted window. (Android is the one exception and has its own path -
         // no Mali/Adreno driver seen so far exposes the extension, so a windowless
         // context is given an AImageReader ANativeWindow that is never displayed.)
-        Bool m_headlessSurfaceSupported = true;
+        // ENABLED ON THIS INSTANCE, not merely offered: a renderer created for a window never asks
+        // for the extension, and its later offscreen targets must not call an entry point the
+        // instance does not have (OffscreenSurfaceRoute.h). Hence false until CreateInstance says so.
+        Bool m_headlessSurfaceSupported = false;
+        // VK_KHR_android_surface was enabled on this instance (the AImageReader route needs it).
+        Bool m_androidSurfaceEnabled = false;
         // Android has the same shortfall: no Mali/Adreno driver seen so far exposes
         // VK_EXT_headless_surface, so a windowless (EGL pbuffer) context gets an
         // AImageReader's ANativeWindow to hand the WSI instead. Nothing is ever
@@ -1963,7 +1970,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResult SetupDebugReportCallback();
         void DestroyDebugReportCallback();
         VkDebugUtilsMessengerCreateInfoEXT PopulateDebugMessengerCreateInfo();
-        void CreateSurface();
+        // False (logged) when the target's surface cannot be built; the renderer then has no surface.
+        Bool CreateSurface();
         void PickPhysicalDevice();
         void CreateLogicalDeviceAndQueues();
         void CreateAllocator();

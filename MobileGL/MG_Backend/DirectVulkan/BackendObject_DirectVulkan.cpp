@@ -370,8 +370,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto suspended = m_suspendedWindowSurfaces.find(m_activatingSurface);
         if (suspended != m_suspendedWindowSurfaces.end()) {
             if (UsesSurfaceTargets() && pVulkanRenderer) {
-                ActivateSuspendedPlaceholder(m_activatingSurface, suspended->second);
-                return true;
+                return ActivateSuspendedPlaceholder(m_activatingSurface, suspended->second);
             }
             return InitPbufferSurface(static_cast<EGLint>(suspended->second.Width),
                                       static_cast<EGLint>(suspended->second.Height));
@@ -386,8 +385,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VulkanRendererConfig config;
         config.SwapInterval = GetRequestedSwapInterval();
         if (UsesSurfaceTargets() && pVulkanRenderer) {
-            pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), nativeWindow, config);
-            return true;
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), nativeWindow, config);
         }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
@@ -404,8 +402,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
         if (UsesSurfaceTargets() && pVulkanRenderer) {
-            pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), NativeWindowType{}, config);
-            return true;
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), NativeWindowType{},
+                                                          config);
         }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
@@ -511,7 +509,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 VulkanRendererConfig config;
                 config.SurfaceWidth = static_cast<Uint32>(state->Width);
                 config.SurfaceHeight = static_cast<Uint32>(state->Height);
-                pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+                (void)pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
             }
             return true;
         }
@@ -610,7 +608,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BackendObject::ReleaseEGLResources();
     }
 
-    void BackendObject_DirectVulkan::ActivateSuspendedPlaceholder(EGLSurface surface,
+    Bool BackendObject_DirectVulkan::ActivateSuspendedPlaceholder(EGLSurface surface,
                                                                   const SuspendedWindowSurface& extent) {
         // A pbuffer target at the window's extent: every default-framebuffer path (render passes,
         // read-back, the shared-image blit, the acquire and the present) keeps a live swapchain to
@@ -618,7 +616,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VulkanRendererConfig config;
         config.SurfaceWidth = std::max<Uint32>(extent.Width, 1);
         config.SurfaceHeight = std::max<Uint32>(extent.Height, 1);
-        pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+        return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
     }
 
     Bool BackendObject_DirectVulkan::SuspendServerWindow(void* window) {
@@ -648,7 +646,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // swapchain and VkSurfaceKHR - nothing references the window after this.
                 pVulkanRenderer->DestroySurfaceTarget(key);
                 m_suspendedWindowSurfaces[client] = extent;
-                if (active) ActivateSuspendedPlaceholder(client, extent);
+                // A placeholder that cannot be built is a suspend that failed: the window is already let
+                // go of, and the caller ends the session by name instead (its EGL resources go).
+                if (active && !ActivateSuspendedPlaceholder(client, extent)) return false;
             } else {
                 m_suspendedWindowSurfaces[client] = extent;
             }
@@ -686,7 +686,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             config.SurfaceWidth = std::max<Uint32>(width, 1);
             config.SurfaceHeight = std::max<Uint32>(height, 1);
             config.SwapInterval = GetRequestedSwapInterval();
-            pVulkanRenderer->ActivateSurfaceTarget(key, reinterpret_cast<NativeWindowType>(window), config);
+            if (!pVulkanRenderer->ActivateSurfaceTarget(key, reinterpret_cast<NativeWindowType>(window), config)) {
+                return false;
+            }
         }
         MGLOG_I("DirectVulkan: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
                 window, width, height);

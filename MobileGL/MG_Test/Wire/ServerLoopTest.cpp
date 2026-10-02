@@ -38,6 +38,7 @@
 #include <MG_Backend/DirectGLES/Utils.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
+#include <MG_Backend/DirectVulkan/Renderer/OffscreenSurfaceRoute.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipe.h>
@@ -3733,6 +3734,30 @@ TEST(ServerLoopSuspendTest, ABackendThatCannotSuspendStillLatchesServerWindowLos
 
 // Mid-stream: answered within the stream (DrainRing's per-pop check) and the stream goes on. Red with
 // the suspend arm deleted: the stream is cut at the latch (bits 4|8|16).
+// MAGMA'S PLACEHOLDER ON A RENDERER CREATED FOR A WINDOW (the device crash: SIGSEGV at pc 0 in
+// VulkanRenderer::CreateSurface on screen-off). The on-screen session's renderer was built for the
+// server's window, so its instance enabled the Android surface extension and nothing headless; the
+// suspend's offscreen placeholder must take the AImageReader route - the way a windowless renderer's
+// pbuffers are built on drivers without the headless extension - and never call a headless entry point
+// the instance does not have. With no route at all the target is refused (and the suspend fails, so the
+// session latches as the cannot-suspend case below shows) instead of called through a null pointer.
+// Red with the route keyed on what the LOADER offers rather than what the instance enabled (the first
+// two expectations answer Headless).
+TEST(ServerLoopSuspendTest, AnOffscreenTargetNeverCallsAHeadlessEntryPointTheInstanceDoesNotHave) {
+    using MG_Backend::DirectVulkan::ChooseOffscreenSurfaceRoute;
+    using MG_Backend::DirectVulkan::OffscreenSurfaceRoute;
+    // A renderer created for a window: Android surfaces enabled, the headless extension never enabled -
+    // whether or not the loader would answer its entry point.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, false, true), OffscreenSurfaceRoute::AndroidImageReader);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, true, true), OffscreenSurfaceRoute::AndroidImageReader);
+    // Enabled, but the entry point is absent: still never called.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, false, true), OffscreenSurfaceRoute::AndroidImageReader);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, false, false), OffscreenSurfaceRoute::Unavailable);
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(false, false, false), OffscreenSurfaceRoute::Unavailable);
+    // A windowless renderer on a driver that has the extension.
+    EXPECT_EQ(ChooseOffscreenSurfaceRoute(true, true, false), OffscreenSurfaceRoute::Headless);
+}
+
 TEST(ServerLoopSuspendTest, ALostServerWindowMidStreamSuspendsPromptlyAndTheStreamCarriesOn) {
     EXPECT_EXIT(SuspendMidStreamAndExit(), ::testing::ExitedWithCode(0), ".*")
         << "bits: 1 = Detach did not answer ReleasedBySession; 2 = Detach took 1 s or more; 4 = the stream was "
