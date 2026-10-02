@@ -35,6 +35,7 @@
 
 #include <Config.h>
 #include <MG_Remote/Client/ClientSession.h>
+#include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSpawn.h>
@@ -1228,6 +1229,34 @@ TEST(ServerSpawnTest, AKilledServerLatchesDeviceLostFromTheHangupAndNotFromADead
     // consequence, and it is what glGetGraphicsResetStatus reports.
     Client::ClientSessionInstance().LatchDeviceLost("the test killed the server");
     EXPECT_TRUE(Client::ClientSession::DeviceLost());
+
+    Client::ClientSessionInstance().Stop();
+    int exitCode = -1;
+    (void)Server::ReapServer(session.server, 5000, &exitCode);
+}
+
+// A LOST DEVICE MAKES A READBACK A NO-OP, NOT A CRASH. Once the session is device-lost every verb
+// is declined, and the read used to treat that DECLINE as Fatal{ReadbackDeclined} - so the first
+// glReadPixels after a server-side GPU fault aborted the client (Chrome's in-process GPU thread
+// took the whole browser with it). GL's answer for a lost context is that the read writes nothing
+// and glGetGraphicsResetStatus reports the reset. Red once by dropping the device-lost arm of
+// RequireReadbackReplyComplete: this case dies of SIGABRT.
+TEST(ServerSpawnTest, AReadbackOnALostDeviceWritesNothingAndDoesNotAbort) {
+    Session session;
+    ASSERT_TRUE(Bring("lostread", &session));
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    Transport::Doorbell* bell = Client::ClientSessionInstance().SelfDoorbellForTest();
+    ASSERT_NE(bell, nullptr);
+    ASSERT_EQ(::kill(session.server.pid, SIGKILL), 0);
+    for (int attempt = 0; attempt < 200 && !bell->PeerHungUp(); ++attempt) (void)bell->Park(10);
+    ASSERT_TRUE(bell->PeerHungUp());
+    Client::ClientSessionInstance().LatchDeviceLost("the test killed the server");
+    ASSERT_TRUE(Client::ClientSession::DeviceLost());
+
+    std::uint8_t pixels[4] = {0x5A, 0x5A, 0x5A, 0x5A};
+    Client::RemoteEmitTable().GL.ReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(pixels[0], 0x5A);
+    EXPECT_EQ(pixels[3], 0x5A) << "a lost context's read wrote into the destination";
 
     Client::ClientSessionInstance().Stop();
     int exitCode = -1;

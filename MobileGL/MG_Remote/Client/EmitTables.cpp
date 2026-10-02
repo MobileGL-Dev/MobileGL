@@ -900,7 +900,15 @@ namespace MobileGL::MG_Remote::Client {
         // The same predicate at the call site, with the named Fatal each failure mode owns.
         // status > expected cannot reach here: EmitAndWait already aborts Fatal{ReplyTooLarge} on
         // an oversize reply, so the only failures left are a wrong status or a SHORT one.
-        void RequireReadbackReplyComplete(Int32 status, Uint64 replySize, Uint64 expected) {
+        //
+        // A LOST DEVICE IS NOT ONE OF THOSE FAILURES. Once the session is device-lost every verb
+        // is declined by EmitAndWait itself, and the GL answer for a lost context is that its
+        // commands do nothing: the read writes no pixel and the application learns of the loss
+        // from glGetGraphicsResetStatus. Dying here instead turned a server-side GPU fault into a
+        // crash of the client (Chrome's in-process GPU thread took the browser with it). False:
+        // the caller leaves the destination untouched and returns.
+        Bool RequireReadbackReplyComplete(Int32 status, Uint64 replySize, Uint64 expected) {
+            if (status != Wire::ReplySink::kStatusOk && ClientSession::DeviceLost()) return false;
             if (status == Wire::ReplySink::kStatusError) {
                 SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
                         "the destination is left untouched rather than filled with stale bytes");
@@ -922,6 +930,7 @@ namespace MobileGL::MG_Remote::Client {
                         static_cast<unsigned long long>(replySize),
                         static_cast<unsigned long long>(expected));
             }
+            return true;
         }
 
 #include "TextureReadbackEmit.inc"
@@ -1068,7 +1077,7 @@ namespace MobileGL::MG_Remote::Client {
                     // M2 / codex 11: an OK reply that arrived short, or a DECLINE/ERROR, must not
                     // be handed back as pixels. The Fatal aborts before the application reads the
                     // buffer, so the bytes EmitAndWait already copied are never observed.
-                    RequireReadbackReplyComplete(status, replySize, bandBytes);
+                    if (!RequireReadbackReplyComplete(status, replySize, bandBytes)) return;
                     ApplyReadbackByteSwap(at, bandBytes, type, pack);
                     return;
                 }
@@ -1078,7 +1087,7 @@ namespace MobileGL::MG_Remote::Client {
                                     0, bounce.data(), bandBytes, &status, &replySize);
                 // BEFORE THE SCATTER, so a short or non-OK reply never reaches the application's
                 // pointer at all (the bounce is the only thing that held the partial bytes).
-                RequireReadbackReplyComplete(status, replySize, bandBytes);
+                if (!RequireReadbackReplyComplete(status, replySize, bandBytes)) return;
                 ApplyReadbackByteSwap(bounce.data(), bandBytes, type, pack);
                 if (pbo) {
                     // pixels is an offset, never a host pointer. Upload only the requested

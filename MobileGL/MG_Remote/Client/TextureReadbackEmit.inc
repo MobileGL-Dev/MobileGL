@@ -140,7 +140,7 @@
                 Uint64 received = 0;
                 session.EmitAndWait(MG_Pipe::MGPWireOp::GetTextureImage, &info, sizeof(info), nullptr, 0,
                                     bytes.data() + offset, info.DstSize, &status, &received);
-                RequireReadbackReplyComplete(status, received, info.DstSize);
+                if (!RequireReadbackReplyComplete(status, received, info.DstSize)) return;
                 offset += info.DstSize;
             }
             ApplyReadbackByteSwap(bytes.data(), tight, type, pack);
