@@ -15,6 +15,7 @@ anland 5.x 用 MobileGL：容器（Droidspaces，arch-kde-mgl）里的 Linux cli
 
 | Commit | 内容 |
 |---|---|
+| `d554c87c` | EGL loader 缺 `eglSwapBuffersWithDamageEXT` 不再 FATAL（EXT→KHR→eglSwapBuffers 回退 + GLES 符号 dlsym 回退防自指）；stencil-only 存储格式配对修复；各带测试 |
 | `7a48521d` | DirectGLES：创建 server-owned window surface 前先销毁同窗口的残留 surface（此前第二个起的 session 必死 EGL_BAD_NATIVE_WINDOW） |
 | `5a0f13fd` | 广告 GL_ARB_shader_objects/vertex_shader/fragment_shader/texture_non_power_of_two（KWin `checkSupported` 的硬门槛） |
 | `ff212061` | P14 S6：后端 twin 表按 {session, share group} 键控 |
@@ -22,12 +23,11 @@ anland 5.x 用 MobileGL：容器（Droidspaces，arch-kde-mgl）里的 Linux cli
 | `ebc552a0`/`6fb880cd` | Wayland Present 失败回 EGL_BAD_SURFACE；GLX drawable 走远端 pbuffer；Linux libGL 别名 |
 | `d52c031c` | P14 设计文档 |
 
-另有一批已审查、待验证提交的 WIP（被杀死的并行 agent 留下）：EGL loader 的 `eglSwapBuffersWithDamageEXT` 缺符号从 FATAL 改为 EXT→KHR→eglSwapBuffers 回退 + GLES 符号 dlsym 回退（防自指）、stencil-only 格式配对修复，各带测试。
-
 ### anland 关键提交（新→旧）
 
 | Commit | 内容 |
 |---|---|
+| `56b060c` | 恢复工具链入库 `producers/kde/Arch_v5/mobilegl-tools/`（KernelSU grant helper、源码同步与容器内 client 构建、EGL smoke 探针、设备侧部署/daemon 脚本） |
 | `1fb419a` | mobilegl-startup.sh：默认 socket 指向实验 daemon（/etc/environment 的 pam_env 会盖掉 systemd drop-in）；plasma 模式改走 kwin_wayland_wrapper（BusName=org.kde.KWinWrapper 只在 wrapper 注册，直跑 kwin 90 秒被 systemd 杀）；KWin 直写 surface 不加 FlipY（此前画面上下颠倒）；sync-build-kwin.sh 容器侧 canonical 同步/增量构建/原子安装管线 |
 | `118ae52` | `MOBILEGL_BACKEND_TYPE=DirectGLES`（Espryt 只是别名，写错会被 pinned-backend 拒）；eglChooseConfig 收 count≥1（MobileGL 默认有两份配置）；compositor client 日志落文件 |
 | `da03d3b`/`35699f3` | consumer flap 时不再停 compositor；APK consumer 侧不再因 Surface 生命周期事件重启 native 管线 |
@@ -60,10 +60,9 @@ anland 5.x 用 MobileGL：容器（Droidspaces，arch-kde-mgl）里的 Linux cli
 ## 设备与环境要点（复现用）
 
 - 设备 HA27Q3LQ（Y700 TB321FU），clone `arch-kde-mgl`（arch-kde 保持不动），容器内 `/opt/mobilegl/{lib,bin,kwin}`。
-- **KernelSU grant**：`ksud profile` 无直授命令；管理器专属 ioctl 的解法：root 下 setuid 到 manager UID（10255）→ `reboot(0xDEADBEEF,0xCAFEBABE)` 拿 `[ksu_driver]` fd → `SET_APP_PROFILE`。helper 源码在 anland worktree `build/ksu_grant.c`（gitignored，按需从本说明重建）。已持久化进 `/data/adb/ksu/.allowlist`。
+- **KernelSU grant**：`ksud profile` 无直授命令；管理器专属 ioctl 的解法：root 下 setuid 到 manager UID（10255）→ `reboot(0xDEADBEEF,0xCAFEBABE)` 拿 `[ksu_driver]` fd → `SET_APP_PROFILE`。helper 源码在 anland `producers/kde/Arch_v5/mobilegl-tools/ksu_grant.c`。已持久化进 `/data/adb/ksu/.allowlist`。
 - 实验 daemon：独立实例 `display_daemon /data/local/tmp/anland-mobilegl/display.sock`（原 daemon 不动）；socket 需 666、目录 777（容器内 uid1000 要连）。
 - clone config 的目录 bind：`/data/local/tmp/display_daemon.sock:/run/display.sock`、`/data/local/tmp/anland-mobilegl:/run/anland-mobilegl`。
 - KWin 启动：`desktop-session.service` + drop-in ExecStart=mobilegl-startup.sh compositor|plasma；Qt 日志默认只出 warning（info 要 QT_LOGGING_RULES）。
-- 构建：Android dist 用 WSL（`/root/anland-mgl-build/android`，NDK r27c，stamp 显式指定）；APK 用 anland worktree 的 `build/build_bundled_apk.sh`（WSL JDK17 + task 代理）；容器 client 用 `build/anland-sync-source.sh build`（注意 `tools/trace_replay` 789MB 必须排除、git archive 的旧 mtime 会骗过 ninja——overlay 后 touch）。
-- **3rdparty/glslang 是用户的 dirty submodule，禁止动**；它缺 5 个补丁会让 shader 编译在容器里 SEGV——容器构建用记录的 gitlink `d89cf443` 覆盖（`build/anland-overlay-glslang.sh`，保留 `External/`）。
+- 构建：Android dist 用 WSL（`/root/anland-mgl-build/android`，NDK r27c，stamp 显式指定）；APK 用 anland worktree 的 `build/build_bundled_apk.sh`（WSL JDK17 + task 代理）；容器 client 用 `producers/kde/Arch_v5/mobilegl-tools/anland-sync-source.sh build`（`MOBILEGL_REPO` 指向已 init 子模块的 MobileGL worktree；注意 `tools/trace_replay` 789MB 必须排除）。
 - 设备 30 秒无操作熄屏——熄屏可能 kill SurfaceView；长跑验证前 `svc power stayon true` 或调 screen_off_timeout。
