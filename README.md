@@ -14,7 +14,7 @@ MobileGL is a *free* and *open-source* project that implements a desktop **OpenG
 
 > [!NOTE]
 >
-> **Status:** In development. Parts of the codebase are incomplete. Current short-term target: **OpenGL 4.2 (Core Profile)**.
+> **Status:** In development. Both backends expose **OpenGL 4.6 (Core Profile)**; a small number of 4.6 features are still incomplete.
 
 ## Project positioning
 
@@ -31,9 +31,11 @@ This project is intended as an implementation/translation layer.
 The repository is organized into following top-level modules:
 
 1. **MG_State** — state tracking and management logic for Graphics APIs.
-2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`.
+2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`: OpenGL, plus the window-system APIs EGL, GLX, WGL, CGL and NSOpenGL.
 3. **MG_Backend** — per-backend translation layer that maps front-end Graphics APIs' semantics and state into concrete backend API calls (e.g. OpenGL ES, Vulkan).
-4. **MG_Util** and other utility modules.
+4. **MG_Pipe** and **MG_Remote** — the command stream between front-end and backend, and the client/server transport that lets the backend run in a separate process (see `docs/Disaggregated`).
+5. **MG_Gbm** — a GBM backend whose buffers are images shared with the MobileGL server, so Wayland clients and compositors can exchange them as dma-bufs.
+6. **MG_Util** and other utility modules.
 
 ## Third-party components
 
@@ -48,12 +50,15 @@ Refer to each component's repository for exact license texts. Any bundled third-
 
 ## Compatibility & target
 
-* **Short-term target:** `OpenGL 4.2 (Core Profile)`.
+* **Target:** `OpenGL 4.6 (Core Profile)`, which both backends already report; the remaining work is closing the last 4.6 gaps and conformance.
+* **Backends:**
+  * `Direct (Vulkan)`
+  * `Direct (OpenGL ES)`
+* **Platforms:** Android, Linux (EGL/GLX, Wayland, usable as a glvnd vendor), Windows (WGL) and macOS (CGL/NSOpenGL).
 * **Current development focus:**
   * Performance improvement
-  * `MG_State` and `MG_Impl` for `OpenGL 4.2 (Core Profile)`
-  * `Direct (Vulkan)` backend
-  * `Direct (OpenGL ES)` backend
+  * OpenGL 4.6 completeness and conformance
+  * Disaggregated mode: the backend in a separate server process serving several clients, e.g. a full Linux desktop on Android with zero-copy window buffers
 
 ## Build Instructions
 
