@@ -6,6 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #include "Config.h"
 #if MOBILEGL_PIPE_PUSH
 // For kMGPipeSubsystemsMigratedAtP5e, the push build's PipePush default (the P2, P3a and P4a
@@ -302,6 +305,17 @@ namespace MobileGL::MG_ConfigLoader {
     inline void InitBackendType() {
         String backendTypeStr;
         QueryEnvVariable("MOBILEGL_BACKEND_TYPE", backendTypeStr, "DirectGLES");
+#if defined(__ANDROID__)
+        // An Android app that hosts the library sets the environment itself, before the library
+        // loads; the debug property is how a developer picks the backend for such a process
+        // without rebuilding it (`adb shell setprop debug.mobilegl.backend DirectVulkan`).
+        char property[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.mobilegl.backend", property) > 0) {
+            MGLOG_I("Config: debug.mobilegl.backend=%s overrides MOBILEGL_BACKEND_TYPE=%s", property,
+                    backendTypeStr.c_str());
+            backendTypeStr = property;
+        }
+#endif
 #define ENTRY(backendType)                                                                                             \
     if (backendTypeStr == #backendType) {                                                                              \
         MG_Config::ActiveBackendType = BackendType::backendType;                                                       \
