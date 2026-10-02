@@ -20,6 +20,7 @@ add_executable(
         GlslangCaptureTest.cpp
         DemotePointSizeTest.cpp
         FragCoordYFlipTest.cpp
+        RelaxedOpaqueStructTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE
