@@ -243,11 +243,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return rawExtent;
     }
 
-    static Int ScaleFramebufferCoordinate(Int value, Int fromExtent, Int toExtent) {
-        if (fromExtent <= 0 || toExtent <= 0) {
-            return value;
+    // A GL bottom-left-origin rectangle on a quarter-turned default framebuffer, expressed in the
+    // stored (rotated) image: the rectangle transposes. This is the mapping the vertex fixup implies
+    // (InsertPositionFixup: Y flip, then (x, y) -> (-y, x) for 90 and (y, -x) for 270) and the one
+    // MapDefaultFramebufferReadbackRect copies with, so a viewport, a scissor and a readback of the
+    // same GL rectangle all land on the same pixels. Unclamped: a viewport may extend past the image.
+    static void MapQuarterTurnRect(Int x, Int y, Int width, Int height, const IntVec2& imageExtent,
+                                   VkSurfaceTransformFlagBitsKHR preTransform, Int* outX, Int* outY, Int* outWidth,
+                                   Int* outHeight) {
+        if (preTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR) {
+            *outX = y;
+            *outY = x;
+        } else {
+            *outX = imageExtent.x() - y - height;
+            *outY = imageExtent.y() - x - width;
         }
-        return static_cast<Int>((static_cast<Int64>(value) * toExtent + fromExtent / 2) / fromExtent);
+        *outWidth = height;
+        *outHeight = width;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -596,10 +608,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Int viewportHeight = viewportState.w() > 0 ? viewportState.w() : logicalExtent.y();
 
         if (isDefaultFramebuffer && IsQuarterTurnPreTransform(preTransform)) {
-            viewportX = ScaleFramebufferCoordinate(viewportX, logicalExtent.x(), framebufferExtent.x());
-            viewportY = ScaleFramebufferCoordinate(viewportY, logicalExtent.y(), framebufferExtent.y());
-            viewportWidth = ScaleFramebufferCoordinate(viewportWidth, logicalExtent.x(), framebufferExtent.x());
-            viewportHeight = ScaleFramebufferCoordinate(viewportHeight, logicalExtent.y(), framebufferExtent.y());
+            // Transposed, not scaled: scaling each axis by the other's extent only coincides with
+            // the rotation for a viewport covering the whole surface.
+            MapQuarterTurnRect(viewportState.x(), viewportState.y(), viewportWidth, viewportHeight, framebufferExtent,
+                               preTransform, &viewportX, &viewportY, &viewportWidth, &viewportHeight);
         }
 
         // The GL viewport rect, expressed against the default framebuffer's stored orientation.
@@ -766,13 +778,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int logicalX1 = std::min<Int>(logicalExtent.x(), scissorBox.x() + std::max<Int>(0, scissorBox.z()));
         const Int logicalY1 = std::min<Int>(logicalExtent.y(), scissorBox.y() + std::max<Int>(0, scissorBox.w()));
 
-        const Int rawX0 = ScaleFramebufferCoordinate(logicalX0, logicalExtent.x(), framebufferExtent.x());
-        const Int rawY0 = ScaleFramebufferCoordinate(logicalY0, logicalExtent.y(), framebufferExtent.y());
-        const Int rawX1 = ScaleFramebufferCoordinate(logicalX1, logicalExtent.x(), framebufferExtent.x());
-        const Int rawY1 = ScaleFramebufferCoordinate(logicalY1, logicalExtent.y(), framebufferExtent.y());
+        // Transposed into the rotated image (MapQuarterTurnRect). Scaling each axis by the other's
+        // extent - what this did before - only agrees with the rotation for a full-surface box, and
+        // turned a compositor's per-window clip into an unrelated sub-rectangle.
+        Int rawX = 0, rawY = 0, rawWidth = 0, rawHeight = 0;
+        MapQuarterTurnRect(logicalX0, logicalY0, std::max<Int>(0, logicalX1 - logicalX0),
+                           std::max<Int>(0, logicalY1 - logicalY0), framebufferExtent, preTransform, &rawX, &rawY,
+                           &rawWidth, &rawHeight);
+        const Int rawX0 = std::max<Int>(0, rawX);
+        const Int rawY0 = std::max<Int>(0, rawY);
+        const Int rawX1 = std::min<Int>(framebufferExtent.x(), rawX + rawWidth);
+        const Int rawY1 = std::min<Int>(framebufferExtent.y(), rawY + rawHeight);
 
         VkRect2D scissor{};
-        scissor.offset = {std::max<Int>(0, rawX0), std::max<Int>(0, rawY0)};
+        scissor.offset = {rawX0, rawY0};
         scissor.extent = {
             static_cast<Uint32>(std::max<Int>(0, rawX1 - rawX0)),
             static_cast<Uint32>(std::max<Int>(0, rawY1 - rawY0)),

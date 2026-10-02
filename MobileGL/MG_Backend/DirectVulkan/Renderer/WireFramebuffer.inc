@@ -400,6 +400,22 @@
                          "default framebuffer; the readback returns its raw pixels",
                          source.swapchainImageIndex);
         }
+        if (source.isDefault && aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+            VkOffset2D probeOffset{};
+            VkExtent2D probeExtent{};
+            if (!MapDefaultFramebufferReadbackRect(x, y, width, height, source.extent,
+                                                   m_swapchainObject.GetPreTransform(), &probeOffset, &probeExtent)) {
+                // A rectangle reaching past the surface: GL leaves those pixels undefined rather
+                // than raising an error, and the usual cause is a client reading back at its
+                // window's new size one frame before its surface follows the resize. Nothing is
+                // copied, and nothing is recorded.
+                MGLOG_E_ONCE("Magma wire: default-framebuffer read %dx%d at (%d,%d) does not fit surface %llx's "
+                        "%ux%u (transform %u); the read is left unfilled", width, height, x, y,
+                        static_cast<unsigned long long>(m_activeTargetKey), source.extent.width,
+                        source.extent.height, static_cast<Uint32>(m_swapchainObject.GetPreTransform()));
+                return;
+            }
+        }
         m_textureManager->FlushPendingUploads();
         RecordWireReadbackWriteBarrier();
         TransitionWireImage(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);

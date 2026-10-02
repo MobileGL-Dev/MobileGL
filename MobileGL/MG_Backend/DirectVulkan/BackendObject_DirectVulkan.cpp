@@ -489,6 +489,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
             return false;
         }
+        const EGLSurfaceState* state = GetRegisteredEGLSurface(surface);
+        if (UsesSurfaceTargets() && pVulkanRenderer && state != nullptr && state->Kind == SurfaceKind::Pbuffer) {
+            // A pbuffer-backed window (a Wayland window presented through wl_shm) whose target is an
+            // image reader of FIXED size: a swapchain rebuild cannot follow the resize, so the target
+            // is rebuilt at the new size - as DirectGLES replaces its native pbuffer. A parked one is
+            // rebuilt when it is next activated, from the size registered above.
+            const Bool active = m_eglSurfaceInitialized && m_eglSurface == surface;
+            pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
+            if (active) {
+                VulkanRendererConfig config;
+                config.SurfaceWidth = static_cast<Uint32>(state->Width);
+                config.SurfaceHeight = static_cast<Uint32>(state->Height);
+                pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(surface), NativeWindowType{}, config);
+            }
+            return true;
+        }
         if (pVulkanRenderer && m_eglSurface == surface) {
             pVulkanRenderer->RequestSwapchainResize(width, height);
         }
