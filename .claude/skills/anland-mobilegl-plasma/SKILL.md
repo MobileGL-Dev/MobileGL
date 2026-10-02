@@ -1,0 +1,151 @@
+---
+name: anland-mobilegl-plasma
+description: Bring up, rebuild, deploy, switch backends on, test and debug the "MobileGL + anland + KDE Plasma" stack - a rooted Android tablet whose anland APK embeds the MobileGL server, plus a Droidspaces Arch Linux ARM container running KWin/plasmashell/Chrome through the MobileGL client library and GBM backend - driven from this Windows machine (Git Bash, WSL archlinux, adb). Use it after a phone reboot, when changing server (NDK) or client (container glibc) MobileGL code or anland's KWin backend/patch, when switching Espryt/Magma, when validating zero-copy dma-buf presentation, and when chasing crashes, black windows, noise or software-rendering fallbacks in the Plasma session.
+---
+
+# MobileGL on anland KDE Plasma
+
+Human-readable runbook (Chinese, same content): `docs/Disaggregated/notes/anland/runbook-plasma.md`.
+Background: `docs/Disaggregated/notes/anland/handoff-legacy-mobilegl-unified.md` (state, commits, known
+issues) and `plan-ahb-dmabuf.md` (zero-copy design).  All scripts are in `scripts/` next to this file;
+parameters are documented at the top of each script and in `scripts/env.sh`.
+
+**The phone may be shared with another session.** Before anything that restarts the app, the daemon,
+the container session or replaces a library, run the read-only `scripts/device/status.sh` and make sure
+nobody else is mid-test.  Use your own `ct.sh` channel names (others use c, c2, c3, xd, xr, gbm).
+
+## Architecture (10 lines)
+
+1. Phone: Lenovo TB321FU (Y700, Adreno 750, Android 15, kernel 6.1), rooted with **KernelSU** (`/data/adb/ksu`, `ksud`; `su -c` works). USB serial `HA27Q3LQ`, or wireless adb `ip:port`.
+2. anland APK `com.anland.consumer.mobilegl` (debuggable build of anland branch `legacy-mobilegl-unified`): UI process + private service process `:mobilegl` (`MobileGLWorker`), which loads the **server** `libMobileGL.so` (NDK, from MobileGL `feat/disaggregated`) and listens on abstract socket `@anland-mobilegl`. One process serves every client (KWin, plasmashell, ksplash, Chrome...), one backend per process.
+3. Backend = `setprop debug.mobilegl.backend DirectGLES|DirectVulkan` (Espryt = DirectGLES, Magma = DirectVulkan; prop lost on reboot) and must equal the container's `/etc/mobilegl/backend` (what every client reports; mismatch = "Hello.backendType disagrees with pinned backend").
+4. Experiment display daemon `/data/adb/modules/anland-daemon/display_daemon /data/local/tmp/anland-mobilegl/display.sock` (display/input broker; NOT started at boot - the module only starts the original one on `/data/local/tmp/display_daemon.sock`, leave that alone).
+5. Container `arch-kde-mgl` (Droidspaces 6.4.5, Arch Linux ARM aarch64 glibc, host net, `rootfs.img` mounted at `/mnt/Droidspaces/arch-kde-mgl` on the Android side). Bind mounts: `/data/local/tmp/anland-mobilegl` -> `/run/anland-mobilegl`, `/data/local/tmp/display_daemon.sock` -> `/run/display.sock`.
+6. `desktop-session.service` (User=swung0x48) has drop-in `ExecStart=/opt/mobilegl/bin/mobilegl-startup.sh plasma`, which writes a user drop-in for `plasma-kwin_wayland.service` (kwin_wayland_wrapper -> `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`, `ANLAND_MOBILEGL=1`, `MOBILEGL_IPC_SURFACE=server`) and runs `startplasma-wayland`.
+7. KWin 6.7.4 with anland's `anland` backend renders straight into the anland Android Surface through the server. Every other GL process is `MOBILEGL_IPC_SURFACE=offscreen` and presents through KWin.
+8. Client = `/opt/mobilegl/lib/libMobileGL.so` (glibc aarch64): glvnd EGL vendor (`/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json`), GLX vendor (`/usr/lib/libGLX_mobilegl.so.0`, `__GLX_VENDOR_LIBRARY_NAME=mobilegl`), env `MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`.
+9. Zero-copy windows: client `wl_egl_window` frames are server-allocated AHardwareBuffer "shared images" exported as dma-buf fds over `zwp_linux_dmabuf_v1`; KWin imports them with EGL and the server recognises its own buffer by inode. KWin gets a DRM device via `GBM_BACKEND=mobilegl` -> `/usr/lib/gbm/mobilegl_gbm.so` (node is only an identity, never ioctl'd). Without linux-dmabuf the client falls back to wl_shm readback.
+10. X11 apps (Xwayland) use the MobileGL GLX vendor with per-frame readback + `xcb_put_image`. Chrome runs ANGLE-GLES over MobileGL EGL with the GPU in-process (`mobilegl-startup.sh chrome`).
+
+## First-time prerequisites (Windows host)
+
+- Git Bash, `adb` (SDK platform-tools), CMake >= 3.22 and Ninja on PATH (seen: CMake 3.27.6, Ninja 1.13.2), Python 3 + Pillow (only `rec.sh`).
+- Android NDK **27.2.12479018** at `%LOCALAPPDATA%/Android/Sdk/ndk/27.2.12479018` (override `ANDROID_NDK`).
+- WSL distro **archlinux** with clang, lld, llvm, cmake, ninja. **lld's major version must equal clang/llvm-libs'** (lld 23 on llvm 22 broke `ld.lld`; working set: all 22.1.6). Then export the sysroot once: `bash scripts/xsysroot/refresh-sysroot.sh` (-> `~/sysroots/arch-kde-mgl` + `~/sysroots/aarch64-arch.cmake`; re-run after container package upgrades, then `xbuild.sh --reconfigure`).
+- MobileGL worktree (never build in the shared main checkout): `GIT_LFS_SKIP_SMUDGE=1 git worktree add ...`, `git submodule update --init --recursive`, and copy `3rdparty/glslang/External/spirv-tools` from the main checkout (the submodule leaves it empty).
+- anland worktree on `legacy-mobilegl-unified` (KWin patch/backend, startup script, `mobilegl-tools/`).
+- Phone side that already exists and is NOT recreated by this skill: the APK (build: anland `consumers/anland_v5/android_consumer/MOBILEGL.md`, gradle `:app:assemblePlainDebug` with `MOBILEGL_DIST`, `-PmobileglApplicationId=com.anland.consumer.mobilegl`; reinstalling with another key changes the UID and needs the KernelSU grant again - `mobilegl-tools/ksu_grant.c`), the anland KernelSU modules (`anland-daemon`, `anland-awl`), the container with KWin's configured build tree `/root/mobilegl-build/kwin-6.7.4/build` and pristine `/root/gbm-dev/kwin-a/src`.
+- Install the helpers once (container must be running): `bash scripts/push-tools.sh` (device/*.sh -> `/data/local/tmp/anl`, `mgrun` -> container `/usr/local/bin`, `kwprep.sh` -> container `/root`).
+
+Run host scripts from Git Bash as `bash scripts/<x>.sh`.  Raw adb with device paths needs `MSYS_NO_PATHCONV=1` and the whole root command in one quoted string: `adb shell 'su -c "..."'`.  A device script can also be run without pushing: `MSYS_NO_PATHCONV=1 adb shell 'su -c sh' < scripts/device/status.sh`.
+
+## Bring-up after a phone reboot
+
+Nothing of the session survives a reboot.  Either `adb shell 'su -c "sh /data/local/tmp/anl/bringup.sh [DirectGLES|DirectVulkan]"'`, or by hand, in this order:
+
+```sh
+adb connect <ip>:<port>                       # only for wireless debugging (e.g. USB cannot power it)
+export MSYS_NO_PATHCONV=1
+adb shell 'su -c "svc power stayon true"'
+adb shell 'su -c "setprop debug.mobilegl.backend DirectVulkan"'     # or DirectGLES; match /etc/mobilegl/backend
+adb shell 'su -c "am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity --es socket_path /data/local/tmp/anland-mobilegl/display.sock"'
+adb shell 'su -c "/data/local/Droidspaces/bin/droidspaces -C /data/local/Droidspaces/Containers/arch-kde-mgl/container.config start"'
+adb shell 'su -c "sh /data/local/tmp/anl/restart-daemon.sh"'       # experiment display daemon, chmod 777 dir / 666 socket
+adb shell 'su -c "sh /data/local/tmp/anl/run-plasma.sh"'           # restarts app + desktop-session, ~90 s
+```
+
+`droidspaces` has no `status` command; `droidspaces show` lists running containers.  Do not use the old
+`/data/local/tmp/restart-daemon.sh` (it kills a hard-coded PID).  Check with `device/status.sh`.
+
+## Build and deploy loops
+
+**Server (Android, NDK) -> APK lib**
+```sh
+bash scripts/build-android.sh          # -> <worktree>/build-android/libMobileGL.so (RelWithDebInfo, unstripped)
+bash scripts/cyc.sh s1                 # clear sticky SW-renderer key, push, swap into APK, restart session, screenshot $ANL_DIR/s1.png, print fatals
+```
+`device/swap.sh` overwrites `/data/app/.../lib/arm64/libMobileGL.so` keeping owner/mode/SELinux context (original saved as `/data/local/tmp/anland-mobilegl/libMobileGL.so.orig`); no re-signing. To swap without the session restart: push to `/data/local/tmp/anland-mobilegl/libMobileGL.new.so`, `su -c "sh /data/local/tmp/anl/swap.sh"`, then `run-plasma.sh` anyway (KWin does not reconnect to a new server process).
+
+**Client + GBM backend (container glibc) via WSL cross-build**
+```sh
+bash scripts/xbuild.sh [--reconfigure]  # WSL ~/mgl-xbuild-a64; ~150 s full, seconds incremental
+bash scripts/xdeploy.sh                 # rename-into-place install of libMobileGL.so + mobilegl_gbm.so, aliases, vendor JSON
+```
+Running clients keep the old inode; restart the client, or `run-plasma.sh` for KWin/plasmashell.  Build server and client from the **same commit** (both stamp `git rev-parse HEAD`), else the logs WARN "compatible wire with different build".  Fallback in-container build (slow): `scripts/sync-src.sh` + anland `mobilegl-tools/anland-build-client.sh`.
+
+**KWin (anland backend / kwin.patch) - built inside the container**
+```sh
+bash scripts/kwin-stage.sh build        # stage CR-stripped patch+backend+startup script, kwprep.sh, background sync-build-kwin.sh
+printf 'tail -5 /root/kwin-build.log\n' | bash scripts/ct.sh kw     # wait for "== ALL DONE =="
+adb shell 'su -c "sh /data/local/tmp/anl/run-plasma.sh"'
+```
+`sync-build-kwin.sh` (anland `producers/kde/Arch_v5/`) copies only the backend sources, then `ninja -j4`, installs `kwin_wayland`, `libkwin.so.6.7.4`, the patched screencast plugin and `/opt/mobilegl/bin/mobilegl-startup.sh` by atomic rename.  `kwprep.sh` is what applies changed `kwin.patch` hunks to core KWin files.  Repo-root `libdisplay_producer/` is not synced by either.  `kwin-stage.sh` is assembled from those two scripts and was not run as one unit yet.
+
+**Unit tests (no device)** - in WSL (the MSVC build of this branch is broken):
+```sh
+MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash /mnt/c/<worktree>/.claude/skills/anland-mobilegl-plasma/scripts/wsl-test.sh MultiSessionTest TwinOwnershipTest
+MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest -R "MultiSession|TwinOwnership" -E DirectVulkan --output-on-failure'
+```
+`wsl-all.sh` builds and runs every unit test.  Never run DirectVulkan integration tests; never two ctest runs at once.
+
+## Switching backends
+
+`adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'` (sets the prop, writes `/etc/mobilegl/backend`, restarts the app), then `run-plasma.sh` - the running session's clients are pinned to the old backend.  `cyc.sh` keeps whatever is set.
+
+## Test clients and how to verify
+
+Inside the container as root (`printf '...' | bash scripts/ct.sh <chan>`), `mgrun offscreen <cmd>` runs a client as swung0x48 in the live session (log `/tmp/mgl-run.client.log`, override base with `MGLOG=/tmp/x.log`):
+```sh
+mgrun offscreen eglinfo -B ; mgrun offscreen glxinfo -B
+timeout 25 mgrun offscreen glmark2-es2-wayland -s 1280x720 --run-forever > /tmp/gm.out 2>&1 &
+sleep 8; grep -a "presented through" /tmp/mgl-run.client.log
+```
+Chrome: `bash scripts/chrome-launch.sh <tag> [flags]` (log `/tmp/mgl-chrome-<tag>.client.log`, screenshot `ch-<tag>.png`).
+Probes: `scripts/probes/texfmt.c` (texture formats keep alpha?), `dmahash.c` (hash a process's dma-bufs); build in the container, e.g. `gcc -O1 /root/texfmt.c -o /usr/local/bin/mgl-texfmt -lEGL`, run with `mgrun offscreen`.
+
+A result counts only if ALL hold:
+- client log says `presented through linux-dmabuf shared images` (not `wl_shm`; `could not be presented through a linux-dmabuf shared image` = fell back);
+- `bash scripts/shot.sh g 2 1` gives two different hashes while the client animates (a "fast" score can mean frames are not shown);
+- `adb logcat -b crash -d` and `adb logcat -d | grep -E "Fatal signal|Abort message|E MobileGL"` are clean (a frozen window is usually a dead server);
+- for plasmashell verdicts, the sticky software renderer is off (below) and `/tmp/mgl-plasmashell.client.log` is freshly written.
+Reference (glmark2-es2-wayland 1280x720, zero-copy vs wl_shm): Espryt 187 vs 49, Magma 158 vs 34.  Rerun any surprising pass.
+
+## Logs
+
+| What | Where |
+|---|---|
+| KWin client side | container `/tmp/mobilegl-compositor.client.log` |
+| plasmashell / ksplash | `/tmp/mgl-plasmashell.client.log`, `/tmp/mgl-ksplash.client.log` (user drop-ins `~/.config/systemd/user/plasma-{plasmashell,ksplash}.service.d/mobilegl-log.conf`) |
+| mgrun / Chrome | `/tmp/mgl-run.client.log`, `/tmp/mgl-chrome-<tag>.client.log` (+ `/tmp/chrome-<tag>-out.log`) |
+| Server | `adb logcat -s MobileGL`; file `/data/data/com.anland.consumer.mobilegl/files/mobilegl-server.server.log` |
+| Native crashes | `adb logcat -b crash -d`; container `coredumpctl list` |
+| Session / KWin stderr | container `journalctl -u desktop-session --no-pager`, `journalctl --no-pager --since -2min \| grep kwin_wayland` |
+| Display daemon | `/data/local/tmp/anland-mobilegl/display-daemon.log` |
+
+`MOBILEGL_LOG_FILE_PATH=/tmp/x.log` produces `/tmp/x.client.log` (and `.server.log` for forwarded lines); files are truncated on open, so one base per process.  Client builds log at INFO.  Symbolize server frames with `$ANDROID_NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-addr2line.exe -Cfe build-android/libMobileGL.so <offset>`.
+
+## Pitfalls
+
+- **pkill -f self-match**: a `ct.sh`/`droidspaces run bash -lc "<script>"` process carries the script in its argv; `pkill -f chrome` kills the runner. Use `pkill -x`.
+- **Root-owned /tmp files**: a log created by a root-run client cannot be reopened by swung0x48 later (no log appears). `rm -f` it as root first.
+- **Sticky Plasma software renderer**: after any server crash Plasma writes `[QtQuickRendererSettings] SceneGraphBackend=software` into `~swung0x48/.config/kdeglobals`; plasmashell then renders on the CPU and screenshots still look fine (tray icon "正在使用的软件渲染器"). Delete before any verdict: `sudo -u swung0x48 kwriteconfig6 --file kdeglobals --group QtQuickRendererSettings --key SceneGraphBackend --delete` (cyc.sh does it), restart the session.
+- **Lock screen**: autolock is off (`kscreenlockerrc [Daemon] Autolock=false`); a real lock can only be left by typing the password (logind lock/unlock is not supported for this session type - `device/unlock.sh` is unverified). Test the greeter with `/usr/lib/kscreenlocker_greet --testing` and kill it.
+- **CRLF**: `core.autocrlf=true` here; anland's backend sources and `sync-build-kwin.sh` are CRLF in the Windows checkout. Strip CR before anything runs on Linux/Android (`tr -d '\r'`; `ct.sh`, `push-tools.sh`, `kwin-stage.sh` do). This skill has a `.gitattributes` forcing LF.
+- **Display daemon not auto-started** after reboot: KWin logs "failed to connect to display daemon at /run/anland-mobilegl/display.sock" and the session exits in ~3 s.
+- **Device power/connection**: low battery or the screen turning off (30 s default) can kill the SurfaceView - `svc power stayon true`; wireless adb `ip:port` changes per pairing - never pin `-s HA27Q3LQ`, use `ANDROID_SERIAL` if several devices are attached.
+- **Container vs phone paths**: container `/tmp` is a different place from the phone's `/data/local/tmp`; move files via `/mnt/Droidspaces/arch-kde-mgl/root` (container `/root`) or `/data/local/tmp/anland-mobilegl` (= container `/run/anland-mobilegl`).
+- **Never overwrite a mapped .so in place** (container or APK while running): copy to a new inode and `mv -f`; the APK swap force-stops the app first.
+- **Input**: plain `adb shell input` is blocked - use `su -c input`; anland grabs the touchscreen, so if `input tap` does nothing use `input mouse tap x y`. Never `debuggerd -b` a container process (signal 35 kills glibc processes).
+- **linux-dmabuf**: the client must use `create` + roundtrip, never `create_immed` (KWin answers a failed immediate import with a protocol error that kills the client).
+- **Cross-session bugs**: noise / another window's pixels after some client starts or exits = process-global state in the multi-session server (handles are per client, FBO/VAO per context). Repro with `kscreenlocker_greet --testing`.
+- `/etc/environment` leaks Mesa/KGSL variables through pam_env; `mobilegl-startup.sh` unsets them - keep that when editing it.
+- `handoff` mentions a `kwin_wayland` logging shim and `/tmp/mgl-kwin-<pid>.log`: stale - `/opt/mobilegl/kwin/bin/kwin_wayland` is now the real binary and logs to `/tmp/mobilegl-compositor.client.log`.
+
+## House rules
+
+- Work in a git worktree, never in the shared main checkout or its build dirs; worktrees need `GIT_LFS_SKIP_SMUDGE=1`.
+- Commit with `git commit --no-verify`, one short sentence, **no** `Co-Authored-By` trailer.
+- Never run the DirectVulkan integration tests (`ctest -E DirectVulkan`).
+- No external project names ("Mesa", "Zink", ...) in source code or comments; describe the technique.
+- Vendor-agnostic only on the zero-copy path: AHB, EGL_ANDROID_*, VK_ANDROID AHB import, sync_file, dma-buf, libgbm ABI - no kgsl/gralloc layouts/QCOM modifiers.
+- Identity caches key on monotonic lifetime ids, never GL names or pointers.

@@ -1,0 +1,3 @@
+# Everything here is executed by bash/sh on Linux, Android or WSL: keep LF even on a Windows checkout
+# (core.autocrlf=true would otherwise hand sh a script full of $'\r').
+* text=auto eol=lf

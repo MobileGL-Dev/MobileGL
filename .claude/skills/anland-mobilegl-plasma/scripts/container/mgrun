@@ -1,0 +1,21 @@
+#!/bin/bash
+# mgrun <surface: offscreen|server> <command...> - (container, as root) run one MobileGL client as the
+# desktop user inside the running Plasma session.  Installed as /usr/local/bin/mgrun (push-tools.sh).
+#   mgrun offscreen glmark2-es2-wayland -s 1280x720     # Wayland client, presents through KWin
+#   mgrun offscreen eglinfo -B ; mgrun offscreen glxinfo -B   # glxinfo goes through Xwayland + GLX vendor
+# "server" is only for a client that owns the Android Surface itself (KWin does); everything else is
+# offscreen.  Backend = /etc/mobilegl/backend (must match the server).  Client log:
+# ${MGLOG:-/tmp/mgl-run.log} -> the library writes /tmp/mgl-run.client.log (truncated per run; give
+# concurrent clients different MGLOG values).  Env: MGLOG, DESKTOP_USER (swung0x48).
+S=$1; shift
+DU=${DESKTOP_USER:-swung0x48}
+U=$(id -u "$DU")
+cd /tmp
+exec sudo -u "$DU" env XDG_RUNTIME_DIR=/run/user/$U WAYLAND_DISPLAY=wayland-0 DISPLAY=:0 \
+  XAUTHORITY=$(ls /run/user/$U/xauth_* 2>/dev/null | head -1) \
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus QT_QPA_PLATFORM=wayland \
+  __EGL_VENDOR_LIBRARY_FILENAMES=/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json \
+  __GLX_VENDOR_LIBRARY_NAME=mobilegl \
+  MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl \
+  MOBILEGL_IPC_SURFACE=$S MOBILEGL_BACKEND_TYPE=$(cat /etc/mobilegl/backend 2>/dev/null || echo DirectGLES) \
+  MOBILEGL_LOG_FILE_PATH=${MGLOG:-/tmp/mgl-run.log} "$@"
