@@ -1056,6 +1056,16 @@ namespace MobileGL::MG_Pipe {
     // "shared" apart from the behaviour they exist to explain.
     Uint64 MGPipeApplierShareGroupCountForTesting(Uint64 sessionKey);
 
+    // P14 S6: THE SHARE-GROUP BUCKET A {session, context token} PAIR IS FILED UNDER, answered
+    // from the registry rather than re-derived. The backend's twin tables are keyed by the same
+    // pair (DirectGLES.h's TwinKey), and a record and the twin describing it must never land in
+    // different buckets - so there is ONE spelling of the rule, here. A registered context
+    // answers its group; anything else (token 0, the 0 of a session that has not bound one yet,
+    // a context no CreateContext ever named) answers the group that context starts itself,
+    // exactly as FindApplierForKey mints it. Never fails, so a caller has no third answer to
+    // invent.
+    Uint64 MGPipeApplierShareGroupKeyFor(Uint64 sessionKey, Uint64 contextToken);
+
     // ---------------------------------------------------------------------------------
     // P5e: THE BARRIERED PREDICATE (MG_Remote/CONTRACT-P5E.md §2.1, ruling 3)
     // ---------------------------------------------------------------------------------

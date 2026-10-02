@@ -643,6 +643,18 @@ namespace MobileGL::MG_Pipe {
         return sessionIt == g_applierSessions.end() ? 0 : static_cast<Uint64>(sessionIt->second.Groups.size());
     }
 
+    Uint64 MGPipeApplierShareGroupKeyFor(Uint64 sessionKey, Uint64 contextToken) {
+        std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+        const auto sessionIt = g_applierSessions.find(sessionKey);
+        if (sessionIt != g_applierSessions.end()) {
+            const auto groupIt = sessionIt->second.ContextGroup.find(contextToken);
+            if (groupIt != sessionIt->second.ContextGroup.end()) return groupIt->second;
+        }
+        // Not registered - the same fallback FindApplierForKey takes, spelled by the same one
+        // function so the two cannot drift.
+        return ApplierShareGroupKey(contextToken, 0);
+    }
+
     namespace {
 
         // The installed handle-shaped resource table. Null until a backend registers one,

@@ -223,6 +223,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
     using NativeContextKeyResolver = Bool (*)(Uint64* outSessionKey, Uint64* outContextToken);
     void SetNativeContextKeyResolver(NativeContextKeyResolver resolver);
 
+#if MOBILEGL_PIPE_PUSH
+    // ---------------------------------------------------------------------------------
+    // P14 S6 (docs/Disaggregated/design/11-state-ownership.md): THE TWIN TABLES' KEY, AND ITS
+    // SHAPE IS S4's, ONE LEVEL DOWN. A twin is a DRIVER object, so it lives in one native
+    // context's object namespace; the identity a twin table must be keyed on is therefore
+    // {session, share group} - the SAME two words the applier's OBJECT RECORDS are filed under
+    // (PipeApply.h's MGPipeApplierKey, derived by the same probe and the same `0 means its own
+    // group` rule, so the two agree by construction rather than by two conventions).
+    //
+    // Answers, for the CALLING THREAD, which session it belongs to and which share group that
+    // session's current context is in. Installed once by the server layer beside the native and
+    // applier probes; with no probe installed - or on a thread that is no session's own, which
+    // is the client process, the in-process client+server shape and every unit case - the
+    // answer is the single key {0, 0}, exactly the process-wide table this replaces.
+    struct TwinKey {
+        Uint64 SessionKey = 0;
+        Uint64 ShareGroupKey = 0;
+        Bool operator==(const TwinKey& other) const {
+            return SessionKey == other.SessionKey && ShareGroupKey == other.ShareGroupKey;
+        }
+        Bool operator!=(const TwinKey& other) const { return !(*this == other); }
+    };
+    struct TwinKeyHash {
+        SizeT operator()(const TwinKey& key) const {
+            // The 64-bit mix SlotAllocator and the applier's registry already use for their own
+            // pair keys, so every keyed table in this tree hashes a session the same way.
+            Uint64 mixed = key.SessionKey ^ (key.ShareGroupKey + 0x9E3779B97F4A7C15ull +
+                                             (key.SessionKey << 6) + (key.SessionKey >> 2));
+            mixed ^= mixed >> 33;
+            mixed *= 0xFF51AFD7ED558CCDull;
+            mixed ^= mixed >> 33;
+            return static_cast<SizeT>(mixed);
+        }
+    };
+    using TwinKeyResolver = Bool (*)(TwinKey* outKey);
+    void SetTwinKeyResolver(TwinKeyResolver resolver);
+    // The calling thread's key. Answers false for {0, 0} - the process-wide group - which is
+    // also the answer when no probe has ever been installed.
+    Bool CurrentTwinKey(TwinKey* outKey);
+#endif
+
     // Builds the native context for `contextToken` under the calling thread's session. A
     // `shareGroupToken` whose group already has a live native context in this session hands that
     // context to eglCreateContext as the share argument - which is what makes two contexts see one

@@ -416,17 +416,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // the textures they view, framebuffers before their attachments, VAOs before the buffers they
     // fetch from), so the last reference to each twin goes here and its destructor - answered
     // InProcessTeardown() - touches neither the driver nor another TU's statics.
+    //
+    // P14 S6: "EVERY TABLE" IS NOW "EVERY BUCKET OF THIS SESSION". The tables are keyed by
+    // {session, share group}, so the same rebuild of the eight registries would take a NEIGHBOUR
+    // session's twins with it - and with S2's in-process supervisor serving several sessions at
+    // once that is not a hypothetical: this runs from ~BackendObject_DirectGLES, on the apply
+    // thread of the session that is ending. So the drop is scoped to the calling thread's
+    // session when it has one, and is the process-wide drop (key {0, 0} and nothing else) when it
+    // does not - which is the shape every unit case and the fork-worker world still has.
     void DropEveryTwinForEndedServerSession() {
         if (g_processTeardown) return;
         g_serverSessionTwinTeardown = true;
-        SamplerViewImpl::g_backendSamplerViews = {};
-        FramebufferImpl::g_backendFramebufferObjects = {};
-        VertexArrayImpl::g_backendVertexArrayObjects = {};
-        PrgramImpl::g_backendProgramObjects = {};
-        SamplerImpl::g_backendSamplerObjects = {};
-        TextureImpl::g_backendTextureObjects = {};
-        RenderbufferImpl::g_backendRenderbufferObjects = {};
-        BufferImpl::g_backendBufferResources = {};
+        TwinKey key;
+        if (CurrentTwinKey(&key) && key.SessionKey != 0) {
+            Uint32 buckets = 0;
+            buckets += SamplerViewImpl::g_backendSamplerViews.DropBucketsOfSession(key.SessionKey);
+            buckets += FramebufferImpl::g_backendFramebufferObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += VertexArrayImpl::g_backendVertexArrayObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += PrgramImpl::g_backendProgramObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += SamplerImpl::g_backendSamplerObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += TextureImpl::g_backendTextureObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += RenderbufferImpl::g_backendRenderbufferObjects.DropBucketsOfSession(key.SessionKey);
+            buckets += BufferImpl::g_backendBufferResources.DropBucketsOfSession(key.SessionKey);
+            MGLOG_I("DirectGLES: the ended server session dropped %u twin group(s) across eight kinds "
+                    "(no driver call); the other sessions in this process keep theirs",
+                    buckets);
+        } else {
+            SamplerViewImpl::g_backendSamplerViews.ResetBuckets();
+            FramebufferImpl::g_backendFramebufferObjects.ResetBuckets();
+            VertexArrayImpl::g_backendVertexArrayObjects.ResetBuckets();
+            PrgramImpl::g_backendProgramObjects.ResetBuckets();
+            SamplerImpl::g_backendSamplerObjects.ResetBuckets();
+            TextureImpl::g_backendTextureObjects.ResetBuckets();
+            RenderbufferImpl::g_backendRenderbufferObjects.ResetBuckets();
+            BufferImpl::g_backendBufferResources.ResetBuckets();
+        }
         // P12 review fix (major): AND THE UNIT SHADOWS THAT POINT AT THEM. A texture or sampler twin
         // scrubs itself out of g_boundTexturesCache / g_boundSamplersCache in its destructor - but
         // not under InProcessTeardown(), which answered true for every twin just dropped. Left
@@ -438,8 +462,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::g_activeTextureUnit = 0;
         SamplerImpl::g_boundSamplersCache = {};
         g_serverSessionTwinTeardown = false;
-        MGLOG_I("DirectGLES: the ended server session's twins are dropped (every kind, no driver call); the next "
-                "session in this process starts from empty twin tables");
     }
 #endif
 

@@ -24,6 +24,10 @@ set(MOBILEGL_WIRE_TESTS
         # the key they resolve under - {session, context} for the working state, {session, share
         # group} for the object records. Drives the registry directly: no EGL, no wire.
         ApplierOwnershipTest
+        # P14 S6 (same doc): the twin tables' key - {session, share group}, the same pair, so a
+        # record and the twin it describes cannot land in different buckets. Drives the real
+        # twin tables directly: no EGL, no wire.
+        TwinOwnershipTest
 )
 
 if (NOT WIN32)

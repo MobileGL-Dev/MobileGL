@@ -11,6 +11,12 @@
 
 #include <MG_Pipe/MGPipeHandles.h>
 
+// P14 S6: the key this table is filed under includes the calling thread's {session, share
+// group}, and the probe that answers it lives on the backend's public surface beside S4's
+// native-tuple key (DirectGLES.h). Included here so this header is self-contained for the two
+// translation units that include it without copying Managers.h's include order.
+#include "DirectGLES.h"
+
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #endif
@@ -154,6 +160,249 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const Bool enabled = ResolveEsprytSlotTablesArm();
         return enabled;
     }
+
+    // =====================================================================================
+    // P14 S6 (docs/Disaggregated/design/11-state-ownership.md): THE TWIN TABLE IS PER
+    // {session, share group}, NOT PER PROCESS.
+    // =====================================================================================
+    //
+    // WHAT WAS WRONG, in one sentence: a twin is a DRIVER object - a GL buffer id, a program, a
+    // texture, the storage behind them - so it belongs to one native context's object namespace,
+    // and a table keyed by {slot, gen} ALONE resolves the same handle value to the same twin
+    // whichever context asked. The frontend gives two contexts that do NOT share a group two
+    // independent name spaces, so the same {slot, gen} in both is legal and means two different
+    // objects; one process-wide table made the second context adopt the first's twin (including
+    // its driver ids, its persistent map and its pooled store). At the same time two contexts of
+    // ONE group - which must see one set of objects - were served by whichever of them twinned
+    // first, i.e. by luck rather than by the group the two agree on.
+    //
+    // THE KEY IS the same pair the applier files its OBJECT RECORDS under: {session, share
+    // group}. Same probe, same `0 means this context started its own group` rule (see
+    // DirectGLES.h's TwinKey and SessionRuntime.cpp's ResolveThreadTwinKey), so a record and the
+    // twin it describes are always in the same bucket. Session is in the key because a twin
+    // names a driver id and no driver id crosses a connection - two connections in one process
+    // are two clients, and nothing may be shared with either from the other.
+    //
+    // THE HOLDER LIST STAYS PROCESS-WIDE AND THAT IS NOT A COMPROMISE. A notice is about an
+    // OBJECT, not about a bucket: OnFrontendObjectDestroyed and ReleaseTwinByHandle must reach
+    // the by-value copies a fixture or a context reset is holding, whichever bucket they sit in,
+    // and "which bucket holds it" is exactly the question that produced the two-holder leak the
+    // list exists to fix. Each SHARED holder of the list is ONE bucket; the walk therefore covers
+    // every bucket of every table.
+    //
+    // THE SAME TABLE OBJECT IS REUSED, NOT REPLACED, and that is what keeps ~200 call sites
+    // alive: `g_backendTextureObjects.Find(...)` still answers from the bucket the calling thread
+    // is in, because the object the global names multiplexes on the key at each lookup. A caller
+    // that must address a bucket OTHER than the calling thread's - the death walks, the
+    // session-teardown drop - takes Shared() or calls the static entries, which walk buckets;
+    // and a caller that wants the whole process's view (the teardown, the tests) takes Snapshot().
+    // FORWARD-DECLARED, because the registry below is DEFINED before the table it holds; the
+    // members that name the table are defined out of line at the bottom of this header.
+    template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
+    class BackendSlotTable;
+
+    template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
+    class SlotTableRegistry {
+    public:
+        using Table = BackendSlotTable<StateObject, BackendObject, kKind>;
+        using Key = TwinKey;
+        using StatePtr = SharedPtr<StateObject>;
+        using BackendPtr = SharedPtr<BackendObject>;
+        // The bound the two tables that ARE a bucket registry have always spelled by name; the
+        // six registries reach it through their own `SlotTable` alias.
+        static constexpr Uint32 kMaxHandleSlot = 1u << 20;
+
+        // One bucket. SHARED, so a caller may keep it across other lookups: the map owns the
+        // pointee and never moves it.
+        SharedPtr<Table> Shared(const Key& key) const {
+            // The common case on the hot path: the same key as last time. One compare, no probe.
+            if (m_memoTable != nullptr && m_memoKey == key) return m_memoTable;
+            const auto found = m_buckets.find(key);
+            if (found != m_buckets.end()) {
+                m_memoKey = key;
+                m_memoTable = found->second;
+                return found->second;
+            }
+            SharedPtr<Table> fresh = MakeShared<Table>();
+            m_buckets.emplace(key, fresh);
+            m_memoKey = key;
+            m_memoTable = fresh;
+            return fresh;
+        }
+
+        // The calling thread's bucket - the ONE entry every in-place call site below resolves
+        // through, and the process-wide answer on a thread that belongs to no session.
+        //
+        // CONST, AND IT ANSWERS A MUTABLE BUCKET: the index is `mutable` because a LOOKUP may
+        // have to create the bucket it is about to miss in (a handle with no twin yet is the
+        // ordinary case), and the bucket's own entries are the table's business rather than the
+        // registry's. The alternative - a const overload returning "no table" - would make every
+        // read-only caller handle a case that cannot arise.
+        Table& ForCallingThread() const {
+            Key key;
+            CurrentTwinKey(&key);
+            return *Shared(key);
+        }
+
+        // Every bucket, in no particular order.
+        Vector<SharedPtr<Table>> Snapshot() const {
+            Vector<SharedPtr<Table>> all;
+            all.reserve(m_buckets.size());
+            for (const auto& bucket : m_buckets) all.push_back(bucket.second);
+            return all;
+        }
+
+        SizeT BucketCount() const { return m_buckets.size(); }
+
+        // THE PER-BUCKET ONE-SHOT, because a bucket held by SharedPtr is never dropped by an
+        // assignment: a caller that means "this context/group is gone" has to be able to say so,
+        // and the key is how it says which one. The bucket LEAVES the index before its twins are
+        // released, so a twin destructor that re-entered Shared() cannot find a half-erased one.
+        Bool Drop(const Key& key) {
+            const auto found = m_buckets.find(key);
+            if (found == m_buckets.end()) return false;
+            SharedPtr<Table> dropped = found->second;
+            m_buckets.erase(found);
+            if (m_memoTable == dropped) {
+                m_memoKey = Key{};
+                m_memoTable = nullptr;
+            }
+            dropped->Reset();
+            return true;
+        }
+
+        // EVERY bucket of one session, for the teardown of a session that owned several groups.
+        // The session is the key's high half, so this is one pass and no per-group bookkeeping -
+        // and it is the difference between "this session's twins go" and "the process's do".
+        Uint32 DropSession(Uint64 sessionKey) {
+            Uint32 dropped = 0;
+            for (auto bucket = m_buckets.begin(); bucket != m_buckets.end();) {
+                if (bucket->first.SessionKey != sessionKey) {
+                    ++bucket;
+                    continue;
+                }
+                SharedPtr<Table> table = bucket->second;
+                if (m_memoTable == table) {
+                    m_memoKey = Key{};
+                    m_memoTable = nullptr;
+                }
+                bucket = m_buckets.erase(bucket);
+                table->Reset();
+                ++dropped;
+            }
+            return dropped;
+        }
+
+        // Replace this registry with an empty one, releasing every bucket's twins. This is what
+        // `registry = {}` meant when the registry WAS one table; a caller that must keep the
+        // tables alive past the call takes a Snapshot() first.
+        void Reset() {
+            const Vector<SharedPtr<Table>> all = Snapshot();
+            m_buckets.clear();
+            m_memoKey = Key{};
+            m_memoTable = nullptr;
+            for (const SharedPtr<Table>& table : all) table->Reset();
+        }
+
+        // ---- the calling thread's bucket, member for member ---------------------------------
+        //
+        // THIS IS WHY THE SHAPE COST THE CALL SITES NOTHING. Every handle-keyed entry the table
+        // has is repeated here and forwarded to the bucket the calling thread resolves to, so
+        // `g_backendTextureObjects.FindByHandle(h)` and `g_backendBufferResources.GetOrCreate(h)`
+        // - unchanged source - answer from the right context's object namespace. A caller that
+        // must name a bucket OTHER than its own (a death walk, a case) takes Shared()/Snapshot()
+        // and calls the table directly.
+        BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) {
+            return ForCallingThread().GetOrCreate(handle);
+        }
+        BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
+            return ForCallingThread().FindByHandle(handle);
+        }
+        const BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) const {
+            return ForCallingThread().FindByHandle(handle);
+        }
+        // Resolve-or-create in a bucket the caller NAMES rather than the one it is in. The
+        // monolith-glue frontend-keyed entry (StateBackendObjectRegistry::GetOrCreate below)
+        // needs it: a state object handed over on the client side of a sync is described by a
+        // record in the CALLING thread's group, and a twin built for it must land in the same
+        // bucket as that record.
+        BackendPtr& GetOrCreateIn(const Key& key, MG_Pipe::MGPipeHandle handle) {
+            return Shared(key)->GetOrCreate(handle);
+        }
+        Uint32 LiveGenAt(Uint32 slot) const { return ForCallingThread().LiveGenAt(slot); }
+        MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
+            return ForCallingThread().HandleOf(stateObj);
+        }
+        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
+            ForCallingThread().NoteStateForHandle(handle, stateObj);
+        }
+        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
+            return ForCallingThread().StateForHandle(handle);
+        }
+        template <typename Fn>
+        void ForEachLive(Fn&& fn) const {
+            // THE CALLING THREAD'S BUCKET, not every bucket, and that is the semantic answer
+            // rather than a shortcut: a caller walking twins is asking "which of the objects I
+            // can see need this", and what it can see is its own share group. Every bucket in
+            // one process would walk a neighbour session's objects.
+            ForCallingThread().ForEachLive(fn);
+        }
+        // Every bucket, in one pass. The caller receives the key with the handle so it can tell
+        // which context a twin belongs to - the only walks that need the whole process's view
+        // are a diagnostic and a teardown.
+        template <typename Fn>
+        void ForEachBucket(Fn&& fn) const {
+            for (const auto& bucket : m_buckets) {
+                bucket.second->ForEachLive(
+                    [&](MG_Pipe::MGPipeHandle handle, const BackendPtr& twin) { fn(bucket.first, handle, twin); });
+            }
+        }
+        // The process-wide answer for the two statics: a notice is about an OBJECT, so it must
+        // reach the twin in EVERY bucket of EVERY holder. They forward to the table's own
+        // statics, which walk the holder list - each SHARED holder of it is one bucket.
+        static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) {
+            return Table::ReleaseTwinByHandle(handle);
+        }
+        static Bool OnFrontendObjectDestroyed(Uint64 lifetimeId) {
+            return Table::OnFrontendObjectDestroyed(lifetimeId);
+        }
+        // The instance spelling, and it HANDS THE TWIN OUT rather than answering a Bool: the two
+        // tables that ARE a bucket registry (buffers, sampler views) have always been called as
+        // `g_backendBufferResources.ReleaseByHandle(res)` and their callers still have to decide
+        // what happens to the driver id the twin owns. The bucket is the CALLING THREAD'S, which
+        // is the bucket that twin was created in.
+        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
+            return ForCallingThread().ReleaseByHandle(handle);
+        }
+        static Uint32 HolderCount() { return Table::HolderCount(); }
+        Uint32 LiveCount() const { return ForCallingThread().LiveCount(); }
+        Uint32 CompositeLiveCount() const { return ForCallingThread().CompositeLiveCount(); }
+        SizeT OrdinaryCapacityForTest() const { return ForCallingThread().OrdinaryCapacityForTest(); }
+        SizeT CompositeCapacityForTest() const { return ForCallingThread().CompositeCapacityForTest(); }
+
+        // ---- the bucket index's own controls, for the two tables that ARE a registry --------
+        //
+        // The six TwinRegistry registries carry the same three under the names in Managers.h
+        // (DropBucket / DropBucketsOfSession / ResetBuckets); they are repeated here because
+        // SlotTableRegistry IS the public type of the buffer and sampler-view tables, so a caller
+        // of those has no registry object in between.
+        Bool DropBucket(const Key& key) { return Drop(key); }
+        // Drop every bucket of one session; answers how many groups that took with it.
+        Uint32 DropBucketsOfSession(Uint64 sessionKey) { return DropSession(sessionKey); }
+        // Empty every bucket (the process-shaped world's teardown, key {0, 0}).
+        void ResetBuckets() { Reset(); }
+
+    private:
+        // ONE BUCKET PER LIVE {session, share group}, held by SHARED pointer so a caller may
+        // snapshot one across other lookups and so `Drop` can take a bucket's twins away
+        // explicitly - an embedded table could do neither. `std::unordered_map` rather than the
+        // tree's own flat Vector: this map is probed once per twin lookup on the draw path.
+        mutable std::unordered_map<Key, SharedPtr<Table>, TwinKeyHash> m_buckets;
+        // Hot-path memo. A registry is per KIND and each kind is touched several times per draw;
+        // a thread only ever moves between buckets when its session binds another context.
+        mutable SharedPtr<Table> m_memoTable;
+        mutable Key m_memoKey;
+    };
 
     template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
     class BackendSlotTable {
@@ -614,6 +863,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        entry.Gen},
                    twin);
             }
+        }
+
+        // Empty this table, releasing every twin it holds. THE SPACES ARE MOVED OUT FIRST and
+        // that is the whole of the care taken here: a twin's destructor is a driver call that
+        // could re-enter GetOrCreate on this table (SlotTables.h's ReleaseTwinAt says why), and
+        // destroying the entries in place would leave that re-entry resizing the vector the
+        // destructors are being walked out of. Here the table is already empty when the entries
+        // die, so a re-entrant insert grows a fresh vector.
+        //
+        // This is what `table = {}` used to mean, spelled so a caller cannot miss the ordering.
+        void Reset() {
+            Vector<Entry> slots = std::move(m_slots);
+            Vector<Entry> band = std::move(m_band);
+            BackendPtr nullTwin = std::move(m_nullTwin);
+            ForgetHandle();
+            slots.clear();
+            band.clear();
+            nullTwin.reset();
         }
 
         Uint32 LiveCount() const {

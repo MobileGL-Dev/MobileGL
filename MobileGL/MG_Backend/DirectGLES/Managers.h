@@ -332,6 +332,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         using const_iterator = typename BackendMap::const_iterator;
 #if MOBILEGL_PIPE_PUSH
         using SlotTable = BackendSlotTable<StateObject, BackendObject, kKind>;
+        // P14 S6: the ONE bucket of this kind the calling thread is in. Every handle-keyed entry
+        // below resolves through it, so the six twin registries answer per {session, share
+        // group} without a single call site naming a bucket.
+        using SlotTables = SlotTableRegistry<StateObject, BackendObject, kKind>;
+        using TwinKey = DirectGLES::TwinKey;
 #endif
 
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
@@ -348,7 +353,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // insertion (D13; SlotTables.h) - so a table used outside a registry arms
                 // it too, which is right: it is the twin, not the registry, that owns the
                 // driver id a guarded destructor exists for.
-                return m_slotTable.GetOrCreate(stateObj);
+                return m_slotTables.ForCallingThread().GetOrCreate(stateObj);
             }
 #endif
             // Twin creation is the moment a driver-owned id starts needing a guarded
@@ -407,7 +412,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
-                return m_slotTable.Find(stateObj);
+                return m_slotTables.ForCallingThread().Find(stateObj);
             }
 #endif
             const auto entryIt = m_entries.find(stateObj);
@@ -445,7 +450,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // backend memo stores instead of a raw pointer, a GL name or a bare lifetime id.
         MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
             if (EsprytSlotTablesEnabled()) {
-                return m_slotTable.HandleOf(stateObj);
+                return m_slotTables.HandleOf(stateObj);
             }
             return MG_Pipe::kMGPipeNullHandle;
         }
@@ -454,7 +459,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the lookup a backend memo that already holds a handle wants: no lifetime-id probe.
         BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
             if (EsprytSlotTablesEnabled()) {
-                return m_slotTable.FindByHandle(handle);
+                return m_slotTables.FindByHandle(handle);
             }
             return nullptr;
         }
@@ -490,7 +495,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return nullptr;
 #endif
             }
-            const Uint32 liveGen = m_slotTable.LiveGenAt(handle.Slot);
+            const Uint32 liveGen = m_slotTables.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
@@ -502,7 +507,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return nullptr;
 #endif
             }
-            return &m_slotTable.GetOrCreate(handle);
+            return &m_slotTables.GetOrCreate(handle);
         }
 
         // The generation of the LIVE entry at this slot, or 0. It exists so a caller can
@@ -510,7 +515,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // performs silently.
         Uint32 LiveGenAt(Uint32 slot) const {
             if (!EsprytSlotTablesEnabled()) return 0;
-            return m_slotTable.LiveGenAt(slot);
+            return m_slotTables.LiveGenAt(slot);
         }
 
         // P5c (hd): the two halves of SlotTables.h's state note, forwarded. A caller holding
@@ -524,12 +529,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // which is the answer the legacy walk's own weak_ptr test already gives.
         void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
             if (EsprytSlotTablesEnabled()) {
-                m_slotTable.NoteStateForHandle(handle, stateObj);
+                m_slotTables.NoteStateForHandle(handle, stateObj);
             }
         }
         StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
             if (EsprytSlotTablesEnabled()) {
-                return m_slotTable.StateForHandle(handle);
+                return m_slotTables.StateForHandle(handle);
             }
             return nullptr;
         }
@@ -591,8 +596,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
         template <typename Fn>
         void ForEachLive(Fn&& fn) const {
             if (EsprytSlotTablesEnabled()) {
-                m_slotTable.ForEachLive(fn);
+                m_slotTables.ForEachLive(fn);
             }
+        }
+
+        // ---- P14 S6: the KEYED shape's own controls ----------------------------------------
+        //
+        // Everything above is the shape a CALL SITE sees, and it is deliberately the shape it
+        // saw before the rekey. These four are the shape only a caller that has to reason about
+        // buckets needs: the teardown of a session, a test asking whether two contexts landed in
+        // two namespaces, and a diagnostic.
+        //
+        // THE ONE BUCKET THIS THREAD RESOLVES TO. A by-value copy of it is exactly what a
+        // fixture's saved registry was, and it is what makes `= {}` and "put it back" both mean
+        // something under a key.
+        SlotTable& BucketForCallingThread() {
+            if (EsprytSlotTablesEnabled()) return m_slotTables.ForCallingThread();
+            // The legacy arm has no buckets; the empty table's Reset() is the only honest
+            // answer, and no shipping path asks (the arm is compiled out or the bit is clear).
+            return m_legacyEmptyTable;
+        }
+
+        Vector<SharedPtr<SlotTable>> BucketSnapshot() const {
+            if (EsprytSlotTablesEnabled()) return m_slotTables.Snapshot();
+            return {};
+        }
+        SizeT BucketCount() const {
+            return EsprytSlotTablesEnabled() ? m_slotTables.BucketCount() : 0;
+        }
+        // Drop one {session, share group}. Answers whether such a bucket existed.
+        Bool DropBucket(const TwinKey& key) {
+            return EsprytSlotTablesEnabled() && m_slotTables.Drop(key);
+        }
+        // Drop every bucket of one session - the difference between "this session's twins go"
+        // and "the process's do" - and answer how many groups that took with it.
+        Uint32 DropBucketsOfSession(Uint64 sessionKey) {
+            return EsprytSlotTablesEnabled() ? m_slotTables.DropSession(sessionKey) : 0;
+        }
+        // Empty every bucket. The teardown of a process-shaped world, where the key is {0, 0}.
+        void ResetBuckets() {
+            if (EsprytSlotTablesEnabled()) m_slotTables.Reset();
+        }
+        // Every bucket, walked with its key.
+        template <typename Fn>
+        void ForEachBucket(Fn&& fn) const {
+            if (EsprytSlotTablesEnabled()) m_slotTables.ForEachBucket(fn);
         }
 #endif
 
@@ -664,7 +712,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 m_creationTick = 0;
         Bool m_isCollecting = false;
 #if MOBILEGL_PIPE_PUSH
-        BackendSlotTable<StateObject, BackendObject, kKind> m_slotTable;
+        // P14 S6: the ONE bucket per {session, share group}, hidden behind the same member names
+        // the single table had, so every handle-keyed call site above and every caller below is
+        // unchanged. See SlotTables.h's SlotTableRegistry for the resolution chain.
+        SlotTables m_slotTables;
+        // The legacy arm's stand-in for BucketForCallingThread(). Never read after a Reset and
+        // never populated: the two entries that could write it are the handle-keyed ones, which
+        // return early on that arm.
+        SlotTable m_legacyEmptyTable;
 #endif
     };
 
@@ -1081,8 +1136,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // HandleOf, no ForEachLive), and the handle overloads never look at it. Death is
         // announced by the family's own ResourceDestroy call, not by the shared death notice
         // (D-L), and the slot is freed by the CLIENT after that call returns.
+        //
+        // P14 S6: A BUCKET REGISTRY, like the six TwinRegistry tables. A buffer twin owns a
+        // driver buffer id, so the SAME {slot, gen} in two contexts that do not share a group
+        // must be two resources - and it was one process-wide table until this slice. The
+        // handle-keyed member-for-member forwarding in SlotTables.h is what leaves every
+        // `g_backendBufferResources.X(...)` call site below untouched.
         using BackendBufferResourceTable =
-            BackendSlotTable<MG_State::GLState::BufferObject, GLESBufferResource, MG_Pipe::MGPipeKind::Buffer>;
+            SlotTableRegistry<MG_State::GLState::BufferObject, GLESBufferResource, MG_Pipe::MGPipeKind::Buffer>;
         extern BackendBufferResourceTable g_backendBufferResources;
 
         // Resolved once per process and latched, exactly like EsprytSlotTablesEnabled() and
@@ -2186,10 +2247,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // unconditionally bumps it), the content version on every CPU pixel mutation, and
             // the params version covers SetSamples/SetFixedSampleLocations, which bump neither
             // of the other two but feed the shape probe. The context id pins the generation to
-            // the context that produced it - generations restart at 0 with a new context, and a
-            // texture is owned by exactly one context (share groups are not implemented), so a
-            // mutation can never happen under a context this key does not name. 0 = never
-            // stamped (real context ids start at 1). Backend-side invalidation rides on
+            // the context that produced it - generations restart at 0 with a new context, so the
+            // id is part of the key. IT IS NOT AN OWNERSHIP CLAIM: a texture belongs to a SHARE
+            // GROUP (P14 S3/S6 - share groups ARE implemented, `ShareGroupState` holds the object
+            // tables and the twin tables are keyed by {session, share group}), so two contexts of
+            // one group both legitimately mutate this texture. What the id buys is only the
+            // cheaper half of the gate: a mutation made under a context sharing this texture
+            // stamps a different id and re-derives the shape, which is a spurious re-derivation
+            // (safe, and only on a shape mutation) rather than a missed one - the per-mutation
+            // versions below are what actually catch a change, and they are group-independent.
+            // 0 = never stamped (real context ids start at 1). Backend-side invalidation rides on
             // m_isInitialized: RequireImageBindableStorage and RecreateBackendTexture clear it.
             Uint64 m_syncedShapeContextId = 0;
             Uint64 m_syncedShapeGeneration = 0;
@@ -3639,7 +3706,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // what makes HandleOf below resolve at all. Not one member that would dereference it is
         // instantiated - no Find(StateObject*), no ForEachLive - and the handle overloads never
         // look at it.
-        using BackendSamplerViewTable = BackendSlotTable<MG_State::GLState::ITextureObject,
+        // P14 S6: and a bucket registry for the same reason the buffer one above is - a sampler
+        // view's twin is a driver object of the texture's group.
+        using BackendSamplerViewTable = SlotTableRegistry<MG_State::GLState::ITextureObject,
                                                         BackendSamplerViewObject,
                                                         MG_Pipe::MGPipeKind::SamplerViewCso>;
         extern BackendSamplerViewTable g_backendSamplerViews;

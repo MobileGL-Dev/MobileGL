@@ -16268,6 +16268,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (resolver != nullptr) (void)resolver(&outSession, &outToken);
     }
 
+#if MOBILEGL_PIPE_PUSH
+    // P14 S6: the twin tables' key. Same probe/fallback shape as the native tuple's above and
+    // for the same reason (the whole single-context world must keep getting one key), and
+    // deliberately a SEPARATE resolver: this one answers for a table that is consulted on paths
+    // the native tuple is not, and a case that drives twins without EGL must be able to set it
+    // alone. See DirectGLES.h for what the two halves mean.
+    static std::atomic<TwinKeyResolver> g_twinKeyResolver{nullptr};
+
+    void SetTwinKeyResolver(TwinKeyResolver resolver) {
+        g_twinKeyResolver.store(resolver, std::memory_order_release);
+    }
+
+    Bool CurrentTwinKey(TwinKey* outKey) {
+        outKey->SessionKey = 0;
+        outKey->ShareGroupKey = 0;
+        const TwinKeyResolver resolver = g_twinKeyResolver.load(std::memory_order_acquire);
+        if (resolver == nullptr) return false;
+        return resolver(outKey);
+    }
+#endif // MOBILEGL_PIPE_PUSH
+
     Uint64 CurrentNativeSessionKey() {
         Uint64 session = 0;
         Uint64 token = 0;

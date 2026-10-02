@@ -62,6 +62,24 @@ namespace MobileGL::MG_Remote::Server {
             outKey->ContextToken = runtime->Session().CurrentContextToken();
             return true;
         }
+
+        // P14 S6 (docs/Disaggregated/design/11-state-ownership.md). WHICH TWIN TABLE DOES THIS
+        // THREAD'S BACKEND OBJECT BELONG TO? The backend's twin tables are per {session, share
+        // group} - a twin owns a DRIVER id, and a driver id belongs to one native context's
+        // object namespace - so this answers the same two words the applier's OBJECT RECORDS are
+        // filed under, resolved through the same `CurrentContextToken()` and the same
+        // MGPipeApplierShareGroupKeyFor rule the applier itself uses. Sharing a helper rather
+        // than re-deriving the rule is the point: a record and the twin it describes must always
+        // land in the same bucket, and a second spelling of "0 means its own group" is exactly
+        // how they would stop doing that.
+        Bool ResolveThreadTwinKey(MG_Backend::DirectGLES::TwinKey* outKey) {
+            SessionRuntime* runtime = t_runtime;
+            if (runtime == nullptr) return false;
+            outKey->SessionKey = reinterpret_cast<Uint64>(&runtime->Session());
+            outKey->ShareGroupKey = MG_Pipe::MGPipeApplierShareGroupKeyFor(
+                outKey->SessionKey, runtime->Session().CurrentContextToken());
+            return true;
+        }
     } // namespace
 
     void Detail::InstallSessionRuntimeHooks() {
@@ -70,6 +88,9 @@ namespace MobileGL::MG_Remote::Server {
         }
         MG_Backend::DirectGLES::SetNativeContextKeyResolver(&ResolveThreadNativeContextKey);
         MG_Pipe::MGPipeSetApplierKeyResolver(&ResolveThreadApplierKey);
+        // P14 S6: the twin tables' key. Same probe, one level down, installed beside the two it
+        // is the twin of (the native tuple's and the applier's).
+        MG_Backend::DirectGLES::SetTwinKeyResolver(&ResolveThreadTwinKey);
     }
 
     SessionRuntime* Detail::CurrentRuntime() { return t_runtime; }

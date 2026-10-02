@@ -132,7 +132,7 @@
 
 1. **native tuple per context**。`g_Display` 保留进程级（native display 一次 initialize 合理）；`g_Context`/`g_Surface`/`g_Config`（`DirectGLES.cpp:16183-16186`）改为 per-(session, contextSlot) 表，native context 按 share group 用 `eglCreateContext(share=…)` 建。
 2. **拆掉无条件 teardown**。`InitDisplayAndContext` 首句 `DestroyEGLContext()`（`DirectGLES.cpp:16569`）与 `BackendObject_DirectGLES` 建 surface 前的 `DestroyEGLContext()+ResetEGLRuntimeState()`（`BackendObject_DirectGLES.cpp:972-982`、`:1007-1014`）改为：目标 context 已存在则复用其 native context，仅换绑 surface；pbuffer→window→pbuffer 不丢资源。`DestroyEGLContext` 只拆指定 context；最后一个 context 走了才 `eglTerminate`。
-3. **Managers 按 share group / context 分表**。六个 twin registry（`Managers.cpp:6895`、`:11035`、`:12835`、`:13188`、`:16255`、`:16580`）按 share group 实例化；`g_activeTextureUnit`/`g_boundTexturesCache`/sampler cache（`Managers.cpp:11031-11032` 等）按 context 实例化；`DropEveryTwinForEndedServerSession`（`Managers.cpp:425-443`）只清本 session。`g_backendContextGeneration` 改为 per-context 世代。
+3. **Managers 按 share group / context 分表**。六个 twin registry（`Managers.cpp:6895`、`:11035`、`:12835`、`:13188`、`:16255`、`:16580`）按 share group 实例化；`g_activeTextureUnit`/`g_boundTexturesCache`/sampler cache（`Managers.cpp:11031-11032` 等）按 context 实例化；`DropEveryTwinForEndedServerSession`（`Managers.cpp:425-443`）只清本 session。`g_backendContextGeneration` 改为 per-context 世代。**（twin 键与 per-session 清理已落地，见 S6；单元影子与 context 世代仍欠。）**
 4. **DirectVulkan 同步审视**。Magma 的 per-device/per-queue 结构也要按 session 分；本阶段先保证不编译退化，多 session 下 Magma 的验收单列。
 
 ### S4 已落地形状（每 context 原生 tuple + share-group 键控）
@@ -152,7 +152,7 @@
 **本切片明确没做（下一层的账）**：
 
 - **`g_applier` 没有改成 {shareGroup → applier}**（上面 server 第 3 条）。原因不是时间，是**形状**：`MGPipeApplierState` 把「share group 的对象记录」和「每 context 的 working state」混在一个结构里（`PipeApply.h:515-933`，其自身注释第 101 行已指出该二分），照字面把它按 share group 键控会让**同一 share group 的两个 context 共用 working state**——bindings、current program、unit 集互相覆盖，比不改更错。正确的做法是先按该二分拆结构（对象表进 share group、working state 进 context），那是独立的一刀。今天 `g_applier` 与 `gMGPipeApplierReset` 逐字未动。**（S5 已做，见下节。）**
-- **六个 twin registry 与 twin 键 `{shareGroup, slot, gen}` 未改**（`Managers.cpp`）。twin 仍按引用活着的后端 context 复用，多 context 下的正确性依赖「一个原生 context 一个 twin 世代」，这在两个 context 都活着时成立（本次测到的），在跨 context 迁移 twin 的路径上还没有证据。**（S5 仍未做，见 S5 的未做项。）**
+- **六个 twin registry 与 twin 键 `{shareGroup, slot, gen}` 未改**（`Managers.cpp`）。twin 仍按引用活着的后端 context 复用，多 context 下的正确性依赖「一个原生 context 一个 twin 世代」，这在两个 context 都活着时成立（本次测到的），在跨 context 迁移 twin 的路径上还没有证据。**（S5 仍未做；S6 已做，见「S6 已落地形状」。）**
 - **share group 的驱动级证明未落地**。`eglCreateContext(share=…)` 已接线，但用 headless EGL 直接问 `glIsBuffer` 的探针在本机没有得到可用的控制（同 context 内 `glGenBuffers` 后 `glIsBuffer` 即返回 false），没有作为「跑了个空的绿」收进来。要证到驱动层，需要先弄清该探针，再补一个用例。**（S5 也没弄清：见 S5 的未做项与「为什么没做」。）**
 - **Wire 第 1 条的逐记录 `ContextSlot` 未做**，仍是 S1 的边沿宣告 + `bind_context`。
 - **`g_backendContextGeneration`/`g_syncContextGeneration` 仍是进程级**：销毁单个 context 会推进全局世代，其他 context 的旧 fence/query 句柄因此读作「已 signal」。安全方向（最坏是多等），但不是每 context 世代，属 P14b/c。
@@ -201,12 +201,55 @@ S4 留下的最后一块：`PipeApply.cpp` 的进程级 `g_applier` 现在是一
 
 **S5 明确没做（下一层的账）**：
 
-- **六个 twin registry 与 twin 键仍未改**（`MG_Backend/DirectGLES/Managers.cpp` 的六个 `g_backend*` 静态注册表；键在 `Managers.h:315` 的 `StateBackendObjectRegistry` → `SlotTables.h` 的 `BackendSlotTable<MGPipeHandle{Slot,Gen}>`）。**这是 S5 之后"两个 nonshared context 的同名 handle"剩下的那一半**：applier 里两条记录是对的（有测试），但 twin 层按 `{slot, gen}` 键，两个 context 的同一个 handle 值会解析到同一个 twin；反向也一样，跨 context 复用 twin 的路径没有按 share group 分组。S4 报告里那条 `glIsBuffer` 探针本机仍无可用控制，所以**驱动级的 shared / nonshared 证据仍然是缺的**，本次没有以"跑了个空的绿"收进来（这是本切片最该被下一刀补上的证据）。改形状是把 `BackendSlotTable` 加一个 group 维度或按组实例化那六个注册表，触及 `Managers.cpp` 里全部调用点，不是本轮时间能稳妥做完的一刀。
+- **六个 twin registry 与 twin 键仍未改**（`MG_Backend/DirectGLES/Managers.cpp` 的六个 `g_backend*` 静态注册表；键在 `Managers.h:315` 的 `StateBackendObjectRegistry` → `SlotTables.h` 的 `BackendSlotTable<MGPipeHandle{Slot,Gen}>`）。**这是 S5 之后"两个 nonshared context 的同名 handle"剩下的那一半**：applier 里两条记录是对的（有测试），但 twin 层按 `{slot, gen}` 键，两个 context 的同一个 handle 值会解析到同一个 twin；反向也一样，跨 context 复用 twin 的路径没有按 share group 分组。S4 报告里那条 `glIsBuffer` 探针本机仍无可用控制，所以**驱动级的 shared / nonshared 证据仍然是缺的**，本次没有以"跑了个空的绿"收进来（这是本切片最该被下一刀补上的证据）。改形状是把 `BackendSlotTable` 加一个 group 维度或按组实例化那六个注册表，触及 `Managers.cpp` 里全部调用点，不是本轮时间能稳妥做完的一刀。**（S6 已做，见下节；驱动级探针仍未弄清，S6 走的是 twin 身份这条替代证据。）**
 - **pbuffer→pbuffer→pbuffer 的资源保留**只到 S4 已落地的程度（`ServerLoopEglTest.CreatingAnotherSurfaceKeepsTheSameNativeContext`：换 surface 不动 tuple 的 `EGLContext` 句柄）。真正的"三个 pbuffer 之间来回且资源都在"要 window 半边，本机 headless 验不了；按 S4 的口径只记录。
 - **wire 第 1 条的逐记录 `ContextSlot`** 仍未做，仍是 S1 的边沿宣告 + `bind_context`。所以"同一 ring 上两个 context 的记录交错"只在 client 按 make-current 顺序发射时成立（本轮的交错压力用例走的正是这个顺序）。
 - **`MGPipeApplierShareGroupCountForTesting`** 是测试观测面，不是生产 API。
 - **`MGPipeApplierState` 的九张表名与 `Objects.X` 两种拼法并存**是刻意换取 ~200 个读点不动的代价；改名的机会在 twin registry 一起做的那一刀。
 - **`g_backendContextGeneration`/`g_syncContextGeneration`、ServerLoop 的 MakeCurrent 去重**同 S4 一节所列，仍未动。
+
+### S6 已落地形状（twin 表按 {session, shareGroup} 键控）
+
+S5 留下的最后一块：八个后端 twin 表（六个 `StateBackendObjectRegistry`，加 `BackendBufferResourceTable` 与 `BackendSamplerViewTable`）从 `{slot, gen}` 的进程级表变成**按 `{session, shareGroup}` 分桶**的表。这是「两个 nonshared context 的同名 handle」剩下的那一半——applier 的记录已经分开了（S5），但记录指向的 twin 还是一条。
+
+**键结构（`MG_Backend/DirectGLES/DirectGLES.h`）**。`TwinKey{ SessionKey, ShareGroupKey }`，与 applier 的 `MGPipeApplierKey` 是**同一个二元组的后一半**：`SessionKey` 是 `ServerSession*` 的地址（S5 注册时用的也是同一个值，两侧按构造一致），`ShareGroupKey` 走 `MGPipeApplierShareGroupKeyFor(session, currentToken)`——**共享一个函数而不是各写一遍规则**，因为记录与它描述的 twin 必须永远落在同一个桶里，而「0 表示这个 context 自己起了一个组」的第二处拼写正是它们会分开的原因。`{0,0}` 保留给「不属于任何 session 的线程」，也就是被替换掉的进程单例。
+
+**解析链（`MG_Remote/Server/SessionRuntime.cpp`）**。第三层同构探针：`ResolveThreadTwinKey` 读 `ThreadSessionScope` 装好的 `t_runtime` → `runtime->Session().CurrentContextToken()` → `MGPipeApplierShareGroupKeyFor`；由 `InstallSessionRuntimeHooks` 用 `SetTwinKeyResolver` 装一次（与 S2 的 PipeInputs 探针、S4 的 native tuple 键、S5 的 applier 键并列）。没有探针的线程（monolith、纯客户端、inproc 单进程形状、单元用例）答案恒为 `{0,0}`。**探针只读 server session 侧的状态，不碰 `MG_State`**：`CurrentContextToken()` 是 apply 线程自己维护的原子，`MGPipeApplierShareGroupKeyFor` 读的是 applier 的注册表，所以 apply 线程那条「禁止前端键控查找」的约束（`Managers.h:341/406/430-436`）原样成立。
+
+**表形状（`SlotTables.h` 的 `SlotTableRegistry`）**。桶是 `SharedPtr<BackendSlotTable<…, kKind>>`，按 key 存在一张 unordered_map 里，带一个「上次的 key → 桶」的线程本地 memo（热路径是一次比较）。**~150 个调用点一行没动**：`SlotTableRegistry` 把表上每一个 handle-keyed 入口（`GetOrCreate` / `FindByHandle` / `LiveGenAt` / `HandleOf` / `StateForHandle` / `NoteStateForHandle` / `ReleaseByHandle` / `ForEachLive` / `LiveCount` / 两个 capacity 观测）按**调用线程的桶**转发一遍，所以 `g_backendTextureObjects.FindByHandle(h)` 还是那行字，答的却是本 context 的名字空间；`StateBackendObjectRegistry` 内同样把 `m_slotTable` 换成 `m_slotTables` 并转发。两处刻意的取舍：
+
+- **holder 列表仍是进程级**。notice 是关于**对象**的，不是关于桶的：`OnFrontendObjectDestroyed` / `ReleaseTwinByHandle` 必须走到 fixture 或 context reset 持有的 by-value 拷贝，无论它在哪个桶里——「哪个桶持有它」正是当初造成双 holder 泄漏的那个问题。每个共享 holder 就是一个桶，所以死亡通知天然覆盖全部桶。
+- **`ForEachLive` 走调用线程的桶**，不是全部桶。调用者问的是「我能看见的对象里哪些需要这个」，而它能看见的就是它自己的 share group；遍历全部桶会走到邻居 session 的对象。需要全进程视野的两处（死亡、诊断）走新的 `ForEachBucket(fn)`（回调带 key）。
+
+**新增的控制面**：`Drop(key)`（一个组）、`DropSession(sessionKey)`（一个 session 的全部组）、`ResetBuckets()`（全部，即 `= {}` 在旧形状下的意思）、`BucketCount()` / `BucketSnapshot()` / `BucketForCallingThread()`（测试与 fixture 的观测面）。`BackendSlotTable::Reset()` 是「把两个空间先移出去再析构」的写法，理由与 `ReleaseTwinAt` 相同：twin 的析构是驱动调用，可能重入 `GetOrCreate`。
+
+**`DropEveryTwinForEndedServerSession` 变成 per-session**（`Managers.cpp`）。它跑在**正在结束的那个 session 的 apply 线程**上，而 S2 之后同一个进程里可能有别的 session 还在渲染，所以现在是「按调用线程的 session 删它全部桶」；没有 session 的线程（单元用例、`SanityTest` 的 `Transport=Spawn` 形状、fork worker）执行全量清理，与旧形状逐字相同。`g_boundTexturesCache` / `g_boundSamplersCache` / `g_activeTextureUnit` 这三个单元影子仍是进程级、仍在这里整体清空（见下面的欠债）。
+
+**`Managers.h:2190` 的注释一并改正**：那里过去写着「a texture is owned by exactly one context (share groups are not implemented)」。真正成立的说法是**texture 属于一个 share group**（S3 的 `ShareGroupState` 持有对象表，S6 之后 twin 表也按组键控），同组两个 context 都会合法地改它；`m_syncedShapeContextId` 因此只是廉价门禁的一半——同组的另一个 context 改了 shape 会 stamp 一个新 id 并（多余地、但安全地）重推一次，而真正兜住变化的是那几个 per-mutation version，它们与 context 无关。
+
+**验收证据**（本次新增）：
+
+- `MG_Test/Wire/TwinOwnershipTest.cpp`，5 个用例，直接驱动**真实** twin 表（无 EGL、无 wire）：同 session 两个不共享的组、同名 handle 是两个 twin 且互不覆盖；同组两个 context 解析**同一个** twin（驱动级共享在 twin 层的等价物——twin 就是持有 driver id 的那个对象）；一个 session 的 `DropBucketsOfSession` 只带走自己的 twin，邻居 session 的不受影响；不属于任何 session 的线程仍拿进程级那张表且与 session 的互不串；第六个用例在 `TwinRegistry` 模板（六个注册表同型）上重复前三条并顺带钉住 per-bucket 的世代门禁。
+  **负控**（必做）：把 `SlotTableRegistry::ForCallingThread` 改成恒答 `{0,0}`（即恢复 S6 前的进程级表），5 个用例里**4 个变红**；`TwoContextsOfOneGroupShareTheGroupsTwins` 保持绿——一个键时两种形状答案相同，这正是该用例断言的是「共享必须发生」而不是「存在两个桶」的原因。改回即全绿。
+- 既有集合零回归：本切片点名的 103 个用例（`EmbeddedServerTest`、`ServerDisplayTest`、`UnixSupervisor`、`InProcessServer`、`SupervisorChildren`、`ServerLoopTest`、`ServerLoopEglTest`、`MultiSessionFixture`、`PeerLatch`、`SurfaceControlFrameTest`、`ContextStateOwnershipTest`、`ApplierOwnershipTest`）全绿，其中 `MultiSessionFixture` 的两个真渲染用例现在跑在按 session 隔离的 twin 表上。
+- **全量 host ctest 与基线的逐名对比**（同 S5 的做法：`git stash push -u -- MobileGL docs` 掉本切片、重建、跑全量留失败名单，恢复后再跑一遍，两份名单按**用例名**`comm` 而不是按行号——本切片多了一个测试文件，行号会整体错位）：
+
+  | | 数量 |
+  |---|---|
+  | 基线失败 | 277 |
+  | 本切片失败 | 278 |
+  | **本切片新增失败** | **0** |
+  | 基线失败而本切片不失败 | 0 |
+
+  两份名单的差集只有一个名字：`LogForwardChannel.APeerThatStopsReadingCostsWarnLinesNotTheCallersTime`，它**基线也抖**——同一台机器上单独重复跑，基线 4/60 失败、本切片 2/40 失败，两边的失败断言逐字相同（`LogForwardTest.cpp:446` 的 `Dropped` 行数与 `counters.lossyDropped` 不等、`:448` 的 `counters.notices == 2` 而非 1），是那个用例自己的日志通道竞态：它让对端停止读取然后断言「掉线通知只发一条」，而通知本身由后台线程按队列水位发。该用例不建 backend、不碰 twin，与本切片无关，按既有基线口径记为抖动。其余失败名单全部落在 glslang / 着色器编译族（`ProgramTest` 80、`ProgramInterfaceTest` 32、`AsyncLinkTest` 17、`GlslangCaptureProbeTest` 15、`ShaderCompileAdoptionTest` 14…），与 `3rdparty/glslang` 这个 dirty submodule 的既有基线一致。
+
+**S6 明确没做（下一层的账）**：
+
+- **单元影子仍是进程级**：`g_activeTextureUnit`、`g_boundTexturesCache`、`g_boundSamplersCache` 与 sampler cache（`Managers.cpp:11031-11032` 等）是 §3 第 3 条留给 P14b/c 的另一半。它们与 twin 键控**不冲突但也不互补**：缓存做的是指针同一性比较，所以按组分开的 twin 只会让「另一组的 twin」比较不相等并重新绑定（安全方向）；真正的残留问题是「同一个 twin 在一次原生 context 切换之后被缓存命中而跳过绑定」，那在 S4 把原生 context 变成 per-context 时就已经存在，属于同一笔账。
+- **驱动级的 `glIsBuffer` 探针仍未弄清**（S4/S5 都记录的同一件事）。S6 因此没有走「真驱动上问一句」那条路，而是按 S5 报告的允许口径在 twin 层断言身份：twin 就是持有 driver id 的对象，两个 context 拿到不同的 twin 就是两个 driver 对象。要做成驱动级证据，需要先把 S4 报告里「同 context 内 `glGenBuffers` 后 `glIsBuffer` 即返回 false」这个探针问题弄清楚。
+- **`g_backendContextGeneration`/`g_syncContextGeneration` 仍是进程级**，同 S4/S5 一节所列。
+- **`MGPipeApplierState` 的两种拼法（`Objects.X` 与表名）仍未收敛**；S5 说「改名的机会在 twin registry 一起做的那一刀」，S6 选择了不动它（那一刀的价值是整洁，而 S6 的 diff 已经在改 8 张表的行为，把重命名捆进来只增风险）。
+- **wire 第 1 条的逐记录 `ContextSlot`** 仍未做。
 
 
 ## 分期与验收
