@@ -1706,6 +1706,22 @@ TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     ASSERT_TRUE(strstr(resultIndexed, indexNeedle) != nullptr)
         << "Expected dual-source color index in generated shader.\n(Searching for \"" << indexNeedle << "\")";
 
+    // The ESSL the GLES backend hands the driver keeps index 1, and ESSL accepts it only with
+    // GL_EXT_blend_func_extended enabled in the shader itself.
+    MG_Util::ShaderTranspiler::SpvcSession spvcSessionEs(fragSpirvIndexed,
+                                                         MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+    spvc_compiler_options optionsEs;
+    spvcSessionEs.CreateOptions(&optionsEs);
+    spvc_compiler_options_set_uint(optionsEs, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
+    spvc_compiler_options_set_bool(optionsEs, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+    spvcSessionEs.SetOptions(optionsEs);
+    spvcSessionEs.DropDefaultFragmentOutputColorIndex();
+    const char* resultEs = nullptr;
+    spvcSessionEs.Compile(&resultEs);
+    ASSERT_NE(resultEs, nullptr);
+    EXPECT_NE(strstr(resultEs, indexNeedle), nullptr) << resultEs;
+    EXPECT_NE(strstr(resultEs, "#extension GL_EXT_blend_func_extended : require"), nullptr) << resultEs;
+
     // glBindFragDataLocation is equivalent to index 0 and resets it.
     BindFragDataLocation(program, 0, "fragColor");
     LinkProgram(program);

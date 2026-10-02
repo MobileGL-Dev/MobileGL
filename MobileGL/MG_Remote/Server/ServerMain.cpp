@@ -461,9 +461,18 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
             hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
             hello->dialMode()) != MOBILEGL_OK) return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-    MobileGL::MG_ConfigLoader::Init();
-    MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
-    MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
+    // ONCE PER PROCESS, NOT PER SESSION. The configuration is the process's environment, the same
+    // for every session it serves, and re-reading it is not a no-op: Init() rewrites the globals
+    // in place - Transport first falls back to Monolith before the line below puts Spawn back - so
+    // a second session accepted while the first is applying showed that session's apply thread a
+    // monolith process for a moment. It then skipped the server stamp on a draw and died on
+    // Fatal{UnmigratedPipeInput}, taking every session in the process with it.
+    static std::once_flag s_serverConfigured;
+    std::call_once(s_serverConfigured, [] {
+        MobileGL::MG_ConfigLoader::Init();
+        MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
+        MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
+    });
     // PH-1 (3), ID-P7-1: THIS PROCESS IS THE SESSION, so a named fault on the peer's bytes may end
     // it cleanly instead of aborting it (FatalFunnel.h's latch block). Armed here and nowhere
     // else: inproc keeps every Fatal (client and server share that process), and the supervisor

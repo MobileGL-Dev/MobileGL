@@ -150,7 +150,8 @@ namespace MobileGL {
                 // A NON-zero index is left exactly as it is: that one really does select the
                 // second dual-source input and cannot be expressed without the extension, so it
                 // must keep reaching the driver (the frontend's own glBindFragDataLocationIndexed
-                // path already emits only non-zero indices for the same reason).
+                // path already emits only non-zero indices for the same reason) - and the stage
+                // then requires GL_EXT_blend_func_extended, which ESSL wants enabled by name.
                 spvc_result DropDefaultFragmentOutputColorIndex();
                 // Drops `readonly` and `writeonly` from every shader storage block - and every
                 // block member - that carries BOTH of them.

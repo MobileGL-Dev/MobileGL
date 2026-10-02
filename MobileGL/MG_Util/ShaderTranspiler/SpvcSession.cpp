@@ -470,11 +470,21 @@ namespace MobileGL {
                 size_t count = 0;
                 SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
                     resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &list, &count));
+                Bool dualSourceIndex = false;
                 for (size_t i = 0; i < count; ++i) {
                     const spvc_reflected_resource& resource = list[i];
                     if (!spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationIndex)) continue;
-                    if (spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationIndex) != 0u) continue;
+                    if (spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationIndex) != 0u) {
+                        dualSourceIndex = true;
+                        continue;
+                    }
                     spvc_compiler_unset_decoration(compiler, resource.id, SpvDecorationIndex);
+                }
+                // The index that stays is printed as `layout(index = 1)`, which ESSL accepts only
+                // with the extension enabled in the shader itself: the driver having it is not
+                // enough, and without the directive the stage is refused exactly as above.
+                if (dualSourceIndex) {
+                    SPVC_CHK_RESULT(spvc_compiler_require_extension(compiler, "GL_EXT_blend_func_extended"));
                 }
                 SPVC_CHK_RETURN
             }
