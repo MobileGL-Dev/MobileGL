@@ -24,9 +24,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <optional>
 #include <thread>
 
 #if defined(__linux__) || defined(__ANDROID__)
@@ -37,6 +40,67 @@
 namespace MobileGL::MG_Remote::Server {
 
     namespace {
+
+        // P14: THE BACKEND'S TURN. The in-process display server runs one apply thread per
+        // session, and the backend those threads drive was written for one GL thread: one owner
+        // thread, one set of binding shadows, process-wide rings and pools. Two sessions applying
+        // at once raced all of it - a session's buffer ops were deferred while the other thread
+        // owned the backend, and a texture bind was skipped because the shadow described the
+        // other session's context. So an apply thread holds the turn while it does backend work
+        // (control requests, a drain batch, fence reports, teardown) and gives it up before it
+        // parks. FIFO, so a session with a busy ring cannot starve its neighbours; reentrant for
+        // the thread that holds it. When the turn moves to a different thread the backend takes
+        // ownership for it and drops its binding shadows (DirectGLES::OnBackendTurnHandoff).
+        class BackendTurnLock {
+        public:
+            void Lock() {
+                const std::thread::id self = std::this_thread::get_id();
+                std::unique_lock<std::mutex> lock(m_mutex);
+                if (m_owner == self) {
+                    ++m_depth;
+                    return;
+                }
+                const Uint64 ticket = m_nextTicket++;
+                m_turn.wait(lock, [&] { return m_serving == ticket; });
+                m_owner = self;
+                m_depth = 1;
+                if (m_lastOwner != self) {
+                    const Bool handoff = m_lastOwner != std::thread::id{};
+                    m_lastOwner = self;
+                    lock.unlock();
+                    if (handoff) MG_Backend::DirectGLES::OnBackendTurnHandoff();
+                }
+            }
+            void Unlock() {
+                const std::lock_guard<std::mutex> lock(m_mutex);
+                if (--m_depth > 0) return;
+                m_owner = std::thread::id{};
+                ++m_serving;
+                m_turn.notify_all();
+            }
+
+        private:
+            std::mutex m_mutex;
+            std::condition_variable m_turn;
+            Uint64 m_nextTicket = 0;
+            Uint64 m_serving = 0;
+            std::thread::id m_owner{};
+            std::thread::id m_lastOwner{};
+            Uint32 m_depth = 0;
+        };
+
+        BackendTurnLock& BackendTurn() {
+            static BackendTurnLock& turn = *new BackendTurnLock(); // leaked at exit (ID-8)
+            return turn;
+        }
+
+        class ScopedBackendTurn {
+        public:
+            ScopedBackendTurn() { BackendTurn().Lock(); }
+            ~ScopedBackendTurn() { BackendTurn().Unlock(); }
+            ScopedBackendTurn(const ScopedBackendTurn&) = delete;
+            ScopedBackendTurn& operator=(const ScopedBackendTurn&) = delete;
+        };
 
         // The bounded join. InProcessTransportTest.cpp:344 uses five seconds for the same
         // reason: a lost wakeup must be a RED TEST and not a hung CI job.
@@ -533,6 +597,7 @@ namespace MobileGL::MG_Remote::Server {
         };
 
         for (;;) {
+            std::optional<ScopedBackendTurn> turn(std::in_place);
             PumpControlRequest();
             if (stopOrForfeit()) break;
             if (eventRingHasRoom()) DrainRing();
@@ -557,6 +622,8 @@ namespace MobileGL::MG_Remote::Server {
                 if (ready()) continue;
             }
 
+            // Never park holding the turn: a neighbour session may be waiting for it.
+            turn.reset();
             const Uint64 waits = m_parks.fetch_add(1, std::memory_order_acq_rel) + 1;
             // THE WAIT LEDGER'S SERVER HALF (P5d round 3, package T item 4). The client may not
             // name this counter - CONTRACT-P5C rule E, layer 2: a GL-thread read of
@@ -622,6 +689,7 @@ namespace MobileGL::MG_Remote::Server {
         // AND AFTER AbandonQueuedRecords (P12 review fix), for the forfeit's reason: the server is
         // stopping under a client that may still be streaming, and draining what it keeps queuing
         // is the unbounded hold Stop()'s bounded join turns into an abort.
+        std::optional<ScopedBackendTurn> exitTurn(std::in_place);
         const Bool forfeited = session.ReverseChannelForfeited();
         const Bool abandoned = m_abandonQueue.load(std::memory_order_acquire);
         PumpControlRequest();
@@ -650,6 +718,7 @@ namespace MobileGL::MG_Remote::Server {
                     "which is the context owner");
             m_backend.reset();
         }
+        exitTurn.reset();
         // P12 (D6): the backend - and with it every surface on the server's window - is gone, so the
         // session's lease on that window ends here, AFTER the reset. A Detach waiting on it returns
         // now; one that arrives later finds no lease and releases the window at once.
@@ -1418,6 +1487,14 @@ namespace MobileGL::MG_Remote::Server {
             // already current on this thread is skipped one layer down
             // (BackendObject_DirectGLES's ID-54 arm), which is what makes "the owner slot is
             // written once" TRUE and measured (ServerLoopTest's C7 control) rather than claimed.
+            //
+            // P14 MULTI-WINDOW: the frame names the client's CONTEXT TOKEN (BackendObject_Remote's
+            // MakeEGLCurrent), and the native bind below resolves the context through the session's
+            // current token - which still names whatever another thread bound last, since this
+            // thread's own bind_context follows the frame. Bound first, so the surface is made
+            // current with ITS context and not attached to a neighbour's. A frame from a client
+            // that sends a handle names no token and leaves the binding alone.
+            if (m_session != nullptr && frame.context != 0) (void)m_session->BindContext(frame.context);
             const MakeCurrentOutcome outcome =
                 ApplyMakeCurrent(backend, HandleFromToken<EGLDisplay>(frame.display),
                                  HandleFromToken<EGLSurface>(frame.surface),

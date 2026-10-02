@@ -3408,13 +3408,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // the same statement one level down, for the backend that would have papered over
                 // it. Under monolith the fall-back is correct and stays.
                 if (MG_Config::Transport != MG_Config::TransportMode::Monolith && maxTouchedUnit >= 0) {
-                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - a draw "
+                    // The windows are the PEER's records, so in a served session this ends THAT
+                    // session (the in-process display server serves every client from one
+                    // process; an abort here took the compositor down with the offender). The
+                    // answer while the latch drains is "no unit is bound": the walk the decline
+                    // would run reads client memory, and the session stops at its next record.
+                    // Unarmed, SessionLatch is the old abort.
+                    if (!MG_Remote::SessionLatch(
+                            MG_Remote::MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - a draw "
                             "touches units 0..%d and neither a sampler-view nor a sampler-state "
                             "window has ever been applied while the sampler subsystem bit is set; "
                             "the pre-handle unit-bindings snapshot walk reads client memory and is "
                             "refused under an active transport (CONTRACT-P5E.md §5.3)",
-                            static_cast<int>(maxTouchedUnit));
-                    std::abort();
+                            static_cast<int>(maxTouchedUnit))) {
+                        out = 0;
+                        return true;
+                    }
                 }
 #endif
                 if (maxTouchedUnit >= 0) {
@@ -16317,6 +16327,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // what makes MakeNativeContextCurrentForBoundToken a no-op when the bind did not actually
         // change the native context (the single-context world's every bind).
         thread_local EGLContext t_boundNativeContext = EGL_NO_CONTEXT;
+        // And the surface it was made current with: a bind to the same context on a different
+        // surface (one client context drawing to several windows) is a real switch.
+        thread_local EGLSurface t_boundNativeDraw = EGL_NO_SURFACE;
     } // namespace
 
     static NativeSessionState& AcquireNativeSession(Uint64 sessionKey) {
@@ -16844,10 +16857,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static Bool EnsureNativeContext(NativeContextTuple& tuple, EGLint surfaceBit, NativeWindowType window) {
-        if (!EnsureDisplayInitialized()) return false;
+        if (!EnsureDisplayInitialized()) {
+            MGLOG_E("EnsureNativeContext: the EGL display did not initialize");
+            return false;
+        }
         if (tuple.Context != EGL_NO_CONTEXT) return true;
 
-        if (tuple.Config == nullptr && !ChooseConfigForSurface(surfaceBit, tuple.Config, window)) return false;
+        if (tuple.Config == nullptr && !ChooseConfigForSurface(surfaceBit, tuple.Config, window)) {
+            MGLOG_E("EnsureNativeContext: no EGL config for surface bit 0x%x (window=%p)",
+                    static_cast<unsigned>(surfaceBit), reinterpret_cast<void*>(window));
+            return false;
+        }
 
         // A share group whose leader has a live native context hands it to eglCreateContext: this is
         // the whole of "shared contexts see the same objects" on the server. The group is recorded
@@ -16861,6 +16881,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 break;
             }
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P14: AND OTHERWISE ANY LIVE NATIVE CONTEXT IN THE PROCESS. The backend keeps buffers,
+        // textures and syncs of its own in process-wide state (the UBO/unpack/upload rings, the
+        // buffer pool, scratch textures, frame fences) and every session's apply thread uses
+        // them; they are only names in another session's context if all the contexts are one
+        // share group. Client isolation does not come from the driver's namespaces - the twin
+        // tables are bucketed per {session, share group} and never hand one bucket's names to
+        // another - so a process-wide group costs nothing in separation.
+        if (share == EGL_NO_CONTEXT) {
+            for (auto* other : NativeContexts()) {
+                if (other != &tuple && other->Context != EGL_NO_CONTEXT) {
+                    share = other->Context;
+                    break;
+                }
+            }
+        }
+#endif
 
         // Negotiate the highest ES 3.x context. Version-strict EGL implementations
         // (ANGLE) return exactly the requested minor, and a bare CLIENT_VERSION 3
@@ -16941,13 +16978,124 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // P14 S4. THE NATIVE HALF OF A CONTEXT SWITCH. See DirectGLES.h; in one line, `bind_context`
     // moves the session's context attribution and this makes the calling thread's native tuple
     // follow it, binding the session's current surface to the newly named context's EGLContext.
+    static Bool SessionOwnsSurface(const NativeSessionState& session, EGLSurface surface) {
+        if (surface == EGL_NO_SURFACE) return false;
+        for (const auto& entry : session.Surfaces) {
+            if (entry.Surface == surface) return true;
+        }
+        return false;
+    }
+
     Bool MakeNativeContextCurrentForBoundToken() {
         NativeContextTuple& tuple = ActiveNativeContext();
         // Nothing to switch to: a session that never sent CreateContext has no native context for
         // this token, and building one here would bind a context the client does not know it has.
         if (tuple.Context == EGL_NO_CONTEXT) return true;
-        if (t_boundNativeContext == tuple.Context) return true;
+        // A MULTI-WINDOW CLIENT: each context draws to the surface it was last made current with,
+        // not to whichever surface the session bound most recently - Qt renders each window on its
+        // own thread with its own context, and binding a context back onto another window's
+        // surface drew one window's frame into the other.
+        NativeSessionState& session = ActiveNativeSession();
+        if (tuple.Draw != session.Draw && SessionOwnsSurface(session, tuple.Draw)) {
+            session.Draw = tuple.Draw;
+            session.Read = SessionOwnsSurface(session, tuple.Read) ? tuple.Read : tuple.Draw;
+        }
+        if (t_boundNativeContext == tuple.Context && t_boundNativeDraw == session.Draw) return true;
         return MakeCurrent();
+    }
+
+    EGLSurface CurrentSessionDrawSurface() { return ActiveNativeSession().Draw; }
+
+    EGLSurface CurrentContextDrawSurface() { return ActiveNativeContext().Draw; }
+
+    Bool SelectSessionSurface(EGLSurface surface) {
+        NativeSessionState& session = ActiveNativeSession();
+        if (!SessionOwnsSurface(session, surface)) return false;
+        session.Draw = surface;
+        session.Read = surface;
+        return true;
+    }
+
+    Bool BindSessionSurface(EGLSurface surface) {
+        NativeSessionState& session = ActiveNativeSession();
+        if (!SessionOwnsSurface(session, surface)) return false;
+        session.Draw = surface;
+        session.Read = surface;
+        if (ActiveNativeContext().Context == EGL_NO_CONTEXT) return true;
+        if (t_boundNativeContext == ActiveNativeContext().Context && t_boundNativeDraw == surface) return true;
+        return MakeCurrent();
+    }
+
+    EGLSurface CreateSessionPbuffer(EGLint width, EGLint height) {
+        NativeContextTuple& tuple = ActiveNativeContext();
+        if (!EnsureNativeContext(tuple, EGL_PBUFFER_BIT, static_cast<NativeWindowType>(0))) return EGL_NO_SURFACE;
+        const EGLint attribs[] = {EGL_WIDTH, width, EGL_HEIGHT, height, EGL_NONE};
+        const EGLSurface surface = g_EGLFuncs.eglCreatePbufferSurface(g_Display, tuple.Config, attribs);
+        if (surface == EGL_NO_SURFACE) return EGL_NO_SURFACE;
+        NativeSessionState& session = ActiveNativeSession();
+        const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+        session.Surfaces.push_back({static_cast<NativeWindowType>(0), surface});
+        g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        return surface;
+    }
+
+    void ReplaceSessionSurface(EGLSurface previous, EGLSurface replacement) {
+        if (previous == EGL_NO_SURFACE || replacement == EGL_NO_SURFACE || previous == replacement) return;
+        NativeSessionState& session = ActiveNativeSession();
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            for (auto* tuple : NativeContexts()) {
+                if (tuple->SessionKey != session.SessionKey) continue;
+                if (tuple->Draw == previous) tuple->Draw = replacement;
+                if (tuple->Read == previous) tuple->Read = replacement;
+            }
+            auto& entries = session.Surfaces;
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                         [&](const NativeSessionState::SurfaceEntry& entry) {
+                                             return entry.Surface == previous;
+                                         }),
+                          entries.end());
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+        if (session.Draw == previous) session.Draw = replacement;
+        if (session.Read == previous) session.Read = replacement;
+        // The calling thread drew to the old one: draw to the new one from here (the old is then
+        // no longer current, and its destruction below is immediate).
+        if (t_boundNativeDraw == previous && ActiveNativeContext().Context != EGL_NO_CONTEXT) (void)MakeCurrent();
+        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY) g_EGLFuncs.eglDestroySurface(g_Display, previous);
+    }
+
+    void DestroySessionSurface(EGLSurface surface) {
+        if (surface == EGL_NO_SURFACE) return;
+        NativeSessionState& session = ActiveNativeSession();
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            auto& entries = session.Surfaces;
+            const auto it = std::find_if(entries.begin(), entries.end(),
+                                         [&](const NativeSessionState::SurfaceEntry& entry) { return entry.Surface == surface; });
+            if (it == entries.end()) return;
+            entries.erase(it);
+            for (auto* tuple : NativeContexts()) {
+                if (tuple->SessionKey != session.SessionKey) continue;
+                if (tuple->Draw == surface) tuple->Draw = EGL_NO_SURFACE;
+                if (tuple->Read == surface) tuple->Read = EGL_NO_SURFACE;
+            }
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+        if (session.Draw == surface || session.Read == surface) {
+            // Fall back onto a surface the session still has, so the next bind has somewhere to go.
+            const EGLSurface fallback = session.Surfaces.empty() ? EGL_NO_SURFACE : session.Surfaces.front().Surface;
+            session.Draw = fallback;
+            session.Read = fallback;
+            if (t_boundNativeDraw == surface && fallback != EGL_NO_SURFACE &&
+                ActiveNativeContext().Context != EGL_NO_CONTEXT) {
+                (void)MakeCurrent();
+            }
+        }
+        // A surface still current on this thread is destroyed by EGL once it is not (EGL 1.5
+        // 3.5.6), so this needs no unbind first.
+        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY) g_EGLFuncs.eglDestroySurface(g_Display, surface);
+        if (t_boundNativeDraw == surface && session.Draw == EGL_NO_SURFACE) t_boundNativeDraw = EGL_NO_SURFACE;
     }
 
     namespace {
@@ -17007,7 +17155,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const EGLSurface surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, tuple.Config, window, nullptr);
-        if (surface == EGL_NO_SURFACE) return false;
+        if (surface == EGL_NO_SURFACE) {
+            const EGLint error = g_EGLFuncs.eglGetError ? g_EGLFuncs.eglGetError() : EGL_SUCCESS;
+            MGLOG_E("InitWindowSurface: eglCreateWindowSurface(window=%p) failed with EGL error 0x%x",
+                    reinterpret_cast<void*>(window), static_cast<unsigned>(error));
+            return false;
+        }
         NativeSessionState& session = ActiveNativeSession();
         session.Surfaces.push_back({window, surface});
         session.Draw = surface;
@@ -17125,6 +17278,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // EGL verification stamp BEFORE publishing the new owner.
     void InvalidateEglVerifiedStamp();
 
+    // EVERY SHADOW OF THE CURRENT NATIVE CONTEXT'S BINDINGS, dropped whenever the context the
+    // calling thread renders into may have changed (MakeCurrent, a turn handoff between two
+    // sessions' apply threads). Re-issuing a bind is cheap; trusting a shadow that describes
+    // another context skips one the driver needed (a texture sampled from the wrong unit, a
+    // draw against another context's VAO). Requires a current context: it re-establishes
+    // GL_TEXTURE0 so the active-unit shadow is true rather than guessed.
+    static void InvalidateNativeBindingShadows() {
+        // Conservatively drop the redundant-glUseProgram guard: re-issuing one bind
+        // after a MakeCurrent is cheaper than trusting a possibly-reset context.
+        PrgramImpl::g_lastUsedBackendProgramId = 0;
+        // The GLContext becoming current may be a fresh one whose slot versions
+        // restarted at zero; the broadcast memo's key is only monotonic within one.
+        PrgramImpl::InvalidateBroadcastMemo();
+        BufferImpl::InvalidateArrayBufferBindingCache();
+        BufferImpl::InvalidateIndexedBufferBindingCache();
+        BufferImpl::InvalidatePixelBufferBindingCaches();
+        BufferImpl::InvalidateTransformFeedbackBindingShadows();
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
+        VertexArrayImpl::InvalidateVAOBindingCache();
+        PixelStoreImpl::InvalidatePackStateCache();
+        // The render-state shadow belongs in this list for the same reason as the ones above:
+        // it describes the real ES context, which outlives the MobileGL context that is
+        // becoming current. See InvalidateSyncedRenderState.
+        RenderStateImpl::InvalidateSyncedRenderState();
+        TextureImpl::g_boundTexturesCache = {};
+        SamplerImpl::g_boundSamplersCache = {};
+        if (g_GLESFuncs.glActiveTexture) g_GLESFuncs.glActiveTexture(GL_TEXTURE0);
+        TextureImpl::g_activeTextureUnit = 0;
+    }
+
     Bool MakeCurrent() {
         // P14 S4: the context comes from the calling thread's tuple (the session's bound token),
         // the surface from the session. Both halves used to be file-level singletons.
@@ -17144,32 +17330,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         InvalidateEglVerifiedStamp();
         t_boundNativeContext = tuple.Context;
+        t_boundNativeDraw = session.Draw;
         g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
         BufferImpl::RegisterBufferBackendOps();
-        // Conservatively drop the redundant-glUseProgram guard: re-issuing one bind
-        // after a MakeCurrent is cheaper than trusting a possibly-reset context.
-        PrgramImpl::g_lastUsedBackendProgramId = 0;
-        // The GLContext becoming current may be a fresh one whose slot versions
-        // restarted at zero; the broadcast memo's key is only monotonic within one.
-        PrgramImpl::InvalidateBroadcastMemo();
-        BufferImpl::InvalidateIndexedBufferBindingCache();
-        BufferImpl::InvalidatePixelBufferBindingCaches();
-        FramebufferImpl::InvalidateFramebufferBindingCache();
-#if MOBILEGL_PIPE_PUSH
-        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
-#endif
-        PixelStoreImpl::InvalidatePackStateCache();
-        // The render-state shadow belongs in this list for the same reason as the ones above:
-        // it describes the real ES context, which outlives the MobileGL context that is
-        // becoming current. See InvalidateSyncedRenderState.
-        RenderStateImpl::InvalidateSyncedRenderState();
+        InvalidateNativeBindingShadows();
         // eglSwapInterval requires a current context; a request made while none was
         // current (and dropped by the driver) is retried here.
         ApplyRequestedSwapInterval();
         return true;
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P14: THE BACKEND'S TURN MOVED TO ANOTHER APPLY THREAD (ServerLoop's BackendTurn). Each
+    // session's apply thread keeps its own native context current, but the backend's owner
+    // thread and every binding shadow are process-wide and still describe the context of the
+    // thread that held the turn before. Take ownership for this thread and forget them.
+    void OnBackendTurnHandoff() {
+        InvalidateEglVerifiedStamp();
+        if (t_boundNativeContext == EGL_NO_CONTEXT) {
+            g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
+            return;
+        }
+        g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
+        InvalidateNativeBindingShadows();
+    }
+#endif
 
     Bool ReleaseCurrent() {
         if (!g_EGLFuncs.eglMakeCurrent || g_Display == EGL_NO_DISPLAY) {
@@ -17187,6 +17374,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // "not current" only defers buffer ops, which is always safe.
         InvalidateEglVerifiedStamp();
         t_boundNativeContext = EGL_NO_CONTEXT;
+        t_boundNativeDraw = EGL_NO_SURFACE;
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
@@ -17712,11 +17900,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //
     // ONE CONTEXT's teardown is DestroyNativeContextFor (the DestroyContext control frame); this is
     // the session's.
+    static void DestroyNativeStateOfSession(Uint64 sessionKey);
+
     void DestroyEGLContext() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
             MG_Pipe::MGPipeServerSetContextLive(false);
 #endif
+        // P14: ANOTHER SESSION'S CONTEXT STILL LIVES. Every native context is in one share group, so
+        // the buffers, textures and syncs this process's backend holds outlive this session's
+        // contexts: bumping the process-wide generations here told every live session that its
+        // GL objects were dead, and they were rebuilt EMPTY (a client exiting or closing its last
+        // window turned the compositor's textures to noise). Only this session's own state goes;
+        // the process-wide reset below is for the last context in the process.
+        const Uint64 endingSession = CurrentNativeSessionKey();
+        Bool othersLive = false;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            for (auto* tuple : NativeContexts()) {
+                if (tuple->SessionKey != endingSession && tuple->Context != EGL_NO_CONTEXT) {
+                    othersLive = true;
+                    break;
+                }
+            }
+        }
+        if (othersLive) {
+            BufferImpl::OnServerSessionEndedWithOthersLive();
+            DestroyNativeStateOfSession(endingSession);
+            return;
+        }
         BufferImpl::OnBackendContextDestroyed();
         XfbImpl::OnBackendContextDestroyed();
         MultiDrawImpl::OnBackendContextDestroyed();
@@ -17744,13 +17956,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_completedFrameSerial.store(g_currentFrameSerial.load(std::memory_order_relaxed),
                                      std::memory_order_relaxed);
 
-        const Uint64 sessionKey = CurrentNativeSessionKey();
+        DestroyNativeStateOfSession(CurrentNativeSessionKey());
+    }
+
+    // This session's native contexts and surfaces, and the display when they were the last.
+    static void DestroyNativeStateOfSession(Uint64 sessionKey) {
         if (g_Display == EGL_NO_DISPLAY) return;
         {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (g_EGLFuncs.eglMakeCurrent) {
                 g_EGLFuncs.eglMakeCurrent(g_Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             }
+            t_boundNativeContext = EGL_NO_CONTEXT;
+            t_boundNativeDraw = EGL_NO_SURFACE;
             for (auto* tuple : NativeContexts()) {
                 if (tuple->SessionKey != sessionKey || tuple->Context == EGL_NO_CONTEXT) continue;
                 if (g_EGLFuncs.eglDestroyContext) g_EGLFuncs.eglDestroyContext(g_Display, tuple->Context);

@@ -3872,6 +3872,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_hasDeferredBufferReleases.store(false, std::memory_order_release);
         }
 
+        void OnServerSessionEndedWithOthersLive() {
+#if MOBILEGL_PIPE_PUSH
+            // Only what belongs to the ending session: its staged bytes (both stores are
+            // session-scoped). The rings, the ops table and the buffer generation are the
+            // process's and every other session's GL buffers are still alive in the shared group.
+            MGL_SERVER_STAGED_DROP_ALL();
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Remote::Server::ServerStagedTexture().DropAll();
+#endif
+#endif
+        }
+
         void OnBackendContextDestroyed() {
             UnregisterBufferBackendOps(); // also bumps the buffer-mutation epoch
             ++g_bufferContextGeneration;
@@ -9697,8 +9709,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // entry's rects are then read out of the SERVER'S WHOLE LEVEL IMAGE -
                             // which is what the derived pointer names - and those piece-relative
                             // offsets are precisely the ones that must not be used here.
+                            //
+                            // GATED ON regionsAddressable, NOT subRectEligible: the per-region arm
+                            // for a level the GPU may have written (m_driverMayHoldGpuWrites below)
+                            // reads MGB_RECT_SRC_PTR too, and it runs exactly when the union box is
+                            // the whole level - which is what two or more slab pieces always add up
+                            // to. Checked only under subRectEligible, a damage rect split across
+                            // pieces kept the later pieces' run-relative offsets and read their
+                            // rows from the top of the level image (KWin's wl_shm window textures:
+                            // the panel repeated down the desktop). bpp is valid whenever the
+                            // regions are addressable.
                             Bool pendingOffsetsAgree = true;
-                            if (pendingUpload != nullptr && subRectEligible && carriedLayoutApplies) {
+                            if (pendingUpload != nullptr && regionsAddressable && carriedLayoutApplies) {
                                 for (const auto& region : pendingUpload->Regions) {
                                     const SizeT derivedOffset = static_cast<SizeT>(region.Z) * levelSliceBytes +
                                                                 static_cast<SizeT>(region.Y) * levelRowBytes +

@@ -906,12 +906,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+    Bool BackendObject_DirectGLES::RebindNativeSurfaceFor(EGLSurface surface) {
+        const auto it = m_nativeSurfaces.find(surface);
+        if (it == m_nativeSurfaces.end()) return false;
+        if (DirectGLES::BindSessionSurface(it->second)) return true;
+        // The session no longer owns it (destroyed with a window loss): forget and recreate.
+        m_nativeSurfaces.erase(it);
+        return false;
+    }
+
+    void BackendObject_DirectGLES::RestoreSurfaceAfterCreation(EGLSurface previousNativeDraw) {
+        // The ACTIVE CONTEXT's own surface, exactly: the creation's bind attached the new surface to
+        // whichever context the session had bound (often another window's thread), and putting back
+        // "the surface activated last" instead re-attached THAT context to a third window's surface -
+        // a desktop drawing into and reading back from the panel's pbuffer.
+        if (previousNativeDraw == EGL_NO_SURFACE) return;
+        if (!DirectGLES::BindSessionSurface(previousNativeDraw)) return;
+        for (const auto& [client, native] : m_nativeSurfaces) {
+            if (native != previousNativeDraw) continue;
+            const auto state = m_eglSurfaces.find(client);
+            if (state == m_eglSurfaces.end()) break;
+            m_eglSurface = client;
+            m_eglSurfaceInitialized = true;
+            m_eglSurfaceKind = state->second.Kind;
+            if (state->second.Kind == SurfaceKind::Window) m_windowHandle = state->second.Window;
+            break;
+        }
+    }
+
     Bool BackendObject_DirectGLES::InitWindowSurface() {
+        if (RebindNativeSurfaceFor(m_activatingSurface)) return true;
         // Only use EGL for now
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
         if (!DirectGLES::InitWindowSurface(nativeWindow)) {
             MGLOG_E("Failed to initialize window surface for DirectGLES backend");
             return false;
+        }
+        if (m_activatingSurface != EGL_NO_SURFACE) {
+            m_nativeSurfaces[m_activatingSurface] = DirectGLES::CurrentSessionDrawSurface();
         }
         return true;
     }
@@ -986,6 +1018,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and its objects. ResetEGLRuntimeState still runs because the base class's per-surface
         // bookkeeping (which surface is active, which threads made it current) does describe the
         // surface that is being replaced.
+        const EGLSurface previous = m_eglSurfaceInitialized ? m_eglSurface : EGL_NO_SURFACE;
+        const EGLSurface previousNativeDraw = DirectGLES::CurrentContextDrawSurface();
         if (m_eglSurfaceInitialized) {
             ResetEGLRuntimeState();
         }
@@ -995,7 +1029,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the first virtual tuple adopts that bind. On failure nothing is known to be bound. The
         // pull arm below is the original statement, byte for byte (G1).
         const Bool created = BackendObject::CreateEGLWindowSurface(surface, handle);
-        if (created) {
+        if (created && previous != EGL_NO_SURFACE && previous != surface) {
+            // Another surface was current: the creation must not leave the context that held it
+            // drawing to the new one (P14 multi-window clients).
+            RestoreSurfaceAfterCreation(previousNativeDraw);
+            NoteNativeContextGone();
+        } else if (created) {
             NoteNativeContextFreshFromSurfaceCreation();
         } else {
             NoteNativeContextGone();
@@ -1019,6 +1058,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // P14 S4: as for the window surface above - the native context is the (session, context
         // token) tuple's and survives a surface switch. This used to be DestroyEGLContext().
+        const EGLSurface previous = m_eglSurfaceInitialized ? m_eglSurface : EGL_NO_SURFACE;
+        const EGLSurface previousNativeDraw = DirectGLES::CurrentContextDrawSurface();
         if (m_eglSurfaceInitialized) {
             ResetEGLRuntimeState();
         }
@@ -1027,7 +1068,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
         // arm below is the original statement, byte for byte (G1).
         const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
-        if (created) {
+        if (created && previous != EGL_NO_SURFACE && previous != surface) {
+            RestoreSurfaceAfterCreation(previousNativeDraw);
+            NoteNativeContextGone();
+        } else if (created) {
             NoteNativeContextFreshFromSurfaceCreation();
         } else {
             NoteNativeContextGone();
@@ -1038,8 +1082,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+    Bool BackendObject_DirectGLES::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto state = m_eglSurfaces.find(surface);
+        const auto native = m_nativeSurfaces.find(surface);
+        if (state == m_eglSurfaces.end() || state->second.Kind != SurfaceKind::Pbuffer || native == m_nativeSurfaces.end()) {
+            return BackendObject::ResizeEGLWindowSurface(surface, width, height);
+        }
+        // A pbuffer has no resize: the client surface gets a new native pbuffer at the new size,
+        // and every context that drew to the old one draws to the new one.
+        const EGLint w = static_cast<EGLint>(std::max<Uint32>(width, 1));
+        const EGLint h = static_cast<EGLint>(std::max<Uint32>(height, 1));
+        const EGLSurface replacement = DirectGLES::CreateSessionPbuffer(w, h);
+        if (replacement == EGL_NO_SURFACE) {
+            MGLOG_E("ResizeEGLWindowSurface: no %dx%d pbuffer could replace the old drawable", w, h);
+            return false;
+        }
+        DirectGLES::ReplaceSessionSurface(native->second, replacement);
+        native->second = replacement;
+        return BackendObject::ResizeEGLWindowSurface(surface, width, height);
+    }
+
     Bool BackendObject_DirectGLES::InitPbufferSurface(EGLint width, EGLint height) {
-        return DirectGLES::InitPbufferSurface(width, height);
+        if (RebindNativeSurfaceFor(m_activatingSurface)) return true;
+        if (!DirectGLES::InitPbufferSurface(width, height)) return false;
+        if (m_activatingSurface != EGL_NO_SURFACE) {
+            m_nativeSurfaces[m_activatingSurface] = DirectGLES::CurrentSessionDrawSurface();
+        }
+        return true;
     }
 
     Bool BackendObject_DirectGLES::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
@@ -1099,7 +1169,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             m_eglSurfaceInitialized && m_eglSurface == draw &&
                                             DirectGLES::IsBackendContextCurrentOnThisThread() &&
                                             NativeBindCanBeSkippedFor(dpy, draw, read, ctx);
-        if (!nativelyCurrentAlready && !DirectGLES::MakeCurrent()) {
+        // The draw surface's own native surface (P14 multi-window): a known one is re-bound, so the
+        // bind goes to it and not to whichever surface the session drew to last.
+        // The real bind still runs whenever the skip above says so (ID-67: a different tuple onto
+        // the same surface needs MakeCurrent's invalidations even though the driver triple is equal).
+        const auto nativeDraw = m_nativeSurfaces.find(draw);
+        if (!nativelyCurrentAlready && nativeDraw != m_nativeSurfaces.end()) {
+            (void)DirectGLES::SelectSessionSurface(nativeDraw->second);
+        }
+        const Bool bound = nativelyCurrentAlready || DirectGLES::MakeCurrent();
+        if (!bound) {
             NoteNativeContextGone();
             return false;
         }
@@ -1139,11 +1218,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
+        // P14: releasing a surface releases THAT SURFACE (OnEGLSurfaceForgotten), never the
+        // contexts. This used to be DestroyEGLContext() - every native context of the session, with
+        // every object the client had built - which a multi-window client hit on its first closed
+        // popup.
         (void)surface;
-        DestroyEGLContext();
 #if MOBILEGL_BUILD_DISAGGREGATED
         NoteNativeContextGone();
 #endif
+    }
+
+    void BackendObject_DirectGLES::OnEGLSurfaceForgotten(EGLSurface surface) {
+        const auto it = m_nativeSurfaces.find(surface);
+        if (it == m_nativeSurfaces.end()) return;
+        const EGLSurface native = it->second;
+        m_nativeSurfaces.erase(it);
+        DirectGLES::DestroySessionSurface(native);
     }
 
     const RendererInfo& BackendObject_DirectGLES::GetRendererInfo() const {

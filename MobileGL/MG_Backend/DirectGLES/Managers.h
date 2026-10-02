@@ -1366,6 +1366,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UnregisterBufferBackendOps();
         // The ES context died: unregister ops, invalidate all outstanding GL ids
         // (they belonged to the dead context) and drop deferred deletes.
+        // P14: a server session ended while another session's native context is still alive (one
+        // process-wide share group): drops only the ending session's own staged bytes.
+        void OnServerSessionEndedWithOthersLive();
         void OnBackendContextDestroyed();
 
         // Get-or-create the backend resource and bring its storage up to date

@@ -629,18 +629,28 @@ namespace MobileGL {
             struct EGLSurfaceState {
                 SurfaceKind Kind = SurfaceKind::None;
                 Bool DestroyPending = false;
+                // Activated at least once: a re-activation (a multi-window client switching back)
+                // is a re-bind and does not re-run the backend's capability probe.
+                Bool Activated = false;
                 WindowHandle Window;
                 EGLint Width = 1;
                 EGLint Height = 1;
             };
 
             void ResetEGLRuntimeState();
+            // ResetEGLRuntimeState for a released ACTIVE surface: the backend has no active surface
+            // any more, but every OTHER thread's current context and surface stay as they were (a
+            // multi-window client closing one popup must not unbind its other windows' threads).
+            void ForgetActiveEGLSurface();
             Bool RegisterEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);
             Bool RegisterEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
             const EGLSurfaceState* GetRegisteredEGLSurface(EGLSurface surface) const;
             Bool ActivateEGLSurface(EGLSurface surface);
             virtual Bool InitPbufferSurface(EGLint width, EGLint height);
             virtual void OnEGLSurfaceReleased(EGLSurface surface);
+            // Every registered surface the base class drops, current or not, after it is gone from
+            // m_eglSurfaces. A backend that keeps a native surface per client surface frees it here.
+            virtual void OnEGLSurfaceForgotten(EGLSurface surface);
             FormatCapabilityCache& MutableFormatCapabilities();
 
             mutable std::recursive_mutex m_eglStateMutex;
@@ -648,6 +658,10 @@ namespace MobileGL {
             WindowHandle m_windowHandle;
             EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
             EGLSurface m_eglSurface = EGL_NO_SURFACE;
+            // The client surface ActivateEGLSurface is bringing up while it calls InitWindowSurface /
+            // InitPbufferSurface, which take no surface argument: a backend that maps client surfaces
+            // to native ones reads it to re-bind an existing native surface instead of making another.
+            EGLSurface m_activatingSurface = EGL_NO_SURFACE;
             Bool m_eglDisplayInitialized = false;
             Bool m_eglSurfaceInitialized = false;
             Bool m_backendCapabilitiesInitialized = false;

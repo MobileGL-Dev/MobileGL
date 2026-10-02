@@ -111,6 +111,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     Bool InitWindowSurface(NativeWindowType window);
     Bool InitPbufferSurface(EGLint width, EGLint height);
+    // The calling thread's session's current native draw surface (the one the last Init*Surface
+    // created, or the last BindSessionSurface named).
+    EGLSurface CurrentSessionDrawSurface();
+    // The surface the calling thread's ACTIVE context last drew to (EGL_NO_SURFACE for none).
+    EGLSurface CurrentContextDrawSurface();
+    // Makes an EXISTING native surface of the calling thread's session the one it draws to, and
+    // binds it to the active context. False for a surface the session does not own.
+    Bool BindSessionSurface(EGLSurface surface);
+    // The same selection without the bind (the caller binds - MakeCurrent - unconditionally).
+    Bool SelectSessionSurface(EGLSurface surface);
+    // Destroys one native surface of the calling thread's session - and only it; the session's
+    // contexts and other surfaces are untouched.
+    void DestroySessionSurface(EGLSurface surface);
+    // A new pbuffer of the calling thread's session, created with the active context's config and
+    // bound to nothing (EGL: creating a surface changes no binding).
+    EGLSurface CreateSessionPbuffer(EGLint width, EGLint height);
+    // Every context of the session that drew to `previous` draws to `replacement` instead, and
+    // `previous` is destroyed (a pbuffer-backed window's resize).
+    void ReplaceSessionSurface(EGLSurface previous, EGLSurface replacement);
     Bool MakeCurrent();
     Bool ReleaseCurrent();
     // True when the backend ES context is current on the calling thread, i.e.
@@ -281,6 +300,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // native context already current on this thread IS that one - so the single-context world pays
     // nothing for it. Called from the bind_context path on the apply thread.
     Bool MakeNativeContextCurrentForBoundToken();
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P14: the server's backend turn moved to the calling apply thread (ServerLoop.cpp's
+    // BackendTurnLock). Takes the backend's GL ownership for this thread and drops every
+    // binding shadow, which still describes the previous holder's native context.
+    void OnBackendTurnHandoff();
+#endif
     // How many native contexts this process holds, and how many of them belong to one session. The
     // test observables for "a second context did not tear the first one down".
     Uint64 NativeContextCount();

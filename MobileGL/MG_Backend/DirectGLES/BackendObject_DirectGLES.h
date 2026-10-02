@@ -38,6 +38,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
         Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) override;
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
+        Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
@@ -57,8 +58,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UpdateDynamicBackendParameters();
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
         void OnEGLSurfaceReleased(EGLSurface surface) override;
+        void OnEGLSurfaceForgotten(EGLSurface surface) override;
+        // An existing native surface for the client surface being activated, re-bound; false when
+        // there is none yet (the caller creates it).
+        Bool RebindNativeSurfaceFor(EGLSurface surface);
+        // EGL: creating a surface does not change what is current. The creation bound the new
+        // surface natively; put the previous one back for the context that held it.
+        void RestoreSurfaceAfterCreation(EGLSurface previousNativeDraw);
 
         Bool m_initialized = false;
+        // P14: ONE NATIVE SURFACE PER CLIENT SURFACE, created on its first activation and re-bound
+        // on every later one. A multi-window client switches surfaces every frame; making a new
+        // native surface each time leaked them and lost what the window had drawn.
+        UnorderedMap<EGLSurface, EGLSurface> m_nativeSurfaces;
         MG_External::EGLFunctionsTable m_EGLFunctions;
         MG_External::GLESFunctionsTable m_GLESFunctions;
         MG_External::GLESCapabilities m_GLESCapabilities;

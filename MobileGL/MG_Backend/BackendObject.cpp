@@ -200,12 +200,15 @@ namespace MobileGL::MG_Backend {
     Bool BackendObject::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         auto surfaceIt = m_eglSurfaces.find(surface);
-        if (surfaceIt == m_eglSurfaces.end() || surfaceIt->second.Kind != SurfaceKind::Window) {
+        if (surfaceIt == m_eglSurfaces.end() || surfaceIt->second.Kind == SurfaceKind::None) {
             MGLOG_E("ResizeEGLWindowSurface failed: no window surface is initialized");
             return false;
         }
+        // A pbuffer-backed window (a Wayland window presented through wl_shm) resizes too.
         surfaceIt->second.Window.Width = width;
         surfaceIt->second.Window.Height = height;
+        surfaceIt->second.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
+        surfaceIt->second.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
         if (m_eglSurface == surface) {
             m_windowHandle.Width = width;
             m_windowHandle.Height = height;
@@ -283,6 +286,7 @@ namespace MobileGL::MG_Backend {
             return true;
         }
 
+        m_activatingSurface = surface;
         if (surfaceState->Kind == SurfaceKind::Window) {
             SetWindowHandle(surfaceState->Window);
             if (!InitWindowSurface()) {
@@ -302,8 +306,14 @@ namespace MobileGL::MG_Backend {
         m_eglSurface = surface;
         m_eglSurfaceInitialized = true;
         m_eglSurfaceKind = surfaceState->Kind;
-        m_eglCurrentThreads.clear();
-        m_backendCapabilitiesInitialized = false;
+        // NOT m_eglCurrentThreads.clear(): another thread's current context and surface are its
+        // own (a multi-window client renders each window on its own thread), and wiping them made
+        // that thread's next eglSwapBuffers fail with "no current context attached".
+        auto activatedIt = m_eglSurfaces.find(surface);
+        if (activatedIt != m_eglSurfaces.end() && !activatedIt->second.Activated) {
+            activatedIt->second.Activated = true;
+            m_backendCapabilitiesInitialized = false;
+        }
         return true;
     }
 
@@ -370,6 +380,14 @@ namespace MobileGL::MG_Backend {
         m_eglCurrentThreads.clear();
     }
 
+    void BackendObject::ForgetActiveEGLSurface() {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        m_eglSurfaceInitialized = false;
+        m_eglSurfaceKind = SurfaceKind::None;
+        m_eglSurface = EGL_NO_SURFACE;
+        m_windowHandle = {};
+    }
+
     Bool BackendObject::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {
@@ -386,8 +404,14 @@ namespace MobileGL::MG_Backend {
             MGLOG_E("SwapEGLBuffers failed: draw surface is not current on this thread");
             return false;
         }
-        if (!m_eglSurfaceInitialized || draw == EGL_NO_SURFACE || draw != m_eglSurface) {
+        if (draw == EGL_NO_SURFACE || !GetRegisteredEGLSurface(draw)) {
             MGLOG_E("SwapEGLBuffers failed: invalid draw surface");
+            return false;
+        }
+        // The calling thread's surface, which another thread's make-current may have moved the
+        // backend off: bring it back before presenting it.
+        if ((!m_eglSurfaceInitialized || draw != m_eglSurface) && !ActivateEGLSurface(draw)) {
+            MGLOG_E("SwapEGLBuffers failed: the draw surface could not be re-activated");
             return false;
         }
 
@@ -430,8 +454,9 @@ namespace MobileGL::MG_Backend {
         m_eglSurfaces.erase(surfaceIt);
         if (m_eglSurface == surface) {
             OnEGLSurfaceReleased(surface);
-            ResetEGLRuntimeState();
+            ForgetActiveEGLSurface();
         }
+        OnEGLSurfaceForgotten(surface);
     }
 
     void BackendObject::ReleaseEGLCurrentThread(const std::thread::id& threadKey) {
@@ -462,8 +487,9 @@ namespace MobileGL::MG_Backend {
         m_eglSurfaces.erase(surfaceIt);
         if (m_eglSurface == surface) {
             OnEGLSurfaceReleased(surface);
-            ResetEGLRuntimeState();
+            ForgetActiveEGLSurface();
         }
+        OnEGLSurfaceForgotten(surface);
     }
 
     void BackendObject::ReleaseEGLResources() {
@@ -494,6 +520,10 @@ namespace MobileGL::MG_Backend {
     }
 
     void BackendObject::OnEGLSurfaceReleased(EGLSurface surface) {
+        (void)surface;
+    }
+
+    void BackendObject::OnEGLSurfaceForgotten(EGLSurface surface) {
         (void)surface;
     }
 } // namespace MobileGL::MG_Backend
