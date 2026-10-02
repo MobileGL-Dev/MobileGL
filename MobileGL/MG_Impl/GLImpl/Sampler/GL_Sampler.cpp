@@ -23,6 +23,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             return static_cast<Float>(*(const GLint*)param);
         }
 
+        // An enum-valued pname through whichever scalar spelling the caller used. GL 4.6 core 8.10
+        // lets every scalar sampler pname be set through either type and converts the value; reading
+        // a glSamplerParameterf argument as a GLint took the IEEE bits of, say, 9728.0f for the enum,
+        // and the parameter silently became garbage. Truncation, as the validator
+        // (ValidateSamplerFloatParam) and the texture-side float setter convert.
+        GLint ReadSamplerEnum(const void* param, Bool isFloat, Bool isUnsignedInteger) {
+            if (isFloat) return static_cast<GLint>(*(const GLfloat*)param);
+            if (isUnsignedInteger) return static_cast<GLint>(*(const GLuint*)param);
+            return *(const GLint*)param;
+        }
+
         // GL_TEXTURE_BORDER_COLOR is the only sampler parameter with more than one component, and it
         // is also the only one whose meaning depends on WHICH entry point wrote it. Everything else
         // reads exactly one component and does not care.
@@ -122,41 +133,47 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!SamplerImpl::ValidateSamplerObject(sampler)) return;
         if (!ValidateSamplerParameterValue(pname, param, isFloat, isUnsignedInteger)) return;
 
+        // Every scalar pname reads the caller's own type and converts it (GL 4.6 core 8.10);
+        // GL_TEXTURE_BORDER_COLOR alone reads its array, below.
+        const Bool isScalar = !IsVectorOnlySamplerPname(pname);
+        const GLint enumParam = isScalar ? ReadSamplerEnum(param, isFloat, isUnsignedInteger) : 0;
+        const Float scalarParam = isScalar ? ReadSamplerScalar(param, isFloat, isUnsignedInteger) : 0.0f;
+
         using namespace MG_Util;
         switch (pname) {
         case GL_TEXTURE_WRAP_S:
-            samplerObj->SetWrapS(MG_Util::ConvertGLEnumToSamplerWrapMode(*(const GLint*)param));
+            samplerObj->SetWrapS(MG_Util::ConvertGLEnumToSamplerWrapMode(enumParam));
             break;
         case GL_TEXTURE_WRAP_T:
-            samplerObj->SetWrapT(MG_Util::ConvertGLEnumToSamplerWrapMode(*(const GLint*)param));
+            samplerObj->SetWrapT(MG_Util::ConvertGLEnumToSamplerWrapMode(enumParam));
             break;
         case GL_TEXTURE_WRAP_R:
-            samplerObj->SetWrapR(MG_Util::ConvertGLEnumToSamplerWrapMode(*(const GLint*)param));
+            samplerObj->SetWrapR(MG_Util::ConvertGLEnumToSamplerWrapMode(enumParam));
             break;
         case GL_TEXTURE_MIN_FILTER:
-            samplerObj->SetMinFilter(MG_Util::ConvertGLEnumToSamplerFilterMode(*(const GLint*)param));
-            samplerObj->SetMipmapMode(MG_Util::ConvertGLEnumToSamplerMipmapMode(*(const GLint*)param));
+            samplerObj->SetMinFilter(MG_Util::ConvertGLEnumToSamplerFilterMode(enumParam));
+            samplerObj->SetMipmapMode(MG_Util::ConvertGLEnumToSamplerMipmapMode(enumParam));
             break;
         case GL_TEXTURE_MAG_FILTER:
-            samplerObj->SetMagFilter(MG_Util::ConvertGLEnumToSamplerFilterMode(*(const GLint*)param));
+            samplerObj->SetMagFilter(MG_Util::ConvertGLEnumToSamplerFilterMode(enumParam));
             break;
         case GL_TEXTURE_MIN_LOD:
-            samplerObj->SetLodRange(*(const GLfloat*)param, samplerObj->GetMaxLod());
+            samplerObj->SetLodRange(scalarParam, samplerObj->GetMaxLod());
             break;
         case GL_TEXTURE_MAX_LOD:
-            samplerObj->SetLodRange(samplerObj->GetMinLod(), *(const GLfloat*)param);
+            samplerObj->SetLodRange(samplerObj->GetMinLod(), scalarParam);
             break;
         case GL_TEXTURE_LOD_BIAS:
-            samplerObj->SetLodBias(*(const GLfloat*)param);
+            samplerObj->SetLodBias(scalarParam);
             break;
         case GL_TEXTURE_MAX_ANISOTROPY_EXT:
-            samplerObj->SetMaxAnisotropy(ReadSamplerScalar(param, isFloat, isUnsignedInteger));
+            samplerObj->SetMaxAnisotropy(scalarParam);
             break;
         case GL_TEXTURE_COMPARE_MODE:
-            samplerObj->SetCompareMode(MG_Util::ConvertGLEnumToSamplerCompareMode(*(const GLint*)param));
+            samplerObj->SetCompareMode(MG_Util::ConvertGLEnumToSamplerCompareMode(enumParam));
             break;
         case GL_TEXTURE_COMPARE_FUNC:
-            samplerObj->SetSamplerCompareFunc(MG_Util::ConvertGLEnumToSamplerCompareFunc(*(const GLint*)param));
+            samplerObj->SetSamplerCompareFunc(MG_Util::ConvertGLEnumToSamplerCompareFunc(enumParam));
             break;
         case GL_TEXTURE_BORDER_COLOR:
             // The only four-component sampler parameter: the caller's form decides which

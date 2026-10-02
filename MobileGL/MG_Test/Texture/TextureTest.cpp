@@ -731,6 +731,56 @@ TEST_F(TextureTest, BorderColorFormChangeBumpsTheVersionEvenWhenTheNumbersDoNotM
     DrainPendingGlErrors();
 }
 
+// GL 4.6 core 8.10: every sampler pname may be set through EITHER scalar type, and the value is
+// converted - an enum through glSamplerParameterf, a LOD through glSamplerParameteri. The setter used
+// to read the caller's bytes as the pname's own type: glSamplerParameterf(GL_TEXTURE_MIN_FILTER,
+// GL_NEAREST) handed the converter the IEEE bits of 9728.0f, the filter became garbage and the sampler
+// kept a mipmap filter, so a single-level mutable texture sampled through it was incomplete and read
+// as opaque black. That is how a translation layer that funnels every sampler parameter through the
+// float entry point (enums cast to float) drew solid black icons.
+TEST_F(TextureTest, SamplerParametersSetThroughTheOtherScalarTypeAreConverted) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    const auto& samplerObject = MG_State::pGLContext->GetSamplerObject(sampler);
+    ASSERT_NE(samplerObject, nullptr);
+
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MIN_FILTER, static_cast<GLfloat>(GL_NEAREST));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_MAG_FILTER, static_cast<GLfloat>(GL_NEAREST));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_WRAP_S, static_cast<GLfloat>(GL_CLAMP_TO_EDGE));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_WRAP_T, static_cast<GLfloat>(GL_MIRRORED_REPEAT));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_WRAP_R, static_cast<GLfloat>(GL_CLAMP_TO_EDGE));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_COMPARE_MODE,
+                                       static_cast<GLfloat>(GL_COMPARE_REF_TO_TEXTURE));
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_COMPARE_FUNC, static_cast<GLfloat>(GL_GREATER));
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetMinFilter(), SamplerFilterMode::Nearest);
+    EXPECT_EQ(samplerObject->GetMipmapMode(), SamplerMipmapMode::None)
+        << "a NEAREST min filter set through the float spelling kept a mipmap mode";
+    EXPECT_EQ(samplerObject->GetMagFilter(), SamplerFilterMode::Nearest);
+    EXPECT_EQ(samplerObject->GetWrapS(), SamplerWrapMode::ClampToEdge);
+    EXPECT_EQ(samplerObject->GetWrapT(), SamplerWrapMode::MirroredRepeat);
+    EXPECT_EQ(samplerObject->GetWrapR(), SamplerWrapMode::ClampToEdge);
+    EXPECT_EQ(samplerObject->GetCompareMode(), SamplerCompareMode::CompareToTexture);
+    EXPECT_EQ(samplerObject->GetSamplerCompareFunc(), SamplerCompareFunc::Greater);
+    GLint minFilter = 0;
+    MG_Impl::GLImpl::GetSamplerParameteriv(sampler, GL_TEXTURE_MIN_FILTER, &minFilter);
+    EXPECT_EQ(minFilter, GL_NEAREST);
+
+    // And the other direction: a LOD written through the integer spellings is a number, not bits.
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MIN_LOD, -2);
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MAX_LOD, 5);
+    const GLuint bias = 3;
+    MG_Impl::GLImpl::SamplerParameterIuiv(sampler, GL_TEXTURE_LOD_BIAS, &bias);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(samplerObject->GetMinLod(), -2.0f);
+    EXPECT_FLOAT_EQ(samplerObject->GetMaxLod(), 5.0f);
+    EXPECT_FLOAT_EQ(samplerObject->GetLodBias(), 3.0f);
+
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    DrainPendingGlErrors();
+}
+
 // GL 4.6 core 8.10: the scalar sampler setters take "the value of pname", so a four-component pname is
 // INVALID_ENUM there. Taking the address of the by-value argument and handing it to the vector path -
 // which is what these used to do - both lost the error and read twelve bytes past a stack scalar.
