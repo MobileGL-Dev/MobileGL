@@ -266,6 +266,15 @@ namespace MobileGL::MG_Util::Damage {
         return static_cast<Uint32>(rects.size());
     }
 
+    // The rectangles a native swap-with-damage gets for `damage` (into `out`, room for kMaxRects),
+    // and their count; 0 = a plain swap. Only a window surface takes any: the platform hands them to
+    // the surface's native window, and a pbuffer has none (Android's EGL dereferences it anyway).
+    // An empty damage has no spelling (no rectangles means the whole surface), so it swaps plainly.
+    inline Uint32 NativeSwapRects(Bool windowSurface, const Region& damage, Int32* out) {
+        if (!windowSurface || damage.IsFull() || damage.IsEmpty()) return 0;
+        return PackRects(damage, out, kMaxRects);
+    }
+
     // Per buffer of a rotating set: the damage each has missed since it was last written.
     class BufferDamageTracker {
     public:

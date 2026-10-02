@@ -18159,21 +18159,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // The damage is the client's, from the present record (CurrentPresentDamage): GL window
         // coordinates, which is what the native call takes. Whole surface = no rectangles.
-        const EGLSurface drawSurface = ActiveNativeSession().Draw;
+        //
+        // ONLY A WINDOW SURFACE TAKES RECTANGLES: the platform's swap-with-damage hands them to the
+        // surface's native window, and a pbuffer has none (Android's dereferences it regardless).
+        NativeSessionState& session = ActiveNativeSession(); // before the lock: it takes it too
+        const EGLSurface drawSurface = session.Draw;
+        Bool windowSurface = false;
+        if (drawSurface != EGL_NO_SURFACE) {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            if (const auto* entry = FindSessionSurfaceLocked(session, drawSurface))
+                windowSurface = entry->Window != static_cast<NativeWindowType>(0);
+        }
         if (g_EGLFuncs.eglSwapBuffersWithDamageEXT != nullptr) {
             const MG_Util::Damage::Region& damage = MG_Backend::CurrentPresentDamage();
             EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
-            EGLint count = 0;
-            if (!damage.IsFull() && !damage.IsEmpty()) {
-                count = static_cast<EGLint>(MG_Util::Damage::PackRects(damage, rects, MG_Util::Damage::kMaxRects));
-            }
+            const EGLint count = static_cast<EGLint>(MG_Util::Damage::NativeSwapRects(windowSurface, damage, rects));
             g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
         } else {
             g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
         if (drawSurface != EGL_NO_SURFACE) {
-            // Resolved before the lock: ActiveNativeSession takes it too.
-            NativeSessionState& session = ActiveNativeSession();
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (auto* entry = FindSessionSurfaceLocked(session, drawSurface)) ++entry->Presents;
         }

@@ -137,6 +137,21 @@ TEST(Damage, PackedRectsRoundTripThroughARecord) {
     EXPECT_EQ(Region::FromEglRects(out, 1), Of({{1, 2, 56, 66}}));
 }
 
+// The native swap gets rectangles only for a window surface: Android's swap-with-damage on a
+// pbuffer (a client window's drawable) dereferences the native window it does not have.
+TEST(Damage, OnlyAWindowSurfaceSwapsWithRectangles) {
+    Int32 out[kMaxRects * 4] = {};
+    const Region partial = Of({{10, 20, 30, 40}});
+    EXPECT_EQ(NativeSwapRects(false, partial, out), 0u) << "a pbuffer swaps plainly";
+    EXPECT_EQ(NativeSwapRects(true, Region::Full(), out), 0u);
+    EXPECT_EQ(NativeSwapRects(true, Region(), out), 0u) << "nothing damaged has no rectangle spelling";
+    ASSERT_EQ(NativeSwapRects(true, partial, out), 1u);
+    EXPECT_EQ(out[0], 10);
+    EXPECT_EQ(out[1], 20);
+    EXPECT_EQ(out[2], 30);
+    EXPECT_EQ(out[3], 40);
+}
+
 // Three shared images rotate; each write must bring over what that image missed.
 TEST(Damage, EachBufferCopiesTheDamageItMissedSinceItsLastWrite) {
     constexpr Int32 W = 200, H = 100;
