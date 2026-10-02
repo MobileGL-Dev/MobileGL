@@ -848,6 +848,17 @@ namespace MobileGL::MG_Remote::Server {
             m_controlDone.notify_all();
             return true;
         }
+        // A TEARDOWN ORDERS AFTER THE RECORDS ITS CLIENT PUBLISHED BEFORE ASKING FOR IT. The loop
+        // pumps a posted frame before it drains the ring, so an eglTerminate (or a surface or
+        // context release) could otherwise run ahead of that client's last swap still queued in
+        // the ring - and the swap then reaches a backend whose renderer the release destroyed. Not
+        // on a full SEG_EVENT, for the loop's own reason: the drain would park inside a post.
+        if ((frame.kind == SurfaceControlOp::ReleaseResources || frame.kind == SurfaceControlOp::ReleaseSurface ||
+             frame.kind == SurfaceControlOp::DestroyContext) &&
+            m_session != nullptr && m_session->DataLink() != nullptr &&
+            m_session->DataLink()->Signals().EventRingFull->load(std::memory_order_acquire) == 0) {
+            DrainRing();
+        }
         // The dispatch runs OUTSIDE the lock, exactly as the old work(user) did, and fills the
         // frame's reply half; the reply is then published back into the slot under the lock so
         // the poster's copy-out after m_controlDone sees it.

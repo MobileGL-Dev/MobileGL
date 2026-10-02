@@ -1760,7 +1760,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void Present() {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Present called with null VulkanRenderer");
+        // A served session's renderer is gone once its client released its resources; a present
+        // that still reaches it has nothing to show and is dropped rather than dereferenced.
+        if (!pVulkanRenderer) {
+            MGLOG_E_ONCE("DirectVulkan: a present reached a session whose renderer is already released; dropped");
+            return;
+        }
         pVulkanRenderer->Present();
         // THE frame boundary for the MGPipe counters, at the backend entry point rather
         // than inside VulkanRenderer::Present: that function has an early return for the

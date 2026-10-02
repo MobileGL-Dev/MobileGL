@@ -129,7 +129,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         constexpr uint32_t kDmabufCreateParams = 1;
         constexpr uint32_t kParamsDestroy = 0;
         constexpr uint32_t kParamsAdd = 1;
-        constexpr uint32_t kParamsCreateImmed = 3; // since version 2
+        constexpr uint32_t kParamsCreate = 2;
         // The highest linux-dmabuf version spoken here: 4 adds feedback objects this never asks for.
         constexpr uint32_t kDmabufMaxVersion = 3;
         // DRM fourccs of the server's shared images: R, G, B, A in memory - GL's RGBA8, so the
@@ -268,8 +268,13 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         void (*const kDmabufListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnDmabufFormat),
                                                  reinterpret_cast<void (*)(void)>(&OnDmabufModifier)};
 
-        void OnParamsCreated(void*, wl_proxy*, wl_proxy*) {}
-        void OnParamsFailed(void* data, wl_proxy*) { *static_cast<Bool*>(data) = true; }
+        // The answer to a `create`: the new wl_buffer, or `failed`.
+        struct ParamsOutcome {
+            wl_proxy* buffer = nullptr;
+            Bool failed = false;
+        };
+        void OnParamsCreated(void* data, wl_proxy*, wl_proxy* buffer) { static_cast<ParamsOutcome*>(data)->buffer = buffer; }
+        void OnParamsFailed(void* data, wl_proxy*) { static_cast<ParamsOutcome*>(data)->failed = true; }
         void (*const kParamsListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnParamsCreated),
                                                  reinterpret_cast<void (*)(void)>(&OnParamsFailed)};
 
@@ -422,9 +427,10 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             buffer = DmabufBuffer{};
         }
 
-        // A shared image of the window's size, as a wl_buffer. create_immed plus a round trip
-        // rather than a bare create_immed: a compositor that refuses the import says so with
-        // `failed`, and attaching that buffer would be a protocol error, fatal to the connection.
+        // A shared image of the window's size, as a wl_buffer. `create` and a round trip, never
+        // create_immed: a compositor that cannot import the buffer answers create_immed with a
+        // protocol error, fatal to the application's whole connection, where `create` answers
+        // `failed` and the window simply stays on wl_shm.
         Bool Allocate(DmabufBuffer& buffer) {
             const Api& api = WaylandApi();
             const LinuxDmabufProtocol* protocol = LinuxDmabuf();
@@ -455,19 +461,20 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 dropImage();
                 return false;
             }
-            Bool failed = false;
-            api.addListener(params, const_cast<void (**)(void)>(kParamsListener), &failed);
+            ParamsOutcome outcome;
+            api.addListener(params, const_cast<void (**)(void)>(kParamsListener), &outcome);
             // The descriptor is duplicated into the request, so it is closed below either way.
             api.marshalFlags(params, kParamsAdd, nullptr, version, 0, image.Fd, 0u, image.Offset, image.Stride,
                              static_cast<uint32_t>(image.Modifier >> 32),
                              static_cast<uint32_t>(image.Modifier & 0xffffffffu));
-            wl_proxy* wlBuffer = api.marshalFlags(params, kParamsCreateImmed, api.bufferInterface, version, 0, nullptr,
-                                                  width, height, fourcc, 0u);
+            api.marshalFlags(params, kParamsCreate, nullptr, version, 0, width, height, fourcc, 0u);
             const Bool settled = api.roundtripQueue(display, queue) >= 0;
             api.marshalFlags(params, kParamsDestroy, nullptr, version, kMarshalFlagDestroy);
-            if (!settled || failed || wlBuffer == nullptr) {
+            wl_proxy* wlBuffer = outcome.buffer;
+            if (!settled || outcome.failed || wlBuffer == nullptr) {
                 MGLOG_E("Wayland: the compositor refused a %dx%d linux-dmabuf buffer", width, height);
-                if (wlBuffer) api.marshalFlags(wlBuffer, kBufferDestroy, nullptr, version, kMarshalFlagDestroy);
+                if (wlBuffer)
+                    api.marshalFlags(wlBuffer, kBufferDestroy, nullptr, api.getVersion(wlBuffer), kMarshalFlagDestroy);
                 dropImage();
                 return false;
             }
@@ -536,8 +543,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                     api.marshalFlags(registry, kRegistryBind, api.shmInterface, 1, 0, name, "wl_shm", 1u, nullptr);
                 return;
             }
-            // create_immed is version 2's: an older linux-dmabuf is left unbound.
-            if (impl->dmabufWanted && impl->dmabuf == nullptr && version >= 2 &&
+            if (impl->dmabufWanted && impl->dmabuf == nullptr &&
                 std::strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
                 const LinuxDmabufProtocol* protocol = LinuxDmabuf();
                 if (protocol == nullptr) return;

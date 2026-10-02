@@ -181,34 +181,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        VkBufferManager& WireManager() {
-            if (g_activeBufferManager.Get() == nullptr) {
-                MGLOG_F("Magma: Fatal{ResourceUnavailable, \"wire-buffer-manager\"}");
-                std::abort();
+        // The session's manager, or null once its renderer is gone - a client's records can still
+        // arrive after its eglTerminate released it (or, surfaceless, before its first surface built
+        // one). Such a record is declined with one line rather than taking the whole server down.
+        VkBufferManager* WireManager(const char* op) {
+            VkBufferManager* manager = g_activeBufferManager.Get();
+            if (manager == nullptr) {
+                MGLOG_E_ONCE("Magma: a wire buffer %s reached a session with no renderer; declined", op);
             }
-            return *g_activeBufferManager.Get();
+            return manager;
         }
 
         const MG_Pipe::MGPipeResourceOps g_vulkanWireResourceOps = {
-            .Create = [](auto res, const auto& desc) { WireManager().CreateWireBuffer(res, desc); },
+            .Create = [](auto res, const auto& desc) { if (auto* m = WireManager("create")) m->CreateWireBuffer(res, desc); },
             .Respecify = [](auto res, const auto& desc, const void* bytes) {
-                WireManager().RespecifyWireBuffer(res, desc, bytes);
+                if (auto* m = WireManager("respecify")) m->RespecifyWireBuffer(res, desc, bytes);
             },
             .SubData = [](auto res, const auto& record, const void* bytes) {
-                WireManager().WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
-                                               MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+                if (auto* m = WireManager("write"))
+                    m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                       MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
             },
             .SubDataResident = [](auto res, const auto& record, const void* bytes) {
-                WireManager().WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
-                                               MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+                if (auto* m = WireManager("write"))
+                    m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                       MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
             },
             .FlushRange = [](auto res, const auto& record, const void* bytes) {
-                WireManager().FlushWireBuffer(res, record.Offset, record.Size, bytes);
+                if (auto* m = WireManager("flush")) m->FlushWireBuffer(res, record.Offset, record.Size, bytes);
             },
             .Readback = [](auto res, const auto& record) {
-                WireManager().ReadbackWireBuffer(res, record.Offset, record.Size);
+                if (auto* m = WireManager("readback")) m->ReadbackWireBuffer(res, record.Offset, record.Size);
             },
-            .Destroy = [](auto res) { WireManager().DestroyWireBuffer(res); },
+            .Destroy = [](auto res) { if (auto* m = WireManager("destroy")) m->DestroyWireBuffer(res); },
             // Split mapping remains T2: the client owns its map and pushes exact
             // modified ranges. A server pointer is never donated across the wire.
             .MapPersistent = [](MG_Pipe::MGPipeHandle, Uint64, const void*) -> void* { return nullptr; },
@@ -217,7 +222,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // P11 B2 (T0): the one door a server pointer is still never donated through stays shut;
             // what T0 adds is the other direction - the CLIENT's pages imported as the store.
             .ImportExternal = [](MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) -> Bool {
-                return WireManager().ImportWireBuffer(res, ahb, size);
+                auto* m = WireManager("import");
+                return m != nullptr && m->ImportWireBuffer(res, ahb, size);
             },
             .SelfTestExternal = [](char* why, Uint64 whyBytes) -> Bool {
                 return VkBufferManager::SelfTestWireImport(why, whyBytes);
