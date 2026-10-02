@@ -293,11 +293,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else {
             auto samplerHandle = state.BoundSamplerStates[unit];
             if (MG_Pipe::MGPipeHandleIsNull(samplerHandle)) samplerHandle = record.Params.BuiltinSampler;
-            if (MG_Pipe::MGPipeHandleIsNull(samplerHandle) || samplerHandle.Slot >= state.SamplerCsos.size())
-                WireDescriptorFatal("sampler-record");
-            const auto& sampler = state.SamplerCsos[samplerHandle.Slot];
-            if (!sampler.Live || sampler.Gen != samplerHandle.Gen) WireDescriptorFatal("sampler-record-generation");
-            out.sampler = m_samplerManager->GetOrCreateSamplerFromParameters(sampler.Params,
+            // A texture's built-in sampler CSO can be missing or gone while the texture still names
+            // it: sampler CSOs are content-addressed and recycled at capacity, and the texture's
+            // record is only re-pointed by its next set_texture_params (a texture whose params never
+            // crossed names none at all). Sample with GL's default parameters rather than end the
+            // session - the DirectGLES arm declines the push in both cases.
+            using SamplerCsoRecord = std::decay_t<decltype(state.SamplerCsos[0])>;
+            static const decltype(SamplerCsoRecord::Params) kDefaultSamplerParams{};
+            const Bool known = !MG_Pipe::MGPipeHandleIsNull(samplerHandle) &&
+                               samplerHandle.Slot < state.SamplerCsos.size();
+            const SamplerCsoRecord* sampler = known ? &state.SamplerCsos[samplerHandle.Slot] : nullptr;
+            const Bool stale = sampler == nullptr || !sampler->Live || sampler->Gen != samplerHandle.Gen;
+            if (stale) {
+                MGLOG_E_ONCE("Magma wire: sampler CSO {%u, %u} named by texture unit %u is missing or no longer "
+                             "live; sampling with default parameters", samplerHandle.Slot, samplerHandle.Gen, unit);
+            }
+            out.sampler = m_samplerManager->GetOrCreateSamplerFromParameters(stale ? kDefaultSamplerParams : sampler->Params,
                 static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
                 domain == SamplerNumericDomain::SignedInteger || domain == SamplerNumericDomain::UnsignedInteger,
                 levels);
