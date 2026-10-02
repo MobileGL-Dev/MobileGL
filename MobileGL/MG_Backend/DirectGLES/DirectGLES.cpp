@@ -16220,7 +16220,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     struct NativeSessionState {
         Uint64 SessionKey = 0;
         // Every native surface this session created, so its teardown destroys its own and only its own.
-        Vector<EGLSurface> Surfaces;
+        // The window is recorded with each entry: a stale surface still bound to a window that a
+        // LATER session wants (a crashed predecessor's server-owned window) is found and destroyed
+        // by InitWindowSurface before the driver refuses the second eglCreateWindowSurface.
+        struct SurfaceEntry {
+            NativeWindowType Window;
+            EGLSurface Surface;
+        };
+        Vector<SurfaceEntry> Surfaces;
         // The surface the session currently draws to / reads from - what a bind to another context
         // re-makes current, and what Present/eglSwapBuffers names.
         EGLSurface Draw = EGL_NO_SURFACE;
@@ -16976,10 +16983,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeContextTuple& tuple = ActiveNativeContext();
         if (!EnsureNativeContext(tuple, EGL_WINDOW_BIT, window)) return false;
 
+        // A crashed predecessor session may have left its surface bound to this window (the
+        // server-owned display window is one ANativeWindow for the process's lifetime, and
+        // several drivers refuse a second eglCreateWindowSurface on it with EGL_BAD_NATIVE_WINDOW).
+        // Teardown is keyed on the session the surface belongs to, so a session that died without
+        // one leaks it; find and destroy those before asking the driver.
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            for (auto* session : NativeSessions()) {
+                auto& entries = session->Surfaces;
+                for (auto it = entries.begin(); it != entries.end();) {
+                    if (it->Window == window) {
+                        if (g_EGLFuncs.eglDestroySurface) g_EGLFuncs.eglDestroySurface(g_Display, it->Surface);
+                        if (session->Draw == it->Surface) session->Draw = EGL_NO_SURFACE;
+                        if (session->Read == it->Surface) session->Read = EGL_NO_SURFACE;
+                        it = entries.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
+        }
+
         const EGLSurface surface = g_EGLFuncs.eglCreateWindowSurface(g_Display, tuple.Config, window, nullptr);
         if (surface == EGL_NO_SURFACE) return false;
         NativeSessionState& session = ActiveNativeSession();
-        session.Surfaces.push_back(surface);
+        session.Surfaces.push_back({window, surface});
         session.Draw = surface;
         session.Read = surface;
         tuple.Draw = surface;
@@ -17017,7 +17047,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const EGLSurface surface = g_EGLFuncs.eglCreatePbufferSurface(g_Display, tuple.Config, surfaceAttribs);
         if (surface == EGL_NO_SURFACE) return false;
         NativeSessionState& session = ActiveNativeSession();
-        session.Surfaces.push_back(surface);
+        session.Surfaces.push_back({static_cast<NativeWindowType>(0), surface});
         session.Draw = surface;
         session.Read = surface;
         tuple.Draw = surface;
@@ -17624,7 +17654,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // P14 S4: the session's surface, not the process's.
-        g_EGLFuncs.eglSwapBuffers(g_Display, ActiveNativeSession().Draw);
+        //
+        // EXT -> KHR -> plain. The loader fills eglSwapBuffersWithDamageEXT from whichever
+        // spelling the driver provides (Adreno exposes only eglSwapBuffersWithDamageKHR), so
+        // the null check below is the whole chain: a driver with neither presents with plain
+        // eglSwapBuffers. Passing n_rects == 0 is not a partial present - the extension
+        // defines it as "the entire surface is implicitly damaged and the behaviour is
+        // equivalent to calling eglSwapBuffers" - and the wire protocol carries no damage
+        // rectangles for the server to forward, so the full surface is what is meant anyway.
+        const EGLSurface drawSurface = ActiveNativeSession().Draw;
+        if (g_EGLFuncs.eglSwapBuffersWithDamageEXT != nullptr) {
+            g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, nullptr, 0);
+        } else {
+            g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
+        }
 
         if (canFence && g_GLESFuncs.glGetSynciv) {
             // Fences signal in submission order within one context, so the highest
@@ -17720,8 +17763,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (auto* session : NativeSessions()) {
                 if (session->SessionKey != sessionKey) continue;
                 if (g_EGLFuncs.eglDestroySurface) {
-                    for (const EGLSurface surface : session->Surfaces) {
-                        if (surface != EGL_NO_SURFACE) g_EGLFuncs.eglDestroySurface(g_Display, surface);
+                    for (const auto& entry : session->Surfaces) {
+                        if (entry.Surface != EGL_NO_SURFACE) g_EGLFuncs.eglDestroySurface(g_Display, entry.Surface);
                     }
                 }
                 session->Surfaces.clear();
