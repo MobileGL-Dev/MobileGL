@@ -17112,19 +17112,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // EGL_BUFFER_AGE_EXT (= EGL_BUFFER_AGE_KHR), spelled out: this file sees only the core EGL header.
         constexpr EGLint kEglBufferAge = 0x313D;
 
-        Bool NativeBufferAgeSupported() {
+        // How the driver answers a buffer age, if at all. EGL_EXT_buffer_age promises the whole
+        // buffer's content for the age it reports. EGL_KHR_partial_update alone promises it only
+        // OUTSIDE the frame's damage region, which is the whole surface until eglSetDamageRegionKHR
+        // narrows it - a frame that asks the age and then draws part of the surface without setting
+        // the region finds the rest undefined (on a tiler: tiles never loaded, noise on screen).
+        struct NativeBufferAge {
+            Bool Ext = false;     // EGL_EXT_buffer_age
+            Bool Partial = false; // EGL_KHR_partial_update
+            EGLBoolean (*SetDamageRegion)(EGLDisplay, EGLSurface, EGLint*, EGLint) = nullptr;
+        };
+        const NativeBufferAge& NativeBufferAgeSupport() {
             static EGLDisplay asked = EGL_NO_DISPLAY;
-            static Bool supported = false;
-            if (g_Display == EGL_NO_DISPLAY || !g_EGLFuncs.eglQueryString) return false;
+            static NativeBufferAge support;
+            if (g_Display == EGL_NO_DISPLAY || !g_EGLFuncs.eglQueryString) {
+                static const NativeBufferAge none;
+                return none;
+            }
             if (asked != g_Display) {
                 asked = g_Display;
                 const char* extensions = g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS);
-                supported = extensions != nullptr && (std::strstr(extensions, "EGL_EXT_buffer_age") != nullptr ||
-                                                      std::strstr(extensions, "EGL_KHR_partial_update") != nullptr);
-                MGLOG_I("DirectGLES: the driver %s EGL_EXT_buffer_age", supported ? "has" : "lacks");
+                support = {};
+                support.Ext = extensions != nullptr && std::strstr(extensions, "EGL_EXT_buffer_age") != nullptr;
+                support.Partial = extensions != nullptr && std::strstr(extensions, "EGL_KHR_partial_update") != nullptr;
+                if (support.Partial && g_EGLFuncs.eglGetProcAddress) {
+                    support.SetDamageRegion = reinterpret_cast<decltype(support.SetDamageRegion)>(
+                        g_EGLFuncs.eglGetProcAddress("eglSetDamageRegionKHR"));
+                }
+                if (support.SetDamageRegion == nullptr) support.Partial = false;
+                MGLOG_I("DirectGLES: native buffer age: EGL_EXT_buffer_age %s, EGL_KHR_partial_update %s",
+                        support.Ext ? "yes" : "no", support.Partial ? "yes" : "no");
             }
-            return supported;
+            return support;
         }
+
+        // The window surface whose age the driver was asked in the frame being drawn on this (the
+        // session's apply) thread; the present ends the frame.
+        thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
 
         // The calling session's record of `surface`; the registry lock is held by the caller (another
         // session's window bring-up may erase stale entries of this one).
@@ -17136,7 +17160,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
-    Int32 CurrentDrawBufferAge() {
+    Int32 CurrentDrawBufferAge(Bool damageRegionFollows) {
         NativeSessionState& session = ActiveNativeSession();
         const EGLSurface surface = session.Draw;
         if (surface == EGL_NO_SURFACE || g_Display == EGL_NO_DISPLAY) return 0;
@@ -17152,10 +17176,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!window) return presents > 0 ? 1 : 0;
         // The driver's answer. On Android the query dequeues the buffer the next frame draws into -
         // what the frame's first draw would do anyway, and the client asks before it draws.
-        if (presents == 0 || !NativeBufferAgeSupported() || !g_EGLFuncs.eglQuerySurface) return 0;
+        const NativeBufferAge& support = NativeBufferAgeSupport();
+        const Bool askable = MG_Util::Damage::NativeAgeAskable(support.Ext, support.Partial, damageRegionFollows);
+        if (presents == 0 || !askable || !g_EGLFuncs.eglQuerySurface) return 0;
         EGLint age = 0;
         if (!g_EGLFuncs.eglQuerySurface(g_Display, surface, kEglBufferAge, &age) || age < 0) return 0;
+        t_ageAskedSurface = surface;
         return age;
+    }
+
+    Bool SetCurrentDrawDamageRegion(const MG_Util::Damage::Region& region) {
+        NativeSessionState& session = ActiveNativeSession();
+        const EGLSurface surface = session.Draw;
+        if (surface == EGL_NO_SURFACE || g_Display == EGL_NO_DISPLAY) return true;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            const auto* entry = FindSessionSurfaceLocked(session, surface);
+            if (entry == nullptr || entry->Window == static_cast<NativeWindowType>(0)) return true;
+        }
+        const NativeBufferAge& support = NativeBufferAgeSupport();
+        if (!support.Partial) return true;
+        // EGL_KHR_partial_update wants the age asked in this frame before the region is set; a client
+        // that was answered 0 without the driver being asked (its first frame) repaints everything.
+        if (t_ageAskedSurface != surface) {
+            EGLint ignored = 0;
+            (void)g_EGLFuncs.eglQuerySurface(g_Display, surface, kEglBufferAge, &ignored);
+            t_ageAskedSurface = surface;
+        }
+        EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
+        const EGLint count =
+            region.IsFull() ? 0 : static_cast<EGLint>(MG_Util::Damage::PackRects(region, rects, MG_Util::Damage::kMaxRects));
+        if (support.SetDamageRegion(g_Display, surface, count > 0 ? rects : nullptr, count) != EGL_TRUE) {
+            MGLOG_W_ONCE("DirectGLES: eglSetDamageRegionKHR refused a %d-rectangle region (EGL error 0x%x)", count,
+                         g_EGLFuncs.eglGetError ? static_cast<unsigned>(g_EGLFuncs.eglGetError()) : 0u);
+        }
+        return true;
     }
 
     Bool SelectSessionSurface(EGLSurface surface) {
@@ -18182,6 +18237,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (auto* entry = FindSessionSurfaceLocked(session, drawSurface)) ++entry->Presents;
         }
+        // A frame boundary: the next frame's age is asked anew.
+        t_ageAskedSurface = EGL_NO_SURFACE;
 
         if (canFence) PollFrameFences();
 

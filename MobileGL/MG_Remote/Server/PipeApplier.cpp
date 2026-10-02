@@ -1578,8 +1578,13 @@ namespace MobileGL::MG_Remote::Server {
         case MG_Pipe::kMGPSharedImageQueryBufferAge: {
             MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
             if (backend == nullptr) return false;
-            reply.BufferAge = backend->QueryCurrentBufferAge();
+            reply.BufferAge = backend->QueryCurrentBufferAge((op.Format & MG_Pipe::kMGPBufferAgeDamageRegionFollows) != 0);
             return true;
+        }
+        case MG_Pipe::kMGPSharedImageSetDamageRegion: {
+            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
+            if (backend == nullptr) return false;
+            return backend->SetCurrentDamageRegion(DamageOfRecord(op.DamageCount, op.Damage));
         }
         case MG_Pipe::kMGPSharedImageAttach: {
             SI::ImageRef image = holder.Get(op.ImageId);

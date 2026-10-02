@@ -152,6 +152,16 @@ TEST(Damage, OnlyAWindowSurfaceSwapsWithRectangles) {
     EXPECT_EQ(out[3], 40);
 }
 
+// A driver whose buffer age is only EGL_KHR_partial_update's keeps nothing inside the default damage
+// region (the whole surface): asking it the age for a client that sets no region shows noise.
+TEST(Damage, APartialUpdateOnlyDriverIsAskedOnlyWhenARegionFollows) {
+    EXPECT_TRUE(NativeAgeAskable(true, false, false)) << "EGL_EXT_buffer_age keeps the whole buffer";
+    EXPECT_TRUE(NativeAgeAskable(true, true, false));
+    EXPECT_FALSE(NativeAgeAskable(false, true, false)) << "partial_update alone, no region coming";
+    EXPECT_TRUE(NativeAgeAskable(false, true, true));
+    EXPECT_FALSE(NativeAgeAskable(false, false, true)) << "no buffer age at all";
+}
+
 // Three shared images rotate; each write must bring over what that image missed.
 TEST(Damage, EachBufferCopiesTheDamageItMissedSinceItsLastWrite) {
     constexpr Int32 W = 200, H = 100;

@@ -117,9 +117,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The surface the calling thread's ACTIVE context last drew to (EGL_NO_SURFACE for none).
     EGLSurface CurrentContextDrawSurface();
     // EGL_BUFFER_AGE_EXT of the session's current draw surface for the next frame: the driver's
-    // answer for a window surface (0 where the driver has no EGL_EXT_buffer_age), 1 for a pbuffer
-    // that has been presented (a pbuffer's content stays across swaps), 0 otherwise.
-    Int32 CurrentDrawBufferAge();
+    // answer for a window surface, 1 for a pbuffer that has been presented (a pbuffer's content stays
+    // across swaps), 0 otherwise. A driver whose buffer age is only EGL_KHR_partial_update's keeps
+    // nothing inside the frame's damage region - the whole surface unless one is set - so it is asked
+    // only when `damageRegionFollows` (SetCurrentDrawDamageRegion before the first draw).
+    Int32 CurrentDrawBufferAge(Bool damageRegionFollows);
+    // eglSetDamageRegionKHR(region) on the session's current window surface (a pbuffer, or a driver
+    // without EGL_KHR_partial_update, ignores it). The driver wants the age asked first in the frame;
+    // when the client was answered without asking it, it is asked here.
+    Bool SetCurrentDrawDamageRegion(const MG_Util::Damage::Region& region);
     // Makes an EXISTING native surface of the calling thread's session the one it draws to, and
     // binds it to the active context. False for a surface the session does not own.
     Bool BindSessionSurface(EGLSurface surface);

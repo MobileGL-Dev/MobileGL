@@ -28,6 +28,7 @@
 #include <mutex>
 #include <sstream>
 #include <type_traits>
+#include <unordered_set>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     namespace {
@@ -192,6 +193,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
             } else {
                 return reinterpret_cast<void*>(static_cast<SizeT>(nativeHandle));
             }
+        }
+
+        // EGL_KHR_partial_update: the surfaces whose application has declared a damage region. Their
+        // buffer-age query tells the server the region follows (a driver whose age is only
+        // partial_update's is then asked). Guarded by EGLOperationMutex; a destroyed surface leaves.
+        std::unordered_set<EGLSurface>& DamageRegionSurfaces() {
+            static auto* surfaces = new std::unordered_set<EGLSurface>();
+            return *surfaces;
         }
 
 #if MOBILEGL_WAYLAND_WINDOWS
@@ -654,6 +663,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state->DestroySurface(dpy, surface)) {
             return EGL_FALSE;
         }
+        DamageRegionSurfaces().erase(surface);
 #if MOBILEGL_WAYLAND_WINDOWS
         WaylandSurfaces().erase(surface);
 #endif
@@ -778,7 +788,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #endif
             EGLint age = 0;
             auto* backendObject = MG_Backend::pActiveBackendObject.get();
-            if (backendObject == nullptr || !backendObject->QueryBufferAge(&age)) age = 0;
+            const Bool regionFollows = DamageRegionSurfaces().count(surface) != 0;
+            if (backendObject == nullptr || !backendObject->QueryBufferAge(regionFollows, &age)) age = 0;
             *value = age;
             return EGL_TRUE;
         }
@@ -789,6 +800,46 @@ namespace MobileGL::MG_Impl::EGLImpl {
             if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) backendObject->RefreshSurfaceExtent(surface);
         }
         return state->QuerySurface(display, surface, attribute, value) ? EGL_TRUE : EGL_FALSE;
+    }
+
+    // EGL_KHR_partial_update: the region this frame draws, before it draws (GL window coordinates;
+    // none = the whole surface). Forwarded in the stream to the server's native surface. More than
+    // kMaxRects rectangles are merged, so an application declaring that many draws their bounds.
+    EGLBoolean SetDamageRegion(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint n_rects) {
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        auto* state = GetState();
+        if (!state) return EGL_FALSE;
+        if (!SharedImagesAvailable()) {
+            state->SetError(EGL_BAD_DISPLAY);
+            return EGL_FALSE;
+        }
+        if (!state->ValidateSurfaceOnDisplay(dpy, surface)) {
+            state->SetError(EGL_BAD_SURFACE);
+            return EGL_FALSE;
+        }
+        if (state->GetCurrentSurface(EGL_DRAW) != surface) {
+            state->SetError(EGL_BAD_MATCH);
+            return EGL_FALSE;
+        }
+        if (n_rects < 0 || (n_rects > 0 && rects == nullptr)) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_FALSE;
+        }
+        MG_Util::Damage::Region region = MG_Util::Damage::Region::FromEglRects(rects, n_rects);
+        if (!region.IsFull()) {
+            EGLint width = 0;
+            EGLint height = 0;
+            if (state->QuerySurface(dpy, surface, EGL_WIDTH, &width) && state->QuerySurface(dpy, surface, EGL_HEIGHT, &height))
+                region.Normalize(width, height);
+            else
+                region.SetFull();
+        }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
+        DamageRegionSurfaces().insert(surface);
+        if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) (void)backendObject->SetDamageRegion(region);
+        return EGL_TRUE;
     }
 
     char const* QueryString(EGLDisplay display, EGLint name) {

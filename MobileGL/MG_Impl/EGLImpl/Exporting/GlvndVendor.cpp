@@ -40,6 +40,7 @@ extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface dra
                                                   EGLint n_rects);
 extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
                                                   EGLint n_rects);
+extern "C" EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects);
 extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
                                                EGLint* num_formats);
 extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
@@ -240,6 +241,7 @@ namespace {
         {"eglQueryDmaBufFormatsEXT", reinterpret_cast<void*>(eglQueryDmaBufFormatsEXT)},
         {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(eglSwapBuffersWithDamageKHR)},
         {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(eglSwapBuffersWithDamageEXT)},
+        {"eglSetDamageRegionKHR", reinterpret_cast<void*>(eglSetDamageRegionKHR)},
         {"eglQueryDmaBufModifiersEXT", reinterpret_cast<void*>(eglQueryDmaBufModifiersEXT)},
         {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
         {"eglCreatePlatformPixmapSurface", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},

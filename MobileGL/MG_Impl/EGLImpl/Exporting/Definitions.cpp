@@ -175,6 +175,13 @@ MOBILEGL_EGL_API EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurfa
     return MobileGL::MG_Impl::EGLImpl::SwapBuffersWithDamage(dpy, draw, rects, n_rects);
 }
 
+// EGL_KHR_partial_update.
+MOBILEGL_EGL_API EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglSetDamageRegionKHR(dpy=%p, surface=%p, n_rects=%d)", dpy, surface, n_rects);
+    return MobileGL::MG_Impl::EGLImpl::SetDamageRegion(dpy, surface, rects, n_rects);
+}
+
 MOBILEGL_EGL_API EGLSurface eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint* attrib_list) {
     const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglCreatePbufferSurface(dpy=%p, config=%p, attrib_list=%p)", dpy, config, attrib_list);

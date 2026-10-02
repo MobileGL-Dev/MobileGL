@@ -2008,7 +2008,11 @@ namespace MobileGL::MG_Pipe {
     //   QueryBufferAge  EGL_BUFFER_AGE_EXT of the current context's draw surface, answered in the
     //             reply's BufferAge: how many presents ago the buffer the next frame draws into held
     //             the frame then presented, 0 = unknown. Asked in the stream, so it is answered
-    //             for the buffer that frame's records will draw into.
+    //             for the buffer that frame's records will draw into. Format carries
+    //             kMGPBufferAgeDamageRegionFollows when the application declares the region it draws
+    //             (EGL_KHR_partial_update) before it draws.
+    //   SetDamageRegion eglSetDamageRegionKHR for the current draw surface: Damage is the region
+    //             the frame is about to draw (GL window coordinates; 0 rectangles = all of it).
     //
     // A Present carries the region of the frame to copy (DamageCount rectangles of Damage, GL
     // window coordinates, origin bottom-left; 0 = all of it): the client keeps per image what the
@@ -2023,7 +2027,9 @@ namespace MobileGL::MG_Pipe {
         kMGPSharedImagePresent = 4,
         kMGPSharedImageAttach = 5,
         kMGPSharedImageQueryBufferAge = 6,
+        kMGPSharedImageSetDamageRegion = 7,
     };
+    inline constexpr Uint32 kMGPBufferAgeDamageRegionFollows = 1u;
 
     struct MGPSharedImageOp {
         Uint32 Op;

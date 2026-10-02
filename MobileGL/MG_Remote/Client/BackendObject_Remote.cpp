@@ -514,15 +514,26 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     // In the stream, so the server answers for the buffer the records after it draw into.
-    Bool BackendObject_Remote::QueryBufferAge(EGLint* age) {
+    Bool BackendObject_Remote::QueryBufferAge(Bool damageRegionFollows, EGLint* age) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr || age == nullptr) return false;
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImageQueryBufferAge;
+        op.Format = damageRegionFollows ? MG_Pipe::kMGPBufferAgeDamageRegionFollows : 0u;
         MG_Pipe::MGPSharedImageReply reply{};
         if (!session->EmitSharedImage(op, -1, &reply, nullptr)) return false;
         *age = std::max<EGLint>(reply.BufferAge, 0);
         return true;
+    }
+
+    // In the stream too: it has to reach the server before the frame's first draw.
+    Bool BackendObject_Remote::SetDamageRegion(const MG_Util::Damage::Region& region) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageSetDamageRegion;
+        op.DamageCount = MG_Util::Damage::PackRects(region, op.Damage, MG_Pipe::kMGPMaxDamageRects);
+        return session->EmitSharedImage(op, -1, nullptr, nullptr);
     }
 
     Bool BackendObject_Remote::AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) {

@@ -1222,7 +1222,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
-    Int32 BackendObject_DirectGLES::QueryCurrentBufferAge() { return DirectGLES::CurrentDrawBufferAge(); }
+    Int32 BackendObject_DirectGLES::QueryCurrentBufferAge(Bool damageRegionFollows) {
+        return DirectGLES::CurrentDrawBufferAge(damageRegionFollows);
+    }
+
+    Bool BackendObject_DirectGLES::SetCurrentDamageRegion(const MG_Util::Damage::Region& region) {
+        return DirectGLES::SetCurrentDrawDamageRegion(region);
+    }
 
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);

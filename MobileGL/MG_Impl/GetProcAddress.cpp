@@ -22,6 +22,7 @@ extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface dra
                                                   EGLint n_rects);
 extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
                                                   EGLint n_rects);
+extern "C" EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects);
 extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
                                                EGLint* num_formats);
 extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
@@ -82,6 +83,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglQueryDmaBufFormatsEXT, name);
         GETPROC(eglSwapBuffersWithDamageKHR, name);
         GETPROC(eglSwapBuffersWithDamageEXT, name);
+        GETPROC(eglSetDamageRegionKHR, name);
         GETPROC(eglQueryDmaBufModifiersEXT, name);
         GETPROC(eglGetPlatformDisplay, name);
         GETPROC(eglGetPlatformDisplayEXT, name);

@@ -275,6 +275,14 @@ namespace MobileGL::MG_Util::Damage {
         return PackRects(damage, out, kMaxRects);
     }
 
+    // Whether a window surface's driver may be asked its buffer age for a frame. EGL_EXT_buffer_age
+    // keeps the whole buffer for the age it reports; EGL_KHR_partial_update alone keeps only what
+    // lies outside the frame's damage region - the whole surface unless the client sets one - so
+    // asking it is right only when the client declares that region before it draws.
+    constexpr Bool NativeAgeAskable(Bool extBufferAge, Bool partialUpdate, Bool damageRegionFollows) {
+        return extBufferAge || (partialUpdate && damageRegionFollows);
+    }
+
     // Per buffer of a rotating set: the damage each has missed since it was last written.
     class BufferDamageTracker {
     public:

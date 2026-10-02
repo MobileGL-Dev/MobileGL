@@ -41,7 +41,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
                                                  const MG_Util::Damage::Region& region) override;
         // The active surface target's swapchain image ages (VulkanRenderer::CurrentDrawBufferAge).
-        Int32 QueryCurrentBufferAge() override;
+        Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: the window surface's target (VkSurfaceKHR,

@@ -651,7 +651,21 @@ namespace MobileGL {
             // thread: how many presents ago the buffer the next frame draws into held the frame then
             // presented; 0 = unknown (the application repaints everything). Asking says the client
             // relies on the answer, so from then on the backend keeps what it presents.
-            virtual Int32 QueryCurrentBufferAge() { return 0; }
+            //
+            // `damageRegionFollows`: the client declares the region it draws (SetCurrentDamageRegion)
+            // before drawing. A driver whose only buffer age is EGL_KHR_partial_update's keeps a
+            // buffer's content only outside that region, so without one coming it is not asked.
+            virtual Int32 QueryCurrentBufferAge(Bool damageRegionFollows) {
+                (void)damageRegionFollows;
+                return 0;
+            }
+            // eglSetDamageRegionKHR for that draw surface: the frame draws `region` (GL window
+            // coordinates; Full = all of it) and nothing outside it. A backend without the notion
+            // ignores it.
+            virtual Bool SetCurrentDamageRegion(const MG_Util::Damage::Region& region) {
+                (void)region;
+                return true;
+            }
 
             // ---- shared images, CLIENT side (BackendObject_Remote implements these) ----------
             //
@@ -680,8 +694,14 @@ namespace MobileGL {
             }
             // In the GL stream: EGL_BUFFER_AGE_EXT of the current draw surface (QueryCurrentBufferAge
             // on the server). False: the backend has no answer (the caller reports 0).
-            virtual Bool QueryBufferAge(EGLint* age) {
-                (void)age;
+            virtual Bool QueryBufferAge(Bool damageRegionFollows, EGLint* age) {
+                (void)damageRegionFollows, (void)age;
+                return false;
+            }
+            // In the GL stream: eglSetDamageRegionKHR for the current draw surface
+            // (SetCurrentDamageRegion on the server).
+            virtual Bool SetDamageRegion(const MG_Util::Damage::Region& region) {
+                (void)region;
                 return false;
             }
             // In the GL stream: the texture whose lifetime id is `textureLifetimeId` takes the image as
