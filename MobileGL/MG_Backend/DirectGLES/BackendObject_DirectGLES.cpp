@@ -1175,6 +1175,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
             V_OpenGL44, V_OpenGL45, V_OpenGL46,
             E_GL_ARB_draw_buffers_blend,
+            // The GLSL 1.00/1.10-era ARB trio plus NPOT textures: all core since GL 2.0 and
+            // trivially true for every context this backend claims (4.6). KWin 6's
+            // EglContext::checkSupported() gates desktop-GL compositing on exactly these four
+            // strings, so withholding them fails its renderer bring-up on an otherwise capable
+            // implementation.
+            E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
+            E_GL_ARB_texture_non_power_of_two,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
             E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object,
             E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage, E_GL_ARB_texture_storage,
