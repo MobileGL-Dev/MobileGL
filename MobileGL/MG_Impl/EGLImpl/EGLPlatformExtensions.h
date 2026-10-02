@@ -6,7 +6,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
     // are absent until their entry points and image paths exist.
     inline constexpr const char* kDeviceExtensionString = "";
 #if defined(__linux__) && !defined(__ANDROID__)
-#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS " EGL_KHR_platform_wayland EGL_EXT_platform_wayland"
+// GBM is claimed as a display platform only: a display on a gbm_device is an offscreen display
+// like a surfaceless one (the frames come from the backend, not from the device), and window
+// surfaces on it are refused. Chromium's Wayland GPU process hands its GL implementation nothing
+// but a GBM display, so without the claim it never reaches this library at all.
+#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS \
+    " EGL_KHR_platform_wayland EGL_EXT_platform_wayland EGL_KHR_platform_gbm EGL_MESA_platform_gbm"
 #else
 #define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS ""
 #endif

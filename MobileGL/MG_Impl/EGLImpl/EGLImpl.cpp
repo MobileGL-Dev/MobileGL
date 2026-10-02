@@ -194,6 +194,19 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // reads the frame back and attaches it to the wl_surface (WaylandWindow.h).  Answers false
         // when the display is not a Wayland one; otherwise *out is the surface, or EGL_NO_SURFACE
         // with the error set.
+        // A gbm_surface is scanout memory of a device this library does not draw with; a window
+        // on a GBM display is refused rather than taken for some other kind of window.
+        template <typename State>
+        Bool RefuseGbmWindow(State* state, EGLDisplay dpy) {
+            constexpr EGLenum kPlatformGbm = 0x31D7; // EGL_PLATFORM_GBM_KHR == EGL_PLATFORM_GBM_MESA
+            Uint64 nativeDisplay = 0;
+            EGLenum platform = EGL_NONE;
+            if (!state->GetDisplayNative(dpy, &nativeDisplay, &platform) || platform != kPlatformGbm) return false;
+            MGLOG_W_ONCE("EGL: window surfaces on a GBM display are not supported (offscreen display only)");
+            state->SetError(EGL_BAD_NATIVE_WINDOW);
+            return true;
+        }
+
         template <typename State>
         Bool CreateWaylandWindowSurface(State* state, EGLDisplay dpy, EGLConfig config, void* window,
                                         Bool platformWindow, EGLSurface* out) {
@@ -274,6 +287,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_NO_SURFACE;
         }
 #if MOBILEGL_WAYLAND_WINDOWS
+        if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
         {
             const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
             EGLSurface waylandSurface = EGL_NO_SURFACE;
@@ -960,6 +974,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_DISPLAY;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A "GBM" display whose native display is a wl_display is a Wayland one: Chromium's
+        // Wayland GL layer names the GBM platform for every display it asks for, including the
+        // one on its own Wayland connection whose windows are wl_egl_windows.
+        constexpr EGLenum kPlatformGbm = 0x31D7;
+        if (platform == kPlatformGbm && native_display != nullptr &&
+            Wayland::IsWaylandDisplay(reinterpret_cast<Uint64>(native_display), EGL_NONE)) {
+            platform = Wayland::kPlatformWayland;
+        }
+#endif
         return state->GetPlatformDisplay(platform, native_display);
     }
 
@@ -970,6 +994,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_NO_SURFACE;
         }
 #if MOBILEGL_WAYLAND_WINDOWS
+        if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
         {
             const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
             EGLSurface waylandSurface = EGL_NO_SURFACE;

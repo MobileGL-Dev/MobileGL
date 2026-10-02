@@ -617,11 +617,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("vendorString: %s", vendorString.c_str());
             return (const GLubyte*)vendorString.c_str();
         case GL_VERSION: {
+            // "OpenGL ES" must not appear anywhere in a desktop GL_VERSION: some callers (ANGLE's GL
+            // backend among them) search the whole string for it rather than its prefix, and
+            // then take this for an ES driver, read the version from the wrong offsets and look
+            // for ES-named extensions. The backend is named "GLES" here for that reason only.
+            String backendName = rendererInfo.BackendName;
+            if (const auto at = backendName.find("OpenGL ES"); at != String::npos) {
+                backendName.replace(at, sizeof("OpenGL ES") - 1, "GLES");
+            }
             versionStr =
                 std::format("{} {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT,
                             rendererInfo.RendererGLInfo.TargetGLVersion.toString(), MG_Config::ProjectName,
                             MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib),
-                            rendererInfo.BackendName);
+                            backendName);
             MGLOG_D("versionStr: %s", versionStr.c_str());
             return (const GLubyte*)versionStr.c_str();
         }

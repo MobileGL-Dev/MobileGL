@@ -41,6 +41,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetShaderiv(GLuint shader, GLenum pname, GLint* params);
     void GetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
     void GetShaderSource(GLuint shader, GLsizei bufSize, GLsizei* length, GLchar* source);
+    void GetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision);
     GLint GetUniformLocation(GLuint program, const GLchar* name);
     void GetUniformfv(GLuint program, GLint location, GLfloat* params);
     void GetUniformiv(GLuint program, GLint location, GLint* params);

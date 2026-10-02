@@ -44,7 +44,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
 
     // Whether a display is a Wayland one: asked for as EGL_PLATFORM_WAYLAND, or (eglGetDisplay with
     // no platform) a native display that is a wl_display - recognised the way Mesa does, by its
-    // first word being libwayland-client's wl_display_interface.
+    // first word being libwayland-client's wl_display_interface (or, for an application with its
+    // own copy of libwayland, an interface named "wl_display").
     Bool IsWaylandDisplay(Uint64 nativeDisplay, EGLenum platform);
 
     // Whether `window` looks like a wl_egl_window this library can present to.

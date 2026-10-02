@@ -2405,6 +2405,47 @@ namespace MobileGL::MG_Impl::GLImpl {
         ShaderBinary_State(count, shaders, binaryformat, binary, length);
     }
 
+    // GL 4.6 core 7.13 (ARB_ES2_compatibility). The shading language here is desktop GLSL, whose
+    // float and int are 32-bit IEEE-754 / two's complement at every precision qualifier, so every
+    // precision answers the same: log2 of the range and the mantissa bits. A silent stub answered
+    // zeros, which an ES-on-GL layer reads as "no highp" and refuses ES 2.0 outright.
+    void GetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision) {
+        if (shadertype != GL_VERTEX_SHADER && shadertype != GL_FRAGMENT_SHADER) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "shadertype must be GL_VERTEX_SHADER or GL_FRAGMENT_SHADER."));
+            return;
+        }
+        GLint rangeLow = 0, rangeHigh = 0, bits = 0;
+        switch (precisiontype) {
+        case GL_LOW_FLOAT:
+        case GL_MEDIUM_FLOAT:
+        case GL_HIGH_FLOAT:
+            rangeLow = 127;
+            rangeHigh = 127;
+            bits = 23;
+            break;
+        case GL_LOW_INT:
+        case GL_MEDIUM_INT:
+        case GL_HIGH_INT:
+            rangeLow = 31;
+            rangeHigh = 30;
+            bits = 0;
+            break;
+        default:
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "precisiontype is not a precision."));
+            return;
+        }
+        if (range) {
+            range[0] = rangeLow;
+            range[1] = rangeHigh;
+        }
+        if (precision) *precision = bits;
+    }
+
     void SpecializeShader(GLuint shader, const GLchar* pEntryPoint, GLuint numSpecializationConstants,
                           const GLuint* pConstantIndex, const GLuint* pConstantValue) {
         SpecializeShader_State(shader, pEntryPoint, numSpecializationConstants, pConstantIndex, pConstantValue);

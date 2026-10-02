@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <mutex>
 #include <sys/mman.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
@@ -302,12 +303,32 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         void OnWindowDestroyed(void* data) { static_cast<WindowSurface::Impl*>(data)->window = nullptr; }
     } // namespace
 
+    namespace {
+        // Copies `size` bytes at `address` of this process, or answers false where nothing is
+        // mapped - the kernel does the reading, so a wild pointer is an error code, not a fault.
+        Bool ReadOwnMemory(const void* address, void* out, SizeT size) {
+            iovec local{out, size};
+            iovec remote{const_cast<void*>(address), size};
+            return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == static_cast<ssize_t>(size);
+        }
+    } // namespace
+
     Bool IsWaylandDisplay(Uint64 nativeDisplay, EGLenum platform) {
         if (platform == kPlatformWayland) return true;
         if (nativeDisplay == 0 || (platform != EGL_NONE && platform != 0)) return false;
         const Api& api = WaylandApi();
         if (!api.loaded) return false;
-        return *reinterpret_cast<const void* const*>(static_cast<uintptr_t>(nativeDisplay)) == api.displayInterface;
+        const void* interface = *reinterpret_cast<const void* const*>(static_cast<uintptr_t>(nativeDisplay));
+        if (interface == api.displayInterface) return true;
+        // AN APPLICATION WITH ITS OWN COPY OF LIBWAYLAND-CLIENT (Chromium links one in statically)
+        // has its own wl_display_interface, at its own address. The interface is still the
+        // protocol's: a wl_interface whose first member names it "wl_display". Whatever else the
+        // first word of a native display is (a gbm_device's is a function address), the probe
+        // only reads through the kernel.
+        const char* name = nullptr;
+        char text[sizeof("wl_display")] = {};
+        return interface != nullptr && ReadOwnMemory(interface, &name, sizeof(name)) && name != nullptr &&
+               ReadOwnMemory(name, text, sizeof(text)) && std::memcmp(text, "wl_display", sizeof(text)) == 0;
     }
 
     Bool IsWaylandWindow(const void* window) {
