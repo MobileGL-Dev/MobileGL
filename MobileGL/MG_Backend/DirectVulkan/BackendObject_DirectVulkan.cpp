@@ -373,14 +373,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
 
+        VulkanRendererConfig config;
+        config.SwapInterval = GetRequestedSwapInterval();
+        if (UsesSurfaceTargets() && pVulkanRenderer) {
+            pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), nativeWindow, config);
+            return true;
+        }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
         BumpRendererGeneration();
-        VulkanRendererConfig config;
-        config.SwapInterval = GetRequestedSwapInterval();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(m_activatingSurface));
         return true;
     }
 
@@ -388,12 +393,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VulkanRendererConfig config;
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
+        if (UsesSurfaceTargets() && pVulkanRenderer) {
+            pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), NativeWindowType{}, config);
+            return true;
+        }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
         BumpRendererGeneration();
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(m_activatingSurface));
         return true;
     }
 
@@ -496,7 +506,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        const Bool ok = BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        if (ok && UsesSurfaceTargets() && ctx != EGL_NO_CONTEXT && draw != EGL_NO_SURFACE) {
+            m_contextBindings[ctx] = EGLCurrentState{.Display = dpy, .DrawSurface = draw, .ReadSurface = read,
+                                                     .Context = ctx};
+        }
+        return ok;
+    }
+
+    void BackendObject_DirectVulkan::OnClientContextBound(Uint64 token) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!UsesSurfaceTargets() || token == 0) return;
+        // Each of a multi-window client's contexts draws to the surface IT was made current with
+        // (Qt renders every window on its own thread and context); the ring interleaves them with
+        // a bind_context between, and no make-current. Follow the context back to its surface.
+        const auto found = m_contextBindings.find(reinterpret_cast<EGLContext>(token));
+        if (found == m_contextBindings.end()) return;
+        const EGLCurrentState binding = found->second;
+        if (!GetRegisteredEGLSurface(binding.DrawSurface)) {
+            m_contextBindings.erase(found);
+            return;
+        }
+        const auto current = m_eglCurrentThreads.find(std::this_thread::get_id());
+        if (current != m_eglCurrentThreads.end() && current->second.Context == binding.Context &&
+            current->second.DrawSurface == binding.DrawSurface && m_eglSurface == binding.DrawSurface) {
+            return;
+        }
+        (void)BackendObject::MakeEGLCurrent(binding.Display, binding.DrawSurface, binding.ReadSurface, binding.Context);
     }
 
     Bool BackendObject_DirectVulkan::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
@@ -531,8 +567,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BackendObject::ReleaseEGLResources();
     }
 
+    Bool BackendObject_DirectVulkan::UsesSurfaceTargets() const {
+        return MG_Config::Transport != MG_Config::TransportMode::Monolith;
+    }
+
+    void BackendObject_DirectVulkan::OnEGLSurfaceForgotten(EGLSurface surface) {
+        if (UsesSurfaceTargets() && pVulkanRenderer) pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
+    }
+
     void BackendObject_DirectVulkan::OnEGLSurfaceReleased(EGLSurface surface) {
-        (void)surface;
+        // The renderer outlives its surfaces here: only this surface's target goes (in
+        // OnEGLSurfaceForgotten, which follows), and every fence stays valid.
+        if (UsesSurfaceTargets() && pVulkanRenderer) return;
         // Outstanding fence/timer-query handles now refer to a dead renderer;
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();

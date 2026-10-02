@@ -3478,6 +3478,9 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
+        // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
+        for (auto& [_, target] : m_parkedTargets) DestroyParkedTarget(target);
+        m_parkedTargets.clear();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
         // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
@@ -16658,6 +16661,8 @@ void main() {
     }
 
     Bool VulkanRenderer::RecreateSwapchain() {
+        // No surface target is active (its surface was released): nothing to build on.
+        if (m_surface == VK_NULL_HANDLE) return false;
         // Handle cases like minimize on Windows, where swapchain could return a 0x0 extent
         const auto swapchainCapabilities =
             SwapchainObject::GetSwapchainCapabilities(m_physicalDevice.handle, m_surface);
@@ -16779,6 +16784,159 @@ void main() {
         if (m_presentsToAppWindow) {
             m_config.SwapInterval = interval;
         }
+    }
+
+    void VulkanRenderer::ExchangeActiveTarget(SurfaceTarget& target) {
+        std::swap(m_activeTargetSerial, target.serial);
+        std::swap(m_window, target.window);
+        std::swap(m_platformDisplay, target.platformDisplay);
+        std::swap(m_platformLibrary, target.platformLibrary);
+        std::swap(m_platformCloseDisplay, target.platformCloseDisplay);
+        std::swap(m_fallbackImageReader, target.fallbackImageReader);
+        std::swap(m_config.SurfaceWidth, target.surfaceWidth);
+        std::swap(m_config.SurfaceHeight, target.surfaceHeight);
+        std::swap(m_config.SwapInterval, target.swapInterval);
+        std::swap(m_presentsToAppWindow, target.presentsToAppWindow);
+        std::swap(m_swapchainSwapInterval, target.swapchainSwapInterval);
+        std::swap(m_swapchainResizeRequested, target.swapchainResizeRequested);
+        std::swap(m_presentSuspended, target.presentSuspended);
+        std::swap(m_surface, target.surface);
+        std::swap(m_swapchainObject, target.swapchain);
+        m_frameContext.ExchangeSwapchainSemaphores(target.renderFinishedSemaphores);
+        std::swap(m_imageIndexAcquired, target.imageIndexAcquired);
+        std::swap(m_defaultFramebufferImageIndex, target.defaultFramebufferImageIndex);
+    }
+
+    void VulkanRenderer::ParkActiveTarget() {
+        if (m_surface == VK_NULL_HANDLE) return;
+        // The active surface's recorded work goes to the queue now, while its images are still
+        // the default framebuffer's.
+        FlushPendingCommands();
+        auto& frame = m_frameContext.GetCurrent();
+        // Its acquired image keeps its acquire for when the surface comes back, but the signal
+        // lives on THIS slot's semaphore, which the next surface acquires with. Wait it out with
+        // an empty submission; the image is then simply held, and its next submit waits nothing.
+        if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE && !m_presentSuspended &&
+            !frame.imageAvailableSemaphoreConsumed) {
+            const VkFence fence = AcquirePooledSubmitFence();
+            if (fence == VK_NULL_HANDLE || !SubmitPendingCommandBuffer(frame, fence, /*pooledFence=*/true)) {
+                MGLOG_E("DirectVulkan: a parked surface's pending acquire could not be waited out");
+            }
+        }
+        SurfaceTarget parked;
+        ExchangeActiveTarget(parked);
+        m_parkedTargets[m_activeTargetKey] = std::move(parked);
+        m_activeTargetKey = 0;
+    }
+
+    void VulkanRenderer::OnActiveTargetChanged() {
+        if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE) {
+            m_swapchainObject.PublishDefaultFramebufferInfo();
+            if (m_programFactory) m_programFactory->SetDefaultFramebufferHeight(m_swapchainObject.GetExtent().height);
+        }
+        if (m_renderPassManager) m_renderPassManager->SetDefaultFramebufferTarget(m_activeTargetSerial);
+        InvalidatePipelineMemo();
+        ResetDynamicStateShadow();
+        InvalidateSetupDrawSnapshots();
+    }
+
+    void VulkanRenderer::ActivateSurfaceTarget(Uint64 key, NativeWindowType window,
+                                               const VulkanRendererConfig& surfaceConfig) {
+        if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) return;
+        ParkActiveTarget();
+        auto parked = m_parkedTargets.find(key);
+        if (parked != m_parkedTargets.end()) {
+            ExchangeActiveTarget(parked->second);
+            m_parkedTargets.erase(parked);
+            // Its acquire was waited when it was parked (ParkActiveTarget).
+            m_frameContext.GetCurrent().imageAvailableSemaphoreConsumed = true;
+        } else {
+            m_activeTargetSerial = m_nextTargetSerial++;
+            m_window = window;
+            m_presentsToAppWindow = window != NativeWindowType{};
+            m_config.SurfaceWidth = surfaceConfig.SurfaceWidth;
+            m_config.SurfaceHeight = surfaceConfig.SurfaceHeight;
+            m_config.SwapInterval = m_presentsToAppWindow ? surfaceConfig.SwapInterval : Nullopt;
+            m_swapchainSwapInterval.reset();
+            m_swapchainResizeRequested = false;
+            m_presentSuspended = false;
+            CreateSurface();
+            CreateSwapchain();
+            m_defaultFramebufferImageIndex = 0;
+            VK_VERIFY(m_frameContext.InitializeSwapchainSemaphores(
+                          m_device, static_cast<Uint32>(m_swapchainObject.GetImageCount())),
+                      "ActivateSurfaceTarget, InitializeSwapchainSemaphores");
+            if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE) {
+                VkResult result = m_frameContext.AcquireNextImageInCurrentSlot(
+                    m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+                if (result == VK_SUBOPTIMAL_KHR) result = VK_SUCCESS;
+                VK_VERIFY(result, "ActivateSurfaceTarget, AcquireNextImageInCurrentSlot");
+                m_defaultFramebufferImageIndex = m_imageIndexAcquired;
+            } else {
+                m_presentSuspended = true;
+            }
+            MGLOG_I("DirectVulkan: surface target %llu built (%ux%u, %s)",
+                    static_cast<unsigned long long>(m_activeTargetSerial), m_swapchainObject.GetExtent().width,
+                    m_swapchainObject.GetExtent().height, m_presentsToAppWindow ? "window" : "pbuffer");
+        }
+        m_activeTargetKey = key;
+        OnActiveTargetChanged();
+    }
+
+    void VulkanRenderer::DestroyParkedTarget(SurfaceTarget& target) {
+        target.swapchain.Shutdown(m_device);
+        for (VkSemaphore semaphore : target.renderFinishedSemaphores) {
+            if (semaphore != VK_NULL_HANDLE) vkDestroySemaphore(m_device, semaphore, nullptr);
+        }
+        target.renderFinishedSemaphores.clear();
+        if (target.surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(m_instance, target.surface, nullptr);
+            target.surface = VK_NULL_HANDLE;
+        }
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+        if (target.fallbackImageReader != nullptr && target.platformLibrary != nullptr) {
+            using AImageReaderDeleteFn = void (*)(void*);
+            auto* imageReaderDelete =
+                reinterpret_cast<AImageReaderDeleteFn>(dlsym(target.platformLibrary, "AImageReader_delete"));
+            if (imageReaderDelete) imageReaderDelete(target.fallbackImageReader);
+            target.fallbackImageReader = nullptr;
+            dlclose(target.platformLibrary);
+            target.platformLibrary = nullptr;
+        }
+#elif defined(VK_USE_PLATFORM_XLIB_KHR)
+        if (target.platformDisplay != nullptr) {
+            using XCloseDisplayFn = int (*)(Display*);
+            auto* closeDisplay = reinterpret_cast<XCloseDisplayFn>(target.platformCloseDisplay);
+            if (closeDisplay) closeDisplay(static_cast<Display*>(target.platformDisplay));
+            target.platformDisplay = nullptr;
+        }
+        if (target.platformLibrary != nullptr) {
+            dlclose(target.platformLibrary);
+            target.platformLibrary = nullptr;
+        }
+#endif
+    }
+
+    void VulkanRenderer::DestroySurfaceTarget(Uint64 key) {
+        if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) ParkActiveTarget();
+        auto parked = m_parkedTargets.find(key);
+        if (parked == m_parkedTargets.end()) return;
+        // Whatever is recorded may name the target's images (a blit out of it, say): submit it,
+        // then let the GPU finish with everything before the views go.
+        FlushPendingCommands();
+        VK_VERIFY(vkDeviceWaitIdle(m_device));
+        OnSubmitsCompletedUpTo(m_submitCounter);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        DestroyWireDrawPass();
+        CollectWireObjects(m_submitCounter, true);
+        ClearAllWireDrawPassCaches();
+#endif
+        if (m_renderPassManager) m_renderPassManager->PurgeRenderPasses();
+        InvalidatePipelineMemo();
+        ResetDynamicStateShadow();
+        InvalidateSetupDrawSnapshots();
+        DestroyParkedTarget(parked->second);
+        m_parkedTargets.erase(parked);
     }
 
     VkInstance VulkanRenderer::GetInstance() const {

@@ -234,6 +234,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    namespace {
+        // Diagnostic memory for DescribeWireBufferHistory: the last handles created and destroyed.
+        struct WireBufferHistory {
+            static constexpr SizeT kDepth = 256;
+            MG_Pipe::MGPipeHandle created[kDepth]{};
+            MG_Pipe::MGPipeHandle destroyed[kDepth]{};
+            SizeT createdCount = 0;
+            SizeT destroyedCount = 0;
+        };
+        SessionLocal<WireBufferHistory> g_wireBufferHistory;
+    } // namespace
+
     VkBufferManager::WireBufferResource* VkBufferManager::FindWireBuffer(MG_Pipe::MGPipeHandle res) {
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         return found == m_wireBuffers.end() ? nullptr : &found->second;
@@ -246,6 +258,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::abort();
         }
         m_wireBuffers.try_emplace(WireBufferKey(res));
+        {
+            auto& history = *g_wireBufferHistory;
+            history.created[history.createdCount++ % 256] = res;
+        }
         RespecifyWireBuffer(res, desc, nullptr);
     }
 
@@ -972,7 +988,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
     }
 
+
+    void VkBufferManager::DescribeWireBufferHistory(MG_Pipe::MGPipeHandle res) const {
+        const auto& history = *g_wireBufferHistory;
+        Int createdAgo = -1, destroyedAgo = -1;
+        for (SizeT i = 0; i < std::min(history.createdCount, WireBufferHistory::kDepth); ++i) {
+            const auto& h = history.created[(history.createdCount - 1 - i) % WireBufferHistory::kDepth];
+            if (h.Slot == res.Slot && h.Gen == res.Gen) { createdAgo = static_cast<Int>(i); break; }
+        }
+        for (SizeT i = 0; i < std::min(history.destroyedCount, WireBufferHistory::kDepth); ++i) {
+            const auto& h = history.destroyed[(history.destroyedCount - 1 - i) % WireBufferHistory::kDepth];
+            if (h.Slot == res.Slot && h.Gen == res.Gen) { destroyedAgo = static_cast<Int>(i); break; }
+        }
+        MGLOG_E("Magma wire buffer {slot=%u, gen=%u}: live stores %zu; created %d creates ago, destroyed %d "
+                "destroys ago (-1 = not in the last %zu); %zu creates, %zu destroys in this session",
+                res.Slot, res.Gen, m_wireBuffers.size(), createdAgo, destroyedAgo, WireBufferHistory::kDepth,
+                history.createdCount, history.destroyedCount);
+    }
+
     void VkBufferManager::DestroyWireBuffer(MG_Pipe::MGPipeHandle res) {
+        {
+            auto& history = *g_wireBufferHistory;
+            history.destroyed[history.destroyedCount++ % WireBufferHistory::kDepth] = res;
+        }
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         if (found == m_wireBuffers.end()) return;
         DeferWireRelease(std::move(found->second.buffer),
@@ -1135,7 +1173,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (g_activeBufferManager.Get() == this) {
             g_activeBufferManager.Get() = nullptr;
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Pipe::MGPipeGetResourceOps() == &g_vulkanWireResourceOps) {
+            // Under a transport the table is the PROCESS's and serves every session: it dispatches
+            // to the calling session's own manager (WireManager), so one session's renderer going
+            // away must not take it from the others - their buffer creates would be dropped from
+            // then on, and every buffer born after that would be a handle the server never saw.
+            if (MG_Config::Transport == MG_Config::TransportMode::Monolith &&
+                MG_Pipe::MGPipeGetResourceOps() == &g_vulkanWireResourceOps) {
                 MG_Pipe::MGPipeSetResourceOps(nullptr);
             }
 #endif

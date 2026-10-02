@@ -28,6 +28,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void Initialize() override;
         void BindSessionStateToThisThread() override;
+        void OnClientContextBound(Uint64 token) override;
         Bool InitWindowSurface() override;
         Bool InitCapabilities() override;
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
@@ -50,6 +51,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     private:
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
         void OnEGLSurfaceReleased(EGLSurface surface) override;
+        void OnEGLSurfaceForgotten(EGLSurface surface) override;
+        // A served session keeps one renderer across all its client's surfaces and switches the
+        // renderer's surface target instead (VulkanRenderer::ActivateSurfaceTarget).
+        Bool UsesSurfaceTargets() const;
+        static Uint64 SurfaceTargetKey(EGLSurface surface) { return reinterpret_cast<Uint64>(surface); }
         void UpdateAdvertisedExtensions();
         void UpdateDynamicBackendParameters();
 
@@ -60,6 +66,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A served session's own copy of Magma's per-process state (MagmaSession.h), bound to its
         // apply thread. Null in the monolith and every other single-session shape.
         UniquePtr<MagmaSession> m_magmaSession;
+        // The binding each client context was last made current with, for OnClientContextBound.
+        UnorderedMap<EGLContext, EGLCurrentState> m_contextBindings;
     };
 
     // Single-source-of-truth helpers shared with the driver POST

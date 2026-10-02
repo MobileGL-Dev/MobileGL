@@ -299,6 +299,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MGLOG_I("Swapchain created, extent = %dx%d, swapchain imageCount = %d", m_extent.width, m_extent.height,
                 imageCount);
 
+        PublishDefaultFramebufferInfo();
+    }
+
+    void SwapchainObject::PublishDefaultFramebufferInfo() const {
+        const VkExtent2D defaultFramebufferExtent = m_surfaceExtent;
         // Properly initialize Default FBO here
         auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
         const Int extentWidth = static_cast<Int>(defaultFramebufferExtent.width);

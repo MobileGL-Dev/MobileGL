@@ -306,8 +306,20 @@
                     "MGPipe: Fatal{ProtocolCorruption, \"Magma:client-vertex-array\"} location=%u: an "
                     "attribute the program reads carries no buffer handle", location);
             BufferSlice slice{};
-            if (!m_bufferManager.AcquireWireSlice(BufferKind::Vertex, resource.Res, slice))
-                MagmaWireFatal("vertex-buffer-resource");
+            if (!m_bufferManager.AcquireWireSlice(BufferKind::Vertex, resource.Res, slice)) {
+                // A buffer with no data store is legal GL to bind (glGenBuffers + glBindBuffer, no
+                // glBufferData), and the client mints its handle at construction while the create
+                // only crosses with the first respecify (PipeFill.cpp's M-1) - so the handle may be
+                // one this server never saw, or one it holds with zero bytes. Either way the draw
+                // reads no storage: it is declined, as the GL draws nothing defined from it.
+                static Bool s_described = false;
+                if (!s_described && !m_bufferManager.IsKnownWireBuffer(resource.Res)) {
+                    s_described = true;
+                    m_bufferManager.DescribeWireBufferHistory(resource.Res);
+                }
+                MGL_WIRE_DECLINE_AT(VertexAttributeWindow, "an enabled attribute's buffer has no storage");
+                return false;
+            }
             const VkDeviceSize offset = input.bindingBaseOffsets[binding];
             const auto type = static_cast<DataType>(attr.Type);
             const SizeT elementSize = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
@@ -387,8 +399,16 @@
             const void* bytes = nullptr;
             if (cpuIndices) bytes = reinterpret_cast<const void*>(indices->indexByteOffset);
             else {
-                if (!m_bufferManager.AcquireWireSlice(BufferKind::Index, state.IndexBuffer.Res, indexSlice))
-                    MagmaWireFatal("index-buffer-resource");
+                if (!m_bufferManager.AcquireWireSlice(BufferKind::Index, state.IndexBuffer.Res, indexSlice)) {
+                    // As for a vertex buffer: a bound element buffer with no data store yet.
+                    static Bool s_described = false;
+                    if (!s_described && !m_bufferManager.IsKnownWireBuffer(state.IndexBuffer.Res)) {
+                        s_described = true;
+                        m_bufferManager.DescribeWireBufferHistory(state.IndexBuffer.Res);
+                    }
+                    MGL_WIRE_DECLINE_AT(IndexWindow, "the element buffer has no storage");
+                    return false;
+                }
                 const Uint64 offset = state.IndexBuffer.Offset + indices->indexByteOffset;
                 if (offset < state.IndexBuffer.Offset || offset > indexSlice.size ||
                     indices->indexByteSize > indexSlice.size - offset) {

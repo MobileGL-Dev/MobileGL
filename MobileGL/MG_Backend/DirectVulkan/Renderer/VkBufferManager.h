@@ -110,6 +110,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // frontend BufferObject. Acquires expose the full GPU store, without a CPU
         // pointer: CPU consumers must use ReadWireBuffer for ordered, current bytes.
         Bool AcquireWireSlice(BufferKind kind, MG_Pipe::MGPipeHandle res, BufferSlice& outSlice);
+        // The handle names a store this session created (whatever its size, zero included).
+        Bool IsKnownWireBuffer(MG_Pipe::MGPipeHandle res) { return FindWireBuffer(res) != nullptr; }
+        // Names, for a Fatal about an unknown handle, whether this manager ever saw it.
+        void DescribeWireBufferHistory(MG_Pipe::MGPipeHandle res) const;
         Bool ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst);
         Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
                                         const BufferSlice& dst);

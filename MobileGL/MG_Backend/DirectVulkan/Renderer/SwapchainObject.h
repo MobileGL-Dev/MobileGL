@@ -38,6 +38,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     Uint32 presentQueueFamily, Uint32 minImageCountHint, VkExtent2D desiredExtent,
                     Optional<Int> swapInterval);
         void Shutdown(VkDevice device);
+        // Tells the frontend (or, under a transport, the client) the default framebuffer's size
+        // and formats. Create does this; a renderer switching between surfaces repeats it.
+        void PublishDefaultFramebufferInfo() const;
 
         VkSwapchainKHR GetHandle() const { return m_swapchain; }
         VkPresentModeKHR GetPresentMode() const { return m_presentMode; }

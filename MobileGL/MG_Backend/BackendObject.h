@@ -596,6 +596,11 @@ namespace MobileGL {
             // native state is process-global by construction gives this object its own copy and binds
             // it to the calling thread. The default has nothing per process to separate.
             virtual void BindSessionStateToThisThread() {}
+            // A served session's ring moved to another of its client's contexts (bind_context). A
+            // backend whose surface follows the native context it binds needs nothing; one that keeps
+            // a single native surface binding re-binds the surface that context was last made current
+            // with. `token` is the client's context token (the EGLContext MakeEGLCurrent was given).
+            virtual void OnClientContextBound(Uint64 token) { (void)token; }
 
             virtual Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
             virtual Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);

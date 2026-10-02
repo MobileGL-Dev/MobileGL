@@ -101,6 +101,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                  VkImageLayout presentLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         SubmitInfoPacket GetSubmitInfo(Bool shouldSubmitCommandBuffer, Uint32 swapchainImageIndex) const;
         PresentInfoPacket GetPresentInfo(VkSwapchainKHR swapchain, Uint32 imageIndex) const;
+        // Acquires into the current slot's semaphore WITHOUT the slot-fence wait: for a surface
+        // brought up mid-frame, whose slot fence this frame has already waited and reset. The
+        // slot's semaphore must be unsignaled with no pending signal (consumed).
+        VkResult AcquireNextImageInCurrentSlot(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex);
+        // The per-swapchain-image render-finished semaphores belong to one swapchain; a renderer
+        // that parks a surface parks them with it.
+        void ExchangeSwapchainSemaphores(Vector<VkSemaphore>& other) { std::swap(m_swapchainImageRenderFinishedSemaphores, other); }
         VkResult WaitAndAcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex,
                                          Uint64 timeout = UINT64_MAX, VkFence acquireFence = VK_NULL_HANDLE);
 

@@ -607,6 +607,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
         if (isDefaultFbo) {
             XXHASH_VERIFY(XXH64_update(m_hashState, &swapchainImageIndex, sizeof(swapchainImageIndex)));
+            XXHASH_VERIFY(XXH64_update(m_hashState, &m_defaultFramebufferTarget, sizeof(m_defaultFramebufferTarget)));
         }
         // sRGB attachments switch between their sRGB and UNORM-twin views with this
         // capability (ResolveSrgbAttachmentWriteFormat), changing the render pass formats.
@@ -1526,6 +1527,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto [insertedIt, _] = m_renderPasses.emplace(hash, Move(renderPassEntry));
         insertedIt->second.lastUsedFrame = m_frameCounter;
         return &insertedIt->second;
+    }
+
+    void VkRenderPassManager::PurgeRenderPasses() {
+        Vector<VkRenderPass> destroyedRenderPasses;
+        destroyedRenderPasses.reserve(m_renderPasses.size());
+        for (auto& [_, entry] : m_renderPasses) destroyedRenderPasses.push_back(entry.renderPass);
+        m_renderPasses.clear();
+        m_rpFastValid = false;
+        if (!destroyedRenderPasses.empty() && m_evictionObserver != nullptr) {
+            m_evictionObserver->OnRenderPassesDestroyed(destroyedRenderPasses);
+        }
     }
 
     void VkRenderPassManager::OnPresent() {

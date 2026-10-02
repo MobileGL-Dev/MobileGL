@@ -427,7 +427,52 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // no new swapchain is installed and presentation must stay suspended.
         Bool RecreateSwapchain();
 
+        // SURFACE TARGETS. One renderer - one device and every GL object's resources - serves
+        // every EGL surface of its context's client; only the presentation side (VkSurfaceKHR,
+        // swapchain, its render-finished semaphores, the acquired image, the pbuffer's image
+        // reader) belongs to a surface. `key` names the client surface. The renderer starts with
+        // the surface it was constructed for as its active target (SetActiveSurfaceTargetKey).
+        // Activating another key parks the active target - its recorded work submitted, its
+        // pending acquire consumed - and brings the other back, or builds it on first use.
+        void SetActiveSurfaceTargetKey(Uint64 key) { m_activeTargetKey = key; }
+        void ActivateSurfaceTarget(Uint64 key, NativeWindowType window, const VulkanRendererConfig& surfaceConfig);
+        // Drops a surface's target, active or parked. A no-op for a key that has none.
+        void DestroySurfaceTarget(Uint64 key);
+
     private:
+        // The presentation half of the renderer, parked while another surface is active. Its
+        // fields mirror the renderer members ExchangeActiveTarget swaps them with.
+        struct SurfaceTarget {
+            Uint64 serial = 0;
+            NativeWindowType window = 0;
+            void* platformDisplay = nullptr;
+            void* platformLibrary = nullptr;
+            void* platformCloseDisplay = nullptr;
+            void* fallbackImageReader = nullptr;
+            Uint32 surfaceWidth = 0;
+            Uint32 surfaceHeight = 0;
+            Optional<Int> swapInterval;
+            Bool presentsToAppWindow = false;
+            Optional<Int> swapchainSwapInterval;
+            Bool swapchainResizeRequested = false;
+            Bool presentSuspended = false;
+            VkSurfaceKHR surface = VK_NULL_HANDLE;
+            SwapchainObject swapchain;
+            Vector<VkSemaphore> renderFinishedSemaphores;
+            Uint imageIndexAcquired = 0;
+            Uint defaultFramebufferImageIndex = 0;
+        };
+        void ExchangeActiveTarget(SurfaceTarget& target);
+        // Submits the active target's work, consumes its pending acquire and moves it into
+        // m_parkedTargets. Leaves the renderer with no target.
+        void ParkActiveTarget();
+        void OnActiveTargetChanged();
+        void DestroyParkedTarget(SurfaceTarget& target);
+        UnorderedMap<Uint64, SurfaceTarget> m_parkedTargets;
+        Uint64 m_activeTargetKey = 0;
+        Uint64 m_activeTargetSerial = 1;
+        Uint64 m_nextTargetSerial = 2;
+
         // Tiered emission for an already-set-up multi-draw batch (state bound, index
         // buffer bound for the indexed form). Tier 1: VK_EXT_multi_draw. Tier 2: one
         // vkCmdDraw(Indexed)Indirect over a transient command array. Tier 3: unrolled

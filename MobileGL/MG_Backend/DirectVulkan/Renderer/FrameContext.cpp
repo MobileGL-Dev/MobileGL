@@ -300,6 +300,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return packet;
     }
 
+    VkResult FrameContext::AcquireNextImageInCurrentSlot(VkDevice device, VkSwapchainKHR swapchain,
+                                                         Uint32& outImageIndex) {
+        auto& frame = GetCurrent();
+        const VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAvailableSemaphore,
+                                                      VK_NULL_HANDLE, &outImageIndex);
+        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) frame.imageAvailableSemaphoreConsumed = false;
+        return result;
+    }
+
     VkResult FrameContext::WaitAndAcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex,
                                                    Uint64 timeout, VkFence acquireFence) {
         auto& frame = GetCurrent();

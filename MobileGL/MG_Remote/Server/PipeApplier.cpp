@@ -12,6 +12,7 @@
 #include <MG_Remote/FatalFunnel.h>
 
 #include "ServerSession.h"
+#include "ServerLoop.h"
 #include "../Transport/ReplySlot.h"
 #include "StagedTextureStore.h"
 
@@ -1504,6 +1505,10 @@ namespace MobileGL::MG_Remote::Server {
         // without a driver call when the context it resolves to is already the one bound here.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             (void)MG_Backend::DirectGLES::MakeNativeContextCurrentForBoundToken();
+            // The backend half for one that keeps a single native surface binding (Magma).
+            if (MG_Backend::BackendObject* backend = ServerLoopInstance().Backend()) {
+                backend->OnClientContextBound(bind.ClientContextToken);
+            }
         }
 #endif
         return true;

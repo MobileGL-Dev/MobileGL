@@ -227,6 +227,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         Bool Initialize();
         void Shutdown();
+        // The surface target the default framebuffer currently names (VulkanRenderer's surface
+        // targets): a default-framebuffer pass of one surface is not another's.
+        void SetDefaultFramebufferTarget(Uint64 serial) {
+            m_defaultFramebufferTarget = serial;
+            m_rpFastValid = false;
+        }
+        // Destroys every cached pass and framebuffer (not the renderbuffers). The device must be
+        // idle and no pass may be open: a surface target's image views are going away.
+        void PurgeRenderPasses();
 
         HashType ComputeHash(
             const MG_State::GLState::FramebufferObject& fbo,
@@ -303,6 +312,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is reused WITHOUT recomputing the expensive per-draw hash. Invalidated by FBO switch /
         // version change, swapchain rotation, any attachment image recreation (the two epochs),
         // or a pending clear. Portable to Vulkan 1.1 (no dynamic_rendering / imageless FB needed).
+        Uint64 m_defaultFramebufferTarget = 0;
         Bool m_rpFastValid = false;
         const MG_State::GLState::FramebufferObject* m_rpFastFbo = nullptr;
         // The FBO's never-reused lifetime id joins the raw pointer + Uint16 version:
