@@ -32,6 +32,11 @@
 #include "../EGLImpl.h"
 #include "../EGLPlatformExtensions.h"
 
+// Defined in Definitions.cpp; eglext.h declares them only under EGL_EGLEXT_PROTOTYPES.
+extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                         const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
+
 namespace {
     using namespace MobileGL;
 
@@ -221,6 +226,8 @@ namespace {
         {"eglWaitSync", reinterpret_cast<void*>(eglWaitSync)},
         {"eglCreateImage", reinterpret_cast<void*>(eglCreateImage)},
         {"eglDestroyImage", reinterpret_cast<void*>(eglDestroyImage)},
+        {"eglCreateImageKHR", reinterpret_cast<void*>(eglCreateImageKHR)},
+        {"eglDestroyImageKHR", reinterpret_cast<void*>(eglDestroyImageKHR)},
         {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
         {"eglCreatePlatformPixmapSurface", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},
         // The platform and current-state queries: not in glvnd's required list, but the names an

@@ -9,6 +9,8 @@
 #pragma once
 #include <Includes.h>
 
+#include <mutex>
+
 namespace MobileGL::MG_Impl::EGLImpl {
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
                                    const EGLint* attrib_list);
@@ -62,4 +64,62 @@ namespace MobileGL::MG_Impl::EGLImpl {
                                            const EGLAttrib* attrib_list);
     EGLBoolean WaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags);
     __eglMustCastToProperFunctionPointerType GetProcAddress(const char* name);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // THE CLIENT'S STREAM GATE. Under a split transport every thread of the process writes into
+    // ONE ring, and the server attributes each record to the context the last applied
+    // `bind_context` named - one current context per SESSION. A context, though, is current per
+    // THREAD, and Qt renders each window on its own QSGRenderThread: two threads' records then
+    // interleave on the ring with no binding between them and land in the wrong context's
+    // applier (empty sampler windows at a Clear, another context's buffers under an upload).
+    //
+    // So every GL entry point and every EGL operation that writes to the stream runs under one
+    // process-wide lock (EGLOperationMutex, which the EGL side already held), and before it
+    // writes, the server is re-bound to the CALLING thread's context whenever the last binding
+    // actually sent names a different one. A no-op scope on a monolith transport and on the
+    // server's own apply thread.
+    Bool StreamGateActive();
+    std::recursive_mutex& StreamMutex();
+    void StreamBindCallingThreadLocked();
+
+    class GLStreamScope {
+    public:
+        GLStreamScope() {
+            if (!StreamGateActive()) return;
+            m_mutex = &StreamMutex();
+            m_mutex->lock();
+            StreamBindCallingThreadLocked();
+        }
+        ~GLStreamScope() {
+            if (m_mutex != nullptr) m_mutex->unlock();
+        }
+        GLStreamScope(const GLStreamScope&) = delete;
+        GLStreamScope& operator=(const GLStreamScope&) = delete;
+
+    private:
+        std::recursive_mutex* m_mutex = nullptr;
+    };
+    // The lock alone, for every EGL entry point: an EGL call may publish into the ring too (a
+    // surface forwarder's catch-up wait, a present, a context frame), and a second thread's GL
+    // record written into the middle of it is a torn record the server latches the session on.
+    class StreamLockScope {
+    public:
+        StreamLockScope() {
+            if (!StreamGateActive()) return;
+            m_mutex = &StreamMutex();
+            m_mutex->lock();
+        }
+        ~StreamLockScope() {
+            if (m_mutex != nullptr) m_mutex->unlock();
+        }
+        StreamLockScope(const StreamLockScope&) = delete;
+        StreamLockScope& operator=(const StreamLockScope&) = delete;
+
+    private:
+        std::recursive_mutex* m_mutex = nullptr;
+    };
+#else
+    class GLStreamScope {};
+    class StreamLockScope {};
+#endif
 } // namespace MobileGL::MG_Impl::EGLImpl

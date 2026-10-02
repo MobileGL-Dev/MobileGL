@@ -76,15 +76,22 @@ namespace MobileGL::MG_Impl::EGLImpl {
         //
         // An unchanged token emits NOTHING: an identical eglMakeCurrent is a legal no-op in
         // EGL and the session is already bound to that context.
+        //
+        // THE COMPARISON IS AGAINST THE BINDING LAST SENT, NOT THIS THREAD'S PREVIOUS CONTEXT
+        // (GLStreamScope in EGLImpl.h): the session has one current context and another thread
+        // may have moved it since this one last bound. The caller holds EGLOperationMutex.
+        thread_local Uint64 t_threadContextToken = 0;
+        Uint64 g_boundContextToken = 0; // guarded by EGLOperationMutex
+
         void EmitContextBinding(EGLStateContext* state, EGLContext switched, Uint64 previousToken) {
+            (void)previousToken;
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
             // The apply thread IS the server in this process; a record emitted there would
             // wait on the thread that has to apply it (EmitAndWait), which is a deadlock and
             // not a slow path.
             if (MG_Remote::Client::RunsAsTheServerRole()) return;
-            const Uint64 token = switched == EGL_NO_CONTEXT ? 0 : state->GetContextClientToken(switched);
-            if (token == previousToken) return;
-            (void)MG_Remote::Client::EmitBindContextRecord(token);
+            t_threadContextToken = switched == EGL_NO_CONTEXT ? 0 : state->GetContextClientToken(switched);
+            StreamBindCallingThreadLocked();
         }
 #endif
 
@@ -93,6 +100,24 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return mutex;
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    } // namespace
+
+    Bool StreamGateActive() {
+        return MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+               !MG_Remote::Client::RunsAsTheServerRole();
+    }
+
+    std::recursive_mutex& StreamMutex() { return EGLOperationMutex(); }
+
+    void StreamBindCallingThreadLocked() {
+        const Uint64 token = t_threadContextToken;
+        if (token == g_boundContextToken) return;
+        if (MG_Remote::Client::EmitBindContextRecord(token)) g_boundContextToken = token;
+    }
+
+    namespace {
+#endif
         String CurrentThreadIdString() {
             std::ostringstream stream;
             stream << std::this_thread::get_id();
@@ -220,6 +245,25 @@ namespace MobileGL::MG_Impl::EGLImpl {
             *out = surface;
             return true;
         }
+
+        // A WAYLAND WINDOW THE APPLICATION RESIZED (wl_egl_window_resize). As with a driver's own
+        // window surface, the new size takes effect at the next make-current or swap: the EGL
+        // surface reports it, the wl_shm presentation adopts it, and the drawable behind it is
+        // resized so the frame rendered at the new size is the frame read back. Qt resizes the
+        // window and then makes the context current, so the make-current arm is the one it hits.
+        void ApplyWaylandResize(EGLStateContext* state, EGLDisplay dpy, EGLSurface surface) {
+            const auto it = WaylandSurfaces().find(surface);
+            if (it == WaylandSurfaces().end()) return;
+            EGLint width = 0;
+            EGLint height = 0;
+            if (!it->second->TakeResize(&width, &height)) return;
+            (void)state->ResizeSurface(dpy, surface, width, height);
+            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            if (backendObject == nullptr ||
+                !backendObject->ResizeEGLWindowSurface(surface, static_cast<Uint32>(width), static_cast<Uint32>(height))) {
+                MGLOG_E("Wayland: the drawable behind a %dx%d window could not be resized", width, height);
+            }
+        }
 #endif
     } // namespace
 
@@ -321,6 +365,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) {
         const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The present is this thread's context's (GLStreamScope in EGLImpl.h).
+        if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
@@ -348,6 +396,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A resize made between frames takes effect for the next one.
+        ApplyWaylandResize(state, dpy, draw);
+#endif
         return EGL_TRUE;
     }
 
@@ -455,6 +507,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
                 threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
 
+#if MOBILEGL_WAYLAND_WINDOWS
+        if (draw != EGL_NO_SURFACE) ApplyWaylandResize(state, dpy, draw);
+#endif
         if (!state->MakeCurrent(dpy, draw, read, ctx)) {
             const EGLint error = state->ConsumeError();
             MGLOG_D("eglMakeCurrent rejected by EGLState thread=%s error=0x%04x", threadId.c_str(), error);
@@ -520,6 +575,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (contextToken != 0 && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole()) {
+            const std::lock_guard<std::recursive_mutex> streamLock(EGLOperationMutex());
+            // The server drops its binding to 0 when the current context is destroyed
+            // (ServerSession::DestroyContext's compare-and-swap); the gate mirrors it so the next
+            // write re-binds.
+            if (g_boundContextToken == contextToken) g_boundContextToken = 0;
             const auto emitted = MG_Remote::Client::SendDestroyContextFrame(contextToken);
             if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
                 MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "

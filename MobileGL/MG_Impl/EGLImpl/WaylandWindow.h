@@ -61,6 +61,11 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // window; the swap itself goes on regardless.
         Bool Present();
 
+        // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave
+        // its wl_egl_window a size this presentation is not at yet. The presentation adopts it -
+        // its next wl_shm buffer is that size - and the caller resizes the drawable behind it.
+        Bool TakeResize(EGLint* width, EGLint* height);
+
         struct Impl;
 
     private:

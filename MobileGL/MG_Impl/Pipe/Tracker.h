@@ -303,9 +303,15 @@ namespace MobileGL::MG_Pipe {
             // A different context is a different server: nothing the tracker latched about
             // the old one says anything about this one, and the first walk on a fresh
             // context must publish a COMPLETE state rather than an increment.
-            if (m_context != &ctx) {
+            //
+            // KEYED ON THE CONTEXT'S NEVER-REUSED ID, NOT ITS ADDRESS: a context destroyed and
+            // remade at the same heap address (Qt does this) is a fresh server-side applier
+            // with empty windows, and an address compare would skip the re-prime that refills
+            // them.
+            if (m_context != &ctx || m_contextId != ctx.GetTextureContextId()) {
                 Reset();
                 m_context = &ctx;
+                m_contextId = ctx.GetTextureContextId();
             }
             const Bool wasPrimed = m_primed;
 
@@ -811,6 +817,7 @@ namespace MobileGL::MG_Pipe {
             m_staged = RenderStateParameters{};
             m_stagedAttribs = AttribDefaults{};
             m_context = nullptr;
+            m_contextId = 0;
             m_lastDirty = 0;
             m_primed = false;
             m_freshlyPrimed = false;
@@ -917,6 +924,7 @@ namespace MobileGL::MG_Pipe {
         AttribDefaults m_stagedAttribs{};
 
         const void* m_context = nullptr;
+        Uint64 m_contextId = 0;
         Uint32 m_lastDirty = 0;
         Bool m_primed = false;
         Bool m_freshlyPrimed = false;

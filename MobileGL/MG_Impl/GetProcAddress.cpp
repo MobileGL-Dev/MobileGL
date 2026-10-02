@@ -15,6 +15,9 @@
 #endif
 
 extern "C" EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void* native_display, const EGLint* attrib_list);
+extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                         const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
 
 #define GETPROC(name, var)                                                                                             \
     if (strcmp(#name, var) == 0) {                                                                                     \
@@ -64,6 +67,8 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglGetSyncAttrib, name);
         GETPROC(eglCreateImage, name);
         GETPROC(eglDestroyImage, name);
+        GETPROC(eglCreateImageKHR, name);
+        GETPROC(eglDestroyImageKHR, name);
         GETPROC(eglGetPlatformDisplay, name);
         GETPROC(eglGetPlatformDisplayEXT, name);
         GETPROC(eglCreatePlatformWindowSurface, name);

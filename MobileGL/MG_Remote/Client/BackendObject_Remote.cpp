@@ -367,7 +367,14 @@ namespace MobileGL::MG_Remote::Client {
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
         // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
         WaitForApplyBeforeEglForwarder("MakeEGLCurrent");
-        if (!Server::ServerMakeEGLCurrent(dpy, draw, read, ctx)) return false;
+        // The frame carries the context's CLIENT TOKEN rather than its handle (the server's
+        // MakeCurrent arm binds the session to it before the native bind). Identity is all the
+        // server reads from the field otherwise, and a token is as unique as a handle.
+        const Uint64 contextToken =
+            (ctx != EGL_NO_CONTEXT && MG_State::pEGLContext) ? MG_State::pEGLContext->GetContextClientToken(ctx) : 0;
+        const EGLContext wireContext =
+            contextToken != 0 ? reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(contextToken)) : ctx;
+        if (!Server::ServerMakeEGLCurrent(dpy, draw, read, wireContext)) return false;
         if (!MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) return false;
 
         // R-12 ARM (a) ON EVERY SUCCESSFUL MAKE-CURRENT (codex 12). ServerMakeEGLCurrent above

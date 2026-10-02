@@ -324,6 +324,17 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         return UniquePtr<WindowSurface>(new WindowSurface(std::move(impl)));
     }
 
+    Bool WindowSurface::TakeResize(EGLint* width, EGLint* height) {
+        Impl& impl = *m_impl;
+        if (impl.window == nullptr || impl.window->width <= 0 || impl.window->height <= 0) return false;
+        if (impl.window->width == impl.width && impl.window->height == impl.height) return false;
+        impl.width = impl.window->width;
+        impl.height = impl.window->height;
+        *width = impl.width;
+        *height = impl.height;
+        return true;
+    }
+
     Bool WindowSurface::Present() {
         Impl& impl = *m_impl;
         if (impl.window == nullptr) return false;

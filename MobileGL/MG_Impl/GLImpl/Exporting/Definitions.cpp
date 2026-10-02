@@ -22,6 +22,7 @@
 #include "../Sync/GL_Sync.h"
 #include "../Debug/GL_Debug.h"
 #include <MG_State/GLState/Core.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
 
@@ -40,22 +41,26 @@
 #define DECLARE_GL_FUNCTION_END(type, name, ...)                                                                       \
     ZoneScopedC(TRACY_ZONECOLOR_ENTRY);                                                                                \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     return MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                               \
     }
 
 #define DECLARE_GL_FUNCTION_END_NO_RETURN(type, name, ...)                                                             \
     ZoneScopedC(TRACY_ZONECOLOR_ENTRY);                                                                                \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                                      \
     }
 #else
 #define DECLARE_GL_FUNCTION_END(type, name, ...)                                                                       \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     return MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                               \
     }
 
 #define DECLARE_GL_FUNCTION_END_NO_RETURN(type, name, ...)                                                             \
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);                                                           \
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;                                                    \
     MobileGL::MG_Impl::GLImpl::name(__VA_ARGS__);                                                                      \
     }
 #endif
@@ -116,12 +121,14 @@ DECLARE_GL_FUNCTION_HEAD(void, EnableVertexAttribArray, GLuint index) DECLARE_GL
 // call really did have nothing to do; MGPipeClientFinish answers false-cheap there too.
 MOBILEGL_GL_API void glFinish() {
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
 #if MOBILEGL_BUILD_DISAGGREGATED
     MobileGL::MG_Pipe::MGPipeClientFinish();
 #endif
 }
 MOBILEGL_GL_API void glFlush() {
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
 #if MOBILEGL_BUILD_DISAGGREGATED
     MobileGL::MG_Pipe::MGPipeClientFlush();
 #endif
