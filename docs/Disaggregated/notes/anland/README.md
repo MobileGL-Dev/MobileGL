@@ -7,6 +7,7 @@
 | [`report-anland.md`](report-anland.md) | Anland 侧：缓冲入口契约、伪造 AHB、同步、帧节奏、进程与 SELinux、容器 GPU 现状、Xwayland glamor、衍生项目、改动插入点（382 处引用） |
 | [`report-mobilegl.md`](report-mobilegl.md) | MobileGL 侧：Linux client 构建与导出、EGL / GLX 能力、split 的 present 路径、AHB / fd / fence 现状、会话与多窗口限制、GL 覆盖面、文档漂移 |
 | [`kgsl-as-server.md`](kgsl-as-server.md) | 把内核 kgsl 看成 server：A / B 实为"缓冲归谁"之分，6.x + Mesa 是 A、5.x 是 B；拆分层级与 virtio-gpu native context / virgl 的对应 |
+| [`plan-ahb-dmabuf.md`](plan-ahb-dmabuf.md) | 计划：server 分配 AHB 当 dma-buf，linux-dmabuf + GBM 后端 + 薄节点，窗口零拷贝；厂商中立规则与分阶段 |
 | [`brief-anland.md`](brief-anland.md)、[`brief-mobilegl.md`](brief-mobilegl.md) | 派给 Codex 的原始提示词。**两份都把后端名写反了**：Espryt = DirectGLES（GLES），Magma = DirectVulkan（Vulkan）；报告已纠正 |
 
 ## 结论
