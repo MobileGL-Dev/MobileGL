@@ -19,6 +19,7 @@ add_executable(
         WidenImageFormatsTest.cpp
         GlslangCaptureTest.cpp
         DemotePointSizeTest.cpp
+        FragCoordYFlipTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

@@ -1313,6 +1313,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 });
                 if (!ok) return false;
+                // An access chain into the builtin (gl_FragCoord.y is one) carries an Input
+                // pointer type. Based on the Private copy it has to carry a Private one, and so
+                // does every chain built on top of it - otherwise the module hands the driver a
+                // pointer whose storage class disagrees with its base, which is invalid SPIR-V
+                // and reads an undefined value. Plan every retype before touching anything, so a
+                // shape this pass does not model declines the whole rewrite.
+                Vector<Pair<Instruction*, Uint32>> retypes;
+                Vector<Instruction*> chains;
+                for (Instruction* user : users) {
+                    if (IsAccessChain(user->opcode())) chains.push_back(user);
+                }
+                while (!chains.empty()) {
+                    Instruction* chain = chains.back();
+                    chains.pop_back();
+                    const Uint32 privateType = PrivatePointerTypeFor(chain->type_id());
+                    if (privateType == 0) return false;
+                    retypes.emplace_back(chain, privateType);
+                    context()->get_def_use_mgr()->ForEachUser(chain, [&](Instruction* next) {
+                        if (IsAccessChain(next->opcode()) && next->NumInOperands() > 0 &&
+                            next->GetSingleWordInOperand(0) == chain->result_id()) {
+                            chains.push_back(next);
+                        }
+                    });
+                }
                 for (Instruction* user : users) {
                     for (Uint32 i = 0; i < user->NumInOperands(); ++i) {
                         auto& operand = user->GetInOperand(i);
@@ -1323,7 +1347,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                     context()->AnalyzeUses(user);
                 }
+                for (auto& [chain, privateType] : retypes) {
+                    chain->SetResultType(privateType);
+                    context()->AnalyzeUses(chain);
+                }
                 return true;
+            }
+
+            static Bool IsAccessChain(spv::Op opcode) {
+                return opcode == spv::Op::OpAccessChain || opcode == spv::Op::OpInBoundsAccessChain ||
+                       opcode == spv::Op::OpPtrAccessChain || opcode == spv::Op::OpInBoundsPtrAccessChain;
+            }
+
+            // The Private-storage twin of an Input pointer type, or 0 when `pointerTypeId` is not
+            // an Input pointer (then the chain is not the shape this pass rewrites).
+            Uint32 PrivatePointerTypeFor(Uint32 pointerTypeId) {
+                using namespace spvtools::opt;
+                Instruction* pointerType = context()->get_def_use_mgr()->GetDef(pointerTypeId);
+                if (!pointerType || pointerType->opcode() != spv::Op::OpTypePointer) return 0;
+                if (static_cast<spv::StorageClass>(pointerType->GetSingleWordInOperand(0)) !=
+                    spv::StorageClass::Input) {
+                    return 0;
+                }
+                return context()->get_type_mgr()->FindPointerToType(pointerType->GetSingleWordInOperand(1),
+                                                                     spv::StorageClass::Private);
             }
 
             Uint32 m_framebufferHeight = 0;
@@ -1861,35 +1908,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return spvtools::Optimizer::PassToken(MakeUnique<GlToVulkanPositionFixPass>(transformFlags));
         }
 
-        Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output,
-                                             Uint32 framebufferHeight) {
-            if (input.empty()) {
-                output.clear();
-                return true;
-            }
-            if (framebufferHeight == 0) {
-                output = input;
-                return true;
-            }
+    } // namespace
 
-            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
-            spvtools::OptimizerOptions options;
-            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
-                                            const char* message) {
-                MGLOG_E("Vulkan: fragcoord y-flip pass: %s", message != nullptr ? message : "");
-            });
-            optimizer.RegisterPass(
-                spvtools::Optimizer::PassToken(MakeUnique<GlFragCoordYFlipPass>(framebufferHeight)));
-
-            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
-            if (!success) {
-                MGLOG_E("Vulkan: failed to run the gl_FragCoord y-flip pass; keeping the original module");
-                output = input;
-            }
-            return success;
+    Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output,
+                                         Uint32 framebufferHeight) {
+        if (input.empty()) {
+            output.clear();
+            return true;
+        }
+        if (framebufferHeight == 0) {
+            output = input;
+            return true;
         }
 
+        spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+        spvtools::OptimizerOptions options;
+        options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
+        optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                        const char* message) {
+            MGLOG_E("Vulkan: fragcoord y-flip pass: %s", message != nullptr ? message : "");
+        });
+        optimizer.RegisterPass(
+            spvtools::Optimizer::PassToken(MakeUnique<GlFragCoordYFlipPass>(framebufferHeight)));
+
+        const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+        if (!success) {
+            MGLOG_E("Vulkan: failed to run the gl_FragCoord y-flip pass; keeping the original module");
+            output = input;
+        }
+        return success;
+    }
+
+    namespace {
         Bool TransformSpirvForXfbCapture(const Vector<Uint>& input, Vector<Uint>& output,
                                          const MagmaProgramSource& program) {
             if (input.empty()) {

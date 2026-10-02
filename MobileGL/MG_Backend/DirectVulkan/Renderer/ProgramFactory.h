@@ -658,4 +658,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<Uint64, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
         static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
+
+    // The FragCoordYFlip variant's module transform: every read of gl_FragCoord goes through a
+    // Private copy whose y is (framebufferHeight - y). Fails open (output = input, false). Exposed
+    // so a unit case can validate the bytes it hands the driver.
+    Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output, Uint32 framebufferHeight);
 } // namespace MobileGL::MG_Backend::DirectVulkan
