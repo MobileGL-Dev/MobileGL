@@ -55,7 +55,7 @@ anland 5.x 用 MobileGL：容器（Droidspaces，arch-kde-mgl）里的 Linux cli
 ## 未完成 / 已知问题（按优先级）
 
 1. **Plasma：桌面已落地、基本可用，剩余问题**（按优先级）：
-   - **启动 Chrome 时 KWin 崩溃**（用户实测）。待抓 core：KWin shim 已改为子进程运行并记录退出码（`/tmp/kwin-exits.log`），但 core 文件写在 `~swung0x48/core`，会被别的进程（如 kioworker）覆盖——shim 应改为在每进程目录下运行 KWin。Chrome 走 GPU 进程 + ANGLE/EGL，可能踩 dmabuf/EGLImage 导入或 X11（Xwayland）路径。
+   - ~~启动 Chrome 时 KWin 崩溃~~ 已修（anland `kwin.patch`）：无 DRM 设备分支里 `waylandServer()->linuxDmabuf()` 会创建 linux-dmabuf global，而空 tranche 不建格式表，Chrome 请求 default feedback 时 KWin 解引用空表（`LinuxDmaBufV1FeedbackPrivate::send` → `FileDescriptor::get`）。现在该分支不碰 dmabuf，client 回落 wl_shm；Chrome 新标签页正常渲染。KWin shim 现在在 `/tmp/kwin-cores/<pid>/` 下运行，core 不会再被覆盖。
    - **某个 client 退出时 KWin 偶发 SEGV**（rc=139，core 被覆盖未取到）；KWin 在 server 进程被杀时也会 SEGV（设备丢失路径），后者是预期外但可接受。
    - **ksplash 启动动画闪黑**：开机时 ksplash 帧间偶有整帧黑；单独 `ksplashqml --test` 在会话内不复现。约 13–15 fps（每帧 2560x1412 全尺寸回读 + wl_shm + KWin 重新上传），见第 3 条。
    - 合成成本：每个 Wayland 窗口每帧整幅 glReadPixels（2 MiB 一片）+ KWin 整幅 glTexSubImage，是当前帧率上限。
