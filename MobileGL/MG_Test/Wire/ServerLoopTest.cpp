@@ -3908,6 +3908,54 @@ namespace {
     }
 } // namespace
 
+namespace {
+    // A STOP WHILE THE APPLY THREAD IS BUSY IN THE BACKEND. One record whose apply takes 8 s - a
+    // GPU the driver needs ~10 s to reset blocks a fence wait just like this - is in hand when
+    // Stop() arrives, longer than the 5 s lost-wakeup bound. The thread is not parked, so the join
+    // waits for it instead of aborting the process (which, in the display server, is every other
+    // client's session too). Red with the busy arm removed: Fatal{ApplyThreadJoinTimeout} at 5 s.
+    std::atomic<int> g_busyRecords{0};
+    void StallOnce() {
+        if (g_busyRecords.fetch_add(1, std::memory_order_acq_rel) == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(8000));
+    }
+
+    [[noreturn]] void StopWhileTheApplyThreadIsBusyAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        loop.SetBetweenRecordsHookForTesting(&StallOnce);
+        MG_Pipe::MGPDrawInfo info{};
+        info.Mode = 0x0004; // GL_TRIANGLES
+        info.InstanceCount = 1;
+        info.MinIndex = ~0u;
+        info.MaxIndex = ~0u;
+        info.NumDraws = 1;
+        const MG_Pipe::MGPDrawRange range{0, 3, 0};
+        const Uint64 last = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range,
+                                                         sizeof(range));
+        if (last == Codec::kInvalidSeq) ::_exit(66);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(last);
+        if (!PollUntil([] { return g_busyRecords.load(std::memory_order_acquire) >= 1; }, 3000)) ::_exit(67);
+        const auto started = std::chrono::steady_clock::now();
+        loop.Stop();
+        const auto stopMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        std::fprintf(stderr, "[busy-stop] Stop() returned in %lld ms\n", static_cast<long long>(stopMs));
+        loop.SetBetweenRecordsHookForTesting(nullptr);
+        fixture.Stop();
+        ::_exit(stopMs < 6000 ? 1 : 0); // it must have waited for the stall, not cut it short
+    }
+} // namespace
+
+TEST(ServerLoopTest, AStopWhileTheApplyThreadIsBusyInTheBackendWaitsForItInsteadOfAborting) {
+    EXPECT_EXIT(StopWhileTheApplyThreadIsBusyAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "1 = Stop() returned before the stall ended; 64+ = setup; SIGABRT = Fatal{ApplyThreadJoinTimeout}";
+}
+
 // P12 review fix. Red with AbandonQueuedRecords a no-op: the batch and the exit-path drain apply the
 // whole stream, Stop()'s join gives up at 5 s and Fatal{ApplyThreadJoinTimeout} aborts the process.
 TEST(ServerLoopTest, StoppingTheServerUnderAStreamingClientLeavesTheQueueAndJoinsPromptly) {

@@ -105,6 +105,14 @@ namespace MobileGL::MG_Remote::Server {
         // The bounded join. InProcessTransportTest.cpp:344 uses five seconds for the same
         // reason: a lost wakeup must be a RED TEST and not a hung CI job.
         constexpr Uint32 kJoinTimeoutMs = 5000;
+        // THE BUSY BOUND. A thread that is not parked when kJoinTimeoutMs runs out is inside the
+        // backend - a draw or a fence wait the GPU has not finished - and on a GPU the driver has
+        // to reset (a shader that never ends: Adreno's preemption fault fires after ~10 s, once per
+        // stuck submission) that takes several times the lost-wakeup bound. Dying at 5 s there
+        // took the whole display server - every session, the compositor's included - down with
+        // the one client whose GPU work hung. The wait goes on, to this bound, which still turns
+        // a thread that never comes back into a named death.
+        constexpr Uint32 kBusyJoinTimeoutMs = 60000;
 
         // A core counts as "big" if its cpufreq ceiling is within 15% of the fastest core's -
         // the identical rule and the identical constant as ShaderCompilePool.cpp:28 and :73-95.
@@ -673,9 +681,11 @@ namespace MobileGL::MG_Remote::Server {
             // Flush-on-idle publishes the last reply record even below the batch threshold.
             session.FlushDataProgress();
             const Bool fencePending = verbs.HasUnreportedFences();
+            m_applyParked.store(true, std::memory_order_release);
             const bool woke = bell.Wait(*signals.ConsumerParked, ready, spinUs,
                                         fencePending ? kFenceIdlePollMs : Transport::kWaitForever,
                                         &m_parkBlocks);
+            m_applyParked.store(false, std::memory_order_release);
             if (!woke) {
                 // Wait returns false only on a dead bell or an expired deadline. A dead bell IS the
                 // shutdown signal (table 3's teardown step 2); treating it as anything else would
@@ -1290,6 +1300,19 @@ namespace MobileGL::MG_Remote::Server {
         {
             std::unique_lock<std::mutex> lock(m_exitMutex);
             exited = m_exitCv.wait_for(lock, std::chrono::milliseconds(kJoinTimeoutMs),
+                                       [this] { return m_exited; });
+        }
+        if (!exited && !m_applyParked.load(std::memory_order_acquire)) {
+            // BUSY, NOT LOST (kBusyJoinTimeoutMs): the thread is applying, most likely blocked on
+            // GPU work that has not finished. What is still queued behind it belongs to a peer
+            // that is leaving, so it is not applied; the join waits for the work in hand.
+            MGLOG_W("MG_Remote server: mgl-srv-apply is still busy in the backend %u ms after Stop() (a "
+                    "GPU stall, not a lost wakeup); the queued records are abandoned and the join waits "
+                    "up to %u ms",
+                    kJoinTimeoutMs, kBusyJoinTimeoutMs);
+            AbandonQueuedRecords();
+            std::unique_lock<std::mutex> lock(m_exitMutex);
+            exited = m_exitCv.wait_for(lock, std::chrono::milliseconds(kBusyJoinTimeoutMs - kJoinTimeoutMs),
                                        [this] { return m_exited; });
         }
         if (!exited) {

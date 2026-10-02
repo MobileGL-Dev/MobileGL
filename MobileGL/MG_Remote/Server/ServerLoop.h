@@ -602,6 +602,10 @@ namespace MobileGL::MG_Remote::Server {
         std::mutex m_exitMutex;
         std::condition_variable m_exitCv;
         Bool m_exited = false;
+        // True only while mgl-srv-apply is parked on its consumer bell - the one place a lost
+        // wakeup can strand it. Stop()'s join reads it to tell a lost wakeup (parked: Fatal at
+        // the bound) from a thread that is BUSY in the backend (a GPU stall: waited for longer).
+        std::atomic<Bool> m_applyParked{false};
 
         Uint64 m_affinityMask = 0;
         std::atomic<Uint64> m_drained{0};
