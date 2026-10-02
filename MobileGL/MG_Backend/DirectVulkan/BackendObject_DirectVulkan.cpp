@@ -332,6 +332,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     BackendObject_DirectVulkan::~BackendObject_DirectVulkan() {
+        // Everything below reaches this session's renderer slot, whichever thread destroys it.
+        MagmaSession* const ownSession = m_magmaSession.get();
+        MagmaSession* const previousSession = BoundMagmaSession();
+        if (ownSession != nullptr) BindMagmaSessionToThisThread(ownSession);
         // P12 review fix: A SERVER SESSION THAT ENDS WITHOUT A CLEAN TEARDOWN LEAVES NO RENDERER ON
         // THE WINDOW. The renderer - swapchain and VkSurfaceKHR on the window - is a process global
         // that only ReleaseEGLResources / a released surface drops, and a client that went away
@@ -348,6 +352,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // And the swap interval it asked for (DirectVulkan.h).
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             ForgetRequestedSwapInterval();
+        }
+        // The session's state goes with it, and no thread may keep answering with it.
+        m_magmaSession.reset();
+        if (ownSession != nullptr) {
+            BindMagmaSessionToThisThread(previousSession == ownSession ? nullptr : previousSession);
         }
     }
 #else
@@ -386,6 +395,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
         return true;
+    }
+
+    void BackendObject_DirectVulkan::BindSessionStateToThisThread() {
+        if (m_magmaSession == nullptr) m_magmaSession = MakeUnique<MagmaSession>();
+        BindMagmaSessionToThisThread(m_magmaSession.get());
+        MGLOG_I("DirectVulkan: session state %llu bound to this apply thread",
+                static_cast<unsigned long long>(m_magmaSession->Id()));
     }
 
     void BackendObject_DirectVulkan::Initialize() {

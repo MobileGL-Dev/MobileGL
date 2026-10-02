@@ -9,6 +9,7 @@
 #pragma once
 
 #include "../VkIncludes.h"
+#include "../MagmaSession.h"
 #include "PipelineFactory.h"
 #include "MagmaProgramSource.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
@@ -251,7 +252,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // entry pointer re-stamps use through a const reference (StampProgramUse).
             mutable Uint64 lastUsedFrame = 0;
 
-            static inline VkDevice s_device = VK_NULL_HANDLE;
+            static inline SessionLocal<VkDevice> s_device;  // per Magma session (MagmaSession.h)
 
             VkProgramObject() = default;
             VkProgramObject(const VkProgramObject&) = delete;
@@ -395,18 +396,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         private:
             void Destroy() {
-                if (s_device != VK_NULL_HANDLE) {
+                if (s_device.Get() != VK_NULL_HANDLE) {
                     if (pipelineLayout != VK_NULL_HANDLE) {
-                        vkDestroyPipelineLayout(s_device, pipelineLayout, nullptr);
+                        vkDestroyPipelineLayout(s_device.Get(), pipelineLayout, nullptr);
                         pipelineLayout = VK_NULL_HANDLE;
                     }
                     if (descriptorSetLayout != VK_NULL_HANDLE) {
-                        vkDestroyDescriptorSetLayout(s_device, descriptorSetLayout, nullptr);
+                        vkDestroyDescriptorSetLayout(s_device.Get(), descriptorSetLayout, nullptr);
                         descriptorSetLayout = VK_NULL_HANDLE;
                     }
                     for (auto module : modules) {
                         if (module != VK_NULL_HANDLE) {
-                            vkDestroyShaderModule(s_device, module, nullptr);
+                            vkDestroyShaderModule(s_device.Get(), module, nullptr);
                         }
                     }
                 }
@@ -463,7 +464,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
               m_enableSpirvValidation(enableSpirvValidation),
               m_updateAfterBindLimits(updateAfterBindLimits),
               m_subgroupPolicy(subgroupPolicy) {
-            VkProgramObject::s_device = device;
+            VkProgramObject::s_device.Get() = device;
         }
         // Destroys the pass-through tessellation control modules. Runs while the device is
         // still alive for the same reason ~VkProgramObject's does: this factory outlives
@@ -655,6 +656,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and adds only a handful of values, so it does not move the cap in practice.
         static constexpr SizeT kMaxPassthroughTessControlStages = 64;
         UnorderedMap<Uint64, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

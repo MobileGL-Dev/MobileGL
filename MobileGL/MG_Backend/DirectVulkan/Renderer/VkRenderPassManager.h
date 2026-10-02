@@ -66,8 +66,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                VkExtent2D swapchainExtent);
 
     struct RenderPassEntry {
-        static inline VkDevice s_device;
-        static inline Vector<VkTextureManager::TextureResource*> s_textureResourcesScratch;
+        // Per Magma session (MagmaSession.h): each session's renderer is its own device.
+        static inline SessionLocal<VkDevice> s_device;
+        static inline thread_local Vector<VkTextureManager::TextureResource*> s_textureResourcesScratch;
         Uint64 hash = 0;
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
@@ -165,10 +166,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         ~RenderPassEntry() {
             if (renderPass != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(s_device, renderPass, nullptr);
+                vkDestroyRenderPass(s_device.Get(), renderPass, nullptr);
             }
             if (framebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(s_device, framebuffer, nullptr);
+                vkDestroyFramebuffer(s_device.Get(), framebuffer, nullptr);
             }
         }
 
@@ -411,12 +412,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DeferRenderbufferBackingRelease(RenderbufferResource& resource);
         void CollectDeferredRenderbufferReleases(Bool destroyAll);
 
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
-        static inline ActiveRenderPassInfo s_activeRenderPass{};
-        static inline Bool s_hasActiveRenderPass = false;
-        static inline VkClearManager* s_clearManager = nullptr;
-        static inline VkTextureManager* s_textureManager = nullptr;
-        static inline SwapchainObject* s_swapchainObject = nullptr;
-        static inline VkRenderPassManager* s_renderPassManager = nullptr;
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
+        // Per Magma session (MagmaSession.h): one session's open render pass and managers are not
+        // another's.
+        static inline SessionLocal<ActiveRenderPassInfo> s_activeRenderPass;
+        static inline SessionLocal<Bool> s_hasActiveRenderPass;
+        static inline SessionLocal<VkClearManager*> s_clearManager;
+        static inline SessionLocal<VkTextureManager*> s_textureManager;
+        static inline SessionLocal<SwapchainObject*> s_swapchainObject;
+        static inline SessionLocal<VkRenderPassManager*> s_renderPassManager;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

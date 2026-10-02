@@ -446,6 +446,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
     MobileGL/MG_Backend/DirectVulkan/BackendObject_DirectVulkan.cpp
+    MobileGL/MG_Backend/DirectVulkan/MagmaSession.cpp
     MobileGL/MG_Backend/DirectVulkan/VmaImpl.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainObject.cpp

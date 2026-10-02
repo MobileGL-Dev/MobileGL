@@ -9,6 +9,7 @@
 #pragma once
 
 #include "../VkIncludes.h"
+#include "../MagmaSession.h"
 #include <Includes.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
@@ -397,38 +398,38 @@ public:
 
         void Reset() {
             if (fullView != VK_NULL_HANDLE) {
-                vkDestroyImageView(s_device, fullView, nullptr);
+                vkDestroyImageView(s_device.Get(), fullView, nullptr);
             }
             if (sampledView != VK_NULL_HANDLE) {
-                vkDestroyImageView(s_device, sampledView, nullptr);
+                vkDestroyImageView(s_device.Get(), sampledView, nullptr);
             }
             for (const auto attachmentView : perMipViews) {
                 if (attachmentView != VK_NULL_HANDLE) {
-                    vkDestroyImageView(s_device, attachmentView, nullptr);
+                    vkDestroyImageView(s_device.Get(), attachmentView, nullptr);
                 }
             }
             for (const auto sampledView : perMipSampledViews) {
                 if (sampledView != VK_NULL_HANDLE) {
-                    vkDestroyImageView(s_device, sampledView, nullptr);
+                    vkDestroyImageView(s_device.Get(), sampledView, nullptr);
                 }
             }
             for (const auto& [_, attachmentView] : attachmentViews) {
                 if (attachmentView != VK_NULL_HANDLE) {
-                    vkDestroyImageView(s_device, attachmentView, nullptr);
+                    vkDestroyImageView(s_device.Get(), attachmentView, nullptr);
                 }
             }
             for (const auto& [_, sampledView] : alternateSampledViews) {
                 if (sampledView != VK_NULL_HANDLE) {
-                    vkDestroyImageView(s_device, sampledView, nullptr);
+                    vkDestroyImageView(s_device.Get(), sampledView, nullptr);
                 }
             }
             for (const auto& [_, storageImageView] : storageImageViews) {
                 if (storageImageView != VK_NULL_HANDLE) {
-                    vkDestroyImageView(s_device, storageImageView, nullptr);
+                    vkDestroyImageView(s_device.Get(), storageImageView, nullptr);
                 }
             }
             if (image != VK_NULL_HANDLE && allocation != nullptr) {
-                vmaDestroyImage(s_allocator, image, allocation);
+                vmaDestroyImage(s_allocator.Get(), image, allocation);
             }
             fullView = VK_NULL_HANDLE;
             sampledView = VK_NULL_HANDLE;
@@ -466,8 +467,8 @@ public:
             Reset();
         }
 
-        static inline VkDevice s_device = VK_NULL_HANDLE;
-        static inline VmaAllocator s_allocator = VK_NULL_HANDLE;
+        static inline SessionLocal<VkDevice> s_device;  // per Magma session (MagmaSession.h)
+        static inline SessionLocal<VmaAllocator> s_allocator;
     };
 
     struct SampledTextureSnapshot {

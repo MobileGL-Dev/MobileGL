@@ -935,17 +935,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  VkDeviceSize offset, VkBuffer countBuffer,
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
                                                                  Uint32 stride);
-        static inline PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
+        PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P8-D: vkCmdDrawIndirectCount (same signature, same extension), for the wire arm's
         // glMultiDrawArraysIndirectCount. The monolith arm never loads it: it reads that count on
         // the CPU (DirectVulkan.cpp's MultiDrawArraysIndirectCount).
-        static inline PFNDrawIndexedIndirectCountFunc s_vkCmdWireDrawIndirectCount = nullptr;
+        PFNDrawIndexedIndirectCountFunc s_vkCmdWireDrawIndirectCount = nullptr;
 #endif
         // VK_EXT_multi_draw entry points, loaded at device creation when the extension
         // (and its multiDraw feature) is enabled; null otherwise.
-        static inline PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
-        static inline PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
+        PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
+        PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
@@ -976,9 +976,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VK_EXT_vertex_attribute_divisor: without it every non-zero glVertexAttribDivisor
         // behaves as 1, because that is all Vulkan's instance input rate can express.
         Bool m_vertexAttributeDivisorEnabled = false;
-        static inline PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
-        static inline PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
-        static inline PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
+        PFN_vkCmdBindTransformFeedbackBuffersEXT s_vkCmdBindTransformFeedbackBuffersEXT = nullptr;
+        PFN_vkCmdBeginTransformFeedbackEXT s_vkCmdBeginTransformFeedbackEXT = nullptr;
+        PFN_vkCmdEndTransformFeedbackEXT s_vkCmdEndTransformFeedbackEXT = nullptr;
         // Counter buffers (one 4-byte slot per capture binding) let consecutive
         // draws within one glBeginTransformFeedback append GL-style. Transform feedback
         // objects can each hold an open, paused span at the same time, so the counters are

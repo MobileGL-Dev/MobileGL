@@ -418,7 +418,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         DynamicTailKey dynamicTailKey{};
     };
-    static DynamicStateShadow g_dynamicStateShadow;
+    // Per Magma session (MagmaSession.h): it shadows the session's own command buffer.
+    static SessionLocal<DynamicStateShadow> g_dynamicStateShadow;
 
 #if MOBILEGL_PIPE_PUSH
     // ---- D12.3: DynamicTailKey's inputs against the P2 chunk table ----
@@ -516,14 +517,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif // MOBILEGL_PIPE_PUSH
 
     static void ResetDynamicStateShadow() {
-        g_dynamicStateShadow = {};
+        *g_dynamicStateShadow = {};
     }
 
     // vkCmdBindVertexBuffers, skipped when this command buffer already holds these
     // buffers and offsets at binding 0.
     static void ShadowedBindVertexBuffers(VkCommandBuffer commandBuffer, const VkBuffer* buffers,
                                           const VkDeviceSize* offsets, Uint32 count) {
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         Bool identical = shadow.vertexBindValid && shadow.vertexBindingCount == count &&
                          count <= DynamicStateShadow::kMaxShadowedVertexBindings;
         if (identical) {
@@ -549,7 +550,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ShadowedSetScissor(VkCommandBuffer commandBuffer, const VkRect2D& scissor) {
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.scissorValid && shadow.scissor.offset.x == scissor.offset.x &&
             shadow.scissor.offset.y == scissor.offset.y &&
             shadow.scissor.extent.width == scissor.extent.width &&
@@ -627,7 +628,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                      VkSurfaceTransformFlagBitsKHR preTransform,
                                      Bool isDefaultFramebuffer) {
         const VkViewport viewport = ComputeGLViewport(0, framebufferExtent, preTransform, isDefaultFramebuffer);
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.viewportValid && shadow.viewport.x == viewport.x && shadow.viewport.y == viewport.y &&
             shadow.viewport.width == viewport.width && shadow.viewport.height == viewport.height &&
             shadow.viewport.minDepth == viewport.minDepth && shadow.viewport.maxDepth == viewport.maxDepth) {
@@ -646,7 +647,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             blendColor.z(),
             blendColor.w(),
         };
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.blendConstantsValid && shadow.blendConstants[0] == blendConstants[0] &&
             shadow.blendConstants[1] == blendConstants[1] && shadow.blendConstants[2] == blendConstants[2] &&
             shadow.blendConstants[3] == blendConstants[3]) {
@@ -674,7 +675,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static void ApplyPolygonOffsetState(VkCommandBuffer commandBuffer) {
         const Float constantFactor = MGB_CTX->GetPolygonOffsetUnits();
         const Float slopeFactor = MGB_CTX->GetPolygonOffsetFactor();
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.depthBiasValid && shadow.depthBiasConstantFactor == constantFactor &&
             shadow.depthBiasSlopeFactor == slopeFactor) {
             return;
@@ -714,7 +715,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 lineWidth = maxLineWidth;
             }
         }
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.lineWidthValid && shadow.lineWidth == lineWidth) {
             return;
         }
@@ -787,7 +788,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint32 frontReference = static_cast<Uint32>(std::max(frontStencil.Ref, 0));
         const Uint32 backReference = static_cast<Uint32>(std::max(backStencil.Ref, 0));
 
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (shadow.stencilValid && shadow.stencilFrontCompareMask == frontStencil.ValueMask &&
             shadow.stencilBackCompareMask == backStencil.ValueMask &&
             shadow.stencilFrontWriteMask == frontStencil.WriteMask &&
@@ -4450,7 +4451,7 @@ void main() {
                 MGLOG_E_ONCE("DrawElements skipped: failed to upload client index data");
                 return false;
             }
-            auto& shadow = g_dynamicStateShadow;
+            auto& shadow = *g_dynamicStateShadow;
             if (!shadow.indexBindValid || shadow.indexBuffer != slice.buffer ||
                 shadow.indexOffset != slice.offset || shadow.indexType != vkIndexType) {
                 vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, slice.offset, vkIndexType);
@@ -4490,7 +4491,7 @@ void main() {
             if (sliceStillValid) {
                 const VkDeviceSize memoBindOffset = indexMemo->indexSliceOffset +
                     static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
-                auto& shadow = g_dynamicStateShadow;
+                auto& shadow = *g_dynamicStateShadow;
                 if (!shadow.indexBindValid || shadow.indexBuffer != indexMemo->indexVkBuffer ||
                     shadow.indexOffset != memoBindOffset || shadow.indexType != vkIndexType) {
                     vkCmdBindIndexBuffer(frame.commandBuffer, indexMemo->indexVkBuffer, memoBindOffset,
@@ -4550,7 +4551,7 @@ void main() {
         }
         const VkDeviceSize indexBindOffset =
             slice.offset + static_cast<VkDeviceSize>(pIndexBufferView->indexByteOffset);
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (!shadow.indexBindValid || shadow.indexBuffer != slice.buffer ||
             shadow.indexOffset != indexBindOffset || shadow.indexType != vkIndexType) {
             vkCmdBindIndexBuffer(frame.commandBuffer, slice.buffer, indexBindOffset, vkIndexType);
@@ -6170,7 +6171,7 @@ void main() {
                 // VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT is invalid pipeline state
                 // (blend support is optional for e.g. 32-bit float formats on some GPUs);
                 // force-disable it instead of baking undefined behavior into the pipeline.
-                static UnorderedMap<Int, Bool> formatBlendSupport;
+                static thread_local UnorderedMap<Int, Bool> formatBlendSupport;
                 auto blendSupportIt = formatBlendSupport.find(static_cast<Int>(colorAttachmentFormat));
                 if (blendSupportIt == formatBlendSupport.end()) {
                     VkFormatProperties formatProperties{};
@@ -6494,7 +6495,7 @@ void main() {
         vkCmdSetViewport(commandBuffer, 0, count, viewports.data());
         vkCmdSetScissor(commandBuffer, 0, count, scissors.data());
 
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         shadow.viewportValid = false;
         shadow.scissorValid = false;
         shadow.dynamicTailValid = false;
@@ -6502,7 +6503,7 @@ void main() {
 
     void VulkanRenderer::ApplyDynamicDrawStateTail(FrameContext::FrameData& frame, const IntVec2& extent,
                                                    Bool isDefaultFbo, Uint32 viewportCount) {
-        auto& shadow = g_dynamicStateShadow;
+        auto& shadow = *g_dynamicStateShadow;
         if (viewportCount > 1) {
             // The other five Apply* still run: blend constants, depth bias, line width and the
             // stencil masks are not per-viewport and a multi-viewport draw needs them just as
@@ -7051,11 +7052,11 @@ void main() {
         snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.vaoLayoutHash = vaoLayoutHash;
         snap.pipeline = pipeline;
-        if (!g_dynamicStateShadow.graphicsPipelineValid ||
-            g_dynamicStateShadow.graphicsPipeline != pipeline) {
+        if (!g_dynamicStateShadow->graphicsPipelineValid ||
+            g_dynamicStateShadow->graphicsPipeline != pipeline) {
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            g_dynamicStateShadow.graphicsPipelineValid = true;
-            g_dynamicStateShadow.graphicsPipeline = pipeline;
+            g_dynamicStateShadow->graphicsPipelineValid = true;
+            g_dynamicStateShadow->graphicsPipeline = pipeline;
         }
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
                                                          m_frameContext.GetCurrentFrameIndex(),
@@ -7608,10 +7609,10 @@ void main() {
             MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
         }
 
-        if (!g_dynamicStateShadow.graphicsPipelineValid || g_dynamicStateShadow.graphicsPipeline != pipeline) {
+        if (!g_dynamicStateShadow->graphicsPipelineValid || g_dynamicStateShadow->graphicsPipeline != pipeline) {
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            g_dynamicStateShadow.graphicsPipelineValid = true;
-            g_dynamicStateShadow.graphicsPipeline = pipeline;
+            g_dynamicStateShadow->graphicsPipelineValid = true;
+            g_dynamicStateShadow->graphicsPipeline = pipeline;
         }
 
         const Bool boundUniforms = m_uniformManager->BindProgramUniformBuffers(
@@ -13111,7 +13112,7 @@ void main() {
                 }
             }
             if (uniformInstances) {
-                static Vector<VkMultiDrawInfoEXT> infos;
+                static thread_local Vector<VkMultiDrawInfoEXT> infos;
                 infos.resize(drawCount);
                 for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
                     infos[idraw].firstVertex = pParams[idraw].firstVertex;
@@ -13193,7 +13194,7 @@ void main() {
                 }
             }
             if (uniformInstances) {
-                static Vector<VkMultiDrawIndexedInfoEXT> infos;
+                static thread_local Vector<VkMultiDrawIndexedInfoEXT> infos;
                 infos.resize(drawCount);
                 for (Uint32 idraw = 0; idraw < drawCount; ++idraw) {
                     infos[idraw].firstIndex = pParams[idraw].firstIndex;
@@ -13303,7 +13304,7 @@ void main() {
         }
         const DrawIndexedCmdParam* pParams = payload.pParams;
         Uint32 drawCount = payload.drawCount;
-        static Vector<DrawIndexedCmdParam> mergedParams;
+        static thread_local Vector<DrawIndexedCmdParam> mergedParams;
         if (mergeGranularity != 0) {
             mergedParams.clear();
             mergedParams.reserve(drawCount);
@@ -14492,7 +14493,7 @@ void main() {
             InvalidatePipelineMemo(); // an aged-out pipeline may still be memoized
             // A recreated pipeline could reuse a freed handle value and alias
             // the bind-dedup shadow; force the next draw to re-bind.
-            g_dynamicStateShadow.graphicsPipelineValid = false;
+            g_dynamicStateShadow->graphicsPipelineValid = false;
             InvalidateSetupDrawSnapshots();
         }
         m_vertexInputStateFactory->OnFrameBoundary();
@@ -16704,7 +16705,7 @@ void main() {
             m_pipelineFactory->DestroyAll();
         }
         InvalidatePipelineMemo(); // pipelines freed -> the memoized handle would dangle
-        g_dynamicStateShadow.graphicsPipelineValid = false;
+        g_dynamicStateShadow->graphicsPipelineValid = false;
         InvalidateSetupDrawSnapshots();
         DestroyComputePipelines();
         if (m_frameContext.GetFrameCount() > 0) {

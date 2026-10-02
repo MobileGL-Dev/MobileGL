@@ -113,30 +113,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using MG_State::GLState::BufferObject;
 
         // The manager owned by the active VulkanRenderer; immediate ops route here.
-        VkBufferManager* g_activeBufferManager = nullptr;
+        SessionLocal<VkBufferManager*> g_activeBufferManager;  // per Magma session (MagmaSession.h)
 
         void Ops_Respecify(BufferObject& bufferObject) {
-            if (g_activeBufferManager) {
-                g_activeBufferManager->OnRespecify(bufferObject);
+            if (g_activeBufferManager.Get()) {
+                g_activeBufferManager.Get()->OnRespecify(bufferObject);
             }
         }
 
         void Ops_SubData(BufferObject& bufferObject, SizeT offset, SizeT size) {
-            if (g_activeBufferManager) {
-                g_activeBufferManager->OnSubData(bufferObject, offset, size);
+            if (g_activeBufferManager.Get()) {
+                g_activeBufferManager.Get()->OnSubData(bufferObject, offset, size);
             }
         }
 
         void Ops_ResidentSubData(BufferObject& bufferObject, SizeT offset, DataPtr data) {
-            if (g_activeBufferManager) {
-                g_activeBufferManager->OnResidentSubData(bufferObject, offset, data);
+            if (g_activeBufferManager.Get()) {
+                g_activeBufferManager.Get()->OnResidentSubData(bufferObject, offset, data);
             }
         }
 
         void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
                                   Flags<BufferMappingAccessBit> appAccess) {
-            if (g_activeBufferManager) {
-                g_activeBufferManager->OnFlushMappedRange(bufferObject, range, appAccess);
+            if (g_activeBufferManager.Get()) {
+                g_activeBufferManager.Get()->OnFlushMappedRange(bufferObject, range, appAccess);
             }
         }
 
@@ -154,15 +154,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         void* Ops_AcquirePersistentMap(BufferObject& bufferObject) {
-            if (g_activeBufferManager) {
-                return g_activeBufferManager->AcquirePersistentMap(bufferObject);
+            if (g_activeBufferManager.Get()) {
+                return g_activeBufferManager.Get()->AcquirePersistentMap(bufferObject);
             }
             return nullptr;
         }
 
         void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
-            if (g_activeBufferManager) {
-                g_activeBufferManager->OnResourceDestroyed(std::move(resource));
+            if (g_activeBufferManager.Get()) {
+                g_activeBufferManager.Get()->OnResourceDestroyed(std::move(resource));
             }
             // No active manager: the device/allocator is gone or going away and
             // Shutdown() already destroyed the storage; dropping the handle here
@@ -182,11 +182,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager& WireManager() {
-            if (g_activeBufferManager == nullptr) {
+            if (g_activeBufferManager.Get() == nullptr) {
                 MGLOG_F("Magma: Fatal{ResourceUnavailable, \"wire-buffer-manager\"}");
                 std::abort();
             }
-            return *g_activeBufferManager;
+            return *g_activeBufferManager.Get();
         }
 
         const MG_Pipe::MGPipeResourceOps g_vulkanWireResourceOps = {
@@ -1123,7 +1123,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!InitializeTransientArenas()) {
             return false;
         }
-        g_activeBufferManager = this;
+        g_activeBufferManager.Get() = this;
         MG_State::GLState::SetBufferBackendOps(&g_vulkanBufferBackendOps);
 #if MOBILEGL_BUILD_DISAGGREGATED
         RegisterWireResourceOps();
@@ -1132,8 +1132,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::Shutdown() {
-        if (g_activeBufferManager == this) {
-            g_activeBufferManager = nullptr;
+        if (g_activeBufferManager.Get() == this) {
+            g_activeBufferManager.Get() = nullptr;
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Pipe::MGPipeGetResourceOps() == &g_vulkanWireResourceOps) {
                 MG_Pipe::MGPipeSetResourceOps(nullptr);

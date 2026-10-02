@@ -235,11 +235,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkClearManager& clearManager, VkTextureManager& textureManager, SwapchainObject& swapchainObject):
         m_device(device), m_physicalDevice(physicalDevice), m_allocator(allocator), m_config(config),
         m_clearManager(clearManager), m_textureManager(textureManager), m_swapchainObject(swapchainObject) {
-        RenderPassEntry::s_device = m_device;
-        s_clearManager = &m_clearManager;
-        s_textureManager = &m_textureManager;
-        s_swapchainObject = &m_swapchainObject;
-        s_renderPassManager = this;
+        RenderPassEntry::s_device.Get() = m_device;
+        s_clearManager.Get() = &m_clearManager;
+        s_textureManager.Get() = &m_textureManager;
+        s_swapchainObject.Get() = &m_swapchainObject;
+        s_renderPassManager.Get() = this;
     }
 
     VkRenderPassManager::~VkRenderPassManager() {}
@@ -257,8 +257,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         CollectDeferredRenderbufferReleases(/*destroyAll=*/true); // caller guarantees device idle
         m_pendingRenderbufferClears.clear();
         RenderPassEntry::s_textureResourcesScratch.clear();
-        s_activeRenderPass = {};
-        s_hasActiveRenderPass = false;
+        s_activeRenderPass.Get() = {};
+        s_hasActiveRenderPass.Get() = false;
         m_rpFastValid = false;
     }
 
@@ -1554,9 +1554,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // immediately - and a single batched notification costs one pipeline-cache
         // scan instead of one per evicted pass.
         Vector<VkRenderPass> destroyedRenderPasses;
-        const Uint64 activeHash = s_hasActiveRenderPass ? s_activeRenderPass.hash : 0;
+        const Uint64 activeHash = s_hasActiveRenderPass.Get() ? s_activeRenderPass.Get().hash : 0;
         for (auto it = m_renderPasses.begin(); it != m_renderPasses.end();) {
-            const Bool isActive = s_hasActiveRenderPass && it->first == activeHash;
+            const Bool isActive = s_hasActiveRenderPass.Get() && it->first == activeHash;
             if (!isActive && m_frameCounter - it->second.lastUsedFrame > kRetireAgeFrames) {
                 if (m_rpFastValid && m_rpFastRenderPassHash == it->first) {
                     m_rpFastValid = false;
@@ -1601,8 +1601,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // texture path below is immune because it re-reads the live payload).
                 // Same defense as ClearAttachmentsOnActiveRenderPass: prefer the live
                 // pending clear, fall back to the snapshot only when none is queued.
-                if (s_renderPassManager != nullptr &&
-                    s_renderPassManager->GetPendingRenderbufferClear(pending.renderbuffer, clearPayload)) {
+                if (s_renderPassManager.Get() != nullptr &&
+                    s_renderPassManager.Get()->GetPendingRenderbufferClear(pending.renderbuffer, clearPayload)) {
                     if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0 && pending.renderbuffer != nullptr &&
                         MG_Util::GetBaseInternalFormatComponentCount(pending.renderbuffer->GetInternalFormat()) ==
                             3) {
@@ -1614,7 +1614,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             } else {
                 if (pending.key.texture == nullptr ||
-                    !s_clearManager->GetPendingClear(pending.key, clearPayload, liveTexture)) {
+                    !s_clearManager.Get()->GetPendingClear(pending.key, clearPayload, liveTexture)) {
                     continue;
                 }
             }
@@ -1636,29 +1636,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         // Pre-pass stream bookkeeping: this pass's attachment images are now
         // referenced by the open frame recording.
-        if (s_textureManager != nullptr) {
+        if (s_textureManager.Get() != nullptr) {
             for (const auto& tracked : renderPassEntry.trackedAttachmentLayouts) {
                 if (tracked.target == TrackedAttachmentTarget::Texture) {
                     if (const auto texture = tracked.texture.lock()) {
-                        s_textureManager->StampTextureRecordingUse(texture.get());
+                        s_textureManager.Get()->StampTextureRecordingUse(texture.get());
                     }
                 }
             }
         }
         for (const auto& pending: renderPassEntry.pendingClearAttachments) {
             if (pending.hasInlinePayload) {
-                if (s_renderPassManager != nullptr) {
-                    s_renderPassManager->PopPendingRenderbufferClear(pending.renderbuffer);
+                if (s_renderPassManager.Get() != nullptr) {
+                    s_renderPassManager.Get()->PopPendingRenderbufferClear(pending.renderbuffer);
                 }
             } else {
-                s_clearManager->PopPendingClear(pending.key);
+                s_clearManager.Get()->PopPendingClear(pending.key);
             }
         }
-        s_activeRenderPass.hash = renderPassEntry.hash;
-        s_activeRenderPass.compatibilityHash = renderPassEntry.compatibilityHash;
-        s_activeRenderPass.trackedAttachmentLayouts = renderPassEntry.trackedAttachmentLayouts;
-        s_activeRenderPass.extent = renderPassEntry.extent;
-        s_hasActiveRenderPass = true;
+        s_activeRenderPass.Get().hash = renderPassEntry.hash;
+        s_activeRenderPass.Get().compatibilityHash = renderPassEntry.compatibilityHash;
+        s_activeRenderPass.Get().trackedAttachmentLayouts = renderPassEntry.trackedAttachmentLayouts;
+        s_activeRenderPass.Get().extent = renderPassEntry.extent;
+        s_hasActiveRenderPass.Get() = true;
 
         return true;
     }
@@ -1668,16 +1668,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdEndRenderPass(commandBuffer);
         // The fast-path memo reuses the ACTIVE render pass; once the pass ends it must not carry
         // over (the next span may be a different FBO resolved before its render pass is begun).
-        if (s_renderPassManager != nullptr) {
-            s_renderPassManager->m_rpFastValid = false;
+        if (s_renderPassManager.Get() != nullptr) {
+            s_renderPassManager.Get()->m_rpFastValid = false;
         }
         if (activeRenderPass != nullptr && !activeRenderPass->trackedAttachmentLayouts.empty()) {
             for (const auto& trackedAttachment : activeRenderPass->trackedAttachmentLayouts) {
                 switch (trackedAttachment.target) {
                     case TrackedAttachmentTarget::Texture:
-                        MOBILEGL_ASSERT(s_textureManager != nullptr, "EndRenderPass: texture manager is null");
+                        MOBILEGL_ASSERT(s_textureManager.Get() != nullptr, "EndRenderPass: texture manager is null");
                         if (const auto texture = trackedAttachment.texture.lock()) {
-                            s_textureManager->UpdateTrackedImageLayoutAfterAttachmentWrite(
+                            s_textureManager.Get()->UpdateTrackedImageLayoutAfterAttachmentWrite(
                                 commandBuffer,
                                 texture.get(),
                                 trackedAttachment.textureMipLevel,
@@ -1685,27 +1685,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         }
                         break;
                     case TrackedAttachmentTarget::Renderbuffer:
-                        MOBILEGL_ASSERT(s_renderPassManager != nullptr, "EndRenderPass: render pass manager is null");
+                        MOBILEGL_ASSERT(s_renderPassManager.Get() != nullptr, "EndRenderPass: render pass manager is null");
                         if (const auto renderbuffer = trackedAttachment.renderbuffer.lock()) {
                             auto resourceIt =
-                                s_renderPassManager->m_renderbufferResources.find(renderbuffer.get());
-                            if (resourceIt != s_renderPassManager->m_renderbufferResources.end()) {
+                                s_renderPassManager.Get()->m_renderbufferResources.find(renderbuffer.get());
+                            if (resourceIt != s_renderPassManager.Get()->m_renderbufferResources.end()) {
                                 resourceIt->second.layout = trackedAttachment.finalLayout;
                             }
                         }
                         break;
                     case TrackedAttachmentTarget::SwapchainColor:
-                        MOBILEGL_ASSERT(s_swapchainObject != nullptr, "EndRenderPass: swapchain object is null");
-                        s_swapchainObject->SetImageLayout(trackedAttachment.swapchainImageIndex, trackedAttachment.finalLayout);
+                        MOBILEGL_ASSERT(s_swapchainObject.Get() != nullptr, "EndRenderPass: swapchain object is null");
+                        s_swapchainObject.Get()->SetImageLayout(trackedAttachment.swapchainImageIndex, trackedAttachment.finalLayout);
                         // The pass stored into the attachment: its content is defined
                         // until the image is next presented.
-                        s_swapchainObject->SetImageContentDefined(trackedAttachment.swapchainImageIndex, true);
+                        s_swapchainObject.Get()->SetImageContentDefined(trackedAttachment.swapchainImageIndex, true);
                         break;
                     case TrackedAttachmentTarget::SwapchainDepthStencil:
-                        MOBILEGL_ASSERT(s_swapchainObject != nullptr, "EndRenderPass: swapchain object is null");
-                        s_swapchainObject->SetDepthStencilImageLayout(trackedAttachment.swapchainImageIndex,
+                        MOBILEGL_ASSERT(s_swapchainObject.Get() != nullptr, "EndRenderPass: swapchain object is null");
+                        s_swapchainObject.Get()->SetDepthStencilImageLayout(trackedAttachment.swapchainImageIndex,
                                                                       trackedAttachment.finalLayout);
-                        s_swapchainObject->SetDepthStencilContentDefined(trackedAttachment.swapchainImageIndex, true);
+                        s_swapchainObject.Get()->SetDepthStencilContentDefined(trackedAttachment.swapchainImageIndex, true);
                         break;
                     default:
                         MOBILEGL_ASSERT(false, "EndRenderPass: unsupported tracked attachment target=%d",
@@ -1714,12 +1714,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
         }
-        s_activeRenderPass = {};
-        s_hasActiveRenderPass = false;
+        s_activeRenderPass.Get() = {};
+        s_hasActiveRenderPass.Get() = false;
         return true;
     }
 
     ActiveRenderPassInfo* VkRenderPassManager::GetActiveRenderPass() {
-        return s_hasActiveRenderPass ? &s_activeRenderPass : nullptr;
+        return s_hasActiveRenderPass.Get() ? &s_activeRenderPass.Get() : nullptr;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -19,6 +19,7 @@
 #include "VertexInputStateBuilder.h"
 #include "MG_State/GLState/VertexArrayState/VertexArrayObject.h"
 #include <Includes.h>
+#include <atomic>
 #include "../VkIncludes.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -217,11 +218,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // memo table is owned by this factory and dies with it, so a per-instance counter is
         // enough there and the epoch shrinks back to what it looks like it should be.
 #if MOBILEGL_PIPE_LEGACY_MEMOS
-        static inline Uint64 s_evictionEpochSource = 0;
+        static inline std::atomic<Uint64> s_evictionEpochSource{0};
         Uint64 m_evictionEpoch = ++s_evictionEpochSource;
 #else
         Uint64 m_evictionEpoch = 1;
 #endif
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -591,6 +591,12 @@ namespace MobileGL {
             virtual Bool InitCapabilities() = 0;
             virtual Bool InitWindowSurface() = 0;
 
+            // A served session's apply thread - the one thread that runs this backend from here on -
+            // calls this first, in a process that may serve several sessions at once. A backend whose
+            // native state is process-global by construction gives this object its own copy and binds
+            // it to the calling thread. The default has nothing per process to separate.
+            virtual void BindSessionStateToThisThread() {}
+
             virtual Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
             virtual Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle);
             virtual Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);

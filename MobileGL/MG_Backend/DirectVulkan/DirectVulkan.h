@@ -9,10 +9,32 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Backend/BackendObject.h>
+#include "MagmaSession.h"
 #include "Renderer/VulkanRenderer.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    extern UniquePtr<VulkanRenderer>& pVulkanRenderer;
+    // The renderer of the calling thread's Magma session (MagmaSession.h): a served session's own on
+    // its apply thread, the process-wide one everywhere else. Spelled like the UniquePtr it used to
+    // be so the call sites read the same.
+    class RendererSlot {
+    public:
+        UniquePtr<VulkanRenderer>& Slot() const { return m_slot.Get(); }
+        VulkanRenderer* get() const { return Slot().get(); }
+        VulkanRenderer* operator->() const { return get(); }
+        VulkanRenderer& operator*() const { return *get(); }
+        explicit operator bool() const { return get() != nullptr; }
+        RendererSlot& operator=(UniquePtr<VulkanRenderer>&& renderer) {
+            Slot() = std::move(renderer);
+            return *this;
+        }
+        void reset() { Slot().reset(); }
+        friend Bool operator==(const RendererSlot& slot, std::nullptr_t) { return slot.get() == nullptr; }
+        friend Bool operator!=(const RendererSlot& slot, std::nullptr_t) { return slot.get() != nullptr; }
+
+    private:
+        SessionLocal<UniquePtr<VulkanRenderer>> m_slot;
+    };
+    extern RendererSlot pVulkanRenderer;
 
     // Generation of the live VulkanRenderer instance, mirroring DirectGLES's
     // g_syncContextGeneration. BackendObject_DirectVulkan bumps it wherever

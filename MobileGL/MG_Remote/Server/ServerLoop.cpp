@@ -534,6 +534,11 @@ namespace MobileGL::MG_Remote::Server {
                 static_cast<unsigned long long>(m_affinityMask), policy.spinUs, ApplyPeerName(session.Peer()),
                 session.PeerSharedSegments() ? "shared segments" : "stream", policy.rule);
 
+        // A served session shares its process with other sessions: its backend's own native state
+        // is bound to this thread before anything can apply a record (BackendObject.h). The inproc
+        // one-process shape has no runtime and keeps the process-wide state.
+        if (m_runtime != nullptr && m_backend != nullptr) m_backend->BindSessionStateToThisThread();
+
         // The decoder is built HERE, on this thread, because PipeWireDecoder is "not thread
         // safe: one decoder on the apply thread, by construction" and its constructor installs
         // the process-wide apply hook.

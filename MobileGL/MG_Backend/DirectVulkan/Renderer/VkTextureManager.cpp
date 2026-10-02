@@ -42,9 +42,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // their feature is off (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), and ALL_GRAPHICS
     // would also serialize against non-shader stages. The default only matters before a device
     // exists, when nothing records barriers.
-    static VkPipelineStageFlags s_sampledReadStages =
-        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    // Per Magma session: each session's renderer is its own device.
+    struct SampledReadStages {
+        VkPipelineStageFlags value = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    };
+    static SessionLocal<SampledReadStages> s_sampledReadStagesSlot;
 
     static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
         Int maxDimension = std::max<Int>(baseTexelSize.x(),
@@ -203,7 +206,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outSrcStageMask = s_sampledReadStages;
+            outSrcStageMask = s_sampledReadStagesSlot->value;
             outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -267,7 +270,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
         case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            outDstStageMask = s_sampledReadStages;
+            outDstStageMask = s_sampledReadStagesSlot->value;
             outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             return;
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -646,7 +649,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_commandPool = initInfo.commandPool;
         m_graphicsQueue = initInfo.graphicsQueue;
         m_imageFormatListSupported = initInfo.imageFormatListSupported;
-        s_sampledReadStages = initInfo.sampledReadStageMask;
+        s_sampledReadStagesSlot->value = initInfo.sampledReadStageMask;
         m_currentFrameIndex = 0;
         m_deferredReleases.clear();
         m_deferredReleases.resize(initInfo.frameCount);
@@ -659,8 +662,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(initInfo.frameCount > 0,
                         "VkTextureManager::Initialize failed: frameCount must be > 0");
 
-        TextureResource::s_device = m_device;
-        TextureResource::s_allocator = m_allocator;
+        TextureResource::s_device.Get() = m_device;
+        TextureResource::s_allocator.Get() = m_allocator;
 
         // Own pool for the recycled upload-batch command buffers. Parking a
         // dozen reset-but-alive command buffers in the renderer's shared pool
@@ -1477,7 +1480,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Bool ok = TransitionImageLayout(commandBuffer, resource->image, resource->layout, targetLayout, srcStageMask,
-                                              s_sampledReadStages, srcAccessMask,
+                                              s_sampledReadStagesSlot->value, srcAccessMask,
                                               VK_ACCESS_SHADER_READ_BIT, resource->aspect, 0, resource->mipLevels);
         MOBILEGL_ASSERT(ok, "TransitionTextureForSampling: transition failed for textureId=%d", texture.GetExternalIndex());
         // Pre-pass stream bookkeeping: a command referencing the image was recorded.
@@ -2693,7 +2696,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkImageLayout finalLayout = ResolveSampledReadOnlyLayout(aspectMask);
         VkImageLayout uploadLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         ok = TransitionImageLayout(commandBuffer, resource.image, uploadLayout, finalLayout,
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT, s_sampledReadStages,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, s_sampledReadStagesSlot->value,
                                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, aspectMask, 0,
                                    resource.mipLevels);
         MOBILEGL_ASSERT(ok, "UploadPendingWireLevels: transition to the sampled layout failed");
@@ -4573,7 +4576,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    uploadLayout,
                                    finalLayout,
                                    VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                   s_sampledReadStages,
+                                   s_sampledReadStagesSlot->value,
                                    VK_ACCESS_TRANSFER_WRITE_BIT,
                                    VK_ACCESS_SHADER_READ_BIT,
                                    aspectMask, 0, outResource.mipLevels);

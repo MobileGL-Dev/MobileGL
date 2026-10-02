@@ -35,8 +35,9 @@
 #include <spirv_reflect.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    // Leak-at-exit storage; see GlobalObjects.cpp.
-    UniquePtr<VulkanRenderer>& pVulkanRenderer = *new UniquePtr<VulkanRenderer>();
+    // Per Magma session (MagmaSession.h); the process-wide session is leak-at-exit storage, see
+    // GlobalObjects.cpp.
+    RendererSlot pVulkanRenderer;
 
     namespace {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -59,7 +60,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // current one (a new renderer restarts its frame-serial counter and
         // reuses pool indices). Atomic because handles may be polled from a
         // thread other than the EGL thread that recreates the renderer.
-        std::atomic<Uint64> g_rendererGeneration{1};
+        //
+        // One per Magma session, drawn from one process-wide source: a handle stamped by one
+        // session's renderer must read as stale against every other session's, never equal.
+        std::atomic<Uint64> g_rendererGenerationSource{1};
+        struct RendererGeneration {
+            std::atomic<Uint64> value{g_rendererGenerationSource.fetch_add(1, std::memory_order_acq_rel)};
+        };
+        SessionLocal<RendererGeneration> g_rendererGeneration;
     } // namespace
 
 #if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
@@ -123,11 +131,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif // MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
 
     Uint64 GetRendererGeneration() {
-        return g_rendererGeneration.load(std::memory_order_acquire);
+        return g_rendererGeneration->value.load(std::memory_order_acquire);
     }
 
     void BumpRendererGeneration() {
-        g_rendererGeneration.fetch_add(1, std::memory_order_acq_rel);
+        g_rendererGeneration->value.store(g_rendererGenerationSource.fetch_add(1, std::memory_order_acq_rel),
+                                          std::memory_order_release);
     }
 
     namespace {
@@ -1274,7 +1283,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         payload.mode = mode;
 
         // TODO: allocate draw cmd buf elsewhere
-        static Vector<DrawCmdParam> params;
+        static thread_local Vector<DrawCmdParam> params;
         params.clear();
         params.resize(drawcount);
 
@@ -1347,7 +1356,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint32 indexSizeShift = static_cast<Uint32>(std::countr_zero(indexSize));
 
         // TODO: allocate draw cmd buf elsewhere
-        static Vector<DrawIndexedCmdParam> params;
+        static thread_local Vector<DrawIndexedCmdParam> params;
         params.clear();
         params.resize(drawcount);
 
@@ -1763,23 +1772,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     namespace {
-        Optional<Int> g_requestedSwapInterval;
+        // Per session: each client asks for its own interval.
+        SessionLocal<Optional<Int>> g_requestedSwapInterval;
     } // namespace
 
     void SetSwapInterval(Int interval) {
-        g_requestedSwapInterval = interval;
+        *g_requestedSwapInterval = interval;
         if (pVulkanRenderer) {
             pVulkanRenderer->SetSwapInterval(interval);
         }
     }
 
     Optional<Int> GetRequestedSwapInterval() {
-        return g_requestedSwapInterval;
+        return *g_requestedSwapInterval;
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     void ForgetRequestedSwapInterval() {
-        g_requestedSwapInterval.reset();
+        g_requestedSwapInterval->reset();
     }
 #endif
 

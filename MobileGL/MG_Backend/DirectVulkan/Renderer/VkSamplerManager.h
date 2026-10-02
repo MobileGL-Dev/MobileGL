@@ -138,6 +138,6 @@ private:
     UnorderedMap<Uint64, SamplerCacheEntry> m_samplers;
     // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
     Uint64 m_frameBoundaryCounter = 0;
-    static inline XXH64_state_t* m_hashState = XXH64_createState();
+    static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
 };
 } // namespace MobileGL::MG_Backend::DirectVulkan

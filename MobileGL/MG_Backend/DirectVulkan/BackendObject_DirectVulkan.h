@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include "../BackendObject.h"
+#include "MagmaSession.h"
 #include <MG_Util/BackendLoaders/Vulkan/Loader.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -26,6 +27,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ~BackendObject_DirectVulkan() override;
 
         void Initialize() override;
+        void BindSessionStateToThisThread() override;
         Bool InitWindowSurface() override;
         Bool InitCapabilities() override;
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
@@ -55,6 +57,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DynamicBackendParameters m_dynamicParameters;
         MG_External::VulkanCapabilities m_vulkanCaps;
         RendererInfo m_rendererInfo;
+        // A served session's own copy of Magma's per-process state (MagmaSession.h), bound to its
+        // apply thread. Null in the monolith and every other single-session shape.
+        UniquePtr<MagmaSession> m_magmaSession;
     };
 
     // Single-source-of-truth helpers shared with the driver POST
