@@ -12,7 +12,13 @@
 // the compositor shows is whatever wl_buffer the client attaches to that window's wl_surface.  The
 // pixels of a MobileGL frame are drawn where the backend is - on a split build, in another process
 // on another OS - so a window surface here is a pbuffer the backend draws into, plus this: at every
-// swap the frame is read back and attached to the wl_surface as a wl_shm buffer.
+// swap the frame is put into a wl_buffer and attached to the wl_surface.
+//
+// Two kinds of wl_buffer. With a backend that has shared images (a split client) and a compositor
+// offering zwp_linux_dmabuf_v1, each buffer is a server-allocated image exported as a dma-buf and
+// the server copies the frame into it GPU-side: nothing crosses the CPU. Otherwise - no such
+// global, no shared images, a refused import, MOBILEGL_WAYLAND_DMABUF=0 - the frame is read back
+// into a wl_shm buffer.
 //
 // libwayland-client is loaded at run time (it is already in every Wayland client's process), so the
 // library neither links it nor needs its headers to build.
@@ -54,9 +60,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     // The size the application last gave its wl_egl_window.
     Bool WindowSize(const void* window, EGLint* width, EGLint* height);
 
-    // One window surface's presentation: the shm buffers, the event queue they are dispatched on,
-    // and the readback scratch.  Created for a wl_egl_window on a wl_display; null with the reason
-    // logged when libwayland-client or the compositor's wl_shm is not there.
+    // One window surface's presentation: the dma-buf or shm buffers, the event queue they are
+    // dispatched on, and the readback scratch.  Created for a wl_egl_window on a wl_display; null
+    // with the reason logged when libwayland-client or the compositor's wl_shm is not there.
     class WindowSurface {
     public:
         static UniquePtr<WindowSurface> Create(void* wlDisplay, void* wlEglWindow, EGLint width, EGLint height,
@@ -65,15 +71,16 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         WindowSurface(const WindowSurface&) = delete;
         WindowSurface& operator=(const WindowSurface&) = delete;
 
-        // Reads the frame back out of the current context's default framebuffer and puts it on
-        // the window: attach, damage, commit.  The application's read-framebuffer and pack state
-        // are put back exactly as they were.  False (logged) when the frame did not reach the
-        // window; the swap itself goes on regardless.
+        // Puts the current context's default-framebuffer frame on the window: copied into a
+        // shared image (or read back into a wl_shm buffer, the application's read-framebuffer and
+        // pack state put back exactly as they were), then attach, damage, commit.  A shared-image
+        // present that fails moves the window to wl_shm for good.  False (logged) when the frame
+        // did not reach the window; the swap itself goes on regardless.
         Bool Present();
 
         // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave
         // its wl_egl_window a size this presentation is not at yet. The presentation adopts it -
-        // its next wl_shm buffer is that size - and the caller resizes the drawable behind it.
+        // its next buffer is that size - and the caller resizes the drawable behind it.
         Bool TakeResize(EGLint* width, EGLint* height);
 
         struct Impl;

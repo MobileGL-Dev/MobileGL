@@ -151,7 +151,7 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     // + P14 S1's bind_context (docs/Disaggregated/design/11-state-ownership.md), the in-band
     // context binding - a kScreen row for applier_reset's reason: a context switch is a
     // whole-session edge, not a context-family verb.
-    EXPECT_EQ(ClassCount<kScreen>(), 13u);
+    EXPECT_EQ(ClassCount<kScreen>(), 14u); // + shared_image (opcode 85), a kScreen table row
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 19u);
@@ -652,7 +652,13 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // kScreen control record with the applier_reset shape - one POD, no blob, no tail, no reply
     // and no MGPipeApply* entry point - so the row beside it is pinned the same way.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindContext), 84);
-    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 85);
+    // Shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) appended opcode 85 by the
+    // same rule: a kScreen row with a reply slot - every operation is answered.
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SharedImage), 85);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 86);
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SharedImage), static_cast<Uint32>(kReplySlot));
+    EXPECT_EQ(MGPipeCallClassFor(MGPWireOp::SharedImage), kScreen);
+    EXPECT_EQ(MGPipeWaitClassFor(MGPWireOp::SharedImage), kWaitReply);
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ReadPixelsToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::GetTextureImageToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(sizeof(MGPReadbackToBuffer), 104u);
@@ -693,6 +699,11 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // the two planes cannot disagree about how much of a token is real.
     EXPECT_EQ(sizeof(MGPBindContext), 8u);
     EXPECT_EQ(sizeof(MGPBindContext::ClientContextToken), 8u);
+    // Shared images: the request, its answer and the aux-socket sideband are fixed-width PODs; the
+    // sideband is the T0 Offer's size so one inbox reads both.
+    EXPECT_EQ(sizeof(MGPSharedImageOp), 32u);
+    EXPECT_EQ(sizeof(MGPSharedImageReply), 40u);
+    EXPECT_EQ(sizeof(MGPSharedImageFdOffer), 32u);
     EXPECT_EQ(sizeof(MGPHandleOnly), 16u);
     // rv's two (§5.3/§7.6): the residual-value POD - 2 + 15 Uint32s, 2 Uint8s and 2 pad bytes,
     // then the three Uint64s - and the AMENDED attribute carrier, which grew 24 -> 56 to carry
@@ -826,7 +837,7 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitNone) << WireOpNameForDiag(op);
     }
 
-    // The partition, by count. 14 + 1 + 10 = 25 rows wait; every other row of the catalogue does
+    // The partition, by count. 15 + 1 + 10 = 26 rows wait (shared_image made the reply rows 15); every other row of the catalogue does
     // not. A row that changed class moves two of these numbers at once - which is why the
     // kWaitApplied count went 9 -> 10 and the kWaitNone offset 24 -> 25 in the SAME commit that
     // moved resource_copy_region (P5e gl, ID-118).
@@ -840,10 +851,10 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
         default: ++other; break;
         }
     }
-    EXPECT_EQ(reply, 14u);
+    EXPECT_EQ(reply, 15u);
     EXPECT_EQ(applied, 10u);
     EXPECT_EQ(present, 1u);
-    EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 25u);
+    EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 26u);
     EXPECT_EQ(other, 0u) << "a row carries the kWaitClassCount terminator as its class";
 
     // And the reply half of the partition BOTH WAYS, over the whole catalogue: exactly the rows
@@ -1059,7 +1070,8 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // appended bind_context's MGPBindContext (docs/Disaggregated/design/11-state-ownership.md):
     // 84. A payload without a list here is one the comparator cannot see, so the row is not
     // optional bookkeeping - gen_pipe.py refuses the build without it.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 84u);
+    // + shared_image's MGPSharedImageOp: 85.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 85u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
@@ -1345,13 +1357,14 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // FOURTEEN. Ten answers that were always declared - get_caps, map_persistent, the two fence
     // reads, the three query reads, the two readbacks and read_pixels - plus the FOUR ACCEPTANCE
     // ROWS, whose applier entry points return a Bool the client acts on destructively and which
-    // carried no flag because in monolith that answer is a direct call's return value.
+    // carried no flag because in monolith that answer is a direct call's return value. FIFTEEN since
+    // shared_image, whose every operation is answered.
     Uint32 replySlotCalls = 0;
 #define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags, Wait)                                                        \
     if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) ++replySlotCalls;
     MGP_CALL_LIST(MGP_COUNT_REPLY_SLOT_CALLS)
 #undef MGP_COUNT_REPLY_SLOT_CALLS
-    EXPECT_EQ(replySlotCalls, 14u);
+    EXPECT_EQ(replySlotCalls, 15u);
 
     // And the four by name, because a count alone would let a row lose the flag while another
     // gained one. These are exactly the MGPipeApply* entry points that return Bool

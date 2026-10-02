@@ -262,7 +262,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         info.format = format;
         info.subresourceRange = {aspect, level, levels, layer, layers};
         if (!storage) {
-            const Bool alphaIsOne = ResolveTextureFormatInfo(
+            // An X-format shared image carries undefined alpha bytes, exactly like an expanded RGB.
+            const Bool alphaIsOne = resource->sharedImageAlphaOne || ResolveTextureFormatInfo(
                 static_cast<TextureInternalFormat>(record.Desc.InternalFormat)).expandRgbToRgba;
             const auto swizzle = [&](Uint32 channel) {
                 const auto value = record.Params.Swizzle[channel];

@@ -32,6 +32,11 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 // P5c (tx): §1's server-side per-level extent derivation, for GenerateMipmap's shape reads.
 #include <MG_Remote/Server/StagedTextureStore.h>
+// Shared images: the registry the EGLImages are built from (SharedImageImpl below).
+#include <MG_Remote/Server/SharedImageRegistry.h>
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#endif
 #endif
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
@@ -16223,6 +16228,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static EGLDisplay g_Display = EGL_NO_DISPLAY;
     // eglInitialize/eglTerminate pairing: the display is terminated only when the count drops to 0.
     static Uint32 g_displayUsers = 0;
+    // How many times the display has been terminated. eglTerminate destroys every EGLImage made on
+    // it, and a re-initialized display hands back the same EGLDisplay handle, so a holder destroys
+    // its EGLImage itself only while this has not moved since the image was made.
+    static std::atomic<Uint64> g_displayTerminations{0};
+#if MOBILEGL_BUILD_DISAGGREGATED
+    namespace SharedImageImpl {
+        // The display (and every EGLImage and renderbuffer made on it) is gone: forget the present
+        // targets without calling into the driver, releasing the images they held.
+        void ForgetPresentTargetsAfterTerminate();
+    } // namespace SharedImageImpl
+#endif
+    static void NoteDisplayTerminated() {
+        g_displayTerminations.fetch_add(1, std::memory_order_acq_rel);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        SharedImageImpl::ForgetPresentTargetsAfterTerminate();
+#endif
+    }
 
     struct NativeContextTuple {
         Uint64 SessionKey = 0;
@@ -17029,6 +17051,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (g_displayUsers > 0) --g_displayUsers;
         if (g_displayUsers == 0 && g_Display != EGL_NO_DISPLAY && g_EGLFuncs.eglTerminate) {
             g_EGLFuncs.eglTerminate(g_Display);
+            NoteDisplayTerminated();
             g_Display = EGL_NO_DISPLAY;
         }
     }
@@ -18082,8 +18105,403 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // closes while another is rendering must not take eglTerminate with it.
         if (g_displayUsers == 0 && g_EGLFuncs.eglTerminate) {
             g_EGLFuncs.eglTerminate(g_Display);
+            NoteDisplayTerminated();
             g_Display = EGL_NO_DISPLAY;
         }
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- SHARED IMAGES (DirectGLES.h; docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) ------
+    namespace SharedImageImpl {
+#if defined(__ANDROID__)
+        namespace {
+            namespace SI = MG_Remote::Server::SharedImages;
+
+            // EGL_ANDROID_image_native_buffer's target and EGL_KHR_image_base's attribute, spelled
+            // here so no extension header is needed.
+            constexpr EGLenum kEglNativeBufferAndroid = 0x3140;
+            constexpr EGLint kEglImagePreservedKhr = 0x30D2;
+
+            using GetNativeClientBufferFn = EGLClientBuffer (*)(const AHardwareBuffer*);
+            using CreateImageKhrFn = void* (*)(EGLDisplay, EGLContext, EGLenum, EGLClientBuffer, const EGLint*);
+            using DestroyImageKhrFn = EGLBoolean (*)(EGLDisplay, void*);
+            using ImageTargetFn = void (*)(GLenum, void*);
+
+            struct EntryPoints {
+                Bool Resolved = false;
+                Bool Usable = false;
+                String Why;
+                GetNativeClientBufferFn GetNativeClientBuffer = nullptr;
+                CreateImageKhrFn CreateImage = nullptr;
+                DestroyImageKhrFn DestroyImage = nullptr;
+                ImageTargetFn TargetTexture2D = nullptr;
+                ImageTargetFn TargetRenderbuffer = nullptr;
+            };
+
+            Bool HasExtensionWord(const char* list, const char* word) {
+                if (list == nullptr) return false;
+                const SizeT n = std::strlen(word);
+                for (const char* at = std::strstr(list, word); at != nullptr; at = std::strstr(at + 1, word)) {
+                    const Bool startOk = at == list || at[-1] == ' ';
+                    const Bool endOk = at[n] == '\0' || at[n] == ' ';
+                    if (startOk && endOk) return true;
+                }
+                return false;
+            }
+
+            // None of these is in the loader's tables, and eglGetProcAddress hands back live-looking
+            // stubs for entry points a driver lacks, so the extension strings decide first. Resolved
+            // once, from the first call that has a context current to read the strings from; the
+            // answer is never modified afterwards, so it is read without the lock.
+            const EntryPoints& ResolvedEntryPoints() {
+                static auto* mutex = new std::mutex();
+                static auto* entry = new EntryPoints();
+                const std::lock_guard<std::mutex> lock(*mutex);
+                if (entry->Resolved) return *entry;
+                if (!g_EGLFuncs.eglGetProcAddress || !g_EGLFuncs.eglQueryString || !g_GLESFuncs.glGetString) {
+                    entry->Why = "the loader has no eglGetProcAddress/eglQueryString/glGetString";
+                    return *entry;
+                }
+                const char* egl = g_Display != EGL_NO_DISPLAY ? g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS)
+                                                              : nullptr;
+                const char* gl = reinterpret_cast<const char*>(g_GLESFuncs.glGetString(GL_EXTENSIONS));
+                if (egl == nullptr || gl == nullptr) {
+                    entry->Why = "no current display and context to read the extension strings from";
+                    return *entry; // asked again on the next call
+                }
+                entry->Resolved = true;
+                if (!HasExtensionWord(egl, "EGL_KHR_image_base") ||
+                    !HasExtensionWord(egl, "EGL_ANDROID_image_native_buffer") ||
+                    !HasExtensionWord(egl, "EGL_ANDROID_get_native_client_buffer")) {
+                    entry->Why = "EGL_KHR_image_base / EGL_ANDROID_image_native_buffer / "
+                                 "EGL_ANDROID_get_native_client_buffer is not advertised";
+                    return *entry;
+                }
+                if (!HasExtensionWord(gl, "GL_OES_EGL_image")) {
+                    entry->Why = "GL_OES_EGL_image is not advertised";
+                    return *entry;
+                }
+                entry->GetNativeClientBuffer = reinterpret_cast<GetNativeClientBufferFn>(
+                    g_EGLFuncs.eglGetProcAddress("eglGetNativeClientBufferANDROID"));
+                entry->CreateImage =
+                    reinterpret_cast<CreateImageKhrFn>(g_EGLFuncs.eglGetProcAddress("eglCreateImageKHR"));
+                entry->DestroyImage =
+                    reinterpret_cast<DestroyImageKhrFn>(g_EGLFuncs.eglGetProcAddress("eglDestroyImageKHR"));
+                entry->TargetTexture2D =
+                    reinterpret_cast<ImageTargetFn>(g_EGLFuncs.eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+                entry->TargetRenderbuffer = reinterpret_cast<ImageTargetFn>(
+                    g_EGLFuncs.eglGetProcAddress("glEGLImageTargetRenderbufferStorageOES"));
+                if (!entry->GetNativeClientBuffer || !entry->CreateImage || !entry->DestroyImage ||
+                    !entry->TargetTexture2D || !entry->TargetRenderbuffer) {
+                    entry->Why = "eglGetProcAddress gave no address for an advertised EGLImage entry point";
+                    return *entry;
+                }
+                entry->Usable = true;
+                return *entry;
+            }
+
+            void DrainErrors() {
+                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {
+                }
+            }
+        } // namespace
+#endif
+
+        struct EglImage {
+#if defined(__ANDROID__)
+            SI::ImageRef Image;
+            void* Handle = nullptr;
+            EGLDisplay Display = EGL_NO_DISPLAY;
+            Uint64 DisplayTerminations = 0;
+            DestroyImageKhrFn Destroy = nullptr;
+
+            ~EglImage() {
+                // eglDestroyImageKHR needs the display, not a context, so a session's twin teardown
+                // (no context current) still releases the image; only exit() and a terminated
+                // display - which destroyed the image itself - skip it.
+                if (Handle == nullptr || Destroy == nullptr || InProcessExit()) return;
+                if (g_displayTerminations.load(std::memory_order_acquire) != DisplayTerminations) return;
+                Destroy(Display, Handle);
+            }
+#endif
+        };
+
+#if defined(__ANDROID__)
+        EglImageRef CreateEglImage(Uint64 id, String& why) {
+            const EntryPoints& entry = ResolvedEntryPoints();
+            if (!entry.Usable) {
+                why = entry.Why;
+                return nullptr;
+            }
+            SI::ImageRef image = SI::Find(id);
+            if (image == nullptr) {
+                why = "no live shared image has this id";
+                return nullptr;
+            }
+            if (image->Native == nullptr) {
+                why = "the image has no AHardwareBuffer";
+                return nullptr;
+            }
+            const EGLClientBuffer buffer =
+                entry.GetNativeClientBuffer(static_cast<const AHardwareBuffer*>(image->Native));
+            if (buffer == nullptr) {
+                why = "eglGetNativeClientBufferANDROID returned null";
+                return nullptr;
+            }
+            const EGLint attribs[] = {kEglImagePreservedKhr, EGL_TRUE, EGL_NONE};
+            void* handle = entry.CreateImage(g_Display, EGL_NO_CONTEXT, kEglNativeBufferAndroid, buffer, attribs);
+            if (handle == nullptr) {
+                char text[96];
+                std::snprintf(text, sizeof(text), "eglCreateImageKHR failed (EGL error 0x%04x)",
+                              g_EGLFuncs.eglGetError ? static_cast<unsigned>(g_EGLFuncs.eglGetError()) : 0u);
+                why = text;
+                return nullptr;
+            }
+            auto result = MakeShared<EglImage>();
+            result->Image = std::move(image);
+            result->Handle = handle;
+            result->Display = g_Display;
+            result->DisplayTerminations = g_displayTerminations.load(std::memory_order_acquire);
+            result->Destroy = entry.DestroyImage;
+            return result;
+        }
+
+        Bool TargetBoundTexture2D(const EglImageRef& image) {
+            const EntryPoints& entry = ResolvedEntryPoints();
+            if (!entry.Usable || image == nullptr || image->Handle == nullptr) return false;
+            DrainErrors();
+            entry.TargetTexture2D(GL_TEXTURE_2D, image->Handle);
+            return g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+
+        namespace {
+            // ONE PRESENT TARGET PER IMAGE, PROCESS-WIDE: the EGLImage and a renderbuffer whose
+            // storage it is. Every native context is in one share group, so the renderbuffer is
+            // one object for every session's context; only the framebuffer it is attached to is
+            // per context. Kept until no session holds the image any more (pruned on every present
+            // - the cache's own reference is then the only one), with a small cap so a client that
+            // cycles through many images cannot pile them up between presents.
+            struct PresentTarget {
+                EglImageRef Image;
+                GLuint Renderbuffer = 0;
+                Uint64 LastUse = 0;
+            };
+            struct PresentTargets {
+                std::mutex Mutex;
+                std::unordered_map<Uint64, PresentTarget> ById;
+                Uint64 UseClock = 0;
+            };
+            constexpr SizeT kMaxPresentTargets = 8;
+
+            PresentTargets& Targets() {
+                static auto* targets = new PresentTargets();
+                return *targets;
+            }
+
+            // The framebuffer a present draws through, one per native context (container objects
+            // are never shared). It carries an attachment only for the duration of a present, so
+            // no context's framebuffer keeps a dropped target's renderbuffer alive.
+            PerNativeContext<GLuint> g_presentFramebuffers;
+
+            Bool TargetIsCurrent(const PresentTarget& target) {
+                return target.Image != nullptr &&
+                       target.Image->DisplayTerminations == g_displayTerminations.load(std::memory_order_acquire);
+            }
+
+            void DeleteTarget(PresentTarget& target) {
+                if (target.Renderbuffer != 0 && TargetIsCurrent(target)) {
+                    g_GLESFuncs.glDeleteRenderbuffers(1, &target.Renderbuffer);
+                }
+                target.Renderbuffer = 0;
+                target.Image = nullptr;
+            }
+
+            // Caller holds the mutex and has a context of the share group current.
+            void PruneLocked(PresentTargets& targets) {
+                for (auto it = targets.ById.begin(); it != targets.ById.end();) {
+                    if (!TargetIsCurrent(it->second) || it->second.Image->Image.use_count() <= 1) {
+                        DeleteTarget(it->second);
+                        it = targets.ById.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
+            GLuint MakeRenderbuffer(const EglImage& image, String& why) {
+                GLuint renderbuffer = 0;
+                g_GLESFuncs.glGenRenderbuffers(1, &renderbuffer);
+                if (renderbuffer == 0) {
+                    why = "glGenRenderbuffers gave no name";
+                    return 0;
+                }
+                // Espryt keeps no renderbuffer-binding shadow; put the driver's binding back as found.
+                GLint previous = 0;
+                g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+                DrainErrors();
+                g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                ResolvedEntryPoints().TargetRenderbuffer(GL_RENDERBUFFER, image.Handle);
+                const GLenum error = g_GLESFuncs.glGetError();
+                g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+                if (error != GL_NO_ERROR) {
+                    char text[96];
+                    std::snprintf(text, sizeof(text), "glEGLImageTargetRenderbufferStorageOES -> 0x%04x",
+                                  static_cast<unsigned>(error));
+                    why = text;
+                    g_GLESFuncs.glDeleteRenderbuffers(1, &renderbuffer);
+                    return 0;
+                }
+                return renderbuffer;
+            }
+
+            // The present returns once the copy completed (the client attaches the buffer to its
+            // wl_surface right after and nothing else orders the compositor's read).
+            Bool WaitForCompletion() {
+                if (g_GLESFuncs.glFenceSync && g_GLESFuncs.glClientWaitSync && g_GLESFuncs.glDeleteSync) {
+                    if (GLsync fence = g_GLESFuncs.glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0)) {
+                        constexpr GLuint64 kSliceNs = 1000ull * 1000 * 1000;
+                        GLenum status = GL_TIMEOUT_EXPIRED;
+                        GLbitfield flags = GL_SYNC_FLUSH_COMMANDS_BIT;
+                        for (Uint slice = 0; slice < 10 && status == GL_TIMEOUT_EXPIRED; ++slice) {
+                            status = g_GLESFuncs.glClientWaitSync(fence, flags, kSliceNs);
+                            flags = 0;
+                        }
+                        g_GLESFuncs.glDeleteSync(fence);
+                        if (status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED) return true;
+                        if (status == GL_TIMEOUT_EXPIRED) {
+                            MGLOG_E("Shared image present: the copy did not complete within 10 s");
+                            return false;
+                        }
+                        // GL_WAIT_FAILED: glFinish is the same promise without the object.
+                    }
+                }
+                g_GLESFuncs.glFinish();
+                return true;
+            }
+        } // namespace
+
+        Bool BlitDefaultFramebufferTo(const SharedImageView& view) {
+            if (view.Id == 0 || view.Width == 0 || view.Height == 0 || view.NativeBuffer == nullptr) return false;
+            if (!IsBackendContextCurrentOnThisThread()) {
+                MGLOG_E_ONCE("Shared image present: no backend context is current on the calling thread");
+                return false;
+            }
+            const EGLSurface surface = CurrentContextDrawSurface();
+            EGLint sourceWidth = 0;
+            EGLint sourceHeight = 0;
+            if (surface == EGL_NO_SURFACE || !g_EGLFuncs.eglQuerySurface ||
+                !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_WIDTH, &sourceWidth) ||
+                !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &sourceHeight) || sourceWidth <= 0 ||
+                sourceHeight <= 0) {
+                MGLOG_E_ONCE("Shared image present: the current context has no default framebuffer to copy");
+                return false;
+            }
+
+            Bool copied = false;
+            {
+                auto& targets = Targets();
+                const std::lock_guard<std::mutex> lock(targets.Mutex);
+                PruneLocked(targets);
+                auto it = targets.ById.find(view.Id);
+                if (it != targets.ById.end() && it->second.Image->Image->Native != view.NativeBuffer) {
+                    DeleteTarget(it->second);
+                    targets.ById.erase(it);
+                    it = targets.ById.end();
+                }
+                if (it == targets.ById.end()) {
+                    String why;
+                    PresentTarget target;
+                    target.Image = CreateEglImage(view.Id, why);
+                    if (target.Image != nullptr) target.Renderbuffer = MakeRenderbuffer(*target.Image, why);
+                    if (target.Renderbuffer == 0) {
+                        MGLOG_E_ONCE("Shared image present: image %llu cannot be rendered to: %s",
+                                     static_cast<unsigned long long>(view.Id), why.c_str());
+                        return false;
+                    }
+                    while (targets.ById.size() >= kMaxPresentTargets) {
+                        auto oldest = targets.ById.begin();
+                        for (auto candidate = targets.ById.begin(); candidate != targets.ById.end(); ++candidate) {
+                            if (candidate->second.LastUse < oldest->second.LastUse) oldest = candidate;
+                        }
+                        DeleteTarget(oldest->second);
+                        targets.ById.erase(oldest);
+                    }
+                    it = targets.ById.emplace(view.Id, std::move(target)).first;
+                }
+                it->second.LastUse = ++targets.UseClock;
+
+                GLuint& framebuffer = g_presentFramebuffers.Current();
+                if (framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
+                if (framebuffer == 0) {
+                    MGLOG_E_ONCE("Shared image present: glGenFramebuffers gave no name");
+                    return false;
+                }
+
+                // Every binding goes through Espryt's shadows (BindFramebufferId, the scissor test's
+                // render-state shadow) and is put back by the guards, so the application's state and
+                // the caches that describe it are what they were. A blit is scissored like a draw.
+                ScopedScissorDisable scissorOff;
+                ScopedFramebufferBinding binding(/*saveRead=*/true, /*saveDraw=*/true);
+                FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, 0);
+                FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, framebuffer);
+                g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                                      it->second.Renderbuffer);
+                const GLenum status = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+                if (status == GL_FRAMEBUFFER_COMPLETE) {
+                    // The default framebuffer's read buffer is context state the application may
+                    // have set to GL_NONE; the copy reads the back buffer either way.
+                    GLint readBuffer = GL_BACK;
+                    g_GLESFuncs.glGetIntegerv(GL_READ_BUFFER, &readBuffer);
+                    if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(GL_BACK);
+                    DrainErrors();
+                    const Bool sameExtent = static_cast<Uint32>(sourceWidth) == view.Width &&
+                                            static_cast<Uint32>(sourceHeight) == view.Height;
+                    // TOP ROW FIRST: GL's top row (y = height - 1) lands in the image's first memory
+                    // row, which an AHardwareBuffer-backed renderbuffer addresses as y = 0.
+                    g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
+                                                  static_cast<GLint>(view.Height), static_cast<GLint>(view.Width), 0,
+                                                  GL_COLOR_BUFFER_BIT, sameExtent ? GL_NEAREST : GL_LINEAR);
+                    const GLenum error = g_GLESFuncs.glGetError();
+                    copied = error == GL_NO_ERROR;
+                    if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(static_cast<GLenum>(readBuffer));
+                    if (!copied) {
+                        MGLOG_E_ONCE("Shared image present: glBlitFramebuffer %dx%d -> %ux%u failed (0x%04x)",
+                                     sourceWidth, sourceHeight, view.Width, view.Height,
+                                     static_cast<unsigned>(error));
+                    }
+                } else {
+                    MGLOG_E_ONCE("Shared image present: image %llu's framebuffer is incomplete (0x%04x)",
+                                 static_cast<unsigned long long>(view.Id), static_cast<unsigned>(status));
+                }
+                g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
+            }
+            return copied && WaitForCompletion();
+        }
+
+        void ForgetPresentTargetsAfterTerminate() {
+            auto& targets = Targets();
+            const std::lock_guard<std::mutex> lock(targets.Mutex);
+            // TargetIsCurrent is already false for every entry, so nothing reaches the driver.
+            for (auto& entry : targets.ById) DeleteTarget(entry.second);
+            targets.ById.clear();
+        }
+#else
+        EglImageRef CreateEglImage(Uint64 id, String& why) {
+            (void)id;
+            why = "shared images are imported through AHardwareBuffer, which only Android has";
+            return nullptr;
+        }
+        Bool TargetBoundTexture2D(const EglImageRef& image) {
+            (void)image;
+            return false;
+        }
+        Bool BlitDefaultFramebufferTo(const SharedImageView& view) {
+            (void)view;
+            return false;
+        }
+        void ForgetPresentTargetsAfterTerminate() {}
+#endif
+    } // namespace SharedImageImpl
+#endif
 
 } // namespace MobileGL::MG_Backend::DirectGLES

@@ -38,6 +38,7 @@
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 // CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
 // client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
 // that decides which of its two spellings a site takes; in a pull build both expand to exactly
@@ -590,6 +591,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         return maxSamples;
     }
 
+    namespace {
+        // GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with shared
+        // images has (EGLImpl::SharedImagesAvailable). The backend's own list - the server's,
+        // under split - cannot know that, so the extension is appended after it.
+        const char* ClientSideExtension() {
+            return MG_Impl::EGLImpl::SharedImagesAvailable() ? "GL_OES_EGL_image" : nullptr;
+        }
+    } // namespace
+
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
     const GLubyte* GetString(GLenum name) {
         static String vendorString;
@@ -654,6 +664,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 extensionsString += MG_Util::ConvertGLExtToString(ext);
             }
+            if (const char* extra = ClientSideExtension()) {
+                if (!extensionsString.empty()) extensionsString += " ";
+                extensionsString += extra;
+            }
             return (const GLubyte*)extensionsString.c_str();
         default:
             return (const GLubyte*)"Unknown Enum";
@@ -674,6 +688,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& rendererInfo = activeBackendObject->GetRendererInfo();
 
         const auto& exts = rendererInfo.RendererGLInfo.Extensions;
+        if (index == exts.size()) {
+            if (const char* extra = ClientSideExtension()) return (const GLubyte*)extra;
+        }
         if (index >= exts.size()) {
             return nullptr;
         }
@@ -2795,7 +2812,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
             break;
         case GL_NUM_EXTENSIONS:
-            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size());
+            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size()) +
+                      (ClientSideExtension() != nullptr ? 1 : 0);
             break;
         case GL_POINT_SIZE_GRANULARITY:
             *params = static_cast<GLint>(dynamicParameters.PointSizeGranularity);

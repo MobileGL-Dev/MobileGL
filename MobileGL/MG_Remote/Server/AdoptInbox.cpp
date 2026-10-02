@@ -79,8 +79,8 @@ namespace MobileGL::MG_Remote::Server {
             const MobileGLResult received = m_transport->ReceiveFd(
                 &fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &sidebandSize, left);
             if (received == MOBILEGL_ERR_TIMEOUT) {
-                why = "no descriptor arrived on the aux socket within " + std::to_string(timeoutMs) +
-                      " ms of its record";
+                why = std::string(kind == Kind::T0 ? "no store" : "no shared-image descriptor") +
+                      " arrived on the aux socket within " + std::to_string(timeoutMs) + " ms of its record";
                 return Outcome::TimedOut;
             }
             if (received != MOBILEGL_OK) {

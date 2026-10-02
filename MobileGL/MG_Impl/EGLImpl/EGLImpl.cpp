@@ -632,6 +632,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
+            // The display's dma-buf EGLImages went with it; so do their shared-image references.
+            for (const Uint64 sharedImageId : state->TakeOrphanedSharedImages()) {
+                (void)backendObject->ReleaseSharedImage(sharedImageId);
+            }
             backendObject->ReleaseEGLResources();
         }
         // The last initialized display is gone and nothing is current on any
@@ -732,7 +736,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
             // One list, in EGLPlatformExtensions.h, because the vendor string glvnd reads and
             // this query an application reads have to agree: an application that does not see the
             // platform extension here never asks for a platform display at all.
-            return display == EGL_NO_DISPLAY ? kClientExtensionString : kDisplayExtensionString;
+            if (display == EGL_NO_DISPLAY) return kClientExtensionString;
+            return SharedImagesAvailable() ? kDisplayExtensionStringWithSharedImages : kDisplayExtensionString;
         default:
             state->SetError(EGL_BAD_PARAMETER);
             return nullptr;
@@ -950,13 +955,63 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return state->GetSyncAttrib(dpy, sync, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
 
+    Bool SharedImagesAvailable() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A split client's backend is the remote one, which forwards the shared-image verbs to
+        // the server; the server's own apply thread and a monolith have no allocator behind them.
+        return StreamGateActive() && MG_Backend::pActiveBackendObject != nullptr;
+#else
+        return false;
+#endif
+    }
+
+    Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height) {
+        auto* state = GetState();
+        MG_State::EGLState::EGLContext::SharedImageInfo info;
+        if (!state || !state->GetSharedImage(image, &info)) return false;
+        *id = info.Id;
+        *width = info.Width;
+        *height = info.Height;
+        return true;
+    }
+
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list) {
         auto* state = GetState();
         if (!state) {
             return EGL_NO_IMAGE;
         }
-        return state->CreateImage(dpy, ctx, target, buffer, attrib_list);
+        if (target != EGL_LINUX_DMA_BUF_EXT) {
+            return state->CreateImage(dpy, ctx, target, buffer, attrib_list);
+        }
+
+        // EGL_EXT_image_dma_buf_import. The only dma-bufs this library can bind are the server's
+        // own shared images (a client's linux-dmabuf wl_buffer): the descriptor goes to the
+        // server, which names the image it was exported from, or refuses it.
+        if (!SharedImagesAvailable()) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_NO_IMAGE;
+        }
+        MG_State::EGLState::EGLContext::DmaBufImportAttribs request;
+        if (!state->PrepareDmaBufImport(dpy, ctx, buffer, attrib_list, &request)) {
+            return EGL_NO_IMAGE;
+        }
+        auto* backendObject = GetBackendObject(state);
+        Uint64 sharedImageId = 0;
+        if (!backendObject ||
+            !backendObject->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
+                                              static_cast<Uint32>(request.Height), request.Fourcc, &sharedImageId) ||
+            sharedImageId == 0) {
+            MGLOG_I_ONCE("eglCreateImage: a %dx%d dma-buf is not one of the server's shared images; refused "
+                         "(EGL_BAD_MATCH)",
+                         request.Width, request.Height);
+            state->SetError(EGL_BAD_MATCH);
+            return EGL_NO_IMAGE;
+        }
+        const EGLImage image = state->CreateSharedImage(
+            dpy, {.Id = sharedImageId, .Width = request.Width, .Height = request.Height, .Fourcc = request.Fourcc});
+        if (image == EGL_NO_IMAGE) (void)backendObject->ReleaseSharedImage(sharedImageId);
+        return image;
     }
 
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image) {
@@ -964,7 +1019,41 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->DestroyImage(dpy, image) ? EGL_TRUE : EGL_FALSE;
+        Uint64 sharedImageId = 0;
+        if (!state->DestroyImage(dpy, image, &sharedImageId)) {
+            return EGL_FALSE;
+        }
+        // A texture the image was bound to keeps its own reference on the server (EGLImage
+        // siblings outlive the image), so only this handle's goes.
+        if (sharedImageId != 0) {
+            if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
+                (void)backendObject->ReleaseSharedImage(sharedImageId);
+            }
+        }
+        return EGL_TRUE;
+    }
+
+    EGLBoolean QueryDmaBufFormats(EGLDisplay dpy, EGLint max_formats, EGLint* formats, EGLint* num_formats) {
+        auto* state = GetState();
+        if (!state) {
+            return EGL_FALSE;
+        }
+        return state->QueryDmaBufFormats(dpy, SharedImagesAvailable(), max_formats, formats, num_formats)
+                   ? EGL_TRUE
+                   : EGL_FALSE;
+    }
+
+    EGLBoolean QueryDmaBufModifiers(EGLDisplay dpy, EGLint format, EGLint max_modifiers, EGLuint64KHR* modifiers,
+                                    EGLBoolean* external_only, EGLint* num_modifiers) {
+        static_assert(sizeof(EGLuint64KHR) == sizeof(Uint64));
+        auto* state = GetState();
+        if (!state) {
+            return EGL_FALSE;
+        }
+        return state->QueryDmaBufModifiers(dpy, SharedImagesAvailable(), format, max_modifiers,
+                                           reinterpret_cast<Uint64*>(modifiers), external_only, num_modifiers)
+                   ? EGL_TRUE
+                   : EGL_FALSE;
     }
 
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list) {

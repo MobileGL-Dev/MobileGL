@@ -1199,6 +1199,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    Bool BackendObject_DirectGLES::BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::BlitDefaultFramebufferTo(image);
+#else
+        (void)image;
+        return false;
+#endif
+    }
+
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);
     }

@@ -919,6 +919,15 @@ if (UNIX AND NOT APPLE)
     target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "LINKER:-Bsymbolic-functions")
 endif()
 
+# ---- Shared images outside GL: the C ABI and the GBM backend (Linux client, split builds) ----
+# docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md. libMobileGL.so exports the shared-image C ABI
+# (MG_Impl/SharedImageApi.h); mobilegl_gbm.so (MG_Gbm/) is a separate GBM loader module that reaches
+# it through dlsym. Self-contained: nothing outside this block refers to either.
+if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE MobileGL/MG_Impl/SharedImageApi.cpp)
+    add_subdirectory(MobileGL/MG_Gbm)
+endif()
+
 if (ANDROID)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         android

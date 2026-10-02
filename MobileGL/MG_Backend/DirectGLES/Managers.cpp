@@ -206,6 +206,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #else
     Bool InProcessTeardown() { return g_processTeardown; }
 #endif
+    Bool InProcessExit() { return g_processTeardown; }
     void EnsureProcessTeardownSentinel() {
         std::call_once(g_teardownSentinelOnce,
                        [] { std::atexit(+[] { g_processTeardown = true; }); });
@@ -7587,6 +7588,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A shared image's EGLImage lives exactly as long as the name it was bound to.
+            m_sharedImage = nullptr;
+#endif
             g_GLESFuncs.glGenTextures(1, &m_backendTextureId);
             m_contextGeneration = g_backendContextGeneration;
             if (m_backendTextureId == 0) {
@@ -8837,6 +8842,92 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_STORAGE_KIND(obj) ((obj)->GetStorageType())
 #endif
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). The client defined
+        // level 0 as WxH RGBA8 with no data and then attached the image; the record's descriptor
+        // still says so, but the texels are the image's, so nothing below may allocate or upload.
+        Bool BackendTextureObject::SyncSharedImageStorage(const MG_Pipe::MGPipeResourceRecord& record) {
+            const Uint64 imageId = record.SharedImageId;
+            if (imageId == 0) {
+                // Respecified away from the image. The ES name is an EGLImage sibling, which must not
+                // be redefined in place: the immutable flag sends the normal path through
+                // RecreateBackendTexture, and the EGLImage goes with the name it was bound to.
+                m_sharedImageId = 0;
+                m_isInitialized = false;
+                m_backendStorageImmutable = true;
+                return false;
+            }
+
+            // Sub-data aimed at the image is not replayed into it - the image is written by the
+            // producer's present - but it must still leave the pending set, or the per-draw clean
+            // gate (IsDrawSyncCleanByRecord) would never close.
+            const auto dropPendingUploads = [&record] {
+                if (record.PendingUploads.empty()) return;
+                MGLOG_W_ONCE("Shared image texture %u: sub-data on an attached shared image is dropped",
+                             record.Desc.GlNameForDiag);
+                Vector<std::pair<Uint16, Uint16>> keys;
+                keys.reserve(record.PendingUploads.size());
+                for (const auto& pending : record.PendingUploads) {
+                    keys.emplace_back(MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget), pending.Level);
+                }
+                for (const auto& key : keys) ConsumePipeTextureUpload(record.Desc.Resource, key.first, key.second);
+            };
+
+            // Steady state: bound to this image already (the serial moves with sub-data and with a
+            // metadata respecify, neither of which changes what the name samples). A failed bind is
+            // retried only once the record moves.
+            if (m_sharedImageId == imageId && m_isInitialized &&
+                (m_sharedImage != nullptr || m_syncedResourceSerial == record.Serial)) {
+                dropPendingUploads();
+                m_syncedResourceSerial = record.Serial;
+                return true;
+            }
+
+            // A fresh mutable name: the current one may hold immutable storage (which no EGLImage
+            // can replace) or another image's sibling. RecreateBackendTexture also moves the FBO
+            // twins' attachment generation and forces the parameter resync the new name needs.
+            RecreateBackendTexture();
+            m_sharedImage = nullptr;
+            m_sharedImageId = imageId;
+            m_isInitialized = true;
+            // Whatever comes next redefines storage through a re-mint (see the imageId == 0 arm).
+            m_backendStorageImmutable = true;
+            m_syncedResourceSerial = record.Serial;
+            dropPendingUploads();
+
+            const TextureTarget target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
+            if (ConvertTextureTargetToBackendGLEnum(target) != GL_TEXTURE_2D) {
+                MGLOG_E_ONCE("Shared image texture %u: target %s cannot take an EGLImage; left empty",
+                             record.Desc.GlNameForDiag, MG_Util::ConvertTextureTargetToString(target).c_str());
+                return true;
+            }
+            String why;
+            SharedImageImpl::EglImageRef image = SharedImageImpl::CreateEglImage(imageId, why);
+            if (image == nullptr) {
+                MGLOG_E_ONCE("Shared image texture %u: image %llu cannot be bound (%s); left empty",
+                             record.Desc.GlNameForDiag, static_cast<unsigned long long>(imageId), why.c_str());
+                return true;
+            }
+            Bind(GL_TEXTURE_2D);
+            if (!SharedImageImpl::TargetBoundTexture2D(image)) {
+                MGLOG_E_ONCE("Shared image texture %u: glEGLImageTargetTexture2DOES refused image %llu; left empty",
+                             record.Desc.GlNameForDiag, static_cast<unsigned long long>(imageId));
+                return true;
+            }
+            m_sharedImage = std::move(image);
+            // The shape the name now has: the descriptor's level 0, and that one level only.
+            m_prevTextureInfo = {static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
+                                 record.Desc.Width,
+                                 record.Desc.Height,
+                                 record.Desc.Depth,
+                                 1,
+                                 0,
+                                 record.Desc.Samples,
+                                 record.Desc.FixedSampleLocations != 0};
+            return true;
+        }
+#endif
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
@@ -8879,6 +8970,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
+            // SHARED IMAGES: ahead of the view test and of the staged-store and serial gates below,
+            // none of which knows the texels belong to an image - the staged store holds none of
+            // them, and the storage path would allocate fresh, empty storage over the image.
+            if (pushedStorage != nullptr && (pushedStorage->SharedImageId != 0 || m_sharedImageId != 0) &&
+                SyncSharedImageStorage(*pushedStorage)) {
+                return;
+            }
             // P5e (tx2), CONTRACT-P5E §5.2 (scout G-S2-2): THE VIEW TEST MOVES BEHIND THE
             // RECORD. `IsTextureView()` was the one frontend read this function made BEFORE it
             // had resolved anything at all, and Desc.ViewOf is the carrier - it names the storage

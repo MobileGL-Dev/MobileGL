@@ -142,7 +142,54 @@ namespace MobileGL {
                 // Image
                 EGLImageHandle CreateImage(EGLDisplayHandle display, EGLContextHandle context, EGLenum target,
                                            EGLClientBuffer buffer, const EGLAttrib* attribList);
-                Bool DestroyImage(EGLDisplayHandle display, EGLImageHandle image);
+                // `releasedSharedImageId` (optional) receives the shared image the destroyed image
+                // named, 0 for any other image: the caller drops the backend's reference to it.
+                Bool DestroyImage(EGLDisplayHandle display, EGLImageHandle image,
+                                  Uint64* releasedSharedImageId = nullptr);
+
+                // DMA-BUF IMPORT (EGL_EXT_image_dma_buf_import[_modifiers]). A dma-buf this library
+                // can name is one of the backend's shared images (MG_Backend::SharedImageExport):
+                // single plane, DRM ABGR8888 or XBGR8888 - the GL RGBA8 byte order. The state
+                // validates and records; the backend identifies the descriptor in between.
+                struct DmaBufImportAttribs {
+                    EGLint Width = 0;
+                    EGLint Height = 0;
+                    Uint32 Fourcc = 0;
+                    int Fd = -1;
+                    EGLint Offset = 0;
+                    EGLint Pitch = 0;
+                    Bool HasModifier = false;
+                    Uint64 Modifier = 0;
+                };
+                struct SharedImageInfo {
+                    Uint64 Id = 0;
+                    EGLint Width = 0;
+                    EGLint Height = 0;
+                    Uint32 Fourcc = 0;
+                };
+                static constexpr Uint32 kDrmFourccAbgr8888 = 0x34324241u; // 'AB24'
+                static constexpr Uint32 kDrmFourccXbgr8888 = 0x34324258u; // 'XB24'
+                static Bool IsDmaBufFourccSupported(Uint32 fourcc);
+
+                // The checks eglCreateImage owes an EGL_LINUX_DMA_BUF_EXT target before anything
+                // is imported: the display, a null context and buffer, and a complete single-plane
+                // attribute list of a supported format. False with the EGL error set.
+                Bool PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context, EGLClientBuffer buffer,
+                                         const EGLAttrib* attribList, DmaBufImportAttribs* out);
+                // An EGLImage naming an imported shared image.
+                EGLImageHandle CreateSharedImage(EGLDisplayHandle display, const SharedImageInfo& info);
+                // The shared image `image` names; false for anything else (an invalid image, or one
+                // of another target).
+                Bool GetSharedImage(EGLImageHandle image, SharedImageInfo* out) const;
+                // Shared images whose EGLImages went with an eglTerminate: the caller releases them.
+                Vector<Uint64> TakeOrphanedSharedImages();
+                // eglQueryDmaBufFormatsEXT / eglQueryDmaBufModifiersEXT. `available` is whether the
+                // backend has shared images at all; without them the lists are empty.
+                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, EGLint maxFormats, EGLint* formats,
+                                        EGLint* numFormats);
+                Bool QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, EGLint format,
+                                          EGLint maxModifiers, Uint64* modifiers, EGLBoolean* externalOnly,
+                                          EGLint* numModifiers);
 
             private:
                 enum class SurfaceType {
@@ -245,6 +292,8 @@ namespace MobileGL {
                     EGLContextHandle Context = nullptr;
                     EGLenum Target = EGL_NONE;
                     EGLClientBuffer Buffer = nullptr;
+                    // EGL_LINUX_DMA_BUF_EXT only: the backend's shared image (Id != 0).
+                    SharedImageInfo Shared;
                 };
 
                 struct ThreadCurrentState {
@@ -310,6 +359,7 @@ namespace MobileGL {
                 UnorderedMap<EGLContextHandle, ContextObject> m_contexts;
                 UnorderedMap<EGLSyncHandle, SyncObject> m_syncs;
                 UnorderedMap<EGLImageHandle, ImageObject> m_images;
+                Vector<Uint64> m_orphanedSharedImages;
 
                 UnorderedMap<std::thread::id, EGLint> m_threadErrors;
                 UnorderedMap<std::thread::id, EGLenum> m_threadBoundAPI;

@@ -38,6 +38,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
         void SetEGLSwapInterval(Int interval) override;
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 

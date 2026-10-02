@@ -1390,6 +1390,14 @@
                                                                        &viewFormat, &layerCount);
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle);
         if (!resource) MagmaWireFatal("mipmap-resource");
+        // A shared image is one level of a buffer someone else allocated; growing the chain would
+        // reallocate it away from the buffer.
+        if (resource->sharedImageId != 0) {
+            MGLOG_E_ONCE("DirectVulkan::GenerateWireMipmap: the texture's level 0 is shared image %llu, which has "
+                         "no mip chain; levels %u..%u are left as they are",
+                         static_cast<unsigned long long>(resource->sharedImageId), logicalBase + 1, logicalEnd - 1);
+            return;
+        }
         m_textureManager->FlushPendingUploads();
         RetireWireDrawPass();
         auto& frame = m_frameContext.GetCurrent();

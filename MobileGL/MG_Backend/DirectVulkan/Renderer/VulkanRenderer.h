@@ -179,6 +179,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             void* getAhbProperties = nullptr; // PFN_vkGetAndroidHardwareBufferPropertiesANDROID
         };
         Bool GetWireAhbImport(WireAhbImport& out) const;
+        // SHARED IMAGES (BackendObject::BlitDefaultFramebufferToSharedImage): the active surface
+        // target's default framebuffer, copied into `image` top row first and scaled to its
+        // extent. Returns once the copy completed on the GPU. False (logged) when it cannot be
+        // done here: no AHardwareBuffer import, a quarter-turned surface, an unblittable format.
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image);
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
@@ -642,6 +647,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // one entry point the import needs (PFN_vkGetAndroidHardwareBufferPropertiesANDROID).
         Bool m_wireAhbImport = false;
         void* m_wireGetAhbProperties = nullptr;
+        // Shared images this session presents into, imported once each and keyed by the image's
+        // id (monotonic, never reused). `owner` watches the registry's image: an entry whose image
+        // died is dropped at the next present, every earlier present having completed.
+        struct SharedImagePresentTarget {
+            VkTextureManager::ImportedSharedImage image;
+            WeakPtr<const void> owner;
+        };
+        UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
+        void DestroySharedImagePresentTargets(Bool onlyDead);
         // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
         // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
         void ArmWireDepthResolveOrder();

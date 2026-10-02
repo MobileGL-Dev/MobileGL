@@ -304,6 +304,24 @@ MOBILEGL_EGL_API EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image) {
     return MobileGL::MG_Impl::EGLImpl::DestroyImage(dpy, image);
 }
 
+// EGL_EXT_image_dma_buf_import_modifiers: the formats eglCreateImage(EGL_LINUX_DMA_BUF_EXT) takes,
+// and (none) explicit modifiers - a compositor then imports with the implicit one.
+MOBILEGL_EGL_API EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
+                                                     EGLint* num_formats) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglQueryDmaBufFormatsEXT(dpy=%p, max_formats=%d)", dpy, max_formats);
+    return MobileGL::MG_Impl::EGLImpl::QueryDmaBufFormats(dpy, max_formats, formats, num_formats);
+}
+
+MOBILEGL_EGL_API EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                                                       EGLuint64KHR* modifiers, EGLBoolean* external_only,
+                                                       EGLint* num_modifiers) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglQueryDmaBufModifiersEXT(dpy=%p, format=0x%08x, max_modifiers=%d)", dpy, format, max_modifiers);
+    return MobileGL::MG_Impl::EGLImpl::QueryDmaBufModifiers(dpy, format, max_modifiers, modifiers, external_only,
+                                                            num_modifiers);
+}
+
 MOBILEGL_EGL_API EGLDisplay eglGetPlatformDisplay(EGLenum platform, void* native_display,
                                                   const EGLAttrib* attrib_list) {
     const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;

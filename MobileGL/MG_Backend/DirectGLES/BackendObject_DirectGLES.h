@@ -41,6 +41,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
+        // Shared images: a GL blit of default framebuffer 0 into a renderbuffer whose storage is
+        // the image's EGLImage, then a wait on its fence (DirectGLES.h, SharedImageImpl).
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 

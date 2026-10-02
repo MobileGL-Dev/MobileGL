@@ -10,6 +10,8 @@
 
 #if MOBILEGL_WAYLAND_WINDOWS
 
+#include "EGLImpl.h"
+#include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -67,11 +69,27 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
 namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     namespace {
-        // libwayland-client's types are opaque here: everything goes through wl_proxy_* and the
-        // exported interface descriptions, and nothing reads a field of either.
+        // libwayland-client's objects are opaque here: everything goes through wl_proxy_* and the
+        // interface descriptions, and nothing reads a field of a proxy.
         struct wl_proxy;
-        struct wl_interface;
         struct wl_event_queue;
+
+        // wayland-util.h's protocol descriptors. libwayland-client exports the core protocol's;
+        // linux-dmabuf's are written out below (LinuxDmabuf), as its generated code would.
+        struct wl_interface;
+        struct wl_message {
+            const char* name;
+            const char* signature;
+            const wl_interface** types;
+        };
+        struct wl_interface {
+            const char* name;
+            int version;
+            int method_count;
+            const wl_message* methods;
+            int event_count;
+            const wl_message* events;
+        };
 
         // wayland-egl-backend.h, WL_EGL_WINDOW_VERSION 3: the struct libwayland-egl allocates for
         // wl_egl_window_create and the driver reads.  The ABI is versioned by its first word.
@@ -106,6 +124,18 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // B, G, R, A for both (little-endian 0xAARRGGBB).
         constexpr uint32_t kShmFormatArgb8888 = 0;
         constexpr uint32_t kShmFormatXrgb8888 = 1;
+        // linux-dmabuf (linux-dmabuf-v1.xml) request opcodes.
+        constexpr uint32_t kDmabufDestroy = 0;
+        constexpr uint32_t kDmabufCreateParams = 1;
+        constexpr uint32_t kParamsDestroy = 0;
+        constexpr uint32_t kParamsAdd = 1;
+        constexpr uint32_t kParamsCreateImmed = 3; // since version 2
+        // The highest linux-dmabuf version spoken here: 4 adds feedback objects this never asks for.
+        constexpr uint32_t kDmabufMaxVersion = 3;
+        // DRM fourccs of the server's shared images: R, G, B, A in memory - GL's RGBA8, so the
+        // frame lands in the buffer with no reordering.
+        constexpr uint32_t kDrmFormatAbgr8888 = 0x34324241u; // 'AB24'
+        constexpr uint32_t kDrmFormatXbgr8888 = 0x34324258u; // 'XB24'
 
         struct Api {
             Bool loaded = false;
@@ -181,6 +211,85 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // The compositor is done with a buffer: it may be drawn into again.
         void OnBufferRelease(void* data, wl_proxy*) { static_cast<ShmBuffer*>(data)->busy = false; }
         void (*const kBufferListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnBufferRelease)};
+
+        // zwp_linux_dmabuf_v1 and zwp_linux_buffer_params_v1 as their generated protocol code
+        // describes them (version 3: what is bound here at most). A request's `types` name the
+        // interface of each new_id/object argument, null for every other argument.
+        struct LinuxDmabufProtocol {
+            const wl_interface* createParamsTypes[1] = {};
+            const wl_interface* noObjectTypes[6] = {};
+            const wl_interface* createImmedTypes[5] = {};
+            const wl_interface* createdTypes[1] = {};
+            wl_message dmabufRequests[2] = {};
+            wl_message dmabufEvents[2] = {};
+            wl_message paramsRequests[4] = {};
+            wl_message paramsEvents[2] = {};
+            wl_interface dmabuf = {};
+            wl_interface params = {};
+        };
+
+        // Null when libwayland-client is not usable. Filled once: the wl_buffer interface it
+        // refers to is libwayland-client's, known only after it is loaded.
+        const LinuxDmabufProtocol* LinuxDmabuf() {
+            static LinuxDmabufProtocol protocol;
+            static std::once_flag once;
+            static Bool ready = false;
+            std::call_once(once, [] {
+                const Api& api = WaylandApi();
+                if (!api.loaded) return;
+                LinuxDmabufProtocol& p = protocol;
+                p.createParamsTypes[0] = &p.params;
+                p.createImmedTypes[0] = api.bufferInterface;
+                p.createdTypes[0] = api.bufferInterface;
+                p.dmabufRequests[0] = {"destroy", "", p.noObjectTypes};
+                p.dmabufRequests[1] = {"create_params", "n", p.createParamsTypes};
+                p.dmabufEvents[0] = {"format", "u", p.noObjectTypes};
+                p.dmabufEvents[1] = {"modifier", "3uuu", p.noObjectTypes};
+                p.paramsRequests[0] = {"destroy", "", p.noObjectTypes};
+                p.paramsRequests[1] = {"add", "huuuuu", p.noObjectTypes};
+                p.paramsRequests[2] = {"create", "iiuu", p.noObjectTypes};
+                p.paramsRequests[3] = {"create_immed", "2niiuu", p.createImmedTypes};
+                p.paramsEvents[0] = {"created", "n", p.createdTypes};
+                p.paramsEvents[1] = {"failed", "", p.noObjectTypes};
+                p.dmabuf = {"zwp_linux_dmabuf_v1", static_cast<int>(kDmabufMaxVersion), 2, p.dmabufRequests, 2,
+                            p.dmabufEvents};
+                p.params = {"zwp_linux_buffer_params_v1", static_cast<int>(kDmabufMaxVersion), 4, p.paramsRequests,
+                            2, p.paramsEvents};
+                ready = true;
+            });
+            return ready ? &protocol : nullptr;
+        }
+
+        // The format table a compositor announces is not consulted: the server's images are one
+        // of the two formats every linux-dmabuf compositor takes, and a refusal is answered by
+        // `failed` below anyway.
+        void OnDmabufFormat(void*, wl_proxy*, uint32_t) {}
+        void OnDmabufModifier(void*, wl_proxy*, uint32_t, uint32_t, uint32_t) {}
+        void (*const kDmabufListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnDmabufFormat),
+                                                 reinterpret_cast<void (*)(void)>(&OnDmabufModifier)};
+
+        void OnParamsCreated(void*, wl_proxy*, wl_proxy*) {}
+        void OnParamsFailed(void* data, wl_proxy*) { *static_cast<Bool*>(data) = true; }
+        void (*const kParamsListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnParamsCreated),
+                                                 reinterpret_cast<void (*)(void)>(&OnParamsFailed)};
+
+        // One server shared image, shown to the compositor as a linux-dmabuf wl_buffer.
+        struct DmabufBuffer {
+            wl_proxy* buffer = nullptr;
+            Uint64 imageId = 0;
+            EGLint width = 0;
+            EGLint height = 0;
+            Bool busy = false;
+        };
+
+        void OnDmabufBufferRelease(void* data, wl_proxy*) { static_cast<DmabufBuffer*>(data)->busy = false; }
+        void (*const kDmabufBufferListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnDmabufBufferRelease)};
+
+        // MOBILEGL_WAYLAND_DMABUF=0 keeps every window on wl_shm.
+        Bool DmabufPresentationAllowed() {
+            const char* value = std::getenv("MOBILEGL_WAYLAND_DMABUF");
+            return value == nullptr || std::strcmp(value, "0") != 0;
+        }
     } // namespace
 
     struct WindowSurface::Impl {
@@ -197,9 +306,21 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         ShmBuffer buffers[3];
         Vector<Uint8> scratch;
 
+        // THE LINUX-DMABUF PATH. With a backend that has shared images, the frame never leaves
+        // the GPU: each buffer is a server-allocated image exported as a dma-buf, the server
+        // copies the frame into it at the swap, and the compositor (a client of the same server)
+        // samples the very same image. wl_shm stays bound as the fallback.
+        Bool dmabufWanted = false;
+        wl_proxy* dmabuf = nullptr;
+        Bool useDmabuf = false;
+        uint32_t fourcc = kDrmFormatXbgr8888;
+        DmabufBuffer dmabufBuffers[3];
+
         ~Impl() {
             const Api& api = WaylandApi();
             for (auto& buffer : buffers) Release(buffer);
+            for (auto& buffer : dmabufBuffers) Release(buffer);
+            if (dmabuf) api.marshalFlags(dmabuf, kDmabufDestroy, nullptr, api.getVersion(dmabuf), kMarshalFlagDestroy);
             // Neither wl_shm (version 1) nor wl_registry has a destroy request: the proxies go
             // on this side only.
             if (shm) api.destroy(shm);
@@ -286,14 +407,147 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 if (api.dispatchQueue(display, queue) < 0) return nullptr;
             }
         }
+
+        // The wl_buffer goes before the image: the compositor's own import holds the image for
+        // as long as it still shows it.
+        void Release(DmabufBuffer& buffer) {
+            const Api& api = WaylandApi();
+            if (buffer.buffer) api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
+                                                kMarshalFlagDestroy);
+            if (buffer.imageId != 0) {
+                if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
+                    (void)backendObject->ReleaseSharedImage(buffer.imageId);
+                }
+            }
+            buffer = DmabufBuffer{};
+        }
+
+        // A shared image of the window's size, as a wl_buffer. create_immed plus a round trip
+        // rather than a bare create_immed: a compositor that refuses the import says so with
+        // `failed`, and attaching that buffer would be a protocol error, fatal to the connection.
+        Bool Allocate(DmabufBuffer& buffer) {
+            const Api& api = WaylandApi();
+            const LinuxDmabufProtocol* protocol = LinuxDmabuf();
+            Release(buffer);
+            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            if (protocol == nullptr || dmabuf == nullptr || backendObject == nullptr) return false;
+            MG_Backend::SharedImageExport image;
+            if (!backendObject->AllocateSharedImage(static_cast<Uint32>(width), static_cast<Uint32>(height), fourcc,
+                                                    &image)) {
+                MGLOG_E("Wayland: the server allocated no %dx%d shared image", width, height);
+                return false;
+            }
+            const auto dropImage = [&] {
+                if (image.Fd >= 0) close(image.Fd);
+                (void)backendObject->ReleaseSharedImage(image.Id);
+            };
+            if (image.Fd < 0 || image.Width != static_cast<Uint32>(width) ||
+                image.Height != static_cast<Uint32>(height)) {
+                MGLOG_E("Wayland: a %dx%d shared image came back as %ux%u (fd %d)", width, height, image.Width,
+                        image.Height, image.Fd);
+                dropImage();
+                return false;
+            }
+
+            const uint32_t version = api.getVersion(dmabuf);
+            wl_proxy* params = api.marshalFlags(dmabuf, kDmabufCreateParams, &protocol->params, version, 0, nullptr);
+            if (params == nullptr) {
+                dropImage();
+                return false;
+            }
+            Bool failed = false;
+            api.addListener(params, const_cast<void (**)(void)>(kParamsListener), &failed);
+            // The descriptor is duplicated into the request, so it is closed below either way.
+            api.marshalFlags(params, kParamsAdd, nullptr, version, 0, image.Fd, 0u, image.Offset, image.Stride,
+                             static_cast<uint32_t>(image.Modifier >> 32),
+                             static_cast<uint32_t>(image.Modifier & 0xffffffffu));
+            wl_proxy* wlBuffer = api.marshalFlags(params, kParamsCreateImmed, api.bufferInterface, version, 0, nullptr,
+                                                  width, height, fourcc, 0u);
+            const Bool settled = api.roundtripQueue(display, queue) >= 0;
+            api.marshalFlags(params, kParamsDestroy, nullptr, version, kMarshalFlagDestroy);
+            if (!settled || failed || wlBuffer == nullptr) {
+                MGLOG_E("Wayland: the compositor refused a %dx%d linux-dmabuf buffer", width, height);
+                if (wlBuffer) api.marshalFlags(wlBuffer, kBufferDestroy, nullptr, version, kMarshalFlagDestroy);
+                dropImage();
+                return false;
+            }
+            close(image.Fd);
+            buffer.buffer = wlBuffer;
+            buffer.imageId = image.Id;
+            buffer.width = width;
+            buffer.height = height;
+            buffer.busy = false;
+            api.addListener(wlBuffer, const_cast<void (**)(void)>(kDmabufBufferListener), &buffer);
+            return true;
+        }
+
+        // As NextFree, over the shared images.
+        DmabufBuffer* NextFreeDmabuf() {
+            const Api& api = WaylandApi();
+            for (;;) {
+                if (api.dispatchQueuePending(display, queue) < 0) return nullptr;
+                for (auto& buffer : dmabufBuffers) {
+                    if (buffer.buffer == nullptr || buffer.busy) continue;
+                    if (buffer.width != width || buffer.height != height) {
+                        if (!Allocate(buffer)) return nullptr;
+                    }
+                    return &buffer;
+                }
+                for (auto& buffer : dmabufBuffers) {
+                    if (buffer.buffer == nullptr) return Allocate(buffer) ? &buffer : nullptr;
+                }
+                if (api.dispatchQueue(display, queue) < 0) return nullptr;
+            }
+        }
+
+        // The rest of this window's life is wl_shm's.
+        void FallBackToShm() {
+            for (auto& buffer : dmabufBuffers) Release(buffer);
+            useDmabuf = false;
+        }
+
+        // `wlBuffer` becomes the window's content: attach, damage, commit.
+        void Commit(wl_proxy* wlBuffer) {
+            const Api& api = WaylandApi();
+            wl_proxy* surface = window->surface;
+            const uint32_t surfaceVersion = api.getVersion(surface);
+            api.marshalFlags(surface, kSurfaceAttach, nullptr, surfaceVersion, 0, wlBuffer, window->dx, window->dy);
+            if (surfaceVersion >= 4) {
+                api.marshalFlags(surface, kSurfaceDamageBuffer, nullptr, surfaceVersion, 0, 0, 0, width, height);
+            } else {
+                api.marshalFlags(surface, kSurfaceDamage, nullptr, surfaceVersion, 0, 0, 0, width, height);
+            }
+            api.marshalFlags(surface, kSurfaceCommit, nullptr, surfaceVersion, 0);
+            window->attached_width = width;
+            window->attached_height = height;
+            window->dx = 0;
+            window->dy = 0;
+            api.flush(display);
+        }
     };
 
     namespace {
-        void OnRegistryGlobal(void* data, wl_proxy* registry, uint32_t name, const char* interface, uint32_t) {
+        void OnRegistryGlobal(void* data, wl_proxy* registry, uint32_t name, const char* interface,
+                              uint32_t version) {
             auto* impl = static_cast<WindowSurface::Impl*>(data);
-            if (impl->shm != nullptr || std::strcmp(interface, "wl_shm") != 0) return;
             const Api& api = WaylandApi();
-            impl->shm = api.marshalFlags(registry, kRegistryBind, api.shmInterface, 1, 0, name, "wl_shm", 1u, nullptr);
+            if (impl->shm == nullptr && std::strcmp(interface, "wl_shm") == 0) {
+                impl->shm =
+                    api.marshalFlags(registry, kRegistryBind, api.shmInterface, 1, 0, name, "wl_shm", 1u, nullptr);
+                return;
+            }
+            // create_immed is version 2's: an older linux-dmabuf is left unbound.
+            if (impl->dmabufWanted && impl->dmabuf == nullptr && version >= 2 &&
+                std::strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
+                const LinuxDmabufProtocol* protocol = LinuxDmabuf();
+                if (protocol == nullptr) return;
+                const uint32_t bindVersion = std::min(version, kDmabufMaxVersion);
+                impl->dmabuf = api.marshalFlags(registry, kRegistryBind, &protocol->dmabuf, bindVersion, 0, name,
+                                                "zwp_linux_dmabuf_v1", bindVersion, nullptr);
+                if (impl->dmabuf != nullptr) {
+                    api.addListener(impl->dmabuf, const_cast<void (**)(void)>(kDmabufListener), impl);
+                }
+            }
         }
         void OnRegistryGlobalRemove(void*, wl_proxy*, uint32_t) {}
         void (*const kRegistryListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnRegistryGlobal),
@@ -362,6 +616,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         impl->width = width;
         impl->height = height;
         impl->format = hasAlpha ? kShmFormatArgb8888 : kShmFormatXrgb8888;
+        impl->fourcc = hasAlpha ? kDrmFormatAbgr8888 : kDrmFormatXbgr8888;
+        impl->dmabufWanted = DmabufPresentationAllowed() && SharedImagesAvailable();
         // A queue of this surface's own, so the application's dispatching never sees these events
         // and this never dispatches the application's.
         impl->queue = api.createQueue(wlDisplay);
@@ -377,10 +633,23 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             MGLOG_E("Wayland: the compositor offers no wl_shm; a window surface cannot be presented");
             return nullptr;
         }
+        // The first shared image is made here, so a server or compositor that cannot do the
+        // dma-buf path is found out before the window shows anything, and the window starts on
+        // wl_shm instead.
+        if (impl->dmabuf != nullptr) impl->useDmabuf = impl->Allocate(impl->dmabufBuffers[0]);
+        if (!impl->useDmabuf && impl->dmabuf != nullptr) {
+            api.marshalFlags(impl->dmabuf, kDmabufDestroy, nullptr, api.getVersion(impl->dmabuf), kMarshalFlagDestroy);
+            impl->dmabuf = nullptr;
+        }
         impl->window->driver_private = impl.get();
         impl->window->destroy_window_callback = &OnWindowDestroyed;
-        MGLOG_I("Wayland: window surface %dx%d presented through wl_shm (%s)", width, height,
-                hasAlpha ? "ARGB8888" : "XRGB8888");
+        if (impl->useDmabuf) {
+            MGLOG_I("Wayland: window surface %dx%d presented through linux-dmabuf shared images (%s)", width, height,
+                    hasAlpha ? "ABGR8888" : "XBGR8888");
+        } else {
+            MGLOG_I("Wayland: window surface %dx%d presented through wl_shm (%s)", width, height,
+                    hasAlpha ? "ARGB8888" : "XRGB8888");
+        }
         return UniquePtr<WindowSurface>(new WindowSurface(std::move(impl)));
     }
 
@@ -398,7 +667,23 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     Bool WindowSurface::Present() {
         Impl& impl = *m_impl;
         if (impl.window == nullptr) return false;
-        const Api& api = WaylandApi();
+
+        if (impl.useDmabuf) {
+            // The server copies the frame into the image GPU-side, top row first - a wl_buffer's
+            // first row - and answers once the copy has completed, so the compositor reads a
+            // finished frame.
+            DmabufBuffer* buffer = impl.NextFreeDmabuf();
+            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            if (buffer != nullptr && backendObject != nullptr && backendObject->PresentToSharedImage(buffer->imageId)) {
+                impl.Commit(buffer->buffer);
+                buffer->busy = true;
+                return true;
+            }
+            MGLOG_E_ONCE("Wayland: a frame could not be presented through a linux-dmabuf shared image; the window "
+                         "falls back to wl_shm");
+            impl.FallBackToShm();
+        }
+
         ShmBuffer* buffer = impl.NextFree();
         if (buffer == nullptr) {
             MGLOG_E_ONCE("Wayland: no wl_shm buffer could be taken for the frame; it is not shown");
@@ -408,24 +693,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // GL's rows run bottom-up and RGBA; a wl_shm buffer's run top-down and B, G, R, A.
         ReadBackFrameBGRA(impl.width, impl.height, impl.scratch, static_cast<Uint8*>(buffer->map),
                           static_cast<SizeT>(buffer->stride));
-
-        wl_proxy* surface = impl.window->surface;
-        const uint32_t surfaceVersion = api.getVersion(surface);
-        api.marshalFlags(surface, kSurfaceAttach, nullptr, surfaceVersion, 0, buffer->buffer, impl.window->dx,
-                         impl.window->dy);
-        if (surfaceVersion >= 4) {
-            api.marshalFlags(surface, kSurfaceDamageBuffer, nullptr, surfaceVersion, 0, 0, 0, impl.width,
-                             impl.height);
-        } else {
-            api.marshalFlags(surface, kSurfaceDamage, nullptr, surfaceVersion, 0, 0, 0, impl.width, impl.height);
-        }
-        api.marshalFlags(surface, kSurfaceCommit, nullptr, surfaceVersion, 0);
+        impl.Commit(buffer->buffer);
         buffer->busy = true;
-        impl.window->attached_width = impl.width;
-        impl.window->attached_height = impl.height;
-        impl.window->dx = 0;
-        impl.window->dy = 0;
-        api.flush(impl.display);
         return true;
     }
 } // namespace MobileGL::MG_Impl::EGLImpl::Wayland

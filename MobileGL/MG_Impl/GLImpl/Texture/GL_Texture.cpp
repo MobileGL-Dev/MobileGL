@@ -32,6 +32,8 @@
 #include <MG_Util/Math/FixedPointConversion.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 // CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
 // client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
 // that decides which of its two spellings a site takes; in a pull build both expand to exactly
@@ -7131,6 +7133,52 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
                     GLenum format, GLenum type, const void* pixels) {
         TexImage2D_State(target, level, internalformat, width, height, border, format, type, pixels);
+    }
+
+    // GL_OES_EGL_image. The only EGLImages with storage behind them are the server's shared images
+    // (EGL_LINUX_DMA_BUF_EXT): level 0 of the bound texture is defined at the image's size through
+    // glTexImage2D's own path - so the respecification is recorded and announced as for any other
+    // - and the backend then swaps that storage for the image. The frontend has no external-image
+    // target, so GL_TEXTURE_2D is the only one taken.
+    void EGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image) {
+        if (target != GL_TEXTURE_2D) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "target must be GL_TEXTURE_2D."));
+            return;
+        }
+        Uint64 sharedImageId = 0;
+        EGLint width = 0;
+        EGLint height = 0;
+        if (!MG_Impl::EGLImpl::LookupSharedImage(static_cast<EGLImage>(image), &sharedImageId, &width, &height)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "image is not a valid EGLImage."));
+            return;
+        }
+        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+        const SharedPtr<MG_State::GLState::ITextureObject> textureObject =
+            activeUnit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+        if (!TextureImpl::ValidateTextureObject(textureObject)) return;
+        if (!ValidateTextureMutable(textureObject, __func__)) return;
+        if (!TextureImpl::ValidateTextureSizeRange(width, height, 1)) return;
+
+        // NULL is an offset into a bound unpack buffer; the definition must read nothing.
+        GLint unpackBuffer = 0;
+        GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpackBuffer);
+        if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        TexImage2D_State(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpackBuffer));
+
+        auto* backendObject = MG_Backend::pActiveBackendObject.get();
+        if (backendObject == nullptr ||
+            !backendObject->AttachSharedImageToTexture(textureObject->GetLifetimeId(), sharedImageId)) {
+            MGLOG_E_ONCE("glEGLImageTargetTexture2DOES: shared image %llu could not be bound to texture %u",
+                         static_cast<unsigned long long>(sharedImageId), textureObject->GetExternalIndex());
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "the image could not be bound."));
+        }
     }
 
     void TexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format,

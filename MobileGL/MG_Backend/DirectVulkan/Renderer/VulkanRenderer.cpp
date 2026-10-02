@@ -48,6 +48,8 @@
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
 #include <MG_Remote/Server/StagedTextureStore.h>
 #include <MG_Remote/Server/ServerLoop.h>
+// Shared images: the present side resolves the image it imports (WireSharedImage.inc).
+#include <MG_Remote/Server/SharedImageRegistry.h>
 // P5c (G6): the named-blit arm's endpoint resolution runs inside the frontend-keyed scope.
 #include <MG_Impl/Pipe/SlotAllocator.h>
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
@@ -3510,6 +3512,7 @@ void main() {
         DestroyWireColorBlitResources();
         DestroyWireDepthMipmapResources();
         DestroyWireMultisampleResolveResources();
+        DestroySharedImagePresentTargets(false);
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -8082,6 +8085,8 @@ void main() {
     // that file's pass with the box filter taken out and a sample index put in.
     #include "WireMultisampleResolve.inc"
     #include "WireDraw.inc"
+    // AFTER WireFramebuffer.inc: the shared-image present is that file's readback, into an image.
+    #include "WireSharedImage.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
 #if MOBILEGL_BUILD_DISAGGREGATED

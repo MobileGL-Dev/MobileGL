@@ -74,6 +74,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // flag while the process is very much alive.
     Bool InProcessTeardown();
     void EnsureProcessTeardownSentinel();
+    // The exit() half of InProcessTeardown alone, for an object whose release needs only the
+    // display, not a current context (an EGLImage): a server session's twin teardown has no
+    // context current but a live display, and skipping the release there would leak the image.
+    Bool InProcessExit();
 
     // Generation of the backend ES context that owns the driver ids currently handed
     // out. Bumped exactly once per DestroyEGLContext. Every backend twin that owns a
@@ -2100,6 +2104,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
                                                      const MG_Pipe::MGPipeResourceRecord& record);
 #endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // SHARED IMAGES (MGPipeResourceRecord::SharedImageId). True when this call settled the
+            // storage - the ES name's level 0 IS the image (glEGLImageTargetTexture2DOES), or the
+            // image could not be bound and the name is left empty - and SyncMipmapsToBackend must
+            // not go on to allocate or upload. False when the record names no image: a twin that
+            // was bound to one has been told to re-mint, and the normal storage path takes over.
+            Bool SyncSharedImageStorage(const MG_Pipe::MGPipeResourceRecord& record);
+#endif
             // Whether this texture's ES storage was minted in an image carrier rather than in the
             // frontend format's own layout - the readback has to ask, because for a NORMALIZED
             // carrier the storage is an integer texture holding codes and glGetTexImage still owes
@@ -2224,6 +2236,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             Bool m_imageBindableStorageRequired = false;
             Bool m_backendStorageImmutable = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The shared image the ES name's level 0 was last bound to (0 = none; image ids are
+            // never reused, so this is a lifetime key), and the EGLImage that binding went through,
+            // which holds the image for as long as the name samples it. Null with a nonzero id when
+            // the image could not be bound: the name is left empty until the record moves.
+            Uint64 m_sharedImageId = 0;
+            SharedImageImpl::EglImageRef m_sharedImage;
+#endif
             // Whether the driver texture may hold texels the shadow never saw. Set the first time
             // anything other than a texel upload can write it - an application framebuffer
             // attachment, a writable image binding, a copy or blit into it, a driver-side mipmap

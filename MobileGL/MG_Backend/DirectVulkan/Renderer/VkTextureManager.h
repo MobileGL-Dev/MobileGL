@@ -357,6 +357,14 @@ public:
         // on every mutation, so the first handle sync of a fresh image always re-checks.
 #if MOBILEGL_BUILD_DISAGGREGATED
         Uint64 syncedWireSerial = 0;
+        // SHARED IMAGES: level 0 is a server shared image (an imported AHardwareBuffer), not a
+        // VMA allocation. The resource owns the image and its dedicated imported memory, and
+        // holds the registry's reference so the buffer outlives every use (deferred releases
+        // included). `sharedImageAlphaOne`: an X-format image, whose alpha bytes are undefined.
+        VkDeviceMemory importedMemory = VK_NULL_HANDLE;
+        Uint64 sharedImageId = 0;
+        SharedPtr<const void> sharedImageOwner;
+        Bool sharedImageAlphaOne = false;
 #endif
 
         TextureResource() = default;
@@ -393,6 +401,10 @@ public:
             std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
 #if MOBILEGL_BUILD_DISAGGREGATED
             std::swap(this->syncedWireSerial, that.syncedWireSerial);
+            std::swap(this->importedMemory, that.importedMemory);
+            std::swap(this->sharedImageId, that.sharedImageId);
+            std::swap(this->sharedImageOwner, that.sharedImageOwner);
+            std::swap(this->sharedImageAlphaOne, that.sharedImageAlphaOne);
 #endif
         }
 
@@ -431,6 +443,16 @@ public:
             if (image != VK_NULL_HANDLE && allocation != nullptr) {
                 vmaDestroyImage(s_allocator.Get(), image, allocation);
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (importedMemory != VK_NULL_HANDLE) {
+                if (image != VK_NULL_HANDLE) vkDestroyImage(s_device.Get(), image, nullptr);
+                vkFreeMemory(s_device.Get(), importedMemory, nullptr);
+            }
+            importedMemory = VK_NULL_HANDLE;
+            sharedImageId = 0;
+            sharedImageOwner.reset();
+            sharedImageAlphaOne = false;
+#endif
             fullView = VK_NULL_HANDLE;
             sampledView = VK_NULL_HANDLE;
             perMipViews.clear();
@@ -592,6 +614,23 @@ public:
     // ranges select cube faces; array and 3D levels share one staged level shadow.
     void MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
                                     Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
+
+    // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): a server shared image's
+    // AHardwareBuffer bound as a single-level 2D colour image on THIS session's device, on dedicated
+    // memory imported from the buffer. Android only (false with `why` elsewhere, or when the device
+    // did not take the AHardwareBuffer extension). The image is born UNDEFINED; whoever uses it
+    // acquires it from the foreign queue family first, and a writer releases it back after.
+    struct ImportedSharedImage {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImageUsageFlags usage = 0;
+        VkFormatFeatureFlags features = 0;
+        Uint32 queueFamily = 0;
+    };
+    static Bool ImportSharedImage(void* nativeBuffer, Uint32 width, Uint32 height, ImportedSharedImage& out,
+                                  String& why);
+    static void DestroyImportedSharedImage(VkDevice device, ImportedSharedImage& image);
 #endif
     VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
@@ -778,6 +817,12 @@ private:
                               Bool requireStorage);
     Bool UploadPendingWireLevels(MG_Pipe::MGPipeHandle handle, MG_Pipe::MGPipeResourceRecord& record,
                                  TextureResource& resource);
+    // SyncWireTextureShape's arm for a record whose level 0 IS a shared image (SharedImageId):
+    // binds the imported buffer instead of allocating. Unresolved = the image is gone or cannot be
+    // imported here; `resource` is then untouched and the caller allocates as for any texture.
+    enum class SharedImageBind : Uint8 { Bound, Failed, Unresolved };
+    SharedImageBind SyncWireSharedImage(const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource,
+                                        Bool requireStorage);
     // The handle-keyed twin of m_textureResources, keyed by StagedTextureStore::KeyForHandle.
     // Node-based for the same reason m_renderbufferResources is: callers hold TextureResource*
     // across map-touching calls.

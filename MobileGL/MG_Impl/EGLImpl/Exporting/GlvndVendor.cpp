@@ -36,6 +36,11 @@
 extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                                          const EGLint* attrib_list);
 extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
+extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
+                                               EGLint* num_formats);
+extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                                                 EGLuint64KHR* modifiers, EGLBoolean* external_only,
+                                                 EGLint* num_modifiers);
 
 namespace {
     using namespace MobileGL;
@@ -228,6 +233,8 @@ namespace {
         {"eglDestroyImage", reinterpret_cast<void*>(eglDestroyImage)},
         {"eglCreateImageKHR", reinterpret_cast<void*>(eglCreateImageKHR)},
         {"eglDestroyImageKHR", reinterpret_cast<void*>(eglDestroyImageKHR)},
+        {"eglQueryDmaBufFormatsEXT", reinterpret_cast<void*>(eglQueryDmaBufFormatsEXT)},
+        {"eglQueryDmaBufModifiersEXT", reinterpret_cast<void*>(eglQueryDmaBufModifiersEXT)},
         {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
         {"eglCreatePlatformPixmapSurface", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},
         // The platform and current-state queries: not in glvnd's required list, but the names an

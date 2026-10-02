@@ -48,6 +48,9 @@ if (NOT WIN32)
     # the in-process queue and a real SCM_RIGHTS socket pair: in order, out of order, late, stale,
     # missing (bounded), not-an-Offer.
     list(APPEND MOBILEGL_WIRE_TESTS AdoptInboxTest)
+    # Shared images: the registry (memfd-backed on a host), identification of a descriptor that
+    # crossed a socket, session holders, and the inbox keeping their descriptors apart from T0's.
+    list(APPEND MOBILEGL_WIRE_TESTS SharedImageTest)
     # P9 W3: the graded log forward - the level mapping both ways, the logger's level reaching the
     # forwarder, and the channel against a transport whose writes can be held (and a real socket
     # pair nobody reads). POSIX for the socket pair.

@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <EGL/eglext.h>
 
 #include <mutex>
 
@@ -56,6 +57,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list);
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image);
+    EGLBoolean QueryDmaBufFormats(EGLDisplay dpy, EGLint max_formats, EGLint* formats, EGLint* num_formats);
+    EGLBoolean QueryDmaBufModifiers(EGLDisplay dpy, EGLint format, EGLint max_modifiers, EGLuint64KHR* modifiers,
+                                    EGLBoolean* external_only, EGLint* num_modifiers);
+    // Whether the active backend has shared images (MG_Backend::BackendObject::AllocateSharedImage):
+    // a split client's does, a monolith's does not. Decides the dma-buf EGL extensions, the
+    // Wayland linux-dmabuf presentation and GL_OES_EGL_image.
+    Bool SharedImagesAvailable();
+    // The shared image an EGLImage names (EGL_LINUX_DMA_BUF_EXT), for glEGLImageTargetTexture2DOES.
+    Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height);
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list);
     EGLSurface CreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,
                                            const EGLAttrib* attrib_list);

@@ -111,6 +111,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     GLint border, GLenum format, GLenum type, const void* pixels);
     void TexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
                     GLenum format, GLenum type, const void* pixels);
+    void EGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
     void TexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format,
                     GLenum type, const GLvoid* pixels);
     void TexBuffer(GLenum target, GLenum internalformat, GLuint buffer);

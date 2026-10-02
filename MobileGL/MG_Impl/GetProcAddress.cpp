@@ -18,6 +18,12 @@ extern "C" EGLDisplay eglGetPlatformDisplayEXT(EGLenum platform, void* native_di
 extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                                          const EGLint* attrib_list);
 extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
+extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
+                                               EGLint* num_formats);
+extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                                                 khronos_uint64_t* modifiers, EGLBoolean* external_only,
+                                                 EGLint* num_modifiers);
+extern "C" void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
 
 #define GETPROC(name, var)                                                                                             \
     if (strcmp(#name, var) == 0) {                                                                                     \
@@ -69,6 +75,8 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglDestroyImage, name);
         GETPROC(eglCreateImageKHR, name);
         GETPROC(eglDestroyImageKHR, name);
+        GETPROC(eglQueryDmaBufFormatsEXT, name);
+        GETPROC(eglQueryDmaBufModifiersEXT, name);
         GETPROC(eglGetPlatformDisplay, name);
         GETPROC(eglGetPlatformDisplayEXT, name);
         GETPROC(eglCreatePlatformWindowSurface, name);
@@ -116,6 +124,7 @@ namespace MobileGL::MG_Impl {
         GETPROC(glTexParameteriv, name);
         GETPROC(glTexImage1D, name);
         GETPROC(glTexImage2D, name);
+        GETPROC(glEGLImageTargetTexture2DOES, name);
         GETPROC(glDrawBuffer, name);
         GETPROC(glClear, name);
         GETPROC(glClearColor, name);

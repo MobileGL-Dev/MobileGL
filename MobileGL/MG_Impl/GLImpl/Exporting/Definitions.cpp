@@ -192,6 +192,7 @@ DECLARE_GL_FUNCTION_HEAD(void, StencilMaskSeparate, GLenum face, GLuint mask) DE
 DECLARE_GL_FUNCTION_HEAD(void, StencilOp, GLenum fail, GLenum zfail, GLenum zpass) DECLARE_GL_FUNCTION_END_NO_RETURN(void, StencilOp, fail, zfail, zpass)
 DECLARE_GL_FUNCTION_HEAD(void, StencilOpSeparate, GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) DECLARE_GL_FUNCTION_END_NO_RETURN(void, StencilOpSeparate, face, sfail, dpfail, dppass)
 DECLARE_GL_FUNCTION_HEAD(void, TexImage2D, GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexImage2D, target, level, internalformat, width, height, border, format, type, pixels)
+DECLARE_GL_FUNCTION_HEAD(void, EGLImageTargetTexture2DOES, GLenum target, GLeglImageOES image) DECLARE_GL_FUNCTION_END_NO_RETURN(void, EGLImageTargetTexture2DOES, target, image)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterf, GLenum target, GLenum pname, GLfloat param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterf, target, pname, param)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterfv, GLenum target, GLenum pname, const GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterfv, target, pname, params)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameteri, GLenum target, GLenum pname, GLint param) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameteri, target, pname, param)

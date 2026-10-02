@@ -462,6 +462,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateSyncedRenderState();
     } // namespace RenderStateImpl
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // ---- SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) ----
+    //
+    // A shared image reaches the driver only through the Android import path: its AHardwareBuffer
+    // becomes an EGLImage (EGL_ANDROID_get_native_client_buffer + EGL_ANDROID_image_native_buffer)
+    // and that EGLImage the storage of a texture or renderbuffer (GL_OES_EGL_image). On a host
+    // build there is no such path and every entry below declines.
+    namespace SharedImageImpl {
+        // One EGLImage over one shared image, holding the image's registry reference for as long
+        // as the EGLImage lives (SharedImageRegistry.h's lifetime rule). The last reference
+        // destroys the EGLImage, unless the display that made it has been terminated since (which
+        // destroyed it already). Opaque outside DirectGLES.cpp.
+        struct EglImage;
+        using EglImageRef = SharedPtr<EglImage>;
+
+        // An EGLImage for the live shared image `id`, or null with `why`. Needs a current context
+        // (the first call resolves the extension entry points).
+        EglImageRef CreateEglImage(Uint64 id, String& why);
+        // glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image) on what the active unit has bound to
+        // GL_TEXTURE_2D. False when the driver refused it (its GL error is consumed).
+        Bool TargetBoundTexture2D(const EglImageRef& image);
+        // BackendObject::BlitDefaultFramebufferToSharedImage, for the calling thread's context.
+        Bool BlitDefaultFramebufferTo(const SharedImageView& image);
+    } // namespace SharedImageImpl
+#endif
+
     extern MG_External::EGLFunctionsTable g_EGLFuncs;
     extern MG_External::GLESFunctionsTable g_GLESFuncs;
     extern MG_External::GLESCapabilities g_GLESCapabilities;

@@ -297,6 +297,7 @@ namespace MobileGL {
 
                 for (auto imageIt = m_images.begin(); imageIt != m_images.end();) {
                     if (imageIt->second.Display == display) {
+                        if (imageIt->second.Shared.Id != 0) m_orphanedSharedImages.push_back(imageIt->second.Shared.Id);
                         imageIt = m_images.erase(imageIt);
                     } else {
                         ++imageIt;
@@ -1558,8 +1559,10 @@ namespace MobileGL {
                 return image;
             }
 
-            Bool EGLContext::DestroyImage(EGLDisplayHandle display, EGLImageHandle image) {
+            Bool EGLContext::DestroyImage(EGLDisplayHandle display, EGLImageHandle image,
+                                          Uint64* releasedSharedImageId) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (releasedSharedImageId != nullptr) *releasedSharedImageId = 0;
                 auto imageIt = m_images.find(image);
                 if (imageIt == m_images.end()) {
                     SetError(EGL_BAD_PARAMETER);
@@ -1569,7 +1572,220 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
+                if (releasedSharedImageId != nullptr) *releasedSharedImageId = imageIt->second.Shared.Id;
                 m_images.erase(imageIt);
+                return true;
+            }
+
+            Bool EGLContext::IsDmaBufFourccSupported(Uint32 fourcc) {
+                // Only the GL RGBA8 byte order: an ARGB/XRGB-ordered import would need the
+                // backend to swizzle the image it binds, which nothing records yet.
+                return fourcc == kDrmFourccAbgr8888 || fourcc == kDrmFourccXbgr8888;
+            }
+
+            Bool EGLContext::PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context,
+                                                 EGLClientBuffer buffer, const EGLAttrib* attribList,
+                                                 DmaBufImportAttribs* out) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                // EGL_EXT_image_dma_buf_import: the context must be EGL_NO_CONTEXT and the buffer
+                // NULL - everything is in the attribute list.
+                if (context != nullptr || buffer != nullptr) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+
+                DmaBufImportAttribs attribs;
+                Bool hasWidth = false, hasHeight = false, hasFourcc = false, hasFd = false, hasOffset = false,
+                     hasPitch = false, hasModifierLo = false, hasModifierHi = false, otherPlane = false;
+                Uint64 modifierLo = 0, modifierHi = 0;
+                for (SizeT i = 0; attribList != nullptr && attribList[i] != EGL_NONE; i += 2) {
+                    const EGLAttrib value = attribList[i + 1];
+                    switch (attribList[i]) {
+                    case EGL_WIDTH:
+                        attribs.Width = static_cast<EGLint>(value);
+                        hasWidth = true;
+                        break;
+                    case EGL_HEIGHT:
+                        attribs.Height = static_cast<EGLint>(value);
+                        hasHeight = true;
+                        break;
+                    case EGL_LINUX_DRM_FOURCC_EXT:
+                        attribs.Fourcc = static_cast<Uint32>(value);
+                        hasFourcc = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_FD_EXT:
+                        attribs.Fd = static_cast<int>(value);
+                        hasFd = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_OFFSET_EXT:
+                        attribs.Offset = static_cast<EGLint>(value);
+                        hasOffset = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_PITCH_EXT:
+                        attribs.Pitch = static_cast<EGLint>(value);
+                        hasPitch = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT:
+                        modifierLo = static_cast<Uint32>(value);
+                        hasModifierLo = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT:
+                        modifierHi = static_cast<Uint32>(value);
+                        hasModifierHi = true;
+                        break;
+                    case EGL_DMA_BUF_PLANE1_FD_EXT:
+                    case EGL_DMA_BUF_PLANE1_OFFSET_EXT:
+                    case EGL_DMA_BUF_PLANE1_PITCH_EXT:
+                    case EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT:
+                    case EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT:
+                    case EGL_DMA_BUF_PLANE2_FD_EXT:
+                    case EGL_DMA_BUF_PLANE2_OFFSET_EXT:
+                    case EGL_DMA_BUF_PLANE2_PITCH_EXT:
+                    case EGL_DMA_BUF_PLANE2_MODIFIER_LO_EXT:
+                    case EGL_DMA_BUF_PLANE2_MODIFIER_HI_EXT:
+                    case EGL_DMA_BUF_PLANE3_FD_EXT:
+                    case EGL_DMA_BUF_PLANE3_OFFSET_EXT:
+                    case EGL_DMA_BUF_PLANE3_PITCH_EXT:
+                    case EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT:
+                    case EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT:
+                        otherPlane = true;
+                        break;
+                    // Hints for YUV formats, and EGL_KHR_image_base's own attribute: meaningless
+                    // for a single-plane RGB image, accepted and ignored.
+                    case EGL_YUV_COLOR_SPACE_HINT_EXT:
+                    case EGL_SAMPLE_RANGE_HINT_EXT:
+                    case EGL_YUV_CHROMA_HORIZONTAL_SITING_HINT_EXT:
+                    case EGL_YUV_CHROMA_VERTICAL_SITING_HINT_EXT:
+                    case EGL_IMAGE_PRESERVED_KHR:
+                        break;
+                    default:
+                        SetError(EGL_BAD_PARAMETER);
+                        return false;
+                    }
+                }
+                if (!hasWidth || !hasHeight || !hasFourcc || !hasFd || !hasOffset || !hasPitch ||
+                    hasModifierLo != hasModifierHi) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (!IsDmaBufFourccSupported(attribs.Fourcc)) {
+                    SetError(EGL_BAD_MATCH);
+                    return false;
+                }
+                // Every supported format has exactly one plane.
+                if (otherPlane) {
+                    SetError(EGL_BAD_ATTRIBUTE);
+                    return false;
+                }
+                if (attribs.Width <= 0 || attribs.Height <= 0 || attribs.Fd < 0) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (attribs.Offset < 0 || attribs.Pitch <= 0) {
+                    SetError(EGL_BAD_ACCESS);
+                    return false;
+                }
+                // Any modifier is taken: the image is identified by its descriptor, never read
+                // through the layout a modifier describes.
+                attribs.HasModifier = hasModifierLo;
+                attribs.Modifier = (modifierHi << 32) | modifierLo;
+                if (out != nullptr) *out = attribs;
+                return true;
+            }
+
+            EGLContext::EGLImageHandle EGLContext::CreateSharedImage(EGLDisplayHandle display,
+                                                                     const SharedImageInfo& info) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_IMAGE;
+                }
+                if (info.Id == 0) {
+                    SetError(EGL_BAD_MATCH);
+                    return EGL_NO_IMAGE;
+                }
+                const auto image = EncodeHandle<EGLImageHandle>(m_nextImageHandle++);
+                m_images[image] = ImageObject{
+                    .Display = display,
+                    .Context = nullptr,
+                    .Target = EGL_LINUX_DMA_BUF_EXT,
+                    .Buffer = nullptr,
+                    .Shared = info,
+                };
+                return image;
+            }
+
+            Bool EGLContext::GetSharedImage(EGLImageHandle image, SharedImageInfo* out) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* imageObject = TryGetImage(image);
+                if (imageObject == nullptr || imageObject->Shared.Id == 0) return false;
+                if (out != nullptr) *out = imageObject->Shared;
+                return true;
+            }
+
+            Vector<Uint64> EGLContext::TakeOrphanedSharedImages() {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                Vector<Uint64> orphaned;
+                orphaned.swap(m_orphanedSharedImages);
+                return orphaned;
+            }
+
+            Bool EGLContext::QueryDmaBufFormats(EGLDisplayHandle display, Bool available, EGLint maxFormats,
+                                                EGLint* formats, EGLint* numFormats) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                if (maxFormats < 0 || numFormats == nullptr || (maxFormats > 0 && formats == nullptr)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888};
+                const EGLint total = available ? static_cast<EGLint>(std::size(kFormats)) : 0;
+                if (maxFormats == 0) {
+                    *numFormats = total;
+                    return true;
+                }
+                const EGLint count = std::min(maxFormats, total);
+                for (EGLint i = 0; i < count; ++i) formats[i] = static_cast<EGLint>(kFormats[i]);
+                *numFormats = count;
+                return true;
+            }
+
+            Bool EGLContext::QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, EGLint format,
+                                                  EGLint maxModifiers, Uint64* modifiers,
+                                                  EGLBoolean* externalOnly, EGLint* numModifiers) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                (void)externalOnly;
+                if (!ValidateDisplay(display)) {
+                    SetError(EGL_BAD_DISPLAY);
+                    return false;
+                }
+                if (!IsDisplayInitialized(display)) {
+                    SetError(EGL_NOT_INITIALIZED);
+                    return false;
+                }
+                if (!available || !IsDmaBufFourccSupported(static_cast<Uint32>(format)) || maxModifiers < 0 ||
+                    numModifiers == nullptr || (maxModifiers > 0 && modifiers == nullptr)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                // No explicit modifiers: an image's layout is its allocator's, which is what an
+                // import without modifier attributes (the implicit modifier) means.
+                *numModifiers = 0;
                 return true;
             }
         } // namespace EGLState

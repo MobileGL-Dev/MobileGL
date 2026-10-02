@@ -22,10 +22,16 @@
 // (shape) and the server's staged-texture store (texels).
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/StagedTextureStore.h>
+// Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
+#include <MG_Remote/Server/SharedImageRegistry.h>
 #include "../DirectVulkan.h"
 // P7 wave 2 package B3: rule I's tally for the silent exits on this file's wire arm.
 #include "WireDeclineTally.h"
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
 #endif
+#endif
+#include <string>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -2108,6 +2114,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkTextureManager::SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record,
                                                 TextureResource& resource, Bool requireStorage) {
         const MG_Pipe::MGPResourceDesc& desc = record.Desc;
+        // Level 0 is a shared image: bind its buffer. An image that cannot be bound here leaves
+        // the texture the storage its NULL-data definition asked for, below.
+        if (record.SharedImageId != 0) {
+            const SharedImageBind bound = SyncWireSharedImage(record, resource, requireStorage);
+            if (bound != SharedImageBind::Unresolved) return bound == SharedImageBind::Bound;
+        }
         if (desc.StorageKind != static_cast<Uint8>(TextureStorageType::Mipmap)) {
             MGLOG_W_ONCE("Magma wire texture {slot=%u, gen=%u}: buffer-backed textures are not migrated; declined",
                          desc.Resource.Slot, desc.Resource.Gen);
@@ -2276,7 +2288,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                           : (desc.Levels > 1 ? std::min(std::max<Uint32>(desc.Levels, fullMipLevels), fullMipLevels)
                                              : 1u);
 
-        const Bool compatible = resource.image != VK_NULL_HANDLE && resource.format == format &&
+        // A shared image never stands in for allocated storage: the attach is over (or never
+        // resolved), so the texture gets storage of its own, and none of the image's texels.
+        const Bool compatible = resource.image != VK_NULL_HANDLE && resource.sharedImageId == 0 &&
+                                resource.format == format &&
                                 resource.extent.width == desc.Width && resource.extent.height == imageHeight &&
                                 resource.depth == shapeInfo.depth && resource.arrayLayers == shapeInfo.arrayLayers &&
                                 resource.viewType == shapeInfo.viewType &&
@@ -2291,7 +2306,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A named-level respecify changes ONLY that level; a BindMask update changes no
         // storage at all. Preserve every compatible old level when growing/upgrading the
         // allocation. A whole-store redefinition permits (but does not require) old texels.
-        const Bool preserve = resource.image != VK_NULL_HANDLE && resource.format == format &&
+        const Bool preserve = resource.image != VK_NULL_HANDLE && resource.sharedImageId == 0 &&
+                              resource.format == format &&
                               resource.extent.width == desc.Width && resource.extent.height == imageHeight &&
                               resource.depth == shapeInfo.depth && resource.arrayLayers == shapeInfo.arrayLayers &&
                               resource.viewType == shapeInfo.viewType &&
@@ -2767,6 +2783,232 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             handle = record.Desc.ViewOf;
         }
         return MG_Pipe::kMGPipeNullHandle;
+    }
+
+    Bool VkTextureManager::ImportSharedImage(void* nativeBuffer, Uint32 width, Uint32 height,
+                                             ImportedSharedImage& out, String& why) {
+        out = ImportedSharedImage{};
+#if defined(__ANDROID__)
+        auto* ahb = static_cast<AHardwareBuffer*>(nativeBuffer);
+        if (ahb == nullptr) {
+            why = "the image has no AHardwareBuffer";
+            return false;
+        }
+        VulkanRenderer::WireAhbImport ctx;
+        if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx)) {
+            why = "the device did not take VK_ANDROID_external_memory_android_hardware_buffer";
+            return false;
+        }
+        AHardwareBuffer_Desc desc{};
+        AHardwareBuffer_describe(ahb, &desc);
+        if (desc.width != width || desc.height != height || desc.layers != 1) {
+            why = "the buffer is " + std::to_string(desc.width) + "x" + std::to_string(desc.height) + "x" +
+                  std::to_string(desc.layers) + ", not " + std::to_string(width) + "x" + std::to_string(height);
+            return false;
+        }
+        const auto getProperties =
+            reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(ctx.getAhbProperties);
+        VkAndroidHardwareBufferFormatPropertiesANDROID formatProperties{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID};
+        VkAndroidHardwareBufferPropertiesANDROID properties{VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+        properties.pNext = &formatProperties;
+        VkResult result = getProperties(ctx.device, ahb, &properties);
+        if (result != VK_SUCCESS) {
+            why = "vkGetAndroidHardwareBufferPropertiesANDROID -> " + std::to_string(static_cast<int>(result));
+            return false;
+        }
+        // The RGBA8/RGBX8 buffers the registry allocates have a Vulkan format; an external-only
+        // format would need a YCbCr conversion and is not a colour buffer this path can write.
+        if (formatProperties.format == VK_FORMAT_UNDEFINED) {
+            why = "the buffer has no Vulkan format (external format only)";
+            return false;
+        }
+        // Usage is bounded by the buffer's own usage (the AHardwareBuffer usage equivalence);
+        // transfers need no buffer usage bit.
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if ((desc.usage & AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE) != 0 &&
+            (formatProperties.formatFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
+            usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        if ((desc.usage & AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT) != 0 &&
+            (formatProperties.formatFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0)
+            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+        VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.pNext = &external;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = formatProperties.format;
+        imageInfo.extent = {width, height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = usage;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        result = vkCreateImage(ctx.device, &imageInfo, nullptr, &out.image);
+        if (result != VK_SUCCESS) {
+            out.image = VK_NULL_HANDLE;
+            why = "vkCreateImage(external AHB) -> " + std::to_string(static_cast<int>(result));
+            return false;
+        }
+        Int32 type = -1;
+        for (Uint32 i = 0; i < ctx.memory.memoryTypeCount && type < 0; ++i) {
+            if ((properties.memoryTypeBits & (1u << i)) != 0 &&
+                (ctx.memory.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0)
+                type = static_cast<Int32>(i);
+        }
+        for (Uint32 i = 0; i < ctx.memory.memoryTypeCount && type < 0; ++i) {
+            if ((properties.memoryTypeBits & (1u << i)) != 0) type = static_cast<Int32>(i);
+        }
+        if (type < 0) {
+            why = "no memory type can import it";
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        dedicated.image = out.image;
+        VkImportAndroidHardwareBufferInfoANDROID import{VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+        import.pNext = &dedicated;
+        import.buffer = ahb;
+        VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocateInfo.pNext = &import;
+        allocateInfo.allocationSize = properties.allocationSize;
+        allocateInfo.memoryTypeIndex = static_cast<Uint32>(type);
+        result = vkAllocateMemory(ctx.device, &allocateInfo, nullptr, &out.memory);
+        if (result != VK_SUCCESS) {
+            out.memory = VK_NULL_HANDLE;
+            why = "vkAllocateMemory(import AHB) -> " + std::to_string(static_cast<int>(result));
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        result = vkBindImageMemory(ctx.device, out.image, out.memory, 0);
+        if (result != VK_SUCCESS) {
+            why = "vkBindImageMemory -> " + std::to_string(static_cast<int>(result));
+            DestroyImportedSharedImage(ctx.device, out);
+            return false;
+        }
+        out.format = formatProperties.format;
+        out.usage = usage;
+        out.features = formatProperties.formatFeatures;
+        out.queueFamily = ctx.queueFamily;
+        return true;
+#else
+        (void)nativeBuffer, (void)width, (void)height;
+        why = "shared images are imported on Android only";
+        return false;
+#endif
+    }
+
+    void VkTextureManager::DestroyImportedSharedImage(VkDevice device, ImportedSharedImage& image) {
+        if (image.image != VK_NULL_HANDLE) vkDestroyImage(device, image.image, nullptr);
+        if (image.memory != VK_NULL_HANDLE) vkFreeMemory(device, image.memory, nullptr);
+        image = ImportedSharedImage{};
+    }
+
+    VkTextureManager::SharedImageBind VkTextureManager::SyncWireSharedImage(
+        const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource, Bool requireStorage) {
+        const MG_Pipe::MGPResourceDesc& desc = record.Desc;
+        const Uint64 id = record.SharedImageId;
+        if (requireStorage) {
+            // The buffer's usage has no storage equivalent; a reallocation would drop the image.
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu is bound as a shader image, "
+                         "which it cannot back; declined",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id));
+            return SharedImageBind::Failed;
+        }
+        // Already this image: the serial moved for something else (params, the bind mask).
+        if (resource.sharedImageId == id && resource.image != VK_NULL_HANDLE) return SharedImageBind::Bound;
+
+        const auto image = MG_Remote::Server::SharedImages::Find(id);
+        if (image == nullptr) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu is no longer live; the texture "
+                         "keeps its own (undefined) level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id));
+            return SharedImageBind::Unresolved;
+        }
+        const Bool flat2D = desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D) ||
+                            desc.Target == static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::TexRect);
+        if (!flat2D || desc.Width != image->Width || desc.Height != image->Height ||
+            !MG_Pipe::MGPipeHandleIsNull(desc.ViewOf)) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: pipe target %u at %ux%u cannot take shared image "
+                         "%llu (%ux%u); the texture keeps its own level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<Uint32>(desc.Target), desc.Width,
+                         desc.Height, static_cast<unsigned long long>(id), image->Width, image->Height);
+            return SharedImageBind::Unresolved;
+        }
+        ImportedSharedImage imported;
+        String why;
+        if (!ImportSharedImage(image->Native, image->Width, image->Height, imported, why)) {
+            MGLOG_E_ONCE("Magma wire texture {slot=%u, gen=%u}: shared image %llu not imported - %s; the texture "
+                         "keeps its own level 0",
+                         desc.Resource.Slot, desc.Resource.Gen, static_cast<unsigned long long>(id), why.c_str());
+            return SharedImageBind::Unresolved;
+        }
+
+        // ACQUIRE FROM THE FOREIGN FAMILY. The writer (a client session's Present, on its own
+        // device) leaves the image released to VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL, which is
+        // also the layout every wire descriptor samples in. Submitted on its own and waited, like
+        // the preserve copy: it runs once per attach, before any recorded use of the image.
+        VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocInfo.commandPool = m_commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        VK_VERIFY(vkAllocateCommandBuffers(m_device, &allocInfo, &commandBuffer),
+                  "vkAllocateCommandBuffers(shared image acquire)");
+        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        VK_VERIFY(vkBeginCommandBuffer(commandBuffer, &beginInfo), "vkBeginCommandBuffer(shared image acquire)");
+        VkImageMemoryBarrier acquire{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        acquire.srcAccessMask = 0;
+        acquire.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        acquire.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        acquire.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        acquire.dstQueueFamilyIndex = imported.queueFamily;
+        acquire.image = imported.image;
+        acquire.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &acquire);
+        VK_VERIFY(vkEndCommandBuffer(commandBuffer), "vkEndCommandBuffer(shared image acquire)");
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence fence = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateFence(m_device, &fenceInfo, nullptr, &fence), "vkCreateFence(shared image acquire)");
+        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+        VK_VERIFY(vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence), "vkQueueSubmit(shared image acquire)");
+        VK_VERIFY(vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(shared image acquire)");
+        vkDestroyFence(m_device, fence, nullptr);
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
+
+        TextureResource replacement;
+        replacement.image = imported.image;
+        replacement.importedMemory = imported.memory;
+        replacement.layout = VK_IMAGE_LAYOUT_GENERAL;
+        replacement.extent = {image->Width, image->Height};
+        replacement.depth = 1;
+        replacement.arrayLayers = 1;
+        replacement.mipLevels = 1;
+        replacement.sampledBaseMipLevel = 0;
+        replacement.sampledLevelCount = 1;
+        replacement.format = imported.format;
+        replacement.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        replacement.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        replacement.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+        replacement.imageCreateFlags = 0;
+        replacement.usageFlags = imported.usage;
+        replacement.sharedImageId = id;
+        replacement.sharedImageOwner = image;
+        replacement.sharedImageAlphaOne = image->Fourcc == MG_Remote::Server::SharedImages::kFourccXbgr8888;
+        ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
+        DeferResourceRelease(Move(resource));
+        std::destroy_at(&resource);
+        std::construct_at(&resource, Move(replacement));
+        MGLOG_D("Magma wire texture {slot=%u, gen=%u}: level 0 is shared image %llu (%ux%u)", desc.Resource.Slot,
+                desc.Resource.Gen, static_cast<unsigned long long>(id), image->Width, image->Height);
+        return SharedImageBind::Bound;
     }
 
     VkTextureManager::TextureResource* VkTextureManager::SyncTextureResourceByHandle(
