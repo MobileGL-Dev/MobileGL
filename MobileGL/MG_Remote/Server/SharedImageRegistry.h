@@ -68,6 +68,15 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         Uint64 IdentityDev = 0;
         Uint64 IdentityIno = 0;
 
+        // SYNCHRONISATION, as sync_file descriptors (-1 = nothing pending). An image has one
+        // writer at a time (the client session presenting into it) and any number of readers (a
+        // compositor session sampling it). Guarded by SyncMutex; reached only through the
+        // functions below, which is why these are mutable on an otherwise immutable record.
+        mutable std::mutex SyncMutex;
+        mutable int WriteFence = -1;
+        mutable Uint64 WriteGeneration = 0;
+        mutable Vector<int> ReadFences;
+
         Image() = default;
         Image(const Image&) = delete;
         Image& operator=(const Image&) = delete;
@@ -87,6 +96,49 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
 
     // Live images, for tests and diagnostics.
     SizeT LiveCount();
+
+    // ---- synchronisation (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) ---------------
+    //
+    // THE SERVER ORDERS THE IMAGE BETWEEN ITS SESSIONS, the way a kernel's implicit sync would:
+    // a writer publishes the fence of its write and moves on; a reader that finds the generation
+    // moved waits for that fence on its GPU before it samples; at the end of each frame a reader
+    // publishes that frame's fence, and the next writer waits for it before it overwrites what
+    // is still being read. Every fence is a sync_file, so no two backends need to agree on more.
+
+    // The writer's fence: the copy just recorded into `image`. Takes ownership of `fence` (-1:
+    // the write has already completed). Moves the write generation.
+    void PublishWrite(const Image& image, int fence);
+    // The current write generation and a duplicate of its still-pending fence (-1 when there is
+    // none or it has signaled). The caller closes the descriptor.
+    int DupWriteFence(const Image& image, Uint64* generation);
+    // A reader's fence: a frame that sampled `image`. Takes ownership of `fence`.
+    void PublishRead(const Image& image, int fence);
+    // Duplicates of the read fences still pending; signaled ones are dropped on the way. The
+    // caller closes each.
+    Vector<int> DupPendingReadFences(const Image& image);
+    // CPU waits, for a backend that cannot wait on its GPU. False on timeout.
+    Bool WaitForReads(const Image& image, Uint32 timeoutMs);
+
+    namespace SyncFile {
+        // Whether `fd` (a sync_file) has signaled; an invalid descriptor counts as signaled.
+        Bool Signaled(int fd);
+        // Waits for it. False on timeout.
+        Bool Wait(int fd, Uint32 timeoutMs);
+    } // namespace SyncFile
+
+    // One reader's frame: the images it sampled since its last frame boundary. A compositor
+    // session notes each image as it binds it and, at its present, publishes the frame's fence
+    // to all of them at once.
+    class ReadTracker {
+    public:
+        void NoteRead(const ImageRef& image);
+        // Takes ownership of `fence` (a sync_file for the frame, -1 if it has completed).
+        void PublishFrame(int fence);
+        SizeT Pending() const { return m_images.size(); }
+
+    private:
+        UnorderedMap<Uint64, ImageRef> m_images;
+    };
 
     // One session's references: what it allocated or imported and has not released yet. Dropping
     // the holder (the session ending) drops every one of them.

@@ -21,6 +21,8 @@
 #include <android/hardware_buffer.h>
 #endif
 #if !defined(_WIN32)
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -182,6 +184,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         }
 #if !defined(_WIN32)
         if (Fd >= 0) ::close(Fd);
+        if (WriteFence >= 0) ::close(WriteFence);
+        for (const int fence : ReadFences) ::close(fence);
 #endif
         ReleaseNative(Native);
     }
@@ -271,6 +275,123 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         SizeT live = 0;
         for (const auto& [id, weak] : reg.byId) live += weak.expired() ? 0 : 1;
         return live;
+    }
+
+    // ---- synchronisation ------------------------------------------------------------------------
+
+    namespace SyncFile {
+        Bool Signaled(int fd) { return Wait(fd, 0); }
+
+        Bool Wait(int fd, Uint32 timeoutMs) {
+#if defined(_WIN32)
+            (void)fd, (void)timeoutMs;
+            return true;
+#else
+            if (fd < 0) return true;
+            pollfd p{fd, POLLIN, 0};
+            for (;;) {
+                const int ready = ::poll(&p, 1, static_cast<int>(timeoutMs));
+                if (ready > 0) return true;
+                if (ready == 0) return false;
+                if (errno != EINTR) return true; // not a fence one can wait on: nothing to order
+            }
+#endif
+        }
+    } // namespace SyncFile
+
+    namespace {
+        void CloseFd(int fd) {
+#if !defined(_WIN32)
+            if (fd >= 0) ::close(fd);
+#endif
+        }
+
+        int Dup(int fd) {
+#if defined(_WIN32)
+            (void)fd;
+            return -1;
+#else
+            return fd >= 0 ? ::fcntl(fd, F_DUPFD_CLOEXEC, 0) : -1;
+#endif
+        }
+
+        // Signaled read fences are history; a reader that keeps sampling a still image publishes
+        // one per frame, so the list is pruned whenever it is touched and bounded besides.
+        constexpr SizeT kMaxReadFences = 8;
+        void PruneReads(const Image& image) {
+            auto& fences = image.ReadFences;
+            for (SizeT i = 0; i < fences.size();) {
+                if (SyncFile::Signaled(fences[i])) {
+                    CloseFd(fences[i]);
+                    fences[i] = fences.back();
+                    fences.pop_back();
+                } else {
+                    ++i;
+                }
+            }
+        }
+    } // namespace
+
+    void PublishWrite(const Image& image, int fence) {
+        const std::lock_guard<std::mutex> lock(image.SyncMutex);
+        CloseFd(image.WriteFence);
+        image.WriteFence = fence;
+        ++image.WriteGeneration;
+    }
+
+    int DupWriteFence(const Image& image, Uint64* generation) {
+        const std::lock_guard<std::mutex> lock(image.SyncMutex);
+        if (generation != nullptr) *generation = image.WriteGeneration;
+        if (image.WriteFence >= 0 && SyncFile::Signaled(image.WriteFence)) {
+            CloseFd(image.WriteFence);
+            image.WriteFence = -1;
+        }
+        return Dup(image.WriteFence);
+    }
+
+    void PublishRead(const Image& image, int fence) {
+        if (fence < 0) return;
+        const std::lock_guard<std::mutex> lock(image.SyncMutex);
+        PruneReads(image);
+        if (image.ReadFences.size() >= kMaxReadFences) {
+            // A reader whose frames never complete: the oldest is waited out rather than dropped,
+            // since dropping it would let a writer overwrite what that frame still reads.
+            SyncFile::Wait(image.ReadFences.front(), 1000);
+            CloseFd(image.ReadFences.front());
+            image.ReadFences.erase(image.ReadFences.begin());
+        }
+        image.ReadFences.push_back(fence);
+    }
+
+    Vector<int> DupPendingReadFences(const Image& image) {
+        const std::lock_guard<std::mutex> lock(image.SyncMutex);
+        PruneReads(image);
+        Vector<int> out;
+        out.reserve(image.ReadFences.size());
+        for (const int fence : image.ReadFences) {
+            const int copy = Dup(fence);
+            if (copy >= 0) out.push_back(copy);
+        }
+        return out;
+    }
+
+    Bool WaitForReads(const Image& image, Uint32 timeoutMs) {
+        Bool all = true;
+        for (const int fence : DupPendingReadFences(image)) {
+            all = SyncFile::Wait(fence, timeoutMs) && all;
+            CloseFd(fence);
+        }
+        return all;
+    }
+
+    void ReadTracker::NoteRead(const ImageRef& image) {
+        if (image != nullptr) m_images.emplace(image->Id, image);
+    }
+
+    void ReadTracker::PublishFrame(int fence) {
+        for (const auto& [id, image] : m_images) PublishRead(*image, Dup(fence));
+        CloseFd(fence);
+        m_images.clear();
     }
 
     void SessionHolder::Hold(const ImageRef& image) {

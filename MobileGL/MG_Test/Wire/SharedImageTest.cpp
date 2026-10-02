@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -161,4 +162,96 @@ TEST(SharedImage, TheInboxKeepsSharedImageAndT0DescriptorsApart) {
     ::close(fd);
     // A shared-image record whose descriptor never comes is a bounded wait, not a hang.
     EXPECT_EQ(inbox.TakeSharedImageFd(7, 20, &fd, why), Server::AdoptInbox::Outcome::TimedOut);
+}
+
+// ---- synchronisation. A pipe stands in for a sync_file: its read end polls readable (signaled)
+// once something is written to it, which is all the registry asks of a fence.
+namespace {
+    struct FakeFence {
+        int read = -1;
+        int write = -1;
+        FakeFence() {
+            int p[2];
+            EXPECT_EQ(::pipe(p), 0);
+            read = p[0];
+            write = p[1];
+        }
+        ~FakeFence() {
+            if (read >= 0) ::close(read);
+            if (write >= 0) ::close(write);
+        }
+        int Take() { return std::exchange(read, -1); } // hands the read end over
+        int Dup() const { return ::dup(read); }
+        void Signal() { ASSERT_EQ(::write(write, "x", 1), 1); }
+    };
+} // namespace
+
+TEST(SharedImageSync, AWriteMovesTheGenerationAndItsFenceIsHandedOutUntilItSignals) {
+    std::string why;
+    SI::ImageRef image = SI::Allocate(8, 8, SI::kFourccAbgr8888, why);
+    ASSERT_NE(image, nullptr) << why;
+    Uint64 generation = 99;
+    EXPECT_EQ(SI::DupWriteFence(*image, &generation), -1);
+    EXPECT_EQ(generation, 0u);
+
+    FakeFence fence;
+    const int pending = fence.Dup();
+    SI::PublishWrite(*image, pending);
+    const int copy = SI::DupWriteFence(*image, &generation);
+    EXPECT_EQ(generation, 1u);
+    ASSERT_GE(copy, 0);
+    EXPECT_FALSE(SI::SyncFile::Signaled(copy));
+    fence.Signal();
+    EXPECT_TRUE(SI::SyncFile::Wait(copy, 1000));
+    ::close(copy);
+    // Signaled: nothing is left to wait for.
+    EXPECT_EQ(SI::DupWriteFence(*image, &generation), -1);
+    // A write that had already completed still moves the generation.
+    SI::PublishWrite(*image, -1);
+    EXPECT_EQ(SI::DupWriteFence(*image, &generation), -1);
+    EXPECT_EQ(generation, 2u);
+}
+
+TEST(SharedImageSync, PendingReadsAreWaitedForAndSignaledOnesAreDropped) {
+    std::string why;
+    SI::ImageRef image = SI::Allocate(8, 8, SI::kFourccAbgr8888, why);
+    ASSERT_NE(image, nullptr) << why;
+    FakeFence first, second;
+    SI::PublishRead(*image, first.Dup());
+    SI::PublishRead(*image, second.Dup());
+    Vector<int> pending = SI::DupPendingReadFences(*image);
+    EXPECT_EQ(pending.size(), 2u);
+    for (const int fd : pending) ::close(fd);
+    EXPECT_FALSE(SI::WaitForReads(*image, 10));
+
+    first.Signal();
+    pending = SI::DupPendingReadFences(*image);
+    EXPECT_EQ(pending.size(), 1u);
+    for (const int fd : pending) ::close(fd);
+    second.Signal();
+    EXPECT_TRUE(SI::WaitForReads(*image, 10));
+    EXPECT_TRUE(SI::DupPendingReadFences(*image).empty());
+}
+
+// A reader's frame fence reaches every image it noted, and only those.
+TEST(SharedImageSync, AReadTrackerPublishesOneFrameToEveryImageItRead) {
+    std::string why;
+    SI::ImageRef a = SI::Allocate(8, 8, SI::kFourccAbgr8888, why);
+    SI::ImageRef b = SI::Allocate(8, 8, SI::kFourccAbgr8888, why);
+    SI::ImageRef untouched = SI::Allocate(8, 8, SI::kFourccAbgr8888, why);
+    ASSERT_TRUE(a && b && untouched) << why;
+    SI::ReadTracker tracker;
+    tracker.NoteRead(a);
+    tracker.NoteRead(b);
+    tracker.NoteRead(a);
+    EXPECT_EQ(tracker.Pending(), 2u);
+    FakeFence frame;
+    tracker.PublishFrame(frame.Dup());
+    EXPECT_EQ(tracker.Pending(), 0u);
+    EXPECT_FALSE(SI::WaitForReads(*a, 10));
+    EXPECT_FALSE(SI::WaitForReads(*b, 10));
+    EXPECT_TRUE(SI::WaitForReads(*untouched, 10));
+    frame.Signal();
+    EXPECT_TRUE(SI::WaitForReads(*a, 10));
+    EXPECT_TRUE(SI::WaitForReads(*b, 10));
 }

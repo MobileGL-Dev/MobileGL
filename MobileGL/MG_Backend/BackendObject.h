@@ -620,9 +620,14 @@ namespace MobileGL {
             // Copies the default framebuffer of the surface current on this (the apply) thread into
             // `image`, rows TOP FIRST - GL's top row (y = height-1) lands in the image's first memory
             // row, which is what a wl_buffer's first row is - scaled to the image's extent if the two
-            // differ. Returns once the copy has COMPLETED on the GPU (the client attaches the buffer
-            // to a wl_surface right after, and nothing else orders the compositor's read). The
-            // application's GL state is untouched. False = not supported / failed (logged).
+            // differ. The image is ORDERED THROUGH ITS SYNC STATE (SharedImageRegistry.h): the copy
+            // waits for the image's pending read fences before it writes, and its own completion
+            // is published with SharedImages::PublishWrite as a sync_file - the call returns once
+            // the copy is submitted, never waiting for it on the CPU (a backend with no fence export
+            // waits and publishes -1). A reader binding the image waits for that fence on its GPU
+            // when the write generation moved, and at its frame boundary publishes its frame's fence
+            // with PublishRead / ReadTracker. The application's GL state is untouched. False = not
+            // supported / failed (logged).
             virtual Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
                 (void)image;
                 return false;
