@@ -25,8 +25,12 @@
 // file must not name ServerLoop's forwarders directly.
 #include <MG_Remote/Client/WireTables.h>
 #endif
+#include <cstring>
 #include <mutex>
 #include <sstream>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <dlfcn.h>
+#endif
 #include <type_traits>
 #include <unordered_set>
 
@@ -1193,6 +1197,32 @@ namespace MobileGL::MG_Impl::EGLImpl {
         (void)attrib_list;
 
         // As GetDisplay.
+        constexpr EGLenum kPlatformGbm = 0x31D7;
+#if MOBILEGL_WAYLAND_WINDOWS
+        // A "GBM" display whose native display is a wl_display is a Wayland one: Chromium's
+        // Wayland GL layer names the GBM platform for every display it asks for, including the
+        // one on its own Wayland connection whose windows are wl_egl_windows.
+        if (platform == kPlatformGbm && native_display != nullptr &&
+            Wayland::IsWaylandDisplay(reinterpret_cast<Uint64>(native_display), EGL_NONE)) {
+            platform = Wayland::kPlatformWayland;
+        }
+#endif
+#if defined(__linux__) && !defined(__ANDROID__)
+        // A GBM device some other backend created (the system's own driver's) is not one this
+        // implementation can draw for: its buffers come from that driver, never from the server.
+        // Declined before anything is brought up, so a loader with more than one EGL vendor hands
+        // the device to the one it belongs to. Only a device whose backend names itself is asked
+        // about; one from a loader too old to say is served as before.
+        if (platform == kPlatformGbm && native_display != nullptr) {
+            using BackendNameFn = const char* (*)(void*);
+            static const auto backendName =
+                reinterpret_cast<BackendNameFn>(dlsym(RTLD_DEFAULT, "gbm_device_get_backend_name"));
+            const char* name = backendName != nullptr ? backendName(native_display) : nullptr;
+            if (name != nullptr && std::strcmp(name, "mobilegl") != 0) {
+                return EGL_NO_DISPLAY;
+            }
+        }
+#endif
         if (!MobileGL::ImplementationAvailable()) {
             return EGL_NO_DISPLAY;
         }
@@ -1200,16 +1230,6 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_DISPLAY;
         }
-#if MOBILEGL_WAYLAND_WINDOWS
-        // A "GBM" display whose native display is a wl_display is a Wayland one: Chromium's
-        // Wayland GL layer names the GBM platform for every display it asks for, including the
-        // one on its own Wayland connection whose windows are wl_egl_windows.
-        constexpr EGLenum kPlatformGbm = 0x31D7;
-        if (platform == kPlatformGbm && native_display != nullptr &&
-            Wayland::IsWaylandDisplay(reinterpret_cast<Uint64>(native_display), EGL_NONE)) {
-            platform = Wayland::kPlatformWayland;
-        }
-#endif
         return state->GetPlatformDisplay(platform, native_display);
     }
 

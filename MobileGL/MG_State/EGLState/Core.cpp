@@ -152,6 +152,18 @@ namespace MobileGL {
 
                 displayObject.Configs.push_back(CreateDefaultConfig(display, 1, 0));
                 displayObject.Configs.push_back(CreateDefaultConfig(display, 2, 8));
+#if !defined(ANDROID) && !defined(__ANDROID__)
+                // The X visual only means something on an X display: the default display (which is
+                // DISPLAY's) or an explicit X11 one. Asking the X server on any other platform
+                // costs a connection a Wayland/GBM/surfaceless client never needed - and an X
+                // server that is itself creating this display (a rootless X server's GL
+                // acceleration) would be waiting on its own connection.
+                constexpr EGLenum kPlatformX11 = 0x31D5;
+                if (platform == EGL_NONE || platform == kPlatformX11) {
+                    const EGLint visualId = QueryDefaultX11VisualId();
+                    for (const auto config : displayObject.Configs) m_configs[config].NativeVisualId = visualId;
+                }
+#endif
 
                 m_displays[display] = displayObject;
                 m_displayLookup[key] = display;
@@ -174,7 +186,7 @@ namespace MobileGL {
                     .RenderableType = EGL_OPENGL_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
                     .MinSwapInterval = 0,
                     .MaxSwapInterval = 4,
-                    .NativeVisualId = QueryDefaultX11VisualId(),
+                    .NativeVisualId = 0, // the display's X visual, set by GetOrCreateDisplay
                 };
 #if defined(ANDROID) || defined(__ANDROID__)
                 cfg.NativeVisualId = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;

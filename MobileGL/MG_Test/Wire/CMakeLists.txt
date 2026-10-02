@@ -121,8 +121,10 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     endif ()
 
     if (test STREQUAL "ServerProbeTest")
-        # It calls the glvnd vendor entry point the way libEGL does.
+        # It calls the glvnd vendor entry point the way libEGL does, and stands in for the GBM
+        # loader's backend-name query with a symbol of its own, which must be visible to dlsym.
         target_include_directories(${test} PRIVATE ${MGL_ROOT}/3rdparty/glvnd/include)
+        set_target_properties(${test} PROPERTIES ENABLE_EXPORTS ON)
     endif ()
 
     if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR

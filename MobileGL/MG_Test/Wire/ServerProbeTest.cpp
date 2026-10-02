@@ -37,6 +37,15 @@ extern "C" int __glx_Main(uint32_t version, const void* exports, void* vendor, v
 
 using namespace MobileGL;
 
+// A stand-in for the GBM loader's query, found by the implementation through the process's global
+// symbols (the target exports them): a "device" here is just the backend name it reports.
+struct FakeGbmDevice {
+    const char* backend;
+};
+extern "C" __attribute__((visibility("default"))) const char* gbm_device_get_backend_name(void* device) {
+    return static_cast<FakeGbmDevice*>(device)->backend;
+}
+
 namespace {
 
     namespace EGL = MobileGL::MG_Impl::EGLImpl;
@@ -244,6 +253,51 @@ namespace {
         EXPECT_EQ(r.glxLoaded, 0) << "the GLX vendor must refuse to load so libGLX falls back";
         EXPECT_GE(r.elapsedMs, 0);
         EXPECT_LT(r.elapsedMs, 1000) << "declining must not cost the bring-up's 20 s connect budget";
+        std::error_code ec;
+        std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
+    }
+
+    // A GBM device another backend created is declined before MobileGL brings anything up (so a
+    // loader with a second vendor gives it to its owner); one of MobileGL's own is served.
+    TEST_F(ServerProbeTest, AForeignGbmDeviceIsDeclinedAndOneOfOursIsServed) {
+        P12::ServerProcess server;
+        if (!P12::LaunchSupervisor("probe-gbm", &server)) GTEST_SKIP() << "no `--serve` supervisor on this host";
+        const std::string logBase = "/tmp/" + UniqueName("gbm") + ".log";
+        int fds[2] = {-1, -1};
+        ASSERT_EQ(::pipe(fds), 0);
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        if (pid == 0) {
+            ::close(fds[0]);
+            ::setenv("MOBILEGL_LOG_FILE_PATH", logBase.c_str(), 1);
+            ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
+            ::setenv("MOBILEGL_IPC_CONTROL", server.endpoint.c_str(), 1);
+            ::setenv("MOBILEGL_BACKEND_TYPE", "DirectGLES", 1);
+            constexpr EGLenum kPlatformGbm = 0x31D7;
+            FakeGbmDevice foreign{"drm"};
+            FakeGbmDevice ours{"mobilegl"};
+            Int32 result[3] = {-1, -1, -1};
+            result[0] = EGL::GetPlatformDisplay(kPlatformGbm, &foreign, nullptr) != EGL_NO_DISPLAY;
+            result[1] = MobileGL::MG_Remote::Client::ClientSession::Active() != nullptr; // nothing brought up for it
+            result[2] = EGL::GetPlatformDisplay(kPlatformGbm, &ours, nullptr) != EGL_NO_DISPLAY;
+            const ssize_t wrote = ::write(fds[1], result, sizeof(result));
+            (void)wrote;
+            std::fflush(nullptr);
+            ::_exit(0);
+        }
+        ::close(fds[1]);
+        Int32 result[3] = {-1, -1, -1};
+        pollfd pfd{fds[0], POLLIN, 0};
+        if (::poll(&pfd, 1, 60000) > 0) {
+            const ssize_t got = ::read(fds[0], result, sizeof(result));
+            (void)got;
+        }
+        ::close(fds[0]);
+        ::kill(pid, SIGKILL);
+        ::waitpid(pid, nullptr, 0);
+        EXPECT_EQ(result[0], 0) << "a device from another GBM backend must be declined";
+        EXPECT_EQ(result[1], 0) << "and declined before the session was brought up";
+        EXPECT_EQ(result[2], 1) << "a device of MobileGL's own GBM backend is served";
         std::error_code ec;
         std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
     }
