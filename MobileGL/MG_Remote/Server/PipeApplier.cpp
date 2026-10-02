@@ -389,6 +389,15 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
+    namespace {
+        // A record's damage rectangles as a region; 0 rectangles is the whole surface. A count past
+        // what the record holds is clamped (the rectangles it names are all there are).
+        MG_Util::Damage::Region DamageOfRecord(Uint32 count, const Int32* rects) {
+            const Int32 n = static_cast<Int32>(std::min<Uint32>(count, MG_Pipe::kMGPMaxDamageRects));
+            return MG_Util::Damage::Region::FromEglRects(rects, n);
+        }
+    } // namespace
+
     Bool ServerVerbSink::OnPresent(const MG_Pipe::MGPPresent& present) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("present");
         if (table == nullptr) return false;
@@ -407,7 +416,10 @@ namespace MobileGL::MG_Remote::Server {
         // TrimBufferPool's recycle watermark stop tracking frames - which is the reason the 1:1
         // was wanted, recorded here so a future swap-without-present is looked for rather than
         // assumed impossible. Presents() is exposed for a lane that wants to make the comparison.
+        // The frame's damage rides to the native present for the length of this call.
+        MG_Backend::SetCurrentPresentDamage(DamageOfRecord(present.DamageCount, present.Damage));
         table->Present();
+        MG_Backend::SetCurrentPresentDamage(MG_Util::Damage::Region::Full());
         ++m_presents;
         // FrameSerial 0 means "the server stamps its own" (c1-v1 8.3): P5 has no client-side
         // present credit, so the client sends 0 and the frame count on this side IS the serial.
@@ -1558,8 +1570,15 @@ namespace MobileGL::MG_Remote::Server {
             view.Height = image->Height;
             view.Fourcc = image->Fourcc;
             view.NativeBuffer = image->Native;
-            if (!backend->BlitDefaultFramebufferToSharedImage(view)) return false;
+            if (!backend->BlitDefaultFramebufferToSharedImage(view, DamageOfRecord(op.DamageCount, op.Damage)))
+                return false;
             fill(*image);
+            return true;
+        }
+        case MG_Pipe::kMGPSharedImageQueryBufferAge: {
+            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
+            if (backend == nullptr) return false;
+            reply.BufferAge = backend->QueryCurrentBufferAge();
             return true;
         }
         case MG_Pipe::kMGPSharedImageAttach: {

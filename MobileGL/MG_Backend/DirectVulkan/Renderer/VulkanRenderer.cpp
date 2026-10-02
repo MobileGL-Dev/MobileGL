@@ -14552,6 +14552,8 @@ void main() {
                 // minimized-window app accumulates them for the whole
                 // suspension.
                 TryDrainFrameTransients();
+                // The application counted this swap; no image did.
+                m_swapchainObject.OnFrameDropped();
                 MGLOG_D("Present skipped: no usable swapchain (zero-area window)");
                 return;
             }
@@ -14699,7 +14701,13 @@ void main() {
         // behaviour), and EVERY ancillary depth/stencil buffer's content is
         // undefined after any swap. The render-pass manager turns the undefined
         // attachments' next tile loads into LOAD_OP_DONT_CARE.
-        m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, false);
+        //
+        // EGL_EXT_buffer_age changes the first half: once the client has asked for an age it
+        // repaints only what changed since the image it is given was last shown, so a presented
+        // image keeps its content (the wire passes load it; Vulkan preserves an image's content
+        // through a present and a layout transition out of PRESENT_SRC) and its age is counted.
+        m_swapchainObject.OnImagePresented(m_imageIndexAcquired);
+        if (!m_swapchainObject.BufferAgeAsked()) m_swapchainObject.SetImageContentDefined(m_imageIndexAcquired, false);
         m_swapchainObject.SetAllDepthStencilContentUndefined();
         // The authoritative check, done here - after the frame is presented, before the next
         // acquire. This is what makes a launcher-side resolution change take effect: shrinking
@@ -14796,6 +14804,17 @@ void main() {
         // descriptor set per draw for the whole frame; it would also be unsafe
         // after a mid-frame FlushPendingCommands, which does not wait.)
         m_uniformManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
+    }
+
+    Int32 VulkanRenderer::CurrentDrawBufferAge() {
+        if (m_surface == VK_NULL_HANDLE || m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended)
+            return 0;
+        m_swapchainObject.NoteBufferAgeAsked();
+        if (m_imageIndexAcquired >= m_swapchainObject.GetImageCount()) return 0;
+        // The image the next frame's first draw makes the default framebuffer's (it was acquired at
+        // the end of the last present). Its content is a frame only if nothing undefined it since.
+        if (!m_swapchainObject.IsImageContentDefined(m_imageIndexAcquired)) return 0;
+        return m_swapchainObject.BufferAgeOf(m_imageIndexAcquired);
     }
 
     void VulkanRenderer::CreateInstance() {

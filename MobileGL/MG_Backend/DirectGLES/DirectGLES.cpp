@@ -16275,6 +16275,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         struct SurfaceEntry {
             NativeWindowType Window;
             EGLSurface Surface;
+            // Presents made on this native surface since it was created: a pbuffer's content is
+            // the last presented frame once there has been one (its buffer age is then 1).
+            Uint64 Presents = 0;
         };
         Vector<SurfaceEntry> Surfaces;
         // The surface the session currently draws to / reads from - what a bind to another context
@@ -17102,6 +17105,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
     EGLSurface CurrentSessionDrawSurface() { return ActiveNativeSession().Draw; }
 
     EGLSurface CurrentContextDrawSurface() { return ActiveNativeContext().Draw; }
+
+    namespace {
+        // Whether the driver of `display` has EGL_EXT_buffer_age (or EGL_KHR_partial_update, which
+        // defines the same query). Asked once per display.
+        // EGL_BUFFER_AGE_EXT (= EGL_BUFFER_AGE_KHR), spelled out: this file sees only the core EGL header.
+        constexpr EGLint kEglBufferAge = 0x313D;
+
+        Bool NativeBufferAgeSupported() {
+            static EGLDisplay asked = EGL_NO_DISPLAY;
+            static Bool supported = false;
+            if (g_Display == EGL_NO_DISPLAY || !g_EGLFuncs.eglQueryString) return false;
+            if (asked != g_Display) {
+                asked = g_Display;
+                const char* extensions = g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS);
+                supported = extensions != nullptr && (std::strstr(extensions, "EGL_EXT_buffer_age") != nullptr ||
+                                                      std::strstr(extensions, "EGL_KHR_partial_update") != nullptr);
+                MGLOG_I("DirectGLES: the driver %s EGL_EXT_buffer_age", supported ? "has" : "lacks");
+            }
+            return supported;
+        }
+
+        // The calling session's record of `surface`; the registry lock is held by the caller (another
+        // session's window bring-up may erase stale entries of this one).
+        NativeSessionState::SurfaceEntry* FindSessionSurfaceLocked(NativeSessionState& session, EGLSurface surface) {
+            for (auto& entry : session.Surfaces) {
+                if (entry.Surface == surface) return &entry;
+            }
+            return nullptr;
+        }
+    } // namespace
+
+    Int32 CurrentDrawBufferAge() {
+        NativeSessionState& session = ActiveNativeSession();
+        const EGLSurface surface = session.Draw;
+        if (surface == EGL_NO_SURFACE || g_Display == EGL_NO_DISPLAY) return 0;
+        Bool window = false;
+        Uint64 presents = 0;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            const auto* entry = FindSessionSurfaceLocked(session, surface);
+            if (entry == nullptr) return 0;
+            window = entry->Window != static_cast<NativeWindowType>(0);
+            presents = entry->Presents;
+        }
+        if (!window) return presents > 0 ? 1 : 0;
+        // The driver's answer. On Android the query dequeues the buffer the next frame draws into -
+        // what the frame's first draw would do anyway, and the client asks before it draws.
+        if (presents == 0 || !NativeBufferAgeSupported() || !g_EGLFuncs.eglQuerySurface) return 0;
+        EGLint age = 0;
+        if (!g_EGLFuncs.eglQuerySurface(g_Display, surface, kEglBufferAge, &age) || age < 0) return 0;
+        return age;
+    }
 
     Bool SelectSessionSurface(EGLSurface surface) {
         NativeSessionState& session = ActiveNativeSession();
@@ -18101,11 +18156,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // defines it as "the entire surface is implicitly damaged and the behaviour is
         // equivalent to calling eglSwapBuffers" - and the wire protocol carries no damage
         // rectangles for the server to forward, so the full surface is what is meant anyway.
+        //
+        // The damage is the client's, from the present record (CurrentPresentDamage): GL window
+        // coordinates, which is what the native call takes. Whole surface = no rectangles.
         const EGLSurface drawSurface = ActiveNativeSession().Draw;
         if (g_EGLFuncs.eglSwapBuffersWithDamageEXT != nullptr) {
-            g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, nullptr, 0);
+            const MG_Util::Damage::Region& damage = MG_Backend::CurrentPresentDamage();
+            EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
+            EGLint count = 0;
+            if (!damage.IsFull() && !damage.IsEmpty()) {
+                count = static_cast<EGLint>(MG_Util::Damage::PackRects(damage, rects, MG_Util::Damage::kMaxRects));
+            }
+            g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
         } else {
             g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
+        }
+        if (drawSurface != EGL_NO_SURFACE) {
+            // Resolved before the lock: ActiveNativeSession takes it too.
+            NativeSessionState& session = ActiveNativeSession();
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            if (auto* entry = FindSessionSurfaceLocked(session, drawSurface)) ++entry->Presents;
         }
 
         if (canFence) PollFrameFences();
@@ -18458,6 +18528,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 EglImageRef Image;
                 GLuint Renderbuffer = 0;
                 Uint64 LastUse = 0;
+                // A present has written the image through this target (its content is a frame).
+                Bool Written = false;
             };
             struct PresentTargets {
                 std::mutex Mutex;
@@ -18662,7 +18734,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
         }
 
-        Bool BlitDefaultFramebufferTo(const SharedImageView& view) {
+        Bool BlitDefaultFramebufferTo(const SharedImageView& view, const MG_Util::Damage::Region& region) {
             if (view.Id == 0 || view.Width == 0 || view.Height == 0 || view.NativeBuffer == nullptr) return false;
             if (!IsBackendContextCurrentOnThisThread()) {
                 MGLOG_E_ONCE("Shared image present: no backend context is current on the calling thread");
@@ -18729,6 +18801,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     it = targets.ById.emplace(view.Id, std::move(target)).first;
                 }
                 it->second.LastUse = ++targets.UseClock;
+                // A target written before keeps what it was given; one new to this process is
+                // copied whole whatever the client asked (it cannot know the image's history here).
+                const Bool wholeTarget = !it->second.Written;
+                it->second.Written = true;
 
                 GLuint& framebuffer = g_presentFramebuffers.Current();
                 if (framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
@@ -18758,9 +18834,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<Uint32>(sourceHeight) == view.Height;
                     // TOP ROW FIRST: GL's top row (y = height - 1) lands in the image's first memory
                     // row, which an AHardwareBuffer-backed renderbuffer addresses as y = 0.
-                    g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
-                                                  static_cast<GLint>(view.Height), static_cast<GLint>(view.Width), 0,
-                                                  GL_COLOR_BUFFER_BIT, sameExtent ? GL_NEAREST : GL_LINEAR);
+                    if (sameExtent && !wholeTarget && !region.IsFull()) {
+                        // Only where the image differs from the frame, each rectangle flipped the
+                        // same way (an empty region copies nothing: the image already is the frame).
+                        MG_Util::Damage::Region clipped = region;
+                        clipped.Normalize(sourceWidth, sourceHeight);
+                        if (clipped.IsFull()) {
+                            g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
+                                                          static_cast<GLint>(view.Height),
+                                                          static_cast<GLint>(view.Width), 0, GL_COLOR_BUFFER_BIT,
+                                                          GL_NEAREST);
+                        } else {
+                            for (const MG_Util::Damage::Rect& rect : clipped.Rects()) {
+                                const MG_Util::Damage::Rect top = MG_Util::Damage::FlipY(rect, sourceHeight);
+                                g_GLESFuncs.glBlitFramebuffer(rect.X, rect.Y, rect.X + rect.Width, rect.Y + rect.Height,
+                                                              top.X, top.Y + top.Height, top.X + top.Width, top.Y,
+                                                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                            }
+                        }
+                    } else {
+                        g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
+                                                      static_cast<GLint>(view.Height), static_cast<GLint>(view.Width),
+                                                      0, GL_COLOR_BUFFER_BIT, sameExtent ? GL_NEAREST : GL_LINEAR);
+                    }
                     const GLenum error = g_GLESFuncs.glGetError();
                     copied = error == GL_NO_ERROR;
                     if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(static_cast<GLenum>(readBuffer));
@@ -18806,8 +18902,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             (void)image;
             return false;
         }
-        Bool BlitDefaultFramebufferTo(const SharedImageView& view) {
-            (void)view;
+        Bool BlitDefaultFramebufferTo(const SharedImageView& view, const MG_Util::Damage::Region& region) {
+            (void)view, (void)region;
             return false;
         }
         void AcquireForSampling(const EglImageRef& image) { (void)image; }

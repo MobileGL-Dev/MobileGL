@@ -116,6 +116,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     EGLSurface CurrentSessionDrawSurface();
     // The surface the calling thread's ACTIVE context last drew to (EGL_NO_SURFACE for none).
     EGLSurface CurrentContextDrawSurface();
+    // EGL_BUFFER_AGE_EXT of the session's current draw surface for the next frame: the driver's
+    // answer for a window surface (0 where the driver has no EGL_EXT_buffer_age), 1 for a pbuffer
+    // that has been presented (a pbuffer's content stays across swaps), 0 otherwise.
+    Int32 CurrentDrawBufferAge();
     // Makes an EXISTING native surface of the calling thread's session the one it draws to, and
     // binds it to the active context. False for a surface the session does not own.
     Bool BindSessionSurface(EGLSurface surface);
@@ -509,7 +513,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_TEXTURE_2D. False when the driver refused it (its GL error is consumed).
         Bool TargetBoundTexture2D(const EglImageRef& image);
         // BackendObject::BlitDefaultFramebufferToSharedImage, for the calling thread's context.
-        Bool BlitDefaultFramebufferTo(const SharedImageView& image);
+        Bool BlitDefaultFramebufferTo(const SharedImageView& image, const MG_Util::Damage::Region& region);
 
         // THE READER'S HALF of the image's sync state (SharedImageRegistry.h). Called on every use
         // of a name whose level 0 is `image`, before the command that samples it: when a write

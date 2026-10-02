@@ -16,6 +16,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
                                    const EGLint* attrib_list);
     EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw);
+    EGLBoolean SwapBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
     EGLBoolean ChooseConfig(EGLDisplay dpy, const EGLint* attrib_list, EGLConfig* configs, EGLint config_size,
                             EGLint* num_config);
     EGLContext CreateContext(EGLDisplay dpy, EGLConfig config, EGLContext shareCtx, const EGLint* attrib_list);

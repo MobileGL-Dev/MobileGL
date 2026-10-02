@@ -11,6 +11,7 @@
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/MGPipeHandles.h>
+#include <MG_Util/Damage/Damage.h>
 #endif
 
 namespace MobileGL {
@@ -611,6 +612,12 @@ namespace MobileGL {
             Uint64 Modifier = 0;
         };
 
+        // THE DAMAGE OF THE PRESENT BEING APPLIED on this thread: the server's apply thread sets it
+        // around the backend's Present (from the present record), and a backend that can hand damage
+        // to its native present reads it there. Full whenever nothing set it.
+        const MG_Util::Damage::Region& CurrentPresentDamage();
+        void SetCurrentPresentDamage(const MG_Util::Damage::Region& damage);
+
         class BackendObject {
         public:
             virtual ~BackendObject() = default;
@@ -628,10 +635,23 @@ namespace MobileGL {
             // when the write generation moved, and at its frame boundary publishes its frame's fence
             // with PublishRead / ReadTracker. The application's GL state is untouched. False = not
             // supported / failed (logged).
-            virtual Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
-                (void)image;
+            //
+            // `region` (GL window coordinates, origin bottom-left) is the part of the frame to copy;
+            // Full copies all of it. The rest of the image is left as it is - the client sends a
+            // region only for an image that already holds the frame outside it - and a backend that
+            // cannot be sure the image's contents survived (a target it has never written) copies
+            // all of it regardless.
+            virtual Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                             const MG_Util::Damage::Region& region) {
+                (void)image, (void)region;
                 return false;
             }
+
+            // EGL_BUFFER_AGE_EXT of the draw surface of the context current on this (the apply)
+            // thread: how many presents ago the buffer the next frame draws into held the frame then
+            // presented; 0 = unknown (the application repaints everything). Asking says the client
+            // relies on the answer, so from then on the backend keeps what it presents.
+            virtual Int32 QueryCurrentBufferAge() { return 0; }
 
             // ---- shared images, CLIENT side (BackendObject_Remote implements these) ----------
             //
@@ -652,9 +672,16 @@ namespace MobileGL {
                 return false;
             }
             // In the GL stream: the current context's default framebuffer, copied top row first into
-            // the image (BlitDefaultFramebufferToSharedImage on the server). Returns when it completed.
-            virtual Bool PresentToSharedImage(Uint64 id) {
-                (void)id;
+            // the image (BlitDefaultFramebufferToSharedImage on the server) - `region` of it, Full for
+            // all. Returns when it completed.
+            virtual Bool PresentToSharedImage(Uint64 id, const MG_Util::Damage::Region& region) {
+                (void)id, (void)region;
+                return false;
+            }
+            // In the GL stream: EGL_BUFFER_AGE_EXT of the current draw surface (QueryCurrentBufferAge
+            // on the server). False: the backend has no answer (the caller reports 0).
+            virtual Bool QueryBufferAge(EGLint* age) {
+                (void)age;
                 return false;
             }
             // In the GL stream: the texture whose lifetime id is `textureLifetimeId` takes the image as
@@ -686,6 +713,12 @@ namespace MobileGL {
             virtual Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height);
             virtual Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx);
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
+            // eglSwapBuffersWithDamage: `damage` (GL window coordinates) is a hint for the native
+            // present. A backend with nothing to hand it to swaps as SwapEGLBuffers does.
+            virtual Bool SwapEGLBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const MG_Util::Damage::Region& damage) {
+                (void)damage;
+                return SwapEGLBuffers(dpy, draw);
+            }
             // Forwards the app-requested eglSwapInterval to the backend's native
             // presentation path (no-op for backends without a SetSwapInterval hook).
             virtual void SetEGLSwapInterval(Int interval);

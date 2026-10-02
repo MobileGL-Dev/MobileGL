@@ -70,7 +70,8 @@
         return destination == VK_FORMAT_R8G8B8A8_UNORM && source == VK_FORMAT_R8G8B8A8_SRGB;
     }
 
-    Bool VulkanRenderer::BlitDefaultFramebufferToSharedImage(const SharedImageView& view) {
+    Bool VulkanRenderer::BlitDefaultFramebufferToSharedImage(const SharedImageView& view,
+                                                             const MG_Util::Damage::Region& region) {
         if (m_device == VK_NULL_HANDLE || view.Width == 0 || view.Height == 0) return false;
         // The debug knob's device check (MGPipeDebugDeviceLossDue) rides the frame boundary here.
         if (MG_Pipe::MGPipeDebugDeviceLossDue()) NoteDeviceLoss(VK_ERROR_DEVICE_LOST, "the debug knob (shared-image present)");
@@ -145,6 +146,18 @@
         const Bool sameExtent = source.extent.width == view.Width && source.extent.height == view.Height;
         const Bool halfTurn = preTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR;
         const Bool copy = sameExtent && !halfTurn && SharedImageCopiesAsIs(source.format, destination.format);
+        // ONLY WHERE THE IMAGE DIFFERS FROM THE FRAME: an image this renderer wrote before, copied
+        // one to one (no scaling, no half turn). Its other texels must survive, so the acquire then
+        // keeps the layout the last reader released it in rather than discarding it.
+        MG_Util::Damage::Region part = region;
+        if (!part.IsFull()) part.Normalize(static_cast<Int32>(view.Width), static_cast<Int32>(view.Height));
+        const Bool partial = !part.IsFull() && found->second.written && sameExtent && !halfTurn;
+        // The region's rectangles, top row first and made disjoint: a copy's regions may not overlap.
+        Vector<MG_Util::Damage::Rect> rows;
+        if (partial) {
+            for (const MG_Util::Damage::Rect& rect : MG_Util::Damage::Disjoint(part.Rects()))
+                rows.push_back(MG_Util::Damage::FlipY(rect, static_cast<Int32>(view.Height)));
+        }
         VkFormatProperties sourceProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &sourceProperties);
         if (!copy) {
@@ -187,7 +200,8 @@
         VkImageMemoryBarrier acquire{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         acquire.srcAccessMask = 0;
         acquire.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        acquire.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // Every present releases the image in GENERAL, and so does every reader.
+        acquire.oldLayout = partial ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
         acquire.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
         acquire.dstQueueFamilyIndex = destination.queueFamily;
@@ -197,7 +211,41 @@
                              0, nullptr, 0, nullptr, 1, &acquire);
 
         const VkImageSubresourceLayers layers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        if (copy) {
+        if (partial) {
+            // An empty region copies nothing: the image already is the frame.
+            if (copy && !rows.empty()) {
+                Vector<VkImageCopy> regions;
+                regions.reserve(rows.size());
+                for (const MG_Util::Damage::Rect& row : rows) {
+                    VkImageCopy one{};
+                    one.srcSubresource = layers;
+                    one.dstSubresource = layers;
+                    one.srcOffset = {row.X, row.Y, 0};
+                    one.dstOffset = {row.X, row.Y, 0};
+                    one.extent = {static_cast<Uint32>(row.Width), static_cast<Uint32>(row.Height), 1};
+                    regions.push_back(one);
+                }
+                vkCmdCopyImage(frame.commandBuffer, source.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<Uint32>(regions.size()), regions.data());
+            } else if (!rows.empty()) {
+                Vector<VkImageBlit> regions;
+                regions.reserve(rows.size());
+                for (const MG_Util::Damage::Rect& row : rows) {
+                    VkImageBlit one{};
+                    one.srcSubresource = layers;
+                    one.dstSubresource = layers;
+                    one.srcOffsets[0] = {row.X, row.Y, 0};
+                    one.srcOffsets[1] = {row.X + row.Width, row.Y + row.Height, 1};
+                    one.dstOffsets[0] = one.srcOffsets[0];
+                    one.dstOffsets[1] = one.srcOffsets[1];
+                    regions.push_back(one);
+                }
+                vkCmdBlitImage(frame.commandBuffer, source.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               static_cast<Uint32>(regions.size()), regions.data(), VK_FILTER_NEAREST);
+            }
+        } else if (copy) {
             VkImageCopy region{};
             region.srcSubresource = layers;
             region.dstSubresource = layers;
@@ -253,6 +301,7 @@
                 return false;
             }
             found->second.lastSubmit = m_submitCounter;
+            found->second.written = true;
             const VkSemaphore signal = std::exchange(m_sharedImageSignalSubmitted, VK_NULL_HANDLE);
             int fence = -1;
             if (signal != VK_NULL_HANDLE && ExportSharedImageSignal(signal, fence)) {
@@ -275,6 +324,7 @@
             return false;
         }
         found->second.lastSubmit = m_submitCounter;
+        found->second.written = true;
         SI::PublishWrite(*image, -1);
         return true;
     }

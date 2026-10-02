@@ -44,7 +44,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Shared images: a GL blit of default framebuffer 0 into a renderbuffer whose storage is
         // the image's EGLImage, ordered after the image's pending reads and published as a native
         // fence without a CPU wait (DirectGLES.h, SharedImageImpl).
-        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                 const MG_Util::Damage::Region& region) override;
+        // A window surface's age is the driver's (EGL_EXT_buffer_age); a pbuffer keeps its content,
+        // so it is 1 once it has been presented (DirectGLES::CurrentDrawBufferAge).
+        Int32 QueryCurrentBufferAge() override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: each window surface on it swaps its native EGL

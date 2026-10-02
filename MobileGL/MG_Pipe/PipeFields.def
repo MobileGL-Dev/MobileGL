@@ -264,7 +264,7 @@
     F(Flags)
 
 #define MGP_FIELDS_MGPPresent(F) \
-    F(FrameSerial)
+    F(FrameSerial) F(DamageCount) F(Damage)
 
 #define MGP_FIELDS_MGPSwapInterval(F) \
     F(Interval)
@@ -303,7 +303,7 @@
 
 // shared_image's POD.
 #define MGP_FIELDS_MGPSharedImageOp(F) \
-    F(Op) F(Format) F(Width) F(Height) F(ImageId) F(Texture)
+    F(Op) F(Format) F(Width) F(Height) F(ImageId) F(Texture) F(DamageCount) F(Damage)
 
 // P5c rv (CONTRACT-P5C.md §5.3): set_context_values' POD, one row per member. The 15-entry
 // array is one field, exactly as MGPFramebufferState's Color[8] is one.

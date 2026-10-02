@@ -320,6 +320,13 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         Bool useDmabuf = false;
         uint32_t fourcc = kDrmFormatXbgr8888;
         DmabufBuffer dmabufBuffers[3];
+        // Per shared image, what the frames written into the other images changed since this one
+        // was last written: what its next write has to bring over besides the frame's own damage.
+        MG_Util::Damage::BufferDamageTracker dmabufDamage{3};
+        // The size of the last buffer committed: a commit at another size (or the first) damages
+        // the whole buffer, whatever the frame says.
+        EGLint committedWidth = 0;
+        EGLint committedHeight = 0;
 
         ~Impl() {
             const Api& api = WaylandApi();
@@ -479,6 +486,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 return false;
             }
             close(image.Fd);
+            // A new image holds nothing of any frame yet.
+            dmabufDamage.Invalidate(static_cast<SizeT>(&buffer - dmabufBuffers));
             buffer.buffer = wlBuffer;
             buffer.imageId = image.Id;
             buffer.width = width;
@@ -510,20 +519,33 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // The rest of this window's life is wl_shm's.
         void FallBackToShm() {
             for (auto& buffer : dmabufBuffers) Release(buffer);
+            dmabufDamage.InvalidateAll();
             useDmabuf = false;
         }
 
-        // `wlBuffer` becomes the window's content: attach, damage, commit.
-        void Commit(wl_proxy* wlBuffer) {
+        // `wlBuffer` becomes the window's content: attach, damage, commit. `damage` is the frame's
+        // (GL window coordinates); a buffer's rows run top-down, so each rectangle is flipped. A
+        // compositor without damage_buffer (wl_surface < 4), a new size or the first commit is
+        // damaged whole.
+        void Commit(wl_proxy* wlBuffer, const MG_Util::Damage::Region& damage) {
             const Api& api = WaylandApi();
             wl_proxy* surface = window->surface;
             const uint32_t surfaceVersion = api.getVersion(surface);
             api.marshalFlags(surface, kSurfaceAttach, nullptr, surfaceVersion, 0, wlBuffer, window->dx, window->dy);
-            if (surfaceVersion >= 4) {
+            const Bool whole = damage.IsFull() || surfaceVersion < 4 || committedWidth != width ||
+                               committedHeight != height || window->dx != 0 || window->dy != 0;
+            if (!whole) {
+                for (const MG_Util::Damage::Rect& rect : damage.FlippedY(height).Rects()) {
+                    api.marshalFlags(surface, kSurfaceDamageBuffer, nullptr, surfaceVersion, 0, rect.X, rect.Y,
+                                     rect.Width, rect.Height);
+                }
+            } else if (surfaceVersion >= 4) {
                 api.marshalFlags(surface, kSurfaceDamageBuffer, nullptr, surfaceVersion, 0, 0, 0, width, height);
             } else {
                 api.marshalFlags(surface, kSurfaceDamage, nullptr, surfaceVersion, 0, 0, 0, width, height);
             }
+            committedWidth = width;
+            committedHeight = height;
             api.marshalFlags(surface, kSurfaceCommit, nullptr, surfaceVersion, 0);
             window->attached_width = width;
             window->attached_height = height;
@@ -670,20 +692,25 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         return true;
     }
 
-    Bool WindowSurface::Present() {
+    Bool WindowSurface::Present(const MG_Util::Damage::Region& damage) {
         Impl& impl = *m_impl;
         if (impl.window == nullptr) return false;
 
         if (impl.useDmabuf) {
             // The server copies the frame into the image GPU-side, top row first - a wl_buffer's
             // first row - and answers once the copy has completed, so the compositor reads a
-            // finished frame.
+            // finished frame. Only where the image differs from the frame: the rest of it already
+            // is the frame.
             DmabufBuffer* buffer = impl.NextFreeDmabuf();
             auto* backendObject = MG_Backend::pActiveBackendObject.get();
-            if (buffer != nullptr && backendObject != nullptr && backendObject->PresentToSharedImage(buffer->imageId)) {
-                impl.Commit(buffer->buffer);
-                buffer->busy = true;
-                return true;
+            if (buffer != nullptr && backendObject != nullptr) {
+                const SizeT index = static_cast<SizeT>(buffer - impl.dmabufBuffers);
+                const MG_Util::Damage::Region copy = impl.dmabufDamage.TakeForWrite(index, damage, impl.width, impl.height);
+                if (backendObject->PresentToSharedImage(buffer->imageId, copy)) {
+                    impl.Commit(buffer->buffer, damage);
+                    buffer->busy = true;
+                    return true;
+                }
             }
             MGLOG_E_ONCE("Wayland: a frame could not be presented through a linux-dmabuf shared image; the window "
                          "falls back to wl_shm");
@@ -699,7 +726,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // GL's rows run bottom-up and RGBA; a wl_shm buffer's run top-down and B, G, R, A.
         ReadBackFrameBGRA(impl.width, impl.height, impl.scratch, static_cast<Uint8*>(buffer->map),
                           static_cast<SizeT>(buffer->stride));
-        impl.Commit(buffer->buffer);
+        impl.Commit(buffer->buffer, MG_Util::Damage::Region::Full());
         buffer->busy = true;
         return true;
     }

@@ -391,7 +391,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         return surface;
     }
 
-    EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) {
+    EGLBoolean SwapBuffers(EGLDisplay dpy, EGLSurface draw) { return SwapBuffersWithDamage(dpy, draw, nullptr, 0); }
+
+    // EGL_KHR/EXT_swap_buffers_with_damage. The rectangles (GL window coordinates, origin
+    // bottom-left; none = the whole surface) are clipped to the surface and fitted into a record.
+    // A Wayland window copies only what its shared image missed and damages only the frame's
+    // rectangles; a server-owned window hands them to the native present. Either way they are a
+    // hint about what changed, never a limit on what is shown.
+    EGLBoolean SwapBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects) {
         const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The present is this thread's context's (GLStreamScope in EGLImpl.h).
@@ -411,15 +418,31 @@ namespace MobileGL::MG_Impl::EGLImpl {
             MGLOG_E_ONCE("activeBackendObject not initialized!");
             return EGL_FALSE;
         }
+        if (n_rects < 0 || (n_rects > 0 && rects == nullptr)) {
+            state->SetError(EGL_BAD_PARAMETER);
+            return EGL_FALSE;
+        }
+        MG_Util::Damage::Region damage = MG_Util::Damage::Region::FromEglRects(rects, n_rects);
+        if (!damage.IsFull()) {
+            EGLint width = 0;
+            EGLint height = 0;
+            if (state->QuerySurface(dpy, draw, EGL_WIDTH, &width) && state->QuerySurface(dpy, draw, EGL_HEIGHT, &height)) {
+                damage.Normalize(width, height);
+            } else {
+                damage.SetFull();
+            }
+        }
 #if MOBILEGL_WAYLAND_WINDOWS
         // A Wayland window shows what is attached to it: the frame is read back and attached
         // BEFORE the swap, while it is still the drawable's content.
-        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end() && !it->second->Present()) {
+        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end() && !it->second->Present(damage)) {
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
 #endif
-        if (!backendObject->SwapEGLBuffers(dpy, draw)) {
+        const Bool swapped = damage.IsFull() ? backendObject->SwapEGLBuffers(dpy, draw)
+                                             : backendObject->SwapEGLBuffersWithDamage(dpy, draw, damage);
+        if (!swapped) {
             MGLOG_E_ONCE("eglSwapBuffers failed on thread=%s dpy=%p draw=%p", CurrentThreadIdString().c_str(), dpy, draw);
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
@@ -727,6 +750,37 @@ namespace MobileGL::MG_Impl::EGLImpl {
         auto* state = GetState();
         if (!state) {
             return EGL_FALSE;
+        }
+        // EGL_EXT_buffer_age. The buffers are the server's, so the server answers - in the stream,
+        // behind the records already written, for the buffer the next frame draws into. Only for the
+        // calling thread's draw surface: that is the buffer the question is about (and the stream is
+        // bound to its context).
+        if (attribute == EGL_BUFFER_AGE_EXT) {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            if (!SharedImagesAvailable()) {
+                state->SetError(EGL_BAD_ATTRIBUTE);
+                return EGL_FALSE;
+            }
+            if (!state->ValidateSurfaceOnDisplay(display, surface)) {
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
+            if (value == nullptr) {
+                state->SetError(EGL_BAD_PARAMETER);
+                return EGL_FALSE;
+            }
+            if (state->GetCurrentSurface(EGL_DRAW) != surface) {
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (StreamGateActive()) StreamBindCallingThreadLocked();
+#endif
+            EGLint age = 0;
+            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            if (backendObject == nullptr || !backendObject->QueryBufferAge(&age)) age = 0;
+            *value = age;
+            return EGL_TRUE;
         }
         // A size that changes under the application (a server-owned window resized) arrives from the
         // backend: let it bring the surface's record up to date first, so a caller that polls the size

@@ -100,6 +100,43 @@ TEST(Damage, NormalizeMergesDownToTheLimitAndStillCoversEverything) {
     EXPECT_EQ(three, Of({{0, 0, 20, 10}, {500, 500, 10, 10}}));
 }
 
+// A copy whose regions may not overlap gets the same pixels, each once.
+TEST(Damage, DisjointCoversTheSamePixelsOnce) {
+    const Vector<Rect> input{{0, 0, 10, 10}, {5, 5, 10, 10}, {2, 2, 3, 3}, {20, 0, 4, 4}, {0, 8, 30, 2}};
+    const Vector<Rect> out = Disjoint(input);
+    for (Int32 y = 0; y < 40; ++y) {
+        for (Int32 x = 0; x < 40; ++x) {
+            Int32 inInput = 0, inOut = 0;
+            for (const Rect& r : input) inInput |= (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
+            for (const Rect& r : out) inOut += (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
+            EXPECT_EQ(inOut, inInput) << x << "," << y;
+        }
+    }
+    EXPECT_EQ(Subtract({0, 0, 10, 10}, {0, 0, 10, 10}).size(), 0u);
+    EXPECT_EQ(Subtract({0, 0, 10, 10}, {20, 20, 5, 5}), (Vector<Rect>{{0, 0, 10, 10}}));
+}
+
+// The record form: 0 rectangles = all, an empty region = one empty rectangle, and back.
+TEST(Damage, PackedRectsRoundTripThroughARecord) {
+    Int32 out[kMaxRects * 4] = {};
+    EXPECT_EQ(PackRects(Region::Full(), out, kMaxRects), 0u);
+    EXPECT_TRUE(Region::FromEglRects(out, 0).IsFull());
+
+    Uint32 n = PackRects(Region(), out, kMaxRects);
+    ASSERT_EQ(n, 1u);
+    EXPECT_TRUE(Region::FromEglRects(out, static_cast<Int32>(n)).IsEmpty()) << "nothing damaged stays nothing";
+
+    const Region two = Of({{1, 2, 3, 4}, {50, 60, 7, 8}});
+    n = PackRects(two, out, kMaxRects);
+    ASSERT_EQ(n, 2u);
+    EXPECT_EQ(Region::FromEglRects(out, static_cast<Int32>(n)), two);
+
+    // More than fit: their bounding box, which still covers them.
+    n = PackRects(two, out, 1);
+    ASSERT_EQ(n, 1u);
+    EXPECT_EQ(Region::FromEglRects(out, 1), Of({{1, 2, 56, 66}}));
+}
+
 // Three shared images rotate; each write must bring over what that image missed.
 TEST(Damage, EachBufferCopiesTheDamageItMissedSinceItsLastWrite) {
     constexpr Int32 W = 200, H = 100;

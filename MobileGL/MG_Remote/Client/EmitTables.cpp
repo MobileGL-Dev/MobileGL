@@ -1186,6 +1186,7 @@ namespace MobileGL::MG_Remote::Client {
             // With run-ahead disarmed this is a counter and nothing else, and the record below
             // travels exactly as it did - the present row's own barrier is the pacing there.
             record.FrameSerial = session.AcquirePresentCredit();
+            record.DamageCount = session.TakePendingPresentDamage(record.Damage);
             session.EmitAndWait(MG_Pipe::MGPWireOp::Present, &record, sizeof(record), nullptr, 0,
                                 nullptr, 0, nullptr);
 

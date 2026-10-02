@@ -422,6 +422,18 @@ namespace MobileGL::MG_Remote::Client {
         return MG_Backend::BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
+    // The damage rides in the present record the base's Present emitter writes (EmitPresent takes it
+    // from the session); the swap is otherwise the plain one above.
+    Bool BackendObject_Remote::SwapEGLBuffersWithDamage(EGLDisplay dpy, EGLSurface draw,
+                                                        const MG_Util::Damage::Region& damage) {
+        ClientSession* session = ClientSession::Active();
+        if (session != nullptr) session->SetPendingPresentDamage(damage);
+        const Bool swapped = SwapEGLBuffers(dpy, draw);
+        // A swap refused before it reached the emitter must not leave its damage for the next one.
+        if (session != nullptr) session->SetPendingPresentDamage(MG_Util::Damage::Region::Full());
+        return swapped;
+    }
+
     // No SetEGLSwapInterval here any more (P10 B): the base class calls the emit table's slot,
     // which is now Server::ServerSetEGLSwapInterval itself (EmitTables.cpp).
 
@@ -491,13 +503,26 @@ namespace MobileGL::MG_Remote::Client {
         return session->EmitSharedImage(op, -1, nullptr, nullptr);
     }
 
-    Bool BackendObject_Remote::PresentToSharedImage(Uint64 id) {
+    Bool BackendObject_Remote::PresentToSharedImage(Uint64 id, const MG_Util::Damage::Region& region) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr) return false;
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImagePresent;
         op.ImageId = id;
+        op.DamageCount = MG_Util::Damage::PackRects(region, op.Damage, MG_Pipe::kMGPMaxDamageRects);
         return session->EmitSharedImage(op, -1, nullptr, nullptr);
+    }
+
+    // In the stream, so the server answers for the buffer the records after it draw into.
+    Bool BackendObject_Remote::QueryBufferAge(EGLint* age) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || age == nullptr) return false;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageQueryBufferAge;
+        MG_Pipe::MGPSharedImageReply reply{};
+        if (!session->EmitSharedImage(op, -1, &reply, nullptr)) return false;
+        *age = std::max<EGLint>(reply.BufferAge, 0);
+        return true;
     }
 
     Bool BackendObject_Remote::AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) {

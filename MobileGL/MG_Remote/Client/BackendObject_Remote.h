@@ -78,6 +78,7 @@ namespace MobileGL::MG_Remote::Client {
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
+        Bool SwapEGLBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const MG_Util::Damage::Region& damage) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
 
@@ -86,7 +87,8 @@ namespace MobileGL::MG_Remote::Client {
                                  MG_Backend::SharedImageExport* out) override;
         Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) override;
         Bool ReleaseSharedImage(Uint64 id) override;
-        Bool PresentToSharedImage(Uint64 id) override;
+        Bool PresentToSharedImage(Uint64 id, const MG_Util::Damage::Region& region) override;
+        Bool QueryBufferAge(EGLint* age) override;
         Bool AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) override;
 
         // Copies the caps mirror's FormatCapabilityCache into the base class's

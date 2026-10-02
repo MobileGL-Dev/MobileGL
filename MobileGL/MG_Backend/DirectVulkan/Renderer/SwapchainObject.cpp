@@ -292,6 +292,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Fresh swapchain images hold garbage until a render pass stores into them.
         m_imageContentDefined.assign(imageCount, false);
         m_depthStencilContentDefined.assign(imageCount, false);
+        // Nothing presented from this chain yet: every buffer age is unknown.
+        m_ages.Reset(imageCount);
 
         CreateImageViews(device);
         CreateDepthStencilResources(device, physicalDevice);
@@ -493,6 +495,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_imageLayouts.clear();
         m_imageContentDefined.clear();
         m_depthStencilContentDefined.clear();
+        m_ages.Reset(0);
         m_preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     }
 

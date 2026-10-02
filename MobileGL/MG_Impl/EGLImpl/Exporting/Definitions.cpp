@@ -154,6 +154,27 @@ MOBILEGL_EGL_API EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface draw) {
     return MobileGL::MG_Impl::EGLImpl::SwapBuffers(dpy, draw);
 }
 
+// EGL_KHR_swap_buffers_with_damage and EGL_EXT_swap_buffers_with_damage: one function, two names.
+MOBILEGL_EGL_API EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
+                                                        EGLint n_rects) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglSwapBuffersWithDamageKHR(dpy=%p, draw=%p, n_rects=%d)", dpy, draw, n_rects);
+#ifdef TRACY_ENABLE
+    FrameMark;
+#endif
+    return MobileGL::MG_Impl::EGLImpl::SwapBuffersWithDamage(dpy, draw, rects, n_rects);
+}
+
+MOBILEGL_EGL_API EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
+                                                        EGLint n_rects) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglSwapBuffersWithDamageEXT(dpy=%p, draw=%p, n_rects=%d)", dpy, draw, n_rects);
+#ifdef TRACY_ENABLE
+    FrameMark;
+#endif
+    return MobileGL::MG_Impl::EGLImpl::SwapBuffersWithDamage(dpy, draw, rects, n_rects);
+}
+
 MOBILEGL_EGL_API EGLSurface eglCreatePbufferSurface(EGLDisplay dpy, EGLConfig config, const EGLint* attrib_list) {
     const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglCreatePbufferSurface(dpy=%p, config=%p, attrib_list=%p)", dpy, config, attrib_list);

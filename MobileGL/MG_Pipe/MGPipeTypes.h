@@ -1804,10 +1804,21 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPFlush, 8);
 
+    // DAMAGE ON THE WIRE (eglSwapBuffersWithDamage, docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md
+    // item 5). At most kMGPMaxDamageRects rectangles, each x, y, width, height in GL window
+    // coordinates - origin at the bottom-left, as EGL hands them over. A count of 0 means the whole
+    // surface, which is also what every record from a client that sends no damage says.
+    inline constexpr Uint32 kMGPMaxDamageRects = 16;
+
     struct MGPPresent {
         Uint64 FrameSerial;
+        // The frame's damage: what the server hands to the native present (swap-with-damage, an
+        // incremental present). A hint for what is shown; it never decides what is drawn.
+        Uint32 DamageCount;
+        Uint32 Pad0;
+        Int32 Damage[kMGPMaxDamageRects * 4];
     };
-    MGP_ASSERT_POD(MGPPresent, 8);
+    MGP_ASSERT_POD(MGPPresent, 272);
 
     struct MGPSwapInterval {
         Int32 Interval;
@@ -1994,6 +2005,15 @@ namespace MobileGL::MG_Pipe {
     //             when the copy has completed on the GPU.
     //   Attach    the texture Texture's storage becomes ImageId (glEGLImageTargetTexture2DOES);
     //             it lasts until the texture's next storage-defining respecify.
+    //   QueryBufferAge  EGL_BUFFER_AGE_EXT of the current context's draw surface, answered in the
+    //             reply's BufferAge: how many presents ago the buffer the next frame draws into held
+    //             the frame then presented, 0 = unknown. Asked in the stream, so it is answered
+    //             for the buffer that frame's records will draw into.
+    //
+    // A Present carries the region of the frame to copy (DamageCount rectangles of Damage, GL
+    // window coordinates, origin bottom-left; 0 = all of it): the client keeps per image what the
+    // image missed since it was last written, and sends that, so the rest of the image is already
+    // the frame.
     //
     // ImageId is a server-minted id, never reused within the server's life.
     enum MGPSharedImageOpKind : Uint32 {
@@ -2002,6 +2022,7 @@ namespace MobileGL::MG_Pipe {
         kMGPSharedImageRelease = 3,
         kMGPSharedImagePresent = 4,
         kMGPSharedImageAttach = 5,
+        kMGPSharedImageQueryBufferAge = 6,
     };
 
     struct MGPSharedImageOp {
@@ -2011,8 +2032,12 @@ namespace MobileGL::MG_Pipe {
         Uint32 Height;
         Uint64 ImageId;
         MGPipeHandle Texture; // Attach only
+        // Present only: the region to copy (see above).
+        Uint32 DamageCount;
+        Uint32 Pad0;
+        Int32 Damage[kMGPMaxDamageRects * 4];
     };
-    MGP_ASSERT_POD(MGPSharedImageOp, 32);
+    MGP_ASSERT_POD(MGPSharedImageOp, 296);
 
     struct MGPSharedImageReply {
         Uint64 ImageId;
@@ -2022,7 +2047,7 @@ namespace MobileGL::MG_Pipe {
         Uint32 Format;
         Uint32 Stride;
         Uint32 Offset;
-        Uint32 Pad0;
+        Int32 BufferAge; // QueryBufferAge only
     };
     MGP_ASSERT_POD(MGPSharedImageReply, 40);
 

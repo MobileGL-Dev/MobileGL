@@ -1212,14 +1212,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-    Bool BackendObject_DirectGLES::BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
+    Bool BackendObject_DirectGLES::BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                                       const MG_Util::Damage::Region& region) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        return DirectGLES::SharedImageImpl::BlitDefaultFramebufferTo(image);
+        return DirectGLES::SharedImageImpl::BlitDefaultFramebufferTo(image, region);
 #else
-        (void)image;
+        (void)image, (void)region;
         return false;
 #endif
     }
+
+    Int32 BackendObject_DirectGLES::QueryCurrentBufferAge() { return DirectGLES::CurrentDrawBufferAge(); }
 
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);

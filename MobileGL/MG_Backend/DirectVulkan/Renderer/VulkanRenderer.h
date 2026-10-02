@@ -186,7 +186,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (SharedImages::PublishWrite); waits for it on the CPU only on a device without sync_file
         // export. False (logged) when it cannot be done here: no AHardwareBuffer import, a
         // quarter-turned surface, an unblittable format.
-        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image);
+        //
+        // `region` (GL window coordinates; Full = all) is the part to copy into an image this
+        // renderer has written before - the rest of it is left as it is; a first write, a scaled
+        // or turned copy copies all of it.
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image, const MG_Util::Damage::Region& region);
+        // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
+        // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
+        // target keep its presented images' content from then on.
+        Int32 CurrentDrawBufferAge();
         // The reading side's per-use hook (WireSharedImage.inc): every shared-image texture the
         // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
         // acquired from the foreign family before it, when it moved or is not held.
@@ -699,6 +707,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkTextureManager::ImportedSharedImage image;
             WeakPtr<const void> owner;
             Uint64 lastSubmit = 0;
+            // A copy has written the image through this import: what it holds is a frame.
+            Bool written = false;
         };
         UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
         void DestroySharedImagePresentTargets(Bool onlyDead);

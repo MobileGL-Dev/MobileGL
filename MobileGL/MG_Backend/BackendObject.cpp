@@ -388,6 +388,16 @@ namespace MobileGL::MG_Backend {
         m_windowHandle = {};
     }
 
+    namespace {
+        MG_Util::Damage::Region& PresentDamageSlot() {
+            thread_local MG_Util::Damage::Region damage = MG_Util::Damage::Region::Full();
+            return damage;
+        }
+    } // namespace
+
+    const MG_Util::Damage::Region& CurrentPresentDamage() { return PresentDamageSlot(); }
+    void SetCurrentPresentDamage(const MG_Util::Damage::Region& damage) { PresentDamageSlot() = damage; }
+
     Bool BackendObject::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {

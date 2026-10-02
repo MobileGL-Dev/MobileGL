@@ -700,8 +700,10 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(sizeof(MGPBindContext), 8u);
     EXPECT_EQ(sizeof(MGPBindContext::ClientContextToken), 8u);
     // Shared images: the request, its answer and the aux-socket sideband are fixed-width PODs; the
-    // sideband is the T0 Offer's size so one inbox reads both.
-    EXPECT_EQ(sizeof(MGPSharedImageOp), 32u);
+    // sideband is the T0 Offer's size so one inbox reads both. The request carries a present's copy
+    // region (kMGPMaxDamageRects rectangles), as the present record carries its frame's damage.
+    EXPECT_EQ(sizeof(MGPSharedImageOp), 296u);
+    EXPECT_EQ(sizeof(MGPPresent), 272u);
     EXPECT_EQ(sizeof(MGPSharedImageReply), 40u);
     EXPECT_EQ(sizeof(MGPSharedImageFdOffer), 32u);
     EXPECT_EQ(sizeof(MGPHandleOnly), 16u);

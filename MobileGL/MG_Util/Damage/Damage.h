@@ -80,6 +80,43 @@ namespace MobileGL::MG_Util::Damage {
                inner.Y + inner.Height <= outer.Y + outer.Height;
     }
 
+    // `a` with `b` taken out: up to four rectangles (the bands above and below `b`, and the parts left
+    // and right of it in between).
+    inline Vector<Rect> Subtract(const Rect& a, const Rect& b) {
+        const Int32 ax1 = a.X + a.Width, ay1 = a.Y + a.Height;
+        const Int32 bx1 = b.X + b.Width, by1 = b.Y + b.Height;
+        if (a.Empty()) return {};
+        if (b.Empty() || b.X >= ax1 || bx1 <= a.X || b.Y >= ay1 || by1 <= a.Y) return {a};
+        Vector<Rect> pieces;
+        const Int32 midY0 = std::max(a.Y, b.Y), midY1 = std::min(ay1, by1);
+        if (b.Y > a.Y) pieces.push_back({a.X, a.Y, a.Width, b.Y - a.Y});
+        if (by1 < ay1) pieces.push_back({a.X, by1, a.Width, ay1 - by1});
+        if (b.X > a.X) pieces.push_back({a.X, midY0, b.X - a.X, midY1 - midY0});
+        if (bx1 < ax1) pieces.push_back({bx1, midY0, ax1 - bx1, midY1 - midY0});
+        return pieces;
+    }
+
+    // The same pixels as `rects`, as rectangles no two of which overlap (a copy whose regions must
+    // not overlap in memory takes these).
+    inline Vector<Rect> Disjoint(const Vector<Rect>& rects) {
+        Vector<Rect> out;
+        for (const Rect& rect : rects) {
+            Vector<Rect> pieces{rect};
+            for (const Rect& taken : out) {
+                Vector<Rect> next;
+                for (const Rect& piece : pieces) {
+                    for (const Rect& left : Subtract(piece, taken)) next.push_back(left);
+                }
+                pieces = std::move(next);
+                if (pieces.empty()) break;
+            }
+            for (const Rect& piece : pieces) {
+                if (!piece.Empty()) out.push_back(piece);
+            }
+        }
+        return out;
+    }
+
     class Region {
     public:
         static Region Full() {
@@ -202,6 +239,32 @@ namespace MobileGL::MG_Util::Damage {
         Bool m_full = false;
         Vector<Rect> m_rects;
     };
+
+    // A region as a record's rectangle list - x, y, width, height per rectangle into `out` (room for
+    // `maxRects`) - and the count. 0 is the whole surface (what a record that carries no damage
+    // says); an empty region is one empty rectangle, so it still reads as "nothing" at the other
+    // end. A region with more rectangles than fit goes as their bounding box.
+    inline Uint32 PackRects(const Region& region, Int32* out, Uint32 maxRects) {
+        if (region.IsFull() || maxRects == 0) return 0;
+        if (region.IsEmpty()) {
+            out[0] = out[1] = out[2] = out[3] = 0;
+            return 1;
+        }
+        const Vector<Rect>& rects = region.Rects();
+        if (rects.size() > maxRects) {
+            Rect box;
+            for (const Rect& rect : rects) box = Bound(box, rect);
+            out[0] = box.X, out[1] = box.Y, out[2] = box.Width, out[3] = box.Height;
+            return 1;
+        }
+        for (SizeT i = 0; i < rects.size(); ++i) {
+            out[i * 4 + 0] = rects[i].X;
+            out[i * 4 + 1] = rects[i].Y;
+            out[i * 4 + 2] = rects[i].Width;
+            out[i * 4 + 3] = rects[i].Height;
+        }
+        return static_cast<Uint32>(rects.size());
+    }
 
     // Per buffer of a rotating set: the damage each has missed since it was last written.
     class BufferDamageTracker {

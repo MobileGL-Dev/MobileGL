@@ -41,6 +41,7 @@
 
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
+#include <MG_Util/Damage/Damage.h>
 
 #include "../Server/ServerSpawn.h"
 #include "../Server/SurfaceControlFrame.h"
@@ -354,6 +355,19 @@ namespace MobileGL::MG_Remote::Client {
         // reservation across the park.
         Uint64 AcquirePresentCredit();
 
+        // eglSwapBuffersWithDamage's damage for the present about to be emitted (BackendObject_Remote
+        // sets it around the swap; EmitPresent takes it into the record). Taking clears it, so a
+        // plain swap after it carries none (the whole surface).
+        void SetPendingPresentDamage(const MG_Util::Damage::Region& damage) {
+            m_pendingDamageCount = MG_Util::Damage::PackRects(damage, m_pendingDamage, MG_Pipe::kMGPMaxDamageRects);
+        }
+        Uint32 TakePendingPresentDamage(Int32* out) {
+            const Uint32 count = m_pendingDamageCount;
+            std::memcpy(out, m_pendingDamage, sizeof(Int32) * 4 * count);
+            m_pendingDamageCount = 0;
+            return count;
+        }
+
         // R-1's invariant made checkable rather than only written down: true while this
         // thread is inside a barrier wait. The apply thread sets its own flag on entry to the
         // applier; a debug/verify build asserts the two are never both true, and that the
@@ -560,6 +574,8 @@ namespace MobileGL::MG_Remote::Client {
         // §2.4: presents published (the 1-based FrameSerial space) and how often the credit
         // wait really blocked.
         Uint64 m_presentsSent = 0;
+        Uint32 m_pendingDamageCount = 0;
+        Int32 m_pendingDamage[MG_Pipe::kMGPMaxDamageRects * 4] = {};
         Uint64 m_presentCreditWaits = 0;
 
         // sm: the spawn client owns ONE end and two bells. Held here rather

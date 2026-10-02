@@ -36,6 +36,10 @@
 extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                                          const EGLint* attrib_list);
 extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
+extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
+                                                  EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
+                                                  EGLint n_rects);
 extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
                                                EGLint* num_formats);
 extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
@@ -234,6 +238,8 @@ namespace {
         {"eglCreateImageKHR", reinterpret_cast<void*>(eglCreateImageKHR)},
         {"eglDestroyImageKHR", reinterpret_cast<void*>(eglDestroyImageKHR)},
         {"eglQueryDmaBufFormatsEXT", reinterpret_cast<void*>(eglQueryDmaBufFormatsEXT)},
+        {"eglSwapBuffersWithDamageKHR", reinterpret_cast<void*>(eglSwapBuffersWithDamageKHR)},
+        {"eglSwapBuffersWithDamageEXT", reinterpret_cast<void*>(eglSwapBuffersWithDamageEXT)},
         {"eglQueryDmaBufModifiersEXT", reinterpret_cast<void*>(eglQueryDmaBufModifiersEXT)},
         {"eglCreatePlatformWindowSurface", reinterpret_cast<void*>(eglCreatePlatformWindowSurface)},
         {"eglCreatePlatformPixmapSurface", reinterpret_cast<void*>(eglCreatePlatformPixmapSurface)},

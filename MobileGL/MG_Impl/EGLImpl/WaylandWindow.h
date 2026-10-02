@@ -34,6 +34,7 @@
 #if MOBILEGL_WAYLAND_WINDOWS
 
 #include <EGL/egl.h>
+#include <MG_Util/Damage/Damage.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     // The current context's default-framebuffer frame, `width` x `height`, written top-down in
@@ -76,7 +77,12 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // pack state put back exactly as they were), then attach, damage, commit.  A shared-image
         // present that fails moves the window to wl_shm for good.  False (logged) when the frame
         // did not reach the window; the swap itself goes on regardless.
-        Bool Present();
+        //
+        // `damage` (GL window coordinates, clipped to the window; Full = all of it) is what the
+        // frame changed. A shared image is copied only where it differs from the frame - the
+        // frame's damage and every frame's since that image was last written - and the surface is
+        // damaged only where the frame changed, flipped to the buffer's top-left origin.
+        Bool Present(const MG_Util::Damage::Region& damage);
 
         // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave
         // its wl_egl_window a size this presentation is not at yet. The presentation adopts it -

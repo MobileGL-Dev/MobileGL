@@ -9,6 +9,7 @@
 #pragma once
 
 #include <Includes.h>
+#include <MG_Util/Damage/Damage.h>
 #include "../VkIncludes.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -80,6 +81,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void SetDepthStencilContentDefined(Uint32 index, Bool defined);
         void SetAllDepthStencilContentUndefined();
 
+        // EGL_EXT_buffer_age over this chain's images. Ages start unknown with the chain (Create).
+        // Until a client asks for an age (NoteBufferAgeAsked) a presented image's content is
+        // treated as undefined, as before; once one has, a presented image keeps it - its age is
+        // counted and its content stays defined, so the next frame loads it.
+        void NoteBufferAgeAsked() { m_bufferAgeAsked = true; }
+        Bool BufferAgeAsked() const { return m_bufferAgeAsked; }
+        Int32 BufferAgeOf(Uint32 index) const { return m_ages.AgeOf(index); }
+        // Image `index` was presented.
+        void OnImagePresented(Uint32 index) { m_ages.OnPresented(index, m_bufferAgeAsked); }
+        // A swapped frame reached no image: every age is unknown.
+        void OnFrameDropped() { m_ages.OnFrameDropped(); }
+
     private:
         void CreateImageViews(VkDevice device);
         void CreateDepthStencilResources(VkDevice device, VkPhysicalDevice physicalDevice);
@@ -109,5 +122,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkImageLayout> m_depthStencilImageLayouts;
         Vector<Bool> m_imageContentDefined;
         Vector<Bool> m_depthStencilContentDefined;
+        MG_Util::Damage::SwapchainAgeTracker m_ages;
+        // Kept across a rebuild: it is the application's habit, not the chain's.
+        Bool m_bufferAgeAsked = false;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

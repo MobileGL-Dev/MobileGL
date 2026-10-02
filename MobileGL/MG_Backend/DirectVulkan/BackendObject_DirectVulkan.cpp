@@ -568,7 +568,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
-    Bool BackendObject_DirectVulkan::BlitDefaultFramebufferToSharedImage(const SharedImageView& image) {
+    Bool BackendObject_DirectVulkan::BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                                         const MG_Util::Damage::Region& region) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Same lock as SwapEGLBuffers: the copy reads the current surface target's image.
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
@@ -577,11 +578,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<unsigned long long>(image.Id));
             return false;
         }
-        return pVulkanRenderer->BlitDefaultFramebufferToSharedImage(image);
+        return pVulkanRenderer->BlitDefaultFramebufferToSharedImage(image, region);
 #else
-        (void)image;
+        (void)image, (void)region;
         return false;
 #endif
+    }
+
+    Int32 BackendObject_DirectVulkan::QueryCurrentBufferAge() {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        return pVulkanRenderer ? pVulkanRenderer->CurrentDrawBufferAge() : 0;
     }
 
     void BackendObject_DirectVulkan::SetEGLSwapInterval(Int interval) {

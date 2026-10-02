@@ -38,7 +38,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;
         void SetEGLSwapInterval(Int interval) override;
-        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image) override;
+        Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image,
+                                                 const MG_Util::Damage::Region& region) override;
+        // The active surface target's swapchain image ages (VulkanRenderer::CurrentDrawBufferAge).
+        Int32 QueryCurrentBufferAge() override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: the window surface's target (VkSurfaceKHR,
