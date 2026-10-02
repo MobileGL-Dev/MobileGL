@@ -12,6 +12,7 @@
 
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Remote/Server/StagedShadow.h>
 #include <MG_Remote/Wire/PipeWireCodec.h>
 
 #include <atomic>
@@ -80,6 +81,17 @@ namespace MobileGL::MG_Remote::Server {
                 outKey->SessionKey, runtime->Session().CurrentContextToken());
             return true;
         }
+
+        // The server's staged stores (StagedShadow.h) file their entries under the same two
+        // words as the twin tables, for the same reason one level up: the bytes they hold belong
+        // to one session's group, and a session's teardown may drop only its own.
+        Bool ResolveThreadStagedBucket(StagedBucket* outBucket) {
+            MG_Backend::DirectGLES::TwinKey key;
+            if (!ResolveThreadTwinKey(&key)) return false;
+            outBucket->SessionKey = key.SessionKey;
+            outBucket->ShareGroupKey = key.ShareGroupKey;
+            return true;
+        }
     } // namespace
 
     void Detail::InstallSessionRuntimeHooks() {
@@ -91,6 +103,7 @@ namespace MobileGL::MG_Remote::Server {
         // P14 S6: the twin tables' key. Same probe, one level down, installed beside the two it
         // is the twin of (the native tuple's and the applier's).
         MG_Backend::DirectGLES::SetTwinKeyResolver(&ResolveThreadTwinKey);
+        SetStagedBucketResolver(&ResolveThreadStagedBucket);
     }
 
     SessionRuntime* Detail::CurrentRuntime() { return t_runtime; }

@@ -279,6 +279,106 @@ TEST(StagedTextureStoreTest, ResetDropAndDropAllForgetExactlyWhatTheyName) {
     EXPECT_FALSE(store.HasShadow(b));
 }
 
+// P14: the in-process display server serves several sessions from one store. A test-installed
+// bucket probe stands in for SessionRuntime's: a thread "in" a bucket answers it, a thread in
+// none answers false (the process-wide bucket).
+namespace {
+    thread_local Server::StagedBucket t_testBucket;
+    thread_local Bool t_testBucketSet = false;
+
+    Bool TestStagedBucket(Server::StagedBucket* outBucket) {
+        if (!t_testBucketSet) return false;
+        *outBucket = t_testBucket;
+        return true;
+    }
+
+    void EnterBucket(Uint64 session, Uint64 group) {
+        t_testBucket = Server::StagedBucket{session, group};
+        t_testBucketSet = true;
+    }
+
+    struct ScopedTestBucketProbe {
+        Server::StagedBucketResolver Previous;
+        ScopedTestBucketProbe() : Previous(Server::g_stagedBucketResolver.load()) {
+            Server::SetStagedBucketResolver(&TestStagedBucket);
+        }
+        ~ScopedTestBucketProbe() {
+            t_testBucketSet = false;
+            Server::SetStagedBucketResolver(Previous);
+        }
+    };
+} // namespace
+
+// The anland Plasma crash, at unit scope: KWin and another client both hold texture {38, 0};
+// the other client's session ends (DestroyEGLContext -> DropAll), and KWin's next upload into
+// the level it declared long ago used to read "arrived before the server declared texture
+// level" and abort the display process. Each session's {slot, gen} is its own texture, and a
+// session's DropAll takes only its own levels.
+TEST(StagedTextureStoreTest, TwoSessionsHoldTheSameHandleAndOneSessionsDropAllSparesTheOther) {
+    ScopedTestBucketProbe probe;
+    Server::StagedTextureStore store(/*copies=*/true);
+    const Uint64 key = Server::StagedTextureStore::KeyForHandle(TestHandle(38, 0));
+    Vector<Uint8> kwinBytes(64, 0x11);
+    Vector<Uint8> appBytes(16, 0x22);
+
+    EnterBucket(/*session=*/1, /*group=*/10);
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{4, 4, 1});
+    store.Adopt(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, kwinBytes.data(), kwinBytes.size());
+
+    EnterBucket(/*session=*/2, /*group=*/20);
+    EXPECT_FALSE(store.IsLevelDefined(key, kTex2DTarget, 0))
+        << "another session's {slot, gen} answered for this one's";
+    store.NoteLevelDefined(key, kTex2DTarget, 0, IntVec3{2, 2, 1});
+    store.Adopt(key, kTex2DTarget, 0, IntVec3{2, 2, 1}, appBytes.data(), appBytes.size());
+
+    EnterBucket(1, 10);
+    EXPECT_EQ(store.LevelExtentOrUndefined(key, kTex2DTarget, 0), (IntVec3{4, 4, 1}))
+        << "the second session's definition redefined the first's level";
+
+    EnterBucket(2, 20);
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(key));
+
+    EnterBucket(1, 10);
+    ASSERT_TRUE(store.IsLevelDefined(key, kTex2DTarget, 0))
+        << "a neighbour session's teardown dropped this session's declared level";
+    EXPECT_TRUE(store.IsCovered(key, kTex2DTarget, 0));
+    EXPECT_NE(store.AdoptRun(key, kTex2DTarget, 0, IntVec3{4, 4, 1}, 0, kwinBytes.data(), kwinBytes.size()),
+              nullptr);
+
+    EnterBucket(1, 11);
+    EXPECT_FALSE(store.HasShadow(key)) << "a non-shared group of the same session is its own name space";
+
+    t_testBucketSet = false;
+    store.DropAll();
+    EnterBucket(1, 10);
+    EXPECT_FALSE(store.HasShadow(key)) << "a thread that is no session's drops the whole store";
+}
+
+// The buffer half: its shadows are keyed by twin address (already unique), but DropAll ran the
+// same process-wide clear on a session's teardown.
+TEST(StagedTextureStoreTest, OneSessionsBufferDropAllSparesTheOthersShadows) {
+    ScopedTestBucketProbe probe;
+    Server::StagedShadowStore store(/*copies=*/true);
+    const int kwinTwin = 0;
+    const int appTwin = 0;
+    Vector<Uint8> bytes(32, 0x33);
+
+    EnterBucket(1, 10);
+    store.Adopt(&kwinTwin, bytes.size(), bytes.data(), 0, bytes.size());
+    EnterBucket(2, 20);
+    store.Adopt(&appTwin, bytes.size(), bytes.data(), 0, bytes.size());
+
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(&appTwin));
+    EXPECT_TRUE(store.HasShadow(&kwinTwin)) << "a neighbour session's teardown dropped this session's bytes";
+    EXPECT_TRUE(store.IsCovered(&kwinTwin, 0, bytes.size()));
+
+    t_testBucketSet = false;
+    store.DropAll();
+    EXPECT_FALSE(store.HasShadow(&kwinTwin));
+}
+
 // T5's dirty mark: a GPU-side generation dirties the SERVER's shadow, and the mark - not the
 // client - answers "dirty region, level has no pending upload". It is settable and clearable
 // per (uploadTarget, level), independent of bytes, and inert on a monolith store.

@@ -333,8 +333,9 @@ namespace MobileGL::MG_Remote::Server {
         const Uint8* AdoptRun(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                               Uint64 imageOffset, const void* bytes, SizeT byteSize) {
             if (!m_copies) return nullptr;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
-            LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
             RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
 #if MOBILEGL_BUILD_DISAGGREGATED
             // A run can be the first piece of a redefined level. Old coverage
@@ -354,7 +355,7 @@ namespace MobileGL::MG_Remote::Server {
                 // P8-E: a run landed whole over a followed copy (AdoptClientBoxes is the spelling
                 // that keeps it), so the bytes no longer hold what the driver does.
                 shadow.HoldsFollowedCopy = false;
-                m_driverWritten[key] = true;
+                m_driverWritten[bucketed] = true;
             }
             shadow.GpuDirty = false;
             return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize);
@@ -369,8 +370,9 @@ namespace MobileGL::MG_Remote::Server {
         const Uint8* Adopt(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                            const void* bytes, SizeT byteSize) {
             if (!m_copies) return nullptr;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
-            LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
             RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
             shadow.GpuDirty = false;
             // P8-E: the caller states these bytes ARE the level, which a followed copy is part of.
@@ -407,6 +409,7 @@ namespace MobileGL::MG_Remote::Server {
                               Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
                               Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
             if (!m_copies) return;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             Uint64 byteBound = 0;
             const Bool supportsSubData = StagedTextureTargetSupportsSubData(resourceTarget);
@@ -424,7 +427,7 @@ namespace MobileGL::MG_Remote::Server {
                             static_cast<unsigned long long>(key), uploadTarget, level,
                             extent.x(), extent.y(), extent.z(), internalFormat);
             }
-            LevelShadow& shadow = m_shadows[key].Levels[PackLevel(uploadTarget, level)];
+            LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
             if (!shadow.Defined || shadow.Extent != extent || shadow.InternalFormat != internalFormat ||
                 shadow.ResourceTarget != resourceTarget || shadow.DeclaredByteBound != byteBound) {
                 shadow.Bytes.clear();
@@ -447,8 +450,9 @@ namespace MobileGL::MG_Remote::Server {
         // chain defined level by level afterwards where the call defines one.
         void ResetLevels(Uint64 key) {
             if (!m_any.load(std::memory_order_acquire)) return;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_shadows.erase(key);
+            m_shadows.erase(bucketed);
         }
 
         // T5's dirty mark: a GPU-side generation made this level's texels newer than any
@@ -457,23 +461,35 @@ namespace MobileGL::MG_Remote::Server {
         // upload" without asking the client (§2.2's last row).
         void MarkLevelGpuDirty(Uint64 key, Uint16 uploadTarget, Uint16 level, Bool dirty) {
             if (!m_copies) return;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_shadows[key].Levels[PackLevel(uploadTarget, level)].GpuDirty = dirty;
+            m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)].GpuDirty = dirty;
             m_any.store(true, std::memory_order_release);
         }
 
         void Drop(Uint64 key) {
             if (!m_any.load(std::memory_order_acquire)) return;
+            const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_shadows.erase(key);
-            m_driverWritten.erase(key);
+            m_shadows.erase(bucketed);
+            m_driverWritten.erase(bucketed);
         }
 
+        // The calling thread's SESSION's levels (every group of it - the callers are a session's
+        // context teardown and its applier release), or every level on a thread that is no
+        // session's. A live neighbour session's declared levels are not this caller's to drop:
+        // that is the P14 Fatal StagedShadow.h's StagedBucket describes.
         void DropAll() {
             if (!m_any.load(std::memory_order_acquire)) return;
+            const Uint64 session = CurrentStagedBucket().SessionKey;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_shadows.clear();
-            m_driverWritten.clear();
+            if (session == 0) {
+                m_shadows.clear();
+                m_driverWritten.clear();
+                return;
+            }
+            EraseSession(m_shadows, session);
+            EraseSession(m_driverWritten, session);
         }
 
         // ---- P8-E (docs/Disaggregated/notes/p8/E.md): WHEN THESE BYTES ARE THE LEVEL'S CONTENT ----
@@ -496,13 +512,13 @@ namespace MobileGL::MG_Remote::Server {
         void MarkDriverWritten(Uint64 key) {
             if (!m_copies) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_driverWritten[key] = true;
+            m_driverWritten[Bucketed(key)] = true;
             m_any.store(true, std::memory_order_release);
         }
         Bool IsDriverWritten(Uint64 key) const {
             if (!m_any.load(std::memory_order_acquire)) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            return m_driverWritten.find(key) != m_driverWritten.end();
+            return m_driverWritten.find(Bucketed(key)) != m_driverWritten.end();
         }
         Bool LevelHoldsFollowedCopy(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             if (!m_any.load(std::memory_order_acquire)) return false;
@@ -521,7 +537,7 @@ namespace MobileGL::MG_Remote::Server {
                         const IntVec3& size) {
             if (!m_copies) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_driverWritten.find(srcKey) != m_driverWritten.end()) return false;
+            if (m_driverWritten.find(Bucketed(srcKey)) != m_driverWritten.end()) return false;
             const LevelShadow* src = FindLevel(srcKey, srcTarget, srcLevel);
             LevelShadow* dst = FindLevelMutable(dstKey, dstTarget, dstLevel);
             if (src == nullptr || dst == nullptr || !LevelComplete(*src)) return false;
@@ -709,7 +725,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool HasShadow(Uint64 key) const {
             if (!m_any.load(std::memory_order_acquire)) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            return m_shadows.find(key) != m_shadows.end();
+            return m_shadows.find(Bucketed(key)) != m_shadows.end();
         }
         SizeT TrackedResources() const {
             const std::lock_guard<std::mutex> lock(m_mutex);
@@ -717,8 +733,46 @@ namespace MobileGL::MG_Remote::Server {
         }
         SizeT TrackedLevelCount(Uint64 key) const {
             const std::lock_guard<std::mutex> lock(m_mutex);
-            const auto it = m_shadows.find(key);
+            const auto it = m_shadows.find(Bucketed(key));
             return it == m_shadows.end() ? 0 : it->second.Levels.size();
+        }
+
+        // THE ENTRY KEY: the caller's key filed under the calling thread's {session, share group}
+        // (StagedShadow.h's StagedBucket). Two clients' {slot, gen} - or two non-shared groups'
+        // of one client - are two textures and must be two entries; with no probe the bucket is
+        // {0, 0} and this is the bare key the store always used.
+        struct ShadowKey {
+            Uint64 SessionKey = 0;
+            Uint64 ShareGroupKey = 0;
+            Uint64 Key = 0;
+            Bool operator==(const ShadowKey& other) const {
+                return SessionKey == other.SessionKey && ShareGroupKey == other.ShareGroupKey &&
+                       Key == other.Key;
+            }
+        };
+        struct ShadowKeyHash {
+            SizeT operator()(const ShadowKey& key) const {
+                Uint64 mixed = key.Key ^ (key.ShareGroupKey + 0x9E3779B97F4A7C15ull + (key.Key << 6) + (key.Key >> 2));
+                mixed ^= key.SessionKey + 0x9E3779B97F4A7C15ull + (mixed << 6) + (mixed >> 2);
+                mixed ^= mixed >> 33;
+                mixed *= 0xFF51AFD7ED558CCDull;
+                mixed ^= mixed >> 33;
+                return static_cast<SizeT>(mixed);
+            }
+        };
+        static ShadowKey Bucketed(Uint64 key) {
+            const StagedBucket bucket = CurrentStagedBucket();
+            return ShadowKey{bucket.SessionKey, bucket.ShareGroupKey, key};
+        }
+        template <typename Map>
+        static void EraseSession(Map& map, Uint64 session) {
+            for (auto it = map.begin(); it != map.end();) {
+                if (it->first.SessionKey == session) {
+                    it = map.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
         static Uint32 PackLevel(Uint16 uploadTarget, Uint16 level) {
@@ -833,13 +887,13 @@ namespace MobileGL::MG_Remote::Server {
         }
 
         const LevelShadow* FindLevel(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
-            const auto textureIt = m_shadows.find(key);
+            const auto textureIt = m_shadows.find(Bucketed(key));
             if (textureIt == m_shadows.end()) return nullptr;
             const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
             return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
         }
         LevelShadow* FindLevelMutable(Uint64 key, Uint16 uploadTarget, Uint16 level) {
-            const auto textureIt = m_shadows.find(key);
+            const auto textureIt = m_shadows.find(Bucketed(key));
             if (textureIt == m_shadows.end()) return nullptr;
             const auto levelIt = textureIt->second.Levels.find(PackLevel(uploadTarget, level));
             return levelIt == textureIt->second.Levels.end() ? nullptr : &levelIt->second;
@@ -879,10 +933,10 @@ namespace MobileGL::MG_Remote::Server {
         const Bool m_copies;
         mutable std::mutex m_mutex;
         StagedTextureDeviceLimits m_deviceLimits{};
-        ska::flat_hash_map<Uint64, TextureShadow> m_shadows;
+        ska::flat_hash_map<ShadowKey, TextureShadow, ShadowKeyHash> m_shadows;
         // P8-E: MarkDriverWritten's keys (the value is always true). Apart from m_shadows on purpose,
         // because ResetLevels erases a key's levels and must not forget this.
-        ska::flat_hash_map<Uint64, Bool> m_driverWritten;
+        ska::flat_hash_map<ShadowKey, Bool, ShadowKeyHash> m_driverWritten;
         // Read on every IsLevelGpuDirty / LevelExtentOrUndefined, so the monolith cost is one
         // acquire load of a never-written flag rather than a mutex and two hash lookups.
         std::atomic<Bool> m_any{false};

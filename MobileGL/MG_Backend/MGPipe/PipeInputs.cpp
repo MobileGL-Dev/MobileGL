@@ -339,6 +339,8 @@ namespace MobileGL::MG_Pipe {
             inputs.m_live = live;
             inputs.m_contextIdentity = identity;
         }
+        static void SetServerContextLive(PipeInputs& inputs, Bool live) { inputs.m_serverContextLive = live; }
+        static Bool ServerContextLive(const PipeInputs& inputs) { return inputs.m_serverContextLive; }
     };
 
     // ---- P5f (f1): the dual-block rehearsal's selection functions (PipeInputs.h) -----------
@@ -397,14 +399,13 @@ namespace MobileGL::MG_Pipe {
         MGPipeStampAccess::SetServerStamped(MGPipeClientInputs(), false);
     }
 
-    namespace { Bool g_serverContextLive = false; }
-
+    // The calling thread's block, so the calling session's (PipeInputs.h's m_serverContextLive).
     void MGPipeServerSetContextLive(Bool live) {
-        g_serverContextLive = live;
+        MGPipeStampAccess::SetServerContextLive(gPipeInputs, live);
         MGPipeServerBlockNoteIdentity();
     }
 
-    Bool MGPipeServerContextIsLive() { return g_serverContextLive; }
+    Bool MGPipeServerContextIsLive() { return MGPipeStampAccess::ServerContextLive(gPipeInputs); }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     namespace { const void* g_serverOwnedWindow = nullptr; }
@@ -433,7 +434,7 @@ namespace MobileGL::MG_Pipe {
         // hands out a null slot - an unnamed crash where the rehearsal exists to produce a
         // named one.
         const Uint64 serial = MGPipeApplierContextSerial();
-        MGPipeStampAccess::SetIdentity(gPipeInputs, g_serverContextLive,
+        MGPipeStampAccess::SetIdentity(gPipeInputs, MGPipeServerContextIsLive(),
                                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
                                            (serial << 1) | Uint64{1})));
     }

@@ -186,7 +186,7 @@ gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 # THIS FILE IS THE PHASE'S ONE RECURRING MERGE CONFLICT, and it is the same-point-append shape
 # BRIEF §5's ownership table exists to prevent: three packages, three targets, one end-of-file.
 # The loop is what stops there being a fourth: a package adding a suite adds a NAME.
-foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest PersistentMapFaultTest)
+foreach (wiretest IN ITEMS RemoteClientTest ServerLoopTest SessionHandshakeTest StagedTextureStoreTest SurfaceControlFrameTest PersistentMapFaultTest ServerContextLiveTest)
     add_executable(${wiretest} ${wiretest}.cpp)
 
     target_include_directories(${wiretest} PRIVATE

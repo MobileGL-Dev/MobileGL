@@ -45,11 +45,43 @@
 #include <MG_Util/Math/VectorTypes.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 
 namespace MobileGL::MG_Remote::Server {
+
+    // P14: WHOSE STAGED BYTES ARE THESE? The two server stores below are one per process, but the
+    // in-process display server serves several sessions in that process at once, and a session's
+    // end (DestroyEGLContext's OnBackendContextDestroyed) used to DropAll() them - every live
+    // neighbour's declared texture levels and buffer shadows with it. The neighbour's next upload
+    // into a texture it had declared long ago then read as "resource_subdata arrived before the
+    // server declared texture level", a Fatal that took the whole display process (and so every
+    // session in it) down. The texture store is also keyed by the client's {slot, gen}, which two
+    // clients - or two non-shared groups of one client - hand out independently.
+    //
+    // So both stores file their entries under the calling thread's {session, share group}: the
+    // SAME two words the S6 twin tables are keyed on, answered by the same probe (installed by
+    // SessionRuntime.cpp beside the twin-key one). With no probe, or on a thread that is no
+    // session's, the answer is {0, 0} - the single process-wide bucket these stores always were.
+    struct StagedBucket {
+        Uint64 SessionKey = 0;
+        Uint64 ShareGroupKey = 0;
+    };
+    using StagedBucketResolver = Bool (*)(StagedBucket* outBucket);
+    inline std::atomic<StagedBucketResolver> g_stagedBucketResolver{nullptr};
+
+    inline void SetStagedBucketResolver(StagedBucketResolver resolver) {
+        g_stagedBucketResolver.store(resolver, std::memory_order_release);
+    }
+
+    inline StagedBucket CurrentStagedBucket() {
+        StagedBucket bucket;
+        const StagedBucketResolver resolver = g_stagedBucketResolver.load(std::memory_order_acquire);
+        if (resolver != nullptr && !resolver(&bucket)) bucket = StagedBucket{};
+        return bucket;
+    }
 
     // Keyed by the resource twin's ADDRESS, which is stable: the twins are heap-allocated and
     // held by SharedPtr in the backend slot table, and every event that ends a base's life -
@@ -72,6 +104,9 @@ namespace MobileGL::MG_Remote::Server {
             if (!m_copies) return raw - offset;
             const std::lock_guard<std::mutex> lock(m_mutex);
             Shadow& shadow = m_shadows[key];
+            // A twin's address is already unique across buckets (each bucket owns its twins), so
+            // the session rides along only for DropAll's sake.
+            shadow.SessionKey = CurrentStagedBucket().SessionKey;
             const SizeT needed = std::max<SizeT>(width, offset + size);
             if (shadow.Bytes.size() < needed) shadow.Bytes.resize(needed, 0);
             if (size != 0 && raw != nullptr) {
@@ -91,10 +126,23 @@ namespace MobileGL::MG_Remote::Server {
             m_shadows.erase(key);
         }
 
+        // The calling thread's SESSION's shadows (every group of it: a session's teardown ends
+        // all its contexts), or every shadow on a thread that is no session's.
         void DropAll() {
             if (!m_any.load(std::memory_order_acquire)) return;
+            const Uint64 session = CurrentStagedBucket().SessionKey;
             const std::lock_guard<std::mutex> lock(m_mutex);
-            m_shadows.clear();
+            if (session == 0) {
+                m_shadows.clear();
+                return;
+            }
+            for (auto it = m_shadows.begin(); it != m_shadows.end();) {
+                if (it->second.SessionKey == session) {
+                    it = m_shadows.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
         // Fatal when a drain reaches bytes no record staged. It fires ONLY for a base that is
@@ -187,6 +235,7 @@ namespace MobileGL::MG_Remote::Server {
             Vector<Uint8> Bytes;
             // Sorted, disjoint, EXACT.
             Vector<Range1D> Covered;
+            Uint64 SessionKey = 0;
         };
 
         const Bool m_copies;

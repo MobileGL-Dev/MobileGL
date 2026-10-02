@@ -748,6 +748,12 @@ namespace MobileGL::MG_Pipe {
         // ---- identity ----
         const void* m_contextIdentity = nullptr;
         Bool m_live = false;
+        // MGPipeServerSetContextLive's flag. In the block, not in a process global, because the
+        // in-process display server runs several sessions at once and each has its own served
+        // context: one session's teardown or eglMakeCurrent(NO_CONTEXT) must not mark a
+        // neighbour's context dead mid-frame (P14; the per-thread block resolution below is
+        // what makes this the calling session's).
+        Bool m_serverContextLive = false;
         MGPipeVerb m_currentVerb = MGPipeVerb::kVerbCount;
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState m_filled{};
