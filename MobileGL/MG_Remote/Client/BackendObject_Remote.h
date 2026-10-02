@@ -72,6 +72,9 @@ namespace MobileGL::MG_Remote::Client {
         Bool InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) override;
         Bool CreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle) override;
         Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
+        // A server-owned window surface: the published surface-changed events are applied first (after the
+        // server caught up), so a client polling eglQuerySurface sees a resize it drew nothing for.
+        void RefreshSurfaceExtent(EGLSurface surface) override;
         Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
         Bool MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) override;
         Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) override;

@@ -100,12 +100,18 @@ namespace MobileGL::MG_Remote::Server {
         if (window == m_window) {
             // surfaceChanged: the same window at a new extent. This is also how a geometry request
             // is answered, so a waiting AcquireFor is woken.
+            const Bool resized = width != m_width || height != m_height;
             m_width = width;
             m_height = height;
             NoteExtentReportLocked(width, height);
+            // The session rendering into it publishes the new extent to its client NOW - not at its
+            // next present, which a compositor with nothing to redraw never makes.
+            const Bool told = resized && m_leaseHolder != nullptr && m_onResized != nullptr;
+            if (told) m_onResized(m_leaseHolder);
             lock.unlock();
             m_cv.notify_all();
-            MGLOG_I("MG_Remote server: server window %p is now %ux%u", window, width, height);
+            MGLOG_I("MG_Remote server: server window %p is now %ux%u%s", window, width, height,
+                    told ? "; its session is told" : "");
             return;
         }
         if (m_window != nullptr) {
@@ -184,7 +190,8 @@ namespace MobileGL::MG_Remote::Server {
 
     ServerWindowAcquire ServerDisplay::AcquireFor(Uint32 width, Uint32 height, Uint32 timeoutMs, void* holder,
                                                   ServerWindowLostHook onLost, ServerWindowWaitCancel cancel,
-                                                  void* cancelUser, ServerWindowLease* out) {
+                                                  void* cancelUser, ServerWindowLease* out,
+                                                  ServerWindowResizedHook onResized) {
         ServerDisplayHooks hooks{};
         Uint64 interrupts = 0;
         const Bool sizeRequested = width != 0 && height != 0;
@@ -240,6 +247,7 @@ namespace MobileGL::MG_Remote::Server {
                 if (sizeOk || now >= geometryDeadline) {
                     m_leaseHolder = holder;
                     m_onLost = onLost;
+                    m_onResized = onResized;
                     m_lostRequested = false;
                     // A suspended holder that leased a window again waits for no other.
                     m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
@@ -281,6 +289,7 @@ namespace MobileGL::MG_Remote::Server {
         if (holder == nullptr || m_leaseHolder != holder) return false;
         m_leaseHolder = nullptr;
         m_onLost = nullptr;
+        m_onResized = nullptr;
         m_lostRequested = false;
         releases->swap(m_releaseAfterLease);
         *hooks = m_hooks;
@@ -336,6 +345,15 @@ namespace MobileGL::MG_Remote::Server {
         m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
                                          [holder](const SuspendedHolder& entry) { return entry.holder == holder; }),
                           m_suspended.end());
+    }
+
+    Bool ServerDisplay::WindowExtent(void* holder, void** window, Uint32* width, Uint32* height) const {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        if (holder == nullptr || m_leaseHolder != holder || m_window == nullptr) return false;
+        if (window != nullptr) *window = m_window;
+        if (width != nullptr) *width = m_width;
+        if (height != nullptr) *height = m_height;
+        return true;
     }
 
     Uint32 ServerDisplay::SuspendedHolders() const {

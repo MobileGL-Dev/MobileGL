@@ -710,6 +710,17 @@ namespace MobileGL {
                 (void)window, (void)width, (void)height;
                 return false;
             }
+            // `window` changed size to `width`x`height` (the display's report - the one size to publish).
+            // Its surfaces publish that extent to the client now, without waiting for a present; a
+            // swapchain that has to follow is rebuilt when no frame is half-recorded, else at the
+            // present. False: nothing was published (no surface on it, or not supported).
+            virtual Bool ServerWindowResized(void* window, Uint32 width, Uint32 height) {
+                (void)window, (void)width, (void)height;
+                return false;
+            }
+            // CLIENT side, from eglQuerySurface(EGL_WIDTH/EGL_HEIGHT): a backend whose surface extents
+            // change under the application (a remote server's window) applies what it has received.
+            virtual void RefreshSurfaceExtent(EGLSurface surface) { (void)surface; }
 
             void SetWindowHandle(const WindowHandle& handle);
 

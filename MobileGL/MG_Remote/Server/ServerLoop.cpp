@@ -371,6 +371,9 @@ namespace MobileGL::MG_Remote::Server {
         m_serverWindowsResumed.store(0, std::memory_order_release);
         m_serverWindowWantWidth = 0;
         m_serverWindowWantHeight = 0;
+        m_publishedWindowWidth = 0;
+        m_publishedWindowHeight = 0;
+        m_serverWindowResizes.store(0, std::memory_order_release);
         m_testLogFloodLines = ApplyLogFloodLinesForTest();
         {
             const std::lock_guard<std::mutex> lock(m_exitMutex);
@@ -1748,6 +1751,15 @@ namespace MobileGL::MG_Remote::Server {
         }
     }
 
+    void ServerLoop::ServerWindowResizedThunk(void* self) {
+        auto* loop = static_cast<ServerLoop*>(self);
+        // As the lost hook: called under the display's lock while this loop holds the lease.
+        loop->m_windowRequests.fetch_or(kWindowResized, std::memory_order_acq_rel);
+        if (loop->m_session != nullptr && loop->m_session->DataLink() != nullptr) {
+            loop->m_session->DataLink()->ConsumerBell().Notify();
+        }
+    }
+
     Bool ServerLoop::ServerWindowWaitCancelled(void* self) {
         const auto* loop = static_cast<const ServerLoop*>(self);
         // A window-lost request also ends the wait: this thread holds a lease on a window that is
@@ -1762,7 +1774,8 @@ namespace MobileGL::MG_Remote::Server {
         ServerWindowLease local;
         ServerWindowLease* const lease = out != nullptr ? out : &local;
         const ServerWindowAcquire acquired = display.AcquireFor(width, height, timeoutMs, this, &ServerWindowLostThunk,
-                                                                &ServerWindowWaitCancelled, this, lease);
+                                                                &ServerWindowWaitCancelled, this, lease,
+                                                                &ServerWindowResizedThunk);
         switch (acquired) {
         case ServerWindowAcquire::Acquired:
             m_holdsWindowLease = true;
@@ -1841,7 +1854,7 @@ namespace MobileGL::MG_Remote::Server {
         window.Height = lease.height;
         // Review fix: the backend is told which window is the server's own, so its surface init
         // reports the extent for this window and for no window a client named (MGPipeServerOwnedWindow).
-        MG_Pipe::MGPipeServerSetOwnedWindow(lease.window);
+        NoteServerWindowExtent(lease.window, lease.width, lease.height);
         frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), window);
         if (!frame.ok) {
             MGLOG_E("MG_Remote server: the backend could not create a window surface on the server window %p "
@@ -1912,6 +1925,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_serverWindowWantWidth = wantWidth;
         m_serverWindowWantHeight = wantHeight;
+        NoteServerWindowExtent(lease.window, lease.width, lease.height);
         frame.ok = backend->ResizeEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), lease.width, lease.height);
         frame.width = static_cast<Int>(lease.width);
         frame.height = static_cast<Int>(lease.height);
@@ -1925,7 +1939,7 @@ namespace MobileGL::MG_Remote::Server {
         if (!m_holdsWindowLease) return;
         m_holdsWindowLease = false;
         m_leasedWindow = nullptr;
-        MG_Pipe::MGPipeServerSetOwnedWindow(nullptr);
+        NoteServerWindowExtent(nullptr, 0, 0);
         ServerDisplayInstance().EndLease(this);
     }
 
@@ -1942,6 +1956,35 @@ namespace MobileGL::MG_Remote::Server {
         const Uint32 requests = m_windowRequests.exchange(0, std::memory_order_acq_rel);
         if ((requests & kWindowLost) != 0) ReleaseLostServerWindow();
         if ((requests & kWindowAttached) != 0 && !SessionLatched()) ResumeSuspendedServerWindow();
+        if ((requests & kWindowResized) != 0 && !SessionLatched()) PublishServerWindowResize();
+    }
+
+    void ServerLoop::NoteServerWindowExtent(void* window, Uint32 width, Uint32 height) {
+        MG_Pipe::MGPipeServerSetOwnedWindow(window);
+        MG_Pipe::MGPipeServerSetOwnedWindowExtent(width, height);
+        m_publishedWindowWidth = width;
+        m_publishedWindowHeight = height;
+    }
+
+    void ServerLoop::PublishServerWindowResize() {
+        if (!m_holdsWindowLease || m_backend == nullptr) return;
+        // THE DISPLAY'S EXTENT, READ NOW: the latest report wins over any a burst of them left queued.
+        void* window = nullptr;
+        Uint32 width = 0;
+        Uint32 height = 0;
+        if (!ServerDisplayInstance().WindowExtent(this, &window, &width, &height) || window != m_leasedWindow ||
+            width == 0 || height == 0)
+            return;
+        if (width == m_publishedWindowWidth && height == m_publishedWindowHeight) return;
+        const Uint32 previousWidth = m_publishedWindowWidth;
+        const Uint32 previousHeight = m_publishedWindowHeight;
+        NoteServerWindowExtent(window, width, height);
+        const Bool published = m_backend->ServerWindowResized(window, width, height);
+        if (published) m_serverWindowResizes.fetch_add(1, std::memory_order_acq_rel);
+        MGLOG_I("MG_Remote server: server window %p resized %ux%u -> %ux%u; %s", window, previousWidth, previousHeight,
+                width, height,
+                published ? "the new extent is published to the client"
+                          : "the backend published nothing (no surface on the window, or it follows at its present)");
     }
 
     void ServerLoop::LatchServerWindowLost(const char* why) {
@@ -1974,7 +2017,7 @@ namespace MobileGL::MG_Remote::Server {
             const Uint64 suspends = m_serverWindowsSuspended.fetch_add(1, std::memory_order_acq_rel) + 1;
             m_holdsWindowLease = false;
             m_leasedWindow = nullptr;
-            MG_Pipe::MGPipeServerSetOwnedWindow(nullptr);
+            NoteServerWindowExtent(nullptr, 0, 0);
             MGLOG_I("MG_Remote server: server window %p lost - the on-screen session is SUSPENDED, not ended: what "
                     "was bound to the window was released on mgl-srv-apply, its surfaces draw into an offscreen "
                     "placeholder, and it resumes on the next window (suspend #%llu)",
@@ -1997,7 +2040,7 @@ namespace MobileGL::MG_Remote::Server {
         const ServerWindowAcquire acquired =
             ServerDisplayInstance().AcquireFor(m_serverWindowWantWidth, m_serverWindowWantHeight,
                                                ServerDisplay::kGeometryGraceMs, this, &ServerWindowLostThunk,
-                                               &ServerWindowWaitCancelled, this, &lease);
+                                               &ServerWindowWaitCancelled, this, &lease, &ServerWindowResizedThunk);
         if (acquired != ServerWindowAcquire::Acquired) {
             // Still registered: the next new window wakes this again.
             MGLOG_I("MG_Remote server: a suspended on-screen session did not get the new server window (%s); it "
@@ -2012,7 +2055,7 @@ namespace MobileGL::MG_Remote::Server {
 
     Bool ServerLoop::ResumeServerWindowOnLease(const ServerWindowLease& lease) {
         // Before the backend: its republished extent is the server window's (MGPipeServerOwnedWindow).
-        MG_Pipe::MGPipeServerSetOwnedWindow(lease.window);
+        NoteServerWindowExtent(lease.window, lease.width, lease.height);
         if (m_backend == nullptr || !m_backend->ResumeServerWindow(lease.window, lease.width, lease.height)) {
             LatchServerWindowLost("the suspended on-screen session's surfaces could not be rebuilt on the new server "
                                   "window");

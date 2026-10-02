@@ -17094,6 +17094,30 @@ void main() {
         m_parkedTargets.erase(parked);
     }
 
+    Bool VulkanRenderer::FollowActiveWindowResize() {
+        if (m_surface == VK_NULL_HANDLE || !m_presentsToAppWindow) return false;
+        const auto& frame = m_frameContext.GetCurrent();
+        if (frame.isCommandRecording || frame.hasCommandBufferRecorded || frame.isPreCommandRecording ||
+            frame.hasPreCommandBufferRecorded) {
+            m_swapchainResizeRequested = true;
+            MGLOG_I("DirectVulkan: the window resized mid-frame; its swapchain is rebuilt at this frame's present");
+            return true;
+        }
+        // The surface already reports the swapchain's extent: nothing to rebuild.
+        if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE && !SwapchainIsOutOfDate()) return true;
+        // The target's own rebuild - the path a surface's re-activation takes: its pending acquire waited
+        // out, a new VkSurfaceKHR and swapchain at the surface's current extent and pre-transform, a new
+        // target serial for the render passes, and the extent published.
+        const Uint64 key = m_activeTargetKey;
+        const NativeWindowType window = m_window;
+        VulkanRendererConfig config;
+        config.SurfaceWidth = m_config.SurfaceWidth;
+        config.SurfaceHeight = m_config.SurfaceHeight;
+        config.SwapInterval = m_config.SwapInterval;
+        DestroySurfaceTarget(key);
+        return ActivateSurfaceTarget(key, window, config);
+    }
+
     VkExtent2D VulkanRenderer::SurfaceTargetExtent(Uint64 key) const {
         if (key == m_activeTargetKey && m_surface != VK_NULL_HANDLE) {
             return m_swapchainObject.GetHandle() != VK_NULL_HANDLE ? m_swapchainObject.GetSurfaceExtent()

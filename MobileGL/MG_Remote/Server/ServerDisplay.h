@@ -72,6 +72,9 @@ namespace MobileGL::MG_Remote::Server {
     // A new window was attached while `holder` was suspended (SuspendLease). Same rules as the lost
     // hook: called with the display's lock held.
     using ServerWindowAttachedHook = void (*)(void* holder);
+    // The leased window changed size (surfaceChanged of the SAME window: the app's layout moved it).
+    // Same rules: called with the display's lock held; the holder reads the new extent with WindowExtent.
+    using ServerWindowResizedHook = void (*)(void* holder);
     // Asked about every 50 ms while AcquireFor waits; true ends the wait (Cancelled).
     using ServerWindowWaitCancel = Bool (*)(void* user);
 
@@ -139,10 +142,16 @@ namespace MobileGL::MG_Remote::Server {
         // The apply thread's side. Requests the geometry (w, h; 0/0 = the window's own), then waits
         // until a window is attached - and, for a requested size, has reached it or the geometry
         // grace ran out - and leases it to `holder`, whose `onLost` Detach will call. The same holder
-        // may lease again while it holds the lease (a surface re-created at a new size).
+        // may lease again while it holds the lease (a surface re-created at a new size). `onResized`, when
+        // given, is called whenever the leased window changes size while the lease lasts.
         ServerWindowAcquire AcquireFor(Uint32 width, Uint32 height, Uint32 timeoutMs, void* holder,
                                        ServerWindowLostHook onLost, ServerWindowWaitCancel cancel,
-                                       void* cancelUser, ServerWindowLease* out);
+                                       void* cancelUser, ServerWindowLease* out,
+                                       ServerWindowResizedHook onResized = nullptr);
+        // THE WINDOW'S EXTENT AS THE PLATFORM LAST REPORTED IT (surfaceCreated / surfaceChanged): the one
+        // source of truth for the size a session publishes to its client. False unless `holder` holds
+        // the lease on an attached window.
+        Bool WindowExtent(void* holder, void** window, Uint32* width, Uint32* height) const;
         // The holder has released everything that referenced the window (its backend surface, or the
         // whole backend). Wakes a waiting Detach; releases a reference Detach left behind on timeout.
         // A holder that holds no lease is a no-op.
@@ -196,6 +205,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 m_extentReports = 0;
         void* m_leaseHolder = nullptr;
         ServerWindowLostHook m_onLost = nullptr;
+        ServerWindowResizedHook m_onResized = nullptr;
         Bool m_lostRequested = false;
         // References a timed-out Detach could not release yet; EndLease releases them.
         std::vector<void*> m_releaseAfterLease;

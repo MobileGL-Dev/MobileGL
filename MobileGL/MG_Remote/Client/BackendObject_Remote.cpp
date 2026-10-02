@@ -269,6 +269,16 @@ namespace MobileGL::MG_Remote::Client {
         return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, width, height);
     }
 
+    void BackendObject_Remote::RefreshSurfaceExtent(EGLSurface surface) {
+        if (!ClientSession::IsServerOwnedWindowSurface(surface)) return;
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr) return;
+        // The known-idle instant every EGL forwarder drains at: the server has applied what this client
+        // published, so the events it posted for it - a resized window's extent - are all there.
+        WaitForApplyBeforeEglForwarder("QuerySurface");
+        session->DrainPublishedEvents();
+    }
+
     Bool BackendObject_Remote::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
         WaitForApplyBeforeEglForwarder("CreateEGLPbufferSurface");
         Server::SurfaceRefusalCode refusal = Server::SurfaceRefusalCode::None;

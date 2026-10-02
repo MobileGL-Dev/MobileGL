@@ -1301,6 +1301,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    Bool BackendObject_DirectGLES::ServerWindowResized(void* window, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (window == nullptr) return false;
+        Bool published = false;
+        for (auto& [client, state] : m_eglSurfaces) {
+            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+            if (std::find(m_suspendedWindowSurfaces.begin(), m_suspendedWindowSurfaces.end(), client) !=
+                m_suspendedWindowSurfaces.end())
+                continue;
+            state.Window.Width = width;
+            state.Window.Height = height;
+            state.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
+            state.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
+            if (m_eglSurface == client) m_windowHandle = state.Window;
+            // The window surface's buffers follow the window by themselves (from the next one the
+            // driver dequeues); only the client has to be told.
+            const auto native = m_nativeSurfaces.find(client);
+            if (native == m_nativeSurfaces.end()) continue;
+            published = DirectGLES::RepublishWindowSurfaceShape(native->second,
+                                                                reinterpret_cast<NativeWindowType>(window)) ||
+                        published;
+        }
+        return published;
+    }
+
     void BackendObject_DirectGLES::OnEGLSurfaceReleased(EGLSurface surface) {
         // P14: releasing a surface releases THAT SURFACE (OnEGLSurfaceForgotten), never the
         // contexts. This used to be DestroyEGLContext() - every native context of the session, with

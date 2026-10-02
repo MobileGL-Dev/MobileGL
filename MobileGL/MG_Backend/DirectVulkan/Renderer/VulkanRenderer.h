@@ -461,6 +461,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The default framebuffer's extent (surface space, what PublishDefaultFramebufferInfo
         // publishes) of `key`'s target, active or parked; 0x0 when it has none or no swapchain.
         VkExtent2D SurfaceTargetExtent(Uint64 key) const;
+        // The active WINDOW target's window changed size. Between frames (nothing recorded since the last
+        // present) its swapchain is rebuilt now - which publishes the new extent - so a client that has
+        // nothing to redraw learns it without presenting; with a frame half-recorded the rebuild waits
+        // for that frame's present (it would otherwise land half in each swapchain). False: no active
+        // window target.
+        Bool FollowActiveWindowResize();
         // Whether `key` names the active target.
         Bool IsActiveSurfaceTarget(Uint64 key) const { return key == m_activeTargetKey && m_surface != VK_NULL_HANDLE; }
 

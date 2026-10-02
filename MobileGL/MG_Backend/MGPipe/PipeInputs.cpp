@@ -413,6 +413,23 @@ namespace MobileGL::MG_Pipe {
     void MGPipeServerSetOwnedWindow(const void* window) { g_serverOwnedWindow = window; }
 
     const void* MGPipeServerOwnedWindow() { return g_serverOwnedWindow; }
+
+    namespace {
+        Uint32 g_serverOwnedWindowWidth = 0;
+        Uint32 g_serverOwnedWindowHeight = 0;
+    } // namespace
+
+    void MGPipeServerSetOwnedWindowExtent(Uint32 width, Uint32 height) {
+        g_serverOwnedWindowWidth = width;
+        g_serverOwnedWindowHeight = height;
+    }
+
+    Bool MGPipeServerOwnedWindowExtent(Uint32* width, Uint32* height) {
+        if (g_serverOwnedWindowWidth == 0 || g_serverOwnedWindowHeight == 0) return false;
+        if (width != nullptr) *width = g_serverOwnedWindowWidth;
+        if (height != nullptr) *height = g_serverOwnedWindowHeight;
+        return true;
+    }
 #endif
 
     void MGPipeServerBlockNoteIdentity() {

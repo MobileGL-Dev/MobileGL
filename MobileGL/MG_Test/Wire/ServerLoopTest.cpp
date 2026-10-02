@@ -3460,6 +3460,7 @@ namespace {
         Bool InitWindowSurface() override { return true; }
         Bool CreateEGLWindowSurface(EGLSurface, const MG_Backend::WindowHandle& handle) override {
             window.store(handle.Handle, std::memory_order_release);
+            NoteExtentAt(createExtent);
             creates.fetch_add(1, std::memory_order_acq_rel);
             return true;
         }
@@ -3475,8 +3476,17 @@ namespace {
             resumeOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
             resumeWidth.store(width, std::memory_order_release);
             resumeHeight.store(height, std::memory_order_release);
+            NoteExtentAt(resumeExtent);
             window.store(fresh, std::memory_order_release);
             resumes.fetch_add(1, std::memory_order_acq_rel);
+            return true;
+        }
+        Bool ServerWindowResized(void* resizedWindow, Uint32 width, Uint32 height) override {
+            if (resizedWindow != window.load(std::memory_order_acquire)) return false;
+            resizedOnApplyThread.store(Server::ServerLoop::OnApplyThread(), std::memory_order_release);
+            resizedTo.store(Pack(width, height), std::memory_order_release);
+            NoteExtentAt(resizeExtent);
+            resizes.fetch_add(1, std::memory_order_acq_rel);
             return true;
         }
         void ReleaseEGLResources() override {
@@ -3506,6 +3516,21 @@ namespace {
         static inline std::atomic<Bool> resumeOnApplyThread{false};
         static inline std::atomic<Uint32> resumeWidth{0};
         static inline std::atomic<Uint32> resumeHeight{0};
+        // The extent the server window had in MGPipe - the one a real backend publishes - when each
+        // call ran (width << 32 | height; 0 = none).
+        static inline std::atomic<Uint64> createExtent{0};
+        static inline std::atomic<Uint64> resumeExtent{0};
+        static inline std::atomic<Uint64> resizeExtent{0};
+        static inline std::atomic<Uint64> resizedTo{0};
+        static inline std::atomic<int> resizes{0};
+        static inline std::atomic<Bool> resizedOnApplyThread{false};
+        static constexpr Uint64 Pack(Uint32 width, Uint32 height) { return (Uint64{width} << 32) | height; }
+        static void NoteExtentAt(std::atomic<Uint64>& slot) {
+            Uint32 width = 0;
+            Uint32 height = 0;
+            slot.store(MG_Pipe::MGPipeServerOwnedWindowExtent(&width, &height) ? Pack(width, height) : 0,
+                       std::memory_order_release);
+        }
 
     private:
         Bool m_canSuspend = false;
@@ -3734,6 +3759,70 @@ TEST(ServerLoopSuspendTest, ABackendThatCannotSuspendStillLatchesServerWindowLos
 
 // Mid-stream: answered within the stream (DrainRing's per-pop check) and the stream goes on. Red with
 // the suspend arm deleted: the stream is cut at the latch (bits 4|8|16).
+namespace {
+    enum : int {
+        kResizeNotPublished = 1, // a resize with no present was not handed to the backend at the new size, on the apply thread
+        kResizeExtent = 2,       // the extent a backend publishes (MGPipe's) did not follow the display
+        kResizeRepeated = 4,     // an unchanged report was published again
+        kResizePresented = 8,    // a present ran (the case is about publishing without one)
+        kResizeAfterResume = 16, // the resume did not take the new window's extent, or a later resize was lost
+    };
+
+    [[noreturn]] void ResizeWithoutAPresentAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!BringUpAnOnScreenSession(fixture, /*canSuspend=*/true)) ::_exit(250);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        using Double = WindowBackendDouble;
+        int failed = 0;
+        if (Double::createExtent.load() != Double::Pack(64, 48)) failed |= kResizeExtent;
+
+        // The app's bar is hidden: the SAME window, taller - and the client draws nothing at all.
+        display.Attach(&g_fakeServerWindow, 64, 60);
+        if (!PollUntil([&] { return loop.ServerWindowResizesPublished() == 1; }, 3000) || Double::resizes.load() != 1 ||
+            Double::resizedTo.load() != Double::Pack(64, 60) || !Double::resizedOnApplyThread.load())
+            failed |= kResizeNotPublished;
+        if (Double::resizeExtent.load() != Double::Pack(64, 60)) failed |= kResizeExtent;
+        display.Attach(&g_fakeServerWindow, 64, 60);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (Double::resizes.load() != 1) failed |= kResizeRepeated;
+        if (Double::presents.load() != 0) failed |= kResizePresented;
+
+        // Screen off; the new window comes back at the session's own size, then the bar moves again.
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(251);
+        if (display.Detach(3000) != Server::ServerWindowDetach::ReleasedBySession) failed |= kResizeAfterResume;
+        if (MG_Pipe::MGPipeServerOwnedWindowExtent(nullptr, nullptr)) failed |= kResizeExtent; // no window, no extent
+        display.Attach(&g_secondFakeServerWindow, 64, 48);
+        if (!PollUntil([&] { return loop.ServerWindowsResumed() == 1; }, 3000) ||
+            Double::resumeExtent.load() != Double::Pack(64, 48))
+            failed |= kResizeAfterResume;
+        display.Attach(&g_secondFakeServerWindow, 64, 60);
+        if (!PollUntil([&] { return Double::resizes.load() == 2; }, 3000) ||
+            Double::resizedTo.load() != Double::Pack(64, 60) || Double::resizeExtent.load() != Double::Pack(64, 60))
+            failed |= kResizeAfterResume;
+        std::fprintf(stderr, "[resize] published=%llu resizes=%d presents=%d\n",
+                     static_cast<unsigned long long>(loop.ServerWindowResizesPublished()), Double::resizes.load(),
+                     Double::presents.load());
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// THE RESIZE NOBODY PRESENTED FOR (device: the bar toggled while the compositor was idle, or just
+// before the lock, never reached it). The display's surfaceChanged of the leased window reaches the
+// session's apply thread at once, and the backend publishes the DISPLAY's extent - MGPipe's, which
+// every publish of the server window reads - with no present in between; after a suspend and resume
+// the resume publishes the new window's extent and a later resize is published again. Red with
+// ServerDisplay::Attach not telling the holder (exit 23: nothing published), and with the resize path
+// handing the backend the size without setting MGPipe's extent (exit 18: bits 2|16).
+TEST(ServerLoopSuspendTest, AResizeOfTheServerWindowIsPublishedWithoutWaitingForAPresent) {
+    EXPECT_EXIT(ResizeWithoutAPresentAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the resize was not published without a present; 2 = the published extent is not the "
+           "display's; 4 = an unchanged report was published again; 8 = a present ran; 16 = the resume or a "
+           "resize after it went wrong (250+ = setup)";
+}
+
 // MAGMA'S PLACEHOLDER ON A RENDERER CREATED FOR A WINDOW (the device crash: SIGSEGV at pc 0 in
 // VulkanRenderer::CreateSurface on screen-off). The on-screen session's renderer was built for the
 // server's window, so its instance enabled the Android surface extension and nothing headless; the

@@ -728,6 +728,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+        // A size that changes under the application (a server-owned window resized) arrives from the
+        // backend: let it bring the surface's record up to date first, so a caller that polls the size
+        // while it draws nothing still sees the change.
+        if (attribute == EGL_WIDTH || attribute == EGL_HEIGHT) {
+            if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) backendObject->RefreshSurfaceExtent(surface);
+        }
         return state->QuerySurface(display, surface, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
 

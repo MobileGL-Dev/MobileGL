@@ -36,7 +36,6 @@
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
-#include <android/native_window.h>
 #include <unistd.h>
 #endif
 #endif
@@ -16276,10 +16275,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // re-makes current, and what Present/eglSwapBuffers names.
         EGLSurface Draw = EGL_NO_SURFACE;
         EGLSurface Read = EGL_NO_SURFACE;
-        // The server window's extent this session last published to its client (0x0: none yet).
-        // Present compares the window against it (RepublishServerWindowExtentIfMoved).
-        Int PublishedWidth = 0;
-        Int PublishedHeight = 0;
     };
 
     static std::mutex g_nativeRegistryMutex;
@@ -16521,10 +16516,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // framebuffer's shape, so that publish - and no pbuffer's - may carry the surface's extent.
     // Split builds only: the pull build's publish is unchanged (G1).
     static Bool g_publishWindowExtent = false;
-    // The extent that publish carries when the caller already knows it (a republish from the window's
-    // own size, which the surface's buffers follow from the next frame on); 0x0 = ask the surface.
-    static Int g_publishExtentWidth = 0;
-    static Int g_publishExtentHeight = 0;
 #endif
 
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight) {
@@ -16689,15 +16680,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // (ClientSession.cpp ApplySurfaceChangedToClient), so it is deliberately NOT published
             // for a pbuffer, nor under inproc / monolith: those keep the format-only shape above.
             if (g_publishWindowExtent && MG_Config::Transport == MG_Config::TransportMode::Spawn) {
-                Int extentWidth = g_publishExtentWidth;
-                Int extentHeight = g_publishExtentHeight;
-                if ((extentWidth > 0 && extentHeight > 0) || QueryCurrentSurfaceSize(extentWidth, extentHeight)) {
-                    info.Width = static_cast<Uint32>(extentWidth);
-                    info.Height = static_cast<Uint32>(extentHeight);
-                    // What Present compares the window against from here on.
-                    NativeSessionState& session = ActiveNativeSession();
-                    session.PublishedWidth = extentWidth;
-                    session.PublishedHeight = extentHeight;
+                // THE DISPLAY'S EXTENT, NEVER THE SURFACE'S: eglQuerySurface answers the buffer last
+                // dequeued, which after a resize is still the old size - publishing it told the client a
+                // size the window no longer had.
+                Uint32 extentWidth = 0;
+                Uint32 extentHeight = 0;
+                if (MG_Pipe::MGPipeServerOwnedWindowExtent(&extentWidth, &extentHeight)) {
+                    info.Width = extentWidth;
+                    info.Height = extentHeight;
                 }
             }
 #endif
@@ -17262,64 +17252,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-    // The window's own extent, which the surface's buffers take from the next frame on - not the
-    // surface's, which on some drivers still reports the buffer just presented.
-    static Bool CurrentWindowExtent(NativeWindowType window, EGLSurface surface, Int& outWidth, Int& outHeight) {
-#if defined(__ANDROID__)
-        (void)surface;
-        auto* nativeWindow = reinterpret_cast<ANativeWindow*>(window);
-        outWidth = static_cast<Int>(ANativeWindow_getWidth(nativeWindow));
-        outHeight = static_cast<Int>(ANativeWindow_getHeight(nativeWindow));
-#else
-        (void)window;
-        EGLint width = 0;
-        EGLint height = 0;
-        if (!g_EGLFuncs.eglQuerySurface || !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_WIDTH, &width) ||
-            !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &height))
-            return false;
-        outWidth = static_cast<Int>(width);
-        outHeight = static_cast<Int>(height);
-#endif
-        return outWidth > 0 && outHeight > 0;
-    }
-
-    // THE SERVER WINDOW CHANGED SIZE UNDER ITS SURFACE (the app's layout moved the view: a bar shown
-    // or hidden, a rotation). Its extent used to be published once, at the surface's creation, so the
-    // client kept sizing its viewport and default framebuffer for the old one while the window's
-    // buffers took the new one. Asked at every present of the session's server-owned window surface -
-    // one size query - and republished, as the creation publishes it, when it moved.
-    static void RepublishServerWindowExtentIfMoved(EGLSurface drawSurface) {
-        const void* const serverWindow = MG_Pipe::MGPipeServerOwnedWindow();
-        if (serverWindow == nullptr || drawSurface == EGL_NO_SURFACE ||
-            MG_Config::Transport != MG_Config::TransportMode::Spawn)
-            return;
-        NativeSessionState& session = ActiveNativeSession();
-        NativeWindowType window = static_cast<NativeWindowType>(0);
-        for (const auto& entry : session.Surfaces) {
-            if (entry.Surface != drawSurface) continue;
-            window = entry.Window;
-            break;
-        }
-        if (reinterpret_cast<const void*>(window) != serverWindow) return;
-        Int width = 0;
-        Int height = 0;
-        if (!CurrentWindowExtent(window, drawSurface, width, height)) return;
-        if (width == session.PublishedWidth && height == session.PublishedHeight) return;
-        MGLOG_I("DirectGLES: the server window is now %dx%d (last published %dx%d); its extent is republished to "
-                "the client",
-                width, height, session.PublishedWidth, session.PublishedHeight);
-        g_publishExtentWidth = width;
-        g_publishExtentHeight = height;
+    // THE SERVER WINDOW CHANGED SIZE (the app's layout moved the view: a bar shown or hidden, a
+    // rotation). The new extent - the display's, set by the server loop before this runs - is published
+    // as the creation publishes it, at once: the client sizes its viewport and default framebuffer from
+    // it, and a compositor with nothing to redraw makes no present to hang this on.
+    Bool RepublishWindowSurfaceShape(EGLSurface surface, NativeWindowType window) {
+        if (surface == EGL_NO_SURFACE || !window) return false;
+        // Bound, because the publish reads the default framebuffer's format.
+        if (!BindSessionSurface(surface) || t_boundNativeDraw != surface) return false;
         PublishWindowSurfaceShape(window);
-        g_publishExtentWidth = 0;
-        g_publishExtentHeight = 0;
-        // Asked once per size, whatever the publish managed: a publish that could not run is not
-        // retried - and logged - every frame.
-        session.PublishedWidth = width;
-        session.PublishedHeight = height;
+        return true;
     }
-#endif
 
     EGLSurface SuspendSessionWindowSurface(EGLSurface windowSurface) {
         if (windowSurface == EGL_NO_SURFACE || g_Display == EGL_NO_DISPLAY) return EGL_NO_SURFACE;
@@ -18134,11 +18077,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         if (canFence) PollFrameFences();
-
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // The frame is out; the next one is drawn into the window's current buffers.
-        RepublishServerWindowExtentIfMoved(drawSurface);
-#endif
 
         // After the watermark advanced: retire grown-away ring stores and record the
         // frame's ring high-water marks for slot reclamation.

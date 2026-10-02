@@ -695,6 +695,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool BackendObject_DirectVulkan::ServerWindowResized(void* window, Uint32 width, Uint32 height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (window == nullptr || !UsesSurfaceTargets()) return false;
+        Bool followed = false;
+        for (auto& [client, state] : m_eglSurfaces) {
+            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+            if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
+            state.Window.Width = width;
+            state.Window.Height = height;
+            state.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
+            state.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
+            if (m_eglSurface == client) m_windowHandle = state.Window;
+            // Magma's extent is its swapchain's, published when it is built: the active target follows
+            // the window now (or at the half-recorded frame's present); a parked one at its next present.
+            if (pVulkanRenderer && pVulkanRenderer->IsActiveSurfaceTarget(SurfaceTargetKey(client))) {
+                followed = pVulkanRenderer->FollowActiveWindowResize() || followed;
+            }
+        }
+        return followed;
+    }
+
     Bool BackendObject_DirectVulkan::UsesSurfaceTargets() const {
         return MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }

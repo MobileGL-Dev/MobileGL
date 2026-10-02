@@ -485,3 +485,45 @@ TEST(ServerDisplayTest, ASuspendedHolderIsToldAboutTheNextNewWindowUntilItLeases
     EXPECT_EQ(attached.load(), 2);
     display.Uninstall(100);
 }
+
+// A RESIZE OF THE LEASED WINDOW REACHES ITS HOLDER AT ONCE (surfaceChanged of the same window), and
+// WindowExtent answers the platform's latest report - the one size a session publishes. Not for a
+// report of the same size, not for anyone but the holder, not after the lease ended. Red with Attach's
+// same-window arm not calling the hook (resized stays 0).
+TEST(ServerDisplayTest, AResizeOfTheLeasedWindowIsToldToItsHolderAndWindowExtentAnswersIt) {
+    FakePlatform platform;
+    ServerDisplay display;
+    display.Install(HooksFor(platform));
+    display.Attach(FakeWindow(0), 64, 48);
+    static std::atomic<int> resized{0};
+    resized.store(0);
+    const auto onResized = [](void*) { resized.fetch_add(1); };
+    int holder = 0;
+    int stranger = 0;
+    ServerWindowLease lease;
+    ASSERT_EQ(display.AcquireFor(64, 48, 100, &holder, nullptr, nullptr, nullptr, &lease, onResized),
+              ServerWindowAcquire::Acquired);
+    void* window = nullptr;
+    Uint32 width = 0;
+    Uint32 height = 0;
+    ASSERT_TRUE(display.WindowExtent(&holder, &window, &width, &height));
+    EXPECT_EQ(window, FakeWindow(0));
+    EXPECT_EQ(width, 64u);
+    EXPECT_EQ(height, 48u);
+    EXPECT_FALSE(display.WindowExtent(&stranger, &window, &width, &height)) << "only the holder reads it";
+
+    display.Attach(FakeWindow(0), 64, 60); // the app's bar hidden
+    EXPECT_EQ(resized.load(), 1);
+    ASSERT_TRUE(display.WindowExtent(&holder, &window, &width, &height));
+    EXPECT_EQ(height, 60u);
+    display.Attach(FakeWindow(0), 64, 60); // the same report again
+    EXPECT_EQ(resized.load(), 1) << "an unchanged extent is not a resize";
+    display.Attach(FakeWindow(0), 64, 48); // and back
+    EXPECT_EQ(resized.load(), 2);
+
+    display.EndLease(&holder);
+    display.Attach(FakeWindow(0), 64, 60);
+    EXPECT_EQ(resized.load(), 2) << "a holder whose lease ended is not told";
+    EXPECT_FALSE(display.WindowExtent(&holder, &window, &width, &height));
+    display.Uninstall(100);
+}

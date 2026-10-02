@@ -140,6 +140,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // replace) for every context that drew to it, is bound, and its extent is published as a
     // creation publishes it. Returns the new surface, or EGL_NO_SURFACE.
     EGLSurface ResumeSessionWindowSurface(EGLSurface placeholder, NativeWindowType window);
+    // The window under `surface` changed size: its extent (the display's) is published again, at once.
+    Bool RepublishWindowSurfaceShape(EGLSurface surface, NativeWindowType window);
     Bool MakeCurrent();
     Bool ReleaseCurrent();
     // True when the backend ES context is current on the calling thread, i.e.

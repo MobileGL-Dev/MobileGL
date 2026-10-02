@@ -3156,6 +3156,21 @@ TEST(RemoteRunAhead, ARepublishedServerWindowExtentResizesTheServerOwnedSurfaceA
         if (ClientSessionInstance().DrainPublishedEvents() < 1u) ::_exit(95);
         if (query(EGL_WIDTH) != 2560 || query(EGL_HEIGHT) != 1600) ::_exit(96);
 
+        // AN APPLICATION THAT POLLS THE SIZE WHILE IT DRAWS NOTHING (the compositor's timer): the next
+        // resize is published and nothing drains it - no verb, no make-current - but eglQuerySurface
+        // itself takes it in. Red with BackendObject_Remote::RefreshSurfaceExtent a no-op (exit 97).
+        MG_Backend::pActiveBackendObject = MakeUnique<BackendObject_Remote>();
+        s_info.Width = 2560;
+        s_info.Height = 1412;
+        republish();
+        EGLint polledWidth = -1;
+        EGLint polledHeight = -1;
+        if (MG_Impl::EGLImpl::QuerySurface(dpy, surface, EGL_WIDTH, &polledWidth) != EGL_TRUE ||
+            MG_Impl::EGLImpl::QuerySurface(dpy, surface, EGL_HEIGHT, &polledHeight) != EGL_TRUE ||
+            polledWidth != 2560 || polledHeight != 1412)
+            ::_exit(97);
+        MG_Backend::pActiveBackendObject.reset();
+
         defaultFramebuffer.reset();
         ClientSessionInstance().ForgetServerOwnedWindowSurface(surface);
         MG_State::pEGLContext.reset();

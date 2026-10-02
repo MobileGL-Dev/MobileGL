@@ -996,6 +996,11 @@ namespace MobileGL::MG_Pipe {
     // earlier session relied on. Apply thread only.
     void MGPipeServerSetOwnedWindow(const void* window);
     const void* MGPipeServerOwnedWindow();
+    // That window's extent as the display last reported it (ServerLoop sets it from ServerDisplay with the
+    // lease and on every resize; 0x0 with no lease). The ONE size a backend publishes for it: a surface's own
+    // query can still answer the buffer before the resize. False while unknown. Apply thread only.
+    void MGPipeServerSetOwnedWindowExtent(Uint32 width, Uint32 height);
+    Bool MGPipeServerOwnedWindowExtent(Uint32* width, Uint32* height);
 #else
     // The push-without-transport build has one role and one block, so the fill side's spelling
     // folds onto gPipeInputs and PipeFill.cpp reads identically in both build flavours. An

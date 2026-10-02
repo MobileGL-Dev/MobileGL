@@ -440,6 +440,9 @@ namespace MobileGL::MG_Remote::Server {
         // a placeholder until the display attaches a window again.
         Uint64 ServerWindowsSuspended() const { return m_serverWindowsSuspended.load(std::memory_order_acquire); }
         Uint64 ServerWindowsResumed() const { return m_serverWindowsResumed.load(std::memory_order_acquire); }
+        // How many times a resize of the leased window was published to the client (the display's
+        // surfaceChanged, answered on the apply thread without waiting for a present).
+        Uint64 ServerWindowResizesPublished() const { return m_serverWindowResizes.load(std::memory_order_acquire); }
         Bool ServerWindowSuspended() const { return m_serverWindowSuspended.load(std::memory_order_acquire); }
 
         // TEST SEAM: the backend this loop owns, instead of CreateBackend's (a fake that can or cannot
@@ -484,6 +487,14 @@ namespace MobileGL::MG_Remote::Server {
         static void ServerWindowLostThunk(void* self);
         // ServerDisplay's attached hook for a suspended session: the same discipline as the lost one.
         static void ServerWindowAttachedThunk(void* self);
+        // ServerDisplay's resized hook for the lease holder: the same discipline again.
+        static void ServerWindowResizedThunk(void* self);
+        // Apply thread: the leased window's new extent (the display's) is handed to the backend, which
+        // publishes it to the client now.
+        void PublishServerWindowResize();
+        // Apply thread: the extent a backend publishes for the server window from here on (MGPipe's), and
+        // what this session last handed it.
+        void NoteServerWindowExtent(void* window, Uint32 width, Uint32 height);
         // AcquireFor's cancel predicate: the loop is stopping, or the session latched.
         static Bool ServerWindowWaitCancelled(void* self);
         // D4: latched at the session's first successful surface creation; reset by Start(). Per
@@ -500,6 +511,7 @@ namespace MobileGL::MG_Remote::Server {
         // apply thread wakes for it.
         static constexpr Uint32 kWindowLost = 1u;
         static constexpr Uint32 kWindowAttached = 2u;
+        static constexpr Uint32 kWindowResized = 4u;
         std::atomic<Uint32> m_windowRequests{0};
         std::atomic<Uint64> m_serverWindowsLost{0};
         // Written by the apply thread, read by tests.
@@ -510,6 +522,10 @@ namespace MobileGL::MG_Remote::Server {
         // layout's), which a resume asks for again.
         Uint32 m_serverWindowWantWidth = 0;
         Uint32 m_serverWindowWantHeight = 0;
+        // Apply thread only: the leased window's extent this session last published.
+        Uint32 m_publishedWindowWidth = 0;
+        Uint32 m_publishedWindowHeight = 0;
+        std::atomic<Uint64> m_serverWindowResizes{0};
 
         void ApplyThreadMain();
         // Runs a posted control frame, if there is one. Returns true if it ran one.

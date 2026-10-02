@@ -51,6 +51,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // window surface for a placeholder pbuffer and back (DirectGLES::Suspend/ResumeSessionWindowSurface).
         Bool SuspendServerWindow(void* window) override;
         Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
+        Bool ServerWindowResized(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;

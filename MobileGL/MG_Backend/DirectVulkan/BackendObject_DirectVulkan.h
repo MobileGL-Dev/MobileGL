@@ -45,6 +45,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // swapchain) is destroyed and a pbuffer target of the same extent stands in for it, and back.
         Bool SuspendServerWindow(void* window) override;
         Bool ResumeServerWindow(void* window, Uint32 width, Uint32 height) override;
+        Bool ServerWindowResized(void* window, Uint32 width, Uint32 height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
