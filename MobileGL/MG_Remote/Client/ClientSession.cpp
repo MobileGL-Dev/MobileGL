@@ -1504,6 +1504,10 @@ namespace MobileGL::MG_Remote::Client {
                 // One op is outstanding at a time (m_remoteControlMutex), so a report naming any
                 // other seq is a server that has lost track of which op it is running.
                 const auto* progress = envelope->msg_as_SurfaceProgress();
+                // An OLDER seq is an op this client already gave up on (its reply budget expired
+                // while the server's apply thread was blocked - a long GPU stall does it): the
+                // server is reporting, late, on work it did take. Dropped, like its late reply.
+                if (progress != nullptr && progress->seq() < frame.seq) continue;
                 if (progress == nullptr || progress->seq() != frame.seq) {
                     MGLOG_E("MG_Remote client: a SurfaceProgress names seq %llu while seq %llu is "
                             "the op outstanding",
@@ -1545,6 +1549,19 @@ namespace MobileGL::MG_Remote::Client {
                 return MOBILEGL_ERR_PROTOCOL_MISMATCH;
             }
             const ::MobileGL::Wire::SurfaceReply* wire = envelope->msg_as_SurfaceReply();
+            if (wire->seq() < frame.seq) {
+                // THE LATE ANSWER TO AN OP THIS CLIENT TIMED OUT ON. One op is outstanding at a
+                // time, so every reply older than the one owed is exactly that: the server
+                // answered after the budget expired. Treating it as a protocol mismatch left the
+                // session one reply behind for good - every later op read its predecessor's
+                // answer and failed, which wedged a client for the rest of its life after one
+                // multi-second GPU stall. Drop it and keep waiting for ours.
+                MGLOG_W("MG_Remote client: dropping the late SurfaceReply for seq %llu (an op that "
+                        "timed out); still waiting for seq %llu",
+                        static_cast<unsigned long long>(wire->seq()),
+                        static_cast<unsigned long long>(frame.seq));
+                continue;
+            }
             if (wire->seq() != frame.seq) {
                 MGLOG_E("MG_Remote client: SurfaceReply names seq %llu, we asked for %llu",
                         static_cast<unsigned long long>(wire->seq()),

@@ -1122,6 +1122,35 @@ TEST(ServerSpawnTest, AFrozenServerReportsNoProgressAndTheOpStillTimesOutAtTheBu
     EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a frozen server is not a lost device (5.4)";
 }
 
+// THE LATE ANSWER TO AN OP THE CLIENT GAVE UP ON. A server whose apply thread is blocked for
+// longer than the reply budget - a GPU hang the driver takes ~10 s to reset does it - answers the
+// timed-out op when it comes back. The client used to read that answer as the NEXT op's and call
+// it a protocol mismatch, and from then on every op read its predecessor's reply: one long GPU
+// stall left the client unable to make a context current for the rest of its life. The late reply
+// is now dropped and the next op reads its own. Red once by restoring the mismatch arm: the second
+// op comes back MOBILEGL_ERR_PROTOCOL_MISMATCH.
+TEST(ServerSpawnTest, AnOpAfterOneThatTimedOutReadsItsOwnReplyAndNotThatLateOne) {
+    const ScopedEnvironment headless("EGL_PLATFORM", HeadlessEglPlatform());
+    const ShortReplyBudgets budgets(1000);
+
+    Session session;
+    ASSERT_TRUE(Bring("latereply", &session));
+    ScopedSessionCleanup cleanup{session};
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK);
+    ASSERT_EQ(::kill(session.server.pid, SIGSTOP), 0);
+    Server::SurfaceControlFrame first = PbufferCreation();
+    const MobileGLResult timedOut = Client::ClientSessionInstance().RunRemoteSurfaceControlFrame(first);
+    (void)::kill(session.server.pid, SIGCONT);
+    ASSERT_EQ(timedOut, MOBILEGL_ERR_TIMEOUT) << "the frozen server's op was not timed out";
+
+    Server::SurfaceControlFrame second = PbufferCreation();
+    second.surface = 2;
+    const MobileGLResult rc = Client::ClientSessionInstance().RunRemoteSurfaceControlFrame(second);
+    EXPECT_EQ(rc, MOBILEGL_OK) << "the op after a timed-out one came back rc=" << static_cast<int>(rc)
+                               << ": it read the late reply of the op before it";
+    EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a late reply is not a lost device";
+}
+
 TEST(ServerSpawnTest, TheHandshakeCarriesTwoDifferentProcessIdsAndNotTwoZeroes) {
     // CONTRACT-P6 4.3. Hello::pid was hard-coded 0 and Welcome::serverPid ECHOED it back, so the
     // handshake carried 0 and 0 and named nothing at all. Both now carry real ids, which makes
