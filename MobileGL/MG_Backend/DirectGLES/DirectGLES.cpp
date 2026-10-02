@@ -18590,8 +18590,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 EglImageRef Image;
                 GLuint Renderbuffer = 0;
                 Uint64 LastUse = 0;
-                // A present has written the image through this target (its content is a frame).
-                Bool Written = false;
             };
             struct PresentTargets {
                 std::mutex Mutex;
@@ -18863,10 +18861,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     it = targets.ById.emplace(view.Id, std::move(target)).first;
                 }
                 it->second.LastUse = ++targets.UseClock;
-                // A target written before keeps what it was given; one new to this process is
-                // copied whole whatever the client asked (it cannot know the image's history here).
-                const Bool wholeTarget = !it->second.Written;
-                it->second.Written = true;
 
                 GLuint& framebuffer = g_presentFramebuffers.Current();
                 if (framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
@@ -18896,29 +18890,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<Uint32>(sourceHeight) == view.Height;
                     // TOP ROW FIRST: GL's top row (y = height - 1) lands in the image's first memory
                     // row, which an AHardwareBuffer-backed renderbuffer addresses as y = 0.
-                    if (sameExtent && !wholeTarget && !region.IsFull()) {
-                        // Only where the image differs from the frame, each rectangle flipped the
-                        // same way (an empty region copies nothing: the image already is the frame).
-                        MG_Util::Damage::Region clipped = region;
-                        clipped.Normalize(sourceWidth, sourceHeight);
-                        if (clipped.IsFull()) {
-                            g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
-                                                          static_cast<GLint>(view.Height),
-                                                          static_cast<GLint>(view.Width), 0, GL_COLOR_BUFFER_BIT,
-                                                          GL_NEAREST);
-                        } else {
-                            for (const MG_Util::Damage::Rect& rect : clipped.Rects()) {
-                                const MG_Util::Damage::Rect top = MG_Util::Damage::FlipY(rect, sourceHeight);
-                                g_GLESFuncs.glBlitFramebuffer(rect.X, rect.Y, rect.X + rect.Width, rect.Y + rect.Height,
-                                                              top.X, top.Y + top.Height, top.X + top.Width, top.Y,
-                                                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-                            }
-                        }
-                    } else {
-                        g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
-                                                      static_cast<GLint>(view.Height), static_cast<GLint>(view.Width),
-                                                      0, GL_COLOR_BUFFER_BIT, sameExtent ? GL_NEAREST : GL_LINEAR);
-                    }
+                    //
+                    // ALWAYS THE WHOLE FRAME, whatever `region` says. A blit of only the damaged
+                    // rectangles into the image's renderbuffer was measured to lose texels around
+                    // them on a tiler: the driver does not load the image's other content into the
+                    // pass that blits a part of it, and what it stores back there is stale tile memory
+                    // (old frames' pixels around the copied rectangles). GL has no way to ask for the
+                    // load, so the copy stays whole here; the region still narrows what the client
+                    // damages on its surface, which is what the compositor repaints.
+                    (void)region;
+                    g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, static_cast<GLint>(view.Height),
+                                                  static_cast<GLint>(view.Width), 0, GL_COLOR_BUFFER_BIT,
+                                                  sameExtent ? GL_NEAREST : GL_LINEAR);
                     const GLenum error = g_GLESFuncs.glGetError();
                     copied = error == GL_NO_ERROR;
                     if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(static_cast<GLenum>(readBuffer));
