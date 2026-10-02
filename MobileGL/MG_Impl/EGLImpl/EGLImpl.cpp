@@ -636,10 +636,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     EGLBoolean ReleaseThread() {
+        // Always succeeds (EGL 1.4 §3.11): after the last eglTerminate tore MobileGL down there is
+        // simply nothing of this thread's left to release.
+        if (!MG_State::pEGLContext) return EGL_TRUE;
         auto* state = GetState();
-        if (!state) {
-            return EGL_FALSE;
-        }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             (void)backendObject->MakeEGLCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }

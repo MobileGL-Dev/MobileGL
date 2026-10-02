@@ -29,6 +29,15 @@
 
 #include <EGL/egl.h>
 
+namespace MobileGL::MG_Impl::EGLImpl {
+    // The current context's default-framebuffer frame, `width` x `height`, written top-down in
+    // B, G, R, A byte order (a wl_shm ARGB8888 buffer and a 24/32-bit little-endian X image both
+    // hold that) to `dst`, one row every `dstStride` bytes. Through this library's own entry
+    // points: the application's read framebuffer, pack buffer and pack state are saved and put
+    // back, so the readback is invisible to it. `scratch` is the caller's, reused across frames.
+    void ReadBackFrameBGRA(EGLint width, EGLint height, Vector<Uint8>& scratch, Uint8* dst, SizeT dstStride);
+} // namespace MobileGL::MG_Impl::EGLImpl
+
 namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     // EGL_PLATFORM_WAYLAND_KHR and EGL_PLATFORM_WAYLAND_EXT are the same enum.
     inline constexpr EGLenum kPlatformWayland = 0x31D8;

@@ -25,6 +25,45 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+namespace MobileGL::MG_Impl::EGLImpl {
+    void ReadBackFrameBGRA(EGLint width, EGLint height, Vector<Uint8>& scratch, Uint8* dst, SizeT dstStride) {
+        namespace GL = MG_Impl::GLImpl;
+        GLint readFramebuffer = 0, packBuffer = 0, alignment = 4, rowLength = 0, skipRows = 0, skipPixels = 0;
+        GL::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+        GL::GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
+        GL::GetIntegerv(GL_PACK_ALIGNMENT, &alignment);
+        GL::GetIntegerv(GL_PACK_ROW_LENGTH, &rowLength);
+        GL::GetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
+        GL::GetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
+        if (readFramebuffer != 0) GL::BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        if (packBuffer != 0) GL::BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        GL::PixelStorei(GL_PACK_ALIGNMENT, 4);
+        GL::PixelStorei(GL_PACK_ROW_LENGTH, 0);
+        GL::PixelStorei(GL_PACK_SKIP_ROWS, 0);
+        GL::PixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        const SizeT rowBytes = static_cast<SizeT>(width) * 4;
+        scratch.resize(rowBytes * static_cast<SizeT>(height));
+        GL::ReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, scratch.data());
+        GL::PixelStorei(GL_PACK_ALIGNMENT, alignment);
+        GL::PixelStorei(GL_PACK_ROW_LENGTH, rowLength);
+        GL::PixelStorei(GL_PACK_SKIP_ROWS, skipRows);
+        GL::PixelStorei(GL_PACK_SKIP_PIXELS, skipPixels);
+        if (packBuffer != 0) GL::BindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(packBuffer));
+        if (readFramebuffer != 0) GL::BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));
+
+        for (EGLint y = 0; y < height; ++y) {
+            const Uint8* src = scratch.data() + static_cast<SizeT>(height - 1 - y) * rowBytes;
+            Uint8* row = dst + static_cast<SizeT>(y) * dstStride;
+            for (EGLint x = 0; x < width; ++x) {
+                row[x * 4 + 0] = src[x * 4 + 2];
+                row[x * 4 + 1] = src[x * 4 + 1];
+                row[x * 4 + 2] = src[x * 4 + 0];
+                row[x * 4 + 3] = src[x * 4 + 3];
+            }
+        }
+    }
+} // namespace MobileGL::MG_Impl::EGLImpl
+
 namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     namespace {
         // libwayland-client's types are opaque here: everything goes through wl_proxy_* and the
@@ -345,45 +384,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             return false;
         }
 
-        // The frame, out of the default framebuffer, through this library's own entry points: the
-        // application's read framebuffer, pack buffer and pack state are saved and put back, so
-        // the readback is invisible to it.
-        namespace GL = MG_Impl::GLImpl;
-        GLint readFramebuffer = 0, packBuffer = 0, alignment = 4, rowLength = 0, skipRows = 0, skipPixels = 0;
-        GL::GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
-        GL::GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &packBuffer);
-        GL::GetIntegerv(GL_PACK_ALIGNMENT, &alignment);
-        GL::GetIntegerv(GL_PACK_ROW_LENGTH, &rowLength);
-        GL::GetIntegerv(GL_PACK_SKIP_ROWS, &skipRows);
-        GL::GetIntegerv(GL_PACK_SKIP_PIXELS, &skipPixels);
-        if (readFramebuffer != 0) GL::BindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        if (packBuffer != 0) GL::BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-        GL::PixelStorei(GL_PACK_ALIGNMENT, 4);
-        GL::PixelStorei(GL_PACK_ROW_LENGTH, 0);
-        GL::PixelStorei(GL_PACK_SKIP_ROWS, 0);
-        GL::PixelStorei(GL_PACK_SKIP_PIXELS, 0);
-        const SizeT rowBytes = static_cast<SizeT>(impl.width) * 4;
-        impl.scratch.resize(rowBytes * static_cast<SizeT>(impl.height));
-        GL::ReadPixels(0, 0, impl.width, impl.height, GL_RGBA, GL_UNSIGNED_BYTE, impl.scratch.data());
-        GL::PixelStorei(GL_PACK_ALIGNMENT, alignment);
-        GL::PixelStorei(GL_PACK_ROW_LENGTH, rowLength);
-        GL::PixelStorei(GL_PACK_SKIP_ROWS, skipRows);
-        GL::PixelStorei(GL_PACK_SKIP_PIXELS, skipPixels);
-        if (packBuffer != 0) GL::BindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(packBuffer));
-        if (readFramebuffer != 0) GL::BindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(readFramebuffer));
-
         // GL's rows run bottom-up and RGBA; a wl_shm buffer's run top-down and B, G, R, A.
-        auto* dst = static_cast<Uint8*>(buffer->map);
-        for (EGLint y = 0; y < impl.height; ++y) {
-            const Uint8* src = impl.scratch.data() + static_cast<SizeT>(impl.height - 1 - y) * rowBytes;
-            Uint8* row = dst + static_cast<SizeT>(y) * static_cast<SizeT>(buffer->stride);
-            for (EGLint x = 0; x < impl.width; ++x) {
-                row[x * 4 + 0] = src[x * 4 + 2];
-                row[x * 4 + 1] = src[x * 4 + 1];
-                row[x * 4 + 2] = src[x * 4 + 0];
-                row[x * 4 + 3] = src[x * 4 + 3];
-            }
-        }
+        ReadBackFrameBGRA(impl.width, impl.height, impl.scratch, static_cast<Uint8*>(buffer->map),
+                          static_cast<SizeT>(buffer->stride));
 
         wl_proxy* surface = impl.window->surface;
         const uint32_t surfaceVersion = api.getVersion(surface);

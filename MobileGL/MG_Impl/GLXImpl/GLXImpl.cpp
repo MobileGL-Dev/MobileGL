@@ -10,6 +10,7 @@
 
 #if defined(__linux__) && !defined(__ANDROID__)
 #include "../EGLImpl/EGLImpl.h"
+#include "../EGLImpl/WaylandWindow.h"
 #include "../GetProcAddress.h"
 #include <Init.h>
 #include <Config.h>
@@ -157,6 +158,53 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return *functions;
         }
 
+        // ---- X11 presentation of a remote drawable (libxcb through libX11's own connection,
+        //      dlopen'd like the rest; xcb's request is plain arguments, no struct layouts) ----
+        struct XcbVoidCookie {
+            unsigned int Sequence;
+        };
+        struct XcbFunctions {
+            void* (*GetXCBConnection)(Display*) = nullptr;
+            Uint32 (*GenerateId)(void*) = nullptr;
+            XcbVoidCookie (*CreateGC)(void*, Uint32, Uint32, Uint32, const void*) = nullptr;
+            XcbVoidCookie (*FreeGC)(void*, Uint32) = nullptr;
+            XcbVoidCookie (*PutImage)(void*, Uint8, Uint32, Uint32, Uint16, Uint16, Int16, Int16, Uint8, Uint8,
+                                      Uint32, const Uint8*) = nullptr;
+            Uint32 (*MaximumRequestLength)(void*) = nullptr;
+            int (*Flush)(void*) = nullptr;
+
+            Bool Valid() const {
+                return GetXCBConnection && GenerateId && CreateGC && FreeGC && PutImage && MaximumRequestLength &&
+                       Flush;
+            }
+        };
+
+        const XcbFunctions& Xcb() {
+            static const XcbFunctions* functions = [] {
+                auto* fns = new XcbFunctions();
+                void* x11xcb = dlopen("libX11-xcb.so.1", RTLD_LOCAL | RTLD_NOW);
+                void* xcb = dlopen("libxcb.so.1", RTLD_LOCAL | RTLD_NOW);
+                if (x11xcb && xcb) {
+                    fns->GetXCBConnection =
+                        reinterpret_cast<decltype(fns->GetXCBConnection)>(dlsym(x11xcb, "XGetXCBConnection"));
+                    fns->GenerateId = reinterpret_cast<decltype(fns->GenerateId)>(dlsym(xcb, "xcb_generate_id"));
+                    fns->CreateGC = reinterpret_cast<decltype(fns->CreateGC)>(dlsym(xcb, "xcb_create_gc"));
+                    fns->FreeGC = reinterpret_cast<decltype(fns->FreeGC)>(dlsym(xcb, "xcb_free_gc"));
+                    fns->PutImage = reinterpret_cast<decltype(fns->PutImage)>(dlsym(xcb, "xcb_put_image"));
+                    fns->MaximumRequestLength = reinterpret_cast<decltype(fns->MaximumRequestLength)>(
+                        dlsym(xcb, "xcb_get_maximum_request_length"));
+                    fns->Flush = reinterpret_cast<decltype(fns->Flush)>(dlsym(xcb, "xcb_flush"));
+                }
+                if (!fns->Valid()) {
+                    MGLOG_E_ONCE("glx: libX11-xcb/libxcb entry points missing; remote windows are not shown");
+                }
+                return fns;
+            }();
+            return *functions;
+        }
+
+        constexpr Uint8 kXcbImageFormatZPixmap = 2;
+
         // ---- FBConfigs: mirror the two EGLState configs, stencil-8 first so
         //      stencil-wanting choosers (GLFW's default hints) match config 1 ----
         struct FBConfigInfo {
@@ -189,6 +237,13 @@ namespace MobileGL::MG_Impl::GLXImpl {
             Uint32 Height = 0;
             std::chrono::steady_clock::time_point LastSizePoll{};
             Bool RemotePbuffer = false;
+            // A remote drawable's presentation: the window's depth, the GC its frames are put
+            // with (0 until the first one) and the readback buffers.
+            ::Display* XDisplay = nullptr;
+            Uint32 Depth = 0;
+            Uint32 Gc = 0;
+            Vector<Uint8> Scratch;
+            Vector<Uint8> Image;
         };
 
         std::recursive_mutex& RegistryMutex() {
@@ -257,7 +312,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return it == contexts.end() ? nullptr : &it->second;
         }
 
-        Bool QueryDrawableSize(Display* dpy, GLXDrawableHandle drawable, Uint32& width, Uint32& height) {
+        Bool QueryDrawableSize(Display* dpy, GLXDrawableHandle drawable, Uint32& width, Uint32& height,
+                               Uint32* depthOut = nullptr) {
             const auto& x11 = X11();
             if (!x11.Valid() || !dpy || drawable == 0) {
                 return false;
@@ -274,7 +330,57 @@ namespace MobileGL::MG_Impl::GLXImpl {
             }
             width = std::max(w, 1u);
             height = std::max(h, 1u);
+            if (depthOut) *depthOut = depth;
             return true;
+        }
+
+        // A REMOTE DRAWABLE IS A PBUFFER, AND NOTHING OF IT REACHES THE X WINDOW BY ITSELF: the
+        // backend draws in another process (another OS), where an XID means nothing. So at every
+        // swap the frame is read back and put on the window with PutImage - the same contract as
+        // the Wayland windows' wl_shm presentation. Called with the drawable current.
+        void PresentRemoteDrawable(GLXDrawableHandle drawable, DrawableSurface& surface) {
+            const EGLImpl::GLStreamScope stream; // the readback is GL records of this thread's context
+            const auto& xcb = Xcb();
+            if (!xcb.Valid() || !surface.XDisplay) return;
+            if (surface.Depth != 24 && surface.Depth != 32) {
+                MGLOG_W_ONCE("glx: a depth-%u window cannot be shown (24/32-bit only)", surface.Depth);
+                return;
+            }
+            void* connection = xcb.GetXCBConnection(surface.XDisplay);
+            if (!connection) return;
+            if (surface.Gc == 0) {
+                surface.Gc = xcb.GenerateId(connection);
+                (void)xcb.CreateGC(connection, surface.Gc, static_cast<Uint32>(drawable), 0, nullptr);
+            }
+            const EGLint width = static_cast<EGLint>(surface.Width);
+            const EGLint height = static_cast<EGLint>(surface.Height);
+            const SizeT rowBytes = static_cast<SizeT>(width) * 4;
+            surface.Image.resize(rowBytes * static_cast<SizeT>(height));
+            EGLImpl::ReadBackFrameBGRA(width, height, surface.Scratch, surface.Image.data(), rowBytes);
+
+            // A request over the server's maximum length closes the connection, so the image goes
+            // in bands of whole rows that each fit (the request header is 24 bytes).
+            const SizeT maxBytes = static_cast<SizeT>(xcb.MaximumRequestLength(connection)) * 4;
+            const SizeT budget = maxBytes > 64 ? maxBytes - 64 : rowBytes;
+            const EGLint bandRows = std::max<EGLint>(1, static_cast<EGLint>(budget / rowBytes));
+            for (EGLint y = 0; y < height; y += bandRows) {
+                const EGLint rows = std::min(bandRows, height - y);
+                (void)xcb.PutImage(connection, kXcbImageFormatZPixmap, static_cast<Uint32>(drawable), surface.Gc,
+                                   static_cast<Uint16>(width), static_cast<Uint16>(rows), 0, static_cast<Int16>(y), 0,
+                                   static_cast<Uint8>(surface.Depth), static_cast<Uint32>(rowBytes * rows),
+                                   surface.Image.data() + rowBytes * static_cast<SizeT>(y));
+            }
+            (void)xcb.Flush(connection);
+        }
+
+        void ReleaseDrawableSurface(DrawableSurface& surface) {
+            if (surface.Gc != 0 && surface.XDisplay) {
+                const auto& xcb = Xcb();
+                if (void* connection = xcb.Valid() ? xcb.GetXCBConnection(surface.XDisplay) : nullptr) {
+                    (void)xcb.FreeGC(connection, surface.Gc);
+                }
+            }
+            EGLImpl::DestroySurface(surface.Display, surface.Surface);
         }
 
         // The backends never query the X window size themselves; the GLX layer
@@ -296,10 +402,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             if (width == surface.Width && height == surface.Height) {
                 return;
             }
-            // A remote X drawable is backed by a pbuffer; an XID has no meaning
-            // to the Android worker. Its allocation cannot be resized by the
-            // native-window hook. Keep the current allocation until recreated.
-            if (surface.RemotePbuffer) return;
+            // A remote X drawable is a pbuffer; resizing it gives it a new one at the new size.
             if (EGLImpl::ResizePlatformWindowSurface(surface.Display, surface.Surface,
                                                      static_cast<EGLint>(width),
                                                      static_cast<EGLint>(height))) {
@@ -319,7 +422,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
 
             Uint32 width = 0;
             Uint32 height = 0;
-            if (!QueryDrawableSize(dpy, drawable, width, height)) {
+            Uint32 depth = 0;
+            if (!QueryDrawableSize(dpy, drawable, width, height, &depth)) {
                 MGLOG_E_ONCE("glx: XGetGeometry failed for drawable 0x%lx", drawable);
                 return nullptr;
             }
@@ -329,7 +433,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
                 EGL_HEIGHT, static_cast<EGLAttrib>(height),
                 EGL_NONE,
             };
-            const Bool remotePbuffer = MG_Config::Transport == MG_Config::TransportMode::Spawn;
+            const Bool remotePbuffer = MG_Config::Transport == MG_Config::TransportMode::Spawn ||
+                                       MG_Config::Transport == MG_Config::TransportMode::UnixSocket;
             const EGLint pbufferAttribs[] = {EGL_WIDTH, static_cast<EGLint>(width),
                                              EGL_HEIGHT, static_cast<EGLint>(height), EGL_NONE};
             EGLSurface surface = remotePbuffer
@@ -348,6 +453,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
             record.Width = width;
             record.Height = height;
             record.RemotePbuffer = remotePbuffer;
+            record.XDisplay = dpy;
+            record.Depth = depth;
             record.LastSizePoll = std::chrono::steady_clock::now();
             auto [inserted, _] = surfaces.emplace(drawable, record);
             return &inserted->second;
@@ -973,8 +1080,14 @@ namespace MobileGL::MG_Impl::GLXImpl {
             MGLOG_W_ONCE("glx: glXSwapBuffers with no surface for drawable 0x%lx", drawable);
             return;
         }
-        SyncSurfaceSize(dpy, drawable, it->second);
+        // What the window shows is the frame the swap finishes, read back while it is still the
+        // drawable's content (only from the thread it is current to: the readback is a GL call).
+        if (it->second.RemotePbuffer && t_current.Draw == drawable && t_current.Context) {
+            PresentRemoteDrawable(drawable, it->second);
+        }
         EGLImpl::SwapBuffers(it->second.Display, it->second.Surface);
+        // A resize takes effect for the next frame.
+        SyncSurfaceSize(dpy, drawable, it->second);
     }
 
     GLXDrawableHandle CreateWindow(Display*, GLXFBConfigHandle config, GLXDrawableHandle window,
@@ -1000,7 +1113,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         if (it == surfaces.end()) {
             return;
         }
-        EGLImpl::DestroySurface(it->second.Display, it->second.Surface);
+        ReleaseDrawableSurface(it->second);
         surfaces.erase(it);
     }
 

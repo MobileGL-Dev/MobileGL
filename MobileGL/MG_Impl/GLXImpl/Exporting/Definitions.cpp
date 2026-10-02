@@ -8,12 +8,20 @@
 
 #include <Includes.h>
 #include "../LookUp/LookUp.h"
+#include "../../EGLImpl/EGLImpl.h"
+
+// Every GLX entry point holds the client's stream lock, as every EGL and GL one does: they are EGL
+// calls underneath (and a swap reads the frame back), so they cannot interleave with another
+// thread's GL records.
+using GLXStreamLock = MobileGL::MG_Impl::EGLImpl::StreamLockScope;
 
 MOBILEGL_GLX_API void* glXGetProcAddress(const char* name) {
+    GLXStreamLock streamLock;
     return MG_Impl::GLXImpl::GetProcAddress(name);
 }
 
 MOBILEGL_GLX_API void* glXGetProcAddressARB(const char* name) {
+    GLXStreamLock streamLock;
     return MG_Impl::GLXImpl::GetProcAddressARB(name);
 }
 
@@ -27,149 +35,184 @@ namespace GLXImpl = MobileGL::MG_Impl::GLXImpl;
 // and XVisualInfo* crosses as void*.
 
 MOBILEGL_GLX_API int glXQueryExtension(Display* dpy, int* errorBase, int* eventBase) {
+    GLXStreamLock streamLock;
     return GLXImpl::QueryExtension(dpy, errorBase, eventBase);
 }
 
 MOBILEGL_GLX_API int glXQueryVersion(Display* dpy, int* major, int* minor) {
+    GLXStreamLock streamLock;
     return GLXImpl::QueryVersion(dpy, major, minor);
 }
 
 MOBILEGL_GLX_API const char* glXQueryExtensionsString(Display* dpy, int screen) {
+    GLXStreamLock streamLock;
     return GLXImpl::QueryExtensionsString(dpy, screen);
 }
 
 MOBILEGL_GLX_API const char* glXGetClientString(Display* dpy, int name) {
+    GLXStreamLock streamLock;
     return GLXImpl::GetClientString(dpy, name);
 }
 
 MOBILEGL_GLX_API const char* glXQueryServerString(Display* dpy, int screen, int name) {
+    GLXStreamLock streamLock;
     return GLXImpl::QueryServerString(dpy, screen, name);
 }
 
 MOBILEGL_GLX_API void** glXGetFBConfigs(Display* dpy, int screen, int* nelements) {
+    GLXStreamLock streamLock;
     return GLXImpl::GetFBConfigs(dpy, screen, nelements);
 }
 
 MOBILEGL_GLX_API void** glXChooseFBConfig(Display* dpy, int screen, const int* attribList,
                                           int* nelements) {
+    GLXStreamLock streamLock;
     return GLXImpl::ChooseFBConfig(dpy, screen, attribList, nelements);
 }
 
 MOBILEGL_GLX_API int glXGetFBConfigAttrib(Display* dpy, void* config, int attribute, int* value) {
+    GLXStreamLock streamLock;
     return GLXImpl::GetFBConfigAttrib(dpy, config, attribute, value);
 }
 
 MOBILEGL_GLX_API void* glXGetVisualFromFBConfig(Display* dpy, void* config) {
+    GLXStreamLock streamLock;
     return GLXImpl::GetVisualFromFBConfig(dpy, config);
 }
 
 MOBILEGL_GLX_API void* glXChooseVisual(Display* dpy, int screen, int* attribList) {
+    GLXStreamLock streamLock;
     return GLXImpl::ChooseVisual(dpy, screen, attribList);
 }
 
 MOBILEGL_GLX_API int glXGetConfig(Display* dpy, void* visualInfo, int attribute, int* value) {
+    GLXStreamLock streamLock;
     return GLXImpl::GetConfig(dpy, visualInfo, attribute, value);
 }
 
 MOBILEGL_GLX_API void* glXCreateContext(Display* dpy, void* visualInfo, void* shareList, int direct) {
+    GLXStreamLock streamLock;
     return GLXImpl::CreateContext(dpy, visualInfo, shareList, direct);
 }
 
 MOBILEGL_GLX_API void* glXCreateNewContext(Display* dpy, void* config, int renderType,
                                            void* shareList, int direct) {
+    GLXStreamLock streamLock;
     return GLXImpl::CreateNewContext(dpy, config, renderType, shareList, direct);
 }
 
 MOBILEGL_GLX_API void* glXCreateContextAttribsARB(Display* dpy, void* config, void* shareContext,
                                                   int direct, const int* attribList) {
+    GLXStreamLock streamLock;
     return GLXImpl::CreateContextAttribsARB(dpy, config, shareContext, direct, attribList);
 }
 
 MOBILEGL_GLX_API void glXDestroyContext(Display* dpy, void* context) {
+    GLXStreamLock streamLock;
     GLXImpl::DestroyContext(dpy, context);
 }
 
 MOBILEGL_GLX_API int glXMakeCurrent(Display* dpy, unsigned long drawable, void* context) {
+    GLXStreamLock streamLock;
     return GLXImpl::MakeCurrent(dpy, drawable, context);
 }
 
 MOBILEGL_GLX_API int glXMakeContextCurrent(Display* dpy, unsigned long draw, unsigned long read,
                                            void* context) {
+    GLXStreamLock streamLock;
     return GLXImpl::MakeContextCurrent(dpy, draw, read, context);
 }
 
 MOBILEGL_GLX_API void glXSwapBuffers(Display* dpy, unsigned long drawable) {
+    GLXStreamLock streamLock;
     GLXImpl::SwapBuffers(dpy, drawable);
 }
 
 MOBILEGL_GLX_API unsigned long glXCreateWindow(Display* dpy, void* config, unsigned long window,
                                                const int* attribList) {
+    GLXStreamLock streamLock;
     return GLXImpl::CreateWindow(dpy, config, window, attribList);
 }
 
 MOBILEGL_GLX_API void glXDestroyWindow(Display* dpy, unsigned long window) {
+    GLXStreamLock streamLock;
     GLXImpl::DestroyWindow(dpy, window);
 }
 
 MOBILEGL_GLX_API void* glXGetCurrentContext() {
+    GLXStreamLock streamLock;
     return GLXImpl::GetCurrentContext();
 }
 
 MOBILEGL_GLX_API unsigned long glXGetCurrentDrawable() {
+    GLXStreamLock streamLock;
     return GLXImpl::GetCurrentDrawable();
 }
 
 MOBILEGL_GLX_API unsigned long glXGetCurrentReadDrawable() {
+    GLXStreamLock streamLock;
     return GLXImpl::GetCurrentReadDrawable();
 }
 
 MOBILEGL_GLX_API Display* glXGetCurrentDisplay() {
+    GLXStreamLock streamLock;
     return GLXImpl::GetCurrentDisplay();
 }
 
 MOBILEGL_GLX_API int glXIsDirect(Display* dpy, void* context) {
+    GLXStreamLock streamLock;
     return GLXImpl::IsDirect(dpy, context);
 }
 
 MOBILEGL_GLX_API void glXWaitGL() {
+    GLXStreamLock streamLock;
     GLXImpl::WaitGL();
 }
 
 MOBILEGL_GLX_API void glXWaitX() {
+    GLXStreamLock streamLock;
     GLXImpl::WaitX();
 }
 
 MOBILEGL_GLX_API int glXQueryContext(Display* dpy, void* context, int attribute, int* value) {
+    GLXStreamLock streamLock;
     return GLXImpl::QueryContext(dpy, context, attribute, value);
 }
 
 MOBILEGL_GLX_API void glXQueryDrawable(Display* dpy, unsigned long drawable, int attribute,
                                        unsigned int* value) {
+    GLXStreamLock streamLock;
     GLXImpl::QueryDrawable(dpy, drawable, attribute, value);
 }
 
 MOBILEGL_GLX_API void glXSwapIntervalEXT(Display* dpy, unsigned long drawable, int interval) {
+    GLXStreamLock streamLock;
     GLXImpl::SwapIntervalEXT(dpy, drawable, interval);
 }
 
 MOBILEGL_GLX_API int glXSwapIntervalMESA(unsigned int interval) {
+    GLXStreamLock streamLock;
     return GLXImpl::SwapIntervalMESA(interval);
 }
 
 MOBILEGL_GLX_API int glXGetSwapIntervalMESA() {
+    GLXStreamLock streamLock;
     return GLXImpl::GetSwapIntervalMESA();
 }
 
 MOBILEGL_GLX_API int glXSwapIntervalSGI(int interval) {
+    GLXStreamLock streamLock;
     return GLXImpl::SwapIntervalSGI(interval);
 }
 
 // Legacy entry points some loaders probe for; harmless no-op stubs.
 MOBILEGL_GLX_API void glXCopyContext(Display*, void*, void*, unsigned long) {
+    GLXStreamLock streamLock;
     MGLOG_W_ONCE("glx: glXCopyContext is not supported");
 }
 
 MOBILEGL_GLX_API unsigned long glXCreateGLXPixmap(Display*, void*, unsigned long) {
+    GLXStreamLock streamLock;
     MGLOG_W_ONCE("glx: glXCreateGLXPixmap is not supported");
     return 0;
 }
@@ -177,6 +220,7 @@ MOBILEGL_GLX_API unsigned long glXCreateGLXPixmap(Display*, void*, unsigned long
 MOBILEGL_GLX_API void glXDestroyGLXPixmap(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API unsigned long glXCreatePixmap(Display*, void*, unsigned long, const int*) {
+    GLXStreamLock streamLock;
     MGLOG_W_ONCE("glx: glXCreatePixmap is not supported");
     return 0;
 }
@@ -184,6 +228,7 @@ MOBILEGL_GLX_API unsigned long glXCreatePixmap(Display*, void*, unsigned long, c
 MOBILEGL_GLX_API void glXDestroyPixmap(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API unsigned long glXCreatePbuffer(Display*, void*, const int*) {
+    GLXStreamLock streamLock;
     MGLOG_W_ONCE("glx: glXCreatePbuffer is not supported");
     return 0;
 }
@@ -191,12 +236,14 @@ MOBILEGL_GLX_API unsigned long glXCreatePbuffer(Display*, void*, const int*) {
 MOBILEGL_GLX_API void glXDestroyPbuffer(Display*, unsigned long) {}
 
 MOBILEGL_GLX_API void glXUseXFont(unsigned long, int, int, int) {
+    GLXStreamLock streamLock;
     MGLOG_W_ONCE("glx: glXUseXFont is not supported");
 }
 
 MOBILEGL_GLX_API void glXSelectEvent(Display*, unsigned long, unsigned long) {}
 
 MOBILEGL_GLX_API void glXGetSelectedEvent(Display*, unsigned long, unsigned long* eventMask) {
+    GLXStreamLock streamLock;
     if (eventMask) {
         *eventMask = 0;
     }
