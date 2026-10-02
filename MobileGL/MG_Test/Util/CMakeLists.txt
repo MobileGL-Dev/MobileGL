@@ -53,7 +53,26 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# The partial-present bookkeeping: damage rectangles, the y-flip, the per-buffer missed damage of
+# rotating shared images and the per-image buffer age. Pure, no GL context.
+add_executable(
+        DamageTest
+        DamageTest.cpp
+)
+
+target_include_directories(DamageTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        DamageTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 include(GoogleTest)
 gtest_discover_tests(JobNodeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeStatsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(DamageTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
