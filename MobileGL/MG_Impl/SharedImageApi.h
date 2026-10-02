@@ -41,6 +41,11 @@ extern "C" {
 /* DRM fourccs (little-endian packed). ABGR8888 is R, G, B, A in memory - GL's RGBA8. */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888 0x34324241u /* 'AB24' */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888 0x34324258u /* 'XB24' */
+/* ARGB8888 / XRGB8888: allocatable too. The layout of every shared image is the server's own
+ * (modifier INVALID, never mapped), and channels are addressed logically by the GL that reads and
+ * writes them, so the name an image is allocated under never changes its colours. */
+#define MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 0x34325241u /* 'AR24' */
+#define MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888 0x34325258u /* 'XR24' */
 
 /* One allocated image. VERSIONED BY SIZE: the caller sets struct_size to the sizeof it was built
  * against and the library writes no byte past it, so fields are only ever appended. */

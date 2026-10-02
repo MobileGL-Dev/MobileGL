@@ -588,7 +588,8 @@ namespace MobileGL {
         //
         // The server-side view of one image, as a backend sees it: `NativeBuffer` is the image's
         // AHardwareBuffer (null where there is none), `Fourcc` a DRM fourcc - ABGR8888 (R, G, B, A in
-        // memory, GL RGBA8) or XBGR8888 (alpha ignored).
+        // memory, GL RGBA8) or XBGR8888 (alpha ignored); ARGB8888 / XRGB8888 images are stored the
+        // same way (SharedImageRegistry.h says why), so a backend binds every one as RGBA8.
         struct SharedImageView {
             Uint64 Id = 0;
             Uint32 Width = 0;

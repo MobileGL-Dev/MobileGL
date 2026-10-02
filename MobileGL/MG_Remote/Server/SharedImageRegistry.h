@@ -38,12 +38,20 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     }
     inline constexpr Uint32 kFourccAbgr8888 = FourCC('A', 'B', '2', '4');
     inline constexpr Uint32 kFourccXbgr8888 = FourCC('X', 'B', '2', '4');
+    // ARGB8888 / XRGB8888 name B, G, R, A in memory. An image of either is still stored R, G, B, A:
+    // its layout is the allocator's (the modifier is INVALID and no CPU mapping is offered), every
+    // reader and writer is this server, and they all address channels LOGICALLY - so what a
+    // client renders as red samples as red, whichever of the four names it allocated under.
+    inline constexpr Uint32 kFourccArgb8888 = FourCC('A', 'R', '2', '4');
+    inline constexpr Uint32 kFourccXrgb8888 = FourCC('X', 'R', '2', '4');
     // "The layout is the allocator's": what an AHardwareBuffer is to anybody but its allocator.
     inline constexpr Uint64 kModifierInvalid = 0x00ffffffffffffffull;
     inline constexpr Uint64 kModifierLinear = 0;
 
     // Whether images of this fourcc can be allocated (and so imported) at all.
     Bool FourccSupported(Uint32 fourcc);
+    // The X formats: alpha reads as 1 whatever is stored.
+    Bool FourccIgnoresAlpha(Uint32 fourcc);
 
     struct Image {
         Uint64 Id = 0;

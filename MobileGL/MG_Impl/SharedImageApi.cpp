@@ -26,7 +26,8 @@
 namespace {
     using MobileGL::MG_Backend::BackendObject;
 
-    constexpr uint32_t kFormats[] = {MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888, MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888};
+    constexpr uint32_t kFormats[] = {MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888, MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888,
+                                     MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888, MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888};
 
     bool FourccSupported(uint32_t fourcc) {
         for (uint32_t format : kFormats) {

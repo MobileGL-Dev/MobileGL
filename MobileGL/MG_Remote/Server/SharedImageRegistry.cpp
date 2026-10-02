@@ -110,7 +110,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
             desc.width = image.Width;
             desc.height = image.Height;
             desc.layers = 1;
-            desc.format = image.Fourcc == kFourccXbgr8888 ? AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM
+            desc.format = FourccIgnoresAlpha(image.Fourcc) ? AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM
                                                           : AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
             desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
             AHardwareBuffer* ahb = nullptr;
@@ -186,7 +186,12 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         ReleaseNative(Native);
     }
 
-    Bool FourccSupported(Uint32 fourcc) { return fourcc == kFourccAbgr8888 || fourcc == kFourccXbgr8888; }
+    Bool FourccSupported(Uint32 fourcc) {
+        return fourcc == kFourccAbgr8888 || fourcc == kFourccXbgr8888 || fourcc == kFourccArgb8888 ||
+               fourcc == kFourccXrgb8888;
+    }
+
+    Bool FourccIgnoresAlpha(Uint32 fourcc) { return fourcc == kFourccXbgr8888 || fourcc == kFourccXrgb8888; }
 
     ImageRef Allocate(Uint32 width, Uint32 height, Uint32 fourcc, std::string& why) {
         if (width == 0 || height == 0 || width > 16384 || height > 16384) {

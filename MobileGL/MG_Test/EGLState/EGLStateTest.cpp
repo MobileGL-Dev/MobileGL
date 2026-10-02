@@ -138,7 +138,9 @@ TEST(EGLStateProfile, CompatibilityProfileRequiresExplicitCompatBit) {
 namespace {
     constexpr EGLAttrib kAbgr8888 = StateContext::kDrmFourccAbgr8888;
     constexpr EGLAttrib kXbgr8888 = StateContext::kDrmFourccXbgr8888;
-    constexpr EGLAttrib kArgb8888 = 0x34325241; // 'AR24': not a shared-image byte order
+    constexpr EGLAttrib kArgb8888 = StateContext::kDrmFourccArgb8888;
+    constexpr EGLAttrib kXrgb8888 = StateContext::kDrmFourccXrgb8888;
+    constexpr EGLAttrib kRgb565 = 0x36314752; // 'RG16': not a shared-image format
 
     // A complete single-plane import, as a compositor builds it for a linux-dmabuf wl_buffer.
     std::vector<EGLAttrib> DmaBufAttribs(EGLAttrib fourcc = kAbgr8888) {
@@ -208,8 +210,8 @@ TEST(EGLStateDmaBufImport, RefusesWhatTheExtensionRefuses) {
     EXPECT_EQ(PrepareError(*fixture, DmaBufAttribs(), EGL_NO_CONTEXT, &notABuffer), EGL_BAD_PARAMETER);
     // An attribute no dma-buf import has.
     EXPECT_EQ(PrepareError(*fixture, WithAttrib(DmaBufAttribs(), EGL_CONFIG_ID, 1)), EGL_BAD_PARAMETER);
-    // Formats outside the shared images' byte order, and planes a single-plane format lacks.
-    EXPECT_EQ(PrepareError(*fixture, DmaBufAttribs(kArgb8888)), EGL_BAD_MATCH);
+    // A format no shared image has, and planes a single-plane format lacks.
+    EXPECT_EQ(PrepareError(*fixture, DmaBufAttribs(kRgb565)), EGL_BAD_MATCH);
     EXPECT_EQ(PrepareError(*fixture, WithAttrib(DmaBufAttribs(), EGL_DMA_BUF_PLANE1_FD_EXT, 8)), EGL_BAD_ATTRIBUTE);
     // Values no image can have.
     auto zeroWidth = WithoutAttrib(DmaBufAttribs(), EGL_WIDTH);
@@ -265,12 +267,14 @@ TEST(EGLStateDmaBufImport, FormatAndModifierQueries) {
     auto fixture = CreateFixture();
     EGLint count = -1;
     ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 0, nullptr, &count));
-    EXPECT_EQ(count, 2);
+    EXPECT_EQ(count, 4);
     EGLint formats[4] = {};
     ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 4, formats, &count));
-    ASSERT_EQ(count, 2);
+    ASSERT_EQ(count, 4);
     EXPECT_EQ(formats[0], static_cast<EGLint>(kAbgr8888));
     EXPECT_EQ(formats[1], static_cast<EGLint>(kXbgr8888));
+    EXPECT_EQ(formats[2], static_cast<EGLint>(kArgb8888));
+    EXPECT_EQ(formats[3], static_cast<EGLint>(kXrgb8888));
     ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 1, formats, &count));
     EXPECT_EQ(count, 1);
 
@@ -287,7 +291,7 @@ TEST(EGLStateDmaBufImport, FormatAndModifierQueries) {
     ASSERT_TRUE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, static_cast<EGLint>(kAbgr8888), 2,
                                                     modifiers, externalOnly, &count));
     EXPECT_EQ(count, 0);
-    EXPECT_FALSE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, static_cast<EGLint>(kArgb8888), 0,
+    EXPECT_FALSE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, static_cast<EGLint>(kRgb565), 0,
                                                      nullptr, nullptr, &count));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
 

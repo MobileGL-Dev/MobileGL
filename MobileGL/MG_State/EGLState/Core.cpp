@@ -1578,9 +1578,9 @@ namespace MobileGL {
             }
 
             Bool EGLContext::IsDmaBufFourccSupported(Uint32 fourcc) {
-                // Only the GL RGBA8 byte order: an ARGB/XRGB-ordered import would need the
-                // backend to swizzle the image it binds, which nothing records yet.
-                return fourcc == kDrmFourccAbgr8888 || fourcc == kDrmFourccXbgr8888;
+                // The four orders a shared image can be allocated under (SharedImageApi.h).
+                return fourcc == kDrmFourccAbgr8888 || fourcc == kDrmFourccXbgr8888 || fourcc == kDrmFourccArgb8888 ||
+                       fourcc == kDrmFourccXrgb8888;
             }
 
             Bool EGLContext::PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context,
@@ -1753,7 +1753,8 @@ namespace MobileGL {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
-                static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888};
+                static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888, kDrmFourccArgb8888,
+                                                      kDrmFourccXrgb8888};
                 const EGLint total = available ? static_cast<EGLint>(std::size(kFormats)) : 0;
                 if (maxFormats == 0) {
                     *numFormats = total;

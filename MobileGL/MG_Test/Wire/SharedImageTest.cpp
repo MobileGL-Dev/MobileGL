@@ -91,6 +91,12 @@ TEST(SharedImage, AnImageDiesWithItsLastReferenceAndIsNoLongerIdentified) {
 TEST(SharedImage, UnsupportedFormatsAndSizesAreRefused) {
     std::string why;
     EXPECT_EQ(SI::Allocate(16, 16, SI::FourCC('N', 'V', '1', '2'), why), nullptr);
+    // The ARGB orders are allocatable: the layout is the server's, and X ignores alpha.
+    SI::ImageRef argb = SI::Allocate(16, 16, SI::kFourccArgb8888, why);
+    ASSERT_NE(argb, nullptr) << why;
+    EXPECT_EQ(argb->Fourcc, SI::kFourccArgb8888);
+    EXPECT_TRUE(SI::FourccIgnoresAlpha(SI::kFourccXrgb8888));
+    EXPECT_FALSE(SI::FourccIgnoresAlpha(SI::kFourccArgb8888));
     EXPECT_EQ(SI::Allocate(0, 16, SI::kFourccAbgr8888, why), nullptr);
     EXPECT_EQ(SI::Allocate(16, 1u << 20, SI::kFourccAbgr8888, why), nullptr);
 }

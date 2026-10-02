@@ -3001,7 +3001,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         replacement.usageFlags = imported.usage;
         replacement.sharedImageId = id;
         replacement.sharedImageOwner = image;
-        replacement.sharedImageAlphaOne = image->Fourcc == MG_Remote::Server::SharedImages::kFourccXbgr8888;
+        replacement.sharedImageAlphaOne = MG_Remote::Server::SharedImages::FourccIgnoresAlpha(image->Fourcc);
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes
         DeferResourceRelease(Move(resource));
         std::destroy_at(&resource);

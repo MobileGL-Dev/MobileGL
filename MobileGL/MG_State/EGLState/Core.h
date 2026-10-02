@@ -149,7 +149,8 @@ namespace MobileGL {
 
                 // DMA-BUF IMPORT (EGL_EXT_image_dma_buf_import[_modifiers]). A dma-buf this library
                 // can name is one of the backend's shared images (MG_Backend::SharedImageExport):
-                // single plane, DRM ABGR8888 or XBGR8888 - the GL RGBA8 byte order. The state
+                // single plane, DRM ABGR8888 / XBGR8888 / ARGB8888 / XRGB8888 (all stored RGBA8 by the
+                // server, whose layout no client can observe). The state
                 // validates and records; the backend identifies the descriptor in between.
                 struct DmaBufImportAttribs {
                     EGLint Width = 0;
@@ -169,6 +170,8 @@ namespace MobileGL {
                 };
                 static constexpr Uint32 kDrmFourccAbgr8888 = 0x34324241u; // 'AB24'
                 static constexpr Uint32 kDrmFourccXbgr8888 = 0x34324258u; // 'XB24'
+                static constexpr Uint32 kDrmFourccArgb8888 = 0x34325241u; // 'AR24'
+                static constexpr Uint32 kDrmFourccXrgb8888 = 0x34325258u; // 'XR24'
                 static Bool IsDmaBufFourccSupported(Uint32 fourcc);
 
                 // The checks eglCreateImage owes an EGL_LINUX_DMA_BUF_EXT target before anything

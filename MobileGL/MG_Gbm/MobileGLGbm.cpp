@@ -117,11 +117,12 @@ namespace {
         return format;
     }
 
-    // What a shared image can be. ARGB8888/XRGB8888 (B, G, R, A in memory) are absent on purpose:
-    // the server's images hold R, G, B, A, and an image whose bytes disagree with its fourcc is
-    // worse than no image.
+    // What a shared image can be. The ARGB/XRGB orders are stored like the ABGR/XBGR ones: the
+    // layout is the server's (modifier INVALID, no map is offered), so no reader can tell, and
+    // every GL that touches the image addresses its channels logically.
     bool FormatSupported(uint32_t format) {
-        return format == MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888;
+        return format == MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888 ||
+               format == MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888;
     }
 
     bool ModifierAcceptable(uint64_t modifier) { return modifier == kModifierInvalid || modifier == kModifierLinear; }
