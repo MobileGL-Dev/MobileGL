@@ -51,7 +51,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // re-initialize after the last eglTerminate tore everything down.
         // Teardown-ish entry points keep using GetState() and fail benignly
         // when MobileGL is not initialized.
+        //
+        // Bringing MobileGL up dials its server, and with none reachable that waits out the
+        // bring-up's whole budget. So it is not attempted then: the entry point fails at once, as
+        // it would on any implementation without a display to offer.
         EGLStateContext* GetStateEnsureInitialized() {
+            if (!MG_State::pEGLContext && !MobileGL::ImplementationAvailable()) {
+                return nullptr;
+            }
             MobileGL::EnsureInitialized();
             return GetState();
         }
@@ -852,6 +859,24 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     char const* QueryString(EGLDisplay display, EGLint name) {
+        // THE CLIENT QUERIES BRING NOTHING UP. A dispatcher with several vendors asks every one of
+        // them for its client extensions before it picks one, so answering this must not cost a
+        // session - nor wait for a server that is not there.
+        if (display == EGL_NO_DISPLAY) {
+            switch (name) {
+            case EGL_VENDOR:
+                return "MobileGL";
+            case EGL_VERSION:
+                return "1.5 MobileGL";
+            case EGL_CLIENT_APIS:
+                return "OpenGL OpenGL_ES";
+            case EGL_EXTENSIONS:
+                return kClientExtensionString;
+            default:
+                if (auto* state = MG_State::pEGLContext.get()) state->SetError(EGL_BAD_PARAMETER);
+                return nullptr;
+            }
+        }
         auto* state = GetStateEnsureInitialized();
         if (!state) {
             return nullptr;
@@ -1348,7 +1373,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!name) {
             return nullptr;
         }
-        MobileGL::EnsureInitialized();
+        // The answer is a static table; the bring-up is only the lazy-initialization contract, and
+        // it is skipped when there is no server to bring up against (see GetStateEnsureInitialized).
+        if (MobileGL::ImplementationAvailable()) {
+            MobileGL::EnsureInitialized();
+        }
 
         MGLOG_D("eglGetProcAddress(%s)", name);
         void* proc = MG_Impl::GetProcAddress(name);

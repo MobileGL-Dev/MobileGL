@@ -191,6 +191,7 @@ namespace {
         Int32 vendorDisplay = -1;  // 1: the glvnd vendor's getPlatformDisplay did
         Int32 vendorDevices = -1;  // the vendor's eglQueryDevicesEXT count
         Int32 glxLoaded = -1;      // __glx_Main's answer
+        Int32 clientQueries = -1;  // 1: client extensions and a proc address answered (no display needed)
         Int64 elapsedMs = -1;      // all of the above, end to end
     };
 
@@ -214,6 +215,11 @@ namespace {
             __EGLapiExports exports{};
             __EGLapiImports imports{};
             const bool vendor = __egl_Main(EGL_VENDOR_ABI_VERSION, &exports, nullptr, &imports) == EGL_TRUE;
+            // What a dispatcher asks every vendor before choosing one: never a session bring-up.
+            r.clientQueries = vendor && imports.getProcAddress("eglQueryString") != nullptr &&
+                              EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS) != nullptr &&
+                              imports.getDispatchAddress("glClear") != nullptr &&
+                              EGL::GetProcAddress("eglQueryDmaBufModifiersEXT") != nullptr;
             r.vendorDisplay = vendor && imports.getPlatformDisplay(EGL_NONE, EGL_DEFAULT_DISPLAY, nullptr) != EGL_NO_DISPLAY;
             r.getDisplay = EGL::GetDisplay(EGL_DEFAULT_DISPLAY) != EGL_NO_DISPLAY;
             if (vendor) {
@@ -253,6 +259,7 @@ namespace {
         EXPECT_EQ(r.getDisplay, 0);
         EXPECT_EQ(r.vendorDevices, 0) << "no device either, and no error (glvnd fails its merge on one)";
         EXPECT_EQ(r.glxLoaded, 0) << "the GLX vendor must refuse to load so libGLX falls back";
+        EXPECT_EQ(r.clientQueries, 1) << "client queries are answered without a server";
         EXPECT_GE(r.elapsedMs, 0);
         EXPECT_LT(r.elapsedMs, 1000) << "declining must not cost the bring-up's 20 s connect budget";
         std::error_code ec;
@@ -313,6 +320,7 @@ namespace {
         EXPECT_EQ(r.getDisplay, 1);
         EXPECT_EQ(r.vendorDevices, 1);
         EXPECT_EQ(r.glxLoaded, 1);
+        EXPECT_EQ(r.clientQueries, 1);
 
         // A process that asked for software rendering is left to the system's other GL, server or not.
         const EntryReport software = RunEntryPoints(server.endpoint, logBase, true);
