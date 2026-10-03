@@ -4,7 +4,7 @@
 # Xwayland's GLX; with CHROME=1 also Chrome on an animated WebGL page), then per round loses the server
 # session of KWin with the pid-targeted debug knob (debug.mobilegl.inject_device_lost_pid, KWin's pid as
 # it sees itself in the container), waits, and checks.  A round PASSES when:
-#   - the server latched KWin's session (logcat "injected:pid=<kwin>");
+#   - the server latched KWin's session (the server log file: "injected:pid=<kwin>"; logcat is too small);
 #   - KWin, plasmashell and every test client are the SAME processes (nothing restarted);
 #   - KWin restarted compositing on a fresh session (its journal: "compositing restarted on a fresh
 #     MobileGL session"; its client log: one more "RECOVERED");
@@ -31,6 +31,7 @@ MIN_BATTERY=${MIN_BATTERY:-40}
 CH=${CHANNEL:-krec}
 TAG=${TAG:-krec}
 COMPOSITOR_LOG=/tmp/mobilegl-compositor.client.log
+SERVER_LOG=/data/data/$MGL_PKG/files/mobilegl-server.server.log
 
 ct() { bash "$here/ct.sh" "$CH"; }
 
@@ -106,7 +107,7 @@ for round in $(seq 1 "$ROUNDS"); do
     echo "kwin=$kwin plasmashell=$plasma glmark2=$gm glxgears=$gx chrome=$chrome recoveries=$recovered fps-lines=$fps"
     if [ "$kwin" = none ]; then echo "FAIL: KWin is not running"; break; fi
     bash "$here/shot.sh" "$TAG-r$round-pre" 2 1
-    adb_ logcat -c
+    srvlines=$(adb_ shell "su -c 'wc -l < $SERVER_LOG'" | tr -dc '0-9')
     adb_ logcat -b crash -c || true
     adb_ shell "su -c 'setprop debug.mobilegl.inject_device_lost_pid $kwin'"
     sleep "$SETTLE"
@@ -114,9 +115,10 @@ for round in $(seq 1 "$ROUNDS"); do
     bash "$here/shot.sh" "$TAG-r$round-post" 3 1 | tee "$ANL_DIR/$TAG-r$round-post.md5"
     read -r kwin2 plasma2 gm2 gx2 chrome2 recovered2 fps2 < <(snapshot)
     echo "after: kwin=$kwin2 plasmashell=$plasma2 glmark2=$gm2 glxgears=$gx2 chrome=$chrome2 recoveries=$recovered2 fps-lines=$fps2"
-    latched=$(adb_ logcat -d | grep -c "injected:pid=$kwin" || true)
-    adb_ logcat -d | grep -E "inject_device_lost_pid|SessionLatch|session #[0-9]+ (started|pid)|owner=server|lease" \
-        | cut -c1-220 | head -14 || true
+    adb_ shell "su -c 'tail -n +$((srvlines + 1)) $SERVER_LOG'" > "$ANL_DIR/$TAG-r$round-server.log"
+    latched=$(grep -c "injected:pid=$kwin" "$ANL_DIR/$TAG-r$round-server.log" || true)
+    grep -aE "inject_device_lost_pid|SessionLatch|session #[0-9]+ (started|pid)|owner=server|lease" \
+        "$ANL_DIR/$TAG-r$round-server.log" | cut -c1-220 | head -14 || true
     ct <<IN || true
 echo "--- KWin's MobileGL client log:"; grep -aE "DEVICE LOST|RECOVERED|GL_UNKNOWN_CONTEXT_RESET|re-created on the fresh|Refuse" $COMPOSITOR_LOG | tail -6
 echo "--- KWin journal:"; journalctl --no-pager --since -40s 2>/dev/null | grep -aE "kwin_wayland" | grep -aiE "reset|restarted|MobileGL swap|context|fatal|abort" | tail -10
