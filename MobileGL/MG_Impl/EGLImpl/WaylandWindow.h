@@ -82,7 +82,10 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // frame changed. A shared image is copied only where it differs from the frame - the
         // frame's damage and every frame's since that image was last written - and the surface is
         // damaged only where the frame changed, flipped to the buffer's top-left origin.
-        Bool Present(const MG_Util::Damage::Region& damage);
+        //
+        // `swapInterval` above 0 paces the swaps by the compositor's frame callbacks: this waits
+        // for the previous frame's before taking a buffer (FrameThrottle.h).
+        Bool Present(const MG_Util::Damage::Region& damage, Int swapInterval);
 
         // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave
         // its wl_egl_window a size this presentation is not at yet. The presentation adopts it -

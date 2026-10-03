@@ -1260,6 +1260,12 @@ namespace MobileGL {
                 return surf && surf->Display == display;
             }
 
+            EGLint EGLContext::GetSwapInterval(EGLDisplayHandle display) const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto* displayObject = TryGetDisplay(display);
+                return displayObject ? displayObject->SwapInterval : 1;
+            }
+
             Bool EGLContext::SwapInterval(EGLDisplayHandle display, EGLint interval) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto* displayObject = TryGetDisplay(display);

@@ -457,7 +457,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #if MOBILEGL_WAYLAND_WINDOWS
         // A Wayland window shows what is attached to it: the frame is read back and attached
         // BEFORE the swap, while it is still the drawable's content.
-        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end() && !it->second->Present(damage)) {
+        if (auto it = WaylandSurfaces().find(draw);
+            it != WaylandSurfaces().end() && !it->second->Present(damage, state->GetSwapInterval(dpy))) {
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }

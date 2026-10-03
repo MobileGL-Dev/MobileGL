@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(
         EGLStateTest
         EGLStateTest.cpp
+        FrameThrottleTest.cpp
 )
 
 target_include_directories(EGLStateTest PRIVATE

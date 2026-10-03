@@ -105,6 +105,9 @@ namespace MobileGL {
                 Bool ValidateSurface(EGLSurfaceHandle surface) const;
                 Bool ValidateSurfaceOnDisplay(EGLDisplayHandle display, EGLSurfaceHandle surface) const;
                 Bool SwapInterval(EGLDisplayHandle display, EGLint interval);
+                // The interval eglSwapInterval last set on `display` (1, EGL's default, until then or
+                // for a display this state does not know).
+                EGLint GetSwapInterval(EGLDisplayHandle display) const;
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // P12 (on-screen server window), MOBILEGL_IPC_SURFACE=server. A window surface whose
                 // window is the SERVER's: the client's native window may be NULL (a headless client
