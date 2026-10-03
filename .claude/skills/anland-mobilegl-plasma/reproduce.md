@@ -32,7 +32,7 @@ GIT_LFS_SKIP_SMUDGE=1 git submodule update --init --recursive
 # Keep builds out of a shared checkout: work in a worktree (GIT_LFS_SKIP_SMUDGE=1 git worktree add ...).
 
 # anland: branch legacy-mobilegl-unified (KWin backend + patch, startup script, APK, daemon module)
-git clone https://github.com/superturtlee/anland.git && cd anland
+git clone https://github.com/MobileGL-Dev/anland.git && cd anland   # the fork that carries this branch
 git checkout legacy-mobilegl-unified
 ```
 
