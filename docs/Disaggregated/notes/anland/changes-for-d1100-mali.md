@@ -150,4 +150,11 @@ server 的窗口，而 **server 自己的进程没有任何 `MOBILEGL_IPC_SURFAC
   模式下合成不受影响（窗口与默认 framebuffer 属于 KWin），桌面照常上屏，成因未查。
 - 桌面静止时两次 `screencap` 的 md5 相同（时钟只到分钟、无动画）；判断"活着"要看 server 的
   `P65ServerFrame` 计数或 SurfaceView 的 frame events。
-- **Magma（DirectVulkan）未复验**。上面三条代码改动都与后端无关，两个后端都会撞到。
+- **Magma（DirectVulkan）已复验：桌面能上屏**（`Renderer Name: Magma`、`8 presented through
+  linux-dmabuf`、SurfaceView frame events 是真实时间戳、`screencap` 1.05 MB 的桌面 + 面板 + 光标）。
+  上面三条代码改动都与后端无关，两个后端都撞到同一个坑，也都因此被修好。
+- **Magma 少画字**：同一场景下屏幕键盘的按键是**空白白块**（没有 q/w/e…、"American English"、
+  面板时钟的文字），而 Espryt 下这些字都在。看起来是 Magma 的字形/图集路径在这台 Mali 驱动上
+  没画出来，与本文的改动无关，**未查**。首次复现：把后端切到 DirectVulkan（`setprop
+  debug.mobilegl.backend DirectVulkan` + `/etc/mobilegl/backend`）重启 app 与容器，截屏看
+  `plasma-keyboard`。
