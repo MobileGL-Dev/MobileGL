@@ -18879,7 +18879,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // producer), nothing it submitted still samples the image.
                 (void)WaitForCompletion();
             }
-            frame.Tracker.PublishFrame(fence);
+            // A session that writes images publishes every boundary as a write: an image it rendered
+            // into must not leave the frame without its generation moving.
+            if (frame.ImplicitSync)
+                frame.Tracker.PublishFrameAsWrite(fence);
+            else
+                frame.Tracker.PublishFrame(fence);
             frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
         }
 

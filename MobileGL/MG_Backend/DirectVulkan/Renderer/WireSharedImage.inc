@@ -637,7 +637,11 @@
         }
         // No fence (no export on this device): the frame's reads go unpublished - the file
         // comment says why that is the choice.
-        m_sharedImageReads.PublishFrame(fence);
+        // A session that writes images publishes every boundary as a write (PublishSharedImageAccesses).
+        if (m_sharedImageImplicitSync)
+            m_sharedImageReads.PublishFrameAsWrite(fence);
+        else
+            m_sharedImageReads.PublishFrame(fence);
     }
 
     void VulkanRenderer::AbandonSharedImageReads() {
