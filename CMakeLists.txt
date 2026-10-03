@@ -440,6 +440,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Backend/Init.cpp
     MobileGL/MG_Backend/BackendObject.cpp
+    MobileGL/MG_Backend/GpuHangWatch.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
@@ -467,6 +468,7 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkSamplerManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkClearManager.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/GpuProgressMarkers.cpp
 
     MobileGL/MG_State/GLState/Core.cpp
     MobileGL/MG_State/GLState/ShareGroupState.cpp

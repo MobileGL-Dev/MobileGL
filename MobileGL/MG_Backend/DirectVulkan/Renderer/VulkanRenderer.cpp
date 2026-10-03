@@ -3275,6 +3275,9 @@ void main() {
         CreateAllocator();
 
         CreateCommandPool();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        m_progressMarkers.Init(m_device, m_physicalDevice.queueFamilies.graphicsFamily);
+#endif
 
         // Frames-in-flight is a request, not a guarantee: it also seeds the swapchain image
         // count (SwapchainObject clamps the hint into [minImageCount, maxImageCount]). Not every
@@ -3504,6 +3507,9 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        m_progressMarkers.Shutdown();
+#endif
         // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
         for (auto& [_, target] : m_parkedTargets) DestroyParkedTarget(target);
         m_parkedTargets.clear();
@@ -14173,10 +14179,16 @@ void main() {
         submitInfo.pCommandBuffers = commandBuffers;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Shared-image fences staged for the work recorded since the last submission.
+        if (LatchIfGpuHung("flush-submit")) return false;
         SharedImageSubmitSync sharedImageSync;
         AttachSharedImageSync(submitInfo, sharedImageSync);
-#endif
+        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire();
+        const VkResult result = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitInfo, fence, bracket);
+        if (result == VK_SUCCESS) m_progressMarkers.Submitted(bracket);
+        else m_progressMarkers.Abandon(bracket);
+#else
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
+#endif
         if (result != VK_SUCCESS) {
             NoteDeviceLoss(result, "SubmitPendingCommandBuffer vkQueueSubmit");
             MGLOG_E_ONCE("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
@@ -14303,6 +14315,31 @@ void main() {
                                               "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"} - this session's "
                                               "VkDevice was lost to a GPU fault or hang; the session ends and its "
                                               "client reads a lost context, every other session keeps running",
+                                              site != nullptr ? site : "?");
+        }
+        return true;
+    }
+
+    Bool VulkanRenderer::LatchIfGpuHung(const char* site) {
+        if (!m_progressMarkers.Hung()) return false;
+        if (!m_deviceLost) {
+            // NOT LOST TO THE DRIVER: a submission that a failed preemption leaves running is reset
+            // without a device loss, and the next one would stop the GPU again. Treated as lost from
+            // here on - nothing more is submitted - and the session ends as one whose device was.
+            m_deviceLost = true;
+            MGLOG_E("DirectVulkan: the GPU hang watch named this session's VkDevice (a submission ran %llu ms "
+                    "without finishing, at %s); the device is treated as LOST and nothing more is submitted",
+                    static_cast<unsigned long long>(m_progressMarkers.HungRunningMs()),
+                    site != nullptr ? site : "?");
+        }
+        // Where no session latch is armed (no served session) the device only stays "lost".
+        if (!m_deviceLossLatched && MG_Pipe::MGPipeSessionLatchArmed()) {
+            m_deviceLossLatched = true;
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"Magma:gpu-hang:%s\"} - this "
+                                              "session's GPU work ran past the hang budget and stopped the GPU for "
+                                              "every process; the session ends and its client reads a lost context, "
+                                              "every other session keeps running",
                                               site != nullptr ? site : "?");
         }
         return true;
@@ -14656,10 +14693,17 @@ void main() {
         }
         auto submitPacket = m_frameContext.GetSubmitInfo(shouldSubmitCommandBuffer, m_imageIndexAcquired);
 #if MOBILEGL_BUILD_DISAGGREGATED
+        if (LatchIfGpuHung("present-submit")) return;
         SharedImageSubmitSync sharedImageSync;
         AttachSharedImageSync(submitPacket.submitInfo, sharedImageSync);
-#endif
+        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire();
+        const VkResult presentSubmit = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitPacket.submitInfo,
+                                                                           frame.imageInFlightFence, bracket);
+        if (presentSubmit == VK_SUCCESS) m_progressMarkers.Submitted(bracket);
+        else m_progressMarkers.Abandon(bracket);
+#else
         const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
+#endif
         NoteDeviceLoss(presentSubmit, "Present vkQueueSubmit");
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (presentSubmit != VK_SUCCESS && LatchWireDeviceLoss("present-submit")) return;

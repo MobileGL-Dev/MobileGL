@@ -162,14 +162,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // driver whether the calling thread's context was reset (glGetGraphicsResetStatus); a reset -
     // or the debug knob MGPipeDebugDeviceLossDue - latches THIS session through
     // MGPipeSessionLatch and answers true, and the caller returns from its verb without issuing
-    // more GL. Asked at the frame boundaries (Present, a shared-image present) and before a
-    // readback, never per draw. The contexts keep the driver's default reset strategy: asking
-    // every context to lose itself on reset would also end the INNOCENT ones - the compositor's
-    // among them - on any other client's GPU fault.
+    // more GL. Asked at the frame boundaries (Present, a shared-image present), before a readback,
+    // and by the apply loop each time it wakes (LatchIfGpuFaulted), never per draw. The contexts ask
+    // for reset notification (NativeContextsNotifyResets) so the driver can name the GUILTY one;
+    // only GUILTY (or a reset of unknown cause) ends the session - an INNOCENT report, a context
+    // whose work merely waited behind another's hang (the compositor's among them), is only noted.
     // `debugKnob` false: the knob is not consulted here (the on-screen Present, so an injected loss
     // lands on an offscreen client's shared-image present or readback, never on the compositor's).
     Bool LatchIfDeviceLost(const char* site, Bool debugKnob = true);
+    // The apply loop's form of it (BackendObject::LatchIfGpuFaulted), asked each time the apply thread
+    // wakes: the driver's report only, no debug knob, and no EGL ground-truth verification spent.
+    Bool LatchIfGuiltyBeforeApply();
 #endif
+    // True once the process's native contexts were created with EGL_LOSE_CONTEXT_ON_RESET (decided
+    // by the first one; the driver must offer EGL_EXT_create_context_robustness).
+    Bool NativeContextsNotifyResets();
     // GL fence sync objects, backed by native ES fences. FenceSync returns null
     // (the frontend then falls back to an always-signaled sync) when the calling
     // thread does not own the ES context. Waits/queries degrade to "signaled" in

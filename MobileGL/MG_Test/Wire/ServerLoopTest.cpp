@@ -1986,6 +1986,96 @@ TEST(ServerLoopEglTest, TheInitializeDisplayReplyArrivesThroughTheFrame) {
     fixture.TearDown();
 }
 
+// ESPRYT'S HALF OF HANG CONTAINMENT (DirectGLES EnsureNativeContext / LatchIfDeviceLost). With the
+// driver's default strategy a context whose shader hung the GPU is never told - measured on Adreno
+// 750, the guilty context reads NO_ERROR, and after a reset that a failed preemption ended (~10 s) its
+// next frame stops the GPU again, so a client that hangs every frame freezes the device for good.
+// The server's native contexts must ask for EGL_LOSE_CONTEXT_ON_RESET. Red with EnsureNativeContext's
+// strategy attribute removed: the context answers GL_NO_RESET_NOTIFICATION (0x8261).
+TEST(ServerLoopEglTest, TheServersNativeContextAsksTheDriverToReportResets) {
+    EglServerFixture fixture;
+    MGL_EGL_BRING_UP_OR_BAIL(fixture);
+    // On the apply thread: the server's display and context are current there, not here.
+    Bool robustness = false;
+    GLint strategy = 0;
+    ASSERT_EQ(OnApply([&] {
+                  const auto& egl = MG_Backend::DirectGLES::g_EGLFuncs;
+                  const char* extensions = egl.eglQueryString(egl.eglGetCurrentDisplay(), EGL_EXTENSIONS);
+                  robustness = extensions != nullptr &&
+                               std::strstr(extensions, "EGL_EXT_create_context_robustness") != nullptr;
+                  MG_Backend::DirectGLES::g_GLESFuncs.glGetIntegerv(0x8256 /*GL_RESET_NOTIFICATION_STRATEGY*/,
+                                                                    &strategy);
+              }),
+              MOBILEGL_OK);
+    if (!robustness) {
+        fixture.TearDown();
+        GTEST_SKIP() << "this EGL has no EGL_EXT_create_context_robustness";
+    }
+    EXPECT_EQ(strategy, 0x8252 /*GL_LOSE_CONTEXT_ON_RESET*/) << std::hex << "strategy 0x" << strategy;
+    EXPECT_TRUE(MG_Backend::DirectGLES::NativeContextsNotifyResets());
+    fixture.TearDown();
+}
+
+namespace {
+    // The driver's reset status, as the backend sees it through its function table.
+    std::atomic<GLenum> g_fakeResetStatus{GL_NO_ERROR};
+    GLenum FakeGetGraphicsResetStatus() { return g_fakeResetStatus.exchange(GL_NO_ERROR); }
+
+    enum : int {
+        kResetInnocentEnded = 1,  // an INNOCENT report latched the session (the compositor would die with a client)
+        kResetGuiltyApplied = 2,  // a record published after the GUILTY report was applied
+        kResetGuiltyNotLatched = 4, // GUILTY did not latch BackendDeviceLost through Espryt's apply-loop site
+        kResetHealthyNotApplied = 8, // a record before the GUILTY report was not applied
+    };
+
+    [[noreturn]] void ResetReportsAndExit() {
+        MG_Remote::ArmSessionLatch();
+        MG_Remote::InstallPipeSessionFailHook(); // the MG_Pipe latch seam LatchIfDeviceLost latches through
+        EglServerFixture fixture;
+        const std::string why = fixture.BringUp();
+        if (!why.empty()) {
+            std::fprintf(stderr, "[reset] SKIPPED - no headless EGL: %s\n", why.c_str());
+            ::_exit(RequireGpuFromEnvironment() ? 98 : 0);
+        }
+        MG_External::GLESFunctionsTable gles = MG_Backend::DirectGLES::g_GLESFuncs;
+        gles.glGetGraphicsResetStatus = &FakeGetGraphicsResetStatus;
+        MG_Backend::DirectGLES::SetGLESFuncsTable(gles);
+        int failed = 0;
+        const auto applyOne = [&] {
+            MG_Pipe::MGPMemoryBarrier barrier{};
+            barrier.Bits = 0x2000u;
+            const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+            fixture.encoder.Publish();
+            fixture.producer.PublishAndNotify(seq);
+            return fixture.producer.WaitForApplied(seq, 2000) == Transport::SessionWait::Reached;
+        };
+        // Another context hung the GPU; this one only waited behind it.
+        g_fakeResetStatus = GL_INNOCENT_CONTEXT_RESET;
+        if (!applyOne()) failed |= kResetHealthyNotApplied;
+        if (!applyOne() || MG_Remote::SessionLatched()) failed |= kResetInnocentEnded;
+        // This context's own work hung the GPU.
+        g_fakeResetStatus = GL_GUILTY_CONTEXT_RESET;
+        if (applyOne()) failed |= kResetGuiltyApplied;
+        if (!MG_Remote::SessionLatched() || MG_Remote::SessionLatchedFamily() != MG_Remote::MGFatalFamily::BackendDeviceLost ||
+            std::strstr(MG_Remote::SessionLatchedLine(), "Espryt:apply") == nullptr)
+            failed |= kResetGuiltyNotLatched;
+        std::fprintf(stderr, "[reset] latched=%d line=%s\n", MG_Remote::SessionLatched() ? 1 : 0,
+                     MG_Remote::SessionLatchedLine());
+        ::_exit(failed);
+    }
+} // namespace
+
+// A GUILTY report ends the session before its next record; an INNOCENT one does not. Red with the
+// apply loop's LatchIfGpuFaulted call deleted (the record after GUILTY is applied, nothing latches:
+// bits 2|4), and with LatchIfDeviceLost latching every non-NO_ERROR status (bit 1).
+TEST(ServerLoopEglLatchTest, AGuiltyResetEndsTheSessionBeforeItsNextRecordAndAnInnocentOneDoesNot) {
+    PinHeadlessEglEnvironment();
+    EXPECT_EXIT(ResetReportsAndExit(), ::testing::ExitedWithCode(0),
+                ".*")
+        << "bits: 1 = INNOCENT latched; 2 = a record after GUILTY was applied; 4 = GUILTY did not latch "
+           "BackendDeviceLost at Espryt:apply; 8 = a healthy record was not applied (98 = no headless EGL while MOBILEGL_ITEST_REQUIRE_GPU is set)";
+}
+
 // ID-49's tight-size half, gated (review v2 N-5: "nothing, unit and joint"). The client's DstSize is
 // deliberately WRONG - 80, the size a ROW_LENGTH=8 / SKIP_* client would compute for a 4x3 RGBA8
 // read whose tight extent is 48 - and the reply must still be the tight 48 bytes: posted at 48,
@@ -3504,6 +3594,118 @@ TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedMidBatchWhileTheClientStrea
         << "bits: 1 = the lease was not taken; 2 = Detach did not answer ReleasedBySession; 4 = Detach took "
            "1 s or more; 8 = more than two records applied after the window went; 16 = no ServerWindowLost "
            "latch; 32 = the apply thread stayed (64+ = setup)";
+}
+
+// =====================================================================================
+// A SESSION WHOSE OWN GPU WORK HUNG THE GPU APPLIES NOTHING MORE (BackendObject::LatchIfGpuFaulted)
+// =====================================================================================
+
+namespace {
+    // The backend's verdict arrives from elsewhere - the driver's GUILTY report (Espryt) or the hang
+    // watch's thread (Magma) - while the session's next frame is already queued. The double counts
+    // the frames that reach it and, once `faulted` is set, latches its session from the apply thread
+    // as both real backends do.
+    class GpuFaultBackendDouble final : public MG_Backend::BackendObject {
+    public:
+        GpuFaultBackendDouble() { m_functions.Present = &Present; }
+        Bool LatchIfGpuFaulted() override {
+            asked.fetch_add(1, std::memory_order_acq_rel);
+            if (!faulted.load(std::memory_order_acquire)) return false;
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"unit:gpu-hang\"} - the double's "
+                                              "own GPU work hung the GPU");
+            return true;
+        }
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override { return m_info; }
+        String GetBackendAPIVersionString() const override { return "gpu fault double"; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override { return m_functions; }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+        static void Present() { presents.fetch_add(1, std::memory_order_acq_rel); }
+
+        static inline std::atomic<int> presents{0};
+        static inline std::atomic<int> asked{0};
+        static inline std::atomic<Bool> faulted{false};
+
+    private:
+        MG_Backend::GlobalBackendFunctionsTable m_functions{};
+        MG_Backend::DynamicBackendParameters m_params{};
+        RendererInfo m_info{.RendererName = "Test",
+                            .BackendName = "GpuFaultBackendDouble",
+                            .ExtraVendor = Nullopt,
+                            .RendererGLInfo = {.TargetGLVersion = {3, 3, 0},
+                                               .TargetGLSLVersion = {4, 6, 0},
+                                               .Extensions = {},
+                                               .IsCompatibilityProfile = false},
+                            .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
+    };
+
+    enum : int {
+        kFaultFirstFrame = 1,   // the healthy frame before the fault was not applied
+        kFaultFrameApplied = 2, // a frame published after the verdict reached the backend
+        kFaultNotLatched = 4,   // the session did not latch DeviceLost with the backend's line
+        kFaultThreadStayed = 8, // the apply thread was still running 3 s after the verdict
+        kFaultNotAsked = 16,    // the loop never asked the backend
+    };
+
+    [[noreturn]] void ApplyNothingAfterAGpuFaultAndExit() {
+        Remote::ArmSessionLatch();
+        Remote::InstallPipeSessionFailHook(); // the MG_Pipe latch seam the backends latch through (InitServerRoleCommon)
+        ServerFixture fixture;
+        if (!fixture.Handshake()) ::_exit(64);
+        if (Server::ServerLoopInstance().InstallBackendForTesting(MakeUnique<GpuFaultBackendDouble>()) != MOBILEGL_OK)
+            ::_exit(65);
+        if (!fixture.StartLoop() || !fixture.WaitUntilTrulyParked()) ::_exit(66);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        int failed = 0;
+
+        // One healthy frame.
+        MG_Pipe::MGPPresent present{};
+        present.FrameSerial = 1;
+        Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+        if (seq == Codec::kInvalidSeq) ::_exit(67);
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+        if (fixture.producer.WaitForApplied(seq, 3000) != Transport::SessionWait::Reached ||
+            GpuFaultBackendDouble::presents.load() != 1)
+            failed |= kFaultFirstFrame;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(68);
+
+        // The verdict lands while the session is parked; then its next frames arrive.
+        GpuFaultBackendDouble::faulted.store(true, std::memory_order_release);
+        for (Uint64 serial = 2; serial <= 4; ++serial) {
+            present.FrameSerial = serial;
+            seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::Present, &present, sizeof(present));
+            if (seq == Codec::kInvalidSeq) ::_exit(69);
+        }
+        fixture.encoder.Publish();
+        fixture.producer.PublishAndNotify(seq);
+
+        if (!PollUntil([&] { return !loop.Running(); }, 3000)) failed |= kFaultThreadStayed;
+        if (GpuFaultBackendDouble::presents.load() != 1) failed |= kFaultFrameApplied;
+        if (!Remote::SessionLatched() || Remote::SessionLatchedFamily() != Remote::MGFatalFamily::BackendDeviceLost ||
+            std::strstr(Remote::SessionLatchedLine(), "\"unit:gpu-hang\"") == nullptr)
+            failed |= kFaultNotLatched;
+        if (GpuFaultBackendDouble::asked.load() == 0) failed |= kFaultNotAsked;
+        std::fprintf(stderr, "[gpu-fault] presents %d, asked %d, drained %llu\n", GpuFaultBackendDouble::presents.load(),
+                     GpuFaultBackendDouble::asked.load(), static_cast<unsigned long long>(loop.DrainedRecords()));
+        fixture.Stop();
+        ::_exit(failed);
+    }
+} // namespace
+
+// Red with ServerLoop's per-wakeup LatchIfGpuFaulted call deleted: the three frames behind the
+// verdict are applied - on a device each would stop the GPU again - and nothing latches (bits
+// 2|4|8|16).
+TEST(ServerLoopLatchTest, ASessionWhoseGpuWorkHungAppliesNoFrameAfterTheVerdict) {
+    EXPECT_EXIT(ApplyNothingAfterAGpuFaultAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the healthy frame was not applied; 2 = a frame behind the verdict was applied; 4 = no "
+           "DeviceLost latch with the backend's line; 8 = the apply thread stayed; 16 = the loop never asked "
+           "(64+ = setup)";
 }
 
 // =====================================================================================

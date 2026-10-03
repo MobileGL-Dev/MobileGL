@@ -681,6 +681,13 @@ namespace MobileGL::MG_Remote::Server {
             std::optional<ScopedBackendTurn> turn(std::in_place);
             PumpControlRequest();
             if (stopOrForfeit()) break;
+            // A SESSION WHOSE OWN GPU WORK HUNG THE GPU APPLIES NOTHING MORE. A shader that never
+            // ends stops every process's GPU work until the kernel resets it (MG_Backend/
+            // GpuHangWatch.h), and the same client's next frame usually carries the same shader. The
+            // backend's verdict - the driver's GUILTY report on Espryt, the hang watch on Magma - is
+            // asked HERE, before the drain, so that frame is never applied: the session latches
+            // (DeviceLost, its client reads a lost context) and leaves below. Cheap by contract.
+            if (m_backend != nullptr && !SessionLatched()) (void)m_backend->LatchIfGpuFaulted();
             if (eventRingHasRoom()) DrainRing();
             if (stopOrForfeit()) break;
             // The session-targeted device-loss debug knob (PipeSessionFail.h): asked here, after a

@@ -98,6 +98,11 @@ add_subdirectory(SelfTest)
 # The DirectGLES post-transpile ESSL passes are pure String -> String, so unlike the
 # DirectVulkan suite below this one needs no device and always builds.
 add_subdirectory(Backend/DirectGLES)
+# Which session's submission stops the GPU (MG_Backend/GpuHangWatch.h): no device, no driver.
+add_executable(GpuHangWatchTest Backend/GpuHangWatchTest.cpp)
+target_include_directories(GpuHangWatchTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(GpuHangWatchTest PRIVATE GTest::gtest_main ${LINK_LIBRARIES})
+gtest_discover_tests(GpuHangWatchTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 if (ENABLE_INTEGRATION_TESTS)
     add_subdirectory(Backend/DirectVulkan)
 endif()

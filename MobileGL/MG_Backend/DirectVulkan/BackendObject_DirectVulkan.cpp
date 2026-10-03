@@ -422,6 +422,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 static_cast<unsigned long long>(m_magmaSession->Id()));
     }
 
+    Bool BackendObject_DirectVulkan::LatchIfGpuFaulted() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return pVulkanRenderer != nullptr && pVulkanRenderer->LatchIfGpuHung("apply");
+#else
+        return false;
+#endif
+    }
+
     void BackendObject_DirectVulkan::Initialize() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager::RegisterWireResourceOps();

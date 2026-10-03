@@ -961,6 +961,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    Bool BackendObject_DirectGLES::LatchIfGpuFaulted() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return LatchIfGuiltyBeforeApply();
+#else
+        return false;
+#endif
+    }
+
     void BackendObject_DirectGLES::Initialize() {
         MG_Util::BackendLoader::AcquireEGLFunctions(m_EGLFunctions);
         MG_Util::BackendLoader::AcquireGLESFunctions(m_GLESFunctions, m_EGLFunctions.eglGetProcAddress);

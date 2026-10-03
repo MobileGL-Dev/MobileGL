@@ -749,6 +749,12 @@ namespace MobileGL {
             // native state is process-global by construction gives this object its own copy and binds
             // it to the calling thread. The default has nothing per process to separate.
             virtual void BindSessionStateToThisThread() {}
+            // A served session's apply thread asks this each time it wakes, BEFORE it applies another
+            // record: true when this session's own GPU work faulted or hung the GPU and the backend has
+            // latched the session for it (MGPipeSessionLatch, family DeviceLost), so the next frame -
+            // which would very likely stop the GPU again - is never applied. Cheap by contract: no
+            // wait, at most a status read. The default knows of no fault.
+            virtual Bool LatchIfGpuFaulted() { return false; }
             // A served session's ring moved to another of its client's contexts (bind_context). A
             // backend whose surface follows the native context it binds needs nothing; one that keeps
             // a single native surface binding re-binds the surface that context was last made current

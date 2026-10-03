@@ -23,6 +23,7 @@
 #include "VkTextureManager.h"
 #include "VkTimerQueryManager.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
+#include "GpuProgressMarkers.h"
 #include "WireRenderPassCompatibility.h"
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #endif
@@ -408,6 +409,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // without recording or submitting anything more. False: an ordinary failure, the site
         // keeps the death it had. `site` names it in the latch line.
         Bool LatchWireDeviceLoss(const char* site);
+        // THE GPU HANG WATCH (GpuProgressMarkers.h): true once the watch named one of this device's
+        // submissions as the one that stops the GPU. The device is then treated as lost, this session
+        // is latched, and the caller returns from its verb without submitting anything more. Asked
+        // before every frame submission and by the apply loop before it applies another record.
+        Bool LatchIfGpuHung(const char* site);
 #endif
         // Flush gated on usefulness: only flushes when `submitIndex` is still
         // unsubmitted, so poll loops on already-submitted fences do not split
@@ -626,6 +632,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_deviceLost = false;
         Bool m_deviceLossLatched = false;
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // Brackets this device's frame submissions for the GPU hang watch (LatchIfGpuHung).
+        GpuProgressMarkers m_progressMarkers;
         struct WireImage {
             VkImage image = VK_NULL_HANDLE;
             VkFormat format = VK_FORMAT_UNDEFINED;

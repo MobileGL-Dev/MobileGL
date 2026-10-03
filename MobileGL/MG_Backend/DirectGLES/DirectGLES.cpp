@@ -16982,6 +16982,53 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+    // RESET NOTIFICATION, decided once per process by its first native context (EnsureNativeContext
+    // says why). MOBILEGL_ESPRYT_RESET_NOTIFICATION=0 keeps the driver's default.
+    namespace {
+        // EGL_EXT_create_context_robustness (eglext.h is not part of this file's include set).
+        constexpr EGLint kEglResetNotificationStrategyExt = 0x3138;
+        constexpr EGLint kEglLoseContextOnResetExt = 0x31BF;
+        enum class ResetNotification : Uint8 { Undecided, On, Off };
+        std::atomic<ResetNotification> g_resetNotification{ResetNotification::Undecided};
+
+        Bool ResetNotificationWanted() {
+            const ResetNotification decided = g_resetNotification.load(std::memory_order_acquire);
+            if (decided != ResetNotification::Undecided) return decided == ResetNotification::On;
+            if (const char* value = std::getenv("MOBILEGL_ESPRYT_RESET_NOTIFICATION"); value != nullptr && value[0] == '0')
+                return false;
+            if (g_Display == EGL_NO_DISPLAY || !g_EGLFuncs.eglQueryString) return false;
+            const char* extensions = g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS);
+            if (extensions == nullptr) return false;
+            constexpr const char kWord[] = "EGL_EXT_create_context_robustness";
+            for (const char* at = std::strstr(extensions, kWord); at != nullptr; at = std::strstr(at + 1, kWord)) {
+                const char after = at[sizeof(kWord) - 1];
+                if ((at == extensions || at[-1] == ' ') && (after == '\0' || after == ' ')) return true;
+            }
+            return false;
+        }
+
+        void NoteResetNotificationRefused() {
+            ResetNotification expected = ResetNotification::Undecided;
+            if (g_resetNotification.compare_exchange_strong(expected, ResetNotification::Off, std::memory_order_acq_rel))
+                MGLOG_W("DirectGLES: the driver refused EGL_LOSE_CONTEXT_ON_RESET; a context that hangs the GPU is "
+                        "not told, and its session cannot be ended for it");
+        }
+
+        void NoteResetNotificationDecided(Bool used) {
+            ResetNotification expected = ResetNotification::Undecided;
+            const ResetNotification decided = used ? ResetNotification::On : ResetNotification::Off;
+            if (g_resetNotification.compare_exchange_strong(expected, decided, std::memory_order_acq_rel))
+                MGLOG_I("DirectGLES: native contexts %s reset notification (EGL_LOSE_CONTEXT_ON_RESET): a context "
+                        "whose work hangs or faults the GPU %s",
+                        used ? "ask for" : "do not ask for",
+                        used ? "is named by the driver and ends its own session" : "is not told");
+        }
+    } // namespace
+
+    Bool NativeContextsNotifyResets() {
+        return g_resetNotification.load(std::memory_order_acquire) == ResetNotification::On;
+    }
+
     static Bool EnsureNativeContext(NativeContextTuple& tuple, EGLint surfaceBit, NativeWindowType window) {
         if (!EnsureDisplayInitialized()) {
             MGLOG_E("EnsureNativeContext: the EGL display did not initialize");
@@ -17030,21 +17077,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // request yields a 3.0 context that lacks the 3.1/3.2 texture targets the
         // capability probes exercise; mobile drivers ignore the minor and hand out
         // their maximum either way.
+        //
+        // RESET NOTIFICATION. With the driver's default strategy a context whose work hung the GPU
+        // is never told: after Adreno's ~2 s timeout reset it silently drops everything that context
+        // submits (the client's window just stops), and its client never learns it should recreate.
+        // Asking for EGL_LOSE_CONTEXT_ON_RESET lets the driver name the guilty context
+        // (glGetGraphicsResetStatus answers GUILTY, once) and LatchIfDeviceLost ends that session
+        // alone, so the client reads a lost context and can recover. (A ~10 s reset that a failed
+        // preemption ends was not reported to the server's contexts in measurement - see
+        // GpuHangWatch.h.) Every context of the process shares one group, and contexts that share
+        // must agree on the strategy, so it is decided once, by the first context, and kept.
         for (const EGLint minorVersion : {2, 1, 0}) {
+            const Bool notify = ResetNotificationWanted();
             const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
                                              EGL_CONTEXT_MINOR_VERSION, minorVersion,
+                                             notify ? kEglResetNotificationStrategyExt : EGL_NONE,
+                                             kEglLoseContextOnResetExt,
                                              EGL_NONE};
             tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, contextAttribs);
+            if (tuple.Context == EGL_NO_CONTEXT && notify && share == EGL_NO_CONTEXT) {
+                // The process's first context: if the same version WITHOUT the strategy is accepted,
+                // it was the strategy the driver refused, and no context of the process asks for it.
+                const EGLint plainAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, minorVersion,
+                                               EGL_NONE};
+                tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, plainAttribs);
+                if (tuple.Context != EGL_NO_CONTEXT) NoteResetNotificationRefused();
+            }
             if (tuple.Context != EGL_NO_CONTEXT) {
+                NoteResetNotificationDecided(notify);
                 tuple.Serial = g_nativeContextSerials.fetch_add(1, std::memory_order_relaxed) + 1;
                 ++g_displayUsers;
                 return true;
             }
         }
 
-        const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        const Bool notify = ResetNotificationWanted();
+        const EGLint legacyContextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3,
+                                               notify ? kEglResetNotificationStrategyExt : EGL_NONE,
+                                               kEglLoseContextOnResetExt, EGL_NONE};
         tuple.Context = g_EGLFuncs.eglCreateContext(g_Display, tuple.Config, share, legacyContextAttribs);
         if (tuple.Context == EGL_NO_CONTEXT) return false;
+        NoteResetNotificationDecided(notify);
         tuple.Serial = g_nativeContextSerials.fetch_add(1, std::memory_order_relaxed) + 1;
         ++g_displayUsers;
         return true;
@@ -18229,25 +18302,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    Bool LatchIfDeviceLost(const char* site, Bool debugKnob) {
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+    namespace {
         // Once per thread: a latched session declines everything after this verb anyway, and the
         // apply thread is the session's own.
-        static thread_local Bool latched = false;
-        if (latched) return true;
+        thread_local Bool t_deviceLossLatched = false;
+
+        Bool LatchOnResetStatus(const char* site, GLenum status) {
+            if (status == GL_NO_ERROR) return false;
+            // ONLY THE GUILTY CONTEXT ENDS ITS SESSION. The contexts ask for reset notification
+            // (EnsureNativeContext) so the driver can name the context whose work hung or faulted the
+            // GPU; a reset it reports to an INNOCENT context - one whose work only waited behind the
+            // stall, the compositor's above all - is noted and the session goes on as it did before
+            // contexts were told. Adreno 750 measured: the guilty context reads GUILTY once, after
+            // which the driver drops everything it submits; innocent ones read NO_ERROR.
+            static thread_local Bool innocentNoted = false;
+            if (status == GL_INNOCENT_CONTEXT_RESET) {
+                if (!innocentNoted) {
+                    innocentNoted = true;
+                    MGLOG_W("Espryt:%s - the driver reports a GPU reset this session's context did not cause "
+                            "(GL_INNOCENT_CONTEXT_RESET); the session goes on",
+                            site != nullptr ? site : "?");
+                }
+                return false;
+            }
+            t_deviceLossLatched = true;
+            (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                              "MGPipe: Fatal{BackendDeviceLost, \"Espryt:%s\"} - this session's EGL "
+                                              "context was reset (glGetGraphicsResetStatus 0x%x); the session ends "
+                                              "and its client reads a lost context, every other session keeps running",
+                                              site != nullptr ? site : "?", static_cast<unsigned>(status));
+            return true;
+        }
+    } // namespace
+
+    Bool LatchIfDeviceLost(const char* site, Bool debugKnob) {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        if (t_deviceLossLatched) return true;
         GLenum status = GL_NO_ERROR;
         if (g_GLESFuncs.glGetGraphicsResetStatus != nullptr && IsBackendContextCurrentOnThisThread()) {
             status = g_GLESFuncs.glGetGraphicsResetStatus();
         }
         if (status == GL_NO_ERROR && debugKnob && MG_Pipe::MGPipeDebugDeviceLossDue()) status = GL_UNKNOWN_CONTEXT_RESET;
-        if (status == GL_NO_ERROR) return false;
-        latched = true;
-        (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
-                                          "MGPipe: Fatal{BackendDeviceLost, \"Espryt:%s\"} - this session's EGL "
-                                          "context was reset (glGetGraphicsResetStatus 0x%x); the session ends "
-                                          "and its client reads a lost context, every other session keeps running",
-                                          site != nullptr ? site : "?", static_cast<unsigned>(status));
-        return true;
+        return LatchOnResetStatus(site, status);
+    }
+
+    Bool LatchIfGuiltyBeforeApply() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+        if (t_deviceLossLatched) return true;
+        // Asked every time the apply thread wakes, so it must leave nothing behind: not
+        // IsBackendContextCurrentOnThisThread, whose once-per-frame EGL verification stamp it would
+        // spend at the top of the loop (where the session may be between two of its contexts) - only
+        // whether this thread holds a native context and the backend's ownership.
+        if (g_GLESFuncs.glGetGraphicsResetStatus == nullptr || t_boundNativeContext == EGL_NO_CONTEXT ||
+            g_backendContextOwnerThread.load(std::memory_order_acquire) != std::this_thread::get_id())
+            return false;
+        return LatchOnResetStatus("apply", g_GLESFuncs.glGetGraphicsResetStatus());
     }
 #endif
 

@@ -28,6 +28,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void Initialize() override;
         void BindSessionStateToThisThread() override;
+        // The GPU hang watch's verdict on this session's device (VulkanRenderer::LatchIfGpuHung).
+        Bool LatchIfGpuFaulted() override;
         void OnClientContextBound(Uint64 token) override;
         Bool InitWindowSurface() override;
         Bool InitCapabilities() override;

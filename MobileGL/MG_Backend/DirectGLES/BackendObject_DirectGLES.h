@@ -32,6 +32,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     public:
         ~BackendObject_DirectGLES() override;
 
+        // The driver's verdict on this session's context (DirectGLES::LatchIfDeviceLost).
+        Bool LatchIfGpuFaulted() override;
         void Initialize() override;
         Bool InitCapabilities() override;
         Bool InitWindowSurface() override;
