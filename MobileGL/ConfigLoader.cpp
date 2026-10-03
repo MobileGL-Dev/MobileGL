@@ -348,6 +348,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaDeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
+        features.MagmaAllowInvalidSpirv = QueryEnvFlag("MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
         features.MagmaMaxDrawsPerCommandBuffer =
             QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);

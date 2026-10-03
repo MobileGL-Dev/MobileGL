@@ -6835,7 +6835,7 @@ void main() {
         // A refused program cannot reach here today - the full path refuses before it ever
         // records a snapshot - but declining the fast path costs one compare and means the
         // refusal does not depend on that ordering staying true.
-        if (programObj.pointSizeCapabilityUnsupported) {
+        if (programObj.pointSizeCapabilityUnsupported || programObj.invalidSpirvDeclined) {
             return false;
         }
 
@@ -7318,7 +7318,7 @@ void main() {
         // The build already said why, once, naming the program and the stage. Refusing here -
         // before any pipeline is built from it - is what makes that message a decline rather
         // than a note attached to invalid usage the driver still receives.
-        if (programObj.pointSizeCapabilityUnsupported) {
+        if (programObj.pointSizeCapabilityUnsupported || programObj.invalidSpirvDeclined) {
             return false;
         }
         // For the snapshot's memoised entry pointer: if anything below inserts into the
@@ -7778,6 +7778,8 @@ void main() {
         }
         ProgramFactory::CompileOptionFlags transformFlags = 0;
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // No shader module of a program that failed validation exists; the build said why, once.
+        if (programObj.invalidSpirvDeclined) return;
 
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();
@@ -7840,6 +7842,8 @@ void main() {
         }
         ProgramFactory::CompileOptionFlags transformFlags = 0;
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, transformFlags);
+        // No shader module of a program that failed validation exists; the build said why, once.
+        if (programObj.invalidSpirvDeclined) return;
 
         if (!frame.isCommandRecording) {
             m_frameContext.BeginCommandRecording();

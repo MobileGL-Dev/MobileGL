@@ -32,6 +32,7 @@
 #include <dlfcn.h>
 #endif
 #include <type_traits>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MobileGL::MG_Impl::EGLImpl {
@@ -214,6 +215,38 @@ namespace MobileGL::MG_Impl::EGLImpl {
         std::unordered_set<EGLSurface>& DamageRegionSurfaces() {
             static auto* surfaces = new std::unordered_set<EGLSurface>();
             return *surfaces;
+        }
+
+        // EGL_KHR_surfaceless_context. The EGL state records a surfaceless binding as exactly that
+        // (eglGetCurrentSurface answers EGL_NO_SURFACE), but every backend renders into the surface
+        // it was bound to, and a session's capabilities are published on its first bind to one. So
+        // the backend is bound to a 1x1 pbuffer of the display's own instead: one per display, made
+        // on the first surfaceless bind, never handed to the application, and gone with the display
+        // (eglTerminate). Guarded by EGLOperationMutex.
+        std::unordered_map<EGLDisplay, EGLSurface>& SurfacelessStandIns() {
+            static auto* standIns = new std::unordered_map<EGLDisplay, EGLSurface>();
+            return *standIns;
+        }
+
+        // The display's stand-in, made now if it has none (or the one it had did not survive).
+        // EGL_NO_SURFACE when the backend could not make a pbuffer; the EGL error is then set.
+        EGLSurface SurfacelessStandIn(EGLStateContext* state, EGLDisplay dpy) {
+            auto& standIns = SurfacelessStandIns();
+            if (const auto it = standIns.find(dpy); it != standIns.end()) {
+                if (state->ValidateSurfaceOnDisplay(dpy, it->second)) return it->second;
+                standIns.erase(it);
+            }
+            // Any of the display's configs will do: a stand-in is never read back or presented.
+            EGLConfig config = nullptr;
+            EGLint count = 0;
+            if (!state->GetConfigs(dpy, &config, 1, &count) || count < 1 || config == nullptr) {
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+            const EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+            const EGLSurface standIn = CreatePbufferSurface(dpy, config, attribs);
+            if (standIn != EGL_NO_SURFACE) standIns[dpy] = standIn;
+            return standIn;
         }
 
 #if MOBILEGL_WAYLAND_WINDOWS
@@ -620,7 +653,22 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
             return EGL_FALSE;
         }
-        if (!backendObject->MakeEGLCurrent(dpy, draw, read, ctx)) {
+        // A surfaceless binding (EGL_KHR_surfaceless_context; EGLState took it above and records
+        // EGL_NO_SURFACE): the backend gets the display's stand-in pbuffer to render into.
+        EGLSurface backendDraw = draw;
+        EGLSurface backendRead = read;
+        if (draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE) {
+            backendDraw = backendRead = SurfacelessStandIn(state, dpy);
+            if (backendDraw == EGL_NO_SURFACE) {
+                const EGLint error = state->ConsumeError();
+                MGLOG_E_ONCE("eglMakeCurrent: no stand-in pbuffer for a surfaceless binding thread=%s (error=0x%04x)",
+                             threadId.c_str(), error);
+                state->MakeCurrent(oldDisplay, oldDraw, oldRead, oldContext);
+                state->SetError(error != EGL_SUCCESS ? error : EGL_BAD_ALLOC);
+                return EGL_FALSE;
+            }
+        }
+        if (!backendObject->MakeEGLCurrent(dpy, backendDraw, backendRead, ctx)) {
             MGLOG_E_ONCE("eglMakeCurrent backend attach failed thread=%s dpy=%p draw=%p read=%p ctx=%p", threadId.c_str(),
                     dpy, draw, read, ctx);
             state->SetError(EGL_BAD_ACCESS);
@@ -699,6 +747,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         if (!state->TerminateDisplay(dpy)) {
             return EGL_FALSE;
+        }
+        {
+            // The display's surfaces went with it, its surfaceless stand-in among them; the backend
+            // side goes with ReleaseEGLResources below.
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            SurfacelessStandIns().erase(dpy);
         }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             // The display's dma-buf EGLImages went with it; so do their shared-image references.

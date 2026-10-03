@@ -135,6 +135,51 @@ TEST(EGLStateProfile, CompatibilityProfileRequiresExplicitCompatBit) {
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
 }
 
+// What `eglinfo -B` does for every API: eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)
+// (EGL_KHR_surfaceless_context). It used to be EGL_BAD_MATCH, so eglinfo printed the EGL lines and
+// no GL renderer/version lines at all. The binding records no surface: a client asking for the
+// current surface must see what it bound.
+TEST(EGLStateMakeCurrent, SurfacelessBindIsAcceptedAndRecordsNoSurface) {
+    auto fixture = CreateFixture();
+    EXPECT_TRUE(fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, fixture->Context));
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
+    EXPECT_EQ(fixture->State.GetCurrentContext(), fixture->Context);
+    EXPECT_EQ(fixture->State.GetCurrentSurface(EGL_DRAW), EGL_NO_SURFACE);
+    EXPECT_EQ(fixture->State.GetCurrentSurface(EGL_READ), EGL_NO_SURFACE);
+    EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+}
+
+// The extension relaxes only the both-absent case: one surface without the other stays a mismatch.
+TEST(EGLStateMakeCurrent, OneSidedSurfaceIsStillAMismatch) {
+    auto fixture = CreateFixture();
+    EXPECT_FALSE(fixture->State.MakeCurrent(fixture->Display, fixture->Surface, EGL_NO_SURFACE, fixture->Context));
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_MATCH);
+    EXPECT_FALSE(fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, fixture->Surface, fixture->Context));
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_MATCH);
+}
+
+// eglinfo's ES probe chooses with EGL_RENDERABLE_TYPE/EGL_CONFORMANT = EGL_OPENGL_ES_BIT (ES 1.x),
+// which no MobileGL config claims, so it passes the NULL config on to eglCreateContext - legal
+// with EGL_KHR_no_config_context, where it means "no config". Without it that was
+// EGL_BAD_CONFIG and the "OpenGL ES profile" lines never printed.
+TEST(EGLStateCreateContext, NoConfigContextIsAcceptedAndReportsConfigIdZero) {
+    auto fixture = CreateFixture();
+    const EGLint esAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
+    const auto context = fixture->State.CreateContext(fixture->Display, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, esAttribs);
+    ASSERT_NE(context, EGL_NO_CONTEXT);
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
+    EGLint configId = -1;
+    EXPECT_TRUE(fixture->State.QueryContext(fixture->Display, context, EGL_CONFIG_ID, &configId));
+    EXPECT_EQ(configId, 0);
+    EXPECT_TRUE(fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
+    EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    // A non-null handle that names no config is still EGL_BAD_CONFIG.
+    EXPECT_EQ(fixture->State.CreateContext(fixture->Display, reinterpret_cast<EGLConfig>(0xdead), EGL_NO_CONTEXT,
+                                           esAttribs),
+              EGL_NO_CONTEXT);
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_CONFIG);
+}
+
 namespace {
     constexpr EGLAttrib kAbgr8888 = StateContext::kDrmFourccAbgr8888;
     constexpr EGLAttrib kXbgr8888 = StateContext::kDrmFourccXbgr8888;

@@ -229,6 +229,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // the cache entry, so every later draw of the same program variant reads the same
             // answer instead of re-deciding it.
             Bool pointSizeCapabilityUnsupported = false;
+            // One of the program's final modules fails SPIR-V validation, so none of its modules
+            // was created and every draw or dispatch of it is refused by name (the ProgramInvalidSpirv /
+            // ComputeProgramInvalidSpirv wire declines) - see ProgramFactory::ScreenModuleForDriver.
+            // Sticky like the flag above: it lives on the cache entry, so the one log line is honest.
+            Bool invalidSpirvDeclined = false;
             Bool needsPassthroughTessControl = false;
             // ...and the pass-through this renderer can synthesize carries gl_Position and
             // nothing else, so it is only correct when the evaluation stage's inputs are
@@ -289,6 +294,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
                 declinedDescriptors = other.declinedDescriptors;
+                // The three refusal flags travel like every other field: a robin-hood insert swaps
+                // entries, and a flag left behind would refuse (or admit) the wrong program.
+                invalidSpirvDeclined = other.invalidSpirvDeclined;
+                xfbCaptureDeclined = other.xfbCaptureDeclined;
+                pointSizeCapabilityUnsupported = other.pointSizeCapabilityUnsupported;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -310,6 +320,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
+                other.invalidSpirvDeclined = false;
+                other.xfbCaptureDeclined = false;
+                other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;
@@ -353,6 +366,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
                 declinedDescriptors = other.declinedDescriptors;
+                // The three refusal flags travel like every other field: a robin-hood insert swaps
+                // entries, and a flag left behind would refuse (or admit) the wrong program.
+                invalidSpirvDeclined = other.invalidSpirvDeclined;
+                xfbCaptureDeclined = other.xfbCaptureDeclined;
+                pointSizeCapabilityUnsupported = other.pointSizeCapabilityUnsupported;
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
@@ -374,6 +392,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
+                other.invalidSpirvDeclined = false;
+                other.xfbCaptureDeclined = false;
+                other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.activeFragmentOutputLocationMask = 0;
@@ -503,6 +524,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (their command buffers retired many frames ago), mirroring
         // VkRenderPassManager::OnPresent's sweep.
         void OnFrameBoundary();
+
+        // What the last look at a module's final bytes - the exact words vkCreateShaderModule
+        // would receive - decided.
+        enum class DriverModuleVerdict : Uint8 {
+            Valid,           // validates: handed to the driver
+            DeclinedInvalid, // fails validation: never handed over, the program's work is declined
+            AdmittedInvalid, // fails validation, handed over anyway (MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV)
+        };
+        // Validates `spirv` for the Vulkan environment its version word names and turns the
+        // result into a verdict. A driver is not a validating entry point: Adreno page-faulted
+        // into device loss on a module that carried a sampler inside a uniform block, Mali
+        // SIGSEGVs inside pipeline creation. So an invalid module is declined unless
+        // `allowInvalid` (the escape hatch) says to hand it over regardless.
+        //
+        // The validator's answer is remembered per module content (64-bit hash plus word count),
+        // process-wide: a program variant, an evicted-then-rebuilt entry and two programs that
+        // share a stage all re-screen the same bytes, and only the first pays for spirv-val.
+        // `outReason` receives the validator's message for an invalid module.
+        static DriverModuleVerdict ScreenModuleForDriver(const Vector<Uint>& spirv, Bool allowInvalid,
+                                                         String* outReason = nullptr);
+        // How many times ScreenModuleForDriver actually ran the validator (cache misses), for
+        // the tests that pin the cache.
+        static Uint64 DriverModuleValidatorRuns();
 
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
         static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
