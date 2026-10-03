@@ -2111,6 +2111,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not go on to allocate or upload. False when the record names no image: a twin that
             // was bound to one has been told to re-mint, and the normal storage path takes over.
             Bool SyncSharedImageStorage(const MG_Pipe::MGPipeResourceRecord& record);
+            // Pending sub-data written into the attached shared image (Managers.cpp).
+            void ReplaySharedImageUploads(const MG_Pipe::MGPipeResourceRecord& record);
+            // The attached image takes RGB texels only (an X format): uploads are converted.
+            Bool m_sharedImageUploadsRgb = false;
 #endif
             // Whether this texture's ES storage was minted in an image carrier rather than in the
             // frontend format's own layout - the readback has to ask, because for a NORMALIZED
@@ -2483,6 +2487,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.
         void SyncNeccessaryTextures();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Every texture of this session bound to a shared image with sub-data still pending is
+        // synced now, so the uploads are in the images before a flush publishes them (an X
+        // server's PutImage into a window pixmap no later draw of its own samples).
+        void WritePendingSharedImageUploads();
+#endif
         extern Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
                      MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;

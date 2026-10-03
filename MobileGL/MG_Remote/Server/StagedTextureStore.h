@@ -668,6 +668,29 @@ namespace MobileGL::MG_Remote::Server {
                     site, static_cast<Uint32>(uploadTarget), static_cast<Uint32>(level));
         }
 
+        // A box of a level for a replay into storage that is not this store's - a shared image,
+        // whose level was defined with no data and is written in pieces (an X server uploading a
+        // client's pixels into a window pixmap). The level image and its row length in texels when
+        // every row of the box is covered; null otherwise. Unlike RequireLevelBytes a partially
+        // covered level answers, and nothing is fatal: an uncovered box is the caller's to skip.
+        const Uint8* CoveredBoxBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, Int x, Int y, Uint32 w, Uint32 h,
+                                     SizeT texel, Int* rowTexels) const {
+            if (!m_copies) return nullptr;
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
+            if (shadow == nullptr || !shadow->Defined || x < 0 || y < 0 || w == 0 || h == 0 ||
+                x + static_cast<Int>(w) > shadow->Extent.x() || y + static_cast<Int>(h) > shadow->Extent.y())
+                return nullptr;
+            for (Uint32 row = 0; row < h; ++row) {
+                const SizeT begin = TexelOffset(shadow->Extent, x, y + static_cast<Int>(row), 0, texel);
+                const SizeT end = begin + static_cast<SizeT>(w) * texel;
+                if (end > shadow->Bytes.size() || !StagedShadowStore::CoverageHas(shadow->Covered, begin, end))
+                    return nullptr;
+            }
+            *rowTexels = shadow->Extent.x();
+            return shadow->Bytes.data();
+        }
+
         // Diagnostics the sync path and the unit cases read, so that a check can assert WHAT
         // HAPPENED rather than that nothing blew up.
         Bool IsCovered(Uint64 key, Uint16 uploadTarget, Uint16 level) const {

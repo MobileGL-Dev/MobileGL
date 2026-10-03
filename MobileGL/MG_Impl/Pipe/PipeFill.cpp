@@ -3987,6 +3987,20 @@ namespace MobileGL::MG_Pipe {
 #endif
     }
 
+    void MGPipeClientDrainTextureUploads() {
+        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (MG_Remote::Client::RunsAsTheServerRole()) return;
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        const Uint64 pushMask = MG_Config::Features.PipePush;
+        if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
+            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0 &&
+            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources) &&
+            P4aFamilyDependenciesAreSet(kMGPipeSubsystemTextureResources, pushMask)) {
+            (void)MGPipeTextureEmitterInstance().DrainTextureSubData(*ctx);
+        }
+    }
+
 #if MOBILEGL_BUILD_DISAGGREGATED
     // Declared in PipeMutation.h, where the list is argued. THE ORDER: the latch goes first, so
     // everything after it - a pin's last owner dying, a deferred destroy replayed, an evicted

@@ -266,6 +266,11 @@ namespace MobileGL::MG_Pipe {
     void MGPipeClientFinish();
     // Submit a stream link's published prefix; never wait for appliedSeq.
     void MGPipeClientFlush();
+    // The texture sub-data drain of a validate point, outside one: a shared-image producer's
+    // glFlush (an X server's PutImage into a window pixmap is followed by no draw of its own)
+    // has to get its uploads to the server before the flush publishes the images. Gated as the
+    // validate point's drain is; a no-op on a monolith and on the server role.
+    void MGPipeClientDrainTextureUploads();
 
     // A FRESH SESSION REPLACES AN ENDED ONE (a device loss recovered, or an eglTerminate /
     // eglInitialize): every client-side answer to "what does the server hold" describes the

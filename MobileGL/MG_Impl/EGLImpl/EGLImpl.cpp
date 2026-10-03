@@ -1458,6 +1458,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
                                                ownsServerWindow, std::getenv("MOBILEGL_SHARED_IMAGE_FLUSH_SYNC")))
             return;
         auto* backendObject = MG_Backend::pActiveBackendObject.get();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // Uploads still waiting for a validate point go first: they are part of what is published.
+        MG_Pipe::MGPipeClientDrainTextureUploads();
+#endif
         if (backendObject != nullptr && !backendObject->FlushSharedImageAccesses()) {
             MGLOG_E_ONCE("glFlush: this session's shared-image accesses could not be published; another session may "
                          "read them early");

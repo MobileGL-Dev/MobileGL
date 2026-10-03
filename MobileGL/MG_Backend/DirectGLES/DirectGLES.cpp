@@ -18856,6 +18856,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool PublishPendingAccesses() {
             ReadFrame& frame = CurrentReadFrame();
             frame.ImplicitSync = true;
+            // Sub-data waiting for a sync that nothing of this session would otherwise trigger.
+            if (t_boundNativeContext != EGL_NO_CONTEXT) TextureImpl::WritePendingSharedImageUploads();
             if (frame.Tracker.Pending() == 0) return true;
             int fence = -1;
             if (t_boundNativeContext != EGL_NO_CONTEXT && !ExportFence(&fence)) {

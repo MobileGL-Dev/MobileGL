@@ -8858,27 +8858,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
-            // Sub-data aimed at the image is not replayed into it - the image is written by the
-            // producer's present - but it must still leave the pending set, or the per-draw clean
-            // gate (IsDrawSyncCleanByRecord) would never close.
-            const auto dropPendingUploads = [&record] {
-                if (record.PendingUploads.empty()) return;
-                MGLOG_W_ONCE("Shared image texture %u: sub-data on an attached shared image is dropped",
-                             record.Desc.GlNameForDiag);
-                Vector<std::pair<Uint16, Uint16>> keys;
-                keys.reserve(record.PendingUploads.size());
-                for (const auto& pending : record.PendingUploads) {
-                    keys.emplace_back(MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget), pending.Level);
-                }
-                for (const auto& key : keys) ConsumePipeTextureUpload(record.Desc.Resource, key.first, key.second);
-            };
-
             // Steady state: bound to this image already (the serial moves with sub-data and with a
             // metadata respecify, neither of which changes what the name samples). A failed bind is
-            // retried only once the record moves.
+            // retried only once the record moves. Pending sub-data is the caller's
+            // (ReplaySharedImageUploads), after the image's sync state has been acquired.
             if (m_sharedImageId == imageId && m_isInitialized &&
                 (m_sharedImage != nullptr || m_syncedResourceSerial == record.Serial)) {
-                dropPendingUploads();
                 m_syncedResourceSerial = record.Serial;
                 return true;
             }
@@ -8893,7 +8878,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Whatever comes next redefines storage through a re-mint (see the imageId == 0 arm).
             m_backendStorageImmutable = true;
             m_syncedResourceSerial = record.Serial;
-            dropPendingUploads();
 
             const TextureTarget target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
             if (ConvertTextureTargetToBackendGLEnum(target) != GL_TEXTURE_2D) {
@@ -8915,6 +8899,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return true;
             }
             m_sharedImage = std::move(image);
+            m_sharedImageUploadsRgb = false;
             // The shape the name now has: the descriptor's level 0, and that one level only.
             m_prevTextureInfo = {static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
                                  record.Desc.Width,
@@ -8925,6 +8910,83 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  record.Desc.Samples,
                                  record.Desc.FixedSampleLocations != 0};
             return true;
+        }
+
+        // SUB-DATA ON A SHARED IMAGE IS WRITTEN INTO IT. An X server drawing with glamor uploads
+        // its clients' pixels (MIT-SHM / PutImage) into window pixmaps whose level 0 is a shared
+        // image, with glTexSubImage2D: the texels are in the staged store (the client defined the
+        // level without data, so only the uploaded boxes are covered), and they go into the
+        // EGLImage-backed name box by box. Every pending entry leaves the set either way, or the
+        // per-draw clean gate would never close. Called after AcquireForSampling, so the upload is
+        // ordered after the image's pending reads and writes like any other use.
+        void BackendTextureObject::ReplaySharedImageUploads(const MG_Pipe::MGPipeResourceRecord& record) {
+            if (record.PendingUploads.empty()) return;
+            Vector<std::pair<Uint16, Uint16>> keys;
+            Vector<std::pair<Uint16, MG_Pipe::MGPBox>> boxes;
+            keys.reserve(record.PendingUploads.size());
+            for (const auto& pending : record.PendingUploads) {
+                const Uint16 uploadHalf = MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget);
+                keys.emplace_back(uploadHalf, pending.Level);
+                if (pending.Level != 0) continue; // an image has one level
+                if (pending.Regions.empty()) {
+                    boxes.emplace_back(uploadHalf, pending.UnionBox);
+                } else {
+                    for (const auto& region : pending.Regions)
+                        boxes.emplace_back(uploadHalf, MG_Pipe::MGPBox{region.X, region.Y, region.Z, region.W, region.H,
+                                                                       region.D});
+                }
+            }
+            if (m_sharedImage != nullptr && !boxes.empty()) {
+                auto& store = MG_Remote::Server::ServerStagedTexture();
+                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(record.Desc.Resource);
+                Bind(GL_TEXTURE_2D);
+                ScopedDefaultUnpackState unpackState;
+                BufferImpl::BindPixelUnpackBufferId(0);
+                for (const auto& [uploadHalf, box] : boxes) {
+                    Int rowTexels = 0;
+                    // A shared image is RGBA8 to every client that names it (the level the client
+                    // defined over it): four bytes a texel.
+                    const Uint8* bytes =
+                        store.CoveredBoxBytes(key, uploadHalf, 0, box.X, box.Y, box.W, box.H, 4, &rowTexels);
+                    if (bytes == nullptr) {
+                        MGLOG_E_ONCE("Shared image texture %u: an upload of %ux%u at (%d,%d) has no staged texels; "
+                                     "not written",
+                                     record.Desc.GlNameForDiag, box.W, box.H, box.X, box.Y);
+                        continue;
+                    }
+                    const Uint8* origin =
+                        bytes + (static_cast<SizeT>(box.Y) * static_cast<SizeT>(rowTexels) + static_cast<SizeT>(box.X)) * 4;
+                    if (!m_sharedImageUploadsRgb) {
+                        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                        }
+                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, rowTexels);
+                        g_GLESFuncs.glTexSubImage2D(GL_TEXTURE_2D, 0, box.X, box.Y, static_cast<GLsizei>(box.W),
+                                                    static_cast<GLsizei>(box.H), GL_RGBA, GL_UNSIGNED_BYTE, origin);
+                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                        // An image of an X format (no alpha) is an RGB8 texture to the driver, which
+                        // takes only RGB texels: this image's uploads are converted from now on.
+                        if (g_GLESFuncs.glGetError() != GL_INVALID_OPERATION) continue;
+                        m_sharedImageUploadsRgb = true;
+                    }
+                    Vector<Uint8> rgb(static_cast<SizeT>(box.W) * box.H * 3);
+                    for (Uint32 row = 0; row < box.H; ++row) {
+                        const Uint8* src = origin + static_cast<SizeT>(row) * static_cast<SizeT>(rowTexels) * 4;
+                        Uint8* dst = rgb.data() + static_cast<SizeT>(row) * box.W * 3;
+                        for (Uint32 x = 0; x < box.W; ++x) {
+                            dst[x * 3 + 0] = src[x * 4 + 0];
+                            dst[x * 3 + 1] = src[x * 4 + 1];
+                            dst[x * 3 + 2] = src[x * 4 + 2];
+                        }
+                    }
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                    g_GLESFuncs.glTexSubImage2D(GL_TEXTURE_2D, 0, box.X, box.Y, static_cast<GLsizei>(box.W),
+                                                static_cast<GLsizei>(box.H), GL_RGB, GL_UNSIGNED_BYTE, rgb.data());
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                }
+                MGLOG_I_ONCE("Shared image texture %u: sub-data written into its image (%s texels)",
+                             record.Desc.GlNameForDiag, m_sharedImageUploadsRgb ? "RGB" : "RGBA");
+            }
+            for (const auto& [uploadHalf, level] : keys) ConsumePipeTextureUpload(record.Desc.Resource, uploadHalf, level);
         }
 #endif
 
@@ -8979,6 +9041,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // a write that landed since the last one is waited for on this context's GPU
                 // before the command this sync is for, and the session's frame notes the read.
                 if (m_sharedImage != nullptr) SharedImageImpl::AcquireForSampling(m_sharedImage);
+                ReplaySharedImageUploads(*pushedStorage);
                 return;
             }
             // P5e (tx2), CONTRACT-P5E §5.2 (scout G-S2-2): THE VIEW TEST MOVES BEHIND THE
@@ -11247,6 +11310,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
         TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture> g_backendTextureObjects;
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        void WritePendingSharedImageUploads() {
+            auto& applier = MG_Pipe::MGPipeApplier();
+            for (SizeT slot = 0; slot < applier.TextureResources.size(); ++slot) {
+                const auto& record = applier.TextureResources[slot];
+                if (!record.Live || record.SharedImageId == 0 || record.PendingUploads.empty()) continue;
+                const MG_Pipe::MGPipeHandle handle{static_cast<Uint32>(slot), record.Gen};
+                auto* twin = g_backendTextureObjects.FindByHandle(handle);
+                if (twin == nullptr || !*twin) continue;
+                (*twin)->SyncMipmapsToBackendByHandle(handle);
+            }
+        }
+#endif
 
         void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
             SharedPtr<MG_State::GLState::ITextureObject> storage = textureObject;

@@ -2371,7 +2371,12 @@ namespace MobileGL::MG_Pipe {
         // the mask arrives - and by construction only the non-storage fields differ.
         record->Desc = desc;
         // A shared image is the storage this call replaces - unless the call replaces none.
-        if (level != nullptr || !metadataOnly) record->SharedImageId = 0;
+        if ((level != nullptr || !metadataOnly) && record->SharedImageId != 0) {
+            MGLOG_D("MGPipe: texture %u leaves shared image %llu: a respecify (%s) redefined its storage",
+                    desc.GlNameForDiag, static_cast<unsigned long long>(record->SharedImageId),
+                    level != nullptr ? "one level" : "whole resource");
+            record->SharedImageId = 0;
+        }
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (level != nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
             // Scope and BufOffset/BufSize are transient respecify carriers, not resource state.
