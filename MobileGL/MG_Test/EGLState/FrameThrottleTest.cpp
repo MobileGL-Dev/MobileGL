@@ -10,30 +10,35 @@ using MobileGL::MG_Impl::EGLImpl::Wayland::FrameThrottle;
 
 TEST(WaylandFrameThrottle, IntervalOneWaitsForTheCallbackOfThePreviousCommit) {
     FrameThrottle throttle;
-    EXPECT_FALSE(throttle.MustWait(1)); // the first swap has nothing to wait for
-    ASSERT_TRUE(throttle.WantsFrameRequest(1));
-    throttle.Requested();
-    EXPECT_TRUE(throttle.MustWait(1)); // the next swap waits ...
-    EXPECT_FALSE(throttle.WantsFrameRequest(1)); // ... and asks for no second callback meanwhile
+    EXPECT_EQ(throttle.WaitBudgetMs(1, 0), 0); // the first swap has nothing to wait for
+    ASSERT_TRUE(throttle.WantsFrameRequest());
+    throttle.Requested(0);
+    EXPECT_EQ(throttle.WaitBudgetMs(1, 1), FrameThrottle::kForever); // the next swap waits for it ...
+    EXPECT_FALSE(throttle.WantsFrameRequest());                      // ... and asks for no second one
     throttle.Done();
-    EXPECT_FALSE(throttle.MustWait(1)); // the compositor used the frame
-    EXPECT_TRUE(throttle.WantsFrameRequest(1));
+    EXPECT_EQ(throttle.WaitBudgetMs(1, 2), 0); // the compositor used the frame
+    EXPECT_TRUE(throttle.WantsFrameRequest());
 }
 
-TEST(WaylandFrameThrottle, IntervalZeroNeitherAsksNorWaits) {
+TEST(WaylandFrameThrottle, IntervalZeroStaysUnpacedWhileTheCompositorAnswers) {
     FrameThrottle throttle;
-    EXPECT_FALSE(throttle.WantsFrameRequest(0));
-    EXPECT_FALSE(throttle.MustWait(0));
+    throttle.Requested(1000);
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 1000), 0);
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 1000 + FrameThrottle::kStarvedAfterMs - 1), 0);
+    throttle.Done();
+    throttle.Requested(1016);
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 1030), 0);
 }
 
-TEST(WaylandFrameThrottle, DroppingToIntervalZeroStopsWaitingOnAnOutstandingCallback) {
+TEST(WaylandFrameThrottle, IntervalZeroSlowsToTheStarvedPaceWhenNothingIsShown) {
     FrameThrottle throttle;
-    throttle.Requested();
-    EXPECT_FALSE(throttle.MustWait(0));
-    EXPECT_TRUE(throttle.Outstanding()); // still answered later, then requested again at interval 1
-    EXPECT_FALSE(throttle.WantsFrameRequest(1));
+    throttle.Requested(5000);
+    // The compositor shows nothing: the callback stays unanswered, every later swap waits a while.
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 5000 + FrameThrottle::kStarvedAfterMs), FrameThrottle::kStarvedWaitMs);
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 60000), FrameThrottle::kStarvedWaitMs);
+    // Shown again: the first answer ends it.
     throttle.Done();
-    EXPECT_TRUE(throttle.WantsFrameRequest(2));
+    EXPECT_EQ(throttle.WaitBudgetMs(0, 60001), 0);
 }
 
 TEST(EGLStateSwapInterval, DefaultsToOneAndFollowsEglSwapInterval) {

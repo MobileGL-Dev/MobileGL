@@ -19,12 +19,14 @@
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Util/Debug/Log.h>
 #include <cerrno>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <mutex>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -161,6 +163,11 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             int (*dispatchQueue)(void*, wl_event_queue*) = nullptr;
             int (*dispatchQueuePending)(void*, wl_event_queue*) = nullptr;
             int (*flush)(void*) = nullptr;
+            // Optional: a bounded wait for a frame callback (FrameThrottle's interval-0 case).
+            int (*prepareReadQueue)(void*, wl_event_queue*) = nullptr;
+            int (*getFd)(void*) = nullptr;
+            int (*readEvents)(void*) = nullptr;
+            void (*cancelRead)(void*) = nullptr;
         };
 
         // Loaded once.  RTLD_NOLOAD first: a Wayland client has the library already, and the copy
@@ -193,6 +200,11 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 api.dispatchQueuePending =
                     reinterpret_cast<decltype(api.dispatchQueuePending)>(sym("wl_display_dispatch_queue_pending"));
                 api.flush = reinterpret_cast<decltype(api.flush)>(sym("wl_display_flush"));
+                api.prepareReadQueue =
+                    reinterpret_cast<decltype(api.prepareReadQueue)>(sym("wl_display_prepare_read_queue"));
+                api.getFd = reinterpret_cast<decltype(api.getFd)>(sym("wl_display_get_fd"));
+                api.readEvents = reinterpret_cast<decltype(api.readEvents)>(sym("wl_display_read_events"));
+                api.cancelRead = reinterpret_cast<decltype(api.cancelRead)>(sym("wl_display_cancel_read"));
                 api.loaded = api.displayInterface && api.registryInterface && api.shmInterface &&
                              api.shmPoolInterface && api.bufferInterface && api.marshalFlags && api.addListener && api.destroy &&
                              api.getVersion && api.createWrapper && api.wrapperDestroy && api.setQueue &&
@@ -339,6 +351,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         void* surfaceWrapper = nullptr;
         wl_proxy* frameCallback = nullptr;
         FrameThrottle throttle;
+        Int loggedInterval = -1;
 
         ~Impl() {
             const Api& api = WaylandApi();
@@ -544,34 +557,73 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             throttle.Done();
         }
 
-        // A swap with an interval above 0 waits for the callback of the frame before it: the
-        // compositor has used that one. It sends none while it shows nothing (its output is off),
-        // and then this - like any EGL on Wayland - waits until it shows something again.
+        static Int64 NowMs() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        }
+
+        // A broken connection answers nothing again; stop pacing on it.
+        void AbandonFrame() {
+            if (frameCallback) WaylandApi().destroy(frameCallback);
+            frameCallback = nullptr;
+            throttle.Done();
+        }
+
+        // Waits, as FrameThrottle decides, for the callback of the frame before this one: the
+        // compositor has used that one. It sends none while it shows nothing.
         void WaitForFrame(Int swapInterval) {
             const Api& api = WaylandApi();
-            while (throttle.MustWait(swapInterval)) {
-                if (api.dispatchQueue(display, queue) < 0) {
-                    // A broken connection answers nothing again; stop pacing on it.
-                    if (frameCallback) api.destroy(frameCallback);
-                    frameCallback = nullptr;
-                    throttle.Done();
+            const Int64 budget = throttle.WaitBudgetMs(swapInterval, NowMs());
+            if (budget == 0) return;
+            if (budget == FrameThrottle::kForever) {
+                while (throttle.Outstanding()) {
+                    if (api.dispatchQueue(display, queue) < 0) return AbandonFrame();
+                }
+                return;
+            }
+            if (!api.prepareReadQueue || !api.getFd || !api.readEvents || !api.cancelRead) return;
+            const Int64 deadline = NowMs() + budget;
+            while (throttle.Outstanding()) {
+                // libwayland's read protocol: whatever is queued first, then one read of the
+                // socket for this queue, bounded by the deadline.
+                while (api.prepareReadQueue(display, queue) != 0) {
+                    if (api.dispatchQueuePending(display, queue) < 0) return AbandonFrame();
+                }
+                if (!throttle.Outstanding()) {
+                    api.cancelRead(display);
                     return;
                 }
+                api.flush(display);
+                const Int64 remaining = deadline - NowMs();
+                if (remaining <= 0) {
+                    api.cancelRead(display);
+                    return;
+                }
+                pollfd fd{api.getFd(display), POLLIN, 0};
+                const int ready = poll(&fd, 1, static_cast<int>(remaining));
+                if (ready <= 0) {
+                    api.cancelRead(display);
+                    if (ready < 0 && errno == EINTR) continue;
+                    return;
+                }
+                if (api.readEvents(display) < 0) return AbandonFrame();
+                if (api.dispatchQueuePending(display, queue) < 0) return AbandonFrame();
             }
         }
 
-        // The next commit asks for a frame callback (interval above 0, none outstanding).
-        void RequestFrame(wl_proxy* surface, Int swapInterval);
+        // The next commit asks for a frame callback (none outstanding).
+        void RequestFrame(wl_proxy* surface);
 
         // `wlBuffer` becomes the window's content: attach, damage, commit. `damage` is the frame's
         // (GL window coordinates); a buffer's rows run top-down, so each rectangle is flipped. A
         // compositor without damage_buffer (wl_surface < 4), a new size or the first commit is
         // damaged whole.
-        void Commit(wl_proxy* wlBuffer, const MG_Util::Damage::Region& damage, Int swapInterval) {
+        void Commit(wl_proxy* wlBuffer, const MG_Util::Damage::Region& damage) {
             const Api& api = WaylandApi();
             wl_proxy* surface = window->surface;
             const uint32_t surfaceVersion = api.getVersion(surface);
-            RequestFrame(surface, swapInterval);
+            RequestFrame(surface);
             api.marshalFlags(surface, kSurfaceAttach, nullptr, surfaceVersion, 0, wlBuffer, window->dx, window->dy);
             const Bool whole = damage.IsFull() || surfaceVersion < 4 || committedWidth != width ||
                                committedHeight != height || window->dx != 0 || window->dy != 0;
@@ -673,9 +725,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         return eglWindow->width > 0 && eglWindow->height > 0;
     }
 
-    void WindowSurface::Impl::RequestFrame(wl_proxy* surface, Int swapInterval) {
+    void WindowSurface::Impl::RequestFrame(wl_proxy* surface) {
         const Api& api = WaylandApi();
-        if (api.callbackInterface == nullptr || !throttle.WantsFrameRequest(swapInterval)) return;
+        if (api.callbackInterface == nullptr || !throttle.WantsFrameRequest()) return;
         if (surfaceWrapper == nullptr) {
             surfaceWrapper = api.createWrapper(surface);
             if (surfaceWrapper == nullptr) return;
@@ -686,7 +738,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                                          nullptr);
         if (frameCallback == nullptr) return;
         api.addListener(frameCallback, const_cast<void (**)(void)>(kFrameListener), this);
-        throttle.Requested();
+        throttle.Requested(NowMs());
     }
 
     WindowSurface::WindowSurface(UniquePtr<Impl> impl) : m_impl(std::move(impl)) {}
@@ -757,6 +809,12 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     Bool WindowSurface::Present(const MG_Util::Damage::Region& damage, Int swapInterval) {
         Impl& impl = *m_impl;
         if (impl.window == nullptr) return false;
+        if (swapInterval != impl.loggedInterval) {
+            MGLOG_I("Wayland: window surface %dx%d swaps with interval %d (%s)", impl.width, impl.height,
+                    static_cast<int>(swapInterval),
+                    swapInterval > 0 ? "paced by frame callbacks" : "unpaced while the compositor shows it");
+            impl.loggedInterval = swapInterval;
+        }
         impl.WaitForFrame(swapInterval);
 
         if (impl.useDmabuf) {
@@ -770,7 +828,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 const SizeT index = static_cast<SizeT>(buffer - impl.dmabufBuffers);
                 const MG_Util::Damage::Region copy = impl.dmabufDamage.TakeForWrite(index, damage, impl.width, impl.height);
                 if (backendObject->PresentToSharedImage(buffer->imageId, copy)) {
-                    impl.Commit(buffer->buffer, damage, swapInterval);
+                    impl.Commit(buffer->buffer, damage);
                     buffer->busy = true;
                     return true;
                 }
@@ -789,7 +847,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // GL's rows run bottom-up and RGBA; a wl_shm buffer's run top-down and B, G, R, A.
         ReadBackFrameBGRA(impl.width, impl.height, impl.scratch, static_cast<Uint8*>(buffer->map),
                           static_cast<SizeT>(buffer->stride));
-        impl.Commit(buffer->buffer, MG_Util::Damage::Region::Full(), swapInterval);
+        impl.Commit(buffer->buffer, MG_Util::Damage::Region::Full());
         buffer->busy = true;
         return true;
     }
