@@ -125,7 +125,8 @@ mgrun offscreen eglinfo -B ; mgrun offscreen glxinfo -B
 timeout 25 mgrun offscreen glmark2-es2-wayland -s 1280x720 --run-forever > /tmp/gm.out 2>&1 &
 sleep 8; grep -a "presented through" /tmp/mgl-run.client.log
 ```
-Chrome: `bash scripts/chrome-launch.sh <tag> [flags]` (log `/tmp/mgl-chrome-<tag>.client.log`, screenshot `ch-<tag>.png`).
+Chrome: `bash scripts/chrome-launch.sh <tag> [flags]` (log `/tmp/mgl-chrome-<tag>.client.log`, screenshot `ch-<tag>.png`; `CHROME_GPU=process` runs the GPU in its own process, which needs the anland startup script that knows `MOBILEGL_CHROME_GPU`).
+Device loss: `setprop debug.mobilegl.inject_device_lost_pid <pid>` (as root) loses the server session of the client whose pid - as it sees itself in the container - is `<pid>`, once per value, on any backend and whether or not it presents; `debug.mobilegl.inject_device_lost_at N` instead loses whichever session makes the N-th device check (Espryt presents and read-backs only). `bash scripts/chrome-recover.sh <in-process|process> [rounds]` checks that Chrome repaints after such a loss without a restart (battery-guarded, stops below 40%).
 Probes: `scripts/probes/texfmt.c` (texture formats keep alpha?), `dmahash.c` (hash a process's dma-bufs); build in the container, e.g. `gcc -O1 /root/texfmt.c -o /usr/local/bin/mgl-texfmt -lEGL`, run with `mgrun offscreen`.
 
 A result counts only if ALL hold:
