@@ -304,6 +304,7 @@ set(SOURCE_FILES
     MobileGL/ConfigLoader.cpp
 
     MobileGL/MG_Util/Debug/Log.cpp
+    MobileGL/MG_Util/X11/DisplayGuard.cpp
 
     MobileGL/MG_Util/Async/JobNode.cpp
     MobileGL/MG_Util/Async/ShaderCompilePool.cpp

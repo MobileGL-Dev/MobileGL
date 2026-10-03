@@ -8,6 +8,7 @@
 
 #include "Core.h"
 #include <EGL/eglext.h>
+#include <MG_Util/X11/DisplayGuard.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -33,7 +34,9 @@ namespace MobileGL {
                 EGLint QueryDefaultX11VisualId() {
 #if defined(__linux__) && !defined(__ANDROID__)
                     const char* displayName = std::getenv("DISPLAY");
-                    if (!displayName) {
+                    // Never the display this process serves: an X server drawing with MobileGL
+                    // (Xwayland's glamor) would wait on its own socket (MG_Util/X11/DisplayGuard.h).
+                    if (!displayName || !MG_Util::X11::MayDialX11Display(displayName)) {
                         return 0;
                     }
 

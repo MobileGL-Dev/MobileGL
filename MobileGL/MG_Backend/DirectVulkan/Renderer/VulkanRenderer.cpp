@@ -8,6 +8,7 @@
 
 #include "VulkanRenderer.h"
 #include "SubmitFencePrefix.h"
+#include "MG_Util/X11/DisplayGuard.h"
 #include "OffscreenSurfaceRoute.h"
 
 #include "MG_Backend/DirectVulkan/SubgroupSupportPolicy.h"
@@ -16720,7 +16721,10 @@ void main() {
         }
 
         const char* displayName = std::getenv("DISPLAY");
-        auto* display = xOpenDisplay(displayName);
+        // Never the display this process serves (MG_Util/X11/DisplayGuard.h).
+        auto* display = displayName != nullptr && MG_Util::X11::MayDialX11Display(displayName)
+                            ? xOpenDisplay(displayName)
+                            : nullptr;
         if (display == nullptr) {
             MGLOG_F("XOpenDisplay(%s) failed while creating a Vulkan Xlib window surface; there is no usable X "
                     "display for the requested window surface",

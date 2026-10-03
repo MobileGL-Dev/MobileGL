@@ -8,6 +8,7 @@
 
 #include "DirectGLES.h"
 #include "ContextEpoch.h"
+#include "MG_Util/X11/DisplayGuard.h"
 #include "EGL/egl.h"
 #include "MG_Util/Types.h"
 #include "Utils.h"
@@ -16769,7 +16770,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static EGLint QueryDefaultX11VisualId() {
 #if defined(__linux__) && !defined(__ANDROID__)
         const char* displayName = std::getenv("DISPLAY");
-        if (!displayName) {
+        if (!displayName || !MG_Util::X11::MayDialX11Display(displayName)) {
             return 0;
         }
 
@@ -16816,7 +16817,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return 0;
         }
         const char* displayName = std::getenv("DISPLAY");
-        if (!displayName) {
+        if (!displayName || !MG_Util::X11::MayDialX11Display(displayName)) {
             return 0;
         }
 
