@@ -245,7 +245,7 @@ TEST(FramebufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     X(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZero)              \
     X(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired)                                 \
     X(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)                \
-    X(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent)
+    X(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent)                    X(FramebufferEmit, TheDefaultFramebuffersRecordNamesNoSurfaceAShareGroupWouldHaveToHold)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -704,6 +704,46 @@ TEST(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent)
     EXPECT_NE(applied->ContentHash, hashBefore) << "the resize did not move the record's content hash";
     EXPECT_EQ(applied->Width, 128u);
     EXPECT_EQ(applied->Height, 96u);
+}
+
+// THE DEFAULT FRAMEBUFFER'S RECORD NAMES NO SURFACE. Its attachments are the frontend's
+// placeholders - one process-wide set every context's framebuffer 0 shares, whose records live in
+// the one share group that was bound when they were born - and the server's default framebuffer
+// is the surface the context is current on. Red while the record named them: every other share
+// group was sent texture handles it held no record for, and logged the miss on each draw.
+TEST(FramebufferEmit, TheDefaultFramebuffersRecordNamesNoSurfaceAShareGroupWouldHaveToHold) {
+    FramebufferScope scope;
+    const auto color = MakeColorTexture(96, 64);
+    const auto depthStencil = MakeShared<TextureObject2D>(97);
+    depthStencil->SetInternalFormat(TextureInternalFormat::Depth32FStencil8);
+    depthStencil->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                  MipmapInput{IntVec3{64, 64, 1}, static_cast<SizeT>(64 * 64 * 8)});
+    const auto fbo0 = MakeShared<FramebufferObject>(0); // what MG_Impl::BuildDefaultFramebuffer builds
+    ASSERT_TRUE(fbo0->IsDefaultFramebuffer());
+    for (const auto point : {FramebufferAttachmentType::Color0, FramebufferAttachmentType::FrontLeft,
+                             FramebufferAttachmentType::FrontRight, FramebufferAttachmentType::BackLeft,
+                             FramebufferAttachmentType::BackRight}) {
+        fbo0->AttachTexture(point, color, TextureUploadTarget::Texture2D);
+    }
+    fbo0->AttachTexture(FramebufferAttachmentType::Depth, depthStencil, TextureUploadTarget::Texture2D);
+    fbo0->AttachTexture(FramebufferAttachmentType::Stencil, depthStencil, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(fbo0, fbo0);
+    Framebuffers().EmitFramebufferState(Ctx());
+
+    const MGPFramebufferState* const applied = MGPipeApplier().DrawFramebuffer();
+    ASSERT_NE(applied, nullptr) << "the default framebuffer's record did not reach the applier";
+    EXPECT_EQ(applied->IsDefault, 1) << "MGPFramebufferState::IsDefault";
+    for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
+        EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind at colour point " << i;
+        EXPECT_TRUE(MGPipeHandleIsNull(applied->Color[i].Res)) << "MGPSurface::Res at colour point " << i;
+    }
+    EXPECT_EQ(applied->Depth.Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind on the depth point";
+    EXPECT_EQ(applied->Stencil.Kind, kMGPipeSurfaceKindNone) << "MGPSurface::Kind on the stencil point";
+    EXPECT_EQ(applied->ReadSurface.Kind, kMGPipeSurfaceKindNone) << "MGPFramebufferState::ReadSurface";
+    // What the record still carries: the extent, and slot 0 as the back buffer's draw buffer.
+    EXPECT_EQ(applied->Width, 64u) << "MGPFramebufferState::Width";
+    EXPECT_EQ(applied->Height, 64u) << "MGPFramebufferState::Height";
+    EXPECT_EQ(applied->DrawBuffers[0], 0) << "MGPFramebufferState::DrawBuffers[0]";
 }
 
 // ============================ D-D2 ============================

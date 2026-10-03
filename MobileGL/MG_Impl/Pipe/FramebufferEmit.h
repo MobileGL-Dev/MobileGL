@@ -524,22 +524,28 @@ namespace MobileGL::MG_Pipe {
             out.Target = static_cast<Uint8>(target);
             out.IsDefault = fbo.IsDefaultFramebuffer() ? 1 : 0;
 
-            // THE COLOUR POINTS. A default framebuffer keeps its one colour surface under
-            // BackLeft rather than under Color0, and the record has exactly one place to put
-            // it: Color[0], which is also the index MGPipeDrawBufferIndex maps that token to,
-            // so the array and the draw-buffer indices agree by construction.
-            if (out.IsDefault != 0) {
-                out.Color[0] = SurfaceOf(fbo, FramebufferAttachmentType::BackLeft);
-            } else {
+            // THE SURFACES - and a DEFAULT framebuffer's record names none. Its storage on the
+            // server is the surface the context is current on (the native window or pbuffer,
+            // Magma's swapchain); both servers answer every default-framebuffer question from
+            // IsDefault and never resolve a surface of this record. The frontend's attachments
+            // are placeholders: one process-wide set of textures every context's framebuffer 0
+            // shares, created once, so their records live in the ONE share group that was
+            // bound when they were born. Naming them here sent every other group a handle it
+            // holds no record for ("texture {12, 0} has no applier resource record" on each of
+            // its draws) and marked bind bits on them under whichever context drew next.
+            // Publishing them into every group instead would build a driver texture per group
+            // for storage nothing reads. The extent still comes from them (FillGeometry), and
+            // the draw-buffer indices below still map BackLeft to slot 0.
+            if (out.IsDefault == 0) {
                 for (SizeT i = 0; i < kMGPipeMaxColorAttachments; ++i) {
                     out.Color[i] = SurfaceOf(fbo, static_cast<FramebufferAttachmentType>(
                                                       static_cast<Int>(FramebufferAttachmentType::Color0) +
                                                       static_cast<Int>(i)));
                 }
+                out.Depth = SurfaceOf(fbo, FramebufferAttachmentType::Depth);
+                out.Stencil = SurfaceOf(fbo, FramebufferAttachmentType::Stencil);
+                out.ReadSurface = SurfaceOf(fbo, fbo.GetReadBuffer());
             }
-            out.Depth = SurfaceOf(fbo, FramebufferAttachmentType::Depth);
-            out.Stencil = SurfaceOf(fbo, FramebufferAttachmentType::Stencil);
-            out.ReadSurface = SurfaceOf(fbo, fbo.GetReadBuffer());
 
             const auto& drawBuffers = fbo.GetDrawBuffers();
             for (SizeT i = 0; i < kMGPipeMaxColorAttachments; ++i) {

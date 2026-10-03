@@ -454,6 +454,12 @@ namespace {
         ASSERT_EQ(r.initialized, 1) << "the client hung or did not come up; client log " << logBase << "\n"
                                     << server.Log();
         ASSERT_EQ(r.finished, 1) << "the client did not finish";
+        // Every record named something its own context's share group holds. The default
+        // framebuffer's placeholder textures were the standing exception: one process-wide set,
+        // recorded in the group bound when they were born and named by every context's draw.
+        const std::string serverLog = server.Log();
+        EXPECT_EQ(serverLog.find("has no applier resource record"), std::string::npos)
+            << "a record named a texture its share group holds no record for";
         const int threads = shape == Shape::ReadbackRace ? 1 + kRaceChurners : kThreads;
         for (int i = 0; i < threads; ++i) {
             const ThreadReport& t = r.threads[i];
