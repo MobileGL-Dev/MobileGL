@@ -938,6 +938,15 @@ namespace MobileGL::MG_Pipe {
 
     };
 
+    // P14: where a new applier's working-state serials start. Each applier (one per served context)
+    // gets a range of its own, 2^40 values wide, so no two appliers ever answer with the same serial:
+    // the backends key process-wide memos on these serials (a texture sync list on ContextSerial and
+    // SamplerViewsSerial, the synced framebuffer binding on FramebufferSerial, ...), and one apply
+    // thread serves every context of its session. With every applier counting from 0, two contexts
+    // at the same point of their lives answered the same keys, and a draw in one replayed the memo
+    // the other had built - its own textures went unsynced and it sampled them empty.
+    Uint64 MGPipeNextApplierSerialBase();
+
     // =====================================================================================
     // P14 S5: ONE CONTEXT'S APPLIER = ITS OWN WORKING STATE + ITS SHARE GROUP'S RECORDS.
     // =====================================================================================
@@ -981,7 +990,12 @@ namespace MobileGL::MG_Pipe {
               TextureResources(objects.TextureResources), RenderbufferResources(objects.RenderbufferResources),
               SamplerCsos(objects.SamplerCsos), SamplerViewCsos(objects.SamplerViewCsos),
               ShaderCsos(objects.ShaderCsos), CompositeShaderCsos(objects.CompositeShaderCsos),
-              FramebufferRecords(objects.FramebufferRecords) {}
+              FramebufferRecords(objects.FramebufferRecords) {
+            const Uint64 base = MGPipeNextApplierSerialBase();
+            VertexBuffersSerial = IndexBufferSerial = FramebufferSerial = SamplerViewsSerial = base;
+            SamplerStatesSerial = ShaderImagesSerial = ProgramBindingSerial = ShaderBuffersSerial = base;
+            TextureShutterSerial = ContextSerial = base;
+        }
 
         // ---- THE THREE FRAMEBUFFER ACCESSORS (ID-19(b)/(d)). They are functions rather than
         // members because the storage moved under them and their callers must not have to know

@@ -669,6 +669,12 @@ namespace MobileGL::MG_Pipe {
         thread_local Uint64 t_applierCachedGeneration = 0;
     } // namespace
 
+    Uint64 MGPipeNextApplierSerialBase() {
+        // Constant-initialized, so the default applier's static construction may already use it.
+        static std::atomic<Uint64> appliers{0};
+        return (appliers.fetch_add(1, std::memory_order_relaxed) + 1) << 40;
+    }
+
     MGPipeApplierState& MGPipeApplier() {
         const MGPipeApplierKeyResolver resolve = g_applierKeyResolver;
         if (resolve == nullptr) return g_defaultApplier;
