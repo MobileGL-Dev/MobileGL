@@ -266,6 +266,17 @@ namespace MobileGL::MG_Pipe {
     void MGPipeClientFinish();
     // Submit a stream link's published prefix; never wait for appliedSeq.
     void MGPipeClientFlush();
+
+    // A FRESH SESSION REPLACES AN ENDED ONE (a device loss recovered, or an eglTerminate /
+    // eglInitialize): every client-side answer to "what does the server hold" describes the
+    // ended session's server, and the new one holds nothing. The publication latch, the
+    // content-addressed caches (render-state and sampler CSOs, their slots freed), the
+    // resource tracker's published bits, the texture emitter's records and owed uploads, every
+    // emitter's per-context latches, the dirty tracker, the deferred destroys and the residual
+    // fill's pins all start over. Emits nothing; ClientSession::FinishStartup calls it before
+    // the new session serves its first record. Objects of the ended session that are still
+    // alive find themselves unpublished, so their deaths put nothing on the new wire.
+    void MGPipeForgetEndedSession();
 #endif
 
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);

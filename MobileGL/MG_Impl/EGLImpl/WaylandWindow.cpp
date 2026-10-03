@@ -692,6 +692,22 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         return true;
     }
 
+    void WindowSurface::OnSessionReplaced() {
+        Impl& impl = *m_impl;
+        const Api& api = WaylandApi();
+        for (auto& buffer : impl.dmabufBuffers) {
+            if (buffer.buffer) {
+                api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
+                                 kMarshalFlagDestroy);
+            }
+            buffer = DmabufBuffer{};
+        }
+        impl.dmabufDamage.InvalidateAll();
+        // The linux-dmabuf global is still bound (FallBackToShm keeps it); a window that never had
+        // it, or gave it up at creation because nothing could be allocated, stays on wl_shm.
+        impl.useDmabuf = impl.dmabufWanted && impl.dmabuf != nullptr;
+    }
+
     Bool WindowSurface::Present(const MG_Util::Damage::Region& damage) {
         Impl& impl = *m_impl;
         if (impl.window == nullptr) return false;

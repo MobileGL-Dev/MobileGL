@@ -30,6 +30,16 @@ namespace MobileGL {
     namespace MG_State {
         void Init();
 
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // THE SERVER SESSION GENERATION. A split client advances it each time a session with a
+        // server comes up; every GLContext records the value it was built under. A device loss
+        // ends a session, and once a fresh one replaces it every context built before is lost:
+        // its objects exist only on the dead session's server. 0 is "no session yet" (a monolith
+        // run, or a context built before the first bring-up), which no later session ends.
+        Uint64 CurrentWireEpoch();
+        void AdvanceWireEpoch();
+#endif
+
         namespace GLState {
 #if MOBILEGL_PIPE_PUSH
             // MGPAttribValue::ValueClass' encoding (MG_Pipe/MGPipeTypes.h documents the order
@@ -90,6 +100,22 @@ namespace MobileGL {
                 // Installs the process-wide default framebuffer (GL name 0) into this context:
                 // its table entry and the Draw/Read bindings the context starts with.
                 void InstallDefaultFramebuffer(const SharedPtr<FramebufferObject>& framebuffer);
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // The server session this context was built against (CurrentWireEpoch() at its
+                // construction). Its objects live on that session's server and nowhere else, so
+                // once a later session has replaced it - after a device loss - the context is
+                // lost for good: nothing it holds may reach the new session.
+                Uint64 WireEpoch() const { return m_wireEpoch; }
+                Bool IsFromEndedWireSession() const;
+                // GL_CONTEXT_LOST is reported by glGetError once per lost context, then the
+                // error queue is clear again (a caller draining errors in a loop terminates).
+                Bool TakeContextLostReport() {
+                    if (m_contextLostReported) return false;
+                    m_contextLostReported = true;
+                    return true;
+                }
+#endif
 
                 // Error
                 void RecordError(ErrorCode code, UniquePtr<ErrorInfo> info);
@@ -713,6 +739,11 @@ namespace MobileGL {
                 // Identity of the backend object m_compileEnv was captured against; a plain
                 // pointer compare, never dereferenced.
                 const void* m_compileEnvBackend = nullptr;
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // See WireEpoch(); taken when the context is constructed.
+                Uint64 m_wireEpoch = CurrentWireEpoch();
+                Bool m_contextLostReported = false;
+#endif
             };
         } // namespace GLState
 
@@ -734,6 +765,15 @@ namespace MobileGL {
         // MobileGL::Destroy()) so the objects MG_State::Init() built do not outlive
         // glslang::FinalizeProcess() through a thread that kept its fallback binding.
         void ReleaseProcessDefaultGLContext();
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A fresh process default context, after a device loss has ended the session the old one
+        // was built against; the default framebuffer slot is emptied for MG_Impl to rebuild. The
+        // calling thread moves to the new context if it was on the old one. Other threads keep
+        // the old (lost) one until their next EGL release edge, which restores to this one.
+        // Returns the old one, so the caller decides where its last reference goes.
+        SharedPtr<GLState::GLContext> ReplaceProcessDefaultGLContext();
+#endif
 
         // P14 S3. GL framebuffer 0, built by MG_Impl once the backend is up (it needs texture
         // objects, which need the backend's resource plumbing) and handed back here so every

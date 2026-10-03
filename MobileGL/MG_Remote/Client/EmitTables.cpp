@@ -897,6 +897,11 @@ namespace MobileGL::MG_Remote::Client {
         // control, so R-16's "drive the production predicate" holds rather than a second copy of
         // the rule in the test.
 
+        // How long a declined readback waits for the control plane or the bell to say "lost"
+        // before it is judged a refusal. The SessionFault is sent before the decline is posted,
+        // so this is only ever spent on a server that refused for real.
+        constexpr Uint32 kDeclineVerdictMs = 1000;
+
         // The same predicate at the call site, with the named Fatal each failure mode owns.
         // status > expected cannot reach here: EmitAndWait already aborts Fatal{ReplyTooLarge} on
         // an oversize reply, so the only failures left are a wrong status or a SHORT one.
@@ -909,6 +914,17 @@ namespace MobileGL::MG_Remote::Client {
         // the caller leaves the destination untouched and returns.
         Bool RequireReadbackReplyComplete(Int32 status, Uint64 replySize, Uint64 expected) {
             if (status != Wire::ReplySink::kStatusOk && ClientSession::DeviceLost()) return false;
+            // THE DECLINE CAN OUTRUN THE NEWS. A server whose device was lost inside THIS readback
+            // latches the session - publishing its SessionFault on the control plane - and then
+            // declines the record; the client can read the declined answer before it has looked at
+            // the control plane or seen the hangup that follows. So a decline asks once more,
+            // briefly, before it is taken for a server without GL.ReadPixels.
+            if (status == Wire::ReplySink::kStatusDeclined) {
+                if (ClientSession* session = ClientSession::Active();
+                    session != nullptr && session->ConfirmLossAfterDecline(kDeclineVerdictMs)) {
+                    return false;
+                }
+            }
             if (status == Wire::ReplySink::kStatusError) {
                 SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
                         "the destination is left untouched rather than filled with stale bytes");
@@ -1608,6 +1624,11 @@ namespace MobileGL::MG_Remote::Client {
             MG_Pipe::MGPipeHandle Handle;
             // P10: zero-timeout polls answered "not yet" in a row since the last escalation.
             Uint32 Unanswered = 0;
+            // The session the fence was created on. A fence of an ENDED session (a recovered
+            // device loss) names nothing on the current server: it is answered as the no-op a
+            // lost device gives (signaled), and deleting it puts nothing on the wire.
+            Uint64 Epoch = MG_State::CurrentWireEpoch();
+            Bool FromEndedSession() const { return Epoch != MG_State::CurrentWireEpoch(); }
         };
         std::mutex g_fenceMutex;
         UnorderedMap<MG_Backend::BackendSyncHandle, UniquePtr<RemoteFenceProxy>> g_fenceProxies;
@@ -1754,6 +1775,7 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("ClientWaitSync");
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
             RemoteFenceProxy& fence = FenceProxy(proxy);
+            if (fence.FromEndedSession()) return GL_ALREADY_SIGNALED;
             switch (AnswerFencePollLocally(session, fence, /*mayWait=*/timeout != 0)) {
             case FencePollAnswer::Signaled: return GL_ALREADY_SIGNALED;
             case FencePollAnswer::NotYet: return GL_TIMEOUT_EXPIRED;
@@ -1770,6 +1792,7 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("GetSyncStatus");
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
             RemoteFenceProxy& fence = FenceProxy(proxy);
+            if (fence.FromEndedSession()) return true;
             switch (AnswerFencePollLocally(session, fence, /*mayWait=*/false)) {
             case FencePollAnswer::Signaled: return true;
             case FencePollAnswer::NotYet: return false;
@@ -1786,6 +1809,7 @@ namespace MobileGL::MG_Remote::Client {
         void EmitWaitSync(MG_Backend::BackendSyncHandle proxy, GLbitfield flags, GLuint64 timeout) {
             ClientSession& session = RequireSession("WaitSync");
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
+            if (FenceProxy(proxy).FromEndedSession()) return;
             const MG_Pipe::MGPFenceWait request{FenceHandle(proxy), timeout, flags, 0};
             session.EmitAndWait(MG_Pipe::MGPWireOp::FenceWaitServer, &request, sizeof(request),
                                 nullptr, 0, nullptr, 0, nullptr);
@@ -1796,7 +1820,9 @@ namespace MobileGL::MG_Remote::Client {
             const auto handle = FenceHandle(proxy);
             // MobileGL::Destroy stops the server BEFORE DestroyAllSyncObjects. Detach already
             // released those native objects on the apply thread; only the local proxy remains.
-            if (auto* session = ClientSession::Active(); session != nullptr && session->Started()) {
+            // A fence of an ended session likewise: its server is gone.
+            if (auto* session = ClientSession::Active();
+                session != nullptr && session->Started() && !FenceProxy(proxy).FromEndedSession()) {
                 const MG_Pipe::MGPHandleOnly desc{handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
                 session->EmitAndWait(MG_Pipe::MGPWireOp::FenceDestroy, &desc, sizeof(desc),
                                      nullptr, 0, nullptr, 0, nullptr);

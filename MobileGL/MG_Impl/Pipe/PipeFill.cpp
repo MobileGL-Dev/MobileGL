@@ -1828,6 +1828,12 @@ namespace MobileGL::MG_Pipe {
                 *entry = Entry{};
             }
 
+            // A fresh server holds no record at all (MGPipeForgetEndedSession).
+            void ForgetAll() {
+                for (Vector<Entry>& table : m_kinds) table.clear();
+                m_band.clear();
+            }
+
         private:
             struct Entry {
                 Uint32 Gen = 0;
@@ -1942,6 +1948,13 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeNoteTextureLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // AN UPLOAD ON A LOST CONTEXT IS OWED TO NOBODY. The drain list is process-wide and the
+        // next verb of ANY context drains it; queued from a thread still on a lost context (or
+        // while the session is lost), it would be carried to a fresh session that never created
+        // the texture. The level stays dirty on the object, which no live context can reach.
+        if (MG_Remote::Client::ClientSession::DeviceLost()) return;
+#endif
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
             MGPipeTextureEmitterInstance(),
             [&](auto& emitter) { emitter.NoteLevelDirty(storageOwner, uploadTarget, level); });
@@ -3973,4 +3986,33 @@ namespace MobileGL::MG_Pipe {
         EntryCompare(inputs, mask);
 #endif
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // Declared in PipeMutation.h, where the list is argued. THE ORDER: the latch goes first, so
+    // everything after it - a pin's last owner dying, a deferred destroy replayed, an evicted
+    // cache entry - finds its handle unpublished and puts nothing on the new wire; then the
+    // references the emitters hold into the caches go back, then the caches themselves.
+    void MGPipeForgetEndedSession() {
+        PublicationLatch().ForgetAll();
+        MGPipeResourceTrackerInstance().ForgetPublication();
+        MGPipeReleaseResidualFillPins();
+        MGPipeDrainDeferredDestroys();
+        MGPipeTrackerInstance().Reset();
+        // The texture emitter's records and its owed uploads belong to the ended server; its
+        // sampler references go back to the cache before the cache is emptied.
+        MGPipeTextureEmitterInstance().ResetForTest();
+        MGPipeSamplerEmitterInstance().Reset();
+        MGPipeSamplerCsoCacheInstance().ResetForTest();
+        MGPipeCsoCacheInstance().Reset();
+        MGPipeSetHashSuppressorInstance().InvalidateAll();
+        MGPipeVertexInputEmitterInstance().Reset();
+        MGPipeFramebufferEmitterInstance().ResetForTest();
+        MGPipeImageEmitterInstance().Reset();
+        MGPipeProgramEmitterInstance().Reset();
+        MGPipeShaderBufferEmitterInstance().Reset();
+        g_residualDue = true;
+        g_attribDefaultLastHeader = MGPVertexAttribDefaults{};
+        g_lastFillWasBarriered = true;
+    }
+#endif
 } // namespace MobileGL::MG_Pipe

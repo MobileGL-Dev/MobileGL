@@ -1244,6 +1244,13 @@ namespace MobileGL::MG_Pipe {
             return entry.Gen == handle.Gen ? entry.BuiltinSampler : kMGPipeNullHandle;
         }
         SizeT DrainListSize() const { return m_drain.size(); }
+        // Whether a level of `handle` is still owed to the server (on the drain list).
+        Bool OwesUpload(MGPipeHandle handle) const {
+            for (const DrainEntry& pending : m_drain) {
+                if (pending.Handle == handle) return true;
+            }
+            return false;
+        }
 
         // A fresh context: what the server has is no longer what this emitter last sent. Only
         // LATCHES reset here - the applier's object records survive a make-current and
@@ -1263,7 +1270,8 @@ namespace MobileGL::MG_Pipe {
             m_deadResolves = 0;
         }
 
-        // A unit fixture's per-case reset; the library never calls it. See
+        // A unit fixture's per-case reset, and the reset of a session that replaced an ended one
+        // (MGPipeForgetEndedSession: the fresh server holds none of these records). See
         // MGPipeResourceTracker::ResetForTest for the rule this restates: a texture handle and
         // the applier record it names are SHARE-GROUP OBJECT STATE, so nothing here is
         // per-context and no re-publication path exists or may exist.

@@ -125,6 +125,11 @@ namespace MobileGL::MG_Remote::Client {
     // caller then makes the direct call the record replaced.
     Bool EmitApplierResetRecord();
 
+    // A fresh session replaces an ended one: the create window's deferred answers, its suspect
+    // list and the applier-reset serial all belonged to the ended session (ClientSession's
+    // ForgetEndedSession).
+    void ForgetWireTablesOfEndedSession();
+
     // ---- P14 S1: the EGL context lifecycle's control-plane half -----------------------------
     //
     // NOT ring records and NOT routed rows: eglCreateContext/eglDestroyContext are the EGL

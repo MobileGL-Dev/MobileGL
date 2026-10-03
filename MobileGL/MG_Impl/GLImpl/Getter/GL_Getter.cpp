@@ -2878,6 +2878,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum GetError() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // KHR_robustness: a lost context's commands generate GL_CONTEXT_LOST. Reported ONCE per
+        // context and ahead of whatever else is queued, so an application that learns of the loss
+        // from glGetError (Chromium's decoder does) learns of it, and one that drains errors in a
+        // loop until GL_NO_ERROR still terminates.
+        if (MG_Remote::Client::ClientSession::DeviceLost() && MG_State::pGLContext &&
+            MG_State::pGLContext->TakeContextLostReport()) {
+            return GL_CONTEXT_LOST;
+        }
+#endif
         auto error = MG_State::pGLContext->PopGLError();
         if (!error || !error->get()) {
             return GL_NO_ERROR;

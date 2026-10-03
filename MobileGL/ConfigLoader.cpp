@@ -558,6 +558,8 @@ namespace MobileGL::MG_ConfigLoader {
         ipc.PboReadbackSync = QueryEnvUint32("MOBILEGL_IPC_PBO_READBACK_SYNC", 0, 0, 1);
         // P10: fence polls answered locally; 0 is the A/B arm (Config.h).
         ipc.PollEscalate = QueryEnvUint32("MOBILEGL_IPC_POLL_ESCALATE", 64, 0, 1000000);
+        // A lost session is replaced by a fresh one on the application's next create (Config.h).
+        ipc.RecoverAfterLoss = QueryEnvUint32("MOBILEGL_IPC_RECOVER", 1, 0, 1);
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the

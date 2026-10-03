@@ -51,6 +51,9 @@
 
 #include <MG_Backend/BackendObject.h>
 
+#include <unordered_map>
+#include <unordered_set>
+
 namespace MobileGL::MG_Remote::Client {
 
     class BackendObject_Remote final : public MG_Backend::BackendObject {
@@ -97,6 +100,14 @@ namespace MobileGL::MG_Remote::Client {
         // and this is what it calls; it is the whole of trap 2's answer.
         void RefreshFormatCapabilities();
 
+        // A FRESH SESSION REPLACED A LOST ONE (ClientSession::RecoverAfterDeviceLoss). The
+        // initialized display is initialized on the new server; every surface keeps its client
+        // registration (EGL keeps surfaces across a context loss, only their contents go) but
+        // has no server side yet, and is re-created there the next time it is made current,
+        // swapped or resized; no thread is current any more; the shared images of the lost
+        // session are forgotten without a release (their server is gone).
+        void OnSessionReplaced();
+
     protected:
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
 
@@ -110,6 +121,28 @@ namespace MobileGL::MG_Remote::Client {
         // through the log line on a refresh: a cache that silently stopped tracking the mirror
         // is exactly the shape trap 2 exists to prevent.
         Uint64 m_formatsGeneration = 0;
+
+        // The server side of `surface` on the CURRENT session: re-created from its client
+        // registration when the session that had it was replaced. True when it exists now.
+        Bool EnsureSurfaceHomed(EGLSurface surface);
+        void NoteHomed(EGLSurface surface) {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            m_homedSurfaces.insert(surface);
+        }
+        Bool HoldsSharedImage(Uint64 id) const {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            return m_sessionSharedImages.count(id) != 0;
+        }
+
+        // The surfaces and shared images the CURRENT session's server holds. A surface missing
+        // from the first is one a lost session had (EnsureSurfaceHomed); an image id missing from
+        // the second (counted per reference taken) is a lost session's, and is neither released
+        // nor presented to nor attached on the new server, which never issued it. Guarded by the
+        // base's m_eglStateMutex.
+        std::unordered_set<EGLSurface> m_homedSurfaces;
+        std::unordered_map<Uint64, Uint32> m_sessionSharedImages; // id -> references taken
+        // The ids a replaced session held: releasing one is a success with nothing sent.
+        std::unordered_set<Uint64> m_lostSessionSharedImages;
     };
 
 } // namespace MobileGL::MG_Remote::Client

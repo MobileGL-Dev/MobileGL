@@ -24,6 +24,13 @@
 // (PipeFill.cpp's emitters) and because the frame channel belongs to the server role - this
 // file must not name ServerLoop's forwarders directly.
 #include <MG_Remote/Client/WireTables.h>
+// The recovery after a device loss (RecoverLostSession below): the session, the remote backend's
+// surface book, and the GL framebuffer 0 that is rebuilt on the fresh session.
+#include <MG_Remote/Client/BackendObject_Remote.h>
+#include <MG_Remote/Client/ClientSession.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_State/GLState/Core.h>
+#include <optional>
 #endif
 #include <cstring>
 #include <mutex>
@@ -314,6 +321,80 @@ namespace MobileGL::MG_Impl::EGLImpl {
             }
         }
 #endif
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        using MG_Remote::Client::ClientSession;
+
+        // IS `context` LOST. It was built against a server session that has since ended (a device
+        // loss, recovered), or it lives on the session that is lost right now: either way its
+        // objects are on no server this process can reach, and EGL's answer for it is
+        // EGL_CONTEXT_LOST until the application destroys it.
+        Bool ContextIsLost(EGLStateContext* state, EGLContext context) {
+            if (!StreamGateActive() || context == EGL_NO_CONTEXT) return false;
+            const SharedPtr<MG_State::GLState::GLContext> glState = state->GetContextGLState(context);
+            if (!glState) return false;
+            return glState->IsFromEndedWireSession() || ClientSession::SessionLatchedLost();
+        }
+
+        // THE RECOVERY'S EGL HALF. The caller holds EGLOperationMutex - which every GL entry point
+        // takes too (GLStreamScope), so no other thread is in the middle of a GL call - and is an
+        // entry point an application reaches when it rebuilds after a loss: eglCreateContext,
+        // eglCreate*Surface, eglInitialize. A no-op unless the session is latched lost.
+        //
+        // 1. ClientSession ends the lost session and dials a fresh one; its FinishStartup forgets
+        //    every client cache of the old one and moves the wire epoch, which is what makes every
+        //    context built before lost (their objects die later without a word on the new wire).
+        // 2. The process default context and GL framebuffer 0 are rebuilt on the fresh session:
+        //    every context created from now on starts with framebuffer 0 bound, and the old one's
+        //    attachments are textures the fresh server never heard of.
+        // 3. The remote backend initializes the display again on the new server and forgets which
+        //    surfaces and shared images the old one had; each surface is re-created there when it
+        //    is next made current (EGL keeps surfaces across a power-management loss).
+        // 4. Wayland presentations drop the lost session's shared images and allocate new ones.
+        Bool RecoverLostSession() {
+            if (!StreamGateActive() || !ClientSession::SessionLatchedLost()) return true;
+            ClientSession* session = ClientSession::Active();
+            {
+                const ClientSession::ScopedWireMute mute;
+                if (session->RecoverAfterDeviceLoss() != MOBILEGL_OK) return false;
+            }
+            // Nothing is bound on the fresh session: the next thread that writes binds its own.
+            g_boundContextToken = 0;
+            g_boundShareGroupToken = 0;
+            const ClientSession::ScopedCurrentSessionWork work;
+            SharedPtr<MG_State::GLState::GLContext> lostDefault = MG_State::ReplaceProcessDefaultGLContext();
+            UniquePtr<MG_Impl::GLImpl::FramebufferImpl::DefaultFramebufferInfo> lostFramebuffer =
+                Move(MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo);
+            {
+                // Built into the new default context, whatever this thread has current (a lost
+                // context stays this thread's GL state until the application releases it).
+                SharedPtr<MG_State::GLState::GLContext> caller = MG_State::pGLContext;
+                MG_State::pGLContext = MG_State::ProcessDefaultGLContext();
+                MG_Impl::BuildDefaultFramebuffer();
+                MG_State::pGLContext = Move(caller);
+            }
+            {
+                const ClientSession::ScopedWireMute mute;
+                lostFramebuffer.reset();
+                lostDefault.reset();
+            }
+            if (auto* remote = dynamic_cast<MG_Remote::Client::BackendObject_Remote*>(MG_Backend::pActiveBackendObject.get()))
+                remote->OnSessionReplaced();
+#if MOBILEGL_WAYLAND_WINDOWS
+            for (auto& [surface, presentation] : WaylandSurfaces()) presentation->OnSessionReplaced();
+#endif
+            return true;
+        }
+
+        // The surface entry points' guard: a surface created after a loss is created on a fresh
+        // session. EGL_BAD_ALLOC when no session could be brought up.
+        Bool RecoverBeforeCreatingSurface(EGLStateContext* state) {
+            const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+            if (RecoverLostSession()) return true;
+            state->SetError(EGL_BAD_ALLOC);
+            return false;
+        }
+#endif
     } // namespace
 
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
@@ -322,6 +403,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
 #if MOBILEGL_WAYLAND_WINDOWS
         if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
         {
@@ -434,6 +518,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_SURFACE);
             return EGL_FALSE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // A swap of a lost context's frame: EGL_CONTEXT_LOST (EGL 1.5 3.2), and nothing presented.
+        if (ContextIsLost(state, state->GetCurrentContext())) {
+            state->SetError(EGL_CONTEXT_LOST);
+            return EGL_FALSE;
+        }
+#endif
 
         auto* backendObject = GetBackendObject(state);
         if (!backendObject) {
@@ -490,7 +581,27 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_CONTEXT;
         }
-        const EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // AFTER A DEVICE LOSS THIS IS WHERE AN APPLICATION REBUILDS, so this is where a fresh
+        // session comes up (RecoverLostSession) - before the context's GL state is built, because
+        // building it already emits the creates of its default objects. Sharing with a lost
+        // context would share objects no reachable server holds.
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        if (StreamGateActive()) {
+            if (!RecoverLostSession()) {
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_CONTEXT;
+            }
+            if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
+                state->SetError(EGL_BAD_CONTEXT);
+                return EGL_NO_CONTEXT;
+            }
+        }
+        // The calling thread may still have a lost context current: what is built here is the
+        // fresh session's all the same.
+        const ClientSession::ScopedCurrentSessionWork currentSession;
+#endif
+        EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list);
         if (context == EGL_NO_CONTEXT) {
             return EGL_NO_CONTEXT;
         }
@@ -509,8 +620,26 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // pre-Start bring-up, the server role) keeps it: there is no server to refuse.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole()) {
-            const auto emitted = MG_Remote::Client::SendCreateContextFrame(
+            auto emitted = MG_Remote::Client::SendCreateContextFrame(
                 state->GetContextClientToken(context), state->GetContextShareGroupToken(context), 0);
+            // THE LOSS CAN BE FOUND OUT HERE: a session whose server is gone, which nothing had
+            // noticed yet, refuses the create by hanging up on it. That is the loss, not a refusal:
+            // the half-built context goes (its objects silently - they were never on any server),
+            // a fresh session comes up, and the context is built again on it, once.
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused && ClientSession::SessionLatchedLost()) {
+                {
+                    const ClientSession::ScopedWireMute mute;
+                    state->DestroyContext(dpy, context);
+                }
+                context = EGL_NO_CONTEXT;
+                if (RecoverLostSession()) context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+                if (context == EGL_NO_CONTEXT) {
+                    state->SetError(EGL_BAD_ALLOC);
+                    return EGL_NO_CONTEXT;
+                }
+                emitted = MG_Remote::Client::SendCreateContextFrame(state->GetContextClientToken(context),
+                                                                    state->GetContextShareGroupToken(context), 0);
+            }
             if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
                 state->DestroyContext(dpy, context);
                 state->SetError(EGL_BAD_ACCESS);
@@ -526,6 +655,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // An application that re-initializes a display after a loss (without the eglTerminate that
+        // would have torn the library down) gets a fresh session here, as eglCreateContext would.
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        (void)RecoverLostSession();
+#endif
         if (!state->InitializeDisplay(dpy, major, minor)) {
             return EGL_FALSE;
         }
@@ -584,6 +719,15 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         MGLOG_D("eglMakeCurrent begin thread=%s dpy=%p draw=%p read=%p ctx=%p oldDpy=%p oldDraw=%p oldRead=%p oldCtx=%p",
                 threadId.c_str(), dpy, draw, read, ctx, oldDisplay, oldDraw, oldRead, oldContext);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // EGL 1.5 3.7.3 / 3.2: after a power-management event - a lost device, here - making a
+        // context created before it current fails with EGL_CONTEXT_LOST. The application destroys
+        // it and creates another; a release, and every context created since, go on as usual.
+        if (ctx != EGL_NO_CONTEXT && ContextIsLost(state, ctx)) {
+            state->SetError(EGL_CONTEXT_LOST);
+            return EGL_FALSE;
+        }
+#endif
 
 #if MOBILEGL_WAYLAND_WINDOWS
         if (draw != EGL_NO_SURFACE) ApplyWaylandResize(state, dpy, draw);
@@ -646,12 +790,19 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // context still current on some thread, EGL_BAD_ACCESS) never reaches the server - the
         // two ends stay in step without the server having to guess why a token vanished.
         const Uint64 contextToken = state->GetContextClientToken(ctx);
+        // A LOST CONTEXT IS DESTROYED IN SILENCE. Its objects die here, and a death that reached
+        // the wire would land on whichever session is current now - a fresh one after a recovery,
+        // which never created them. Under the operation lock, like every GL call.
+        const std::lock_guard<std::recursive_mutex> destroyLock(EGLOperationMutex());
+        const Bool lost = ContextIsLost(state, ctx);
+        std::optional<ClientSession::ScopedWireMute> silence;
+        if (lost) silence.emplace();
 #endif
         if (!state->DestroyContext(dpy, ctx)) {
             return EGL_FALSE;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (contextToken != 0 && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (contextToken != 0 && !lost && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole()) {
             const std::lock_guard<std::recursive_mutex> streamLock(EGLOperationMutex());
             // The server drops its binding to 0 when the current context is destroyed
@@ -931,6 +1082,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
         const EGLint width = GetAttribValue(attrib_list, EGL_WIDTH, 1);
         const EGLint height = GetAttribValue(attrib_list, EGL_HEIGHT, 1);
         EGLSurface surface = state->CreatePbufferSurface(dpy, config, attrib_list);
@@ -1266,6 +1420,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SURFACE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+#endif
 #if MOBILEGL_WAYLAND_WINDOWS
         if (RefuseGbmWindow(state, dpy)) return EGL_NO_SURFACE;
         {

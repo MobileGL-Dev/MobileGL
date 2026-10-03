@@ -227,11 +227,20 @@ namespace MobileGL::MG_Remote::Client {
         // depth24+stencil8 surface, and every buffer allocated from that answer is
         // blit-incompatible with the real thing).
         if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
-        return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, handle);
+        if (!MG_Backend::BackendObject::CreateEGLWindowSurface(surface, handle)) return false;
+        NoteHomed(surface);
+        return true;
     }
 
     Bool BackendObject_Remote::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         WaitForApplyBeforeEglForwarder("ResizeEGLWindowSurface");
+        // A surface with no server side on this session (its session was lost) takes the size
+        // into its registration only; it is re-created at that size when it is next used.
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            if (GetRegisteredEGLSurface(surface) != nullptr && m_homedSurfaces.count(surface) == 0)
+                return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, width, height);
+        }
         // P12 review fix: a surface on the SERVER's window is resized by resizing that window. The
         // server asks its display for the size and answers with the extent the window really took,
         // and that - not the size asked for, which EGLImpl already wrote into the EGL state - is what
@@ -296,7 +305,9 @@ namespace MobileGL::MG_Remote::Client {
         // Same drain as the window surface: InitPbufferSurface publishes the default
         // framebuffer's depth/stencil format on SEG_EVENT from inside this very RPC.
         if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
-        return MG_Backend::BackendObject::CreateEGLPbufferSurface(surface, width, height);
+        if (!MG_Backend::BackendObject::CreateEGLPbufferSurface(surface, width, height)) return false;
+        NoteHomed(surface);
+        return true;
     }
 
     namespace {
@@ -368,7 +379,9 @@ namespace MobileGL::MG_Remote::Client {
         if (local.Handle == nullptr) local.Handle = &g_serverOwnedWindowPlaceholder;
         local.Width = reply.width;
         local.Height = reply.height;
-        return MG_Backend::BackendObject::CreateEGLWindowSurface(surface, local);
+        if (!MG_Backend::BackendObject::CreateEGLWindowSurface(surface, local)) return false;
+        NoteHomed(surface);
+        return true;
     }
 
     Bool BackendObject_Remote::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
@@ -378,6 +391,15 @@ namespace MobileGL::MG_Remote::Client {
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
         // own InitCapabilities has run - and ServerMakeEGLCurrent is what publishes it.
         WaitForApplyBeforeEglForwarder("MakeEGLCurrent");
+        const Bool release = draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
+        // A RELEASE ALWAYS SUCCEEDS ON A LOST SESSION. Its server has nothing left to unbind, and
+        // an application releasing a lost context before it destroys it - the order EGL asks for -
+        // must not be told EGL_BAD_ACCESS and left with the lost context still current.
+        if (release && ClientSession::SessionLatchedLost()) {
+            return MG_Backend::BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
+        }
+        // A surface a lost session had gets its server side back before anything is bound to it.
+        if (!release && (!EnsureSurfaceHomed(draw) || (read != draw && !EnsureSurfaceHomed(read)))) return false;
         // The frame carries the context's CLIENT TOKEN rather than its handle (the server's
         // MakeCurrent arm binds the session to it before the native bind). Identity is all the
         // server reads from the field otherwise, and a token is as unique as a handle.
@@ -419,6 +441,7 @@ namespace MobileGL::MG_Remote::Client {
         // on the server directly and put no record on the wire, which is the shape every gate
         // in this phase exists to catch. The forwarder exists for a spawned P6 client whose
         // Present record cannot carry the swap; in P5 it has no caller and that is deliberate.
+        if (!EnsureSurfaceHomed(draw)) return false;
         return MG_Backend::BackendObject::SwapEGLBuffers(dpy, draw);
     }
 
@@ -440,16 +463,90 @@ namespace MobileGL::MG_Remote::Client {
     void BackendObject_Remote::ReleaseEGLSurface(EGLSurface surface) {
         // P12: a released server-owned surface stops taking the server window's geometry.
         if (ClientSession* session = ClientSession::Active()) session->ForgetServerOwnedWindowSurface(surface);
-        Server::ServerReleaseEGLSurface(surface);
+        // Only a surface the current session's server has: one a lost session had is gone with it.
+        Bool homed = false;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            homed = m_homedSurfaces.erase(surface) != 0;
+        }
+        if (homed && !ClientSession::SessionLatchedLost()) Server::ServerReleaseEGLSurface(surface);
         MG_Backend::BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_Remote::ReleaseEGLResources() {
         // BLOCKING BY CONTRACT (ServerLoop.h's header note): MobileGL::Destroy()
         // (MobileGL/Init.cpp:68) walks on the moment this returns, and the server still holds
-        // the context until the apply thread has run it.
-        Server::ServerReleaseEGLResources();
+        // the context until the apply thread has run it. A lost session's server holds nothing.
+        if (!ClientSession::SessionLatchedLost()) Server::ServerReleaseEGLResources();
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            m_homedSurfaces.clear();
+        }
         MG_Backend::BackendObject::ReleaseEGLResources();
+    }
+
+    void BackendObject_Remote::OnSessionReplaced() {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        ResetEGLRuntimeState();
+        m_homedSurfaces.clear();
+        for (const auto& [id, references] : m_sessionSharedImages) m_lostSessionSharedImages.insert(id);
+        m_sessionSharedImages.clear();
+        // The display the application initialized is initialized on the new server too: its
+        // surfaces and contexts are created against it from here on.
+        if (m_eglDisplayInitialized) {
+            EGLint major = 0;
+            EGLint minor = 0;
+            if (!Server::ServerInitializeEGLDisplay(m_eglDisplay, &major, &minor)) {
+                MGLOG_E("MG_Remote client: the fresh session's server did not initialize the display; "
+                        "surfaces and contexts on it will fail");
+            }
+        }
+        if (ClientSession* session = ClientSession::Active()) session->PumpControlPlane();
+        RefreshFormatCapabilities();
+    }
+
+    Bool BackendObject_Remote::EnsureSurfaceHomed(EGLSurface surface) {
+        if (surface == EGL_NO_SURFACE) return true;
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (m_homedSurfaces.count(surface) != 0) return true;
+        const EGLSurfaceState* registered = GetRegisteredEGLSurface(surface);
+        // Unknown to this object: the base class's own checks answer for it.
+        if (registered == nullptr) return true;
+        const EGLSurfaceState state = *registered;
+        Bool recreated = false;
+        const char* kind = "pbuffer";
+        if (state.Kind == SurfaceKind::Pbuffer) {
+            recreated = Server::ServerCreateEGLPbufferSurface(surface, state.Width, state.Height);
+        } else if (ClientSession::IsServerOwnedWindowSurface(surface)) {
+            kind = "server-owned window";
+            const Server::ServerOwnedWindowReply reply =
+                Server::ServerCreateServerOwnedWindowSurface(surface, state.Window.Width, state.Window.Height);
+            recreated = reply.ok;
+            if (recreated && reply.width != 0 && reply.height != 0) {
+                if (MG_State::pEGLContext) {
+                    (void)MG_State::pEGLContext->SetSurfaceExtent(surface, static_cast<EGLint>(reply.width),
+                                                                  static_cast<EGLint>(reply.height));
+                }
+                if (ClientSession* session = ClientSession::Active())
+                    session->NoteServerOwnedWindowSurface(surface, reply.width, reply.height);
+            }
+        } else {
+            kind = "window";
+            Server::ServerSetWindowHandle(state.Window);
+            recreated = Server::ServerCreateEGLWindowSurface(surface, state.Window);
+        }
+        if (!recreated) {
+            MGLOG_E("MG_Remote client: the %s surface %p (%dx%d) of a lost session could not be re-created on "
+                    "the fresh one",
+                    kind, static_cast<void*>(surface), state.Width, state.Height);
+            return false;
+        }
+        if (ClientSession* session = ClientSession::Active()) session->DrainPublishedEvents();
+        m_homedSurfaces.insert(surface);
+        MGLOG_I("MG_Remote client: the %s surface %p (%dx%d) of a lost session is re-created on the fresh one "
+                "(EGL keeps surfaces across a context loss; their contents are undefined)",
+                kind, static_cast<void*>(surface), state.Width, state.Height);
+        return true;
     }
 
     // ---- shared images ----------------------------------------------------------------------
@@ -461,6 +558,9 @@ namespace MobileGL::MG_Remote::Client {
                                                    MG_Backend::SharedImageExport* out) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr || out == nullptr) return false;
+        // A table operation, not a draw: the calling thread's GL state (a lost context, or none) has
+        // no say in whether the server allocates.
+        const ClientSession::ScopedCurrentSessionWork tableOp;
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImageAllocate;
         op.Format = fourcc;
@@ -477,12 +577,17 @@ namespace MobileGL::MG_Remote::Client {
         out->Stride = reply.Stride;
         out->Offset = reply.Offset;
         out->Modifier = reply.Modifier;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            ++m_sessionSharedImages[reply.ImageId];
+        }
         return true;
     }
 
     Bool BackendObject_Remote::ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr || fd < 0) return false;
+        const ClientSession::ScopedCurrentSessionWork tableOp;
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImageImport;
         op.Format = fourcc;
@@ -491,12 +596,26 @@ namespace MobileGL::MG_Remote::Client {
         MG_Pipe::MGPSharedImageReply reply{};
         if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
         if (outId != nullptr) *outId = reply.ImageId;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            ++m_sessionSharedImages[reply.ImageId];
+        }
         return true;
     }
 
     Bool BackendObject_Remote::ReleaseSharedImage(Uint64 id) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr || !session->Started()) return false;
+        // An image of a lost session is gone with its server; the fresh one never issued its id.
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto held = m_sessionSharedImages.find(id);
+            // Nothing to release on the new server, and nothing that failed: the reference died with
+            // its session.
+            if (held == m_sessionSharedImages.end()) return m_lostSessionSharedImages.erase(id) != 0;
+            if (--held->second == 0) m_sessionSharedImages.erase(held);
+        }
+        const ClientSession::ScopedCurrentSessionWork tableOp;
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImageRelease;
         op.ImageId = id;
@@ -506,6 +625,7 @@ namespace MobileGL::MG_Remote::Client {
     Bool BackendObject_Remote::PresentToSharedImage(Uint64 id, const MG_Util::Damage::Region& region) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr) return false;
+        if (!HoldsSharedImage(id)) return false; // a lost session's image: gone with its server
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImagePresent;
         op.ImageId = id;
@@ -539,6 +659,7 @@ namespace MobileGL::MG_Remote::Client {
     Bool BackendObject_Remote::AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr) return false;
+        if (!HoldsSharedImage(id)) return false; // an EGLImage of a lost session: its image is gone
         MG_Pipe::MGPSharedImageOp op{};
         op.Op = MG_Pipe::kMGPSharedImageAttach;
         op.ImageId = id;

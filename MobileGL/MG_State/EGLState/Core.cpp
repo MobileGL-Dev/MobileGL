@@ -249,6 +249,11 @@ namespace MobileGL {
                 // context was made current on it.
                 if (currentIt->second.RestoreThreadGLState) {
                     pGLContext = Move(currentIt->second.RestoreThreadGLState);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    // A fallback built against a server session that has since ended (a device
+                    // loss, recovered) is lost with it: the thread falls back to today's default.
+                    if (pGLContext->IsFromEndedWireSession()) pGLContext = ProcessDefaultGLContext();
+#endif
                 }
                 m_threadCurrents.erase(currentIt);
                 DestroyPendingSurfaceIfUnused(drawSurface);

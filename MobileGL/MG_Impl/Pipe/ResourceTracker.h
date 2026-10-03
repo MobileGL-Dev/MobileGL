@@ -340,6 +340,12 @@ namespace MobileGL::MG_Pipe {
             const SizeT slot = handle.Slot;
             return slot < m_bySlot.size() && m_bySlot[slot].Published;
         }
+        // A session that replaces an ended one has no record for any buffer the ended one was
+        // told about: a live buffer of the ended session's contexts dies with no destroy on the
+        // new wire, and the inverse entries stay so the handles still resolve locally.
+        void ForgetPublication() {
+            for (Entry& entry : m_bySlot) entry.Published = false;
+        }
 
         // The sticky everBoundAs mask. Sticky exactly as MGPResourceDesc::ImageBindableHint's
         // everImageBound is: ORed, never cleared, so a buffer that was an element array once

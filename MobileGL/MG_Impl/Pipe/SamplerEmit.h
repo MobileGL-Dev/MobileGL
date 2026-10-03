@@ -373,7 +373,8 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // A unit test's fixture, and nothing else. NOT called from the validate point's
+        // A unit test's fixture, and a session that replaced an ended one (MGPipeForgetEndedSession:
+        // the fresh server holds none of these records). NOT called from the validate point's
         // FreshlyPrimed arm: MGPipeApplierReset is a make-current and does NOT drop object
         // records, so a sampler CSO the applier holds outlives a context switch. Dropping the
         // cache there would leak the applier's record and re-mint a value it already has.
