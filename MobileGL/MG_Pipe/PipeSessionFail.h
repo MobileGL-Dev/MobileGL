@@ -119,8 +119,10 @@ namespace MobileGL::MG_Pipe {
     // A DEBUG KNOB THAT MAKES ONE DEVICE CHECK REPORT A LOSS, so the containment above can be
     // driven without a GPU that faults on demand. MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT=N (or, on
     // Android, the property debug.mobilegl.inject_device_lost_at) makes the N-th device check the
-    // backends make after the knob was first seen nonzero answer "lost", once per process. The
-    // backends ask at their frame boundaries and readbacks; unset (the default) it is one getenv.
+    // backends make after the knob was first seen nonzero answer "lost", once per value: setting
+    // another value (or 0 and then a value again) re-arms it, so one server process can lose
+    // several sessions in turn. The backends ask at their frame boundaries and readbacks; unset
+    // (the default) it is one getenv.
     bool MGPipeDebugDeviceLossDue();
 #endif
 

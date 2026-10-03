@@ -186,9 +186,22 @@ namespace MobileGL::MG_Pipe {
             }
         }
 #endif
-        if (at <= 0) return false;
+        static std::atomic<long> armedAt{0};
         static std::atomic<long> seen{0};
         static std::atomic<bool> fired{false};
+        if (at <= 0) {
+            // Unset (or 0) disarms: the same value set again counts afresh.
+            if (armedAt.load(std::memory_order_relaxed) != 0) armedAt.store(0, std::memory_order_relaxed);
+            return false;
+        }
+        // A NEW VALUE RE-ARMS. One server process outlives many sessions, so a second loss is
+        // injected by setting the knob again (another value, or 0 and then a value): the count
+        // restarts from the checks made after it was seen.
+        if (long previous = armedAt.load(std::memory_order_acquire);
+            previous != at && armedAt.compare_exchange_strong(previous, at, std::memory_order_acq_rel)) {
+            seen.store(0, std::memory_order_release);
+            fired.store(false, std::memory_order_release);
+        }
         if (fired.load(std::memory_order_acquire)) return false;
         if (seen.fetch_add(1, std::memory_order_acq_rel) + 1 < at) return false;
         if (fired.exchange(true, std::memory_order_acq_rel)) return false;

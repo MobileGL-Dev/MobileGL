@@ -250,3 +250,33 @@ TEST(FatalFunnelSeam, ADeviceLossWithNoArmedSessionDiesThroughSessionFail) {
         << "an unarmed device loss must keep the inproc shape's death";
 #endif
 }
+
+#if !defined(_WIN32)
+// THE DEBUG KNOB RE-ARMS ON A NEW VALUE. One server process serves many sessions, so a device test
+// that loses a second session in the same process sets the knob again. Each value fires once, at its
+// N-th check; the same value set again after 0 counts afresh. In a death-test child, so the knob's
+// process-wide counters start at zero. Red with the old once-per-process latch: the second value
+// never fires (exit code 2).
+TEST(FatalFunnelSeam, TheDeviceLossKnobFiresOncePerValueAndReArmsOnANewOne) {
+    EXPECT_EXIT(
+        {
+            const auto checks = [](int n) {
+                int fired = 0;
+                for (int i = 0; i < n; ++i) fired += MobileGL::MG_Pipe::MGPipeDebugDeviceLossDue() ? 1 << i : 0;
+                return fired;
+            };
+            ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT");
+            if (checks(3) != 0) std::_Exit(1);
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "2", 1);
+            if (checks(4) != 0b0010) std::_Exit(1); // the 2nd check only, then never again
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "1", 1);
+            if (checks(3) != 0b001) std::_Exit(2); // a new value re-arms
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "0", 1);
+            if (checks(2) != 0) std::_Exit(3);
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "1", 1);
+            if (checks(2) != 0b01) std::_Exit(4); // 0 then the same value again re-arms too
+            std::_Exit(0);
+        },
+        ::testing::ExitedWithCode(0), "");
+}
+#endif
