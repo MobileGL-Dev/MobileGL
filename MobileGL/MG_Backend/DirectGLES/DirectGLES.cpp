@@ -5239,19 +5239,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // SyncRenderState runs on the GL thread only.
         static Array<PerBufferBlendState, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS>
             g_dualSourceDeclinedBlendStates;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The context epoch the shadow was last synced in (SyncRenderState).
+        static ContextEpoch g_syncedRenderStateEpoch{};
+#endif
         void InvalidateSyncedRenderState() {
             g_forceFullRenderStateResync = true;
             g_hasSyncedRenderState = false;
             g_syncedBackendViewport = IntVec4(-1, -1, -1, -1);
             g_syncedBackendScissorBox = IntVec4(-1, -1, -1, -1);
         }
+
+        // Whether the shadow's bits are the current native context's. An invalidation (a context
+        // switch, the backend's turn moving to another session's thread) only raises flags - the
+        // bits stay, and they are then another context's.
+        static Bool SyncedRenderStateDescribesCurrentContext() {
+            if (!g_hasSyncedRenderState || g_forceFullRenderStateResync) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (g_syncedRenderStateEpoch != CurrentContextEpoch()) return false;
+#endif
+            return true;
+        }
+
+        Bool DriverScissorTestEnabled() {
+            if (SyncedRenderStateDescribesCurrentContext())
+                return (g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+            return g_GLESFuncs.glIsEnabled != nullptr && g_GLESFuncs.glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE;
+        }
+
+        void SetSyncedScissorTestForTesting(Bool enabled) {
+            g_syncedRenderStateParameters.ScissorTestEnabledMask = enabled ? 1u : 0u;
+            g_hasSyncedRenderState = true;
+            g_forceFullRenderStateResync = false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            g_syncedRenderStateEpoch = CurrentContextEpoch();
+#endif
+        }
+
         void SyncRenderState(Bool forColorClear) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            static ContextEpoch syncedEpoch{};
             const auto epoch = CurrentContextEpoch();
-            if (syncedEpoch != epoch) {
+            if (g_syncedRenderStateEpoch != epoch) {
                 InvalidateSyncedRenderState();
-                syncedEpoch = epoch;
+                g_syncedRenderStateEpoch = epoch;
             }
 #endif
 #ifdef TRACY_ENABLE
@@ -10252,8 +10282,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // error. Disable for the staging blit only; the caller-visible blit below
             // keeps the blit's native scissor semantics. Tracked via the render-state
             // shadow, exactly like ScopedScissorDisable.
-            const Bool scissorWasEnabled =
-                (RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+            const Bool scissorWasEnabled = RenderStateImpl::DriverScissorTestEnabled();
             if (scissorWasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
             g_GLESFuncs.glBlitFramebuffer(left, bottom, right, top, 0, 0, width, height, GL_COLOR_BUFFER_BIT,
                                           GL_NEAREST);
@@ -10987,8 +11016,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool oneToOne = width > 0 && height > 0 && (dstX1 - dstX0) == width && (dstY1 - dstY0) == height;
         // The scissor clips a blit and does not clip a copy, so an enabled scissor makes the two
         // different operations no matter how the rectangles line up.
-        const Bool scissorEnabled =
-            (RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+        const Bool scissorEnabled = RenderStateImpl::DriverScissorTestEnabled();
 
         using MobileGL::FramebufferAttachmentType;
         struct AspectPlan {
@@ -11169,8 +11197,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool oneToOne = width > 0 && height > 0 && (dstX1 - dstX0) == width && (dstY1 - dstY0) == height;
         // The scissor clips a blit and does not clip a copy, so an enabled scissor makes the two
         // different operations no matter how the rectangles line up.
-        const Bool scissorEnabled =
-            (RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+        const Bool scissorEnabled = RenderStateImpl::DriverScissorTestEnabled();
 
         using MobileGL::FramebufferAttachmentType;
         struct AspectPlan {
@@ -11605,11 +11632,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // Force-disables GL_SCISSOR_TEST for the scope (emulation blits and clears are
     // scissored; readback copies must not be clipped by app scissor state) and
-    // restores the app state on exit, tracked via the render-state shadow.
+    // restores the app state on exit.
+    //
+    // WHAT THE DRIVER HAS, NOT WHAT THE SHADOW LAST SAID. The render-state shadow is one per
+    // process and is synced at draws; a session that presents or reads back without drawing
+    // since another session's context synced (a frame that redraws nothing, a client whose
+    // turn came after the compositor's) found the other context's bit there. Its own scissor,
+    // still on from its last draw, then clipped the shared-image copy to a box - flipped into
+    // the wrong rows, too - and the image kept the frame it held before.
     class ScopedScissorDisable {
     public:
-        ScopedScissorDisable()
-            : m_wasEnabled((RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0) {
+        ScopedScissorDisable() : m_wasEnabled(RenderStateImpl::DriverScissorTestEnabled()) {
             if (m_wasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
         }
         ~ScopedScissorDisable() {
@@ -11621,6 +11654,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     private:
         const Bool m_wasEnabled;
     };
+
+    namespace RenderStateImpl {
+        void RunScissorDisabledForTesting(void (*inside)(void*), void* data) {
+            ScopedScissorDisable scissorOff;
+            inside(data);
+        }
+    } // namespace RenderStateImpl
 
     // Binds the shared scratch FBO at READ (isRead) or DRAW for one temp operation,
     // restoring the previous binding on exit. Attachments are managed through the

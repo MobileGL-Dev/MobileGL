@@ -250,3 +250,84 @@ TEST(ContextEpochTest, DualBlockApplierDiagnosticIsRoleLocalWhileSharedControlRe
     GTEST_SKIP() << "role-local observer requires the disaggregated build";
 #endif
 }
+
+// THE SCISSOR GUARD AROUND A COPY THE BACKEND MAKES ON ITS OWN (the shared-image present, the
+// readbacks). The render-state shadow is one per process and is only synced at draws, so after a
+// context switch or another session's turn its bits are another context's. A client that presents
+// without drawing since then (a frame that redraws nothing) kept its own scissor on through the
+// copy - the image was clipped to the client's last box and kept the frame it held before.
+#if MOBILEGL_BUILD_DISAGGREGATED
+namespace {
+    Bool fakeScissor = false;
+    Uint isEnabledCalls = 0;
+    void GL_APIENTRY FakeEnable(GLenum cap) { if (cap == GL_SCISSOR_TEST) fakeScissor = true; }
+    void GL_APIENTRY FakeDisable(GLenum cap) { if (cap == GL_SCISSOR_TEST) fakeScissor = false; }
+    GLboolean GL_APIENTRY FakeIsEnabled(GLenum cap) {
+        ++isEnabledCalls;
+        return cap == GL_SCISSOR_TEST && fakeScissor ? GL_TRUE : GL_FALSE;
+    }
+    struct ScissorDriver : DriverScope {
+        ScissorDriver() {
+            g_GLESFuncs.glEnable = &FakeEnable;
+            g_GLESFuncs.glDisable = &FakeDisable;
+            g_GLESFuncs.glIsEnabled = &FakeIsEnabled;
+            isEnabledCalls = 0;
+        }
+        ~ScissorDriver() { RenderStateImpl::InvalidateSyncedRenderState(); }
+    };
+    // The driver's scissor as the copy inside the guard sees it.
+    Bool ScissorDuringGuard() {
+        Bool seen = true;
+        RenderStateImpl::RunScissorDisabledForTesting([](void* out) { *static_cast<Bool*>(out) = fakeScissor; },
+                                                      &seen);
+        return seen;
+    }
+} // namespace
+#endif
+
+TEST(ContextEpochTest, ScissorGuardTurnsOffTheScissorTheShadowNoLongerDescribes) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    ScissorDriver scope;
+    // Another context last synced the shadow with the test off; then the switch to this one.
+    RenderStateImpl::SetSyncedScissorTestForTesting(false);
+    RenderStateImpl::InvalidateSyncedRenderState();
+    fakeScissor = true; // this context's application left its scissor on
+    EXPECT_FALSE(ScissorDuringGuard()) << "the copy ran clipped by the application's scissor box";
+    EXPECT_TRUE(fakeScissor) << "the guard did not put the application's scissor back";
+
+    // The same through a context epoch moving without an explicit invalidation.
+    RenderStateImpl::SetSyncedScissorTestForTesting(false);
+    ++g_backendContextGeneration;
+    fakeScissor = true;
+    EXPECT_FALSE(ScissorDuringGuard()) << "a shadow synced in another context epoch was trusted";
+    EXPECT_TRUE(fakeScissor);
+#else
+    GTEST_SKIP() << "the per-session render-state shadow hazard is a multi-session server's";
+#endif
+}
+
+TEST(ContextEpochTest, ScissorGuardLeavesAnOffScissorOffWhateverAStaleShadowSays) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    ScissorDriver scope;
+    RenderStateImpl::SetSyncedScissorTestForTesting(true);
+    RenderStateImpl::InvalidateSyncedRenderState();
+    fakeScissor = false;
+    EXPECT_FALSE(ScissorDuringGuard());
+    EXPECT_FALSE(fakeScissor) << "the guard turned on a scissor this context never had";
+#else
+    GTEST_SKIP() << "the per-session render-state shadow hazard is a multi-session server's";
+#endif
+}
+
+TEST(ContextEpochTest, ScissorGuardTakesACurrentShadowsWordWithoutAskingTheDriver) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+    ScissorDriver scope;
+    RenderStateImpl::SetSyncedScissorTestForTesting(true);
+    fakeScissor = true;
+    EXPECT_FALSE(ScissorDuringGuard());
+    EXPECT_TRUE(fakeScissor);
+    EXPECT_EQ(isEnabledCalls, 0u) << "a shadow synced in this context should answer without a driver query";
+#else
+    GTEST_SKIP() << "the per-session render-state shadow hazard is a multi-session server's";
+#endif
+}

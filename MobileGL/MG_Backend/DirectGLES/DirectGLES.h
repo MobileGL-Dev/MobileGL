@@ -495,6 +495,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // answers from the frontend state, which this function only reads.
         void SyncRenderState(Bool forColorClear = false);
         void InvalidateSyncedRenderState();
+
+        // GL_SCISSOR_TEST as the driver has it in the native context current on this thread -
+        // what a guard that turns the test off around its own blit, and puts it back, needs to
+        // know. The shadow answers only while it describes this context (synced since the last
+        // invalidation, in this context epoch); otherwise the driver is asked. The shadow is one
+        // per process: once another session's context synced into it, or a context switch
+        // invalidated it, its bits are some other context's.
+        Bool DriverScissorTestEnabled();
+
+        // TESTING: the shadow as SyncRenderState leaves it in the current context epoch, with
+        // GL_SCISSOR_TEST `enabled`.
+        void SetSyncedScissorTestForTesting(Bool enabled);
+        // TESTING: `inside` runs within the guard the shared-image present and the readbacks
+        // copy under (ScopedScissorDisable).
+        void RunScissorDisabledForTesting(void (*inside)(void*), void* data);
     } // namespace RenderStateImpl
 
 #if MOBILEGL_BUILD_DISAGGREGATED
