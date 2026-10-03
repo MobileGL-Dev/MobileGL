@@ -1539,7 +1539,7 @@ namespace MobileGL::MG_Remote::Server {
                         static_cast<unsigned long long>(seq), why.c_str());
                 return false;
             }
-            SI::ImageRef image = SI::Identify(fd, why);
+            SI::ImageRef image = SI::Identify(fd, op.Width, op.Height, op.Format, why);
 #if !defined(_WIN32)
             ::close(fd);
 #endif

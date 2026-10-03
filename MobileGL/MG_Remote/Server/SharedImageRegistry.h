@@ -87,9 +87,19 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // A new image of `width` x `height` `fourcc`, registered. Null with `why` on failure.
     ImageRef Allocate(Uint32 width, Uint32 height, Uint32 fourcc, std::string& why);
 
-    // The live image `fd` was exported from, or null (`why` says which test failed): a descriptor
-    // this server never exported, or one whose identity the kernel does not keep unique.
-    ImageRef Identify(int fd, std::string& why);
+    // The live image the descriptor was exported from, or null (why says which test failed): a
+    // descriptor this server never exported, or one no live image matches.
+    //
+    // WHICH IDENTITY A DESCRIPTOR CARRIES IS THE KERNEL'S TO SAY. (st_dev, st_ino) is the
+    // honest answer, and the only one on kernels that give every dma-buf its own inode. Some
+    // do not: there, every descriptor reports one identity (measured on a 4.14 vendor kernel:
+    // dev 12, ino 10658, st_size 0, and /proc/self/fdinfo carries nothing else either), so the
+    // descriptor cannot name its image. The import then names it by what it DOES carry - the
+    // extent and the format it declares - and the images the server exported under that
+    // identity are taken in allocation order, each claimable once, which is the order the
+    // producer hands them over. A kernel whose descriptors are ambiguous degrades to that,
+    // and says so once.
+    ImageRef Identify(int fd, Uint32 width, Uint32 height, Uint32 fourcc, std::string& why);
 
     // The live image with this id, or null.
     ImageRef Find(Uint64 id);
