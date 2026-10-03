@@ -23,7 +23,7 @@ nobody else is mid-test.  Use your own `ct.sh` channel names (others use c, c2, 
 5. Container `arch-kde-mgl` (Droidspaces 6.4.5, Arch Linux ARM aarch64 glibc, host net, `rootfs.img` mounted at `/mnt/Droidspaces/arch-kde-mgl` on the Android side). Bind mounts: `/data/local/tmp/anland-mobilegl` -> `/run/anland-mobilegl`, `/data/local/tmp/display_daemon.sock` -> `/run/display.sock`.
 6. `desktop-session.service` (User=swung0x48) has drop-in `ExecStart=/opt/mobilegl/bin/mobilegl-startup.sh plasma`, which writes a user drop-in for `plasma-kwin_wayland.service` (kwin_wayland_wrapper -> `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`, `ANLAND_MOBILEGL=1`, `MOBILEGL_IPC_SURFACE=server`) and runs `startplasma-wayland`.
 7. KWin 6.7.4 with anland's `anland` backend renders straight into the anland Android Surface through the server. Every other GL process is `MOBILEGL_IPC_SURFACE=offscreen` and presents through KWin.
-8. Client = `/opt/mobilegl/lib/libMobileGL.so` (glibc aarch64): glvnd EGL vendor (`/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json`), GLX vendor (`/usr/lib/libGLX_mobilegl.so.0`, `__GLX_VENDOR_LIBRARY_NAME=mobilegl`), env `MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`.
+8. Client = `/opt/mobilegl/lib/libMobileGL.so` (glibc aarch64), the container's **system-wide** GL vendor (section below): glvnd EGL vendor `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json` (sorts before the distribution's `50_*.json`, which serves whenever MobileGL declines), GLX vendor `/usr/lib/libGLX_mobilegl.so.0`, settings from `/etc/mobilegl/client.conf` (`MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`) + `/etc/mobilegl/backend`. No per-process environment is needed.
 9. Zero-copy windows: client `wl_egl_window` frames are server-allocated AHardwareBuffer "shared images" exported as dma-buf fds over `zwp_linux_dmabuf_v1`; KWin imports them with EGL and the server recognises its own buffer by inode. KWin gets a DRM device via `GBM_BACKEND=mobilegl` -> `/usr/lib/gbm/mobilegl_gbm.so` (node is only an identity, never ioctl'd). Without linux-dmabuf the client falls back to wl_shm readback.
 10. X11 apps (Xwayland) use the MobileGL GLX vendor with per-frame readback + `xcb_put_image`. Chrome runs ANGLE-GLES over MobileGL EGL with the GPU in-process (`mobilegl-startup.sh chrome`).
 
@@ -69,7 +69,7 @@ bash scripts/cyc.sh s1                 # clear sticky SW-renderer key, push, swa
 **Client + GBM backend (container glibc) via WSL cross-build**
 ```sh
 bash scripts/xbuild.sh [--reconfigure]  # WSL ~/mgl-xbuild-a64; ~150 s full, seconds incremental
-bash scripts/xdeploy.sh                 # rename-into-place install of libMobileGL.so + mobilegl_gbm.so, aliases, vendor JSON
+bash scripts/xdeploy.sh                 # rename-into-place install of libMobileGL.so + mobilegl_gbm.so, aliases, vendor JSONs, client.conf, GLX/GBM env drop-ins
 ```
 Running clients keep the old inode; restart the client, or `run-plasma.sh` for KWin/plasmashell.  Build server and client from the **same commit** (both stamp `git rev-parse HEAD`), else the logs WARN "compatible wire with different build".  Fallback in-container build (slow): `scripts/sync-src.sh` + anland `mobilegl-tools/anland-build-client.sh`.
 
@@ -92,9 +92,31 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest 
 
 `adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'` (sets the prop, writes `/etc/mobilegl/backend`, restarts the app), then `run-plasma.sh` - the running session's clients are pinned to the old backend.  `cyc.sh` keeps whatever is set.
 
+## System-wide vendor and fallback
+
+Installed by `xdeploy.sh` (and anland's `anland-build-client.sh`), so any process in the container gets MobileGL through the stock libglvnd/libgbm:
+
+| File | Does |
+|---|---|
+| `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json` | EGL vendor, asked before the system's `50_*.json` |
+| `/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json` | same JSON, for per-process forcing with `__EGL_VENDOR_LIBRARY_FILENAMES` |
+| `/etc/mobilegl/client.conf` | `KEY=value` defaults for every client (transport, data, endpoint); rewritten on deploy |
+| `/etc/mobilegl/backend` | the backend (`switch.sh` writes it); wins over a `MOBILEGL_BACKEND_TYPE` line in client.conf |
+| `/etc/environment.d/10-mobilegl.conf` | `__GLX_VENDOR_LIBRARY_NAME=mobilegl`, `GBM_BACKEND=mobilegl` for the systemd user manager (all Plasma services and what they start, terminals included) |
+| `/etc/profile.d/mobilegl.sh` | the same two for login shells (`bash -l`, `su -l`, ssh, `droidspaces run bash -l`) |
+
+Precedence is environment > `/etc/mobilegl/backend` (backend only) > client.conf > built-in; `MOBILEGL_CONFIG_FILE` / `MOBILEGL_BACKEND_FILE` name other files (empty = off); a server process never reads them.
+
+**Fallback.** Before bringing anything up the client probes the configured endpoint (one non-blocking connect, `MOBILEGL_IPC_PROBE_TIMEOUT_MS`, default 250, 0 = off; a refused abstract socket answers in ~0.2 ms). With no server: the EGL vendor returns `EGL_NO_DISPLAY` and no devices (glvnd moves on to the other vendor), the GLX vendor fails `__glx_Main` (libGLX falls back to the vendor Xwayland names), and `mobilegl_gbm` fails `create_device` (libgbm falls back to the device's own backend). Client queries (`eglQueryString(EGL_NO_DISPLAY)`, `eglGetProcAddress`) never bring a session up. MobileGL also steps aside for a GBM device another backend created and for `LIBGL_ALWAYS_SOFTWARE=1` - that is how Xwayland (KWin's patch sets it) keeps the software stack. Show it without stopping the real server:
+```sh
+sed 's|^MOBILEGL_IPC_CONTROL=.*|MOBILEGL_IPC_CONTROL=unix:@nobody|' /etc/mobilegl/client.conf > /tmp/down.conf
+sudo -u swung0x48 env -i HOME=/home/swung0x48 PATH=/usr/bin XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 \
+  MOBILEGL_CONFIG_FILE=/tmp/down.conf eglinfo -B -p wayland     # vendor = the other one, ~0.1 s
+```
+
 ## Test clients and how to verify
 
-Inside the container as root (`printf '...' | bash scripts/ct.sh <chan>`), `mgrun offscreen <cmd>` runs a client as swung0x48 in the live session (log `/tmp/mgl-run.client.log`, override base with `MGLOG=/tmp/x.log`):
+Inside the container as root (`printf '...' | bash scripts/ct.sh <chan>`), `mgrun offscreen <cmd>` runs a client as swung0x48 in the live session through a login shell, with nothing but the surface mode and the log path set (log `/tmp/mgl-run.client.log`, override base with `MGLOG=/tmp/x.log`); a plain `env -i ... bash -l -c '<cmd>'` as swung0x48 gets MobileGL the same way:
 ```sh
 mgrun offscreen eglinfo -B ; mgrun offscreen glxinfo -B
 timeout 25 mgrun offscreen glmark2-es2-wayland -s 1280x720 --run-forever > /tmp/gm.out 2>&1 &
@@ -138,7 +160,9 @@ Reference (glmark2-es2-wayland 1280x720, zero-copy vs wl_shm): Espryt 187 vs 49,
 - **Input**: plain `adb shell input` is blocked - use `su -c input`; anland grabs the touchscreen, so if `input tap` does nothing use `input mouse tap x y`. Never `debuggerd -b` a container process (signal 35 kills glibc processes).
 - **linux-dmabuf**: the client must use `create` + roundtrip, never `create_immed` (KWin answers a failed immediate import with a protocol error that kills the client).
 - **Cross-session bugs**: noise / another window's pixels after some client starts or exits = process-global state in the multi-session server (handles are per client, FBO/VAO per context). Repro with `kscreenlocker_greet --testing`.
-- `/etc/environment` leaks Mesa/KGSL variables through pam_env; `mobilegl-startup.sh` unsets them - keep that when editing it.
+- `/etc/environment` leaks the baseline session's driver variables through pam_env (and, via `/usr/lib/environment.d/99-environment.conf`, into the user manager); `mobilegl-startup.sh` unsets them - keep that when editing it.
+- **Shared log path**: Xwayland inherits KWin's `MOBILEGL_LOG_FILE_PATH`; any line a process logs opens (truncates) that file. MobileGL stays silent in processes it does not serve, but give any extra client its own `MOBILEGL_LOG_FILE_PATH`.
+- **Stale per-process overrides**: an `__EGL_VENDOR_LIBRARY_FILENAMES` / `MOBILEGL_*` left in a unit drop-in or the user manager's environment (`systemctl --user show-environment`) still wins over the system files; `run-plasma.sh` (terminate-user) clears the manager's.
 - `handoff` mentions a `kwin_wayland` logging shim and `/tmp/mgl-kwin-<pid>.log`: stale - `/opt/mobilegl/kwin/bin/kwin_wayland` is now the real binary and logs to `/tmp/mobilegl-compositor.client.log`.
 
 ## House rules

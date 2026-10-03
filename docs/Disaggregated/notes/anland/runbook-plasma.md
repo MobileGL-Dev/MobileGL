@@ -13,7 +13,7 @@
 - **容器** `arch-kde-mgl`：Droidspaces 6.4.5，Arch Linux ARM（aarch64 glibc），host 网络；Android 侧 `rootfs.img` 挂在 `/mnt/Droidspaces/arch-kde-mgl`。bind mount：`/data/local/tmp/anland-mobilegl` → `/run/anland-mobilegl`，`/data/local/tmp/display_daemon.sock` → `/run/display.sock`。
 - **会话**：`desktop-session.service`（User=swung0x48）的 drop-in 把 ExecStart 换成 `/opt/mobilegl/bin/mobilegl-startup.sh plasma`；它每次写 `plasma-kwin_wayland.service` 的用户 drop-in（经 `kwin_wayland_wrapper` 起 `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`，`ANLAND_MOBILEGL=1`、`MOBILEGL_IPC_SURFACE=server`），然后 `startplasma-wayland`。
 - **KWin 6.7.4** 带 anland 的 `anland` 后端，经 server 直接画进 anland 的 Android Surface。其余 GL 进程都是 `MOBILEGL_IPC_SURFACE=offscreen`，经 KWin 合成上屏。
-- **client 库** `/opt/mobilegl/lib/libMobileGL.so`（glibc aarch64）：glvnd 的 EGL vendor（`/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json`）+ GLX vendor（`/usr/lib/libGLX_mobilegl.so.0`，`__GLX_VENDOR_LIBRARY_NAME=mobilegl`）；环境 `MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`。
+- **client 库** `/opt/mobilegl/lib/libMobileGL.so`（glibc aarch64），是容器里**全系统**的 GL vendor（见下节）：EGL vendor `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json`（排在发行版的 `50_*.json` 前面，MobileGL 拒绝时由它接手）、GLX vendor `/usr/lib/libGLX_mobilegl.so.0`，配置来自 `/etc/mobilegl/client.conf`（`MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`）+ `/etc/mobilegl/backend`。进程不需要任何专门的环境变量。
 - **零拷贝窗口**：client 的 `wl_egl_window` 帧是 server 分配的 AHardwareBuffer（shared image），以 dma-buf fd 经 `zwp_linux_dmabuf_v1` 交给 KWin；KWin 用 EGL 导入，server 按 inode 认出是自己发出的那块。KWin 的 DRM 设备来自 `GBM_BACKEND=mobilegl` → `/usr/lib/gbm/mobilegl_gbm.so`（节点只当身份，从不 ioctl）。没有 linux-dmabuf 时退回 wl_shm 回读。
 - **X11**（Xwayland）走 MobileGL 的 GLX vendor，每帧回读 + `xcb_put_image`。Chrome 用 `mobilegl-startup.sh chrome`：ANGLE GLES 跑在 MobileGL EGL 上，GPU 在浏览器进程内。
 
@@ -61,7 +61,7 @@ bash scripts/cyc.sh s1            # 删粘滞软件渲染键 → 推库 → 换�
 
 ```sh
 bash scripts/xbuild.sh [--reconfigure]   # WSL ~/mgl-xbuild-a64；全量约 150 秒，增量几秒
-bash scripts/xdeploy.sh                  # 新 inode 改名就位安装 libMobileGL.so + mobilegl_gbm.so，刷新别名、GLX 链接、vendor JSON
+bash scripts/xdeploy.sh                  # 新 inode 改名就位安装 libMobileGL.so + mobilegl_gbm.so，刷新别名、GLX 链接、vendor JSON、client.conf 和 GLX/GBM 环境 drop-in
 ```
 
 已经在跑的 client 继续映射旧 inode：重启那个 client，KWin / plasmashell 就 `run-plasma.sh`。server 与 client **同一个 commit** 构建（两边 stamp 都取 `git rev-parse HEAD`），否则日志里 WARN "compatible wire with different build"。容器内构建是备用路径（慢）：`scripts/sync-src.sh` 同步改动的文件，再在容器里跑 anland 的 `mobilegl-tools/anland-build-client.sh`。
@@ -90,6 +90,28 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest 
 ## 切换后端
 
 `adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'`（设属性、写 `/etc/mobilegl/backend`、重启 app），然后 `run-plasma.sh`——正在跑的会话里各 client 还钉在旧后端上。`cyc.sh` 不改后端。
+
+## 全系统 vendor 与回退
+
+`xdeploy.sh`（以及 anland 的 `anland-build-client.sh`）安装下面这些，容器里任何进程经原版 libglvnd / libgbm 就用上 MobileGL：
+
+| 文件 | 作用 |
+|---|---|
+| `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json` | EGL vendor，先于系统的 `50_*.json` 被问 |
+| `/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json` | 同一份 JSON，留给 `__EGL_VENDOR_LIBRARY_FILENAMES` 单进程强制 |
+| `/etc/mobilegl/client.conf` | 所有 client 的 `KEY=value` 默认值（transport、data、endpoint），每次部署重写 |
+| `/etc/mobilegl/backend` | 后端（`switch.sh` 写）；比 client.conf 里的 `MOBILEGL_BACKEND_TYPE` 优先 |
+| `/etc/environment.d/10-mobilegl.conf` | `__GLX_VENDOR_LIBRARY_NAME=mobilegl`、`GBM_BACKEND=mobilegl`，给 systemd 用户管理器（所有 Plasma 服务及其子进程，包括终端） |
+| `/etc/profile.d/mobilegl.sh` | 同样两项，给登录 shell（`bash -l`、`su -l`、ssh、`droidspaces run bash -l`） |
+
+优先级：环境变量 > `/etc/mobilegl/backend`（只管后端）> client.conf > 内置默认；`MOBILEGL_CONFIG_FILE` / `MOBILEGL_BACKEND_FILE` 可指向别的文件（设为空即关闭）；server 进程不读这些文件。
+
+**回退**：真正拉起之前 client 先探一次配置的 endpoint（一次非阻塞 connect，`MOBILEGL_IPC_PROBE_TIMEOUT_MS` 默认 250，0 关闭；被拒的抽象 socket 约 0.2 ms 就有结果）。没有 server 时：EGL vendor 返回 `EGL_NO_DISPLAY`、设备数 0（glvnd 换下一个 vendor），GLX vendor 的 `__glx_Main` 失败（libGLX 回退到 Xwayland 报的 vendor），`mobilegl_gbm` 的 `create_device` 失败（libgbm 回退到设备自己的后端）。客户端查询（`eglQueryString(EGL_NO_DISPLAY)`、`eglGetProcAddress`）从不拉起会话。对别的后端创建的 GBM 设备和 `LIBGL_ALWAYS_SOFTWARE=1` 的进程，MobileGL 同样让开——Xwayland（KWin 补丁给它设了这个）因此继续走软件栈。不停真 server 的演示：
+```sh
+sed 's|^MOBILEGL_IPC_CONTROL=.*|MOBILEGL_IPC_CONTROL=unix:@nobody|' /etc/mobilegl/client.conf > /tmp/down.conf
+sudo -u swung0x48 env -i HOME=/home/swung0x48 PATH=/usr/bin XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 \
+  MOBILEGL_CONFIG_FILE=/tmp/down.conf eglinfo -B -p wayland     # vendor 变成另一个，约 0.1 s
+```
 
 ## 跑测试 client 与验证
 
@@ -140,7 +162,9 @@ Chrome：`bash scripts/chrome-launch.sh <tag> [参数]`（日志 `/tmp/mgl-chrom
 - **输入注入**：普通 `adb shell input` 被拦，要 `su -c input`；anland 抓了触摸屏，`input tap` 无效时用 `input mouse tap x y`。不要对容器进程用 `debuggerd -b`（信号 35 会直接杀掉 glibc 进程）。
 - **linux-dmabuf**：client 必须 `create` + roundtrip，不能 `create_immed`（KWin 对失败的立即导入回协议错误，直接断开 client）。
 - **跨会话 bug**：某个 client 起来或退出后出现噪点 / 别的窗口的残影，先怀疑多会话 server 里的进程级状态（handle 是每 client 各自的，FBO / VAO 是每 context 的）。复现用 `kscreenlocker_greet --testing`。
-- `/etc/environment` 经 pam_env 带进 Mesa / KGSL 变量，`mobilegl-startup.sh` 里把它们 unset 了，改脚本时保留。
+- `/etc/environment` 经 pam_env（以及 `/usr/lib/environment.d/99-environment.conf` 进用户管理器）带进基线会话的驱动变量，`mobilegl-startup.sh` 里把它们 unset 了，改脚本时保留。
+- **共用日志路径**：Xwayland 继承 KWin 的 `MOBILEGL_LOG_FILE_PATH`，进程写第一行日志就会打开（截断）那个文件。MobileGL 在不服务的进程里不写日志，但额外起的 client 要给自己的 `MOBILEGL_LOG_FILE_PATH`。
+- **残留的单进程覆盖**：unit drop-in 或用户管理器环境（`systemctl --user show-environment`）里遗留的 `__EGL_VENDOR_LIBRARY_FILENAMES` / `MOBILEGL_*` 仍比系统文件优先；`run-plasma.sh`（terminate-user）会清掉管理器里的。
 - handoff 里提到的 `kwin_wayland` 日志 shim 与 `/tmp/mgl-kwin-<pid>.log` 已过时：`/opt/mobilegl/kwin/bin/kwin_wayland` 现在就是真二进制，KWin 的 client 日志在 `/tmp/mobilegl-compositor.client.log`。
 
 ## 规矩
