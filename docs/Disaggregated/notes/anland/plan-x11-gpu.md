@@ -130,3 +130,31 @@ ordinary X apps (xterm, xeyes) for glamor rendering.
 - The extra round trip per Xwayland `glFlush` (glamor flushes once per main-loop wakeup).
 - DRI3 clients that are not MobileGL (Mesa Vulkan WSI) hand Xwayland dma-bufs the server never
   allocated: `PixmapFromBuffers` fails with BadAlloc for them, as on any driver mismatch.
+
+## Device results (2026-10-03, TB321FU / Adreno 750, x11-gpu 95aa618d server + client)
+
+glxgears 1280x720, % of one core, `x11-verify.sh measure`; "before" = the old stack (`-shm`
+llvmpipe Xwayland, GLX readback + PutImage).
+
+| run | fps | phone | glxgears | Xwayland | kwin | server | GPU |
+|---|---|---|---|---|---|---|---|
+| before, unpaced | 160 | 229% | 28% | 42% | 71% | 37% | 15% |
+| Espryt DRI3+Present, interval 1 | 98-101 | 210% | 12% | 5% | 28% | 32% | 12% |
+| Espryt DRI3+Present, vblank_mode=0 | 1440-1780 | 296% | 29% | 29% | 36% | 62% | 72% |
+| Espryt readback + MIT-SHM on glamor | 46 | 168-188% | 5% | 78% | 11% | 35% | 5% |
+| Magma DRI3+Present, interval 1 | 105-112 | 210% | 12% | 5% | 24% | 43% | 16% |
+| Magma DRI3+Present, vblank_mode=0 | 940-970 | 282% | 24% | 18% | 33% | 60% | 77% |
+| Magma readback + MIT-SHM on glamor | 27 | 161% | 2% | 50% | 7% | 70% | 5% |
+
+- Glamor engages on both backends: Xwayland runs without `-shm`, offers DRI3 1.2 + Present 1.2,
+  its windows are linux-dmabuf shared images; GLX windows log `presented through DRI3+Present`.
+- Found on the device and fixed: uploads into a texture bound to a shared image were dropped
+  (Espryt) - an X server's PutImage into a window pixmap showed black windows. They are now
+  drained at the producer's flush and written into the image (RGB-converted for X formats, which
+  the driver holds as RGB8).
+- The forced readback path is slower on a glamor Xwayland than on the old llvmpipe one (glamor
+  uploads every frame through the server); it is only the fallback now.
+- OPEN: after a hide/show or lock/unlock round, an X11 Qt window (kate) can keep stale or black
+  regions until the app repaints them; XGetImage of the window shows the window pixmap itself
+  lacks them, on both backends. Fresh windows render correctly. Workaround:
+  `ANLAND_XWAYLAND_GLAMOR=0`.
