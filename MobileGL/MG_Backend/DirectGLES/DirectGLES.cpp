@@ -18289,13 +18289,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (const auto* entry = FindSessionSurfaceLocked(session, drawSurface))
                 windowSurface = entry->Window != static_cast<NativeWindowType>(0);
         }
+        EGLBoolean mglSwapped = EGL_FALSE;
         if (g_EGLFuncs.eglSwapBuffersWithDamageEXT != nullptr) {
             const MG_Util::Damage::Region& damage = MG_Backend::CurrentPresentDamage();
             EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
             const EGLint count = static_cast<EGLint>(MG_Util::Damage::NativeSwapRects(windowSurface, damage, rects));
-            g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
-        } else {
-            g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
+            mglSwapped = g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
+            // A DRIVER THAT NAMES THE ENTRY POINT AND THEN REFUSES THE SWAP. Some vendor EGLs
+            // export eglSwapBuffersWithDamageEXT and answer EGL_FALSE on a window surface without
+            // setting an error (measured on a 4.14 vendor kernel with an Adreno driver; the plain
+            // entry point presents the same surface happily). Keeping the frame on that answer
+            // queues nothing at all: the compositor composites into a window whose buffer queue
+            // never sees a buffer. Fall back to the plain call instead of dropping the frame.
+            if (mglSwapped == EGL_FALSE && g_EGLFuncs.eglSwapBuffers != nullptr) {
+                MGLOG_W_ONCE("DirectGLES: this driver's eglSwapBuffersWithDamageEXT refused a window "
+                             "surface; presenting through eglSwapBuffers for the rest of the process");
+                mglSwapped = g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
+            }
+        } else if (g_EGLFuncs.eglSwapBuffers != nullptr) {
+            mglSwapped = g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
         if (drawSurface != EGL_NO_SURFACE) {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
