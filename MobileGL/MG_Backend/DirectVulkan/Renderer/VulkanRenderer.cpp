@@ -3510,6 +3510,10 @@ void main() {
         // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
         // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
         WireDeclineTally::Dump("shutdown");
+        // The SPIR-V screen's engagement proof: a decline-free session above reads as "screened
+        // and valid" only with this count beside it (distinct modules, process-wide).
+        MGLOG_I("MGWIRE-SPIRV-SCREEN[shutdown] modulesValidated=%llu",
+                static_cast<unsigned long long>(ProgramFactory::DriverModuleValidatorRuns()));
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
