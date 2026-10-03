@@ -52,64 +52,9 @@ using namespace P12;
 
 namespace {
 
-    // ---- the server: this test's own fork, the display server entry on a thread, a UNIX endpoint
-    // (the TCP in-process shape keeps its one-session-at-a-time supervisor; this slice changed the
-    // unix one, which is the shape anland's display server uses).
-
-    [[noreturn]] void RunUnixInProcessServerProcess(const std::string& endpoint, const std::string& logBase) {
-        ::setenv("MOBILEGL_LOG_FILE_PATH", logBase.c_str(), 1);
-        ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
-        ::setenv("MOBILEGL_IPC_DIAL", "no", 1);
-        for (const char* name : {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB",
-                                 "MOBILEGL_IPC_STAGE_MB", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_SURFACE",
-                                 "MOBILEGL_IPC_INPROC_MAX_SESSIONS", "MOBILEGL_BACKEND_TYPE"})
-            ::unsetenv(name);
-        sigset_t stop;
-        sigemptyset(&stop);
-        sigaddset(&stop, SIGTERM);
-        pthread_sigmask(SIG_BLOCK, &stop, nullptr);
-        std::atomic<bool> returned{false};
-        std::atomic<int> served{-1};
-        std::thread server([&] {
-            served.store(mobilegl_server_serve_inprocess(endpoint.c_str()));
-            returned.store(true);
-        });
-        bool stopping = false;
-        while (!returned.load()) {
-            timespec slice{0, 100 * 1000 * 1000};
-            if (sigtimedwait(&stop, nullptr, &slice) == SIGTERM && !stopping) {
-                stopping = true;
-                mobilegl_server_stop_inprocess();
-            }
-        }
-        server.join();
-        std::fflush(nullptr);
-        ::_exit(stopping && served.load() == 0 ? 0 : 100 + (served.load() & 0x7f));
-    }
-
-    bool LaunchUnixInProcessServer(ServerProcess* server, const std::string& label) {
-        server->endpoint = "@mgl-multi-" + label + "-" + std::to_string(::getpid());
-        server->logBase = "/tmp/mgl-multi-" + label + "-" + std::to_string(::getpid()) + ".log";
-        ::setenv("MOBILEGL_LOG_FILE_PATH", server->logBase.c_str(), 1);
-        PinHeadlessEgl();
-        Debug::TruncateRoleLogs(server->logBase.c_str());
-        std::fflush(nullptr);
-        const pid_t pid = ::fork();
-        if (pid < 0) return false;
-        if (pid == 0) RunUnixInProcessServerProcess(server->endpoint, server->logBase);
-        server->pid = pid;
-        bool listening = false;
-        (void)WaitFor(
-            [&] {
-                if (server->Log().find("listening on") != std::string::npos) return listening = true;
-                return server->WaitExit(0) && server->pid <= 0;
-            },
-            10000);
-        // The listener takes the native address; the client's control selector includes its
-        // transport prefix (bare @name is not a supported MOBILEGL_IPC_CONTROL spelling).
-        if (listening) server->endpoint = "unix:" + server->endpoint;
-        return listening;
-    }
+    // The server is the rig's LaunchUnixInProcessServer: this test's own fork running the display
+    // server entry on a thread, on a UNIX endpoint (the TCP in-process shape keeps its
+    // one-session-at-a-time supervisor; this slice changed the unix one, which is anland's).
 
     // ---- a peer this test drives STEP BY STEP, so a case can interleave two sessions: everything
     // the peer does is decided by the parent over a pipe, and every step answers with a report.

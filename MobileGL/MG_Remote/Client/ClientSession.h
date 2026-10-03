@@ -74,22 +74,68 @@ namespace MobileGL::MG_Remote::Client {
         static ClientSession* Active();
 
         // P6 `dl` (CONTRACT-P6 5.3). THE DEVICE-LOST LATCH, and the two words that matter are
-        // SESSION-SCOPED and LATCH: it is set at most once per session and never cleared, because
-        // a session whose server died has nothing left to recover into. MOBILEGL_IPC_RESPAWN is
-        // where the recovery would go and it is a named refusal until some stage writes it.
+        // SESSION-SCOPED and LATCH: it is set at most once per session and never cleared while
+        // that session lives. What recovers is the PROCESS, not the session: the application's
+        // next eglCreateContext / eglCreate*Surface / eglInitialize ends the lost session and
+        // dials a fresh one (RecoverAfterDeviceLoss), and every context built before stays lost.
         //
-        // SET FROM Doorbell::PeerHungUp(), NEVER FROM A TIMEOUT. 5.4's whole point is that slow
-        // and dead are different states and must be told apart without a threshold: under P5e
-        // run-ahead a server one frame behind is the INTENDED steady state, so a latch armed by a
-        // deadline would fire on a healthy session under load. The descriptor answers instead.
+        // SET FROM Doorbell::PeerHungUp() OR THE SERVER'S OWN SessionFault, NEVER FROM A
+        // TIMEOUT. 5.4's whole point is that slow and dead are different states and must be told
+        // apart without a threshold: under P5e run-ahead a server one frame behind is the
+        // INTENDED steady state, so a latch armed by a deadline would fire on a healthy session
+        // under load. The descriptor (or the server, naming its fault) answers instead.
+        //
+        // WHAT THE CALLING THREAD SEES, which is more than the latch: the thread's GL state may
+        // belong to a session that has already been replaced (a context from before a recovered
+        // loss, still current on some thread), and for that thread the device is lost for good -
+        // nothing it does may reach the new session. ScopedWireMute below answers true as well;
+        // ScopedCurrentSessionWork lifts the thread's own staleness (not the latch).
         //
         // The static form answers false whenever no session is active, so monolith and the pull
         // build get the honest answer with no branch of their own.
         static Bool DeviceLost();
+        // The latch alone: is the ACTIVE session lost. What the EGL layer asks before recovering.
+        static Bool SessionLatchedLost();
 
         // Arms the latch and says why, once. Safe to call repeatedly and from any thread; only
         // the first call logs.
         void LatchDeviceLost(const char* why);
+
+        // A reply-owning record came back DECLINED where only a latched server declines (a
+        // readback). The server publishes its SessionFault on the control plane BEFORE it declines,
+        // so the frame - or the hangup that follows it - is what tells "lost" from a refusal. Pumps
+        // the control plane and asks the bell for up to `waitMs`; true when the session is lost.
+        Bool ConfirmLossAfterDecline(Uint32 waitMs);
+
+        // THE RECOVERY. Ends this lost session (Stop) and dials the configured server for a fresh
+        // one (StartSpawned); the new session forgets every client-side cache of the old one and
+        // advances MG_State's wire epoch, which is what makes every older GLContext lost. The
+        // caller (EGLImpl) holds the EGL operation lock, which every GL entry point also takes, so
+        // nothing else is emitting. Refused by name - and the session stays latched - under
+        // MOBILEGL_IPC_RECOVER=0, for a transport whose server cannot be dialed again (inproc,
+        // fd:), and when the server does not answer a probe. OK when a fresh session is up.
+        MobileGLResult RecoverAfterDeviceLoss();
+        // Sessions brought up in this process so far (the recovery's arm proof for a test).
+        static Uint64 SessionsStarted();
+
+        // While one is open on a thread, that thread's emissions are DECLINED as on a lost
+        // device: the lost contexts' objects die under it, and their deaths must not reach the
+        // fresh session.
+        struct ScopedWireMute {
+            ScopedWireMute();
+            ~ScopedWireMute();
+            ScopedWireMute(const ScopedWireMute&) = delete;
+            ScopedWireMute& operator=(const ScopedWireMute&) = delete;
+        };
+        // While one is open on a thread, the thread's own GL state does not make it "lost": EGL
+        // work that targets the current session on behalf of a thread whose current context is
+        // a lost one (it creates the replacement context, re-creates a surface).
+        struct ScopedCurrentSessionWork {
+            ScopedCurrentSessionWork();
+            ~ScopedCurrentSessionWork();
+            ScopedCurrentSessionWork(const ScopedCurrentSessionWork&) = delete;
+            ScopedCurrentSessionWork& operator=(const ScopedCurrentSessionWork&) = delete;
+        };
 
         // The bell this session parks on, for the `dl` red-once ONLY. A test cannot otherwise
         // ask the question the latch turns on - "did the peer hang up" is a fact about a
@@ -632,6 +678,9 @@ namespace MobileGL::MG_Remote::Client {
         Uint64 m_t0Fallbacks = 0;
         std::function<void(Uint64)> m_prePublish;
         void ResetT0(Bool releaseStores);
+        // Every client-side cache keyed to the session that just ended, dropped before the next
+        // one serves a record (FinishStartup, on every start after the first).
+        void ForgetEndedSession();
     };
 
     // One per process in P5, because P5 serves one context, and LEAKED AT EXIT like every other

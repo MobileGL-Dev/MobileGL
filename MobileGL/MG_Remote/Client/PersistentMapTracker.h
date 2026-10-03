@@ -158,6 +158,8 @@ namespace MobileGL::MG_Remote::Client {
         // Unit tests only: clears the membership, the hash cache and the mprotect tracked
         // slots (restoring every tracked page writable first), and resets the counters.
         void ClearForTest();
+        // A fresh session replaces an ended one: drop every member (ClientSession).
+        void ForgetEndedSession();
         // Unit tests only: the mprotect arm's white-box surface, for the alignment cases
         // (SplitBufferTest) that the public GL surface cannot see - which pages a map
         // protected is not observable through any push count. MprotectArmAvailableForTest

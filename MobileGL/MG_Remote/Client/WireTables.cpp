@@ -1160,10 +1160,13 @@ namespace MobileGL::MG_Remote::Client {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
         MG_Pipe::MGPBindContext record{};
         record.ClientContextToken = clientContextToken;
-        session->EmitAndWait(MGPWireOp::BindContext, &record, sizeof(record), nullptr, 0, nullptr, 0,
-                             nullptr);
+        const Uint64 seq = session->EmitAndWait(MGPWireOp::BindContext, &record, sizeof(record), nullptr, 0,
+                                                nullptr, 0, nullptr);
         ++g_emitted;
-        return true;
+        // A DECLINED binding moved nothing on the server (a lost session, or a thread whose
+        // context is from an ended one), so the caller must not believe the session is bound to
+        // it: the next thread that writes re-binds its own context.
+        return seq != Wire::kInvalidSeq;
     }
 
     Bool EmitApplierResetRecord() {
@@ -1177,11 +1180,26 @@ namespace MobileGL::MG_Remote::Client {
         if (session == nullptr || !session->Started()) return false;
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
         MG_Pipe::MGPApplierReset record{};
-        record.ContextSerial = g_applierResetContextSerial++;
-        session->EmitAndWait(MGPWireOp::ApplierReset, &record, sizeof(record), nullptr, 0, nullptr,
-                             0, nullptr);
+        record.ContextSerial = g_applierResetContextSerial;
+        const Uint64 seq = session->EmitAndWait(MGPWireOp::ApplierReset, &record, sizeof(record), nullptr, 0,
+                                                nullptr, 0, nullptr);
+        // THE SERIAL COUNTS RESETS THE SERVER WAS SENT, not resets this client primed: a declined
+        // record (a lost session, a thread on an ended session's context) never reached the
+        // server's count, and moving ours past it would latch the next session that hears one.
+        if (seq != Wire::kInvalidSeq) ++g_applierResetContextSerial;
         ++g_emitted;
         return true;
+    }
+
+    void ForgetWireTablesOfEndedSession() {
+        // The ended session's deferred create answers are not coming: their seqs name a ring
+        // that is gone, and a drain on the new session would wait for them (or read another
+        // record's answer). The objects behind them are the ended session's too.
+        g_createWindowHead = 0;
+        g_createWindowCount = 0;
+        g_createSuspects.clear();
+        // A fresh session's server counts applier resets from 0.
+        g_applierResetContextSerial = 0;
     }
 
     // P5c (rv), CONTRACT-P5C.md §5.3. Whether set_context_values can cross RIGHT NOW: a live,

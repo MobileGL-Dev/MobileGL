@@ -46,5 +46,9 @@ namespace MobileGL {
 
     namespace MG_Impl {
         void Init();
+        // GL framebuffer 0, built into the calling thread's GLContext (the process default at
+        // Init) and installed as the one every later context starts with. Init's step, and the
+        // rebuild after a recovered device loss, whose fresh session holds none of the old one's.
+        void BuildDefaultFramebuffer();
     } // namespace MG_Impl
 } // namespace MobileGL

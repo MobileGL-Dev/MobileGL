@@ -1,7 +1,18 @@
 // Opaque local proxies carry only {slot, generation, target} across the wire.
-        struct RemoteQueryProxy { MG_Pipe::MGPQueryDesc Desc{}; };
+        // Epoch: the session the query was created on. A query of an ENDED session (a recovered
+        // device loss) names nothing on the current server: it answers "no result yet", and its
+        // end and delete put nothing on the wire.
+        struct RemoteQueryProxy {
+            MG_Pipe::MGPQueryDesc Desc{};
+            Uint64 Epoch = MG_State::CurrentWireEpoch();
+        };
         std::mutex g_queryProxyMutex;
         UnorderedMap<MG_Backend::BackendQueryHandle, UniquePtr<RemoteQueryProxy>> g_queryProxies;
+
+        Bool QueryFromEndedSession(MG_Backend::BackendQueryHandle handle) {
+            const auto found = g_queryProxies.find(handle);
+            return found != g_queryProxies.end() && found->second->Epoch != MG_State::CurrentWireEpoch();
+        }
 
         const MG_Pipe::MGPQueryDesc& QueryDesc(MG_Backend::BackendQueryHandle handle) {
             const auto found = g_queryProxies.find(handle);
@@ -69,6 +80,7 @@
         void EmitEndQuery(MG_Backend::BackendQueryHandle handle) {
             auto& session = RequireSession("QueryEnd");
             const std::lock_guard<std::mutex> lock(g_queryProxyMutex);
+            if (QueryFromEndedSession(handle)) return;
             const auto& desc = QueryDesc(handle);
             BeforeReadOnlyVerb();
             session.EmitAndWait(MG_Pipe::MGPWireOp::QueryEnd, &desc, sizeof(desc), nullptr, 0, nullptr, 0, nullptr);
@@ -76,6 +88,7 @@
         Bool EmitIsQueryResultAvailable(MG_Backend::BackendQueryHandle handle) {
             auto& session = RequireSession("IsQueryResultAvailable");
             const std::lock_guard<std::mutex> lock(g_queryProxyMutex);
+            if (QueryFromEndedSession(handle)) return false;
             const MG_Pipe::MGPHandleOnly request{QueryDesc(handle).Query, static_cast<Uint32>(MG_Pipe::MGPipeKind::Query), 0};
             const auto result = ReadQueryReply<Uint32>(session, MG_Pipe::MGPWireOp::QueryAvailable, &request, sizeof(request));
             if (result > 1) Wire::WireProtocolFatal("QueryAvailable.reply", "availability is not boolean");
@@ -84,6 +97,7 @@
         Bool EmitGetQueryResult64(MG_Backend::BackendQueryHandle handle, Bool wait, Uint64* value) {
             auto& session = RequireSession("GetQueryResult64");
             const std::lock_guard<std::mutex> lock(g_queryProxyMutex);
+            if (QueryFromEndedSession(handle)) return false;
             MG_Pipe::MGPQueryResultRequest request{};
             request.Query = QueryDesc(handle).Query;
             request.Wait = wait ? 1 : 0;
@@ -98,7 +112,7 @@
         void EmitDeleteBackendQuery(MG_Backend::BackendQueryHandle handle) {
             const std::lock_guard<std::mutex> lock(g_queryProxyMutex);
             const auto query = QueryDesc(handle).Query;
-            if (auto* session = ClientSession::Active(); session && session->Started()) {
+            if (auto* session = ClientSession::Active(); session && session->Started() && !QueryFromEndedSession(handle)) {
                 const MG_Pipe::MGPHandleOnly request{query, static_cast<Uint32>(MG_Pipe::MGPipeKind::Query), 0};
                 session->EmitAndWait(MG_Pipe::MGPWireOp::QueryDestroy, &request, sizeof(request),
                                      nullptr, 0, nullptr, 0, nullptr);

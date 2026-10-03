@@ -634,6 +634,13 @@ namespace MobileGL::MG_Config {
         // poll loop cannot outlive a late report. 0 = every poll crosses, as before P10: the A/B
         // arm and the red-once of the no-reply gate (FencePollScenario).
         Uint32 PollEscalate = 64;
+        // MOBILEGL_IPC_RECOVER (client): 1 (default) = after a device loss ends this client's
+        // session, the application's next eglCreateContext / eglCreate*Surface / eglInitialize
+        // dials the server for a FRESH session, and contexts created from then on work. Contexts
+        // (and their objects) from before the loss stay lost, as EGL's power-management event
+        // has them; surfaces survive and are re-created on the new session when next used.
+        // 0 = the loss is final for the process (every verb DECLINED for the rest of its life).
+        Uint32 RecoverAfterLoss = 1;
         // MOBILEGL_IPC_ADOPT_TIER, THE ZERO-COPY SWITCH (ruling ID-P11-14, CONTRACT-P11 B2):
         // UNSET (kAdoptTierUnset, the default since 2026-09-29, the user's decision) = T0 where the
         // session can run it, T2 QUIETLY where it cannot (MGLOG_D only, still counted);

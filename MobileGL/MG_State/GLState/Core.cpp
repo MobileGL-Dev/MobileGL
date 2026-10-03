@@ -29,7 +29,26 @@ namespace MobileGL::MG_State {
             static SharedPtr<GLState::FramebufferObject>* slot = new SharedPtr<GLState::FramebufferObject>();
             return *slot;
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        std::atomic<Uint64> g_wireEpoch{0};
+#endif
     }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+    Uint64 CurrentWireEpoch() { return g_wireEpoch.load(std::memory_order_acquire); }
+    void AdvanceWireEpoch() { g_wireEpoch.fetch_add(1, std::memory_order_acq_rel); }
+
+    SharedPtr<GLState::GLContext> ReplaceProcessDefaultGLContext() {
+        auto& slot = DefaultGLContextSlot();
+        SharedPtr<GLState::GLContext> old = slot;
+        const Bool callerOnOld = old && pGLContext == old;
+        DefaultFramebufferSlot().reset();
+        slot = MakeShared<GLState::GLContext>();
+        if (callerOnOld || !pGLContext) pGLContext = slot;
+        return old;
+    }
+#endif
 
     const SharedPtr<GLState::GLContext>& ProcessDefaultGLContext() {
         auto& slot = DefaultGLContextSlot();
@@ -1353,6 +1372,12 @@ namespace MobileGL::MG_State {
             static std::atomic<Uint64> nextId{1};
             return nextId.fetch_add(1, std::memory_order_relaxed);
         }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        Bool GLContext::IsFromEndedWireSession() const {
+            return m_wireEpoch != 0 && m_wireEpoch != CurrentWireEpoch();
+        }
+#endif
 
         GLContext::GLContext() : GLContext(MakeShared<ShareGroupState>()) {}
 

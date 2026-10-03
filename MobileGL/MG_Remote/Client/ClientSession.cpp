@@ -24,12 +24,15 @@
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
 #include "EmitTables.h"
+#include "PersistentMapTracker.h"
+#include "ServerProbe.h"
 
 #include <MGGitHash.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
@@ -93,6 +96,13 @@ namespace MobileGL::MG_Remote::Client {
     namespace {
 
         ClientSession* g_active = nullptr;
+
+        // THE RECOVERY'S THREE PIECES OF PROCESS STATE (ClientSession.h). The two scopes are
+        // per thread and nest; the count is how many sessions with a remote server this process
+        // has started, so the second and later know there is an ended one to forget.
+        thread_local Uint32 tl_wireMute = 0;
+        thread_local Uint32 tl_currentSessionWork = 0;
+        std::atomic<Uint64> g_remoteSessionsStarted{0};
 
         // The same bounded handshake deadline the server uses. Bounded, not kWaitForever: a
         // bring-up that never answers has to be a red lane rather than a wedged CI job.
@@ -593,9 +603,28 @@ namespace MobileGL::MG_Remote::Client {
     ClientSession* ClientSession::Active() { return g_active; }
 
     Bool ClientSession::DeviceLost() {
+        if (tl_wireMute != 0) return true;
+        const ClientSession* session = Active();
+        if (session == nullptr) return false;
+        if (session->m_deviceLost.load(std::memory_order_acquire)) return true;
+        if (tl_currentSessionWork != 0) return false;
+        // A thread still on a context from before a recovered loss: lost for good, whatever the
+        // session it would now be writing into.
+        const SharedPtr<MG_State::GLState::GLContext>& context = MG_State::pGLContext;
+        return context != nullptr && context->IsFromEndedWireSession();
+    }
+
+    Bool ClientSession::SessionLatchedLost() {
         const ClientSession* session = Active();
         return session != nullptr && session->m_deviceLost.load(std::memory_order_acquire);
     }
+
+    ClientSession::ScopedWireMute::ScopedWireMute() { ++tl_wireMute; }
+    ClientSession::ScopedWireMute::~ScopedWireMute() { --tl_wireMute; }
+    ClientSession::ScopedCurrentSessionWork::ScopedCurrentSessionWork() { ++tl_currentSessionWork; }
+    ClientSession::ScopedCurrentSessionWork::~ScopedCurrentSessionWork() { --tl_currentSessionWork; }
+
+    Uint64 ClientSession::SessionsStarted() { return g_remoteSessionsStarted.load(std::memory_order_acquire); }
 
     void ClientSession::LatchDeviceLost(const char* why) {
         // exchange, so the log line is written EXACTLY once however many waits notice the same
@@ -604,13 +633,91 @@ namespace MobileGL::MG_Remote::Client {
         if (m_deviceLost.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        MGLOG_E("MGPipe: DEVICE LOST - %s. The server process is gone; every verb from here is "
-                "DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is "
-                "latched from the peer's HANGUP and not from any deadline (CONTRACT-P6 5.4): a "
-                "server one frame behind is P5e's intended steady state and must never read as a "
-                "dead one. There is no recovery - MOBILEGL_IPC_RESPAWN is the stage that would "
-                "add one and it is refused by name until then.",
-                why == nullptr ? "the peer hung up" : why);
+        MGLOG_E("MGPipe: DEVICE LOST - %s. This session's server side is gone; every verb from here "
+                "is DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is "
+                "latched from the peer's HANGUP (or its named SessionFault) and not from any "
+                "deadline (CONTRACT-P6 5.4): a server one frame behind is P5e's intended steady "
+                "state and must never read as a dead one. The contexts of this session stay lost; "
+                "the application's next eglCreateContext / eglCreate*Surface / eglInitialize brings "
+                "a fresh session up (MOBILEGL_IPC_RECOVER=%u).",
+                why == nullptr ? "the peer hung up" : why, MG_Config::Ipc.RecoverAfterLoss);
+    }
+
+    Bool ClientSession::ConfirmLossAfterDecline(Uint32 waitMs) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
+        for (;;) {
+            if (m_deviceLost.load(std::memory_order_acquire)) return true;
+            PumpControlPlane();
+            if (const Transport::Doorbell* bell = m_producer.SelfDoorbell(); bell != nullptr && bell->PeerHungUp()) {
+                LatchDeviceLost("a readback was declined and the peer had hung up");
+            }
+            if (m_link && m_link->PeerHungUp()) LatchDeviceLost("a readback was declined and the link had hung up");
+            if (m_deviceLost.load(std::memory_order_acquire)) return true;
+            if (std::chrono::steady_clock::now() >= deadline) return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+
+    namespace {
+        // A LOST SESSION'S T0 STORES STAY MAPPED. A buffer of a lost context may still hold the
+        // pointer of the store it was adopted into (the application has not destroyed it yet, and
+        // may write through its persistent mapping), so the recovery's Stop must not unmap it.
+        // Bounded by what the lost session had adopted; never touched again.
+        Vector<Transport::AdoptT0::HeldStore>& LostSessionT0Stores() {
+            static auto* stores = new Vector<Transport::AdoptT0::HeldStore>();
+            return *stores;
+        }
+    } // namespace
+
+    MobileGLResult ClientSession::RecoverAfterDeviceLoss() {
+        if (!m_started || !m_deviceLost.load(std::memory_order_acquire)) return MOBILEGL_OK;
+        if (MG_Config::Ipc.RecoverAfterLoss == 0) {
+            MGLOG_E_ONCE("MG_Remote client: Refuse{Recover} the session is lost and MOBILEGL_IPC_RECOVER=0 - "
+                         "no fresh session is dialed; every context of this process stays lost");
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        const std::string control(MG_Config::Ipc.Control.c_str());
+        if (MG_Config::Transport != MG_Config::TransportMode::Spawn || control.compare(0, 3, "fd:") == 0) {
+            MGLOG_E_ONCE("MG_Remote client: Refuse{Recover} the session is lost and this transport cannot "
+                         "reach its server again (%s): an in-process server is this process, and a "
+                         "pre-connected fd: pair was handed over once. Every context stays lost",
+                         control.empty() ? "inproc" : control.c_str());
+            return MOBILEGL_ERR_UNSUPPORTED;
+        }
+        // THE SERVER FIRST, THEN THE TEARDOWN. A session that is stopped and cannot be replaced
+        // leaves no session at all, and a GL call then has nowhere honest to go; a latched session
+        // that is kept declines every verb, which is the answer the application already has.
+        if (ProbeConfiguredServer() == ServerProbeResult::Unreachable) {
+            MGLOG_E("MG_Remote client: the session is lost and no server answers at %s; it stays lost "
+                    "(the next create will ask again)",
+                    control.c_str());
+            return MOBILEGL_ERR_TRANSPORT_CLOSED;
+        }
+        const Uint32 lostServerPid = m_peerServerPid;
+        for (auto& [key, store] : m_t0Stores) LostSessionT0Stores().push_back(store);
+        m_t0Stores.clear();
+        Stop();
+        const MobileGLResult started = StartSpawned();
+        if (started != MOBILEGL_OK) {
+            MGLOG_E("MG_Remote client: the fresh session after a device loss did not come up (rc=%d); "
+                    "there is no session now, and the next create will try again",
+                    static_cast<int>(started));
+            return started;
+        }
+        MGLOG_I("MG_Remote client: RECOVERED - a fresh session (#%llu of this process) replaces the one "
+                "lost on server pid %u; it is served by pid %u. Contexts created before stay lost",
+                static_cast<unsigned long long>(SessionsStarted()), lostServerPid, m_peerServerPid);
+        return MOBILEGL_OK;
+    }
+
+    void ClientSession::ForgetEndedSession() {
+        MGLOG_I("MG_Remote client: session #%llu follows an ended one - the client's caches of that "
+                "session's objects (publication, CSOs, samplers, emitter latches, the create window, "
+                "the reset serial, persistent maps) start over",
+                static_cast<unsigned long long>(SessionsStarted()));
+        ForgetWireTablesOfEndedSession();
+        PersistentMapTracker::Instance().ForgetEndedSession();
+        MG_Pipe::MGPipeForgetEndedSession();
     }
 
     ClientSession& ClientSessionInstance() {
@@ -1690,6 +1797,17 @@ namespace MobileGL::MG_Remote::Client {
             PumpControlPlane();
         }
 
+        // A SESSION WITH A REMOTE SERVER STARTS FROM A CLEAN CLIENT. Every client-side cache that
+        // describes what a server holds (published handles, CSO and sampler caches, emitter
+        // latches, the create window, the applier-reset serial, tracked persistent maps) describes
+        // the PREVIOUS session's server once this one replaces it - after a device loss, or an
+        // eglTerminate/eglInitialize - and a fresh server holds none of it. And the wire epoch
+        // moves, which is what makes every GLContext built against the previous session lost.
+        // Inproc is left as it was: its server role is this process, and it never recovers.
+        if (!startApplyThreadHere) {
+            if (g_remoteSessionsStarted.fetch_add(1, std::memory_order_acq_rel) != 0) ForgetEndedSession();
+            MG_State::AdvanceWireEpoch();
+        }
         // BOTH, AND m_started FIRST. `Active()` is what the integration lane's skip reads and
         // `m_started` is what `EmitAndWait` reads, and c1's round-1 rewrite of this function
         // set only the second of the two - so a fully-handshaken session with an apply thread
@@ -1879,6 +1997,12 @@ namespace MobileGL::MG_Remote::Client {
         // The cold-start window is the next server's, not this one's (RunRemoteSurfaceControlFrame).
         m_serverBackendWarm = false;
         m_presentsSent = 0;
+        // And so are the latch and the control seq space: the next session's server counts its
+        // ops from 1 and has lost nothing. (The latch is read through Active(), which is null
+        // from here until a next session is started.)
+        m_deviceLost.store(false, std::memory_order_release);
+        m_remoteControlSeq = 0;
+        m_logFlushSeq = 0;
         if (g_active == this) {
             g_active = nullptr;
             // Mirror order, and the probe goes with it: a dangling function pointer into a
@@ -2606,6 +2730,19 @@ namespace MobileGL::MG_Remote::Client {
             if (envelope == nullptr) {
                 MGLOG_E("MG_Remote client: an unverifiable control frame (%llu bytes) was dropped",
                         static_cast<unsigned long long>(frame.size()));
+                continue;
+            }
+            if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::Fatal) {
+                // The server latched this session on a named fault (a lost GPU device among them)
+                // and said so before declining the rest: the session is lost, from the server's
+                // own mouth rather than from the hangup that follows.
+                if (const auto* fatal = envelope->msg_as_Fatal()) {
+                    MGLOG_E("MG_Remote client: the server ended this session on a named fault - Fatal "
+                            "family %s: %s",
+                            fatal->family() ? fatal->family()->c_str() : "<none>",
+                            fatal->message() ? fatal->message()->c_str() : "");
+                }
+                LatchDeviceLost("the server published a SessionFault for this session");
                 continue;
             }
             if (envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::CapsSnapshot) {

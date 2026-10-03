@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "PersistentMapTracker.h"
+#include "ClientSession.h"
 #include <MG_Remote/FatalFunnel.h>
 #include <MG_Remote/Transport/AdoptTier.h>
 
@@ -751,7 +752,10 @@ namespace MobileGL::MG_Remote::Client {
         // member that was never large-untracked.
         m_untrackedMembers.erase(key);
         m_edgedMembers.erase(key);
-        if (IsLivePersistentMap(buffer)) {
+        // A buffer mapped on a LOST context (a thread still on one, or a session that is lost)
+        // never becomes a member: the push before every verb would carry its bytes to whichever
+        // session is current, and a fresh one never created the buffer.
+        if (IsLivePersistentMap(buffer) && !ClientSession::DeviceLost()) {
             const auto range = buffer.GetMappedRange();
             // The mprotect arm registers beside the hash arm: tracked buffers are pushed
             // from the fault bitmap, everything else keeps the content scan. A failed
@@ -784,13 +788,21 @@ namespace MobileGL::MG_Remote::Client {
         UntrackWriteMap(key);
     }
 
-    void PersistentMapTracker::ClearForTest() {
+    void PersistentMapTracker::ForgetEndedSession() {
+        // Every member is a buffer of the ended session: its bytes have nowhere to go, and a push
+        // before the next verb would name a handle the fresh server never created. The write
+        // tracking goes with them (pages unprotected); a member that is unmapped or destroyed
+        // later finds nothing here, which Forget already tolerates.
         m_livePersistentMaps.clear();
         m_blockHashes.clear();
         m_untrackedMembers.clear();
         m_edgedMembers.clear();
         UntrackAllWriteMaps();
         m_lastFaultEpoch = 0;
+    }
+
+    void PersistentMapTracker::ClearForTest() {
+        ForgetEndedSession();
         ResetCountersForTest();
     }
 

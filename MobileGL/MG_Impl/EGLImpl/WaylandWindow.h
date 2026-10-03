@@ -92,6 +92,13 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // its next buffer is that size - and the caller resizes the drawable behind it.
         Bool TakeResize(EGLint* width, EGLint* height);
 
+        // The server session that allocated this window's shared images was lost and a fresh one
+        // replaced it: the images went with their server. Their wl_buffers are destroyed here,
+        // nothing is released (the fresh server never issued those ids), and the window goes
+        // back to shared images - allocated anew, on the fresh server, at the next present - if
+        // it was using them, or had fallen back to wl_shm only for a present the loss broke.
+        void OnSessionReplaced();
+
         struct Impl;
 
     private:
