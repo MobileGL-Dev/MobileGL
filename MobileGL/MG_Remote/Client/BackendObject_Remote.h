@@ -94,6 +94,7 @@ namespace MobileGL::MG_Remote::Client {
         Bool QueryBufferAge(Bool damageRegionFollows, EGLint* age) override;
         Bool SetDamageRegion(const MG_Util::Damage::Region& region) override;
         Bool AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) override;
+        Bool FlushSharedImageAccesses() override;
 
         // Copies the caps mirror's FormatCapabilityCache into the base class's
         // m_formatCapabilities. Public because CapsMirror's adoption hook is a free function
@@ -121,6 +122,10 @@ namespace MobileGL::MG_Remote::Client {
         // CreateEGLWindowSurface - ONE ServerOwned frame, no SetWindowHandle, the server's real
         // geometry adopted before it returns, and every refusal named in this process's log.
         Bool CreateServerOwnedWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
+
+        // The stream position right after the last shared-image Flush record: a flush with nothing
+        // published since has nothing new to fence and costs no round trip.
+        Uint64 m_sharedImageFlushedAt = 0;
 
         // The generation of the snapshot m_formatCapabilities was filled from. Exposed only
         // through the log line on a refresh: a cache that silently stopped tracking the mirror

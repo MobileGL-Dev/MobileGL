@@ -684,6 +684,17 @@ namespace MobileGL::MG_Remote::Client {
         return session->EmitSharedImage(op, -1, nullptr, nullptr);
     }
 
+    Bool BackendObject_Remote::FlushSharedImageAccesses() {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started()) return false;
+        if (m_sharedImageFlushedAt != 0 && session->LastPublishedSeq() == m_sharedImageFlushedAt) return true;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageFlush;
+        const Bool published = session->EmitSharedImage(op, -1, nullptr, nullptr);
+        m_sharedImageFlushedAt = session->LastPublishedSeq();
+        return published;
+    }
+
     // NO strong CreateRemoteBackendObject() lives here, and the reason is a link fact, not an
     // oversight. v1's Init.cpp calls MG_Remote::Client::CreateRemoteBackendObject() and ships a
     // __attribute__((weak)) placeholder for it beside ServerLoop that aborts by name; its comment

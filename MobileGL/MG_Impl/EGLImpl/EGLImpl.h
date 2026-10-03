@@ -68,6 +68,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
     Bool SharedImagesAvailable();
     // The shared image an EGLImage names (EGL_LINUX_DMA_BUF_EXT), for glEGLImageTargetTexture2DOES.
     Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height);
+    // glEGLImageTargetTexture2DOES bound a shared image to a texture: from now on glFlush/glFinish
+    // may be shared-image boundaries (SharedImageFlushPolicy.h).
+    void NoteSharedImageBoundToTexture();
+    // From glFlush/glFinish, under the stream lock: publish this session's shared-image accesses
+    // when the policy says a flush is a boundary in this process. Cheap when it is not.
+    void FlushSharedImageAccesses();
     EGLDisplay GetPlatformDisplay(EGLenum platform, void* native_display, const EGLAttrib* attrib_list);
     EGLSurface CreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void* native_window,
                                            const EGLAttrib* attrib_list);

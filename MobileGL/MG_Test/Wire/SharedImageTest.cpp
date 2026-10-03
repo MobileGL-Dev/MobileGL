@@ -255,3 +255,43 @@ TEST(SharedImageSync, AReadTrackerPublishesOneFrameToEveryImageItRead) {
     EXPECT_TRUE(SI::WaitForReads(*a, 10));
     EXPECT_TRUE(SI::WaitForReads(*b, 10));
 }
+
+// Implicit sync by flush (glamor): what a session used since its last boundary is published as a
+// write AND a read - a compositor sampling an X window's pixmap waits for the flush's fence, and the
+// next writer of that pixmap (or of a client buffer the X server copied from) waits for it too.
+TEST(SharedImageSync, AFlushPublishesEveryUsedImageAsAWriteAndARead) {
+    std::string why;
+    SI::ImageRef windowPixmap = SI::Allocate(8, 8, SI::kFourccXrgb8888, why);
+    SI::ImageRef clientBuffer = SI::Allocate(8, 8, SI::kFourccXrgb8888, why);
+    SI::ImageRef untouched = SI::Allocate(8, 8, SI::kFourccXrgb8888, why);
+    ASSERT_TRUE(windowPixmap && clientBuffer && untouched) << why;
+    SI::ReadTracker frame;
+    frame.NoteRead(windowPixmap);
+    frame.NoteRead(clientBuffer);
+    FakeFence flush;
+    frame.PublishFrameAsWrite(flush.Dup());
+    EXPECT_EQ(frame.Pending(), 0u);
+
+    Uint64 generation = 0;
+    for (const SI::ImageRef& image : {windowPixmap, clientBuffer}) {
+        const int write = SI::DupWriteFence(*image, &generation);
+        EXPECT_EQ(generation, 1u) << "a reader must see the flush as a new write";
+        ASSERT_GE(write, 0);
+        EXPECT_FALSE(SI::SyncFile::Signaled(write));
+        ::close(write);
+        EXPECT_FALSE(SI::WaitForReads(*image, 10)) << "a writer must wait for the flush";
+    }
+    EXPECT_EQ(SI::DupWriteFence(*untouched, &generation), -1);
+    EXPECT_EQ(generation, 0u);
+
+    flush.Signal();
+    EXPECT_EQ(SI::DupWriteFence(*windowPixmap, &generation), -1);
+    EXPECT_TRUE(SI::WaitForReads(*windowPixmap, 10));
+    EXPECT_TRUE(SI::WaitForReads(*clientBuffer, 10));
+
+    // A completed flush (no fence) still moves the generation.
+    frame.NoteRead(windowPixmap);
+    frame.PublishFrameAsWrite(-1);
+    EXPECT_EQ(SI::DupWriteFence(*windowPixmap, &generation), -1);
+    EXPECT_EQ(generation, 2u);
+}

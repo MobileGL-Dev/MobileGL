@@ -42,6 +42,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  const MG_Util::Damage::Region& region) override;
         // The active surface target's swapchain image ages (VulkanRenderer::CurrentDrawBufferAge).
         Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
+        // A glFlush that ends a shared-image producer's frame (VulkanRenderer::PublishSharedImageAccesses).
+        Bool PublishSharedImageAccesses() override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: the window surface's target (VkSurfaceKHR,

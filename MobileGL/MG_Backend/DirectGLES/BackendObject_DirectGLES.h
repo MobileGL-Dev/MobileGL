@@ -51,6 +51,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
         // eglSetDamageRegionKHR on a window surface whose driver has EGL_KHR_partial_update.
         Bool SetCurrentDamageRegion(const MG_Util::Damage::Region& region) override;
+        // A glFlush that ends a shared-image producer's frame (SharedImageImpl::PublishPendingAccesses).
+        Bool PublishSharedImageAccesses() override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: each window surface on it swaps its native EGL

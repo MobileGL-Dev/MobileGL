@@ -18813,6 +18813,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             struct ReadFrame {
                 Uint64 Id = 0;
                 SI::ReadTracker Tracker;
+                // The session ends frames at publishing flushes (PublishPendingAccesses): it writes
+                // images, so its first use of one in a frame waits for that image's pending reads.
+                Bool ImplicitSync = false;
             };
             std::atomic<Uint64> g_readFrameIds{0};
 
@@ -18840,9 +18843,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             CloseFd(fence);
             ReadFrame& frame = CurrentReadFrame();
             if (state.NotedFrame != frame.Id) {
+                // A session that renders into images (it ends frames with a publishing flush) may be
+                // about to overwrite this one: what other sessions still sample goes first.
+                if (frame.ImplicitSync) {
+                    for (const int read : SI::DupPendingReadFences(*state.Image)) WaitForFenceBeforeLaterCommands(read);
+                }
                 frame.Tracker.NoteRead(state.Image);
                 state.NotedFrame = frame.Id;
             }
+        }
+
+        Bool PublishPendingAccesses() {
+            ReadFrame& frame = CurrentReadFrame();
+            frame.ImplicitSync = true;
+            if (frame.Tracker.Pending() == 0) return true;
+            int fence = -1;
+            if (t_boundNativeContext != EGL_NO_CONTEXT && !ExportFence(&fence)) {
+                // No fence to publish: the work is waited out here, and published as completed.
+                (void)WaitForCompletion();
+            }
+            frame.Tracker.PublishFrameAsWrite(fence);
+            frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
+            return true;
         }
 
         void PublishPendingReads() {
@@ -19035,6 +19057,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         void AcquireForSampling(const EglImageRef& image) { (void)image; }
         void PublishPendingReads() {}
+        Bool PublishPendingAccesses() { return true; }
         void ForgetPresentTargetsAfterTerminate() {}
 #endif
     } // namespace SharedImageImpl

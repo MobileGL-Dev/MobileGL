@@ -8,6 +8,7 @@
 
 #include "EGLImpl.h"
 #include "EGLPlatformExtensions.h"
+#include "SharedImageFlushPolicy.h"
 #include "WaylandWindow.h"
 #include "../GetProcAddress.h"
 #include <Init.h>
@@ -32,6 +33,8 @@
 #include <MG_State/GLState/Core.h>
 #include <optional>
 #endif
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <sstream>
@@ -1431,6 +1434,34 @@ namespace MobileGL::MG_Impl::EGLImpl {
         *width = info.Width;
         *height = info.Height;
         return true;
+    }
+
+    namespace {
+        std::atomic<Bool>& SharedImageBoundToTexture() {
+            static std::atomic<Bool> bound{false};
+            return bound;
+        }
+    } // namespace
+
+    void NoteSharedImageBoundToTexture() { SharedImageBoundToTexture().store(true, std::memory_order_relaxed); }
+
+    void FlushSharedImageAccesses() {
+        if (!SharedImageBoundToTexture().load(std::memory_order_relaxed) &&
+            std::getenv("MOBILEGL_SHARED_IMAGE_FLUSH_SYNC") == nullptr)
+            return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        static const Bool ownsServerWindow = MG_Config::ServerOwnedWindowSurfaces();
+#else
+        constexpr Bool ownsServerWindow = false;
+#endif
+        if (!FlushPublishesSharedImageAccesses(SharedImagesAvailable(), SharedImageBoundToTexture().load(),
+                                               ownsServerWindow, std::getenv("MOBILEGL_SHARED_IMAGE_FLUSH_SYNC")))
+            return;
+        auto* backendObject = MG_Backend::pActiveBackendObject.get();
+        if (backendObject != nullptr && !backendObject->FlushSharedImageAccesses()) {
+            MGLOG_E_ONCE("glFlush: this session's shared-image accesses could not be published; another session may "
+                         "read them early");
+        }
     }
 
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,

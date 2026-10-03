@@ -394,6 +394,15 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         m_images.clear();
     }
 
+    void ReadTracker::PublishFrameAsWrite(int fence) {
+        for (const auto& [id, image] : m_images) {
+            PublishWrite(*image, Dup(fence));
+            PublishRead(*image, Dup(fence));
+        }
+        CloseFd(fence);
+        m_images.clear();
+    }
+
     void SessionHolder::Hold(const ImageRef& image) {
         if (image == nullptr) return;
         const std::lock_guard<std::mutex> lock(m_mutex);

@@ -7178,7 +7178,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "the image could not be bound."));
+            return;
         }
+        MG_Impl::EGLImpl::NoteSharedImageBoundToTexture();
     }
 
     void TexImage1D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLint border, GLenum format,

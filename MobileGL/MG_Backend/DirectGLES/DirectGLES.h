@@ -546,6 +546,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // at Present and wherever the current native context stops being current (its reads can
         // only be fenced from it). Nothing noted = nothing done.
         void PublishPendingReads();
+        // IMPLICIT SYNC BY FLUSH (BackendObject::PublishSharedImageAccesses): everything the
+        // calling session used since its last boundary is published as written and read by one
+        // fence, and the session's first use of an image in each frame from now on also waits for
+        // the image's pending reads.
+        Bool PublishPendingAccesses();
     } // namespace SharedImageImpl
 #endif
 

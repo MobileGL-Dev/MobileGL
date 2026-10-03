@@ -1586,6 +1586,13 @@ namespace MobileGL::MG_Remote::Server {
             if (backend == nullptr) return false;
             return backend->SetCurrentDamageRegion(DamageOfRecord(op.DamageCount, op.Damage));
         }
+        case MG_Pipe::kMGPSharedImageFlush: {
+            // The answer is posted after the fence is published: the client commits the buffer to
+            // its compositor only after this returns, so the compositor's session finds the write.
+            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
+            if (backend == nullptr) return false;
+            return backend->PublishSharedImageAccesses();
+        }
         case MG_Pipe::kMGPSharedImageAttach: {
             SI::ImageRef image = holder.Get(op.ImageId);
             if (image == nullptr) return false;

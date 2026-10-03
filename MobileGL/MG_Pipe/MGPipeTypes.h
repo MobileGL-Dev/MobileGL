@@ -2013,6 +2013,9 @@ namespace MobileGL::MG_Pipe {
     //             (EGL_KHR_partial_update) before it draws.
     //   SetDamageRegion eglSetDamageRegionKHR for the current draw surface: Damage is the region
     //             the frame is about to draw (GL window coordinates; 0 rectangles = all of it).
+    //   Flush     glFlush/glFinish of a session that renders INTO images (an X server's glamor):
+    //             every image the session used since its last boundary is published as written
+    //             and read by the flush's fence (implicit sync); answered once published.
     //
     // A Present carries the region of the frame to copy (DamageCount rectangles of Damage, GL
     // window coordinates, origin bottom-left; 0 = all of it): the client keeps per image what the
@@ -2028,6 +2031,7 @@ namespace MobileGL::MG_Pipe {
         kMGPSharedImageAttach = 5,
         kMGPSharedImageQueryBufferAge = 6,
         kMGPSharedImageSetDamageRegion = 7,
+        kMGPSharedImageFlush = 8,
     };
     inline constexpr Uint32 kMGPBufferAgeDamageRegionFollows = 1u;
 

@@ -191,6 +191,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // renderer has written before - the rest of it is left as it is; a first write, a scaled
         // or turned copy copies all of it.
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image, const MG_Util::Damage::Region& region);
+        // IMPLICIT SYNC BY FLUSH (BackendObject::PublishSharedImageAccesses): every image acquired
+        // since the last boundary goes back to the foreign family, the recording is submitted with
+        // the exportable semaphore, and its sync_file is published to each as a write and a read.
+        // From then on an image's first acquire per frame also waits for its pending reads.
+        Bool PublishSharedImageAccesses();
         // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
         // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
         // target keep its presented images' content from then on.
@@ -721,6 +726,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // m_sharedImageSyncFd: the device imports and exports SYNC_FD binary semaphores; without
         // it the waits happen on the CPU and nothing is exported (see WireSharedImage.inc).
         Bool m_sharedImageSyncFd = false;
+        // The session ends frames at publishing flushes (PublishSharedImageAccesses): it writes the
+        // images it acquires, so a first acquire waits for the image's pending reads as well.
+        Bool m_sharedImageImplicitSync = false;
         PFN_vkImportSemaphoreFdKHR m_importSemaphoreFd = nullptr;
         PFN_vkGetSemaphoreFdKHR m_getSemaphoreFd = nullptr;
         struct SharedImageWait {

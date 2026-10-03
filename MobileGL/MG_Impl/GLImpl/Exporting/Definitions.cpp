@@ -123,6 +123,8 @@ MOBILEGL_GL_API void glFinish() {
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
     const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
 #if MOBILEGL_BUILD_DISAGGREGATED
+    // A shared-image producer's boundary first (implicit sync; EGLImpl/SharedImageFlushPolicy.h).
+    MobileGL::MG_Impl::EGLImpl::FlushSharedImageAccesses();
     MobileGL::MG_Pipe::MGPipeClientFinish();
 #endif
 }
@@ -130,6 +132,7 @@ MOBILEGL_GL_API void glFlush() {
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);
     const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
 #if MOBILEGL_BUILD_DISAGGREGATED
+    MobileGL::MG_Impl::EGLImpl::FlushSharedImageAccesses();
     MobileGL::MG_Pipe::MGPipeClientFlush();
 #endif
 }

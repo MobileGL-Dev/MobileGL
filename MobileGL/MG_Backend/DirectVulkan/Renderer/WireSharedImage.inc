@@ -517,6 +517,11 @@
         // The write's fence gates the submission carrying the acquire: this recording's, or an
         // earlier one if a flush takes it first - either way ahead of every later command.
         StageSharedImageWait(fence, kSharedImageUseStages);
+        // A session that writes images (implicit sync by flush) may be about to overwrite what
+        // another session still samples: those reads go first.
+        if (m_sharedImageImplicitSync && !resource.sharedImageHeld) {
+            for (const int read : SI::DupPendingReadFences(*image)) StageSharedImageWait(read, kSharedImageUseStages);
+        }
 
         const Uint32 family = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -593,6 +598,31 @@
         vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr,
                              static_cast<Uint32>(releases.size()), releases.data());
+    }
+
+    Bool VulkanRenderer::PublishSharedImageAccesses() {
+        m_sharedImageImplicitSync = true;
+        if (m_sharedImageReads.Pending() == 0 && m_sharedImagesHeld.empty()) return true;
+        ReleaseHeldSharedImages();
+        if (m_sharedImageSyncFd && m_sharedImageSignal == VK_NULL_HANDLE)
+            m_sharedImageSignal = TakeSharedImageSemaphore(/*exportable=*/true);
+        m_sharedImageSignalSubmitted = VK_NULL_HANDLE;
+        if (!FlushPendingCommands()) {
+            MGLOG_E_ONCE("Magma: a flush's shared-image accesses could not be submitted");
+            m_sharedImageReads.PublishFrame(-1); // drops the references; nothing to order against
+            return false;
+        }
+        const VkSemaphore signal = std::exchange(m_sharedImageSignalSubmitted, VK_NULL_HANDLE);
+        int fence = -1;
+        if (signal == VK_NULL_HANDLE || !ExportSharedImageSignal(signal, fence)) {
+            // No fence came out of it: the submission is waited for and published as completed.
+            fence = -1;
+            if (!WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX)) {
+                MGLOG_E_ONCE("Magma: a flush's shared-image accesses could not be waited for");
+            }
+        }
+        m_sharedImageReads.PublishFrameAsWrite(fence);
+        return true;
     }
 
     void VulkanRenderer::PublishSharedImageReads() {

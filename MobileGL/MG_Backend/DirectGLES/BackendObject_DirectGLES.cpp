@@ -1230,6 +1230,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return DirectGLES::SetCurrentDrawDamageRegion(region);
     }
 
+    Bool BackendObject_DirectGLES::PublishSharedImageAccesses() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::PublishPendingAccesses();
+#else
+        return true;
+#endif
+    }
+
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);
     }

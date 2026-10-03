@@ -666,6 +666,14 @@ namespace MobileGL {
                 (void)region;
                 return true;
             }
+            // IMPLICIT SYNC BY FLUSH (docs/Disaggregated/notes/anland/plan-x11-gpu.md): the session
+            // on this (the apply) thread ends a frame at a glFlush. Every shared image it used since
+            // its last boundary is published as written and read by one fence of everything it
+            // submitted (SharedImages::ReadTracker::PublishFrameAsWrite), and from now on its first
+            // use of an image in a frame waits for that image's pending reads (it may be about to
+            // overwrite what another session still samples). A backend without shared images has
+            // nothing to publish.
+            virtual Bool PublishSharedImageAccesses() { return true; }
 
             // ---- shared images, CLIENT side (BackendObject_Remote implements these) ----------
             //
@@ -711,6 +719,10 @@ namespace MobileGL {
                 (void)textureLifetimeId, (void)id;
                 return false;
             }
+            // In the GL stream, from glFlush/glFinish: PublishSharedImageAccesses on the server,
+            // returning once the fence is published. Skipped (true) when nothing reached the stream
+            // since the last one.
+            virtual Bool FlushSharedImageAccesses() { return false; }
 
             virtual void Initialize() = 0;
             virtual Bool InitCapabilities() = 0;

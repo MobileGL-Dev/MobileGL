@@ -134,6 +134,12 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         void NoteRead(const ImageRef& image);
         // Takes ownership of `fence` (a sync_file for the frame, -1 if it has completed).
         void PublishFrame(int fence);
+        // IMPLICIT SYNC BY FLUSH: a session that renders into images as well as sampling them, with
+        // no swap and no explicit write (an X server's glamor) ends its frame at glFlush. Every image
+        // it used since its last boundary gets `fence` both as a write - the generation moves, so the
+        // next reader waits for it - and as a read, so the next writer waits for it too. Takes
+        // ownership of `fence` (-1: the work has completed; the generation still moves).
+        void PublishFrameAsWrite(int fence);
         SizeT Pending() const { return m_images.size(); }
 
     private:
