@@ -1166,7 +1166,10 @@ namespace MobileGL::MG_Pipe {
                 if (present == key) return;
             }
             entry.DrainKeys.push_back(key);
-            m_drain.push_back(DrainEntry{handle, key});
+            // The share group the texels are owed to: the one the stream is bound to while the
+            // GL call that wrote them runs (GLStreamScope binds it to the writing thread's
+            // context, whose group the texture is in). See DrainTextureSubData.
+            m_drain.push_back(DrainEntry{handle, key, MGPipeCurrentShareGroupToken()});
         }
 
         // The DRAIN, at the validate point: one resource_subdata per dirty (storage owner,
@@ -1189,7 +1192,19 @@ namespace MobileGL::MG_Pipe {
             m_draining = true;
             Uint64 bytes = 0;
             Vector<DrainEntry> retry;
+            // ONLY THE BOUND SHARE GROUP'S TEXELS. The list is the process's, and the validate
+            // point that drains it belongs to whichever thread draws next - in a client whose
+            // threads draw with contexts of different share groups, often not the group that
+            // wrote the texels. Its records would land in the drawing context's group, where the
+            // texture has no record, and the level's dirty flag would be cleared all the same:
+            // the texture's own context then sampled a texture that never got its texels. A
+            // level owed to another group waits for a verb of that group.
+            const Uint64 group = MGPipeCurrentShareGroupToken();
             for (const DrainEntry& pending : m_drain) {
+                if (pending.Group != group) {
+                    retry.push_back(pending);
+                    continue;
+                }
                 if (EmitOneLevel(pending, bytes)) continue;
                 retry.push_back(pending);
             }
@@ -1319,6 +1334,7 @@ namespace MobileGL::MG_Pipe {
         struct DrainEntry {
             MGPipeHandle Handle;
             Uint32 Key;
+            Uint64 Group; // MGPipeCurrentShareGroupToken() when the level went dirty
         };
 
         static constexpr Uint32 PackLevelKey(MobileGL::TextureUploadTarget uploadTarget, Uint level) {
