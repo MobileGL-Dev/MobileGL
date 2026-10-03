@@ -1613,6 +1613,83 @@ void main() {
     EXPECT_EQ(locationMask, 0x1u);
 }
 
+// An X server's 2D shaders name gl_FragColor only in the arm of a version guard that a 1.30
+// compile does not take, and write their own output instead. The legacy lowering still declares
+// mg_FragColor (it cannot see the guard), ahead of the shader's output: that declaration is
+// inactive and must not take location 0, or every copy and fill writes to a draw buffer nobody
+// enabled and the window keeps whatever it held before.
+TEST_F(ProgramTest, InactiveLoweredFragColorDoesNotDisplaceTheActiveOutput) {
+    const char* vertexSource = R"(#version 130
+in vec2 primitive;
+out vec2 fill_pos;
+uniform vec4 v_matrix;
+void main() {
+    gl_Position = vec4(primitive * v_matrix.xz + v_matrix.yw, 0.0, 1.0);
+    fill_pos = primitive;
+}
+)";
+    const char* fragmentSource = R"(#version 130
+#if __VERSION__ >= 130
+out vec4 frag_color;
+#else
+#define frag_color gl_FragColor
+#endif
+in vec2 fill_pos;
+uniform sampler2D sampler;
+void main() {
+    frag_color = texture(sampler, fill_pos);
+}
+)";
+    const auto compile = [](GLenum stage, const char* source) {
+        const GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint status = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        char log[1024] = "";
+        GetShaderInfoLog(shader, sizeof log, nullptr, log);
+        EXPECT_EQ(status, GL_TRUE) << log;
+        return shader;
+    };
+    const GLuint program = CreateProgram();
+    AttachShader(program, compile(GL_VERTEX_SHADER, vertexSource));
+    AttachShader(program, compile(GL_FRAGMENT_SHADER, fragmentSource));
+    BindAttribLocation(program, 0, "primitive");
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+
+    EXPECT_EQ(GetFragDataLocation(program, "frag_color"), 0);
+
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    const Int fragmentIndex = programObject->GetShaderIndexByStage(ShaderStage::Fragment);
+    ASSERT_GE(fragmentIndex, 0);
+    const auto& spirvs = programObject->GetGeneratedSpirv();
+    ASSERT_LT(static_cast<SizeT>(fragmentIndex), spirvs.size());
+    const auto& fragmentSpirv = spirvs[fragmentIndex];
+    spv_reflect::ShaderModule reflection(fragmentSpirv.size() * sizeof(Uint), fragmentSpirv.data());
+    ASSERT_EQ(reflection.GetResult(), SPV_REFLECT_RESULT_SUCCESS);
+    uint32_t outputCount = 0;
+    ASSERT_EQ(reflection.EnumerateOutputVariables(&outputCount, nullptr), SPV_REFLECT_RESULT_SUCCESS);
+    Vector<SpvReflectInterfaceVariable*> outputs(outputCount);
+    ASSERT_EQ(reflection.EnumerateOutputVariables(&outputCount, outputs.data()), SPV_REFLECT_RESULT_SUCCESS);
+    Bool sawActive = false;
+    for (const auto* output : outputs) {
+        if (output == nullptr || output->name == nullptr) continue;
+        const String name = output->name;
+        if (name == "frag_color") {
+            sawActive = true;
+            EXPECT_EQ(output->location, 0u);
+        } else {
+            // The lowered declaration, if it survives at all, sits clear of the active output.
+            EXPECT_NE(output->location, 0u) << name;
+        }
+    }
+    EXPECT_TRUE(sawActive);
+}
+
 TEST_F(ProgramTest, CompileAndLinkWithExplicitFragmentOut) {
     char infoLog[1024] = "";
 

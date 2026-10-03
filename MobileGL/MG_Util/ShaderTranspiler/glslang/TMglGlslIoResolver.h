@@ -95,5 +95,8 @@ namespace MobileGL {
         // driver (caught by the super-duper-vanilla and chocapic retrace fixtures).
         static constexpr int kInactiveVertexInLocationTop = 15;
         int m_nextInactiveVertexInLocation = kInactiveVertexInLocationTop;
+        // The draw-buffer count every GL/ES implementation has, for an inactive fragment output
+        // when the compile carried no limit.
+        static constexpr int kMinimumDrawBuffers = 4;
     };
 } // namespace MobileGL

@@ -572,7 +572,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             // The name is the marker: ShaderSourceProcessor only emits it when the source
-            // wrote gl_FragColor, and such a shader can have no other output.
+            // names gl_FragColor, and a shader that writes it can have no other output. One that
+            // names it only in an inactive preprocessor arm keeps the declaration unwritten, and
+            // the IO resolver moves that inactive output off location 0, so the match below
+            // (which wants location 0) does not take it.
             static const char* const kLoweredName = "mg_FragColor";
             if (shaderType != GL_FRAGMENT_SHADER || drawBufferCount <= 1) {
                 return glslCode;

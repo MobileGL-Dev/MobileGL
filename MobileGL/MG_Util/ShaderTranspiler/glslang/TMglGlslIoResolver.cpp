@@ -152,6 +152,29 @@ namespace MobileGL {
                 --m_nextInactiveVertexInLocation;
             }
         }
+        // INACTIVE FRAGMENT OUTPUTS go to the top of the draw-buffer range for the same reason:
+        // GL gives locations to active outputs only, and resolution runs in declaration order, so
+        // a dead output declared first would take location 0 and push the real one to 1, where no
+        // draw buffer reads it. The legacy lowering is where that happens: a source whose
+        // gl_FragColor sits in an inactive preprocessor arm (`#if __VERSION__ >= 130 / out vec4
+        // frag_color; / #else / #define frag_color gl_FragColor`) still gets the injected
+        // mg_FragColor declaration ahead of its own output. The slot is reserved, so no active
+        // output auto-assigned later can land on it.
+        if (!ent.live && stage == EShLangFragment && type.getQualifier().isPipeOutput() &&
+            !type.getQualifier().hasLocation() && !type.isBuiltIn()) {
+            const int size = std::max(1, glslang::TIntermediate::computeTypeLocationSize(type, stage));
+            const int drawBuffers = referenceIntermediate.getLimits().maxDrawBuffers;
+            const int top = (drawBuffers > 0 ? drawBuffers : kMinimumDrawBuffers) - size;
+            const int key = buildStorageKey(EShLangFragment, glslang::EvqInOut);
+            for (int location = top; location >= 0; --location) {
+                bool free = true;
+                for (int i = 0; i < size && free; ++i) free = checkEmpty(key, location + i);
+                if (!free) continue;
+                reserveSlot(key, location, size);
+                ent.symbol->getWritableType().getQualifier().layoutLocation = location;
+                break;
+            }
+        }
         return TDefaultGlslIoResolver::resolveInOutLocation(stage, ent);
     }
 
