@@ -1,15 +1,17 @@
-# switch.sh <DirectGLES|DirectVulkan> - (Android root shell) select the server backend: Espryt =
-# DirectGLES, Magma = DirectVulkan.  Sets the system property the server reads (lost on reboot), writes
-# the container's /etc/mobilegl/backend (what every client and the KWin drop-in report; it must match or
-# the server refuses the client: "Hello.backendType disagrees with pinned backend"), restarts the app.
-# The running Plasma session still speaks the old backend: run run-plasma.sh afterwards.
-# Env: PKG, CONTAINER (arch-kde-mgl), SOCK (display daemon socket).
+# switch.sh <DirectGLES|DirectVulkan> - (Android root shell) change the MobileGL backend the anland
+# app's server runs (Espryt = DirectGLES, Magma = DirectVulkan). The choice is the app's setting
+# (Settings > Connection > MobileGL desktop, saved in the app's files/mobilegl-backend); this does
+# what a user does there: save it, Stop desktop, open the app again. The new server publishes the
+# backend and the container's session copies it to /etc/mobilegl/backend before it starts, so
+# server and clients agree. ~30-60 s. No setprop: debug.mobilegl.backend, if set, still overrides
+# the setting until the next reboot - this clears it.
+# Env: PKG, SOCK.
 B=${1:?usage: switch.sh DirectGLES|DirectVulkan}
 P=${PKG:-com.anland.consumer.mobilegl}
-C=${CONTAINER:-arch-kde-mgl}
-SOCK=${SOCK:-/data/local/tmp/anland-mobilegl/display.sock}
-setprop debug.mobilegl.backend $B
-echo $B > /mnt/Droidspaces/$C/etc/mobilegl/backend
-am force-stop $P
-am start -n $P/com.anland.consumer.MainActivity --es socket_path $SOCK >/dev/null
-sleep 4
+[ -n "$(getprop debug.mobilegl.backend)" ] && setprop debug.mobilegl.backend ""
+if pidof $P:mobilegl > /dev/null; then
+    am startservice -n $P/com.anland.consumer.MobileGLWorker -a com.anland.consumer.mobilegl.STOP > /dev/null
+    i=0; while pidof $P:mobilegl > /dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
+fi
+am start -n $P/com.anland.consumer.MainActivity --es mobilegl_backend $B > /dev/null
+echo "backend $B saved; the desktop is starting (watch: sh $(dirname $0)/status.sh)"

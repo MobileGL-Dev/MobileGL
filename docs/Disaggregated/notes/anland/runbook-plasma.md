@@ -7,12 +7,12 @@
 ## 架构
 
 - **平板**：Lenovo TB321FU（Y700，Adreno 750，Android 15，内核 6.1），**KernelSU** root（`/data/adb/ksu`、`ksud`；不是 Magisk），`su -c` 可用。USB 序列号 `HA27Q3LQ`，也常走无线调试 `ip:port`。
-- **anland APK** `com.anland.consumer.mobilegl`（anland 分支 `legacy-mobilegl-unified` 的 debuggable 构建）：UI 进程 + 私有 Service 进程 `:mobilegl`（`MobileGLWorker`）。后者加载 **server** `libMobileGL.so`（NDK 构建，MobileGL 分支 `feat/disaggregated`），监听抽象 socket `@anland-mobilegl`。一个进程服务所有 client（KWin、plasmashell、ksplash、Chrome……），一个进程只服务一种后端。
-- **后端**：`setprop debug.mobilegl.backend DirectGLES|DirectVulkan`（Espryt = DirectGLES，Magma = DirectVulkan；重启丢失），必须与容器里的 `/etc/mobilegl/backend` 一致——所有 client 按这个文件报后端，不一致 server 拒绝（"Hello.backendType disagrees with pinned backend"）。
-- **实验用 display daemon**：`/data/adb/modules/anland-daemon/display_daemon /data/local/tmp/anland-mobilegl/display.sock`（显示 / 输入中介）。**开机不会自动起**——模块的 `service.sh` 只起原版那个（`/data/local/tmp/display_daemon.sock`），原版不要动。
+- **anland APK** `com.anland.consumer.mobilegl`（anland 分支 `legacy-mobilegl-unified` 的 debuggable 构建）：UI 进程 + 私有 Service 进程 `:mobilegl`（`MobileGLWorker`）。后者加载 **server** `libMobileGL.so`（NDK 构建，MobileGL 分支 `feat/disaggregated`），从第一个 attach 上来的窗口起监听抽象 socket `@anland-mobilegl`。一个进程服务所有 client（KWin、plasmashell、ksplash、Chrome……），一个进程只服务一种后端。`MobileGLWorker` 是**前台服务**（通知"Linux 桌面正在运行"，带"停止桌面"按钮），窗口隐藏、锁屏、从最近任务划掉之后 server 和会话都还在。
+- **后端**：app 设置"渲染后端"（设置 > 连接 > MobileGL 桌面；存在 `/data/data/<包名>/files/mobilegl-backend`，默认 DirectGLES；启动参数 `--es mobilegl_backend X` 也会写它）。Espryt = DirectGLES，Magma = DirectVulkan。server 进程启动时读一次；app 把它发布成 `/data/local/tmp/anland-mobilegl/backend`，会话启动前拷进容器的 `/etc/mobilegl/backend`——所有 client 按这个文件报后端，不一致 server 拒绝（"Hello.backendType disagrees with pinned backend"）。如果有人设了 `debug.mobilegl.backend`，它在下次重启前仍然覆盖设置。
+- **实验用 display daemon**：`/data/adb/modules/anland-daemon/display_daemon /data/local/tmp/anland-mobilegl/display.sock`（显示 / 输入中介），由 app 拉起（见下）。模块的 `service.sh` 开机只起原版那个（`/data/local/tmp/display_daemon.sock`），原版不要动。
 - **容器** `arch-kde-mgl`：Droidspaces 6.4.5，Arch Linux ARM（aarch64 glibc），host 网络；Android 侧 `rootfs.img` 挂在 `/mnt/Droidspaces/arch-kde-mgl`。bind mount：`/data/local/tmp/anland-mobilegl` → `/run/anland-mobilegl`，`/data/local/tmp/display_daemon.sock` → `/run/display.sock`。
-- **会话**：`desktop-session.service`（User=swung0x48）的 drop-in 把 ExecStart 换成 `/opt/mobilegl/bin/mobilegl-startup.sh plasma`；它每次写 `plasma-kwin_wayland.service` 的用户 drop-in（经 `kwin_wayland_wrapper` 起 `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`，`ANLAND_MOBILEGL=1`、`MOBILEGL_IPC_SURFACE=server`），然后 `startplasma-wayland`。
-- **KWin 6.7.4** 带 anland 的 `anland` 后端，经 server 直接画进 anland 的 Android Surface。其余 GL 进程都是 `MOBILEGL_IPC_SURFACE=offscreen`，经 KWin 合成上屏。
+- **会话**：`desktop-session.service`（User=swung0x48，**已 enable**：容器一启动就进会话，和原版镜像一样）。drop-in `/etc/systemd/system/desktop-session.service.d/mobilegl.conf`（anland 的 `producers/kde/Arch_v5/desktop-session-mobilegl.conf`，由 `sync-build-kwin.sh` 安装并 enable）：先 `mobilegl-startup.sh wait`（等 `/proc/net/unix` 里 `@anland-mobilegl` 在监听、daemon socket 存在），再以 root 跑 `sync-backend`，`Restart=always`，ExecStart 是 `/opt/mobilegl/bin/mobilegl-startup.sh plasma`——它删掉粘滞的软件渲染键，整个会话设 `MOBILEGL_IPC_PROBE_TIMEOUT_MS=0`（MobileGL 永不拒绝，glvnd 不会把 KWin / plasmashell 交给别的 GL 栈），它每次写 `plasma-kwin_wayland.service` 的用户 drop-in（经 `kwin_wayland_wrapper` 起 `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`，`ANLAND_MOBILEGL=1`、`MOBILEGL_IPC_SURFACE=server`），然后 `startplasma-wayland`。
+- **KWin 6.7.4** 带 anland 的 `anland` 后端，经 server 直接画进 anland 的 Android Surface。窗口不在屏幕上（consumer 断开）时后端把输出关掉（DPMS Off + RenderLoop inhibit：不合成、不发 frame callback），窗口回来再打开。其余 GL 进程都是 `MOBILEGL_IPC_SURFACE=offscreen`，经 KWin 合成上屏。
 - **client 库** `/opt/mobilegl/lib/libMobileGL.so`（glibc aarch64），是容器里**全系统**的 GL vendor（见下节）：EGL vendor `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json`（排在发行版的 `50_*.json` 前面，MobileGL 拒绝时由它接手）、GLX vendor `/usr/lib/libGLX_mobilegl.so.0`，配置来自 `/etc/mobilegl/client.conf`（`MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`）+ `/etc/mobilegl/backend`。进程不需要任何专门的环境变量。
 - **零拷贝窗口**：client 的 `wl_egl_window` 帧是 server 分配的 AHardwareBuffer（shared image），以 dma-buf fd 经 `zwp_linux_dmabuf_v1` 交给 KWin；KWin 用 EGL 导入，server 按 inode 认出是自己发出的那块。KWin 的 DRM 设备来自 `GBM_BACKEND=mobilegl` → `/usr/lib/gbm/mobilegl_gbm.so`（节点只当身份，从不 ioctl）。没有 linux-dmabuf 时退回 wl_shm 回读。
 - **X11**（Xwayland）走 MobileGL 的 GLX vendor，每帧回读 + `xcb_put_image`。Chrome 用 `mobilegl-startup.sh chrome`：ANGLE GLES 跑在 MobileGL EGL 上，GPU 在浏览器进程内。
@@ -29,22 +29,21 @@
 
 主机脚本都在 Git Bash 里 `bash scripts/<x>.sh` 运行。直接敲 adb 时，带设备路径要加 `MSYS_NO_PATHCONV=1`（否则 `/data/...` 被改写成 Git 安装目录），root 命令整个包进一层引号：`adb shell 'su -c "..."'`。设备脚本也可以不推送直接跑：`MSYS_NO_PATHCONV=1 adb shell 'su -c sh' < scripts/device/status.sh`。
 
-## 平板重启后的拉起
+## 启动、闲置、停止——没有手动步骤
 
-重启后整套会话一样都不在。可以一条 `adb shell 'su -c "sh /data/local/tmp/anl/bringup.sh [DirectGLES|DirectVulkan]"'`（按下面的步骤拼出来的，还没整体跑过），或者按顺序手敲：
+开机什么都不起（容器 `run_at_boot=0`）。**打开 app**（桌面图标，等同 `am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity`，不带参数；APK 的默认 socket 是实验 daemon 那个，见 `-PanlandDefaultSocket`）会调 `MobileGLDesktop.ensureStarted()`——唯一的触发点——启动前台服务，并以 root（`su`）跑 APK 里的 `assets/mobilegl-desktop.sh up`：daemon 不在就起（脚本先离开 app 的 cgroup，app 被杀时 daemon 和容器不受牵连）→ 发布后端 → 容器没跑就启动 → `systemctl start --no-block desktop-session`。窗口等 daemon socket 出现；Surface attach 后 server 开始监听；会话的 `wait` 放行，Plasma 起来。全都在跑时再打开只是重新挂上窗口。日志：`/data/local/tmp/anland-mobilegl/desktop.log`，logcat `AnlandMobileGL`（"MobileGL desktop up done in N ms"）。
+
+窗口隐藏、熄屏、锁屏、从最近任务划掉：server 与会话都留着（前台服务）；KWin 记 "viewer gone: output powered down" 然后闲置，回来时记 "viewer back"。**停止桌面**（通知按钮，或 `am startservice -n <包名>/com.anland.consumer.MobileGLWorker -a com.anland.consumer.mobilegl.STOP`）跑 `mobilegl-desktop.sh down`（停会话、停容器，daemon 留着），关窗口，结束 `:mobilegl` 进程。
 
 ```sh
-adb connect <ip>:<port>        # 只有无线调试才需要（比如 USB 供不上电时）
+adb connect <ip>:<port>        # 只有无线调试才需要
 export MSYS_NO_PATHCONV=1
-adb shell 'su -c "svc power stayon true"'
-adb shell 'su -c "setprop debug.mobilegl.backend DirectVulkan"'      # 或 DirectGLES，与 /etc/mobilegl/backend 一致
-adb shell 'su -c "am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity --es socket_path /data/local/tmp/anland-mobilegl/display.sock"'
-adb shell 'su -c "/data/local/Droidspaces/bin/droidspaces -C /data/local/Droidspaces/Containers/arch-kde-mgl/container.config start"'
-adb shell 'su -c "sh /data/local/tmp/anl/restart-daemon.sh"'        # 实验 daemon；目录 777、socket 666（容器里 uid 1000 要连）
-adb shell 'su -c "sh /data/local/tmp/anl/run-plasma.sh"'            # 重启 app 与 desktop-session，约 90 秒
+adb shell 'su -c "sh /data/local/tmp/anl/bringup.sh"'     # 重启后：点亮、解开锁屏、打开 app、打印各步耗时
+bash scripts/desktop-verify.sh push cold reopen idle      # 冷启动计时、划掉再打开、可见/隐藏/锁屏的 CPU 与 GPU
+adb shell 'su -c "sh /data/local/tmp/anl/status.sh"'
 ```
 
-`droidspaces` 没有 `status` 子命令，`droidspaces show` 列出在跑的容器。不要用旧的 `/data/local/tmp/restart-daemon.sh`（里面 kill 的是写死的 PID）。起完用 `device/status.sh` 检查：两个进程、daemon、会话 active、kwin_wayland 与 plasmashell 在跑、kdeglobals 里没有软件渲染键。
+`droidspaces` 没有 `status` 子命令，`droidspaces show` 列出在跑的容器。`device/run-plasma.sh` 是开发用的重启（会话 + logind 用户，再重开 app），重新构建之后需要——KWin 不会重连新的 server 进程。`device/desktop-reset.sh` 把一切停到"刚重启"的状态。以前的手动序列（setprop、起容器、`restart-daemon.sh`、`run-plasma.sh`）不再需要；`restart-daemon.sh` 只留作调试 daemon。
 
 ## 构建与部署循环
 
@@ -89,7 +88,7 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest 
 
 ## 切换后端
 
-`adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'`（设属性、写 `/etc/mobilegl/backend`、重启 app），然后 `run-plasma.sh`——正在跑的会话里各 client 还钉在旧后端上。`cyc.sh` 不改后端。
+在 app 里：设置 > 连接 > MobileGL 桌面 > 渲染后端，然后通知里"停止桌面"，再打开 app。或者 `adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'`，做的是同一件事（用启动参数保存设置、STOP 服务、重新打开；顺手清掉残留的 `debug.mobilegl.backend`）。不用 setprop，也不用改容器里的文件：会话下次启动时把发布的后端拷进 `/etc/mobilegl/backend`。`cyc.sh` 不改后端。
 
 ## 全系统 vendor 与回退
 
@@ -152,10 +151,10 @@ Chrome：`bash scripts/chrome-launch.sh <tag> [参数]`（日志 `/tmp/mgl-chrom
 
 - **pkill -f 误杀自己**：`ct.sh` / `droidspaces run bash -lc "<脚本>"` 的进程参数里带着整段脚本，`pkill -f chrome` 会先把执行者杀掉。用 `pkill -x`。
 - **/tmp 里 root 的文件**：root 跑 client 留下的日志，之后 swung0x48 打不开（日志不出现）。先以 root `rm -f`。
-- **Plasma 软件渲染是粘滞的**：server 一崩，Plasma 就把 `[QtQuickRendererSettings] SceneGraphBackend=software` 写进 `~swung0x48/.config/kdeglobals`，之后 plasmashell 全用 CPU 渲染，截图照样正常（托盘里有"正在使用的软件渲染器"图标）。下结论前删掉：`sudo -u swung0x48 kwriteconfig6 --file kdeglobals --group QtQuickRendererSettings --key SceneGraphBackend --delete`（cyc.sh 会做），再重启会话。
+- **Plasma 软件渲染是粘滞的**：server 一崩，Plasma 就把 `[QtQuickRendererSettings] SceneGraphBackend=software` 写进 `~swung0x48/.config/kdeglobals`，之后 plasmashell 全用 CPU 渲染，截图照样正常（托盘里有"正在使用的软件渲染器"图标）。`mobilegl-startup.sh plasma` 每次会话启动都会删掉它；一个已经崩过的会话里，下结论前先重启会话（`run-plasma.sh`）。
 - **锁屏**：自动锁屏已关（`kscreenlockerrc` 的 `[Daemon] Autolock=false`）；真锁上只能输密码——这种 logind 会话不支持 lock-session，`device/unlock.sh` 的 unlock-session 能否解开未验证。测 greeter 用 `/usr/lib/kscreenlocker_greet --testing` 再杀掉。
 - **CRLF**：本机 `core.autocrlf=true`，anland 的后端源码和 `sync-build-kwin.sh` 在 Windows checkout 里是 CRLF。凡是要在 Linux / Android 上执行的先 `tr -d '\r'`（`ct.sh`、`push-tools.sh`、`kwin-stage.sh` 已处理）；skill 目录有 `.gitattributes` 强制 LF。
-- **display daemon 开机不自启**：KWin 报 "failed to connect to display daemon at /run/anland-mobilegl/display.sock"，会话约 3 秒退出。
+- **display daemon**：由 app 拉起；会话的 `wait` 步骤保证 KWin 不会在它之前启动（连不上时 KWin 报 "failed to connect to display daemon at /run/anland-mobilegl/display.sock"，约 3 秒退出）。从 app 的 `su` 拉起的东西必须先离开 app 的 cgroup（`echo $$ > /sys/fs/cgroup/cgroup.procs`），否则 force-stop 会一并杀掉。
 - **电量 / 连接**：电量低或熄屏（默认 30 秒）可能让 SurfaceView 被回收——`svc power stayon true`；无线调试的端口每次配对都变——脚本里不要写死 `-s HA27Q3LQ`，多设备时设 `ANDROID_SERIAL`。
 - **容器与 Android 路径**：容器的 `/tmp` 和平板的 `/data/local/tmp` 不是一个地方；文件经 `/mnt/Droidspaces/arch-kde-mgl/root`（= 容器 `/root`）或 `/data/local/tmp/anland-mobilegl`（= 容器 `/run/anland-mobilegl`）中转。
 - **正在映射的 .so 不要原地覆盖**（容器里或运行中的 APK）：拷成新 inode 再 `mv -f`；APK 换库前先 force-stop。

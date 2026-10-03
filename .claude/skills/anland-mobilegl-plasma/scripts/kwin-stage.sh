@@ -27,7 +27,7 @@ for f in "$K"/anland_backend_Arch_v5/src/backends/anland/*; do
     lf "$f" "$st/kwsync/anland_backend_Arch_v5/src/backends/anland/$b"
     lf "$f" "$st/kwin-sync/anland/$b"
 done
-for f in kwin.patch mobilegl-startup.sh; do
+for f in kwin.patch mobilegl-startup.sh desktop-session-mobilegl.conf; do
     lf "$K/Arch_v5/$f" "$st/kwsync/Arch_v5/$f"
     lf "$K/Arch_v5/$f" "$st/kwin-sync/misc/$f"
 done

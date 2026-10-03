@@ -18,12 +18,12 @@ nobody else is mid-test.  Use your own `ct.sh` channel names (others use c, c2, 
 ## Architecture (10 lines)
 
 1. Phone: Lenovo TB321FU (Y700, Adreno 750, Android 15, kernel 6.1), rooted with **KernelSU** (`/data/adb/ksu`, `ksud`; `su -c` works). USB serial `HA27Q3LQ`, or wireless adb `ip:port`.
-2. anland APK `com.anland.consumer.mobilegl` (debuggable build of anland branch `legacy-mobilegl-unified`): UI process + private service process `:mobilegl` (`MobileGLWorker`), which loads the **server** `libMobileGL.so` (NDK, from MobileGL `feat/disaggregated`) and listens on abstract socket `@anland-mobilegl`. One process serves every client (KWin, plasmashell, ksplash, Chrome...), one backend per process.
-3. Backend = `setprop debug.mobilegl.backend DirectGLES|DirectVulkan` (Espryt = DirectGLES, Magma = DirectVulkan; prop lost on reboot) and must equal the container's `/etc/mobilegl/backend` (what every client reports; mismatch = "Hello.backendType disagrees with pinned backend").
-4. Experiment display daemon `/data/adb/modules/anland-daemon/display_daemon /data/local/tmp/anland-mobilegl/display.sock` (display/input broker; NOT started at boot - the module only starts the original one on `/data/local/tmp/display_daemon.sock`, leave that alone).
+2. anland APK `com.anland.consumer.mobilegl` (debuggable build of anland branch `legacy-mobilegl-unified`): UI process + private service process `:mobilegl` (`MobileGLWorker`), which loads the **server** `libMobileGL.so` (NDK, from MobileGL `feat/disaggregated`) and listens on abstract socket `@anland-mobilegl` from the first attached window on. One process serves every client (KWin, plasmashell, ksplash, Chrome...), one backend per process. `MobileGLWorker` is a **foreground service** (notification "Linux desktop is running" / action "Stop desktop"), so the server and the session outlive a hidden, locked or swiped-away window.
+3. Backend = the app setting "Renderer backend" (Settings > Connection > MobileGL desktop; file `/data/data/<pkg>/files/mobilegl-backend`, default DirectGLES; also `am start ... --es mobilegl_backend X`). Espryt = DirectGLES, Magma = DirectVulkan. The server reads it when its process starts; the app publishes it as `/data/local/tmp/anland-mobilegl/backend` and the session copies that into the container's `/etc/mobilegl/backend` (what every client reports; mismatch = "Hello.backendType disagrees with pinned backend"). `debug.mobilegl.backend`, if someone sets it, still overrides the setting until the next reboot.
+4. Experiment display daemon `/data/adb/modules/anland-daemon/display_daemon /data/local/tmp/anland-mobilegl/display.sock` (display/input broker), started by the app (below). The module only starts the original one on `/data/local/tmp/display_daemon.sock` at boot; leave that alone.
 5. Container `arch-kde-mgl` (Droidspaces 6.4.5, Arch Linux ARM aarch64 glibc, host net, `rootfs.img` mounted at `/mnt/Droidspaces/arch-kde-mgl` on the Android side). Bind mounts: `/data/local/tmp/anland-mobilegl` -> `/run/anland-mobilegl`, `/data/local/tmp/display_daemon.sock` -> `/run/display.sock`.
-6. `desktop-session.service` (User=swung0x48) has drop-in `ExecStart=/opt/mobilegl/bin/mobilegl-startup.sh plasma`, which writes a user drop-in for `plasma-kwin_wayland.service` (kwin_wayland_wrapper -> `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`, `ANLAND_MOBILEGL=1`, `MOBILEGL_IPC_SURFACE=server`) and runs `startplasma-wayland`.
-7. KWin 6.7.4 with anland's `anland` backend renders straight into the anland Android Surface through the server. Every other GL process is `MOBILEGL_IPC_SURFACE=offscreen` and presents through KWin.
+6. `desktop-session.service` (User=swung0x48, **enabled**: the container boots straight into it, as the original image does) has drop-in `/etc/systemd/system/desktop-session.service.d/mobilegl.conf` (anland `producers/kde/Arch_v5/desktop-session-mobilegl.conf`, installed + enabled by `sync-build-kwin.sh`): `ExecStartPre=mobilegl-startup.sh wait` (until `@anland-mobilegl` listens in `/proc/net/unix` and the daemon socket exists), `ExecStartPre=+... sync-backend`, `Restart=always`, then `ExecStart=/opt/mobilegl/bin/mobilegl-startup.sh plasma`, which deletes the sticky software-renderer key, sets `MOBILEGL_IPC_PROBE_TIMEOUT_MS=0` session-wide (MobileGL never declines, so glvnd never falls through to another GL stack), writes a user drop-in for `plasma-kwin_wayland.service` (kwin_wayland_wrapper -> `/opt/mobilegl/kwin/bin/kwin_wayland` + `/opt/mobilegl/kwin/lib/libkwin.so.6.7.4`, `ANLAND_MOBILEGL=1`, `MOBILEGL_IPC_SURFACE=server`) and runs `startplasma-wayland`.
+7. KWin 6.7.4 with anland's `anland` backend renders straight into the anland Android Surface through the server. While the window is not on screen (consumer disconnected) the backend powers its output down (DPMS Off + RenderLoop inhibited: no compositing, no frame callbacks) and back up when the window returns. Every other GL process is `MOBILEGL_IPC_SURFACE=offscreen` and presents through KWin.
 8. Client = `/opt/mobilegl/lib/libMobileGL.so` (glibc aarch64), the container's **system-wide** GL vendor (section below): glvnd EGL vendor `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json` (sorts before the distribution's `50_*.json`, which serves whenever MobileGL declines), GLX vendor `/usr/lib/libGLX_mobilegl.so.0`, settings from `/etc/mobilegl/client.conf` (`MOBILEGL_TRANSPORT=spawn MOBILEGL_IPC_DATA=shm MOBILEGL_IPC_CONTROL=unix:@anland-mobilegl`) + `/etc/mobilegl/backend`. No per-process environment is needed.
 9. Zero-copy windows: client `wl_egl_window` frames are server-allocated AHardwareBuffer "shared images" exported as dma-buf fds over `zwp_linux_dmabuf_v1`; KWin imports them with EGL and the server recognises its own buffer by inode. KWin gets a DRM device via `GBM_BACKEND=mobilegl` -> `/usr/lib/gbm/mobilegl_gbm.so` (node is only an identity, never ioctl'd). Without linux-dmabuf the client falls back to wl_shm readback.
 10. X11 apps (Xwayland) use the MobileGL GLX vendor with per-frame readback + `xcb_put_image`. Chrome runs ANGLE-GLES over MobileGL EGL with the GPU in-process (`mobilegl-startup.sh chrome`).
@@ -40,23 +40,21 @@ nobody else is mid-test.  Use your own `ct.sh` channel names (others use c, c2, 
 
 Run host scripts from Git Bash as `bash scripts/<x>.sh`.  Raw adb with device paths needs `MSYS_NO_PATHCONV=1` and the whole root command in one quoted string: `adb shell 'su -c "..."'`.  A device script can also be run without pushing: `MSYS_NO_PATHCONV=1 adb shell 'su -c sh' < scripts/device/status.sh`.
 
-## Bring-up after a phone reboot
+## Starting, idling, stopping - no manual steps
 
-Nothing of the session survives a reboot.  Either `adb shell 'su -c "sh /data/local/tmp/anl/bringup.sh [DirectGLES|DirectVulkan]"'`, or by hand, in this order:
+Nothing starts at phone boot (container `run_at_boot=0`). **Opening the app** (launcher icon = `am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity`, no extras; the APK's default socket is the experiment's, `-PanlandDefaultSocket`) calls `MobileGLDesktop.ensureStarted()` - the single trigger - which starts the foreground service and runs the APK's `assets/mobilegl-desktop.sh up` as root (`su`): display daemon if absent (the script leaves the app's cgroup first, so it survives the app) -> backend published -> container started if stopped -> `systemctl start --no-block desktop-session`. The window waits for the daemon socket; the server listens once the Surface is attached; the session's `wait` step then lets Plasma start. A reopen with everything up only reattaches the window. Log: `/data/local/tmp/anland-mobilegl/desktop.log`, logcat `AnlandMobileGL` ("MobileGL desktop up done in N ms").
+
+Hidden window, screen off, lock screen or swiped-away task: server and session stay (foreground service); KWin logs "viewer gone: output powered down" and idles, "viewer back" on return. **Stop desktop** (notification action, or `am startservice -n <pkg>/com.anland.consumer.MobileGLWorker -a com.anland.consumer.mobilegl.STOP`) runs `mobilegl-desktop.sh down` (session + container stopped, daemon stays), closes the windows, ends `:mobilegl`.
 
 ```sh
-adb connect <ip>:<port>                       # only for wireless debugging (e.g. USB cannot power it)
+adb connect <ip>:<port>                        # only for wireless debugging
 export MSYS_NO_PATHCONV=1
-adb shell 'su -c "svc power stayon true"'
-adb shell 'su -c "setprop debug.mobilegl.backend DirectVulkan"'     # or DirectGLES; match /etc/mobilegl/backend
-adb shell 'su -c "am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity --es socket_path /data/local/tmp/anland-mobilegl/display.sock"'
-adb shell 'su -c "/data/local/Droidspaces/bin/droidspaces -C /data/local/Droidspaces/Containers/arch-kde-mgl/container.config start"'
-adb shell 'su -c "sh /data/local/tmp/anl/restart-daemon.sh"'       # experiment display daemon, chmod 777 dir / 666 socket
-adb shell 'su -c "sh /data/local/tmp/anl/run-plasma.sh"'           # restarts app + desktop-session, ~90 s
+adb shell 'su -c "sh /data/local/tmp/anl/bringup.sh"'     # after a reboot: wake, dismiss keyguard, open the app, print the timeline
+bash scripts/desktop-verify.sh push cold reopen idle      # timed cold start, swipe-away + reopen, CPU/GPU visible/hidden/locked
+adb shell 'su -c "sh /data/local/tmp/anl/status.sh"'
 ```
 
-`droidspaces` has no `status` command; `droidspaces show` lists running containers.  Do not use the old
-`/data/local/tmp/restart-daemon.sh` (it kills a hard-coded PID).  Check with `device/status.sh`.
+`droidspaces` has no `status` command; `droidspaces show` lists running containers. `device/run-plasma.sh` is a developer restart (session + logind user, then the app), needed after a rebuild because KWin does not reconnect to a new server process. `device/desktop-reset.sh` takes everything down to the post-reboot state. The old manual sequence (setprop, start container, `restart-daemon.sh`, `run-plasma.sh`) is gone; `restart-daemon.sh` remains for daemon debugging only.
 
 ## Build and deploy loops
 
@@ -91,7 +89,7 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest 
 
 ## Switching backends
 
-`adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'` (sets the prop, writes `/etc/mobilegl/backend`, restarts the app), then `run-plasma.sh` - the running session's clients are pinned to the old backend.  `cyc.sh` keeps whatever is set.
+In the app: Settings > Connection > MobileGL desktop > Renderer backend, then Stop desktop and open the app. Or `adb shell 'su -c "sh /data/local/tmp/anl/switch.sh DirectGLES"'`, which does the same (saves the setting through the launch extra, STOPs the service, reopens; clears a stale `debug.mobilegl.backend`). No setprop, no file to edit in the container: the session copies the published backend into `/etc/mobilegl/backend` on its next start. `cyc.sh` keeps whatever is set.
 
 ## System-wide vendor and fallback
 
@@ -102,7 +100,7 @@ Installed by `xdeploy.sh` (and anland's `anland-build-client.sh`), so any proces
 | `/usr/share/glvnd/egl_vendor.d/10_mobilegl.json` | EGL vendor, asked before the system's `50_*.json` |
 | `/opt/mobilegl/share/glvnd/egl_vendor.d/50_mobilegl.json` | same JSON, for per-process forcing with `__EGL_VENDOR_LIBRARY_FILENAMES` |
 | `/etc/mobilegl/client.conf` | `KEY=value` defaults for every client (transport, data, endpoint); rewritten on deploy |
-| `/etc/mobilegl/backend` | the backend (`switch.sh` writes it); wins over a `MOBILEGL_BACKEND_TYPE` line in client.conf |
+| `/etc/mobilegl/backend` | the backend (the session's `sync-backend` step copies the app's choice in); wins over a `MOBILEGL_BACKEND_TYPE` line in client.conf |
 | `/etc/environment.d/10-mobilegl.conf` | `__GLX_VENDOR_LIBRARY_NAME=mobilegl`, `GBM_BACKEND=mobilegl` for the systemd user manager (all Plasma services and what they start, terminals included) |
 | `/etc/profile.d/mobilegl.sh` | the same two for login shells (`bash -l`, `su -l`, ssh, `droidspaces run bash -l`) |
 
@@ -144,6 +142,8 @@ Reference (glmark2-es2-wayland 1280x720, zero-copy vs wl_shm): Espryt 187 vs 49,
 | Native crashes | `adb logcat -b crash -d`; container `coredumpctl list` |
 | Session / KWin stderr | container `journalctl -u desktop-session --no-pager`, `journalctl --no-pager --since -2min \| grep kwin_wayland` |
 | Display daemon | `/data/local/tmp/anland-mobilegl/display-daemon.log` |
+| Desktop start/stop (app's su script) | `/data/local/tmp/anland-mobilegl/desktop.log`, `container-start.log`; logcat `-s AnlandMobileGL` |
+| Session wait / backend sync | container `journalctl -u desktop-session --no-pager` ("waiting for the MobileGL server ...") |
 
 `MOBILEGL_LOG_FILE_PATH=/tmp/x.log` produces `/tmp/x.client.log` (and `.server.log` for forwarded lines); files are truncated on open, so one base per process.  Client builds log at INFO.  Symbolize server frames with `$ANDROID_NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-addr2line.exe -Cfe build-android/libMobileGL.so <offset>`.
 
@@ -151,10 +151,10 @@ Reference (glmark2-es2-wayland 1280x720, zero-copy vs wl_shm): Espryt 187 vs 49,
 
 - **pkill -f self-match**: a `ct.sh`/`droidspaces run bash -lc "<script>"` process carries the script in its argv; `pkill -f chrome` kills the runner. Use `pkill -x`.
 - **Root-owned /tmp files**: a log created by a root-run client cannot be reopened by swung0x48 later (no log appears). `rm -f` it as root first.
-- **Sticky Plasma software renderer**: after any server crash Plasma writes `[QtQuickRendererSettings] SceneGraphBackend=software` into `~swung0x48/.config/kdeglobals`; plasmashell then renders on the CPU and screenshots still look fine (tray icon "正在使用的软件渲染器"). Delete before any verdict: `sudo -u swung0x48 kwriteconfig6 --file kdeglobals --group QtQuickRendererSettings --key SceneGraphBackend --delete` (cyc.sh does it), restart the session.
+- **Sticky Plasma software renderer**: after any server crash Plasma writes `[QtQuickRendererSettings] SceneGraphBackend=software` into `~swung0x48/.config/kdeglobals`; plasmashell then renders on the CPU and screenshots still look fine (tray icon "正在使用的软件渲染器"). `mobilegl-startup.sh plasma` deletes it at every session start; within a running session that hit a crash, restart the session (`run-plasma.sh`) before any verdict.
 - **Lock screen**: autolock is off (`kscreenlockerrc [Daemon] Autolock=false`); a real lock can only be left by typing the password (logind lock/unlock is not supported for this session type - `device/unlock.sh` is unverified). Test the greeter with `/usr/lib/kscreenlocker_greet --testing` and kill it.
 - **CRLF**: `core.autocrlf=true` here; anland's backend sources and `sync-build-kwin.sh` are CRLF in the Windows checkout. Strip CR before anything runs on Linux/Android (`tr -d '\r'`; `ct.sh`, `push-tools.sh`, `kwin-stage.sh` do). This skill has a `.gitattributes` forcing LF.
-- **Display daemon not auto-started** after reboot: KWin logs "failed to connect to display daemon at /run/anland-mobilegl/display.sock" and the session exits in ~3 s.
+- **Display daemon**: the app starts it; the session's `wait` step keeps KWin from starting without it (a KWin that cannot reach it logs "failed to connect to display daemon at /run/anland-mobilegl/display.sock" and exits in ~3 s). Anything started from the app's `su` must leave the app's cgroup (`echo $$ > /sys/fs/cgroup/cgroup.procs`) or a force-stop kills it.
 - **Device power/connection**: low battery or the screen turning off (30 s default) can kill the SurfaceView - `svc power stayon true`; wireless adb `ip:port` changes per pairing - never pin `-s HA27Q3LQ`, use `ANDROID_SERIAL` if several devices are attached.
 - **Container vs phone paths**: container `/tmp` is a different place from the phone's `/data/local/tmp`; move files via `/mnt/Droidspaces/arch-kde-mgl/root` (container `/root`) or `/data/local/tmp/anland-mobilegl` (= container `/run/anland-mobilegl`).
 - **Never overwrite a mapped .so in place** (container or APK while running): copy to a new inode and `mv -f`; the APK swap force-stops the app first.
