@@ -269,3 +269,61 @@ TEST(Damage, SwapchainAgeIsUnknownWhenContentWasNotKeptOrTheChainChanged) {
     EXPECT_EQ(ages.AgeOf(1), 0);
     EXPECT_EQ(ages.AgeOf(7), 0) << "an index the chain does not have";
 }
+
+// A partial copy into a shared image: the frame's rows run bottom-up, the image's top-down. Run
+// the blits the way glBlitFramebuffer does (a destination named with its Y bounds swapped takes
+// the source rows in reverse) over a frame of known texels: every pixel of the region, and only
+// those, must land where a whole flipped copy would have put it - edges included.
+TEST(Damage, FlippedCopiesLandEachDamagedTexelWhereAWholeFlipWouldAndNothingElse) {
+    constexpr Int32 W = 37, H = 23;
+    const auto texel = [](Int32 x, Int32 y) { return y * 1000 + x; };
+    const auto run = [&](const Region& region) {
+        Vector<Int32> image(static_cast<SizeT>(W) * H, -1);
+        for (const FlippedCopy& copy : FlippedCopies(region, W, H)) {
+            const Rect& s = copy.Source;
+            const Rect& d = copy.Destination;
+            EXPECT_EQ(s.Width, d.Width);
+            EXPECT_EQ(s.Height, d.Height);
+            EXPECT_TRUE(Contains({0, 0, W, H}, s));
+            EXPECT_TRUE(Contains({0, 0, W, H}, d));
+            for (Int32 i = 0; i < d.Height; ++i) {
+                for (Int32 x = 0; x < d.Width; ++x) {
+                    image[static_cast<SizeT>(d.Y + i) * W + d.X + x] = texel(s.X + x, s.Y + s.Height - 1 - i);
+                }
+            }
+        }
+        return image;
+    };
+    const auto inRegion = [](const Region& region, Int32 x, Int32 y) {
+        if (region.IsFull()) return true;
+        for (const Rect& r : region.Rects()) {
+            if (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height) return true;
+        }
+        return false;
+    };
+    const Region cases[] = {
+        Of({{0, 0, 5, 1}}),                         // the bottom row
+        Of({{30, H - 1, 7, 1}}),                    // the top row, the right edge
+        Of({{3, 4, 6, 5}, {5, 6, 10, 10}}),         // overlapping
+        Of({{-4, -4, 9, 9}, {W - 2, H - 3, 9, 9}}), // past the edges
+        Of({{0, 0, W, H}}),                         // all of it
+        Region::Full(),
+    };
+    for (const Region& region : cases) {
+        Region clipped = region;
+        clipped.Normalize(W, H);
+        const Vector<Int32> image = run(region);
+        for (Int32 row = 0; row < H; ++row) {
+            for (Int32 x = 0; x < W; ++x) {
+                const Int32 y = H - 1 - row; // the frame row that belongs in image row `row`
+                const Int32 got = image[static_cast<SizeT>(row) * W + x];
+                if (inRegion(clipped, x, y)) {
+                    EXPECT_EQ(got, texel(x, y)) << "frame texel " << x << "," << y << " misplaced";
+                } else {
+                    EXPECT_EQ(got, -1) << "image texel " << x << "," << row << " written outside the region";
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(FlippedCopies(Region{}, W, H).empty()) << "an empty region copies nothing";
+}

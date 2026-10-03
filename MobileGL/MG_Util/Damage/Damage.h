@@ -283,6 +283,30 @@ namespace MobileGL::MG_Util::Damage {
         return extBufferAge || (partialUpdate && damageRegionFollows);
     }
 
+    // One blit of a copy from a frame whose rows run bottom-up (a GL default framebuffer) into an
+    // image of the same size addressed top row first (a shared image's renderbuffer): `Source` in
+    // the frame's coordinates, `Destination` the same pixels in the image's. The blit names the
+    // destination's Y bounds swapped (Y + Height, then Y), which is what turns the rows over.
+    struct FlippedCopy {
+        Rect Source;
+        Rect Destination;
+    };
+
+    // The blits that bring `region` (the frame's coordinates) of a `width` x `height` frame into
+    // the image: clipped to the frame, none for an empty region (the image already is the frame),
+    // and one whole-frame blit for a region that covers it.
+    inline Vector<FlippedCopy> FlippedCopies(const Region& region, Int32 width, Int32 height) {
+        if (width <= 0 || height <= 0) return {};
+        Region clipped = region;
+        clipped.Normalize(width, height);
+        const Rect whole{0, 0, width, height};
+        if (clipped.IsFull()) return {FlippedCopy{whole, whole}};
+        Vector<FlippedCopy> copies;
+        copies.reserve(clipped.Rects().size());
+        for (const Rect& rect : clipped.Rects()) copies.push_back({rect, FlipY(rect, height)});
+        return copies;
+    }
+
     // Per buffer of a rotating set: the damage each has missed since it was last written.
     class BufferDamageTracker {
     public:

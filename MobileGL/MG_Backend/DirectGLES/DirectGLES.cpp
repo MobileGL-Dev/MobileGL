@@ -18655,6 +18655,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 EglImageRef Image;
                 GLuint Renderbuffer = 0;
                 Uint64 LastUse = 0;
+                // A present has written the image through this target (its content is a frame).
+                Bool Written = false;
             };
             struct PresentTargets {
                 std::mutex Mutex;
@@ -18926,6 +18928,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     it = targets.ById.emplace(view.Id, std::move(target)).first;
                 }
                 it->second.LastUse = ++targets.UseClock;
+                // A target written before keeps what it was given; one new to this process is
+                // copied whole whatever the client asked (it cannot know the image's history here).
+                const Bool wholeTarget = !it->second.Written;
+                it->second.Written = true;
 
                 GLuint& framebuffer = g_presentFramebuffers.Current();
                 if (framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &framebuffer);
@@ -18956,17 +18962,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // TOP ROW FIRST: GL's top row (y = height - 1) lands in the image's first memory
                     // row, which an AHardwareBuffer-backed renderbuffer addresses as y = 0.
                     //
-                    // ALWAYS THE WHOLE FRAME, whatever `region` says. A blit of only the damaged
-                    // rectangles into the image's renderbuffer was measured to lose texels around
-                    // them on a tiler: the driver does not load the image's other content into the
-                    // pass that blits a part of it, and what it stores back there is stale tile memory
-                    // (old frames' pixels around the copied rectangles). GL has no way to ask for the
-                    // load, so the copy stays whole here; the region still narrows what the client
-                    // damages on its surface, which is what the compositor repaints.
-                    (void)region;
-                    g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0, static_cast<GLint>(view.Height),
-                                                  static_cast<GLint>(view.Width), 0, GL_COLOR_BUFFER_BIT,
-                                                  sameExtent ? GL_NEAREST : GL_LINEAR);
+                    // Only where the image differs from the frame: the client keeps, per image, the
+                    // damage it missed (BufferDamageTracker), and a partial blit keeps the rest of
+                    // the renderbuffer as GL promises (checked texel for texel against the frame on
+                    // Adreno). What once left old texels around the rectangles was the scissor
+                    // guard above trusting another session's shadow: the copy was clipped, and
+                    // the missed-damage bookkeeping then never brought those texels over again.
+                    if (sameExtent && !wholeTarget && !region.IsFull()) {
+                        // Each rectangle flipped the same way (an empty region copies nothing: the
+                        // image already is the frame).
+                        for (const MG_Util::Damage::FlippedCopy& copy :
+                             MG_Util::Damage::FlippedCopies(region, sourceWidth, sourceHeight)) {
+                            const MG_Util::Damage::Rect& from = copy.Source;
+                            const MG_Util::Damage::Rect& to = copy.Destination;
+                            g_GLESFuncs.glBlitFramebuffer(from.X, from.Y, from.X + from.Width, from.Y + from.Height,
+                                                          to.X, to.Y + to.Height, to.X + to.Width, to.Y,
+                                                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                        }
+                    } else {
+                        g_GLESFuncs.glBlitFramebuffer(0, 0, sourceWidth, sourceHeight, 0,
+                                                      static_cast<GLint>(view.Height), static_cast<GLint>(view.Width),
+                                                      0, GL_COLOR_BUFFER_BIT, sameExtent ? GL_NEAREST : GL_LINEAR);
+                    }
                     const GLenum error = g_GLESFuncs.glGetError();
                     copied = error == GL_NO_ERROR;
                     if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(static_cast<GLenum>(readBuffer));
