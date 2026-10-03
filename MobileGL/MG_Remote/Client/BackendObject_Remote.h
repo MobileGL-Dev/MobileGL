@@ -108,6 +108,11 @@ namespace MobileGL::MG_Remote::Client {
         // session are forgotten without a release (their server is gone).
         void OnSessionReplaced();
 
+        // EGL_KHR_surfaceless_context's hidden pbuffer (EGLImpl's SurfacelessStandIn): an ordinary
+        // pbuffer on this side, created on the server with kPbufferFlagSurfacelessStandIn so it
+        // takes no surface mode there, and re-created the same way on a fresh session.
+        Bool CreateEGLSurfacelessStandIn(EGLSurface surface, EGLint width, EGLint height);
+
     protected:
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
 
@@ -125,6 +130,7 @@ namespace MobileGL::MG_Remote::Client {
         // The server side of `surface` on the CURRENT session: re-created from its client
         // registration when the session that had it was replaced. True when it exists now.
         Bool EnsureSurfaceHomed(EGLSurface surface);
+        Bool CreatePbufferOnServer(EGLSurface surface, EGLint width, EGLint height, Bool standIn);
         void NoteHomed(EGLSurface surface) {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
             m_homedSurfaces.insert(surface);
@@ -140,6 +146,8 @@ namespace MobileGL::MG_Remote::Client {
         // nor presented to nor attached on the new server, which never issued it. Guarded by the
         // base's m_eglStateMutex.
         std::unordered_set<EGLSurface> m_homedSurfaces;
+        // The surfaceless stand-ins among this object's pbuffers. Guarded by m_eglStateMutex.
+        std::unordered_set<EGLSurface> m_standInSurfaces;
         std::unordered_map<Uint64, Uint32> m_sessionSharedImages; // id -> references taken
         // The ids a replaced session held: releasing one is a success with nothing sent.
         std::unordered_set<Uint64> m_lostSessionSharedImages;

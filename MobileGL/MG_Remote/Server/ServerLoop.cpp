@@ -1513,12 +1513,16 @@ namespace MobileGL::MG_Remote::Server {
                                                        static_cast<Uint32>(frame.width),
                                                        static_cast<Uint32>(frame.height));
             return MOBILEGL_OK;
-        case SurfaceControlOp::CreatePbufferSurface:
+        case SurfaceControlOp::CreatePbufferSurface: {
+            // A surfaceless stand-in (kPbufferFlagSurfacelessStandIn) is no rendering path: it is
+            // admitted whatever the mode and latches none, so a client that binds surfacelessly
+            // before it creates its server-owned window still gets that window.
+            const Bool standIn = (frame.contextFlags & kPbufferFlagSurfacelessStandIn) != 0;
             // P12 (D4): a pbuffer in a session that went on-screen is the other mode, refused by
             // name and not latched - the session and its window surface carry on. P14 S2: the mode
             // is the session's own - latched by its first surface, on its own loop - and never
             // another session's.
-            if (!SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/false)) {
+            if (!standIn && !SessionSurfaceModeAdmits(m_surfaceMode, /*serverOwnedWindow=*/false)) {
                 frame.ok = false;
                 frame.refusal = static_cast<Uint8>(SurfaceRefusalCode::SurfaceModeMismatch);
                 MGLOG_E("MG_Remote server: SurfaceModeMismatch - CreatePbufferSurface (seq %llu, %dx%d) in a "
@@ -1535,11 +1539,18 @@ namespace MobileGL::MG_Remote::Server {
             // make-current that follows is forwarded and deduped one layer down (ID-54).
             if (frame.ok) {
                 ForgetCurrentTuple();
+                if (standIn) {
+                    MGLOG_I("MG_Remote server: surface=pbuffer %dx%d (surfaceless stand-in; the session's surface "
+                            "mode stays %s)",
+                            frame.width, frame.height, SessionSurfaceModeName(m_surfaceMode));
+                    return MOBILEGL_OK;
+                }
                 if (m_surfaceMode == SessionSurfaceMode::None) m_surfaceMode = SessionSurfaceMode::Offscreen;
                 // P12: THE ARM PROOF (ID-124), once per surface: which of the two paths ran.
                 MGLOG_I("MG_Remote server: surface=pbuffer %dx%d", frame.width, frame.height);
             }
             return MOBILEGL_OK;
+        }
         case SurfaceControlOp::MakeCurrent: {
             // C7 / ID-54: the apply thread binds the native context ONCE per context lifetime
             // and holds it for life. ApplyMakeCurrent forwards a bind only for a tuple it does
@@ -2133,12 +2144,14 @@ namespace MobileGL::MG_Remote::Server {
         return rc == MOBILEGL_OK && frame.ok;
     }
 
-    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height, SurfaceRefusalCode* refusal) {
+    Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height, SurfaceRefusalCode* refusal,
+                                       Uint32 flags) {
         SurfaceControlFrame frame;
         frame.kind = SurfaceControlOp::CreatePbufferSurface;
         frame.surface = TokenFromHandle(surface);
         frame.width = width;
         frame.height = height;
+        frame.contextFlags = flags;
         const MobileGLResult rc = ServerLoopInstance().RunSurfaceControlFrame(frame);
         if (refusal != nullptr) *refusal = static_cast<SurfaceRefusalCode>(frame.refusal);
         return rc == MOBILEGL_OK && frame.ok;

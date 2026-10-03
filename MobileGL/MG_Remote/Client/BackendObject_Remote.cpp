@@ -289,9 +289,21 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Bool BackendObject_Remote::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+        return CreatePbufferOnServer(surface, width, height, /*standIn=*/false);
+    }
+
+    Bool BackendObject_Remote::CreateEGLSurfacelessStandIn(EGLSurface surface, EGLint width, EGLint height) {
+        if (!CreatePbufferOnServer(surface, width, height, /*standIn=*/true)) return false;
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        m_standInSurfaces.insert(surface);
+        return true;
+    }
+
+    Bool BackendObject_Remote::CreatePbufferOnServer(EGLSurface surface, EGLint width, EGLint height, Bool standIn) {
         WaitForApplyBeforeEglForwarder("CreateEGLPbufferSurface");
         Server::SurfaceRefusalCode refusal = Server::SurfaceRefusalCode::None;
-        if (!Server::ServerCreateEGLPbufferSurface(surface, width, height, &refusal)) {
+        if (!Server::ServerCreateEGLPbufferSurface(surface, width, height, &refusal,
+                                                   standIn ? Server::kPbufferFlagSurfacelessStandIn : 0u)) {
             if (refusal == Server::SurfaceRefusalCode::SurfaceModeMismatch) {
                 // P12 (D4), named on THIS side too: the server logged its half.
                 MGLOG_E("MG_Remote client: SurfaceModeMismatch - eglCreatePbufferSurface (%dx%d) in a session "
@@ -468,6 +480,7 @@ namespace MobileGL::MG_Remote::Client {
         {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
             homed = m_homedSurfaces.erase(surface) != 0;
+            m_standInSurfaces.erase(surface);
         }
         if (homed && !ClientSession::SessionLatchedLost()) Server::ServerReleaseEGLSurface(surface);
         MG_Backend::BackendObject::ReleaseEGLSurface(surface);
@@ -481,6 +494,7 @@ namespace MobileGL::MG_Remote::Client {
         {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
             m_homedSurfaces.clear();
+            m_standInSurfaces.clear();
         }
         MG_Backend::BackendObject::ReleaseEGLResources();
     }
@@ -516,7 +530,8 @@ namespace MobileGL::MG_Remote::Client {
         Bool recreated = false;
         const char* kind = "pbuffer";
         if (state.Kind == SurfaceKind::Pbuffer) {
-            recreated = Server::ServerCreateEGLPbufferSurface(surface, state.Width, state.Height);
+            const Uint32 flags = m_standInSurfaces.count(surface) != 0 ? Server::kPbufferFlagSurfacelessStandIn : 0u;
+            recreated = Server::ServerCreateEGLPbufferSurface(surface, state.Width, state.Height, nullptr, flags);
         } else if (ClientSession::IsServerOwnedWindowSurface(surface)) {
             kind = "server-owned window";
             const Server::ServerOwnedWindowReply reply =

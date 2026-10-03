@@ -18,7 +18,9 @@
 //   * without the knob a NULL window is the client's own EGL_BAD_NATIVE_WINDOW and the server never
 //     hears of it;
 //   * D4: a session whose first surface was a pbuffer (offscreen) is refused a ServerOwned surface as
-//     SurfaceModeMismatch - named by the server and by the client - and carries on.
+//     SurfaceModeMismatch - named by the server and by the client - and carries on;
+//   * a surfaceless make-current (EGL_KHR_surfaceless_context) commits the session to neither mode:
+//     the hidden pbuffer the backend is bound to is not the session's first surface.
 
 #include "P12ServerRig.h"
 
@@ -35,6 +37,7 @@ namespace {
         ServerOwnedFirst,       // the ServerOwned create, then a pbuffer
         NullWindowWithoutKnob,  // the knob unset: a NULL window, then a pbuffer
         PbufferThenServerOwned, // a pbuffer first (offscreen), then the ServerOwned create
+        SurfacelessThenServerOwned, // a surfaceless make-current first, then the ServerOwned create
     };
 
     struct EglPeerReport {
@@ -95,7 +98,13 @@ namespace {
                     r.pbufferCreated = pbuffer != EGL_NO_SURFACE ? 1 : 0;
                     if (r.pbufferCreated) r.madeCurrent = EGL::MakeCurrent(dpy, pbuffer, pbuffer, context) == EGL_TRUE;
                 };
-                if (scenario == Scenario::PbufferThenServerOwned) {
+                if (scenario == Scenario::SurfacelessThenServerOwned) {
+                    r.madeCurrent = EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
+                    (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                    tryWindow();
+                    r.madeCurrentAfter =
+                        EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
+                } else if (scenario == Scenario::PbufferThenServerOwned) {
                     tryPbuffer();
                     tryWindow();
                     if (r.pbufferCreated) {
@@ -242,4 +251,34 @@ TEST(ServerOwnedSurface, AnOffscreenSessionRefusesAServerOwnedSurfaceAsSurfaceMo
     EXPECT_NE(reap.find("exit=0 "), std::string::npos) << reap;
     EXPECT_NE(client.Own().find("SurfaceModeMismatch - eglCreateWindowSurface"), std::string::npos) << client.Own();
     EXPECT_EQ(r.madeCurrentAfter, r.madeCurrent) << "the session did not keep its pbuffer after the refusal";
+}
+
+// A SURFACELESS BIND IS NO SURFACE MODE. KWin and Qt make a context current with no surface when
+// EGL_KHR_surfaceless_context is advertised, and the backend is then bound to a hidden 1x1 pbuffer.
+// That pbuffer must not latch the session offscreen: a client with MOBILEGL_IPC_SURFACE=server
+// creates its window after such a bind, and a refusal there is a black desktop. The window here is
+// refused for the reason a displayless server has (NoServerDisplay), never SurfaceModeMismatch, and
+// the surfaceless bind still works after it. Red with the stand-in created as an ordinary pbuffer:
+// the server answers SurfaceModeMismatch.
+TEST(ServerOwnedSurface, ASurfacelessBindDoesNotLatchTheSessionOffscreen) {
+    ServerProcess server;
+    ASSERT_TRUE(LaunchSupervisor("surfaceless", &server)) << server.Log();
+    ClientLog client("surfaceless", server);
+    const EglPeerReport r = RunEglPeer(server, Scenario::SurfacelessThenServerOwned, /*surfaceKnob=*/true, client.base);
+    ASSERT_EQ(r.initialized, 1) << r.note;
+    if (r.madeCurrent == 0) GTEST_SKIP() << "the surfaceless bind needs a pbuffer, and this host has no headless EGL";
+    EXPECT_EQ(r.windowCreated, 0) << "a server with no display created a server-owned window surface";
+    EXPECT_EQ(r.windowError, EGL_BAD_NATIVE_WINDOW);
+    std::string reap;
+    ASSERT_TRUE(WaitFor([&] { return !(reap = ReapLine(server, r.serverPid)).empty(); }, 15000)) << server.Log();
+    const std::string serverLog = server.Log();
+    EXPECT_NE(serverLog.find("surface=pbuffer 1x1 (surfaceless stand-in"), std::string::npos)
+        << "no stand-in arm proof:\n" << serverLog;
+    EXPECT_EQ(serverLog.find("SurfaceModeMismatch"), std::string::npos)
+        << "the surfaceless bind latched the session offscreen:\n" << serverLog;
+    EXPECT_NE(serverLog.find("Refuse ServerOwned: this server owns no display"), std::string::npos) << serverLog;
+    EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos) << serverLog;
+    EXPECT_NE(reap.find("exit=0 "), std::string::npos) << reap;
+    EXPECT_NE(client.Own().find("Refuse ServerOwned (NoServerDisplay)"), std::string::npos) << client.Own();
+    EXPECT_EQ(r.madeCurrentAfter, 1) << "the surfaceless bind failed after the refused window";
 }

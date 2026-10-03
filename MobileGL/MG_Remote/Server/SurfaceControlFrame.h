@@ -99,6 +99,15 @@ namespace MobileGL::MG_Remote::Server {
     // substitutes its own window there; no pointer crosses the wire (Rule G/H).
     inline constexpr Int kServerOwnedWindowBackend = 0x10000;
 
+    // CreatePbufferSurface's flags, in the frame's `contextFlags` word (the wire's SurfaceOp
+    // contextFlags, 0 on every op but CreateContext before this, so an older server reads none).
+    // SURFACELESS STAND-IN: the hidden 1x1 pbuffer a client binds the backend to for a surfaceless
+    // make-current (EGL_KHR_surfaceless_context). It is never presented or read back, so it is no
+    // rendering path: it neither latches the session's surface mode nor is refused by it (D4).
+    // Without it, a client that made a context current with no surface before it created its
+    // server-owned window latched its session offscreen, and the window was refused.
+    inline constexpr Uint32 kPbufferFlagSurfacelessStandIn = 1u;
+
     // P12. Why the server declined a surface op, carried back in the reply half (`refusal`). The
     // values ARE the wire's SurfaceRefusal (protocol.fbs); SurfaceOpCodec pins the agreement with
     // static_asserts, the way it pins SurfaceControlOp against SurfaceOpKind. None of them latches
@@ -133,7 +142,8 @@ namespace MobileGL::MG_Remote::Server {
         Int swapInterval = 0;
         // P14 S1. CreateContext's two values beyond `context` (which is the client context token
         // itself): the share group the context was derived into, and the reserved flags word the
-        // schema carries so a later attribute has a slot. 0 on every other op.
+        // schema carries so a later attribute has a slot. CreatePbufferSurface carries its own
+        // flags in the same word (kPbufferFlagSurfacelessStandIn). 0 on every other op.
         Uint64 shareGroupToken = 0;
         Uint32 contextFlags = 0;
         // The reply half: written by the dispatch on the apply thread, read by the poster after

@@ -702,9 +702,10 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
     Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
     // P12: `refusal`, when given, receives the server's named refusal (SurfaceModeMismatch for a
-    // pbuffer in an on-screen session), None otherwise.
+    // pbuffer in an on-screen session), None otherwise. `flags`: kPbufferFlagSurfacelessStandIn
+    // for the hidden pbuffer of a surfaceless make-current, which takes no surface mode.
     Bool ServerCreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height,
-                                       SurfaceRefusalCode* refusal = nullptr);
+                                       SurfaceRefusalCode* refusal = nullptr, Uint32 flags = 0);
     // P12 (on-screen server window), D1/D2. CreateWindowSurface on the SERVER's window: one frame,
     // WindowKind::ServerOwned with nativeToken 0 on the wire, no SetWindowHandle. `width`/`height`
     // is the size the client asked for (0/0 = the server window's own size); the reply carries the

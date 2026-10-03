@@ -235,6 +235,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return *standIns;
         }
 
+        // eglCreatePbufferSurface for the stand-in, except that a split client creates it on the
+        // server as a stand-in, which takes no surface mode there (a server-owned window may follow).
+        EGLSurface CreateSurfacelessStandInPbuffer(EGLStateContext* state, EGLDisplay dpy, EGLConfig config,
+                                                   const EGLint* attribs);
+
         // The display's stand-in, made now if it has none (or the one it had did not survive).
         // EGL_NO_SURFACE when the backend could not make a pbuffer; the EGL error is then set.
         EGLSurface SurfacelessStandIn(EGLStateContext* state, EGLDisplay dpy) {
@@ -251,7 +256,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 return EGL_NO_SURFACE;
             }
             const EGLint attribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
-            const EGLSurface standIn = CreatePbufferSurface(dpy, config, attribs);
+            const EGLSurface standIn = CreateSurfacelessStandInPbuffer(state, dpy, config, attribs);
             if (standIn != EGL_NO_SURFACE) standIns[dpy] = standIn;
             return standIn;
         }
@@ -428,6 +433,26 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return false;
         }
 #endif
+
+        EGLSurface CreateSurfacelessStandInPbuffer(EGLStateContext* state, EGLDisplay dpy, EGLConfig config,
+                                                   const EGLint* attribs) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            auto* remote = dynamic_cast<MG_Remote::Client::BackendObject_Remote*>(GetBackendObject(state));
+            if (remote == nullptr) return CreatePbufferSurface(dpy, config, attribs);
+            if (!RecoverBeforeCreatingSurface(state)) return EGL_NO_SURFACE;
+            const EGLSurface surface = state->CreatePbufferSurface(dpy, config, attribs);
+            if (surface == EGL_NO_SURFACE) return EGL_NO_SURFACE;
+            if (!remote->CreateEGLSurfacelessStandIn(surface, GetAttribValue(attribs, EGL_WIDTH, 1),
+                                                     GetAttribValue(attribs, EGL_HEIGHT, 1))) {
+                state->DestroySurface(dpy, surface);
+                state->SetError(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+            return surface;
+#else
+            return CreatePbufferSurface(dpy, config, attribs);
+#endif
+        }
     } // namespace
 
     EGLSurface CreateWindowSurface(EGLDisplay dpy, EGLConfig config, NativeWindowType window,
