@@ -136,6 +136,11 @@ ordinary X apps (xterm, xeyes) for glamor rendering.
 glxgears 1280x720, % of one core, `x11-verify.sh measure`; "before" = the old stack (`-shm`
 llvmpipe Xwayland, GLX readback + PutImage).
 
+> glxgears is fixed-function GL (glBegin/glEnd display lists, glLight), which MobileGL does not
+> implement (Core Profile only), so its window stays black. These numbers measure presentation
+> throughput of empty frames through each path, not rendering. Check X11 rendering with a
+> core-profile or shader-based GLX client, and verify it from pixels (mgl-xgrab / XGetImage).
+
 | run | fps | phone | glxgears | Xwayland | kwin | server | GPU |
 |---|---|---|---|---|---|---|---|
 | before, unpaced | 160 | 229% | 28% | 42% | 71% | 37% | 15% |

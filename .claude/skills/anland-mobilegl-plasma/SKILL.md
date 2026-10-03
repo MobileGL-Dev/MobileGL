@@ -117,7 +117,7 @@ sudo -u swung0x48 env -i HOME=/home/swung0x48 PATH=/usr/bin XDG_RUNTIME_DIR=/run
 
 ## Test clients and how to verify
 
-X11 on the GPU has its own driver, `scripts/x11-verify.sh` (preflight, measure before/after with glxgears at `vblank_mode=0` on both GLX paths, deploy-client/-kwin/-server, check, apps, stop); `scripts/device/x11-measure.sh` refuses to load the phone below 40% battery.
+X11 on the GPU has its own driver, `scripts/x11-verify.sh` (preflight, measure before/after with glxgears at `vblank_mode=0` on both GLX paths (presentation throughput only: glxgears is fixed-function GL, which MobileGL does not implement, so its window is black by design), deploy-client/-kwin/-server, check, apps, stop); `scripts/device/x11-measure.sh` refuses to load the phone below 40% battery.
 
 Inside the container as root (`printf '...' | bash scripts/ct.sh <chan>`), `mgrun offscreen <cmd>` runs a client as swung0x48 in the live session through a login shell, with nothing but the surface mode and the log path set (log `/tmp/mgl-run.client.log`, override base with `MGLOG=/tmp/x.log`); a plain `env -i ... bash -l -c '<cmd>'` as swung0x48 gets MobileGL the same way:
 ```sh
