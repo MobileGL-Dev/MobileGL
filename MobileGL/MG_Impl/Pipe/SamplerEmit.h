@@ -576,12 +576,12 @@ namespace MobileGL::MG_Pipe {
             // here - a content-addressed CSO has no frontend object whose death is being
             // announced, which is precisely why this eviction is the only death path it has.
             //
-            // THE DELETE REACHES THE BOUND SHARE GROUP ONLY, so it is sent only when that group
-            // holds the record; a group that was never sent the create would count
-            // it as a refused object call. Other groups keep an unreferenced record at this slot
-            // (nothing may name it: the count is 0) until a create for the slot's next
-            // generation is published there and starts it over, or the group is torn down.
-            if (IsPublishedIn(m_entries[index], MGPipeCurrentShareGroupToken())) {
+            // THE DELETE ENDS THE HANDLE IN EVERY SHARE GROUP IT WAS PUBLISHED TO, not only the
+            // bound one: the applier drops a sampler CSO from every group of its session
+            // (MGPipeApplyDeleteSamplerState), because the handle this frees is one identity for
+            // the whole session. So it is sent whenever ANY group was sent the create - and not
+            // at all for an entry no group holds, which the applier would count as a refusal.
+            if (m_entries[index].PublishedGroupCount != 0) {
                 MGPipeRouteDeleteSamplerState(handle);
             }
             // AND THE LATCH GOES WITH THE DELETE. This is the "an emitter that drops a record

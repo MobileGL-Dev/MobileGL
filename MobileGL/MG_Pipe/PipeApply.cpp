@@ -663,6 +663,25 @@ namespace MobileGL::MG_Pipe {
             return raw;
         }
 
+        // Every share group's object records in the session the calling thread's records are
+        // applied for, or nothing on a thread that serves no session (the process-wide applier is
+        // then the only one). The pointers stay valid after the lock is dropped: a group's records
+        // are held by UniquePtr, and only this session's own apply thread adds or drops its groups.
+        Vector<MGPipeObjectRecords*> BoundSessionGroups() {
+            Vector<MGPipeObjectRecords*> groups;
+            const MGPipeApplierKeyResolver resolve = g_applierKeyResolver;
+            MGPipeApplierKey key;
+            if (resolve == nullptr || !resolve(&key)) return groups;
+            std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
+            const auto session = g_applierSessions.find(key.SessionKey);
+            if (session == g_applierSessions.end()) return groups;
+            for (auto& [groupKey, records] : session->second.Groups) {
+                (void)groupKey;
+                if (records) groups.push_back(records.get());
+            }
+            return groups;
+        }
+
         thread_local MGPipeApplierState* t_applierCached = nullptr;
         thread_local Uint64 t_applierCachedSession = 0;
         thread_local Uint64 t_applierCachedContext = 0;
@@ -3286,6 +3305,27 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerCso),
                         "delete_sampler_state on kind %u", handle.Kind);
+        // A SAMPLER CSO IS ONE VALUE FOR THE WHOLE SESSION, and its delete drops it from every
+        // share group that holds it. The client's cache is content-addressed and process-wide:
+        // one handle names one canonical value, published into each group that uses it (a
+        // record per group, all of them copies), and the cache's eviction frees the handle -
+        // which ends it in every group at once, whichever context happens to be bound. Dropping
+        // only the bound group's copy left every other group a record at a slot the client hands
+        // out again. The handle space is the client's, so no other object can hold this slot at
+        // this generation in any of the session's groups.
+        if (const Vector<MGPipeObjectRecords*> groups = BoundSessionGroups(); !groups.empty()) {
+            Bool dropped = false;
+            for (MGPipeObjectRecords* group : groups) {
+                MGPipeSamplerCsoRecord* held = FindIn(group->SamplerCsos, handle.Handle);
+                if (held == nullptr) continue;
+                const Uint32 gen = held->Gen;
+                *held = MGPipeSamplerCsoRecord{};
+                held->Gen = gen;
+                dropped = true;
+            }
+            if (!dropped) (void)ResolveObject(MGPipeApplier().SamplerCsos, "delete_sampler_state", handle.Handle);
+            return;
+        }
         MGPipeSamplerCsoRecord* record =
             ResolveObject(MGPipeApplier().SamplerCsos, "delete_sampler_state", handle.Handle);
         if (record == nullptr) return;

@@ -908,6 +908,40 @@ namespace {
         Cache().Release(second);
     }
 
+    // AN EVICTION ENDS THE VALUE IN EVERY SHARE GROUP IT WAS PUBLISHED TO. The cache frees the
+    // handle, which is one identity for the whole session, whichever context is bound when the LRU
+    // runs. Red while the delete reached the bound group only: the other group kept a record at a
+    // slot the cache hands out again.
+    TEST(SamplerEmit, AnEvictionDropsTheValueFromEveryShareGroupItWasPublishedTo) {
+        EmitterScope scope;
+        ShareGroupPair groups(/*shared=*/false);
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+
+        groups.MakeCurrent(0);
+        const MGPipeHandle victim = Cache().Acquire(params, payload);
+        groups.MakeCurrent(1);
+        ASSERT_EQ(Cache().Acquire(params, payload), victim);
+        ASSERT_NE(BoundGroupSamplerRecord(victim), nullptr) << "the second group was not sent the create";
+        Cache().Release(victim);
+        Cache().Release(victim);
+
+        // The first group fills the cache with values nothing keeps naming: the victim is the
+        // least recently used entry, and the LRU takes it while the FIRST group is bound.
+        groups.MakeCurrent(0);
+        SamplerParameters filler = DistinctParameters();
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity; ++i) {
+            filler.minLod = static_cast<float>(i) + 0.5f;
+            Cache().Release(Cache().Acquire(filler, payload));
+        }
+        ASSERT_FALSE(Cache().RecordIsPublished(victim)) << "the LRU did not take the victim";
+        EXPECT_EQ(BoundGroupSamplerRecord(victim), nullptr) << "the bound group still holds the evicted value";
+        groups.MakeCurrent(1);
+        EXPECT_EQ(BoundGroupSamplerRecord(victim), nullptr)
+            << "the other share group still holds a sampler CSO the cache has freed";
+        EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+    }
+
     // ============================ D-F2: the sampler view ============================
 
     TEST(SamplerEmit, AnUnchangedTextureReIssuesNothing) {
