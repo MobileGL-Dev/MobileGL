@@ -822,9 +822,19 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         impl.useDmabuf = impl.dmabufWanted && impl.dmabuf != nullptr;
     }
 
-    Bool WindowSurface::Present(const MG_Util::Damage::Region& damage, Int swapInterval) {
+    void WindowSurface::CommitPendingState() {
         Impl& impl = *m_impl;
-        if (impl.window == nullptr) return false;
+        if (impl.window == nullptr || impl.window->surface == nullptr) return;
+        const Api& api = WaylandApi();
+        wl_proxy* surface = impl.window->surface;
+        api.marshalFlags(surface, kSurfaceCommit, nullptr, api.getVersion(surface), 0);
+        api.flush(impl.display);
+    }
+
+    WindowSurface::PresentResult WindowSurface::Present(const MG_Util::Damage::Region& damage, Int swapInterval,
+                                                        Bool (*sessionLost)()) {
+        Impl& impl = *m_impl;
+        if (impl.window == nullptr) return PresentResult::kNotShown;
         if (swapInterval != impl.loggedInterval) {
             MGLOG_I("Wayland: window surface %dx%d swaps with interval %d (%s)", impl.width, impl.height,
                     static_cast<int>(swapInterval),
@@ -846,9 +856,12 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 if (backendObject->PresentToSharedImage(buffer->imageId, copy)) {
                     impl.Commit(buffer->buffer, damage);
                     buffer->busy = true;
-                    return true;
+                    return PresentResult::kPresented;
                 }
             }
+            // The image went with a lost server: the window keeps its shared images (a fresh
+            // session replaces them, OnSessionReplaced) and shows no frame of the lost device.
+            if (sessionLost != nullptr && sessionLost()) return PresentResult::kLost;
             MGLOG_E_ONCE("Wayland: a frame could not be presented through a linux-dmabuf shared image; the window "
                          "falls back to wl_shm");
             impl.FallBackToShm();
@@ -857,15 +870,17 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         ShmBuffer* buffer = impl.NextFree();
         if (buffer == nullptr) {
             MGLOG_E_ONCE("Wayland: no wl_shm buffer could be taken for the frame; it is not shown");
-            return false;
+            return PresentResult::kNotShown;
         }
 
         // GL's rows run bottom-up and RGBA; a wl_shm buffer's run top-down and B, G, R, A.
         ReadBackFrameBGRA(impl.width, impl.height, impl.scratch, static_cast<Uint8*>(buffer->map),
                           static_cast<SizeT>(buffer->stride));
+        // A read-back the device was lost under answered zeros: the buffer stays free.
+        if (sessionLost != nullptr && sessionLost()) return PresentResult::kLost;
         impl.Commit(buffer->buffer, MG_Util::Damage::Region::Full());
         buffer->busy = true;
-        return true;
+        return PresentResult::kPresented;
     }
 } // namespace MobileGL::MG_Impl::EGLImpl::Wayland
 

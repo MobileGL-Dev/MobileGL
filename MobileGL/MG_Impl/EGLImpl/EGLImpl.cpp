@@ -692,7 +692,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         // A swap of a lost context's frame: EGL_CONTEXT_LOST (EGL 1.5 3.2), and nothing presented.
+        // A Wayland window is still committed, with no new buffer (WindowSurface::CommitPendingState):
+        // Qt asks for a frame callback before every swap and draws the window again only once it
+        // has fired, so a swap that never committed froze the window for good - a Plasma panel
+        // that hit the loss in its own swap never redrew, not even to rebuild its context.
         if (ContextIsLost(state, state->GetCurrentContext())) {
+#if MOBILEGL_WAYLAND_WINDOWS
+            if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end()) it->second->CommitPendingState();
+#endif
             state->SetError(EGL_CONTEXT_LOST);
             return EGL_FALSE;
         }
@@ -720,10 +727,28 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #if MOBILEGL_WAYLAND_WINDOWS
         // A Wayland window shows what is attached to it: the frame is read back and attached
         // BEFORE the swap, while it is still the drawable's content.
-        if (auto it = WaylandSurfaces().find(draw);
-            it != WaylandSurfaces().end() && !it->second->Present(damage, state->GetSwapInterval(dpy))) {
-            state->SetError(EGL_BAD_SURFACE);
-            return EGL_FALSE;
+        if (auto it = WaylandSurfaces().find(draw); it != WaylandSurfaces().end()) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // A loss that this very present runs into is reported here, as the one above: a
+            // frame of the lost device shown as if it were the window's would leave the toolkit
+            // with a transparent window it learns only afterwards it has to redraw.
+            const auto sessionLost = +[]() -> Bool {
+                auto* current = GetState();
+                return current != nullptr && ContextIsLost(current, current->GetCurrentContext());
+            };
+#else
+            Bool (*const sessionLost)() = nullptr;
+#endif
+            switch (it->second->Present(damage, state->GetSwapInterval(dpy), sessionLost)) {
+            case Wayland::WindowSurface::PresentResult::kPresented: break;
+            case Wayland::WindowSurface::PresentResult::kLost:
+                it->second->CommitPendingState();
+                state->SetError(EGL_CONTEXT_LOST);
+                return EGL_FALSE;
+            case Wayland::WindowSurface::PresentResult::kNotShown:
+                state->SetError(EGL_BAD_SURFACE);
+                return EGL_FALSE;
+            }
         }
 #endif
         const Bool swapped = damage.IsFull() ? backendObject->SwapEGLBuffers(dpy, draw)

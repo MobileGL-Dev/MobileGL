@@ -75,8 +75,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // Puts the current context's default-framebuffer frame on the window: copied into a
         // shared image (or read back into a wl_shm buffer, the application's read-framebuffer and
         // pack state put back exactly as they were), then attach, damage, commit.  A shared-image
-        // present that fails moves the window to wl_shm for good.  False (logged) when the frame
-        // did not reach the window; the swap itself goes on regardless.
+        // present that fails moves the window to wl_shm for good.  kNotShown (logged) when the
+        // frame did not reach the window; the swap itself goes on regardless.
         //
         // `damage` (GL window coordinates, clipped to the window; Full = all of it) is what the
         // frame changed. A shared image is copied only where it differs from the frame - the
@@ -85,12 +85,24 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         //
         // `swapInterval` above 0 paces the swaps by the compositor's frame callbacks: this waits
         // for the previous frame's before taking a buffer (FrameThrottle.h).
-        Bool Present(const MG_Util::Damage::Region& damage, Int swapInterval);
+        //
+        // `sessionLost` (may be null) says whether the device was lost under the frame. A frame
+        // that failed - or was read back - on a lost device is nothing but zeros: kLost, with no
+        // buffer attached and the window left where it was, so the caller reports the loss at
+        // this swap instead of showing a transparent window that the toolkit never redraws.
+        enum class PresentResult { kPresented, kNotShown, kLost };
+        PresentResult Present(const MG_Util::Damage::Region& damage, Int swapInterval, Bool (*sessionLost)());
 
         // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave
         // its wl_egl_window a size this presentation is not at yet. The presentation adopts it -
         // its next buffer is that size - and the caller resizes the drawable behind it.
         Bool TakeResize(EGLint* width, EGLint* height);
+
+        // A swap that presents nothing (its context was lost) still commits the application's
+        // wl_surface, with no new buffer: the frame callback a toolkit asked for just before the
+        // swap is surface state that only a commit applies, and a toolkit that waits for it before
+        // drawing again would never draw again - not even to find out that it has to rebuild.
+        void CommitPendingState();
 
         // The server session that allocated this window's shared images was lost and a fresh one
         // replaced it: the images went with their server. Their wl_buffers are destroyed here,
