@@ -360,7 +360,10 @@ extern "C" MOBILEGL_EGL_API EGLBoolean __egl_Main(uint32_t version, const __EGLa
     imports->getDispatchAddress = VendorGetDispatchAddress;
     imports->setDispatchIndex = VendorSetDispatchIndex;
 
-    MGLOG_I("glvnd vendor: MobileGL is serving EGL through libglvnd (ABI %u.%u, platforms: %s)",
+    // DEBUG, not INFO: as the system's vendor this runs in every EGL process, including the many
+    // that end up served by another vendor, and the first line a process logs opens (and
+    // truncates) its log file - one it may share with the process that launched it.
+    MGLOG_D("glvnd vendor: MobileGL is serving EGL through libglvnd (ABI %u.%u, platforms: %s)",
             static_cast<unsigned>(EGL_VENDOR_ABI_MAJOR_VERSION), static_cast<unsigned>(EGL_VENDOR_ABI_MINOR_VERSION),
             kPlatformExtensions);
     return EGL_TRUE;

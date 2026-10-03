@@ -40,7 +40,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
 
         EGLStateContext* GetState() {
             if (!MG_State::pEGLContext) {
-                MGLOG_E_ONCE("pEGLContext is null. MG_State may not be initialized.");
+                // Not an error by itself: a dispatcher calls every vendor's per-thread and error
+                // entry points, including a vendor that never served this process.
+                MGLOG_D("pEGLContext is null. MG_State may not be initialized.");
             }
             return MG_State::pEGLContext.get();
         }
