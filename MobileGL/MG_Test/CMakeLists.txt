@@ -105,4 +105,6 @@ endif()
 # is only registered there. Nothing under MG_Remote is compiled otherwise.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     add_subdirectory(Wire)
+    # The GBM backend glamor uses (Xwayland on MobileGL), through the system's loader.
+    add_subdirectory(Gbm)
 endif()
