@@ -5,6 +5,7 @@ description: Bring up, rebuild, deploy, switch backends on, test and debug the "
 
 # MobileGL on anland KDE Plasma
 
+**Setting this up on a new machine or phone from source: `reproduce.md` next to this file.**
 Human-readable runbook (Chinese, same content): `docs/Disaggregated/notes/anland/runbook-plasma.md`.
 Background: `docs/Disaggregated/notes/anland/handoff-legacy-mobilegl-unified.md` (state, commits, known
 issues) and `plan-ahb-dmabuf.md` (zero-copy design).  All scripts are in `scripts/` next to this file;
