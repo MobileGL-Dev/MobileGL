@@ -938,6 +938,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // knows it. Read here because `state->MakeCurrent` below has already committed the
         // new one by the time the emission points are reached.
         const Uint64 oldContextToken = state->GetContextClientToken(oldContext);
+        // Read before the release too: a thread letting go of a context lost with an ended session
+        // says nothing to the fresh one (its binding never named that context).
+        const Bool oldContextLost = ContextIsLost(state, oldContext);
 #endif
         const String threadId = CurrentThreadIdString();
 
@@ -981,7 +984,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
             }
             MGLOG_D("eglMakeCurrent release succeeded thread=%s", threadId.c_str());
 #if MOBILEGL_BUILD_DISAGGREGATED
-            EmitContextBinding(state, EGL_NO_CONTEXT, oldContextToken);
+            {
+                std::optional<ClientSession::ScopedWireMute> silence;
+                if (oldContextLost) silence.emplace();
+                EmitContextBinding(state, EGL_NO_CONTEXT, oldContextToken);
+            }
 #endif
             return EGL_TRUE;
         }

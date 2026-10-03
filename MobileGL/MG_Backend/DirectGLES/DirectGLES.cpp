@@ -17110,7 +17110,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         tuple->Read = EGL_NO_SURFACE;
         g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
         if (g_displayUsers > 0) --g_displayUsers;
-        if (g_displayUsers == 0 && g_Display != EGL_NO_DISPLAY && g_EGLFuncs.eglTerminate) {
+        // NOT WHILE A SESSION STILL HOLDS SURFACES. eglTerminate destroys them with the display, and
+        // the session keeps naming them: the next context made current on one (an application that
+        // destroys its only context and creates another on the same surface, as eglinfo does with
+        // its surfaceless stand-in) bound a surface the driver no longer had. The session's own
+        // teardown terminates the display once its surfaces are gone (DestroyNativeStateOfSession).
+        Bool surfacesRemain = false;
+        for (const auto* session : NativeSessions()) surfacesRemain = surfacesRemain || !session->Surfaces.empty();
+        if (g_displayUsers == 0 && !surfacesRemain && g_Display != EGL_NO_DISPLAY && g_EGLFuncs.eglTerminate) {
             g_EGLFuncs.eglTerminate(g_Display);
             NoteDisplayTerminated();
             g_Display = EGL_NO_DISPLAY;
@@ -17139,9 +17146,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // surface drew one window's frame into the other.
         NativeSessionState& session = ActiveNativeSession();
         // Nothing to make it current on yet: a context bound for the records of its own creation
-        // (EGLImpl's CreateContext) before the session has any surface. Its first make-current
-        // gives it one.
-        if (tuple.Draw == EGL_NO_SURFACE && session.Draw == EGL_NO_SURFACE) return true;
+        // (EGLImpl's CreateContext), which no make-current has given a surface (or whose surface
+        // is gone). Binding it to whichever surface the session holds would hand it another
+        // context's surface - one the driver may not even have any more. Its first make-current
+        // binds it natively.
+        if (tuple.Draw == EGL_NO_SURFACE) return true;
         if (tuple.Draw != session.Draw && SessionOwnsSurface(session, tuple.Draw)) {
             session.Draw = tuple.Draw;
             session.Read = SessionOwnsSurface(session, tuple.Read) ? tuple.Read : tuple.Draw;
