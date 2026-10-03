@@ -5,14 +5,15 @@
 #
 #   preflight             read-only: battery, stack status, Xwayland package, render node, xcb libs,
 #                         test apps, Xwayland's extensions and its GLX vendor
-#   measure <label> [s]   glxgears (vblank_mode=0) for s seconds (10): its fps, then CPU/GPU/dma-buf
+#   measure <label> [s]   glxgears 1280x720 (GEARS_ARGS; vblank_mode=0) for s seconds (10): its fps, then CPU/GPU/dma-buf
 #                         counts (device/x11-measure.sh); also with MOBILEGL_GLX_PRESENT=readback
 #   deploy-client         xbuild.sh + xdeploy.sh of this worktree's client (MGL_XBUILD_DIR)
 #   deploy-kwin           kwin-stage.sh build from ANLAND_WORKTREE; waits for "== ALL DONE =="
 #   deploy-server         build-android.sh + cyc.sh x11-server (swaps the APK lib, RESTARTS the session)
 #   check                 the evidence: Xwayland took glamor (journal), its MobileGL log, GLX's path
 #                         line, dma-buf counts in Xwayland/KWin, the server's import lines
-#   apps                  xterm + xeyes + glxgears on screen, two screenshots (hashes must differ)
+#   apps                  X11 clients on screen: konsole and kate on Qt's xcb platform (glamor-drawn
+#                         core X), glxgears (GLX), xterm/xeyes when installed; two screenshots
 #   stop                  kill the test apps
 #
 # Typical run: preflight; measure before; deploy-client; deploy-kwin; deploy-server; check; measure
@@ -49,7 +50,7 @@ preflight)
     battery_ok || true
     adb_ shell "su -c 'sh $DEV_TOOLS/status.sh'" || true
     bash "$here/ct.sh" "$CH" <<'IN'
-echo "== packages"; pacman -Q xorg-xwayland libxcb mesa-utils xorg-xeyes xterm xorg-xdpyinfo 2>&1 | sed 's/^/  /'
+echo "== packages"; pacman -Q xorg-xwayland libxcb mesa-utils xorg-xdpyinfo qt6-base 2>&1 | sed 's/^/  /'
 echo "== render nodes"; ls -l /dev/dri/ 2>&1 | sed 's/^/  /'
 U=swung0x48; for n in /dev/dri/renderD*; do sudo -u $U test -r "$n" -a -w "$n" && echo "  $U can open $n"; done
 echo "== KWin's thin node"; tr '\0' '\n' < /proc/$(pgrep -x kwin_wayland)/environ 2>/dev/null | grep -E "MOBILEGL_GBM_NODE|ANLAND_XWAYLAND_GLAMOR|GBM_BACKEND" | sed 's/^/  /'
@@ -67,7 +68,7 @@ measure)
     for mode in auto readback; do
         printf '%s\n' \
             "pkill -x glxgears; rm -f /tmp/mgl-x11-gears.client.log /tmp/x11-gears.out" \
-            "MGLOG=/tmp/mgl-x11-gears timeout $((secs + 8)) mgrun offscreen env vblank_mode=0 MOBILEGL_GLX_PRESENT=$mode glxgears > /tmp/x11-gears.out 2>&1 &" \
+            "MGLOG=/tmp/mgl-x11-gears.log timeout $((secs + 8)) mgrun offscreen env vblank_mode=${VBLANK_MODE:-0} MOBILEGL_GLX_PRESENT=$mode glxgears ${GEARS_ARGS:--geometry 1280x720} > /tmp/x11-gears.out 2>&1 &" \
             "sleep 3" | bash "$here/ct.sh" "$CH" >/dev/null
         adb_ shell "su -c 'sh $DEV_TOOLS/x11-measure.sh $label-$mode glxgears $secs'" || true
         sleep 6
@@ -100,14 +101,14 @@ check)
 echo "== Xwayland's command line (no -shm with glamor)"; pgrep -a -x Xwayland | sed 's/^/  /'
 echo "== Xwayland's glamor (journal)"
 journalctl --no-pager --since -30min 2>/dev/null | grep -aiE "glamor|Xwayland.*(EGL|gbm|dri3|falling back)" | tail -10 | sed 's/^/  /'
-echo "== Xwayland's MobileGL client log"; grep -aE "presented|shared image|declin|Fatal|ERROR" /tmp/mgl-xwayland.client.log 2>/dev/null | tail -8 | sed 's/^/  /' || echo "  (none)"
+echo "== Xwayland's MobileGL client log"; grep -aE "presented|shared image|declin|Fatal|ERROR" /tmp/mgl-xwayland.client.log /tmp/mgl-xwayland.client 2>/dev/null | tail -8 | sed 's/^/  /' || echo "  (none)"
 X=$(pgrep -x Xwayland); K=$(pgrep -x kwin_wayland)
 echo "== dma-bufs held: Xwayland $(ls -l /proc/$X/fd 2>/dev/null | grep -c dmabuf), kwin $(ls -l /proc/$K/fd 2>/dev/null | grep -c dmabuf)"
 echo "== Xwayland's GLX vendor and extensions"
 mgrun offscreen xdpyinfo 2>/dev/null | grep -E "^ +(DRI3|Present|MIT-SHM)$" | sed 's/^/  ext/'
 echo "== a GLX window's path"
 rm -f /tmp/mgl-x11-check.client.log
-MGLOG=/tmp/mgl-x11-check timeout 6 mgrun offscreen glxgears >/dev/null 2>&1
+MGLOG=/tmp/mgl-x11-check.log timeout 6 mgrun offscreen glxgears >/dev/null 2>&1
 grep -a "presented through\|leaves DRI3" /tmp/mgl-x11-check.client.log | sed 's/^/  /'
 IN
     adb_ logcat -d | grep -aE "MobileGL.*(shared image|dma-buf import|refused)" | tail -8 || true
@@ -116,15 +117,17 @@ IN
 apps)
     battery_ok
     printf '%s\n' \
-        "pkill -x xterm; pkill -x xeyes; pkill -x glxgears" \
-        "MGLOG=/tmp/mgl-x11-xterm mgrun offscreen xterm -geometry 80x24+40+40 >/dev/null 2>&1 &" \
-        "MGLOG=/tmp/mgl-x11-xeyes mgrun offscreen xeyes -geometry 200x150+700+40 >/dev/null 2>&1 &" \
-        "MGLOG=/tmp/mgl-x11-gears mgrun offscreen glxgears >/dev/null 2>&1 &" \
-        "sleep 4; pgrep -a -x xterm; pgrep -a -x xeyes; pgrep -a -x glxgears; true" | bash "$here/ct.sh" "$CH"
+        "pkill -x xterm; pkill -x xeyes; pkill -x glxgears; pkill -x konsole; pkill -x kate" \
+        "MGLOG=/tmp/mgl-x11-konsole.log mgrun offscreen env QT_QPA_PLATFORM=xcb konsole >/dev/null 2>&1 &" \
+        "MGLOG=/tmp/mgl-x11-kate.log mgrun offscreen env QT_QPA_PLATFORM=xcb kate >/dev/null 2>&1 &" \
+        "command -v xterm >/dev/null && MGLOG=/tmp/mgl-x11-xterm.log mgrun offscreen xterm >/dev/null 2>&1 &" \
+        "command -v xeyes >/dev/null && MGLOG=/tmp/mgl-x11-xeyes.log mgrun offscreen xeyes >/dev/null 2>&1 &" \
+        "MGLOG=/tmp/mgl-x11-gears.log mgrun offscreen glxgears >/dev/null 2>&1 &" \
+        "sleep 6; pgrep -a -x konsole; pgrep -a -x kate; pgrep -a -x xterm; pgrep -a -x xeyes; pgrep -a -x glxgears; true" | bash "$here/ct.sh" "$CH"
     bash "$here/shot.sh" x11-apps 2 1
     ;;
 stop)
-    printf '%s\n' "pkill -x xterm; pkill -x xeyes; pkill -x glxgears; true" | bash "$here/ct.sh" "$CH"
+    printf '%s\n' "pkill -x xterm; pkill -x xeyes; pkill -x glxgears; pkill -x konsole; pkill -x kate; true" | bash "$here/ct.sh" "$CH"
     ;;
 *)
     echo "unknown step $step" >&2; exit 2
