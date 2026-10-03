@@ -95,7 +95,7 @@ P6.5 link numbers: `docs/Disaggregated/notes/p12/CROSSHOST-ACCEPTANCE.md`.
 ## netbench.sh — Wi-Fi TCP throughput baseline
 
 **Understates the link**: the `toybox nc` sink capped at 18-22 MiB/s while the render server
-read 52 MB/s on the same Wi-Fi. Use the server's `P65ServerFrame` read rate as the throughput number.
+read 52 MB/s on the same Wi-Fi. Use the server's `P65ServerFrame` read rate as the throughput number (enable it with `MOBILEGL_SERVER_FRAME_STATS=1` or `setprop debug.mobilegl.server_frame_stats 1`; it is off by default).
 
 WSL -> phone bulk transfer over `toybox nc` sink, 3 reps; refuses to run
 unless `tcp_path_check.sh` passes. The `nc` listener must keep stdin open or it

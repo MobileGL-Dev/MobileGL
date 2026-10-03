@@ -28,6 +28,9 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstdio>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -217,6 +220,23 @@ namespace MobileGL::MG_Remote::Server {
         Bool SpinSetExplicitly() {
             const char* text = std::getenv("MOBILEGL_IPC_SPIN_US");
             return text != nullptr && text[0] != '\0';
+        }
+
+        // The per-frame P65ServerFrame line is a measurement aid, not a log: at one line per present
+        // of every session it floods the device log (and pushes the lines tests grep for out of the
+        // ring). Opt in with MOBILEGL_SERVER_FRAME_STATS=1, or on Android the property
+        // debug.mobilegl.server_frame_stats=1; read once.
+        Bool ServerFrameStatsEnabled() {
+            static const Bool enabled = [] {
+                const char* value = std::getenv("MOBILEGL_SERVER_FRAME_STATS");
+#if defined(__ANDROID__)
+                char property[PROP_VALUE_MAX] = {};
+                if (value == nullptr && __system_property_get("debug.mobilegl.server_frame_stats", property) > 0)
+                    value = property;
+#endif
+                return value != nullptr && value[0] != ' ' && value[0] != '0';
+            }();
+            return enabled;
         }
 
         void NameThisThread(const char* name) {
@@ -1099,23 +1119,25 @@ namespace MobileGL::MG_Remote::Server {
                         // reader spent WAITING for bytes, and one that is mostly recv calls with
                         // little read_ms is a reader that is copying.
                         const auto read = Transport::LinkMetricsTakeReadStats();
-                        MGLOG_I("P65ServerFrame frame=%llu records=%llu apply_ms=%.1f wall_ms=%.1f "
-                                "outside_ms=%.1f | read: %llu B in %llu recv(%llu reads) "
-                                "recv_ms=%.1f total_ms=%.1f (%.0f%% blocked, %.1f MB/s)",
-                                static_cast<unsigned long long>(++sFrameIndex),
-                                static_cast<unsigned long long>(sFrameRecords), applyMs, wallMs,
-                                wallMs - applyMs,
-                                static_cast<unsigned long long>(read.bytes),
-                                static_cast<unsigned long long>(read.calls),
-                                static_cast<unsigned long long>(read.reads),
-                                static_cast<double>(read.nsInRecv) / 1e6,
-                                static_cast<double>(read.nsTotal) / 1e6,
-                                read.nsTotal ? 100.0 * static_cast<double>(read.nsInRecv) /
-                                                   static_cast<double>(read.nsTotal)
-                                             : 0.0,
-                                read.nsTotal ? static_cast<double>(read.bytes) /
-                                                   (static_cast<double>(read.nsTotal) / 1e9) / 1e6
-                                             : 0.0);
+                        if (ServerFrameStatsEnabled()) {
+                            MGLOG_I("P65ServerFrame frame=%llu records=%llu apply_ms=%.1f wall_ms=%.1f "
+                                    "outside_ms=%.1f | read: %llu B in %llu recv(%llu reads) "
+                                    "recv_ms=%.1f total_ms=%.1f (%.0f%% blocked, %.1f MB/s)",
+                                    static_cast<unsigned long long>(++sFrameIndex),
+                                    static_cast<unsigned long long>(sFrameRecords), applyMs, wallMs,
+                                    wallMs - applyMs,
+                                    static_cast<unsigned long long>(read.bytes),
+                                    static_cast<unsigned long long>(read.calls),
+                                    static_cast<unsigned long long>(read.reads),
+                                    static_cast<double>(read.nsInRecv) / 1e6,
+                                    static_cast<double>(read.nsTotal) / 1e6,
+                                    read.nsTotal ? 100.0 * static_cast<double>(read.nsInRecv) /
+                                                       static_cast<double>(read.nsTotal)
+                                                 : 0.0,
+                                    read.nsTotal ? static_cast<double>(read.bytes) /
+                                                       (static_cast<double>(read.nsTotal) / 1e9) / 1e6
+                                                 : 0.0);
+                        }
                         sFrameWallStart = now;
                         sFrameApplyNs = 0;
                         sFrameRecords = 0;
