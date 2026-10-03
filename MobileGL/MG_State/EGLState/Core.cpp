@@ -956,6 +956,16 @@ namespace MobileGL {
                 return ctx ? ctx->ResetNotificationStrategy : EGL_NO_RESET_NOTIFICATION;
             }
 
+            EGLenum EGLContext::GetCurrentContextClientAPI() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return EGL_OPENGL_API;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx ? ctx->ClientAPI : EGL_OPENGL_API;
+            }
+
             Bool EGLContext::IsCurrentContextRobustAccessRequested() const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto currentIt = m_threadCurrents.find(CurrentThreadKey());

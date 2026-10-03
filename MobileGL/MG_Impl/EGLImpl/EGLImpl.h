@@ -66,6 +66,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
     // a split client's does, a monolith's does not. Decides the dma-buf EGL extensions, the
     // Wayland linux-dmabuf presentation and GL_OES_EGL_image.
     Bool SharedImagesAvailable();
+    // Under a dispatching libEGL the dispatcher, not this library, owns eglBindAPI's state: it does
+    // not forward a bind of the API it already reports (EGL_OPENGL_ES_API, EGL's default), so a
+    // context would otherwise be created for whatever this library assumed. The glvnd vendor
+    // installs the dispatcher's own answer here; eglCreateContext asks it.
+    void SetDispatcherCurrentApiHook(EGLenum (*hook)());
     // The shared image an EGLImage names (EGL_LINUX_DMA_BUF_EXT), for glEGLImageTargetTexture2DOES.
     Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height);
     // glEGLImageTargetTexture2DOES bound a shared image to a texture: from now on glFlush/glFinish

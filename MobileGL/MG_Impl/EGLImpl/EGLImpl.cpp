@@ -48,6 +48,8 @@
 
 namespace MobileGL::MG_Impl::EGLImpl {
     namespace {
+        // SetDispatcherCurrentApiHook.
+        std::atomic<EGLenum (*)()> g_dispatcherCurrentApi{nullptr};
         using EGLStateContext = MG_State::EGLState::EGLContext;
 
         EGLStateContext* GetState() {
@@ -673,6 +675,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
         auto* state = GetState();
         if (!state) {
             return EGL_NO_CONTEXT;
+        }
+        // The API the context is for, as the dispatcher reports it (SetDispatcherCurrentApiHook):
+        // an ES context made without an eglBindAPI - or with one of the default - is an ES context.
+        if (const auto currentApi = g_dispatcherCurrentApi.load()) {
+            const EGLenum api = currentApi();
+            if (api == EGL_OPENGL_API || api == EGL_OPENGL_ES_API) state->SetBoundAPI(api);
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         // AFTER A DEVICE LOSS THIS IS WHERE AN APPLICATION REBUILDS, so this is where a fresh
@@ -1415,6 +1423,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         return state->GetSyncAttrib(dpy, sync, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
+
+    void SetDispatcherCurrentApiHook(EGLenum (*hook)()) { g_dispatcherCurrentApi.store(hook); }
 
     Bool SharedImagesAvailable() {
 #if MOBILEGL_BUILD_DISAGGREGATED

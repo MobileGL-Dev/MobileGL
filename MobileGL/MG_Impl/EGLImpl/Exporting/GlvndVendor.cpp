@@ -352,6 +352,12 @@ extern "C" MOBILEGL_EGL_API EGLBoolean __egl_Main(uint32_t version, const __EGLa
         return EGL_FALSE;
     }
     g_eglExports = exports;
+    if (exports->getCurrentApi != nullptr) {
+        MobileGL::MG_Impl::EGLImpl::SetDispatcherCurrentApiHook([]() -> EGLenum {
+            return g_eglExports != nullptr && g_eglExports->getCurrentApi != nullptr ? g_eglExports->getCurrentApi()
+                                                                                     : EGL_NONE;
+        });
+    }
 
     imports->getPlatformDisplay = VendorGetPlatformDisplay;
     imports->getSupportsAPI = VendorGetSupportsAPI;

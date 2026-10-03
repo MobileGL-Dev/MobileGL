@@ -603,12 +603,26 @@ namespace MobileGL::MG_Impl::GLImpl {
         //     Robust buffer ACCESS is a separate promise (GL_CONTEXT_ROBUST_ACCESS) and is not
         //     implied by any of them.
         // One list for glGetString and glGetStringi, so the two forms always agree.
+        Bool EsIdentityActive();
+
         const Vector<const char*>& ClientSideExtensions() {
             static const Vector<const char*> withImages = {"GL_OES_EGL_image", "GL_KHR_robustness",
                                                            "GL_ARB_robustness", "GL_EXT_robustness"};
             static const Vector<const char*> withoutImages = {"GL_KHR_robustness", "GL_ARB_robustness",
                                                               "GL_EXT_robustness"};
-            return MG_Impl::EGLImpl::SharedImagesAvailable() ? withImages : withoutImages;
+            // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
+            // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
+            // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
+            // pixel transfer format's, as on desktop GL.
+            static const Vector<const char*> esWithImages = {
+                "GL_OES_EGL_image",  "GL_KHR_robustness",      "GL_ARB_robustness",
+                "GL_EXT_robustness", "GL_EXT_texture_format_BGRA8888", "GL_EXT_read_format_bgra"};
+            static const Vector<const char*> esWithoutImages = {"GL_KHR_robustness", "GL_ARB_robustness",
+                                                                "GL_EXT_robustness", "GL_EXT_texture_format_BGRA8888",
+                                                                "GL_EXT_read_format_bgra"};
+            const Bool images = MG_Impl::EGLImpl::SharedImagesAvailable();
+            if (EsIdentityActive()) return images ? esWithImages : esWithoutImages;
+            return images ? withImages : withoutImages;
         }
 
         // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend
@@ -622,6 +636,22 @@ namespace MobileGL::MG_Impl::GLImpl {
                        extensions.end() ||
                    std::find(extensions.begin(), extensions.end(), E_GL_ARB_robust_buffer_access_behavior) !=
                        extensions.end();
+        }
+
+        // MOBILEGL_ES_CONTEXT_IDENTITY=1: a context created for the OpenGL ES API names itself OpenGL
+        // ES 3.2 (GL_VERSION, GL_SHADING_LANGUAGE_VERSION, GL_MAJOR/MINOR_VERSION) instead of the
+        // desktop version every context reports by default. Opt-in, for an application that
+        // decides what it may use from that identity: ANGLE's GL-on-EGL backend offers
+        // GL_OES_EGL_image - which Chrome's GPU process presents through - only over a native
+        // driver that calls itself OpenGL ES, and reads the desktop identity's extension names
+        // otherwise.
+        Bool EsIdentityActive() {
+            static const Bool requested = [] {
+                const char* value = std::getenv("MOBILEGL_ES_CONTEXT_IDENTITY");
+                return value != nullptr && value[0] == '1';
+            }();
+            return requested && MG_State::pEGLContext &&
+                   MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
         }
 
         Bool CurrentContextHasRobustAccess() {
@@ -683,6 +713,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (const auto at = backendName.find("OpenGL ES"); at != String::npos) {
                 backendName.replace(at, sizeof("OpenGL ES") - 1, "GLES");
             }
+            if (EsIdentityActive()) {
+                versionStr = std::format("OpenGL ES 3.2 {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT, MG_Config::ProjectName,
+                                         MG_Config::CoreVersion.toFormattedString(MG_Config::DefaultVersionStringFormatAttrib),
+                                         backendName);
+                return (const GLubyte*)versionStr.c_str();
+            }
             versionStr =
                 std::format("{} {} {}, {} Backend, GIT@" GIT_COMMIT_HASH_SHORT,
                             rendererInfo.RendererGLInfo.TargetGLVersion.toString(), MG_Config::ProjectName,
@@ -699,6 +735,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return (const GLubyte*)rendererString.c_str();
         }
         case GL_SHADING_LANGUAGE_VERSION:
+            if (EsIdentityActive()) return (const GLubyte*)"OpenGL ES GLSL ES 3.20";
             shadingLanguageVersion =
                 std::format("{} {}", rendererInfo.RendererGLInfo.TargetGLSLVersion.toString({true, false}),
                             MG_Config::ProjectName);
@@ -2583,7 +2620,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &params[2]);
             break;
         case GL_MAJOR_VERSION:
-            *params = rendererInfo.RendererGLInfo.TargetGLVersion.Major;
+            *params = EsIdentityActive() ? 3 : rendererInfo.RendererGLInfo.TargetGLVersion.Major;
             break;
         case GL_MAX_3D_TEXTURE_SIZE:
             *params = dynamicParameters.Max3DTextureSize;
@@ -2870,7 +2907,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(RenderStateParameters::MAX_VIEWPORTS);
             break;
         case GL_MINOR_VERSION:
-            *params = rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
+            *params = EsIdentityActive() ? 2 : rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
             break;
         case GL_NUM_EXTENSIONS:
             *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size() + ClientSideExtensions().size());

@@ -153,6 +153,9 @@ namespace MobileGL {
                 return TextureInternalFormat::RGBA4;
             case GL_RGB5_A1:
                 return TextureInternalFormat::RGB5A1;
+            // GL_BGRA8_EXT (EXT_texture_storage with EXT_texture_format_BGRA8888): stored as RGBA8;
+            // the BGRA byte order is the pixel transfer format's business, as on desktop GL.
+            case 0x93A1:
             case GL_RGBA8:
                 return TextureInternalFormat::RGBA8;
             case GL_RGBA8_SNORM:
@@ -330,6 +333,9 @@ namespace MobileGL {
                 return TextureInternalFormat::RG;
             case GL_RGB:
                 return TextureInternalFormat::RGB;
+            // GL_BGRA_EXT as an unsized internal format (EXT_texture_format_BGRA8888, an ES
+            // application's spelling): the same storage as GL_RGBA.
+            case GL_BGRA:
             case GL_RGBA:
                 return TextureInternalFormat::RGBA;
             default:

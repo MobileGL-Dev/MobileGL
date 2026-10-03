@@ -74,6 +74,9 @@ namespace MobileGL {
                 // robust buffer access.
                 EGLint GetCurrentContextResetNotificationStrategy() const;
                 Bool IsCurrentContextRobustAccessRequested() const;
+                // The client API the calling thread's current context was created for
+                // (EGL_OPENGL_API with no context current).
+                EGLenum GetCurrentContextClientAPI() const;
 
                 // P14 S1. The wire identity of a context, and of the context the CALLING THREAD
                 // has current (0 when it has none - the release edge's value, and the value a

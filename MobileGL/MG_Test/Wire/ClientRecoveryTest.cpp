@@ -44,6 +44,7 @@
 #include <mutex>
 
 extern "C" {
+void glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
 const GLubyte* glGetString(GLenum name);
 const GLubyte* glGetStringi(GLenum name, GLuint index);
 void glGetIntegerv(GLenum pname, GLint* data);
@@ -922,6 +923,102 @@ namespace {
         }
     };
 
+    // THE ES IDENTITY (MOBILEGL_ES_CONTEXT_IDENTITY=1), what Chrome's GPU process runs with: ANGLE
+    // offers GL_OES_EGL_image - the GPU process's dma-buf images - only over a native driver that
+    // calls itself OpenGL ES, and then creates BGRA textures with the ES spelling. And the API a
+    // dispatching libEGL reports wins over the one this library was told (glvnd never forwards a
+    // bind of the API it already reports, EGL's default ES).
+    struct EsIdentityReport {
+        Int32 initialized = 0;
+        Int32 dispatcherApiWins = -1;
+        char esVersion[96] = {};
+        char esGlsl[64] = {};
+        Int32 esMajor = 0;
+        Int32 esMinor = 0;
+        Int32 bgraAdvertised = -1;
+        Int32 bgraIndexed = -1;
+        Uint32 bgraImageError = 0xFFFFFFFFu;
+        Uint32 bgraStorageError = 0xFFFFFFFFu;
+        Uint32 bgraFboStatus = 0;
+        Uint32 bgraPixel = 0;
+        char desktopVersion[96] = {};
+        char note[256] = {};
+    };
+
+    void Note(EsIdentityReport& r, const char* text) {
+        if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
+    }
+
+    EGLenum g_dispatcherApi = EGL_OPENGL_ES_API;
+
+    void RunEsIdentityClient(EsIdentityReport& r) {
+        ::setenv("MOBILEGL_ES_CONTEXT_IDENTITY", "1", 1);
+        Egl egl;
+        RecoveryReport bring{};
+        if (!egl.Bring(bring)) return Note(r, bring.note);
+        // The dispatcher says ES although this library was told GL last (Bring binds the GL API).
+        EGL::SetDispatcherCurrentApiHook([]() -> EGLenum { return g_dispatcherApi; });
+        const EGLContext es = EGL::CreateContext(egl.dpy, egl.config, EGL_NO_CONTEXT, kAngleNativeAttribs);
+        g_dispatcherApi = EGL_OPENGL_API;
+        const EGLContext desktop = EGL::CreateContext(egl.dpy, egl.config, EGL_NO_CONTEXT, kRobustAttribs);
+        EGL::SetDispatcherCurrentApiHook(nullptr);
+        if (es == EGL_NO_CONTEXT || desktop == EGL_NO_CONTEXT) return Note(r, "the contexts were not created");
+        EGLint type = 0;
+        (void)EGL::QueryContext(egl.dpy, es, EGL_CONTEXT_CLIENT_TYPE, &type);
+        r.dispatcherApiWins = type == EGL_OPENGL_ES_API ? 1 : 0;
+
+        if (EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, es) != EGL_TRUE)
+            return Note(r, "the ES context did not go current");
+        r.initialized = 1;
+        std::snprintf(r.esVersion, sizeof(r.esVersion), "%s", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+        std::snprintf(r.esGlsl, sizeof(r.esGlsl), "%s",
+                      reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
+        glGetIntegerv(GL_MAJOR_VERSION, &r.esMajor);
+        glGetIntegerv(GL_MINOR_VERSION, &r.esMinor);
+        r.bgraAdvertised = HasToken(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)),
+                                    "GL_EXT_texture_format_BGRA8888")
+                               ? 1
+                               : 0;
+        GLint count = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+        r.bgraIndexed = 0;
+        for (GLint i = 0; i < count; ++i) {
+            const auto* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+            if (name != nullptr && std::string(name) == "GL_EXT_texture_format_BGRA8888") r.bgraIndexed = 1;
+        }
+        while (glGetError() != GL_NO_ERROR) {
+        }
+        // BGRA as EXT_texture_format_BGRA8888 spells it: GL_BGRA_EXT as the internal format, and
+        // GL_BGRA8_EXT through glTexStorage2D; a BGRA texel reads back in RGBA order.
+        const Uint8 bgra[4] = {0x10, 0x20, 0x30, 0xFF}; // B, G, R, A
+        GLuint textures[2] = {};
+        glGenTextures(2, textures);
+        glBindTexture(GL_TEXTURE_2D, textures[0]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA, 1, 1, 0, GL_BGRA, GL_UNSIGNED_BYTE, bgra);
+        r.bgraImageError = glGetError();
+        glBindTexture(GL_TEXTURE_2D, textures[1]);
+        glTexStorage2D(GL_TEXTURE_2D, 1, 0x93A1 /* GL_BGRA8_EXT */, 1, 1);
+        r.bgraStorageError = glGetError();
+        GLuint framebuffer = 0;
+        glGenFramebuffers(1, &framebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[0], 0);
+        r.bgraFboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        r.bgraPixel = ReadPixel();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, desktop) == EGL_TRUE) {
+            std::snprintf(r.desktopVersion, sizeof(r.desktopVersion), "%s",
+                          reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+            (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        }
+        (void)EGL::DestroyContext(egl.dpy, es);
+        (void)EGL::DestroyContext(egl.dpy, desktop);
+        (void)EGL::DestroySurface(egl.dpy, egl.surface);
+        (void)EGL::Terminate(egl.dpy);
+    }
+
     RecoveryReport RunClient(const ServerProcess& server, Route route, const std::string& clientLogBase,
                              EGLenum api = EGL_OPENGL_API, const EGLint* attribs = kRobustAttribs) {
         return RunInClient<RecoveryReport>(server, clientLogBase, [route, api, attribs](RecoveryReport& r) {
@@ -1217,5 +1314,47 @@ TEST_F(ClientRecovery, ThePidTargetedKnobLosesOnlyThatClientAndOnlyOnce) {
     EXPECT_NE(log.find("injected:pid=" + std::to_string(target.pid)), std::string::npos) << log;
     EXPECT_EQ(Count(log, "reaped exit=75"), 1u) << log;
     EXPECT_EQ(Count(log, "reaped exit=0"), 2u) << log;
+    server.Stop();
+}
+
+// THE ES IDENTITY (RunEsIdentityClient): an ES context names itself OpenGL ES 3.2 and offers BGRA
+// the ES way, a desktop context of the same process does not change, and the dispatcher's API wins.
+TEST_F(ClientRecovery, AnEsContextUnderTheEsIdentityIsOpenGlEs32WithBgraTextures) {
+    ServerProcess server;
+    ASSERT_TRUE(LaunchUnixInProcessServer(&server, "esid")) << server.Log();
+    ClientLog client("esid");
+    const EsIdentityReport r = RunInClient<EsIdentityReport>(server, client.base, &RunEsIdentityClient);
+    const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
+    EXPECT_EQ(r.dispatcherApiWins, 1) << "the context was not created for the API the dispatcher reports";
+    ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
+    EXPECT_EQ(std::string(r.esVersion).rfind("OpenGL ES 3.2 ", 0), 0u) << r.esVersion;
+    EXPECT_STREQ(r.esGlsl, "OpenGL ES GLSL ES 3.20");
+    EXPECT_EQ(r.esMajor, 3);
+    EXPECT_EQ(r.esMinor, 2);
+    EXPECT_EQ(r.bgraAdvertised, 1);
+    EXPECT_EQ(r.bgraIndexed, 1);
+    EXPECT_EQ(r.bgraImageError, static_cast<Uint32>(GL_NO_ERROR)) << std::hex << r.bgraImageError;
+    EXPECT_EQ(r.bgraStorageError, static_cast<Uint32>(GL_NO_ERROR)) << std::hex << r.bgraStorageError;
+    EXPECT_EQ(r.bgraFboStatus, static_cast<Uint32>(GL_FRAMEBUFFER_COMPLETE)) << std::hex << r.bgraFboStatus;
+    EXPECT_EQ(r.bgraPixel, 0xFF102030u) << "a BGRA texel did not read back in RGBA order: " << std::hex << r.bgraPixel;
+    EXPECT_EQ(std::string(r.desktopVersion).find("OpenGL ES"), std::string::npos)
+        << "a desktop context took the ES identity: " << r.desktopVersion;
+    EXPECT_NE(std::string(r.desktopVersion), "") << diagnostics;
+    server.Stop();
+}
+
+// Chrome's GPU process's own shape: ANGLE's native ES context, under the ES identity, told of the
+// loss and recovering like any other.
+TEST_F(ClientRecovery, AnglesNativeContextUnderTheEsIdentityRecovers) {
+    ServerProcess server;
+    ASSERT_TRUE(Launch(&server, "angle-es")) << server.Log();
+    ClientLog client("angle-es");
+    const RecoveryReport r = RunInClient<RecoveryReport>(server, client.base, [](RecoveryReport& report) {
+        ::setenv("MOBILEGL_ES_CONTEXT_IDENTITY", "1", 1);
+        RunRecoveringClient(Route::NewContext, report, EGL_OPENGL_ES_API, kAngleNativeAttribs);
+    });
+    const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
+    ExpectLossReportedAndRecovered(r, diagnostics);
+    ExpectOneLossAndACleanSecondSession(server);
     server.Stop();
 }
