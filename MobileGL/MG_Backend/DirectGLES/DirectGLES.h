@@ -551,6 +551,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // fence, and the session's first use of an image in each frame from now on also waits for
         // the image's pending reads.
         Bool PublishPendingAccesses();
+        // EGL_ANDROID_native_fence_sync's fence command (BackendObject::ExportNativeFence): a
+        // sync_file of everything the current context submitted in `*fence` (-1: none, and the work
+        // is waited out here), and - for a session that writes images - the boundary
+        // PublishPendingAccesses makes.
+        Bool ExportNativeFence(int* fence);
     } // namespace SharedImageImpl
 #endif
 

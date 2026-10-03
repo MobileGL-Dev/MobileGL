@@ -1529,7 +1529,47 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_NO_SYNC;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // EGL_ANDROID_native_fence_sync's fence command: a native fence with no descriptor of the
+        // application's. The server publishes the current context's shared-image accesses - its
+        // writes into dma-bufs become visible to the compositor's session, as at a glFlush - and
+        // hands back a sync_file of the work, which the application passes on with the buffer
+        // (Chrome's GPU process creates one per frame instead of flushing, when the compositor's
+        // kernel takes dma-buf fences). Answered through the round trip, so it is flushed too.
+        if (type == EGL_SYNC_NATIVE_FENCE_ANDROID && SharedImagesAvailable()) {
+            Bool hasFd = false;
+            for (const EGLAttrib* at = attrib_list; at != nullptr && at[0] != EGL_NONE; at += 2) {
+                if (at[0] == EGL_SYNC_NATIVE_FENCE_FD_ANDROID && at[1] != EGL_NO_NATIVE_FENCE_FD_ANDROID) hasFd = true;
+            }
+            if (!hasFd) {
+                if (GetCurrentContext() == EGL_NO_CONTEXT) {
+                    state->SetError(EGL_BAD_MATCH);
+                    return EGL_NO_SYNC;
+                }
+                int fence = -1;
+                {
+                    const GLStreamScope stream;
+                    MG_Pipe::MGPipeClientDrainTextureUploads();
+                    auto* backendObject = MG_Backend::pActiveBackendObject.get();
+                    if (backendObject == nullptr || !backendObject->CreateNativeFence(&fence)) {
+                        MGLOG_E_ONCE("eglCreateSync: the server did not answer a native fence; none is created");
+                        state->SetError(EGL_BAD_ALLOC);
+                        return EGL_NO_SYNC;
+                    }
+                }
+                return state->CreateNativeFenceSync(dpy, fence, EGL_SYNC_PRIOR_COMMANDS_COMPLETE);
+            }
+        }
+#endif
         return state->CreateSync(dpy, type, attrib_list);
+    }
+
+    EGLint DupNativeFenceFD(EGLDisplay dpy, EGLSync sync) {
+        auto* state = GetState();
+        if (!state) {
+            return EGL_NO_NATIVE_FENCE_FD_ANDROID;
+        }
+        return state->DupNativeFenceFD(dpy, sync);
     }
 
     EGLBoolean DestroySync(EGLDisplay dpy, EGLSync sync) {

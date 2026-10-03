@@ -53,6 +53,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool SetCurrentDamageRegion(const MG_Util::Damage::Region& region) override;
         // A glFlush that ends a shared-image producer's frame (SharedImageImpl::PublishPendingAccesses).
         Bool PublishSharedImageAccesses() override;
+        // An EGL native fence of the session's work (SharedImageImpl::ExportNativeFence).
+        Bool ExportNativeFence(int* fence) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: each window surface on it swaps its native EGL

@@ -37,7 +37,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         "EGL_MESA_platform_surfaceless" MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS
         " EGL_KHR_image_base EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers"
         " EGL_EXT_buffer_age EGL_KHR_partial_update EGL_KHR_swap_buffers_with_damage"
-        " EGL_EXT_swap_buffers_with_damage";
+        " EGL_EXT_swap_buffers_with_damage"
+        // Native fences come from the server's sessions (a sync_file of a session's submitted work),
+        // which is also what publishes a context's writes into dma-bufs to the compositor without a
+        // swap: Chrome's GPU process ends each frame with one rather than a flush.
+        " EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_ANDROID_native_fence_sync";
     inline constexpr const char* kClientExtensionString =
         "EGL_EXT_client_extensions EGL_KHR_create_context EGL_EXT_platform_base "
         "EGL_KHR_platform_base EGL_MESA_platform_surfaceless" MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS;

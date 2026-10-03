@@ -527,3 +527,79 @@ TEST(EGLStateRobustness, RobustAccessIsARequestAndNeverAGLContextFlagByItself) {
     const EGLint off[] = {EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_FALSE, EGL_NONE};
     EXPECT_FALSE(requestOf(off, &flags));
 }
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+
+// EGL_ANDROID_native_fence_sync, the half that is pure state: a native fence sync owns a sync_file
+// and answers its status, waits and copies from it. A pipe's read end stands in for the sync_file -
+// it polls readable once something is written, as a fence does once it signals.
+TEST(EGLStateNativeFence, AnImportedDescriptorDecidesStatusWaitsAndCopies) {
+    auto fixture = CreateFixture();
+    int fence[2] = {-1, -1};
+    ASSERT_EQ(::pipe(fence), 0);
+    const EGLAttrib attribs[] = {EGL_SYNC_NATIVE_FENCE_FD_ANDROID, fence[0], EGL_NONE};
+    const EGLSync sync = fixture->State.CreateSync(fixture->Display, EGL_SYNC_NATIVE_FENCE_ANDROID, attribs);
+    ASSERT_NE(sync, EGL_NO_SYNC) << "error 0x" << std::hex << fixture->State.ConsumeError();
+
+    EGLAttrib value = 0;
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, sync, EGL_SYNC_TYPE, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_SYNC_NATIVE_FENCE_ANDROID));
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, sync, EGL_SYNC_CONDITION, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID));
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, sync, EGL_SYNC_STATUS, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_UNSIGNALED));
+    EXPECT_EQ(fixture->State.ClientWaitSync(fixture->Display, sync, 0, 0), EGL_TIMEOUT_EXPIRED);
+    EXPECT_EQ(fixture->State.ClientWaitSync(fixture->Display, sync, 0, 5u * 1000 * 1000), EGL_TIMEOUT_EXPIRED);
+
+    // A copy is a descriptor of the same fence: it signals with it.
+    const EGLint copy = fixture->State.DupNativeFenceFD(fixture->Display, sync);
+    ASSERT_GE(copy, 0);
+    EXPECT_NE(copy, fence[0]);
+
+    ASSERT_EQ(::write(fence[1], "s", 1), 1);
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, sync, EGL_SYNC_STATUS, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_SIGNALED));
+    EXPECT_EQ(fixture->State.ClientWaitSync(fixture->Display, sync, 0, EGL_FOREVER), EGL_CONDITION_SATISFIED);
+    EXPECT_TRUE(fixture->State.WaitSync(fixture->Display, sync, 0));
+    pollfd entry{copy, POLLIN, 0};
+    EXPECT_EQ(::poll(&entry, 1, 0), 1);
+
+    // The sync owned its descriptor: destroying it closes that, and the copy stays the caller's.
+    EXPECT_TRUE(fixture->State.DestroySync(fixture->Display, sync));
+    EXPECT_EQ(::fcntl(fence[0], F_GETFD), -1);
+    EXPECT_NE(::fcntl(copy, F_GETFD), -1);
+    ::close(copy);
+    ::close(fence[1]);
+}
+
+// A fence command whose work completed with no descriptor to show for it is signaled, and has no
+// descriptor to copy; a native fence without one is no import either, and an ordinary fence has
+// none to copy.
+TEST(EGLStateNativeFence, AFenceCommandWithoutADescriptorIsSignaledAndHasNoneToCopy) {
+    auto fixture = CreateFixture();
+    const EGLSync done = fixture->State.CreateNativeFenceSync(fixture->Display, -1, EGL_SYNC_PRIOR_COMMANDS_COMPLETE);
+    ASSERT_NE(done, EGL_NO_SYNC);
+    EGLAttrib value = 0;
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, done, EGL_SYNC_STATUS, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_SIGNALED));
+    ASSERT_TRUE(fixture->State.GetSyncAttrib(fixture->Display, done, EGL_SYNC_CONDITION, &value));
+    EXPECT_EQ(value, static_cast<EGLAttrib>(EGL_SYNC_PRIOR_COMMANDS_COMPLETE));
+    EXPECT_EQ(fixture->State.ClientWaitSync(fixture->Display, done, 0, 0), EGL_CONDITION_SATISFIED);
+    EXPECT_EQ(fixture->State.DupNativeFenceFD(fixture->Display, done), EGL_NO_NATIVE_FENCE_FD_ANDROID);
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
+    EXPECT_TRUE(fixture->State.DestroySync(fixture->Display, done));
+
+    const EGLAttrib none[] = {EGL_NONE};
+    EXPECT_EQ(fixture->State.CreateSync(fixture->Display, EGL_SYNC_NATIVE_FENCE_ANDROID, none), EGL_NO_SYNC);
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_ATTRIBUTE);
+
+    const EGLSync plain = fixture->State.CreateSync(fixture->Display, EGL_SYNC_FENCE, none);
+    ASSERT_NE(plain, EGL_NO_SYNC);
+    EXPECT_EQ(fixture->State.DupNativeFenceFD(fixture->Display, plain), EGL_NO_NATIVE_FENCE_FD_ANDROID);
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
+    EXPECT_TRUE(fixture->State.DestroySync(fixture->Display, plain));
+}
+#endif

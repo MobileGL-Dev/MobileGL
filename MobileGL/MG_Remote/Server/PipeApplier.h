@@ -47,6 +47,7 @@
 #include "../Wire/PipeWireCodec.h"
 
 #include <deque>
+#include <utility>
 
 namespace MobileGL::MG_Remote::Server {
 
@@ -413,6 +414,20 @@ namespace MobileGL::MG_Remote::Server {
         Vector<GLint> m_multiBaseVertices;
         LastDrawRecord m_lastDraw{};
         Uint64 m_drawRecords = 0;
+        // The newest native fence (shared_image NativeFence) this session handed out, kept so a
+        // later fence with nothing left to export still answers with a descriptor: by then this
+        // one has signaled (the backend waited the work out), and a signaled sync_file stays so.
+        struct OwnedFd {
+            int fd = -1;
+            OwnedFd() = default;
+            OwnedFd(const OwnedFd&) = delete;
+            OwnedFd& operator=(const OwnedFd&) = delete;
+            OwnedFd(OwnedFd&& other) noexcept : fd(std::exchange(other.fd, -1)) {}
+            OwnedFd& operator=(OwnedFd&& other) noexcept;
+            ~OwnedFd();
+            void Reset(int next);
+        };
+        OwnedFd m_lastNativeFence;
     };
 
     class PipeApplier {

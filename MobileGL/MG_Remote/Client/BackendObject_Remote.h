@@ -96,6 +96,7 @@ namespace MobileGL::MG_Remote::Client {
         Bool SetDamageRegion(const MG_Util::Damage::Region& region) override;
         Bool AttachSharedImageToTexture(Uint64 textureLifetimeId, Uint64 id) override;
         Bool FlushSharedImageAccesses() override;
+        Bool CreateNativeFence(int* fence) override;
 
         // Copies the caps mirror's FormatCapabilityCache into the base class's
         // m_formatCapabilities. Public because CapsMirror's adoption hook is a free function

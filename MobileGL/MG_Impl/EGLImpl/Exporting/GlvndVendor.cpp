@@ -44,6 +44,12 @@ extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface dra
 extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
                                                   EGLint n_rects);
 extern "C" EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects);
+extern "C" EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync);
+extern "C" EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout);
+extern "C" EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint* value);
+extern "C" EGLint eglWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags);
+extern "C" EGLint eglDupNativeFenceFDANDROID(EGLDisplay dpy, EGLSyncKHR sync);
 extern "C" EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats, EGLint* formats,
                                                EGLint* num_formats);
 extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
@@ -264,6 +270,12 @@ namespace {
         {"eglClientWaitSync", reinterpret_cast<void*>(eglClientWaitSync)},
         {"eglGetSyncAttrib", reinterpret_cast<void*>(eglGetSyncAttrib)},
         {"eglWaitSync", reinterpret_cast<void*>(eglWaitSync)},
+        {"eglCreateSyncKHR", reinterpret_cast<void*>(eglCreateSyncKHR)},
+        {"eglDestroySyncKHR", reinterpret_cast<void*>(eglDestroySyncKHR)},
+        {"eglClientWaitSyncKHR", reinterpret_cast<void*>(eglClientWaitSyncKHR)},
+        {"eglGetSyncAttribKHR", reinterpret_cast<void*>(eglGetSyncAttribKHR)},
+        {"eglWaitSyncKHR", reinterpret_cast<void*>(eglWaitSyncKHR)},
+        {"eglDupNativeFenceFDANDROID", reinterpret_cast<void*>(eglDupNativeFenceFDANDROID)},
         {"eglCreateImage", reinterpret_cast<void*>(eglCreateImage)},
         {"eglDestroyImage", reinterpret_cast<void*>(eglDestroyImage)},
         {"eglCreateImageKHR", reinterpret_cast<void*>(eglCreateImageKHR)},

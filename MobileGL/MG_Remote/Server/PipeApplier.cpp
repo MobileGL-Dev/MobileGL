@@ -1480,6 +1480,20 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
+    ServerVerbSink::OwnedFd& ServerVerbSink::OwnedFd::operator=(OwnedFd&& other) noexcept {
+        if (this != &other) Reset(std::exchange(other.fd, -1));
+        return *this;
+    }
+
+    ServerVerbSink::OwnedFd::~OwnedFd() { Reset(-1); }
+
+    void ServerVerbSink::OwnedFd::Reset(int next) {
+#if !defined(_WIN32)
+        if (fd >= 0) ::close(fd);
+#endif
+        fd = next;
+    }
+
     // P14 S1. THE RING'S DOOR INTO THE SESSION'S CONTEXT TABLE.
     //
     // The record carries the client's current context token and this is where a session's
@@ -1592,6 +1606,38 @@ namespace MobileGL::MG_Remote::Server {
             MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
             if (backend == nullptr) return false;
             return backend->PublishSharedImageAccesses();
+        }
+        case MG_Pipe::kMGPSharedImageNativeFence: {
+            // A descriptor of the session's work, and an image writer's flush (MGPipeTypes.h). Like
+            // an Allocate's, the descriptor goes out BEFORE the reply is posted.
+            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
+            if (backend == nullptr) return false;
+            int fence = -1;
+            if (!backend->ExportNativeFence(&fence)) return false;
+#if !defined(_WIN32)
+            if (fence >= 0) {
+                m_lastNativeFence.Reset(::dup(fence));
+            } else if (m_lastNativeFence.fd >= 0) {
+                fence = ::dup(m_lastNativeFence.fd);
+            }
+#endif
+            reply.Format = 0;
+            if (fence < 0) return true;
+            Transport::ITransport* transport = session->ControlTransport();
+            MG_Pipe::MGPSharedImageFdOffer offer{MG_Pipe::kMGPSharedImageFdMagic, 1, seq, 0, 0};
+            const MobileGLResult shared = transport != nullptr
+                                              ? transport->ShareFd(fence, MobileGLByteSpan{&offer, sizeof(offer)})
+                                              : MOBILEGL_ERR_NOT_INITIALIZED;
+#if !defined(_WIN32)
+            ::close(fence);
+#endif
+            if (shared != MOBILEGL_OK) {
+                MGLOG_E_ONCE("MG_Remote server: a native fence could not be sent on the aux socket (rc=%d)",
+                             static_cast<int>(shared));
+                return false;
+            }
+            reply.Format = MG_Pipe::kMGPNativeFenceFdFollows;
+            return true;
         }
         case MG_Pipe::kMGPSharedImageAttach: {
             SI::ImageRef image = holder.Get(op.ImageId);

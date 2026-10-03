@@ -29,6 +29,13 @@ extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, 
                                                  khronos_uint64_t* modifiers, EGLBoolean* external_only,
                                                  EGLint* num_modifiers);
 extern "C" void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
+// EGL_KHR_fence_sync / EGL_KHR_wait_sync / EGL_ANDROID_native_fence_sync (Definitions.cpp).
+extern "C" EGLSync eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
+extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSync sync);
+extern "C" EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
+extern "C" EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLint* value);
+extern "C" EGLint eglWaitSyncKHR(EGLDisplay dpy, EGLSync sync, EGLint flags);
+extern "C" EGLint eglDupNativeFenceFDANDROID(EGLDisplay dpy, EGLSync sync);
 // KHR_robustness / EXT_robustness suffixed names (Definitions.cpp); the desktop headers declare
 // only the unsuffixed and ARB ones.
 extern "C" GLenum glGetGraphicsResetStatusKHR(void);
@@ -89,6 +96,12 @@ namespace MobileGL::MG_Impl {
         GETPROC(eglDestroySync, name);
         GETPROC(eglClientWaitSync, name);
         GETPROC(eglGetSyncAttrib, name);
+        GETPROC(eglCreateSyncKHR, name);
+        GETPROC(eglDestroySyncKHR, name);
+        GETPROC(eglClientWaitSyncKHR, name);
+        GETPROC(eglGetSyncAttribKHR, name);
+        GETPROC(eglWaitSyncKHR, name);
+        GETPROC(eglDupNativeFenceFDANDROID, name);
         GETPROC(eglCreateImage, name);
         GETPROC(eglDestroyImage, name);
         GETPROC(eglCreateImageKHR, name);

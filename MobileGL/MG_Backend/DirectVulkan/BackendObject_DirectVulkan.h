@@ -44,6 +44,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Int32 QueryCurrentBufferAge(Bool damageRegionFollows) override;
         // A glFlush that ends a shared-image producer's frame (VulkanRenderer::PublishSharedImageAccesses).
         Bool PublishSharedImageAccesses() override;
+        // An EGL native fence of the session's work (VulkanRenderer::ExportNativeFence).
+        Bool ExportNativeFence(int* fence) override;
         void ReleaseEGLSurface(EGLSurface surface) override;
         void ReleaseEGLResources() override;
         // The server window going and coming back: the window surface's target (VkSurfaceKHR,

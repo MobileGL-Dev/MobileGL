@@ -161,7 +161,12 @@
         auto* resource = m_textureManager->SyncTextureResourceByHandle(out.storage, renderbuffer);
         if (!resource) MagmaWireFatal("framebuffer-resource");
         // Another session writes it: acquired (WireSharedImage.inc) before the layout is read below.
-        if (resource->sharedImageId != 0) AcquireSharedImage(*resource);
+        // An image reached through a framebuffer is one this session renders into (or copies
+        // through), which makes it a writer of images from now on.
+        if (resource->sharedImageId != 0) {
+            m_sharedImageImplicitSync = true;
+            AcquireSharedImage(*resource);
+        }
         out.image = resource->image;
         out.format = viewFormat != VK_FORMAT_UNDEFINED ? viewFormat : resource->format;
         out.extent = {std::max(resource->extent.width >> level, 1u),

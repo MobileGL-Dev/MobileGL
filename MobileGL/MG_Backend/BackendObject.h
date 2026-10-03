@@ -674,6 +674,15 @@ namespace MobileGL {
             // overwrite what another session still samples). A backend without shared images has
             // nothing to publish.
             virtual Bool PublishSharedImageAccesses() { return true; }
+            // EGL_ANDROID_native_fence_sync's fence command, on the server: in `*fence`, a sync_file
+            // (the caller's to close) that signals once everything the session submitted so far has
+            // completed - and, for a session that writes images, what PublishSharedImageAccesses
+            // does. -1 when there is none to give: the backend cannot export one, or the work has
+            // already completed - in both cases it HAS completed when this returns.
+            virtual Bool ExportNativeFence(int* fence) {
+                *fence = -1;
+                return PublishSharedImageAccesses();
+            }
 
             // ---- shared images, CLIENT side (BackendObject_Remote implements these) ----------
             //
@@ -723,6 +732,13 @@ namespace MobileGL {
             // returning once the fence is published. Skipped (true) when nothing reached the stream
             // since the last one.
             virtual Bool FlushSharedImageAccesses() { return false; }
+            // In the GL stream, from eglCreateSync(EGL_SYNC_NATIVE_FENCE_ANDROID) with no descriptor:
+            // ExportNativeFence on the server. `*fence` is the sync_file it handed back (the
+            // caller's to close), or -1 when it had none - the fenced work has then completed.
+            virtual Bool CreateNativeFence(int* fence) {
+                *fence = -1;
+                return false;
+            }
 
             virtual void Initialize() = 0;
             virtual Bool InitCapabilities() = 0;

@@ -18882,6 +18882,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        Bool ExportNativeFence(int* fence) {
+            *fence = -1;
+            ReadFrame& frame = CurrentReadFrame();
+            // No context current: nothing of this session is in flight to fence.
+            if (t_boundNativeContext == EGL_NO_CONTEXT) return true;
+            TextureImpl::WritePendingSharedImageUploads();
+            int exported = -1;
+            if (!ExportFence(&exported)) {
+                // No descriptor to give: the work is waited out, so the caller may report it done.
+                exported = -1;
+                (void)WaitForCompletion();
+            }
+            // A session that writes images (one that ends frames at flushes) ends one here too; a
+            // compositor's reads stay for its swap, which comes after the fence's work anyway.
+            if (frame.ImplicitSync && frame.Tracker.Pending() != 0) {
+                frame.Tracker.PublishFrameAsWrite(exported >= 0 ? ::dup(exported) : -1);
+                frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
+            }
+            *fence = exported;
+            return true;
+        }
+
         void PublishPendingReads() {
             ReadFrame& frame = CurrentReadFrame();
             if (frame.Tracker.Pending() == 0) return;
@@ -19078,6 +19100,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void AcquireForSampling(const EglImageRef& image) { (void)image; }
         void PublishPendingReads() {}
         Bool PublishPendingAccesses() { return true; }
+        Bool ExportNativeFence(int* fence) {
+            *fence = -1;
+            return true;
+        }
         void ForgetPresentTargetsAfterTerminate() {}
 #endif
     } // namespace SharedImageImpl

@@ -56,6 +56,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLBoolean DestroySync(EGLDisplay dpy, EGLSync sync);
     EGLint ClientWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
     EGLBoolean GetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib* value);
+    // EGL_ANDROID_native_fence_sync: a copy of a native fence sync's sync_file.
+    EGLint DupNativeFenceFD(EGLDisplay dpy, EGLSync sync);
     EGLImage CreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
                          const EGLAttrib* attrib_list);
     EGLBoolean DestroyImage(EGLDisplay dpy, EGLImage image);

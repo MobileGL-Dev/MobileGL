@@ -10,6 +10,13 @@
 #include <EGL/eglext.h>
 #include <MG_Util/X11/DisplayGuard.h>
 
+#include <cerrno>
+#include <climits>
+#if !defined(_WIN32)
+#include <poll.h>
+#include <unistd.h>
+#endif
+
 namespace MobileGL {
     namespace MG_State {
         namespace EGLState {
@@ -223,6 +230,55 @@ namespace MobileGL {
                 return it == m_surfaces.end() ? nullptr : &it->second;
             }
 
+            namespace {
+                void CloseNativeFd(int fd) {
+#if !defined(_WIN32)
+                    if (fd >= 0) ::close(fd);
+#else
+                    (void)fd;
+#endif
+                }
+
+                // Waits up to `timeoutMs` (negative: for ever) for a sync_file to signal; an absent
+                // descriptor has. False on timeout.
+                Bool WaitNativeFd(int fd, int timeoutMs) {
+#if !defined(_WIN32)
+                    if (fd < 0) return true;
+                    pollfd entry{fd, POLLIN, 0};
+                    for (;;) {
+                        const int ready = ::poll(&entry, 1, timeoutMs);
+                        if (ready > 0) return true;
+                        if (ready == 0) return false;
+                        if (errno != EINTR && errno != EAGAIN) return true; // not a fence that can block
+                    }
+#else
+                    (void)fd, (void)timeoutMs;
+                    return true;
+#endif
+                }
+
+                int DupNativeFd(int fd) {
+#if !defined(_WIN32)
+                    return fd >= 0 ? ::dup(fd) : -1;
+#else
+                    (void)fd;
+                    return -1;
+#endif
+                }
+
+                // EGLTimeKHR nanoseconds as a poll timeout, rounded up; EGL_FOREVER waits for ever.
+                int NativeWaitTimeoutMs(EGLTime timeout) {
+                    if (timeout == EGL_FOREVER) return -1;
+                    const EGLTime ms = timeout / 1000000u + (timeout % 1000000u != 0 ? 1u : 0u);
+                    return ms > static_cast<EGLTime>(INT_MAX) ? INT_MAX : static_cast<int>(ms);
+                }
+
+                // A server wait on a native fence is a wait of the calling thread: nothing it issues
+                // later reaches the server before the fence signals. Bounded, so a fence that never
+                // signals costs a stall rather than the application.
+                constexpr int kNativeServerWaitMs = 2000;
+            } // namespace
+
             const EGLContext::SyncObject* EGLContext::TryGetSync(EGLSyncHandle sync) const {
                 auto it = m_syncs.find(sync);
                 return it == m_syncs.end() ? nullptr : &it->second;
@@ -334,6 +390,7 @@ namespace MobileGL {
 
                 for (auto syncIt = m_syncs.begin(); syncIt != m_syncs.end();) {
                     if (syncIt->second.Display == display) {
+                        CloseNativeFd(syncIt->second.NativeFd);
                         syncIt = m_syncs.erase(syncIt);
                     } else {
                         ++syncIt;
@@ -1595,6 +1652,19 @@ namespace MobileGL {
                     SetError(EGL_NOT_INITIALIZED);
                     return EGL_NO_SYNC;
                 }
+                if (type == EGL_SYNC_NATIVE_FENCE_ANDROID) {
+                    // An application's descriptor to wait on. A fence command (no descriptor) needs
+                    // the backend, which EGLImpl asks before it gets here (CreateNativeFenceSync).
+                    const auto fd = ParseAttribValue(attribList, EGL_SYNC_NATIVE_FENCE_FD_ANDROID);
+#if !defined(_WIN32)
+                    if (fd && *fd != EGL_NO_NATIVE_FENCE_FD_ANDROID) {
+                        return CreateNativeFenceSync(display, static_cast<int>(*fd),
+                                                     EGL_SYNC_NATIVE_FENCE_SIGNALED_ANDROID);
+                    }
+#endif
+                    SetError(EGL_BAD_ATTRIBUTE);
+                    return EGL_NO_SYNC;
+                }
                 if (type != EGL_SYNC_FENCE) {
                     SetError(EGL_BAD_ATTRIBUTE);
                     return EGL_NO_SYNC;
@@ -1626,27 +1696,80 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
+                CloseNativeFd(syncIt->second.NativeFd);
                 m_syncs.erase(syncIt);
                 return true;
             }
 
-            EGLint EGLContext::ClientWaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags,
-                                              EGLTime timeout) {
+            EGLContext::EGLSyncHandle EGLContext::CreateNativeFenceSync(EGLDisplayHandle display, int fd,
+                                                                        EGLenum condition) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                (void)flags;
-                (void)timeout;
+#if defined(_WIN32)
+                (void)display, (void)fd, (void)condition;
+                SetError(EGL_BAD_ATTRIBUTE);
+                return EGL_NO_SYNC;
+#else
+                if (!IsDisplayInitialized(display)) {
+                    CloseNativeFd(fd);
+                    SetError(EGL_NOT_INITIALIZED);
+                    return EGL_NO_SYNC;
+                }
+                SyncObject sync = {
+                    .Display = display,
+                    .Type = EGL_SYNC_NATIVE_FENCE_ANDROID,
+                    .Condition = condition,
+                    .Status = EGL_UNSIGNALED,
+                    .NativeFd = fd,
+                };
+                const auto syncHandle = EncodeHandle<EGLSyncHandle>(m_nextSyncHandle++);
+                m_syncs[syncHandle] = sync;
+                return syncHandle;
+#endif
+            }
 
+            EGLint EGLContext::DupNativeFenceFD(EGLDisplayHandle display, EGLSyncHandle sync) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* syncObject = TryGetSync(sync);
                 if (!syncObject) {
                     SetError(EGL_BAD_PARAMETER);
-                    return EGL_FALSE;
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
                 }
                 if (syncObject->Display != display) {
                     SetError(EGL_BAD_MATCH);
-                    return EGL_FALSE;
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
                 }
+                const int fd =
+                    syncObject->Type == EGL_SYNC_NATIVE_FENCE_ANDROID ? DupNativeFd(syncObject->NativeFd) : -1;
+                if (fd < 0) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return EGL_NO_NATIVE_FENCE_FD_ANDROID;
+                }
+                return fd;
+            }
 
-                return EGL_CONDITION_SATISFIED;
+            EGLint EGLContext::ClientWaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags,
+                                              EGLTime timeout) {
+                (void)flags;
+                int fd = -1;
+                {
+                    const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    const auto* syncObject = TryGetSync(sync);
+                    if (!syncObject) {
+                        SetError(EGL_BAD_PARAMETER);
+                        return EGL_FALSE;
+                    }
+                    if (syncObject->Display != display) {
+                        SetError(EGL_BAD_MATCH);
+                        return EGL_FALSE;
+                    }
+                    if (syncObject->Type != EGL_SYNC_NATIVE_FENCE_ANDROID) return EGL_CONDITION_SATISFIED;
+                    // A copy, waited on outside the lock: other threads keep using EGL meanwhile,
+                    // and one may destroy the sync while this waits.
+                    fd = DupNativeFd(syncObject->NativeFd);
+                }
+                const Bool signaled = WaitNativeFd(fd, NativeWaitTimeoutMs(timeout));
+                CloseNativeFd(fd);
+                return signaled ? EGL_CONDITION_SATISFIED : EGL_TIMEOUT_EXPIRED;
             }
 
             Bool EGLContext::GetSyncAttrib(EGLDisplayHandle display, EGLSyncHandle sync, EGLint attribute,
@@ -1671,6 +1794,10 @@ namespace MobileGL {
                     *value = static_cast<EGLAttrib>(syncObject->Type);
                     return true;
                 case EGL_SYNC_STATUS:
+                    if (syncObject->Type == EGL_SYNC_NATIVE_FENCE_ANDROID) {
+                        *value = WaitNativeFd(syncObject->NativeFd, 0) ? EGL_SIGNALED : EGL_UNSIGNALED;
+                        return true;
+                    }
                     *value = static_cast<EGLAttrib>(syncObject->Status);
                     return true;
                 case EGL_SYNC_CONDITION:
@@ -1683,17 +1810,24 @@ namespace MobileGL {
             }
 
             Bool EGLContext::WaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags) const {
-                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 (void)flags;
-                const auto* syncObject = TryGetSync(sync);
-                if (!syncObject) {
-                    const_cast<EGLContext*>(this)->SetError(EGL_BAD_PARAMETER);
-                    return false;
+                int fd = -1;
+                {
+                    const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                    const auto* syncObject = TryGetSync(sync);
+                    if (!syncObject) {
+                        const_cast<EGLContext*>(this)->SetError(EGL_BAD_PARAMETER);
+                        return false;
+                    }
+                    if (syncObject->Display != display) {
+                        const_cast<EGLContext*>(this)->SetError(EGL_BAD_MATCH);
+                        return false;
+                    }
+                    if (syncObject->Type != EGL_SYNC_NATIVE_FENCE_ANDROID) return true;
+                    fd = DupNativeFd(syncObject->NativeFd);
                 }
-                if (syncObject->Display != display) {
-                    const_cast<EGLContext*>(this)->SetError(EGL_BAD_MATCH);
-                    return false;
-                }
+                (void)WaitNativeFd(fd, kNativeServerWaitMs);
+                CloseNativeFd(fd);
                 return true;
             }
 

@@ -594,6 +594,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
     }
 
+    Bool BackendObject_DirectVulkan::ExportNativeFence(int* fence) {
+        *fence = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        return pVulkanRenderer ? pVulkanRenderer->ExportNativeFence(fence) : true;
+#else
+        return true;
+#endif
+    }
+
     // A swapchain image keeps its content through a present whatever region is drawn next: the
     // damage region the client may declare is not needed here.
     Int32 BackendObject_DirectVulkan::QueryCurrentBufferAge(Bool damageRegionFollows) {

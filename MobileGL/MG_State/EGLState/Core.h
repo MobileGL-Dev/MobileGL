@@ -168,6 +168,15 @@ namespace MobileGL {
                 Bool GetSyncAttrib(EGLDisplayHandle display, EGLSyncHandle sync, EGLint attribute,
                                    EGLAttrib* value) const;
                 Bool WaitSync(EGLDisplayHandle display, EGLSyncHandle sync, EGLint flags) const;
+                // EGL_ANDROID_native_fence_sync. A native fence sync owns a sync_file descriptor and
+                // its status is that descriptor's: CreateSync takes one an application imports
+                // (EGL_SYNC_NATIVE_FENCE_FD_ANDROID), and CreateNativeFenceSync takes the one a fence
+                // command produced (`condition` EGL_SYNC_PRIOR_COMMANDS_COMPLETE; fd -1 = the fenced
+                // work has completed and no descriptor came with it). Both take ownership of `fd`,
+                // also on failure. DupNativeFenceFD hands out a copy, or EGL_NO_NATIVE_FENCE_FD_ANDROID
+                // (EGL_BAD_PARAMETER) when the sync has none. Not on Windows, which has no sync_file.
+                EGLSyncHandle CreateNativeFenceSync(EGLDisplayHandle display, int fd, EGLenum condition);
+                EGLint DupNativeFenceFD(EGLDisplayHandle display, EGLSyncHandle sync);
 
                 // Image
                 EGLImageHandle CreateImage(EGLDisplayHandle display, EGLContextHandle context, EGLenum target,
@@ -335,6 +344,8 @@ namespace MobileGL {
                     EGLenum Type = EGL_SYNC_FENCE;
                     EGLenum Condition = EGL_SYNC_PRIOR_COMMANDS_COMPLETE;
                     EGLenum Status = EGL_SIGNALED;
+                    // EGL_SYNC_NATIVE_FENCE_ANDROID only: the owned sync_file, -1 = none (signaled).
+                    int NativeFd = -1;
                 };
 
                 struct ImageObject {

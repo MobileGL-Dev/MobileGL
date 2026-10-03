@@ -1238,6 +1238,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+    Bool BackendObject_DirectGLES::ExportNativeFence(int* fence) {
+        *fence = -1;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        return DirectGLES::SharedImageImpl::ExportNativeFence(fence);
+#else
+        return true;
+#endif
+    }
+
     Bool BackendObject_DirectGLES::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         return BackendObject::SwapEGLBuffers(dpy, draw);
     }

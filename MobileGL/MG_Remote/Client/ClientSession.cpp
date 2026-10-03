@@ -3067,6 +3067,9 @@ namespace MobileGL::MG_Remote::Client {
         if (status != Wire::ReplySink::kStatusOk || returned != sizeof(answer)) return false;
         if (reply != nullptr) *reply = answer;
         if (receivedFd == nullptr) return true;
+        // A native fence's answer says whether a descriptor follows (none: the work completed).
+        if (op.Op == MG_Pipe::kMGPSharedImageNativeFence && answer.Format != MG_Pipe::kMGPNativeFenceFdFollows)
+            return true;
 #if defined(_WIN32)
         return false;
 #else

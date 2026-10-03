@@ -287,8 +287,10 @@ MOBILEGL_EGL_API EGLBoolean eglDestroySync(EGLDisplay dpy, EGLSync sync) {
     return MobileGL::MG_Impl::EGLImpl::DestroySync(dpy, sync);
 }
 
+// The waits take no stream lock: they read EGL state only (its own lock), never the stream, and a
+// native fence's wait blocks for as long as the fenced work runs - with the lock held, every other
+// thread's GL call would wait with it.
 MOBILEGL_EGL_API EGLint eglClientWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout) {
-    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglClientWaitSync(dpy=%p, sync=%p, flags=%d, timeout=%llu)", dpy, sync, flags,
             static_cast<unsigned long long>(timeout));
     return MobileGL::MG_Impl::EGLImpl::ClientWaitSync(dpy, sync, flags, timeout);
@@ -298,6 +300,65 @@ MOBILEGL_EGL_API EGLBoolean eglGetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLin
     const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglGetSyncAttrib(dpy=%p, sync=%p, attribute=%d, value=%p)", dpy, sync, attribute, value);
     return MobileGL::MG_Impl::EGLImpl::GetSyncAttrib(dpy, sync, attribute, value);
+}
+
+// EGL_KHR_fence_sync / EGL_KHR_wait_sync / EGL_ANDROID_native_fence_sync's spellings, which
+// ANGLE's GLES-on-EGL backend loads by name (and only through them offers fences to Chrome): the
+// same objects as EGL 1.5's, with EGLint attribute lists.
+namespace {
+    // EGL_KHR_fence_sync's attribute list widened to EGL 1.5's; at most 16 pairs, as no sync type
+    // takes more than two attributes.
+    bool WidenSyncAttribs(const EGLint* in, EGLAttrib* out, int capacity) {
+        int n = 0;
+        for (const EGLint* at = in; at != nullptr && at[0] != EGL_NONE; at += 2) {
+            if (n + 3 > capacity) return false;
+            out[n++] = static_cast<EGLAttrib>(at[0]);
+            out[n++] = static_cast<EGLAttrib>(at[1]);
+        }
+        out[n] = EGL_NONE;
+        return true;
+    }
+} // namespace
+
+MOBILEGL_EGL_API EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglCreateSyncKHR(dpy=%p, type=%u, attrib_list=%p)", dpy, type, attrib_list);
+    EGLAttrib attribs[33];
+    if (!WidenSyncAttribs(attrib_list, attribs, 33)) return EGL_NO_SYNC_KHR;
+    return MobileGL::MG_Impl::EGLImpl::CreateSync(dpy, type, attribs);
+}
+
+MOBILEGL_EGL_API EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglDestroySyncKHR(dpy=%p, sync=%p)", dpy, sync);
+    return MobileGL::MG_Impl::EGLImpl::DestroySync(dpy, sync);
+}
+
+MOBILEGL_EGL_API EGLint eglClientWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags, EGLTimeKHR timeout) {
+    MGLOG_D("eglClientWaitSyncKHR(dpy=%p, sync=%p, flags=%d, timeout=%llu)", dpy, sync, flags,
+            static_cast<unsigned long long>(timeout));
+    return MobileGL::MG_Impl::EGLImpl::ClientWaitSync(dpy, sync, flags, timeout);
+}
+
+MOBILEGL_EGL_API EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint attribute, EGLint* value) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglGetSyncAttribKHR(dpy=%p, sync=%p, attribute=%d, value=%p)", dpy, sync, attribute, value);
+    if (value == nullptr) return MobileGL::MG_Impl::EGLImpl::GetSyncAttrib(dpy, sync, attribute, nullptr);
+    EGLAttrib wide = 0;
+    const EGLBoolean ok = MobileGL::MG_Impl::EGLImpl::GetSyncAttrib(dpy, sync, attribute, &wide);
+    if (ok == EGL_TRUE) *value = static_cast<EGLint>(wide);
+    return ok;
+}
+
+MOBILEGL_EGL_API EGLint eglWaitSyncKHR(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags) {
+    MGLOG_D("eglWaitSyncKHR(dpy=%p, sync=%p, flags=%d)", dpy, sync, flags);
+    return MobileGL::MG_Impl::EGLImpl::WaitSync(dpy, sync, flags) == EGL_TRUE ? EGL_TRUE : EGL_FALSE;
+}
+
+MOBILEGL_EGL_API EGLint eglDupNativeFenceFDANDROID(EGLDisplay dpy, EGLSyncKHR sync) {
+    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
+    MGLOG_D("eglDupNativeFenceFDANDROID(dpy=%p, sync=%p)", dpy, sync);
+    return MobileGL::MG_Impl::EGLImpl::DupNativeFenceFD(dpy, sync);
 }
 
 MOBILEGL_EGL_API EGLImage eglCreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
@@ -384,8 +445,8 @@ MOBILEGL_EGL_API EGLSurface eglCreatePlatformPixmapSurface(EGLDisplay dpy, EGLCo
     return MobileGL::MG_Impl::EGLImpl::CreatePlatformPixmapSurface(dpy, config, native_pixmap, attrib_list);
 }
 
+// No stream lock, like eglClientWaitSync's: a native fence's server wait blocks the calling thread.
 MOBILEGL_EGL_API EGLBoolean eglWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags) {
-    const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglWaitSync(dpy=%p, sync=%p, flags=%d)", dpy, sync, flags);
     return MobileGL::MG_Impl::EGLImpl::WaitSync(dpy, sync, flags);
 }

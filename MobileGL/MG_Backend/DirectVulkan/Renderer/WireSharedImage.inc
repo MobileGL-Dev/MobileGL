@@ -625,6 +625,47 @@
         return true;
     }
 
+    // THE NATIVE FENCE. A sync_file of everything the session submitted so far, for the client's
+    // EGL_ANDROID_native_fence_sync: the application hands the descriptor on (Chrome's GPU process,
+    // to the browser that commits the buffer), so it has to signal no earlier than the last of that
+    // work. With nothing recorded, an empty
+    // recording is submitted to carry the signal: the in-order queue runs it after every earlier
+    // submission, and it is tracked like any other (the semaphore's reuse waits for it).
+    Bool VulkanRenderer::ExportNativeFence(int* fence) {
+        *fence = -1;
+        if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0)
+            return true; // nothing was ever submitted: nothing to fence
+        // A session that writes images ends its frame here, as at a flush; a compositor that only
+        // samples them keeps its reads for its present, which follows the fence's work anyway.
+        const Bool boundary = m_sharedImageImplicitSync;
+        if (boundary) ReleaseHeldSharedImages();
+        if (m_sharedImageSyncFd && m_sharedImageSignal == VK_NULL_HANDLE)
+            m_sharedImageSignal = TakeSharedImageSemaphore(/*exportable=*/true);
+        m_sharedImageSignalSubmitted = VK_NULL_HANDLE;
+        if (!HasPendingRecordedWork() && m_sharedImageSignal != VK_NULL_HANDLE)
+            m_frameContext.BeginCommandRecording();
+        const Bool submitted = HasPendingRecordedWork() && FlushPendingCommands();
+        if (HasPendingRecordedWork()) MGLOG_E_ONCE("Magma: a native fence's commands could not be submitted");
+        const VkSemaphore signal =
+            submitted ? std::exchange(m_sharedImageSignalSubmitted, VK_NULL_HANDLE) : VK_NULL_HANDLE;
+        int exported = -1;
+        if (signal == VK_NULL_HANDLE || !ExportSharedImageSignal(signal, exported)) exported = -1;
+        if (exported < 0) {
+            // No descriptor: the work is waited out, so the caller may report it completed.
+            if (!WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX))
+                MGLOG_E_ONCE("Magma: a native fence's work could not be waited for");
+        }
+        if (boundary && m_sharedImageReads.Pending() != 0) {
+            int published = -1;
+#if !defined(_WIN32)
+            if (exported >= 0) published = ::dup(exported);
+#endif
+            m_sharedImageReads.PublishFrameAsWrite(published);
+        }
+        *fence = exported;
+        return true;
+    }
+
     void VulkanRenderer::PublishSharedImageReads() {
         const VkSemaphore signal = std::exchange(m_sharedImageSignalSubmitted, VK_NULL_HANDLE);
         int fence = -1;

@@ -2016,6 +2016,13 @@ namespace MobileGL::MG_Pipe {
     //   Flush     glFlush/glFinish of a session that renders INTO images (an X server's glamor):
     //             every image the session used since its last boundary is published as written
     //             and read by the flush's fence (implicit sync); answered once published.
+    //   NativeFence     EGL_ANDROID_native_fence_sync's fence command: a sync_file that signals
+    //             once everything the session submitted so far has completed (and, in a session
+    //             that writes images, what Flush does)
+    //             reaches the client on the aux socket BEFORE the reply is posted, with the reply's
+    //             Format = kMGPNativeFenceFdFollows. Format = 0: the server has no descriptor to give
+    //             (it cannot export fences, and none it gave before can stand in), and the work has
+    //             completed by the time the reply is posted.
     //
     // A Present carries the region of the frame to copy (DamageCount rectangles of Damage, GL
     // window coordinates, origin bottom-left; 0 = all of it): the client keeps per image what the
@@ -2032,8 +2039,10 @@ namespace MobileGL::MG_Pipe {
         kMGPSharedImageQueryBufferAge = 6,
         kMGPSharedImageSetDamageRegion = 7,
         kMGPSharedImageFlush = 8,
+        kMGPSharedImageNativeFence = 9,
     };
     inline constexpr Uint32 kMGPBufferAgeDamageRegionFollows = 1u;
+    inline constexpr Uint32 kMGPNativeFenceFdFollows = 1u;
 
     struct MGPSharedImageOp {
         Uint32 Op;

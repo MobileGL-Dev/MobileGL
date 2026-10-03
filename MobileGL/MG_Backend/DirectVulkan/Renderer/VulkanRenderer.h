@@ -196,6 +196,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the exportable semaphore, and its sync_file is published to each as a write and a read.
         // From then on an image's first acquire per frame also waits for its pending reads.
         Bool PublishSharedImageAccesses();
+        // EGL_ANDROID_native_fence_sync's fence command (BackendObject::ExportNativeFence): the
+        // submission's sync_file in `*fence` (-1: none, and the work is waited out here), and - for
+        // a session that writes images - the boundary PublishSharedImageAccesses makes.
+        Bool ExportNativeFence(int* fence);
         // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
         // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
         // target keep its presented images' content from then on.
@@ -726,8 +730,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // m_sharedImageSyncFd: the device imports and exports SYNC_FD binary semaphores; without
         // it the waits happen on the CPU and nothing is exported (see WireSharedImage.inc).
         Bool m_sharedImageSyncFd = false;
-        // The session ends frames at publishing flushes (PublishSharedImageAccesses): it writes the
-        // images it acquires, so a first acquire waits for the image's pending reads as well.
+        // The session writes images - it ends frames at publishing flushes
+        // (PublishSharedImageAccesses), or it reached one through a framebuffer (ResolveWireImage):
+        // a first acquire waits for the image's pending reads as well, and its boundaries publish
+        // what it used as written.
         Bool m_sharedImageImplicitSync = false;
         PFN_vkImportSemaphoreFdKHR m_importSemaphoreFd = nullptr;
         PFN_vkGetSemaphoreFdKHR m_getSemaphoreFd = nullptr;
