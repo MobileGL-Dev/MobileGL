@@ -17193,23 +17193,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // session's apply) thread; the present ends the frame.
         thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
 
-        // A WINDOW SURFACE'S BUFFER AGE IS OPT-IN (MOBILEGL_ESPRYT_WINDOW_AGE=1, or on Android the
-        // property debug.mobilegl.espryt_window_age=1); off, a window answers 0 and its client
-        // repaints whole frames. Measured on Adreno 750 with the compositor repainting by age: with a
-        // client presenting far faster than the display (hundreds of frames a second), about one run
-        // in six ended with part of a window showing a frame two or three presents old, with the
-        // driver's partial-update age and with EGL_BUFFER_PRESERVED alike, and never at sixty frames
-        // a second or with whole repaints. Whole repaints hide whatever goes stale; until that is
-        // found, they stay the default here. Pbuffers (client windows) are not affected.
+        // A WINDOW SURFACE'S BUFFER AGE, on unless MOBILEGL_ESPRYT_WINDOW_AGE=0 (or, on Android, the
+        // property debug.mobilegl.espryt_window_age=0); off, a window answers 0 and its client
+        // repaints whole frames. It was opt-in while a window repainted by age sometimes showed a
+        // client frame two or three presents old: the client's shared image had kept its previous
+        // frame, its copy clipped by a scissor guard that trusted another session's render-state
+        // shadow (ScopedScissorDisable) - whole repaints only happened to leave that shadow
+        // agreeing with the client. Pbuffers (client windows) are not affected.
         Bool WindowBufferAgeEnabled() {
             static const Bool enabled = [] {
-                if (const char* env = std::getenv("MOBILEGL_ESPRYT_WINDOW_AGE")) return std::strcmp(env, "1") == 0;
+                if (const char* env = std::getenv("MOBILEGL_ESPRYT_WINDOW_AGE")) return std::strcmp(env, "0") != 0;
 #if defined(__ANDROID__)
                 char property[PROP_VALUE_MAX] = {};
                 if (__system_property_get("debug.mobilegl.espryt_window_age", property) > 0)
-                    return std::strcmp(property, "1") == 0;
+                    return std::strcmp(property, "0") != 0;
 #endif
-                return false;
+                return true;
             }();
             return enabled;
         }
