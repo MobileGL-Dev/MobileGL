@@ -250,17 +250,34 @@ namespace MobileGL {
                 }
                 // P14 S3: the thread's GL state goes back to what it was before this EGL
                 // context was made current on it.
-                if (currentIt->second.RestoreThreadGLState) {
-                    pGLContext = Move(currentIt->second.RestoreThreadGLState);
+                //
+                // A THREAD THAT HAD NONE (one that never had GL state before its first bind) GOES
+                // TO THE PROCESS DEFAULT, never keeps the released context's. Keeping it made the
+                // thread's TLS the last owner of a context destroyed after the release, so the
+                // context's objects ended in the thread-exit destructor of that TLS: outside every
+                // entry point and its lock, writing their records into the middle of another
+                // thread's - torn records, a reply read from the wrong slot, a lost session.
+                pGLContext = currentIt->second.RestoreThreadGLState ? Move(currentIt->second.RestoreThreadGLState)
+                                                                    : ProcessDefaultGLContext();
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    // A fallback built against a server session that has since ended (a device
-                    // loss, recovered) is lost with it: the thread falls back to today's default.
-                    if (pGLContext->IsFromEndedWireSession()) pGLContext = ProcessDefaultGLContext();
+                // A fallback built against a server session that has since ended (a device loss,
+                // recovered) is lost with it: the thread falls back to today's default.
+                if (pGLContext->IsFromEndedWireSession()) pGLContext = ProcessDefaultGLContext();
 #endif
-                }
                 m_threadCurrents.erase(currentIt);
                 DestroyPendingSurfaceIfUnused(drawSurface);
                 DestroyPendingSurfaceIfUnused(readSurface);
+                // A context destroyed while it was current is destroyed now that nothing has it
+                // current; the caller finishes it (TakeReapedContexts).
+                if (context != nullptr && m_contextOwners.find(context) == m_contextOwners.end()) {
+                    const auto contextIt = m_contexts.find(context);
+                    if (contextIt != m_contexts.end() && contextIt->second.DestroyPending) {
+                        m_reapedContexts.push_back(ReapedContext{context, contextIt->second.ClientContextToken,
+                                                                 contextIt->second.ShareGroupToken,
+                                                                 Move(contextIt->second.GLStateObject)});
+                        m_contexts.erase(contextIt);
+                    }
+                }
             }
 
             Bool EGLContext::IsSurfaceCurrentUnlocked(EGLSurfaceHandle surface) const {
@@ -656,7 +673,8 @@ namespace MobileGL {
 
             EGLContext::EGLContextHandle EGLContext::CreateContext(EGLDisplayHandle display, EGLConfigHandle config,
                                                                    EGLContextHandle shareCtx,
-                                                                   const EGLint* attribList) {
+                                                                   const EGLint* attribList,
+                                                                   Bool deferGLState) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* displayObject = TryGetDisplay(display);
                 if (!displayObject) {
@@ -737,7 +755,11 @@ namespace MobileGL {
                 }
                 // P14 S3: the context's own GL state, sharing the objects (and the name spaces)
                 // of the group above, with bindings, errors and the current program of its own.
-                contextObject.GLStateObject = MakeShared<GLState::GLContext>(shareGroup);
+                if (deferGLState) {
+                    contextObject.PendingShareGroup = Move(shareGroup);
+                } else {
+                    contextObject.GLStateObject = MakeShared<GLState::GLContext>(shareGroup);
+                }
 
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_CLIENT_VERSION); value) {
                     contextObject.ClientVersion = *value;
@@ -791,10 +813,23 @@ namespace MobileGL {
                 return context;
             }
 
-            Bool EGLContext::DestroyContext(EGLDisplayHandle display, EGLContextHandle context) {
+            Bool EGLContext::BuildContextGLState(EGLContextHandle context) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                const auto contextIt = m_contexts.find(context);
+                if (contextIt == m_contexts.end()) return false;
+                ContextObject& object = contextIt->second;
+                if (!object.GLStateObject) {
+                    object.GLStateObject = MakeShared<GLState::GLContext>(Move(object.PendingShareGroup));
+                    object.PendingShareGroup = nullptr;
+                }
+                return true;
+            }
+
+            Bool EGLContext::DestroyContext(EGLDisplayHandle display, EGLContextHandle context, Bool* deferred) {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                if (deferred != nullptr) *deferred = false;
                 auto contextIt = m_contexts.find(context);
-                if (contextIt == m_contexts.end()) {
+                if (contextIt == m_contexts.end() || contextIt->second.DestroyPending) {
                     SetError(EGL_BAD_CONTEXT);
                     return false;
                 }
@@ -803,13 +838,21 @@ namespace MobileGL {
                     return false;
                 }
 
-                auto ownerIt = m_contextOwners.find(context);
-                if (ownerIt != m_contextOwners.end()) {
-                    SetError(EGL_BAD_ACCESS);
-                    return false;
+                if (m_contextOwners.find(context) != m_contextOwners.end()) {
+                    // EGL 1.5 3.7.2: current to a thread, so destroyed once it no longer is.
+                    contextIt->second.DestroyPending = true;
+                    if (deferred != nullptr) *deferred = true;
+                    return true;
                 }
                 m_contexts.erase(contextIt);
                 return true;
+            }
+
+            Vector<EGLContext::ReapedContext> EGLContext::TakeReapedContexts() {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                Vector<ReapedContext> reaped;
+                reaped.swap(m_reapedContexts);
+                return reaped;
             }
 
             Bool EGLContext::QueryContext(EGLDisplayHandle display, EGLContextHandle context, EGLint attribute,
@@ -820,7 +863,7 @@ namespace MobileGL {
                     return false;
                 }
                 const auto* contextObject = TryGetContext(context);
-                if (!contextObject) {
+                if (!contextObject || contextObject->DestroyPending) {
                     const_cast<EGLContext*>(this)->SetError(EGL_BAD_CONTEXT);
                     return false;
                 }
@@ -867,13 +910,15 @@ namespace MobileGL {
 
             Bool EGLContext::ValidateContext(EGLContextHandle context) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                return m_contexts.find(context) != m_contexts.end();
+                const auto* ctx = TryGetContext(context);
+                return ctx != nullptr && !ctx->DestroyPending;
             }
 
+            // A context whose destroy is pending is no context for any new use of its handle.
             Bool EGLContext::ValidateContextOnDisplay(EGLDisplayHandle display, EGLContextHandle context) const {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* ctx = TryGetContext(context);
-                return ctx && ctx->Display == display;
+                return ctx && !ctx->DestroyPending && ctx->Display == display;
             }
 
             // P14 S1. 0 for an unknown handle or a thread with no current context: 0 is the

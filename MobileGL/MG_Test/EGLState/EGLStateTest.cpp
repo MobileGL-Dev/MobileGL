@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <MG_State/EGLState/Core.h>
+#include <MG_State/GLState/Core.h>
 #include <EGL/eglext.h>
 #include <future>
 #include <memory>
@@ -147,6 +148,99 @@ TEST(EGLStateMakeCurrent, SurfacelessBindIsAcceptedAndRecordsNoSurface) {
     EXPECT_EQ(fixture->State.GetCurrentSurface(EGL_DRAW), EGL_NO_SURFACE);
     EXPECT_EQ(fixture->State.GetCurrentSurface(EGL_READ), EGL_NO_SURFACE);
     EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+}
+
+// EGL 1.5 3.7.2: a context current to a thread is destroyed once it is no longer current. The
+// destroy answers EGL_TRUE (it used to be EGL_BAD_ACCESS), the handle is dead for any new use at
+// once, the thread keeps it current until it releases it, and that release hands the context -
+// with its GL state, whose last owner the caller now is - to whoever finishes the destroy.
+TEST(EGLStateDestroyContext, DestroyingAContextCurrentOnAThreadIsDeferredUntilItsRelease) {
+    auto fixture = CreateFixture();
+    auto& state = fixture->State;
+    const MobileGL::Uint64 token = state.GetContextClientToken(fixture->Context);
+    std::weak_ptr<MobileGL::MG_State::GLState::GLContext> glState = state.GetContextGLState(fixture->Context);
+    ASSERT_FALSE(glState.expired());
+
+    std::promise<void> current;
+    std::promise<void> destroyed;
+    auto currentFuture = current.get_future();
+    auto destroyedFuture = destroyed.get_future();
+    bool stillCurrentAfterDestroy = false;
+    bool rebindRefused = false;
+    EGLint rebindError = EGL_SUCCESS;
+    size_t reapedWhileCurrent = 0;
+    std::thread owner([&] {
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context));
+        current.set_value();
+        destroyedFuture.wait();
+        stillCurrentAfterDestroy = state.GetCurrentContext() == fixture->Context;
+        rebindRefused = !state.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context);
+        rebindError = state.ConsumeError();
+        reapedWhileCurrent = state.TakeReapedContexts().size();
+        EXPECT_TRUE(state.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    });
+    currentFuture.wait();
+    bool deferred = false;
+    EXPECT_TRUE(state.DestroyContext(fixture->Display, fixture->Context, &deferred));
+    EXPECT_TRUE(deferred);
+    EXPECT_FALSE(state.ValidateContext(fixture->Context));
+    EXPECT_FALSE(state.DestroyContext(fixture->Display, fixture->Context));
+    EXPECT_EQ(state.ConsumeError(), EGL_BAD_CONTEXT);
+    destroyed.set_value();
+    owner.join();
+
+    EXPECT_TRUE(stillCurrentAfterDestroy);
+    EXPECT_TRUE(rebindRefused);
+    EXPECT_EQ(rebindError, EGL_BAD_CONTEXT);
+    EXPECT_EQ(reapedWhileCurrent, 0u);
+    auto reaped = state.TakeReapedContexts();
+    ASSERT_EQ(reaped.size(), 1u);
+    EXPECT_EQ(reaped[0].Handle, fixture->Context);
+    EXPECT_EQ(reaped[0].ClientContextToken, token);
+    ASSERT_NE(reaped[0].GLStateObject, nullptr);
+    // Nothing else holds the GL state - neither the book nor the thread that released it.
+    reaped.clear();
+    EXPECT_TRUE(glState.expired());
+}
+
+// A thread that had no GL state before its first bind does not keep the context's after releasing
+// it. Keeping it made the thread's TLS the last owner of a context destroyed after the release, and
+// the context's objects then died in the thread-exit destructor of that TLS, outside every entry
+// point and its lock.
+TEST(EGLStateDestroyContext, ReleasingThreadDoesNotKeepTheContextsGLState) {
+    auto fixture = CreateFixture();
+    auto& state = fixture->State;
+    std::weak_ptr<MobileGL::MG_State::GLState::GLContext> glState = state.GetContextGLState(fixture->Context);
+    std::thread worker([&] {
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context));
+        EXPECT_EQ(MobileGL::MG_State::pGLContext.get(), glState.lock().get());
+        EXPECT_TRUE(state.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+        EXPECT_NE(MobileGL::MG_State::pGLContext.get(), glState.lock().get());
+        bool deferred = true;
+        EXPECT_TRUE(state.DestroyContext(fixture->Display, fixture->Context, &deferred));
+        EXPECT_FALSE(deferred);
+        // Ended here, by the destroy - not later, when this thread exits.
+        EXPECT_TRUE(glState.expired());
+    });
+    worker.join();
+}
+
+// A context created with its GL state deferred has none until BuildContextGLState builds it (a
+// split client tells its server about the context first, then builds the state under it).
+TEST(EGLStateCreateContext, DeferredGLStateIsBuiltOnRequestInTheShareGroup) {
+    auto fixture = CreateFixture();
+    auto& state = fixture->State;
+    const auto shared = state.CreateContext(fixture->Display, fixture->Config, fixture->Context, nullptr,
+                                            /*deferGLState=*/true);
+    ASSERT_NE(shared, EGL_NO_CONTEXT);
+    EXPECT_EQ(state.GetContextGLState(shared), nullptr);
+    EXPECT_EQ(state.GetContextShareGroupToken(shared), state.GetContextShareGroupToken(fixture->Context));
+    ASSERT_TRUE(state.BuildContextGLState(shared));
+    const auto built = state.GetContextGLState(shared);
+    ASSERT_NE(built, nullptr);
+    EXPECT_EQ(built->GetShareGroup(), state.GetContextGLState(fixture->Context)->GetShareGroup());
+    ASSERT_TRUE(state.BuildContextGLState(shared)); // idempotent
+    EXPECT_EQ(state.GetContextGLState(shared), built);
 }
 
 // The extension relaxes only the both-absent case: one surface without the other stays a mismatch.

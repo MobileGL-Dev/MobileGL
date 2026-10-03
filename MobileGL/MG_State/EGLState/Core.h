@@ -59,9 +59,28 @@ namespace MobileGL {
                                      EGLint* value) const;
 
                 // Context
+                // `deferGLState`: the context is created without its GL state, which
+                // BuildContextGLState builds later. Building it creates the context's default
+                // objects, and a split client has to tell its server which context they belong to
+                // first (the server must know the context before anything is filed under it).
                 EGLContextHandle CreateContext(EGLDisplayHandle display, EGLConfigHandle config,
-                                               EGLContextHandle shareCtx, const EGLint* attribList);
-                Bool DestroyContext(EGLDisplayHandle display, EGLContextHandle context);
+                                               EGLContextHandle shareCtx, const EGLint* attribList,
+                                               Bool deferGLState = false);
+                Bool BuildContextGLState(EGLContextHandle context);
+                // EGL 1.5 3.7.2: a context current to some thread is not destroyed until it is no
+                // longer current. Such a destroy answers true with `*deferred` set: the handle is
+                // invalid for any new use from here on, and the release that ends its last binding
+                // moves it to the reaped list (TakeReapedContexts), where the caller finishes it.
+                Bool DestroyContext(EGLDisplayHandle display, EGLContextHandle context, Bool* deferred = nullptr);
+                struct ReapedContext {
+                    EGLContextHandle Handle = nullptr;
+                    Uint64 ClientContextToken = 0;
+                    Uint64 ShareGroupToken = 0;
+                    SharedPtr<GLState::GLContext> GLStateObject;
+                };
+                // The contexts whose deferred destroy a release has just completed, oldest first.
+                // The caller owns them now: dropping a GLStateObject destroys the context's objects.
+                Vector<ReapedContext> TakeReapedContexts();
                 Bool QueryContext(EGLDisplayHandle display, EGLContextHandle context, EGLint attribute,
                                   EGLint* value) const;
                 Bool ValidateContext(EGLContextHandle context) const;
@@ -267,6 +286,11 @@ namespace MobileGL {
                     // share group's ShareGroupState (shared with every context that shares with
                     // this one); its bindings, errors and current program are its own.
                     SharedPtr<GLState::GLContext> GLStateObject;
+                    // The group GLStateObject joins when it is built later (CreateContext's
+                    // deferGLState); null once it is built.
+                    SharedPtr<GLState::ShareGroupState> PendingShareGroup;
+                    // eglDestroyContext was called while the context was current to a thread.
+                    Bool DestroyPending = false;
                     EGLenum ClientAPI = EGL_OPENGL_API;
                     EGLint ClientVersion = 1;
                     EGLint MajorVersion = 1;
@@ -379,6 +403,7 @@ namespace MobileGL {
                 UnorderedMap<EGLConfigHandle, ConfigObject> m_configs;
                 UnorderedMap<EGLSurfaceHandle, SurfaceObject> m_surfaces;
                 UnorderedMap<EGLContextHandle, ContextObject> m_contexts;
+                Vector<ReapedContext> m_reapedContexts;
                 UnorderedMap<EGLSyncHandle, SyncObject> m_syncs;
                 UnorderedMap<EGLImageHandle, ImageObject> m_images;
                 Vector<Uint64> m_orphanedSharedImages;

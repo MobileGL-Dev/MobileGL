@@ -88,6 +88,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
+        using MG_Remote::Client::ClientSession;
+
         // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE CONTEXT BINDING, AND
         // THE ONE PLACE IT IS EMITTED.
         //
@@ -159,6 +161,82 @@ namespace MobileGL::MG_Impl::EGLImpl {
     }
 
     namespace {
+        // RECORDS WRITTEN FOR A CONTEXT THAT IS NOT THE CALLING THREAD'S. eglCreateContext builds
+        // the new context's GL state (its default objects are created there) and eglDestroyContext
+        // ends a context's objects, on whatever thread calls them - one with another context
+        // current, or none. Those records belong to the context being created or destroyed, so the
+        // stream is bound to it first; the next GL entry point binds the stream back to its own
+        // thread's context (GLStreamScope). The caller holds StreamMutex().
+        void StreamBindContextLocked(Uint64 token, Uint64 shareGroupToken) {
+            if (token == g_boundContextToken) return;
+            if (MG_Remote::Client::EmitBindContextRecord(token)) {
+                g_boundContextToken = token;
+                g_boundShareGroupToken = shareGroupToken;
+            }
+        }
+
+        // THE ONE WAY A CONTEXT ENDS on a split client, whether eglDestroyContext ended it at once
+        // or its deferred destroy completed when the last thread released it. `glState` is the
+        // context's GL state, whose last owner this is: dropping it ends the context's own objects
+        // (and its share group's, when it is the group's last context). They end under the
+        // context's own binding, the residual fill's object pins included (a pinned vertex array
+        // or program of this context would otherwise end inside some later thread's draw), and
+        // only then does the server drop the context - the order the records need, because the
+        // server files nothing under a context it no longer has. A context lost with an ended
+        // session goes in silence, as before.
+        void FinishContextDestroy(Uint64 token, Uint64 shareGroupToken, SharedPtr<MG_State::GLState::GLContext> glState,
+                                  Bool lost) {
+            if (token == 0 || lost || !StreamGateActive()) {
+                std::optional<ClientSession::ScopedWireMute> silence;
+                if (lost) silence.emplace();
+                glState.reset();
+                return;
+            }
+            StreamBindContextLocked(token, shareGroupToken);
+            // The pins live in the client's own residual block - its own memory only when the
+            // server is another process; in the one-process shape the apply thread reads that block
+            // too, and only a barriered apply's return may touch it (ClientSession::ReleaseFillPins).
+            if (ClientSession* session = ClientSession::Active();
+                session != nullptr && session->Started() && MG_Config::Transport != MG_Config::TransportMode::InProcess) {
+                session->WaitForApplyToCatchUp("eglDestroyContext");
+                session->ReleaseFillPins();
+            }
+            glState.reset();
+            // The server drops its binding to 0 when the bound context is destroyed
+            // (ServerSession::DestroyContext's compare-and-swap); the gate mirrors it so the next
+            // write re-binds.
+            if (g_boundContextToken == token) {
+                g_boundContextToken = 0;
+                g_boundShareGroupToken = 0;
+            }
+            const auto emitted = MG_Remote::Client::SendDestroyContextFrame(token);
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
+                MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "
+                             "session's table and this client's EGL book have drifted apart",
+                             static_cast<unsigned long long>(token));
+            }
+        }
+    } // namespace
+
+    void FinishReapedContexts(MG_State::EGLState::EGLContext* state) {
+        if (state == nullptr) return;
+        if (!StreamGateActive()) {
+            (void)state->TakeReapedContexts(); // dropping them ends their GL state
+            return;
+        }
+        for (auto& reaped : state->TakeReapedContexts()) {
+            const Bool lost = reaped.GLStateObject != nullptr &&
+                              (reaped.GLStateObject->IsFromEndedWireSession() || ClientSession::SessionLatchedLost());
+            FinishContextDestroy(reaped.ClientContextToken, reaped.ShareGroupToken, Move(reaped.GLStateObject), lost);
+        }
+    }
+
+    namespace {
+#else
+        // A monolith has no stream to bind: a context whose deferred destroy completed simply ends.
+        void FinishReapedContexts(MG_State::EGLState::EGLContext* state) {
+            if (state != nullptr) (void)state->TakeReapedContexts();
+        }
 #endif
         String CurrentThreadIdString() {
             std::ostringstream stream;
@@ -713,8 +791,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // The calling thread may still have a lost context current: what is built here is the
         // fresh session's all the same.
         const ClientSession::ScopedCurrentSessionWork currentSession;
+        // A split client builds the context's GL state only once the server has its token (below).
+        const Bool splitClient = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                                 !MG_Remote::Client::RunsAsTheServerRole();
+#else
+        constexpr Bool splitClient = false;
 #endif
-        EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+        EGLContext context = state->CreateContext(dpy, config, shareCtx, attrib_list, splitClient);
         if (context == EGL_NO_CONTEXT) {
             return EGL_NO_CONTEXT;
         }
@@ -754,7 +837,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
                         replacedGroup = state->GetContextShareGroupToken(shareCtx);
                         shareCtx = ReplacementShareContext(state, dpy, replacedGroup);
                     }
-                    context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+                    context = state->CreateContext(dpy, config, shareCtx, attrib_list, splitClient);
                 }
                 if (context == EGL_NO_CONTEXT) {
                     state->SetError(EGL_BAD_ALLOC);
@@ -769,6 +852,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 state->SetError(EGL_BAD_ACCESS);
                 return EGL_NO_CONTEXT;
             }
+            // NOW THE CONTEXT'S GL STATE, under its own binding. Building it creates the context's
+            // default objects (a texture per target, ...), and the records that create them belong
+            // to THIS context's share group on the server - not to whichever context the stream
+            // was last bound to by some other thread, which is where they landed when the state was
+            // built before the token crossed: a context in a share group of its own then drew with
+            // default objects its group never had.
+            if (emitted == MG_Remote::Client::ContextFrameEmit::Sent) {
+                StreamBindContextLocked(state->GetContextClientToken(context), state->GetContextShareGroupToken(context));
+            }
+            (void)state->BuildContextGLState(context);
         }
 #endif
         return context;
@@ -828,6 +921,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+        // A release (explicit, or the implicit one of binding another context) may complete the
+        // deferred destroy of the context it releases; that destroy is finished on the way out,
+        // under the lock, whichever way this call returns.
+        struct FinishReapedOnExit {
+            EGLStateContext* State;
+            ~FinishReapedOnExit() { FinishReapedContexts(State); }
+        } finishReaped{state};
 
         const auto oldDisplay = state->GetCurrentDisplay();
         const auto oldDraw = state->GetCurrentSurface(EGL_DRAW);
@@ -928,41 +1028,34 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
+        // Under the operation lock, like every GL call: what ends here writes records.
+        const std::lock_guard<std::recursive_mutex> destroyLock(EGLOperationMutex());
         // P14 S1. Read BEFORE the client's own book drops the context: after DestroyContext
         // the handle no longer resolves and the token is unrecoverable. The frame is sent
-        // AFTER the client's state machine has accepted the destroy, so one EGL refused (a
-        // context still current on some thread, EGL_BAD_ACCESS) never reaches the server - the
-        // two ends stay in step without the server having to guess why a token vanished.
+        // AFTER the client's state machine has accepted the destroy, so one EGL refused never
+        // reaches the server - the two ends stay in step without the server having to guess why
+        // a token vanished.
         const Uint64 contextToken = state->GetContextClientToken(ctx);
+        const Uint64 shareGroupToken = state->GetContextShareGroupToken(ctx);
         // A LOST CONTEXT IS DESTROYED IN SILENCE. Its objects die here, and a death that reached
         // the wire would land on whichever session is current now - a fresh one after a recovery,
-        // which never created them. Under the operation lock, like every GL call.
-        const std::lock_guard<std::recursive_mutex> destroyLock(EGLOperationMutex());
+        // which never created them.
         const Bool lost = ContextIsLost(state, ctx);
-        std::optional<ClientSession::ScopedWireMute> silence;
-        if (lost) silence.emplace();
-#endif
-        if (!state->DestroyContext(dpy, ctx)) {
+        // The context's GL state, held across the book's drop so that its objects end in
+        // FinishContextDestroy, under the context's own binding, rather than inside EGLState.
+        SharedPtr<MG_State::GLState::GLContext> glState = state->GetContextGLState(ctx);
+        Bool deferred = false;
+        if (!state->DestroyContext(dpy, ctx, &deferred)) {
             return EGL_FALSE;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
         ForgetReplacementShareContext(ctx);
-        if (contextToken != 0 && !lost && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            !MG_Remote::Client::RunsAsTheServerRole()) {
-            const std::lock_guard<std::recursive_mutex> streamLock(EGLOperationMutex());
-            // The server drops its binding to 0 when the current context is destroyed
-            // (ServerSession::DestroyContext's compare-and-swap); the gate mirrors it so the next
-            // write re-binds.
-            if (g_boundContextToken == contextToken) {
-                g_boundContextToken = 0;
-                g_boundShareGroupToken = 0;
-            }
-            const auto emitted = MG_Remote::Client::SendDestroyContextFrame(contextToken);
-            if (emitted == MG_Remote::Client::ContextFrameEmit::Refused) {
-                MGLOG_E_ONCE("eglDestroyContext: the server holds no context token %llu; the "
-                             "session's table and this client's EGL book have drifted apart",
-                             static_cast<unsigned long long>(contextToken));
-            }
+        // CURRENT TO A THREAD (this one or another): EGL destroys it once it is released, and that
+        // release finishes it (FinishReapedContexts). Until then its thread keeps drawing in it.
+        if (deferred) return EGL_TRUE;
+        FinishContextDestroy(contextToken, shareGroupToken, Move(glState), lost);
+#else
+        if (!state->DestroyContext(dpy, ctx)) {
+            return EGL_FALSE;
         }
 #endif
         return EGL_TRUE;
@@ -1027,11 +1120,18 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // Always succeeds (EGL 1.4 §3.11): after the last eglTerminate tore MobileGL down there is
         // simply nothing of this thread's left to release.
         if (!MG_State::pEGLContext) return EGL_TRUE;
+        const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
         auto* state = GetState();
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             (void)backendObject->MakeEGLCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
         state->ReleaseThread();
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // The release edge, as eglMakeCurrent's release sends it: this thread has no context now,
+        // and the binding must not keep naming the one it had.
+        EmitContextBinding(state, EGL_NO_CONTEXT, 0);
+#endif
+        FinishReapedContexts(state);
         return EGL_TRUE;
     }
 

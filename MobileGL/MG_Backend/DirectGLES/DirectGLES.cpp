@@ -17138,6 +17138,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // own thread with its own context, and binding a context back onto another window's
         // surface drew one window's frame into the other.
         NativeSessionState& session = ActiveNativeSession();
+        // Nothing to make it current on yet: a context bound for the records of its own creation
+        // (EGLImpl's CreateContext) before the session has any surface. Its first make-current
+        // gives it one.
+        if (tuple.Draw == EGL_NO_SURFACE && session.Draw == EGL_NO_SURFACE) return true;
         if (tuple.Draw != session.Draw && SessionOwnsSurface(session, tuple.Draw)) {
             session.Draw = tuple.Draw;
             session.Read = SessionOwnsSurface(session, tuple.Read) ? tuple.Read : tuple.Draw;
