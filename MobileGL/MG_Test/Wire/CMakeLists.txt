@@ -80,6 +80,9 @@ if (NOT WIN32)
     # the loss reported, creates new contexts on a FRESH session and renders. Forks the in-process
     # display server and its client, like MultiSessionTest, so it needs no server image either.
     list(APPEND MOBILEGL_WIRE_TESTS ClientRecoveryTest)
+    # Several contexts on several threads of one client, in one share group or one each, drawing at
+    # once against the in-process display server (Qt Quick's shape, and its shape after a loss).
+    list(APPEND MOBILEGL_WIRE_TESTS ConcurrentContextsTest)
     # P11 A1: MOBILEGL_IPC_ADOPT_TIER=0/1 on a stream data plane, against a real `--serve`
     # supervisor over loopback TCP (P12ServerRig.h): refused by name once per session on the side
     # that names it, map_persistent DECLINED, never a Fatal. Needs the server image too.
@@ -108,7 +111,7 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     if (test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR test STREQUAL "ServerOwnedSurfaceTest" OR
         test STREQUAL "EglInfoSequenceTest" OR
         test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest" OR test STREQUAL "ServerProbeTest" OR
-        test STREQUAL "ClientRecoveryTest")
+        test STREQUAL "ClientRecoveryTest" OR test STREQUAL "ConcurrentContextsTest")
         # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
         # the way the codec suites do. (P12's two server suites share PeerLatchTest's healthy
         # session, P12ServerRig.h, and so its include paths.)
