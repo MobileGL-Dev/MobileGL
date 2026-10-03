@@ -53,6 +53,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -156,6 +157,15 @@ namespace MobileGL::MG_Remote::Client {
         std::unordered_map<Uint64, Uint32> m_sessionSharedImages; // id -> references taken
         // The ids a replaced session held: releasing one is a success with nothing sent.
         std::unordered_set<Uint64> m_lostSessionSharedImages;
+        // The size each server-owned window surface ASKED for (0x0: the window's own), which is what a
+        // fresh session is asked for again when the surface is re-created there - not the extent the
+        // window happened to have, which would fix the window's size for good. Guarded by
+        // m_eglStateMutex.
+        std::unordered_map<EGLSurface, std::pair<Uint32, Uint32>> m_serverOwnedRequests;
+        void NoteServerOwnedRequest(EGLSurface surface, Uint32 width, Uint32 height) {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            m_serverOwnedRequests[surface] = {width, height};
+        }
     };
 
 } // namespace MobileGL::MG_Remote::Client

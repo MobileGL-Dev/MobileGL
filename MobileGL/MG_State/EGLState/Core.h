@@ -197,6 +197,10 @@ namespace MobileGL {
                     EGLint Width = 0;
                     EGLint Height = 0;
                     Uint32 Fourcc = 0;
+                    // The server session the reference was taken on (MG_State::CurrentWireEpoch() at the
+                    // import). A reference of an ended session died with it and is never released on
+                    // another: the same image imported again on the fresh session has the same Id.
+                    Uint64 WireEpoch = 0;
                 };
                 static constexpr Uint32 kDrmFourccAbgr8888 = 0x34324241u; // 'AB24'
                 static constexpr Uint32 kDrmFourccXbgr8888 = 0x34324258u; // 'XB24'

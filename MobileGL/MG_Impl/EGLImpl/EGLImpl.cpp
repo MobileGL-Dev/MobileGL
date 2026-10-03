@@ -1643,8 +1643,16 @@ namespace MobileGL::MG_Impl::EGLImpl {
             state->SetError(EGL_BAD_MATCH);
             return EGL_NO_IMAGE;
         }
-        const EGLImage image = state->CreateSharedImage(
-            dpy, {.Id = sharedImageId, .Width = request.Width, .Height = request.Height, .Fourcc = request.Fourcc});
+#if MOBILEGL_BUILD_DISAGGREGATED
+        const Uint64 wireEpoch = MG_State::CurrentWireEpoch();
+#else
+        const Uint64 wireEpoch = 0;
+#endif
+        const EGLImage image = state->CreateSharedImage(dpy, {.Id = sharedImageId,
+                                                              .Width = request.Width,
+                                                              .Height = request.Height,
+                                                              .Fourcc = request.Fourcc,
+                                                              .WireEpoch = wireEpoch});
         if (image == EGL_NO_IMAGE) (void)backendObject->ReleaseSharedImage(sharedImageId);
         return image;
     }
@@ -1654,10 +1662,20 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
+        // The session the image's reference was taken on: a reference of a session that has ended
+        // died with it, and the same image imported again on the fresh session has the same id - a
+        // release of the old one sent there would drop the new one's reference.
+        MG_State::EGLState::EGLContext::SharedImageInfo shared;
+        const Bool sharedImage = state->GetSharedImage(image, &shared);
         Uint64 sharedImageId = 0;
         if (!state->DestroyImage(dpy, image, &sharedImageId)) {
             return EGL_FALSE;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (sharedImage && shared.WireEpoch != MG_State::CurrentWireEpoch()) sharedImageId = 0;
+#else
+        (void)sharedImage;
+#endif
         // A texture the image was bound to keeps its own reference on the server (EGLImage
         // siblings outlive the image), so only this handle's goes.
         if (sharedImageId != 0) {

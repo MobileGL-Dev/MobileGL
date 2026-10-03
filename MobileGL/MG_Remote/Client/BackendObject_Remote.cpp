@@ -238,8 +238,12 @@ namespace MobileGL::MG_Remote::Client {
         // into its registration only; it is re-created at that size when it is next used.
         {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-            if (GetRegisteredEGLSurface(surface) != nullptr && m_homedSurfaces.count(surface) == 0)
+            if (GetRegisteredEGLSurface(surface) != nullptr && m_homedSurfaces.count(surface) == 0) {
+                // A server-owned one asks the fresh session's window for this size, as a resize would.
+                if (ClientSession::IsServerOwnedWindowSurface(surface))
+                    m_serverOwnedRequests[surface] = {width, height};
                 return MG_Backend::BackendObject::ResizeEGLWindowSurface(surface, width, height);
+            }
         }
         // P12 review fix: a surface on the SERVER's window is resized by resizing that window. The
         // server asks its display for the size and answers with the extent the window really took,
@@ -254,6 +258,7 @@ namespace MobileGL::MG_Remote::Client {
                         width, height, static_cast<int>(reply.transport), Server::SurfaceRefusalCodeName(reply.refusal));
                 return false;
             }
+            NoteServerOwnedRequest(surface, width, height);
             const Uint32 realWidth = reply.width != 0 ? reply.width : width;
             const Uint32 realHeight = reply.height != 0 ? reply.height : height;
             if (MG_State::pEGLContext) {
@@ -392,6 +397,7 @@ namespace MobileGL::MG_Remote::Client {
         local.Width = reply.width;
         local.Height = reply.height;
         if (!MG_Backend::BackendObject::CreateEGLWindowSurface(surface, local)) return false;
+        NoteServerOwnedRequest(surface, handle.Width, handle.Height);
         NoteHomed(surface);
         return true;
     }
@@ -481,6 +487,7 @@ namespace MobileGL::MG_Remote::Client {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
             homed = m_homedSurfaces.erase(surface) != 0;
             m_standInSurfaces.erase(surface);
+            m_serverOwnedRequests.erase(surface);
         }
         if (homed && !ClientSession::SessionLatchedLost()) Server::ServerReleaseEGLSurface(surface);
         MG_Backend::BackendObject::ReleaseEGLSurface(surface);
@@ -534,8 +541,13 @@ namespace MobileGL::MG_Remote::Client {
             recreated = Server::ServerCreateEGLPbufferSurface(surface, state.Width, state.Height, nullptr, flags);
         } else if (ClientSession::IsServerOwnedWindowSurface(surface)) {
             kind = "server-owned window";
+            // The window is asked for what the application asked for (its own size for a surface
+            // created without one), not for the extent it had: that would fix its size for good.
+            const auto requested = m_serverOwnedRequests.find(surface);
+            const Uint32 wantWidth = requested != m_serverOwnedRequests.end() ? requested->second.first : 0u;
+            const Uint32 wantHeight = requested != m_serverOwnedRequests.end() ? requested->second.second : 0u;
             const Server::ServerOwnedWindowReply reply =
-                Server::ServerCreateServerOwnedWindowSurface(surface, state.Window.Width, state.Window.Height);
+                Server::ServerCreateServerOwnedWindowSurface(surface, wantWidth, wantHeight);
             recreated = reply.ok;
             if (recreated && reply.width != 0 && reply.height != 0) {
                 if (MG_State::pEGLContext) {

@@ -342,7 +342,14 @@ namespace MobileGL {
 
                 for (auto imageIt = m_images.begin(); imageIt != m_images.end();) {
                     if (imageIt->second.Display == display) {
-                        if (imageIt->second.Shared.Id != 0) m_orphanedSharedImages.push_back(imageIt->second.Shared.Id);
+                        // Only a reference the current session holds is owed a release there.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                        const Bool currentSession = imageIt->second.Shared.WireEpoch == CurrentWireEpoch();
+#else
+                        constexpr Bool currentSession = true;
+#endif
+                        if (imageIt->second.Shared.Id != 0 && currentSession)
+                            m_orphanedSharedImages.push_back(imageIt->second.Shared.Id);
                         imageIt = m_images.erase(imageIt);
                     } else {
                         ++imageIt;
