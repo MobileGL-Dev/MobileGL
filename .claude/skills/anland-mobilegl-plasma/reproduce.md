@@ -81,7 +81,8 @@ APK, from anland `consumers/anland_v5/android_consumer` (details in its `MOBILEG
 ```sh
 mkdir -p dist/arm64-v8a && cp <worktree>/build-android/libMobileGL.so dist/arm64-v8a/
 MOBILEGL_DIST=$PWD/dist ./gradlew :app:assemblePlainDebug \
-  -PanlandNdkVersion=27.2.12479018 -PmobileglApplicationId=com.anland.consumer.mobilegl
+  -PanlandNdkVersion=27.2.12479018 -PmobileglApplicationId=com.anland.consumer.mobilegl \
+  -PanlandDefaultSocket=/data/local/tmp/anland-mobilegl/display.sock
 adb install -r app/build/outputs/apk/plain/debug/app-plain-debug.apk
 ```
 - **Grant root:** the app needs root for its helper; approve it in KernelSU.
@@ -134,14 +135,26 @@ The MobileGL session runs a rebuilt KWin from `/opt/mobilegl/kwin`, so the packa
 
 ## 7. Bring it up
 
-Until the app-driven auto-start lands, the order matters:
-1. **Backend:** `setprop debug.mobilegl.backend DirectVulkan`; it must match `/etc/mobilegl/backend`.
-2. **App:** start it with `--es socket_path /data/local/tmp/anland-mobilegl/display.sock`.
-3. **Container:** start it.
-4. **Display daemon:** start the MobileGL daemon instance.
-5. **Plasma:** `run-plasma.sh`.
+Nothing has to be started by hand, and the order no longer matters: **open the app** (its launcher
+icon, or `am start -n com.anland.consumer.mobilegl/com.anland.consumer.MainActivity` with no extras).
+That is the single trigger. The app starts its foreground service and runs its bundled
+`mobilegl-desktop.sh up` as root, which:
+1. starts the display daemon if it is not running;
+2. publishes the backend (the app setting "Renderer backend", default DirectGLES) to
+   `/data/local/tmp/anland-mobilegl/backend`;
+3. starts the container if it is stopped;
+4. starts `desktop-session`, which waits for the server and the daemon socket, copies the backend into
+   `/etc/mobilegl/backend` and runs Plasma.
 
-`scripts/device/bringup.sh [DirectVulkan|DirectGLES]` does all five. See SKILL.md "Bring-up after a phone reboot".
+Cold start to a desktop takes about 8-12 s. `scripts/device/bringup.sh` wakes the phone, dismisses the
+keyguard, opens the app and prints the timeline. To change the backend, use the app setting and then
+Stop desktop and reopen, or run `scripts/device/switch.sh DirectGLES|DirectVulkan`. Do not use
+`setprop debug.mobilegl.backend`: it overrides the setting until the next reboot. **Stop desktop**
+(the notification action) stops the session and the container.
+
+**After a phone reboot:** wireless adb does not come back by itself. Re-enable it on the phone
+(Developer options > Wireless debugging), then `adb connect <ip>:<port>`; the port changes. After
+that, open the app as above. See SKILL.md "Starting, idling, stopping".
 
 ## 8. Verify
 
