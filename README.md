@@ -166,6 +166,7 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_MAGMA_DISABLE_SUBGROUP` | Disable Vulkan shader subgroup support. | `0`, `1` | `0` |
 | `MOBILEGL_ADVERTISE_FP64` | Advertise `GL_ARB_gpu_shader_fp64`. GLSL `double`/`dvec`/`dmat` compile and run either way - they are narrowed to 32 bits - so this only changes whether an application is told it has 64-bit precision, which it does not. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | Use Magma's R11G11B10F format fallback. | `0`, `1` | `0` |
+| `MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV` | Hand a shader module that fails SPIR-V validation to the driver anyway. By default Magma declines such a program (no shader module is created, its draws and dispatches are refused and logged by name), because a driver that accepts invalid SPIR-V can fault the GPU into device loss. Diagnostic use only. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_FRAMESINFLIGHT` | Set Magma frames in flight. | Integer `1`–`64` | `3` |
 | `MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER` | Draws and dispatches Magma records into one command buffer before it submits the buffer mid-frame and continues on a fresh one. `0` never splits. | Integer `0`–`16777216` | `16384` |
 | `MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES` | Frames a frame slot's descriptor pools must stay under a quarter full before Magma frees the slot's cached descriptor sets and grown pools. `0` never trims. | Integer `0`–`1048576` | `120` |

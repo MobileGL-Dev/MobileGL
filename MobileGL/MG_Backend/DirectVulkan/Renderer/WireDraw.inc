@@ -230,6 +230,10 @@
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
             programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         }
+        if (programObject->invalidSpirvDeclined) {
+            MGL_WIRE_DECLINE_AT(ProgramInvalidSpirv, "a module of the program fails SPIR-V validation and was never built");
+            return false;
+        }
         if (programObject->pointSizeCapabilityUnsupported) {
             MGL_WIRE_DECLINE_AT(PointSizeCapability, "the program writes gl_PointSize and the device cannot express it");
             return false;
@@ -775,6 +779,10 @@
             return;
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
+        if (programObj.invalidSpirvDeclined) {
+            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv, "a module of the compute program fails SPIR-V validation and was never built");
+            return;
+        }
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;
@@ -847,6 +855,10 @@
             return;
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
+        if (programObj.invalidSpirvDeclined) {
+            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv, "a module of the compute program fails SPIR-V validation and was never built");
+            return;
+        }
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;

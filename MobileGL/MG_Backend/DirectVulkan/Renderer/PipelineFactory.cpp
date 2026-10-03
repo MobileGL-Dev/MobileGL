@@ -391,6 +391,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkPipeline PipelineFactory::CreatePipeline(const PipelineCreatePayload& payload) const {
         MOBILEGL_ASSERT(payload.stages != nullptr && !payload.stages->empty(), "PipelineFactory: stages are empty");
+        // The assert compiles out of shipping builds, and a program declined for an invalid
+        // module (VkProgramObject::invalidSpirvDeclined) has no stages at all: a caller that
+        // forgot to refuse it must get a skipped draw, not a stageCount=0 pipeline.
+        if (payload.stages == nullptr || payload.stages->empty()) {
+            MGLOG_E_ONCE("PipelineFactory::CreatePipeline: refusing a pipeline with no shader stages "
+                         "(programHash=0x%llx); its draws are skipped",
+                         static_cast<unsigned long long>(payload.programHash));
+            return VK_NULL_HANDLE;
+        }
         MOBILEGL_ASSERT(payload.vertexInputState != nullptr, "PipelineFactory: vertexInputState is null");
         MOBILEGL_ASSERT(payload.pipelineLayout != VK_NULL_HANDLE, "PipelineFactory: pipelineLayout is null");
         MOBILEGL_ASSERT(payload.renderPass != VK_NULL_HANDLE, "PipelineFactory: renderPass is null");

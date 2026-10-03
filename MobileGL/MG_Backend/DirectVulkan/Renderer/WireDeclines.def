@@ -126,3 +126,11 @@ MGL_WIRE_DECLINE(MipmapDepthStencilAspect)
 // is missing, or the three group-count words lie outside it or are misaligned.
 MGL_WIRE_DECLINE(DispatchIndirectBufferUnbound)
 MGL_WIRE_DECLINE(DispatchIndirectRange)
+
+// ---- ProgramFactory::ScreenModuleForDriver ------------------------------------------------
+// One of the bound program's final modules fails SPIR-V validation, so no shader module of it was
+// created (VkProgramObject::invalidSpirvDeclined): SetupWireDraw refuses the draw, and the two
+// dispatch arms the dispatch. A driver handed the module could fault the GPU into device loss.
+// MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV=1 builds the module anyway, and then neither row moves.
+MGL_WIRE_DECLINE(ProgramInvalidSpirv)
+MGL_WIRE_DECLINE(ComputeProgramInvalidSpirv)

@@ -130,6 +130,11 @@ namespace MobileGL::MG_Config {
         Bool AdvertiseFp64 = false;
         // MOBILEGL_MAGMA_R11G11B10F_FALLBACK: use fallback format for R11G11B10F on Vulkan.
         Bool MagmaR11G11B10FFallback = false;
+        // MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV: hand a shader module that fails SPIR-V validation to
+        // the driver anyway. Off by default: Magma declines such a program (no shader module, its
+        // draws refused by name), because a driver that accepts invalid SPIR-V may fault the GPU
+        // into device loss. For diagnosing a driver that copes with a specific module only.
+        Bool MagmaAllowInvalidSpirv = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
         // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into

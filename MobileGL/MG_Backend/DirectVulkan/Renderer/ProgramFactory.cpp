@@ -12,7 +12,9 @@
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
+#include <Config.h>
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -2273,7 +2275,83 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
         }
+
+        // ScreenModuleForDriver's memory. Keyed by content, never by program: the same bytes get
+        // the same answer whichever program, variant or session carries them.
+        struct DriverModuleVerdictCache {
+            struct Entry {
+                Uint64 wordCount = 0;
+                Bool valid = true;
+                String reason;
+            };
+            // Generous for any one application's distinct stage modules; past it the whole table
+            // is dropped rather than tracked per entry - a re-validation is the only cost.
+            static constexpr SizeT kMaxEntries = 8192;
+            std::mutex mutex;
+            UnorderedMap<Uint64, Entry> entries;
+            std::atomic<Uint64> validatorRuns{0};
+        };
+
+        DriverModuleVerdictCache& GetDriverModuleVerdictCache() {
+            // Leaked on purpose: screened from session threads that may outlive static destruction.
+            static auto* cache = new DriverModuleVerdictCache();
+            return *cache;
+        }
     } // namespace
+
+    ProgramFactory::DriverModuleVerdict ProgramFactory::ScreenModuleForDriver(const Vector<Uint>& spirv,
+                                                                              Bool allowInvalid, String* outReason) {
+        if (outReason != nullptr) outReason->clear();
+        if (spirv.empty()) return DriverModuleVerdict::Valid;
+
+        auto& cache = GetDriverModuleVerdictCache();
+        const Uint64 key = XXH64(spirv.data(), spirv.size() * sizeof(Uint), 0);
+        Bool valid = true;
+        String reason;
+        Bool known = false;
+        {
+            const std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto it = cache.entries.find(key);
+            if (it != cache.entries.end() && it->second.wordCount == spirv.size()) {
+                known = true;
+                valid = it->second.valid;
+                reason = it->second.reason;
+            }
+        }
+        if (!known) {
+            // Outside the lock: two threads screening the same new module both validate, and
+            // agree; nothing waits on another session's spirv-val.
+            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
+            cache.validatorRuns.fetch_add(1, std::memory_order_relaxed);
+            spv_context context = spvContextCreate(GetSpirvTargetEnv(spirv));
+            spv_validator_options options = spvValidatorOptionsCreate();
+            spvValidatorOptionsSetFriendlyNames(options, true);
+            spv_const_binary_t binary = {spirv.data(), spirv.size()};
+            spv_diagnostic diagnostic = nullptr;
+            const spv_result_t result = spvValidateWithOptions(context, options, &binary, &diagnostic);
+            valid = result == SPV_SUCCESS;
+            if (!valid) {
+                reason = diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<no diagnostic>";
+                // The process-wide counter the validating test lanes assert on.
+                MG_Util::ShaderTranspiler::ShaderCompiler::NoteSpirvValidationFailure();
+            }
+            spvDiagnosticDestroy(diagnostic);
+            spvValidatorOptionsDestroy(options);
+            spvContextDestroy(context);
+
+            const std::lock_guard<std::mutex> lock(cache.mutex);
+            if (cache.entries.size() >= DriverModuleVerdictCache::kMaxEntries) cache.entries.clear();
+            cache.entries[key] = DriverModuleVerdictCache::Entry{spirv.size(), valid, reason};
+        }
+
+        if (valid) return DriverModuleVerdict::Valid;
+        if (outReason != nullptr) *outReason = Move(reason);
+        return allowInvalid ? DriverModuleVerdict::AdmittedInvalid : DriverModuleVerdict::DeclinedInvalid;
+    }
+
+    Uint64 ProgramFactory::DriverModuleValidatorRuns() {
+        return GetDriverModuleVerdictCache().validatorRuns.load(std::memory_order_relaxed);
+    }
 
     // A shader that assigns gl_FragDepth (SPIR-V DepthReplacing) supplies depth itself
     // instead of taking the pipeline's interpolated Z, so a driver that varies the vertex
@@ -3814,26 +3892,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool remapOk = RemapDescriptorBindingsForVulkan(moduleSpirvs, m_maxBindings, moduleSpirvs);
         MOBILEGL_ASSERT(remapOk, "ProgramFactory::GetOrCreateProgram: descriptor binding remap failed");
 
+        // Last look at the exact bytes the driver receives, in EVERY build rather than only in
+        // DEBUG or with MOBILEGL_ENABLE_SPIRV_VALIDATION armed, and for every stage BEFORE any
+        // module is created. By here the descriptor bindings have been remapped and the layout
+        // about to be reflected describes the remapped module, so there is no module left that
+        // is both valid and consistent with it to fall back to (the recovery that exists lives
+        // one step earlier, at the clip/XFB fixups). What is left is to keep the bytes away from
+        // the driver: a driver is not a validating entry point, and an invalid module it accepts
+        // can fault the GPU into device loss (a frontend translation once put a sampler inside
+        // the default uniform block, and Adreno page-faulted reading its "descriptor" out of
+        // uniform-buffer bytes). One invalid stage declines the whole program: no shader module
+        // of it is created, and every draw or dispatch of it is refused by name
+        // (VkProgramObject::invalidSpirvDeclined). MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV hands the
+        // bytes over anyway, for diagnosing a driver that copes.
         for (SizeT i = 0; i < moduleCount; ++i) {
+            String reason;
+            const DriverModuleVerdict verdict = ScreenModuleForDriver(
+                moduleSpirvs[i], MG_Config::Features.MagmaAllowInvalidSpirv, &reason);
+            if (verdict == DriverModuleVerdict::DeclinedInvalid) {
+                MGLOG_E_ONCE("ProgramFactory: declining program %u - its stage %d module fails SPIR-V validation (%s); "
+                             "no shader module is created and its draws are refused. "
+                             "MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV=1 hands such modules to the driver anyway.",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]), reason.c_str());
+                entry.invalidSpirvDeclined = true;
+                break;
+            }
+            if (verdict == DriverModuleVerdict::AdmittedInvalid) {
+                MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d "
+                             "because MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV is set (%s)",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]), reason.c_str());
+            }
+        }
+
+        for (SizeT i = 0; i < moduleCount && !entry.invalidSpirvDeclined; ++i) {
             auto& moduleSpv = moduleSpirvs[i];
             if (moduleSpv.empty()) continue;
-
-            // Last look at the exact bytes the driver receives, in EVERY build rather than only
-            // in DEBUG or with MOBILEGL_ENABLE_SPIRV_VALIDATION armed. This one only reports:
-            // by here the descriptor bindings have been remapped and the layout about to be
-            // reflected describes the remapped module, so there is no module left that is both
-            // valid and consistent with it to fall back to. The recovery lives one step earlier,
-            // at the clip/XFB fixups (see the revert there) - which is where a transform can
-            // introduce a reference to a delisted interface variable, the failure this whole
-            // guard exists for. Anything that reaches this line names itself in the log of a
-            // shipping build instead of dying anonymously inside the driver.
-            SpirvValidationFailure finalFailure{};
-            if (!ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex(), &finalFailure)) {
-                MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d - "
-                             "a backend transform after the clip/XFB fixups broke it (%s)",
-                             program.GetExternalIndex(), static_cast<Int>(stages[i]),
-                             finalFailure.message.c_str());
-            }
 
             // Does the stage the driver will treat as the last pre-rasterization one actually
             // carry Xfb? Asked of the FINAL bytes, so it answers for whatever the whole transform
