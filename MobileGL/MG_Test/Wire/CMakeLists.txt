@@ -67,6 +67,9 @@ if (NOT WIN32)
     # MOBILEGL_IPC_SURFACE=server against a display-less `--serve` supervisor. Both drive real peers
     # and (the second, and D8's case) the real server image, as PeerLatchTest does.
     list(APPEND MOBILEGL_WIRE_TESTS InProcessServerTest ServerOwnedSurfaceTest)
+    # `eglinfo -B`'s per-API sequence (surfaceless make-current, the ES probe's NULL config) through
+    # a real MobileGL client against a real `--serve` supervisor, as ServerOwnedSurfaceTest does.
+    list(APPEND MOBILEGL_WIRE_TESTS EglInfoSequenceTest)
     # P14 S2 (docs/Disaggregated/design/11-state-ownership.md): several sessions in ONE process.
     # The in-process unix supervisor serves each session on its own control thread with its own
     # ServerSession/ServerLoop/PipeInputs block/latch domain/segment resolver; two SHM clients are
@@ -99,6 +102,7 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
             ${MGL_ROOT}/3rdparty/flatbuffers/include
     )
     if (test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR test STREQUAL "ServerOwnedSurfaceTest" OR
+        test STREQUAL "EglInfoSequenceTest" OR
         test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest" OR test STREQUAL "ServerProbeTest")
         # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
         # the way the codec suites do. (P12's two server suites share PeerLatchTest's healthy
@@ -128,7 +132,8 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     endif ()
 
     if (test STREQUAL "ServerSpawnTest" OR test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR
-        test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "ServerProbeTest")
+        test STREQUAL "ServerOwnedSurfaceTest" OR test STREQUAL "EglInfoSequenceTest" OR test STREQUAL "AdoptTierStreamTest" OR
+        test STREQUAL "ServerProbeTest")
         # It execs the real image, so it must be built first and must be told
         # where it is. MOBILEGL_TEST_SERVER_PATH is read by the test's
         # ServerImage() helper; without it the test would depend on the working

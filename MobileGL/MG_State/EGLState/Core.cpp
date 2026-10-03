@@ -659,7 +659,10 @@ namespace MobileGL {
                     SetError(EGL_NOT_INITIALIZED);
                     return nullptr;
                 }
-                if (!ValidateConfigOnDisplay(display, config)) {
+                // EGL_KHR_no_config_context: EGL_NO_CONFIG_KHR is a context with no config, which
+                // every surface is compatible with. eglinfo's ES probe relies on it: it chooses with
+                // EGL_OPENGL_ES_BIT (ES 1.x), which no config here claims, and passes the NULL on.
+                if (config != EGL_NO_CONFIG_KHR && !ValidateConfigOnDisplay(display, config)) {
                     SetError(EGL_BAD_CONFIG);
                     return nullptr;
                 }
@@ -802,6 +805,11 @@ namespace MobileGL {
                     *value = contextObject->EGLContextFlags;
                     return true;
                 case EGL_CONFIG_ID: {
+                    // EGL_KHR_no_config_context: a context created without a config reports 0.
+                    if (contextObject->Config == EGL_NO_CONFIG_KHR) {
+                        *value = 0;
+                        return true;
+                    }
                     const auto* cfg = TryGetConfig(contextObject->Config);
                     if (!cfg) {
                         const_cast<EGLContext*>(this)->SetError(EGL_BAD_CONFIG);
@@ -1327,7 +1335,9 @@ namespace MobileGL {
                         SetError(EGL_BAD_CONTEXT);
                         return false;
                     }
-                    if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE) {
+                    // EGL_KHR_surfaceless_context: with BOTH surfaces absent the context is bound
+                    // surfacelessly (no default framebuffer). One without the other is still a mismatch.
+                    if ((draw == EGL_NO_SURFACE) != (read == EGL_NO_SURFACE)) {
                         SetError(EGL_BAD_MATCH);
                         return false;
                     }
