@@ -154,7 +154,16 @@ llvmpipe Xwayland, GLX readback + PutImage).
   the driver holds as RGB8).
 - The forced readback path is slower on a glamor Xwayland than on the old llvmpipe one (glamor
   uploads every frame through the server); it is only the fallback now.
-- OPEN: after a hide/show or lock/unlock round, an X11 Qt window (kate) can keep stale or black
-  regions until the app repaints them; XGetImage of the window shows the window pixmap itself
-  lacks them, on both backends. Fresh windows render correctly. Workaround:
-  `ANLAND_XWAYLAND_GLAMOR=0`.
+- Fixed (cd58f048): after a hide/show or lock/unlock round, X11 Qt windows kept stale or black
+  regions in their window pixmap. Root cause: every glamor copy and fill drew nothing. glamor's
+  fragment shaders name gl_FragColor only in the inactive arm of a version guard and write their
+  own `frag_color`; the legacy lowering still declared `mg_FragColor` ahead of it, and the IO
+  resolver gave that dead output location 0 and `frag_color` location 1, which no draw buffer
+  reads. Uploads (PutImage) still landed, so windows looked right until Xwayland copied between
+  window buffers (it swaps the window pixmap on every commit and reallocates buffers after a
+  hide), and then showed old content or zeros. Inactive fragment outputs now take the top of the
+  draw-buffer range. Host test: ProgramTest.InactiveLoweredFragColorDoesNotDisplaceTheActiveOutput.
+  On the device, an X client checking its own XGetImage against a CPU model (PutImage, CopyArea
+  and FillRectangle; MIT-SHM and plain; depth 24 and 32) sees 0 bad pixels through hide/show/lock
+  on both backends. One run in about 20 on Magma (no SHM, depth 24) left a 2751-pixel rect
+  mismatched; it did not come back in the repeats.
