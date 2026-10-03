@@ -150,11 +150,25 @@ server 的窗口，而 **server 自己的进程没有任何 `MOBILEGL_IPC_SURFAC
   模式下合成不受影响（窗口与默认 framebuffer 属于 KWin），桌面照常上屏，成因未查。
 - 桌面静止时两次 `screencap` 的 md5 相同（时钟只到分钟、无动画）；判断"活着"要看 server 的
   `P65ServerFrame` 计数或 SurfaceView 的 frame events。
+- **"桌面全黑"里有一半是锁屏**：会话跑一会儿后 kscreenlocker 会把屏幕锁上，看到的黑屏其实是
+  greeter（它自己也打 `Renderer Name: …`，所以日志里会误以为是桌面的渲染器）。判断方法：
+  `pgrep -a -f kscreenlocker_greet`。修法：写 `~/.config/kscreenlockerrc`
+  （`[Daemon] Autolock=false`/`LockOnStart=false`）后重启会话；**杀 greeter 没用**，kwin 会用
+  `--immediateLock` 再起一个，D-Bus 的 `SetActive(false)` 也解不开。这一条是"看不到完整桌面"
+  的直接原因，与渲染无关。
 - **Magma（DirectVulkan）已复验：桌面能上屏**（`Renderer Name: Magma`、`8 presented through
   linux-dmabuf`、SurfaceView frame events 是真实时间戳、`screencap` 1.05 MB 的桌面 + 面板 + 光标）。
   上面三条代码改动都与后端无关，两个后端都撞到同一个坑，也都因此被修好。
-- **Magma 少画字**：同一场景下屏幕键盘的按键是**空白白块**（没有 q/w/e…、"American English"、
-  面板时钟的文字），而 Espryt 下这些字都在。看起来是 Magma 的字形/图集路径在这台 Mali 驱动上
-  没画出来，与本文的改动无关，**未查**。首次复现：把后端切到 DirectVulkan（`setprop
-  debug.mobilegl.backend DirectVulkan` + `/etc/mobilegl/backend`）重启 app 与容器，截屏看
-  `plasma-keyboard`。
+- **Magma 少画字（未修，已缩小到一条线索）**：同一场景下所有 `Text` 都不画（键盘按键是空白白块、
+  没有 q/w/e…/"American English"，面板时钟也没有），而矩形/图标/壁纸都正常。已用探针**逐条排除**：
+  `eglprobe6/8`（ES2 的 `GL_ALPHA` 与 ES3 的 `GL_R8`/`GL_RED` 采样 `.a`/`.r` 均正确）、
+  `eglprobe7`（`UNPACK_ALIGNMENT=1` 的窄行上传正确）、`eglprobe9`（图集模式：大纹理 +
+  `glTexSubImage2D` 偏移 + `GL_UNPACK_ROW_LENGTH`，值全对、未触碰区域仍为 0）、
+  `eglprobe10`（`fwidth` 与距离场 `smoothstep` 都正常）。
+  剩下的一手证据在容器日志里：**Magma 下 Qt 的 RHI 上下文建立失败**——
+  `QRhiGles2: Failed to make context current. Expect bad things to happen.` 与
+  `QWaylandGLContext::makeCurrent: eglError: 0x3002`（EGL_NOT_INITIALIZED），Espryt 下没有这两条。
+  下一步应从 `DirectVulkan` 的 `MakeEGLCurrent`/`OnClientContextBound`（`m_contextBindings`
+  按上下文找 surface 的那条路，注释里明确写着"Qt 每个窗口一个线程与上下文"）查起。
+  顺带记一个可查项：Magma 的 `GL_EXTENSIONS` **不含 `OES_standard_derivatives`**，而 `fwidth`
+  实际可用。
