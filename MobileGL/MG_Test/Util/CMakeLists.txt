@@ -107,8 +107,28 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# GLX presentation through DRI3 + Present against a fake X server and fake shared images, and the
+# glFlush-as-shared-image-boundary policy (docs/Disaggregated/notes/anland/plan-x11-gpu.md).
+add_executable(
+        X11PresentTest
+        X11PresentTest.cpp
+        SharedImageFlushPolicyTest.cpp
+)
+
+target_include_directories(X11PresentTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        X11PresentTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 include(GoogleTest)
 gtest_discover_tests(X11DisplayGuardTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(X11PresentTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(JobNodeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeStatsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

@@ -12,8 +12,11 @@
 #include "../EGLImpl/EGLImpl.h"
 #include "../EGLImpl/WaylandWindow.h"
 #include "../GetProcAddress.h"
+#include "X11Present.h"
+#include "X11PresentXcb.h"
 #include <Init.h>
 #include <Config.h>
+#include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLXImpl {
     namespace {
@@ -72,6 +75,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
         // GLX_EXT_swap_control
         constexpr int GLX_SWAP_INTERVAL_EXT = 0x20F1;
         constexpr int GLX_MAX_SWAP_INTERVAL_EXT = 0x20F2;
+        // GLX_EXT_buffer_age
+        constexpr int GLX_BACK_BUFFER_AGE_EXT = 0x20F4;
         // GLX_ARB_create_context / _profile / _no_error
         constexpr int GLX_CONTEXT_MAJOR_VERSION_ARB = 0x2091;
         constexpr int GLX_CONTEXT_MINOR_VERSION_ARB = 0x2092;
@@ -86,6 +91,15 @@ namespace MobileGL::MG_Impl::GLXImpl {
         constexpr const char* kGLXExtensions =
             "GLX_ARB_create_context GLX_ARB_create_context_no_error GLX_ARB_create_context_profile "
             "GLX_ARB_get_proc_address GLX_EXT_swap_control GLX_MESA_swap_control GLX_SGI_swap_control";
+        // The server answers its surfaces' buffer age (EGL_EXT_buffer_age) when it has shared images.
+        constexpr const char* kGLXExtensionsWithBufferAge =
+            "GLX_ARB_create_context GLX_ARB_create_context_no_error GLX_ARB_create_context_profile "
+            "GLX_ARB_get_proc_address GLX_EXT_swap_control GLX_MESA_swap_control GLX_SGI_swap_control "
+            "GLX_EXT_buffer_age";
+
+        const char* GLXExtensions() {
+            return EGLImpl::SharedImagesAvailable() ? kGLXExtensionsWithBufferAge : kGLXExtensions;
+        }
 
         // ---- Xlib access (dlopen'd at runtime, same convention as the backends;
         //      libX11 is never a link-time dependency of libMobileGL) ----
@@ -230,6 +244,33 @@ namespace MobileGL::MG_Impl::GLXImpl {
             const FBConfigInfo* FBConfig = nullptr;
         };
 
+        // The server's shared images, as X11Present's chain uses them (the GL stream's verbs: the
+        // caller holds the stream lock, as every GLX entry point does).
+        class BackendImageSource final : public X11Present::ImageSource {
+        public:
+            Bool Allocate(Uint32 width, Uint32 height, Uint32 fourcc, X11Present::Image* out) override {
+                auto* backend = MG_Backend::pActiveBackendObject.get();
+                MG_Backend::SharedImageExport image;
+                if (backend == nullptr || !backend->AllocateSharedImage(width, height, fourcc, &image)) return false;
+                out->Id = image.Id;
+                out->Fd = image.Fd;
+                out->Width = image.Width;
+                out->Height = image.Height;
+                out->Stride = image.Stride;
+                out->Offset = image.Offset;
+                out->Fourcc = image.Fourcc;
+                out->Modifier = image.Modifier;
+                return true;
+            }
+            void Release(Uint64 id) override {
+                if (auto* backend = MG_Backend::pActiveBackendObject.get()) (void)backend->ReleaseSharedImage(id);
+            }
+            Bool CopyFrame(Uint64 id, const MG_Util::Damage::Region& region) override {
+                auto* backend = MG_Backend::pActiveBackendObject.get();
+                return backend != nullptr && backend->PresentToSharedImage(id, region);
+            }
+        };
+
         struct DrawableSurface {
             EGLDisplay Display = EGL_NO_DISPLAY;
             EGLSurface Surface = EGL_NO_SURFACE;
@@ -244,6 +285,14 @@ namespace MobileGL::MG_Impl::GLXImpl {
             Uint32 Gc = 0;
             Vector<Uint8> Scratch;
             Vector<Uint8> Image;
+            // How its frames reach the window (chosen at the first swap, X11Present::SelectPath):
+            // DRI3+Present shared images, or the readback put with MIT-SHM or plain PutImage.
+            Bool PathChosen = false;
+            X11Present::Path Path = X11Present::Path::PutImage;
+            UniquePtr<X11Present::Connection> PresentConnection;
+            UniquePtr<BackendImageSource> Images;
+            UniquePtr<X11Present::Chain> Chain;
+            UniquePtr<X11Present::ShmPresenter> Shm;
         };
 
         std::recursive_mutex& RegistryMutex() {
@@ -279,8 +328,18 @@ namespace MobileGL::MG_Impl::GLXImpl {
         };
         thread_local ThreadCurrent t_current;
 
+        // vblank_mode=0 (the benchmark convention X11 GL drivers honour) never waits for the
+        // display, whatever the application asks; anything else leaves the interval to it.
+        Bool VblankForcedOff() {
+            static const Bool off = [] {
+                const char* mode = std::getenv("vblank_mode");
+                return mode != nullptr && std::strcmp(mode, "0") == 0;
+            }();
+            return off;
+        }
+
         Int& SwapIntervalShadow() {
-            static auto* interval = new Int(1);
+            static auto* interval = new Int(VblankForcedOff() ? 0 : 1);
             return *interval;
         }
 
@@ -334,10 +393,62 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return true;
         }
 
+        Int& SwapIntervalShadow();
+
+        Int64 SteadyNowMs() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        }
+
+        // Which way this drawable's frames go, decided once (X11Present::SelectPath), with the
+        // DRI3 chain set up when that is the way. A chain that cannot be set up falls through to
+        // the readback paths.
+        void ChoosePresentPath(GLXDrawableHandle drawable, DrawableSurface& surface, void* connection) {
+            surface.PathChosen = true;
+            X11Present::ConnectionCaps caps = X11Present::QueryConnectionCaps(connection);
+            caps.SharedImages = EGLImpl::SharedImagesAvailable();
+            const char* override = std::getenv("MOBILEGL_GLX_PRESENT");
+            surface.Path = X11Present::SelectPath(caps, surface.Depth, override);
+            if (surface.Path == X11Present::Path::Dri3Present) {
+                surface.PresentConnection =
+                    X11Present::CreateXcbConnection(connection, static_cast<Uint32>(drawable), caps);
+                if (surface.PresentConnection) {
+                    surface.Images = MakeUnique<BackendImageSource>();
+                    surface.Chain = MakeUnique<X11Present::Chain>(
+                        *surface.PresentConnection, *surface.Images, surface.Depth, static_cast<Int32>(surface.Width),
+                        static_cast<Int32>(surface.Height), &SteadyNowMs);
+                } else {
+                    caps.Dri3Major = 0;
+                    surface.Path = X11Present::SelectPath(caps, surface.Depth, override);
+                }
+            }
+            if (surface.Path == X11Present::Path::ShmPutImage) {
+                surface.Shm = X11Present::CreateShmPresenter(connection);
+                if (!surface.Shm) surface.Path = X11Present::Path::PutImage;
+            }
+            MGLOG_I("glx: window 0x%lx (%ux%u, depth %u) presented through %s (DRI3 %u.%u, Present %u.%u, MIT-SHM "
+                    "%u.%u, %s connection, shared images %s)",
+                    drawable, surface.Width, surface.Height, surface.Depth, X11Present::PathName(surface.Path),
+                    caps.Dri3Major, caps.Dri3Minor, caps.PresentMajor, caps.PresentMinor, caps.ShmMajor, caps.ShmMinor,
+                    caps.LocalConnection ? "local" : "remote", caps.SharedImages ? "yes" : "no");
+        }
+
+        // The chain's resources go (pixmaps freed, images released); the drawable keeps whatever
+        // readback path is left.
+        void DropChain(DrawableSurface& surface) {
+            surface.Chain.reset();
+            surface.PresentConnection.reset();
+            surface.Images.reset();
+        }
+
         // A REMOTE DRAWABLE IS A PBUFFER, AND NOTHING OF IT REACHES THE X WINDOW BY ITSELF: the
         // backend draws in another process (another OS), where an XID means nothing. So at every
-        // swap the frame is read back and put on the window with PutImage - the same contract as
-        // the Wayland windows' wl_shm presentation. Called with the drawable current.
+        // swap the frame goes to the window one of three ways (X11Present.h): copied GPU-side into
+        // a shared image the X server has as a DRI3 pixmap and presented with PresentPixmap - no
+        // CPU copy at all; or read back and put with MIT-SHM; or read back and put with PutImage,
+        // the same contract as the Wayland windows' wl_shm presentation. Called with the drawable
+        // current.
         void PresentRemoteDrawable(GLXDrawableHandle drawable, DrawableSurface& surface) {
             const EGLImpl::GLStreamScope stream; // the readback is GL records of this thread's context
             const auto& xcb = Xcb();
@@ -348,6 +459,20 @@ namespace MobileGL::MG_Impl::GLXImpl {
             }
             void* connection = xcb.GetXCBConnection(surface.XDisplay);
             if (!connection) return;
+            if (!surface.PathChosen) ChoosePresentPath(drawable, surface, connection);
+            if (surface.Chain) {
+                if (surface.Chain->Present(MG_Util::Damage::Region::Full(), SwapIntervalShadow())) return;
+                if (!surface.Chain->Broken()) return; // the frame is dropped; the chain goes on
+                MGLOG_I("glx: window 0x%lx leaves DRI3+Present: %s; its frames are read back from now on", drawable,
+                        surface.Chain->BrokenReason());
+                DropChain(surface);
+                X11Present::ConnectionCaps caps = X11Present::QueryConnectionCaps(connection);
+                surface.Path = X11Present::SelectPath(caps, surface.Depth, "readback");
+                if (surface.Path == X11Present::Path::ShmPutImage) {
+                    surface.Shm = X11Present::CreateShmPresenter(connection);
+                    if (!surface.Shm) surface.Path = X11Present::Path::PutImage;
+                }
+            }
             if (surface.Gc == 0) {
                 surface.Gc = xcb.GenerateId(connection);
                 (void)xcb.CreateGC(connection, surface.Gc, static_cast<Uint32>(drawable), 0, nullptr);
@@ -355,6 +480,15 @@ namespace MobileGL::MG_Impl::GLXImpl {
             const EGLint width = static_cast<EGLint>(surface.Width);
             const EGLint height = static_cast<EGLint>(surface.Height);
             const SizeT rowBytes = static_cast<SizeT>(width) * 4;
+            if (surface.Shm) {
+                const Bool put = surface.Shm->Put(
+                    static_cast<Uint32>(drawable), surface.Gc, surface.Depth, width, height,
+                    [&](Uint8* rows, SizeT stride) { EGLImpl::ReadBackFrameBGRA(width, height, surface.Scratch, rows, stride); });
+                if (put) return;
+                MGLOG_I("glx: window 0x%lx: MIT-SHM put failed; PutImage from now on", drawable);
+                surface.Shm.reset();
+                surface.Path = X11Present::Path::PutImage;
+            }
             surface.Image.resize(rowBytes * static_cast<SizeT>(height));
             EGLImpl::ReadBackFrameBGRA(width, height, surface.Scratch, surface.Image.data(), rowBytes);
 
@@ -374,6 +508,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
         }
 
         void ReleaseDrawableSurface(DrawableSurface& surface) {
+            DropChain(surface);
+            surface.Shm.reset();
             if (surface.Gc != 0 && surface.XDisplay) {
                 const auto& xcb = Xcb();
                 if (void* connection = xcb.Valid() ? xcb.GetXCBConnection(surface.XDisplay) : nullptr) {
@@ -408,6 +544,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
                                                      static_cast<EGLint>(height))) {
                 surface.Width = width;
                 surface.Height = height;
+                // The shared images follow: the next frame goes into ones of the new size.
+                if (surface.Chain) surface.Chain->Resize(static_cast<Int32>(width), static_cast<Int32>(height));
             }
         }
 
@@ -456,7 +594,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             record.XDisplay = dpy;
             record.Depth = depth;
             record.LastSizePoll = std::chrono::steady_clock::now();
-            auto [inserted, _] = surfaces.emplace(drawable, record);
+            auto [inserted, _] = surfaces.emplace(drawable, std::move(record));
             return &inserted->second;
         }
 
@@ -670,7 +808,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
     }
 
     const char* QueryExtensionsString(Display*, int) {
-        return kGLXExtensions;
+        return GLXExtensions();
     }
 
     const char* GetClientString(Display*, int name) {
@@ -680,7 +818,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         case GLX_VERSION:
             return "1.4";
         case GLX_EXTENSIONS:
-            return kGLXExtensions;
+            return GLXExtensions();
         default:
             return nullptr;
         }
@@ -1086,8 +1224,15 @@ namespace MobileGL::MG_Impl::GLXImpl {
             PresentRemoteDrawable(drawable, it->second);
         }
         EGLImpl::SwapBuffers(it->second.Display, it->second.Surface);
-        // A resize takes effect for the next frame.
-        SyncSurfaceSize(dpy, drawable, it->second);
+        // A resize takes effect for the next frame: at once when Present reported one, else at the
+        // next throttled geometry poll.
+        Int32 configuredWidth = 0;
+        Int32 configuredHeight = 0;
+        const Bool configured =
+            it->second.Chain && it->second.Chain->TakeConfiguredSize(&configuredWidth, &configuredHeight) &&
+            (static_cast<Uint32>(configuredWidth) != it->second.Width ||
+             static_cast<Uint32>(configuredHeight) != it->second.Height);
+        SyncSurfaceSize(dpy, drawable, it->second, configured);
     }
 
     GLXDrawableHandle CreateWindow(Display*, GLXFBConfigHandle config, GLXDrawableHandle window,
@@ -1187,6 +1332,21 @@ namespace MobileGL::MG_Impl::GLXImpl {
         case GLX_SWAP_INTERVAL_EXT:
             *value = static_cast<unsigned int>(SwapIntervalShadow());
             return;
+        case GLX_BACK_BUFFER_AGE_EXT: {
+            // GLX_EXT_buffer_age: the age of the buffer the drawable's next frame draws into - the
+            // server's pbuffer, which keeps its content - asked of the EGL surface behind it, which
+            // answers only while it is the calling thread's draw surface.
+            *value = 0;
+            const std::lock_guard<std::recursive_mutex> lock(RegistryMutex());
+            auto& surfaces = DrawableSurfaces();
+            auto it = surfaces.find(drawable);
+            if (it == surfaces.end() || t_current.Draw != drawable) return;
+            EGLint age = 0;
+            if (EGLImpl::QuerySurface(it->second.Display, it->second.Surface, EGL_BUFFER_AGE_EXT, &age) && age > 0) {
+                *value = static_cast<unsigned int>(age);
+            }
+            return;
+        }
         case GLX_MAX_SWAP_INTERVAL_EXT:
             *value = 4;
             return;
@@ -1210,7 +1370,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return;
         }
         // MobileGL validates 0..4; adaptive vsync (negative) clamps to regular.
-        interval = std::clamp(interval, 0, 4);
+        interval = VblankForcedOff() ? 0 : std::clamp(interval, 0, 4);
         EGLImpl::SwapInterval(display, interval);
         SwapIntervalShadow() = interval;
     }

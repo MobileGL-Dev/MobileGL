@@ -402,6 +402,8 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLXImpl/Exporting/Definitions.cpp
     MobileGL/MG_Impl/GLXImpl/Exporting/GlvndVendor.cpp
     MobileGL/MG_Impl/GLXImpl/GLXImpl.cpp
+    MobileGL/MG_Impl/GLXImpl/X11Present.cpp
+    MobileGL/MG_Impl/GLXImpl/X11PresentXcb.cpp
     MobileGL/MG_Impl/GLXImpl/LookUp/LookUp.cpp
 
     MobileGL/MG_Impl/EGLImpl/Exporting/Definitions.cpp
