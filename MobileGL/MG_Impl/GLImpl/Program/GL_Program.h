@@ -46,6 +46,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetUniformfv(GLuint program, GLint location, GLfloat* params);
     void GetUniformiv(GLuint program, GLint location, GLint* params);
     void GetUniformuiv(GLuint program, GLint location, GLuint* params);
+    // GL 4.5 / KHR_robustness: the queries above, bounded by bufSize.
+    void GetnUniformfv(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+    void GetnUniformiv(GLuint program, GLint location, GLsizei bufSize, GLint* params);
+    void GetnUniformuiv(GLuint program, GLint location, GLsizei bufSize, GLuint* params);
+    void GetnUniformdv(GLuint program, GLint location, GLsizei bufSize, GLdouble* params);
     GLboolean IsProgram(GLuint program);
     GLboolean IsShader(GLuint shader);
     void LinkProgram(GLuint program);

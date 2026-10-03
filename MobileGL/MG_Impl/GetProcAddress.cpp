@@ -29,6 +29,19 @@ extern "C" EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, 
                                                  khronos_uint64_t* modifiers, EGLBoolean* external_only,
                                                  EGLint* num_modifiers);
 extern "C" void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
+// KHR_robustness / EXT_robustness suffixed names (Definitions.cpp); the desktop headers declare
+// only the unsuffixed and ARB ones.
+extern "C" GLenum glGetGraphicsResetStatusKHR(void);
+extern "C" GLenum glGetGraphicsResetStatusEXT(void);
+extern "C" void glReadnPixelsKHR(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                 GLsizei bufSize, void* data);
+extern "C" void glReadnPixelsEXT(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                 GLsizei bufSize, void* data);
+extern "C" void glGetnUniformfvKHR(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+extern "C" void glGetnUniformfvEXT(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+extern "C" void glGetnUniformivKHR(GLuint program, GLint location, GLsizei bufSize, GLint* params);
+extern "C" void glGetnUniformivEXT(GLuint program, GLint location, GLsizei bufSize, GLint* params);
+extern "C" void glGetnUniformuivKHR(GLuint program, GLint location, GLsizei bufSize, GLuint* params);
 
 #define GETPROC(name, var)                                                                                             \
     if (strcmp(#name, var) == 0) {                                                                                     \
@@ -876,6 +889,15 @@ namespace MobileGL::MG_Impl {
         GETPROC(glGetnUniformivARB, name);
         GETPROC(glGetnUniformuivARB, name);
         GETPROC(glGetnUniformdvARB, name);
+        GETPROC(glGetGraphicsResetStatusKHR, name);
+        GETPROC(glGetGraphicsResetStatusEXT, name);
+        GETPROC(glReadnPixelsKHR, name);
+        GETPROC(glReadnPixelsEXT, name);
+        GETPROC(glGetnUniformfvKHR, name);
+        GETPROC(glGetnUniformfvEXT, name);
+        GETPROC(glGetnUniformivKHR, name);
+        GETPROC(glGetnUniformivEXT, name);
+        GETPROC(glGetnUniformuivKHR, name);
         GETPROC(glFramebufferSampleLocationsfvARB, name);
         GETPROC(glNamedFramebufferSampleLocationsfvARB, name);
         GETPROC(glEvaluateDepthValuesARB, name);

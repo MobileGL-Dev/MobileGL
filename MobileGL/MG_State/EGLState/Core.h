@@ -69,6 +69,11 @@ namespace MobileGL {
                 Bool IsCurrentContextOpenGLCoreProfile() const;
                 Bool IsCurrentContextOpenGLCompatibilityProfile() const;
                 EGLint GetCurrentContextFlags() const;
+                // The calling thread's current context's reset notification behavior
+                // (EGL_NO_RESET_NOTIFICATION with no context current) and whether it asked for
+                // robust buffer access.
+                EGLint GetCurrentContextResetNotificationStrategy() const;
+                Bool IsCurrentContextRobustAccessRequested() const;
 
                 // P14 S1. The wire identity of a context, and of the context the CALLING THREAD
                 // has current (0 when it has none - the release edge's value, and the value a
@@ -265,7 +270,15 @@ namespace MobileGL {
                     EGLint MinorVersion = 0;
                     EGLint OpenGLProfileMask = 0;
                     EGLint EGLContextFlags = 0;
+                    // GL_CONTEXT_FLAGS as requested, without GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT: that
+                    // one is reported only where robust buffer access is actually provided, which
+                    // the GL layer decides (RobustAccessRequested below is the request).
                     EGLint OpenGLContextFlags = 0;
+                    // EGL_EXT_create_context_robustness / EGL 1.5. EGL_NO_RESET_NOTIFICATION or
+                    // EGL_LOSE_CONTEXT_ON_RESET; contexts that share must agree on it.
+                    EGLint ResetNotificationStrategy = EGL_NO_RESET_NOTIFICATION;
+                    // EGL_CONTEXT_OPENGL_ROBUST_ACCESS(_EXT) or the KHR flag bit was given as true.
+                    Bool RobustAccessRequested = false;
                 };
 
                 struct SurfaceObject {

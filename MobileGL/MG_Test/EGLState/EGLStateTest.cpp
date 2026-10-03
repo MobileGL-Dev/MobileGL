@@ -344,3 +344,92 @@ TEST(EGLStateDmaBufImport, FormatAndModifierQueries) {
     EXPECT_FALSE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 0, nullptr, &count));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_NOT_INITIALIZED);
 }
+
+// EGL_EXT_create_context_robustness / EGL 1.5: the reset notification behavior a context is
+// created with, under both names of the attribute (the extension's, which Chrome, KWin and Qt
+// pass, and EGL 1.5's, which ANGLE's GL-on-EGL backend passes for its own native context), the
+// errors the extension defines, and robust buffer access recorded as a request only.
+TEST(EGLStateRobustness, ResetNotificationStrategyIsRecordedValidatedAndMatchedAcrossShares) {
+    auto fixture = CreateFixture();
+    auto& state = fixture->State;
+    auto strategyOf = [&](StateContext::EGLContextHandle context) {
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, context));
+        const EGLint strategy = state.GetCurrentContextResetNotificationStrategy();
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+        return strategy;
+    };
+
+    // The default, and no context current at all.
+    EXPECT_EQ(state.GetCurrentContextResetNotificationStrategy(), EGL_NO_RESET_NOTIFICATION);
+    EXPECT_EQ(strategyOf(fixture->Context), EGL_NO_RESET_NOTIFICATION);
+
+    const EGLint loseExt[] = {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_LOSE_CONTEXT_ON_RESET_EXT,
+                              EGL_NONE};
+    const auto robustExt = state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, loseExt);
+    ASSERT_NE(robustExt, EGL_NO_CONTEXT);
+    EXPECT_EQ(strategyOf(robustExt), EGL_LOSE_CONTEXT_ON_RESET);
+
+    // ANGLE's shape: an ES 3.2 request with the EGL 1.5 name.
+    const EGLint loseCore[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
+                               EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY, EGL_LOSE_CONTEXT_ON_RESET, EGL_NONE};
+    const auto robustCore = state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, loseCore);
+    ASSERT_NE(robustCore, EGL_NO_CONTEXT);
+    EXPECT_EQ(strategyOf(robustCore), EGL_LOSE_CONTEXT_ON_RESET);
+
+    const EGLint noReset[] = {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_NO_RESET_NOTIFICATION_EXT,
+                              EGL_NONE};
+    const auto plain = state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, noReset);
+    ASSERT_NE(plain, EGL_NO_CONTEXT);
+    EXPECT_EQ(strategyOf(plain), EGL_NO_RESET_NOTIFICATION);
+
+    // A value that is neither: EGL_BAD_ATTRIBUTE, for both names.
+    const EGLint badExt[] = {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_TRUE, EGL_NONE};
+    EXPECT_EQ(state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, badExt), EGL_NO_CONTEXT);
+    EXPECT_EQ(state.ConsumeError(), EGL_BAD_ATTRIBUTE);
+    const EGLint badCore[] = {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY, 0, EGL_NONE};
+    EXPECT_EQ(state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, badCore), EGL_NO_CONTEXT);
+    EXPECT_EQ(state.ConsumeError(), EGL_BAD_ATTRIBUTE);
+
+    // Sharing: the two must agree (EGL_BAD_MATCH), in both directions; agreeing shares are made.
+    EXPECT_EQ(state.CreateContext(fixture->Display, fixture->Config, robustExt, nullptr), EGL_NO_CONTEXT);
+    EXPECT_EQ(state.ConsumeError(), EGL_BAD_MATCH);
+    EXPECT_EQ(state.CreateContext(fixture->Display, fixture->Config, fixture->Context, loseExt), EGL_NO_CONTEXT);
+    EXPECT_EQ(state.ConsumeError(), EGL_BAD_MATCH);
+    const auto sharedRobust = state.CreateContext(fixture->Display, fixture->Config, robustExt, loseCore);
+    ASSERT_NE(sharedRobust, EGL_NO_CONTEXT);
+    EXPECT_EQ(state.GetContextShareGroupToken(sharedRobust), state.GetContextShareGroupToken(robustExt));
+    EXPECT_EQ(strategyOf(sharedRobust), EGL_LOSE_CONTEXT_ON_RESET);
+    const auto sharedPlain = state.CreateContext(fixture->Display, fixture->Config, fixture->Context, noReset);
+    EXPECT_NE(sharedPlain, EGL_NO_CONTEXT);
+}
+
+TEST(EGLStateRobustness, RobustAccessIsARequestAndNeverAGLContextFlagByItself) {
+    auto fixture = CreateFixture();
+    auto& state = fixture->State;
+    auto requestOf = [&](const EGLint* attribs, EGLint* flags) {
+        const auto context = state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, attribs);
+        EXPECT_NE(context, EGL_NO_CONTEXT);
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, context));
+        const bool requested = state.IsCurrentContextRobustAccessRequested();
+        *flags = state.GetCurrentContextFlags();
+        EXPECT_TRUE(state.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+        return requested;
+    };
+    EGLint flags = 0;
+    const EGLint none[] = {EGL_NONE};
+    EXPECT_FALSE(requestOf(none, &flags));
+    const EGLint ext[] = {EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_TRUE, EGL_NONE};
+    EXPECT_TRUE(requestOf(ext, &flags));
+    EXPECT_EQ(flags & GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT, 0) << "GL_CONTEXT_FLAGS claims robust access";
+    const EGLint core[] = {EGL_CONTEXT_OPENGL_ROBUST_ACCESS, EGL_TRUE, EGL_NONE};
+    EXPECT_TRUE(requestOf(core, &flags));
+    EXPECT_EQ(flags & GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT, 0);
+    // KWin's desktop candidate: the KHR flag bit, next to the debug bit that IS a GL flag.
+    const EGLint khr[] = {EGL_CONTEXT_FLAGS_KHR, EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR | EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
+                          EGL_NONE};
+    EXPECT_TRUE(requestOf(khr, &flags));
+    EXPECT_EQ(flags & GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT, 0);
+    EXPECT_NE(flags & GL_CONTEXT_FLAG_DEBUG_BIT, 0);
+    const EGLint off[] = {EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT, EGL_FALSE, EGL_NONE};
+    EXPECT_FALSE(requestOf(off, &flags));
+}

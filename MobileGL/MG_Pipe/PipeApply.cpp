@@ -54,6 +54,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -206,6 +207,47 @@ namespace MobileGL::MG_Pipe {
         if (seen.fetch_add(1, std::memory_order_acq_rel) + 1 < at) return false;
         if (fired.exchange(true, std::memory_order_acq_rel)) return false;
         MGLOG_E("MGPipe: debug knob inject_device_lost_at=%ld - this device check reports the device LOST", at);
+        return true;
+    }
+
+    bool MGPipeDebugSessionLossDue(unsigned clientPid) {
+        if (clientPid == 0) return false;
+        // The first call on a thread only starts the clock, so a session is first asked 100 ms
+        // after it started rendering - never in the middle of its first make-current.
+        thread_local auto lastAsked = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (lastAsked == std::chrono::steady_clock::time_point{}) {
+            lastAsked = now;
+            return false;
+        }
+        if (now - lastAsked < std::chrono::milliseconds(100)) return false;
+        lastAsked = now;
+        long target = 0;
+        if (const char* value = std::getenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID")) {
+            target = std::strtol(value, nullptr, 10);
+        }
+#if defined(__ANDROID__)
+        else {
+            char property[PROP_VALUE_MAX] = {};
+            if (__system_property_get("debug.mobilegl.inject_device_lost_pid", property) > 0) {
+                target = std::strtol(property, nullptr, 10);
+            }
+        }
+#endif
+        // Once per value: the session it hit is over, and a later session of the same process (the
+        // recovery's) must not be lost again by the same setting. Another pid - or unset/0 and
+        // then the same one - re-arms it.
+        static std::atomic<long> firedFor{0};
+        if (target <= 0) {
+            if (firedFor.load(std::memory_order_relaxed) != 0) firedFor.store(0, std::memory_order_relaxed);
+            return false;
+        }
+        if (static_cast<unsigned long>(target) != clientPid) return false;
+        long previous = firedFor.load(std::memory_order_acquire);
+        if (previous == target || !firedFor.compare_exchange_strong(previous, target, std::memory_order_acq_rel)) {
+            return false;
+        }
+        MGLOG_E("MGPipe: debug knob inject_device_lost_pid=%ld - this session's device is reported LOST", target);
         return true;
     }
 

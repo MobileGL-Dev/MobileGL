@@ -14,8 +14,11 @@
 //
 // What an application that handles context loss (Chrome through ANGLE) needs, each case asserting
 // it from the application's side:
-//   * the loss is REPORTED: glGetGraphicsResetStatus answers a reset, glGetError GL_CONTEXT_LOST
-//     (once), eglSwapBuffers and eglMakeCurrent on the old context fail with EGL_CONTEXT_LOST;
+//   * the loss is REPORTED to a context that asked to be told (EGL_EXT_create_context_robustness,
+//     EGL_LOSE_CONTEXT_ON_RESET - advertised, and what ANGLE asks for): glGetGraphicsResetStatus
+//     answers a reset and keeps answering it, glGetError GL_CONTEXT_LOST (once), eglSwapBuffers
+//     and eglMakeCurrent on the old context fail with EGL_CONTEXT_LOST; a context that did not ask
+//     is told through GL only where semantics are relaxed, and through EGL everywhere;
 //   * the old context is SAFE TO USE AND TO DESTROY: a draw and a texture upload on it after the
 //     loss do nothing, and destroying it puts nothing on the new session's wire;
 //   * a context created after the loss gets a FRESH session (the server starts session #2, nothing
@@ -41,6 +44,11 @@
 #include <mutex>
 
 extern "C" {
+const GLubyte* glGetString(GLenum name);
+const GLubyte* glGetStringi(GLenum name, GLuint index);
+void glGetIntegerv(GLenum pname, GLint* data);
+void glGetnUniformfv(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 void glClear(GLbitfield mask);
 void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
@@ -130,8 +138,24 @@ namespace {
         Uint32 resetStatusEnd = 0xFFFFFFFFu;
         Uint32 serverPidBefore = 0;
         Uint32 serverPidAfter = 0;
+        // Robustness, as the application sees it: the extensions it checks before asking, the
+        // strategy its contexts report, the status again (it stays) and through the KHR name.
+        Int32 eglRobustnessAdvertised = -1;
+        Int32 glRobustnessAdvertised = -1;
+        Int32 glRobustnessIndexed = -1;
+        Int32 strategyBefore = 0;
+        Int32 robustAccess = -1;
+        Uint32 resetStatusRepeat = 0;
+        Uint32 resetStatusKhr = 0;
+        Int32 strategyNew = 0;
         char note[256] = {};
     };
+
+    Bool HasToken(const char* list, const char* token) {
+        if (list == nullptr) return false;
+        const std::string all = std::string(" ") + list + " ";
+        return all.find(std::string(" ") + token + " ") != std::string::npos;
+    }
 
     void Note(RecoveryReport& r, const char* text) {
         if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
@@ -233,10 +257,32 @@ namespace {
         return session != nullptr ? session->LastPublishedSeq() : 0;
     }
 
+    // The contexts an application that handles loss creates: a 3.3 context that asks to be told of
+    // a reset (EGL_EXT_create_context_robustness - what Chrome, KWin and Qt pass when the display
+    // has the extension). Contexts that share must agree on it.
+    const EGLint kRobustAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                     3,
+                                     EGL_CONTEXT_MINOR_VERSION,
+                                     3,
+                                     EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+                                     EGL_LOSE_CONTEXT_ON_RESET_EXT,
+                                     EGL_NONE};
+    // ANGLE's GL-on-EGL backend's own native context: the ES API, the highest ES version it tries
+    // first, and EGL 1.5's name of the attribute.
+    const EGLint kAngleNativeAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                          3,
+                                          EGL_CONTEXT_MINOR_VERSION,
+                                          2,
+                                          EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY,
+                                          EGL_LOSE_CONTEXT_ON_RESET,
+                                          EGL_NONE};
+
     struct Egl {
         EGLDisplay dpy = EGL_NO_DISPLAY;
         EGLConfig config = nullptr;
         EGLSurface surface = EGL_NO_SURFACE;
+        EGLenum api = EGL_OPENGL_API;
+        const EGLint* contextAttribs = kRobustAttribs;
 
         Bool Bring(RecoveryReport& r) {
             dpy = EGL::GetDisplay(EGL_DEFAULT_DISPLAY);
@@ -244,7 +290,7 @@ namespace {
             EGLint minor = 0;
             if (dpy == EGL_NO_DISPLAY || EGL::Initialize(dpy, &major, &minor) != EGL_TRUE)
                 return Note(r, "eglInitialize failed (no spawn session?)"), false;
-            (void)EGL::BindAPI(EGL_OPENGL_API);
+            (void)EGL::BindAPI(api);
             const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
             EGLint count = 0;
             if (EGL::ChooseConfig(dpy, configAttribs, &config, 1, &count) != EGL_TRUE || count < 1)
@@ -255,21 +301,42 @@ namespace {
             return true;
         }
 
-        EGLContext Context() const {
-            const EGLint attribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
-            return EGL::CreateContext(dpy, config, EGL_NO_CONTEXT, attribs);
-        }
+        EGLContext Context() const { return EGL::CreateContext(dpy, config, EGL_NO_CONTEXT, contextAttribs); }
     };
 
+    // The robustness answers of the current context, before the loss.
+    void NoteRobustness(Egl& egl, RecoveryReport& r) {
+        r.eglRobustnessAdvertised =
+            HasToken(EGL::QueryString(egl.dpy, EGL_EXTENSIONS), "EGL_EXT_create_context_robustness") ? 1 : 0;
+        r.glRobustnessAdvertised =
+            HasToken(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)), "GL_KHR_robustness") ? 1 : 0;
+        GLint count = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+        r.glRobustnessIndexed = 0;
+        for (GLint i = 0; i < count; ++i) {
+            const auto* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+            if (name != nullptr && std::string(name) == "GL_KHR_robustness") r.glRobustnessIndexed = 1;
+        }
+        glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &r.strategyBefore);
+        GLint robust = -1;
+        glGetIntegerv(GL_CONTEXT_ROBUST_ACCESS, &robust);
+        r.robustAccess = robust;
+    }
+
     // The client, in a fork: everything an application does around a loss, through the entry points.
-    void RunRecoveringClient(Route route, RecoveryReport& r) {
+    // `api` and `attribs` are the contexts' shape (the first and every replacement).
+    void RunRecoveringClient(Route route, RecoveryReport& r, EGLenum api = EGL_OPENGL_API,
+                             const EGLint* attribs = kRobustAttribs) {
         Egl egl;
+        egl.api = api;
+        egl.contextAttribs = attribs;
         if (!egl.Bring(r)) return;
         const EGLContext lost = egl.Context();
         if (lost == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, lost) != EGL_TRUE)
             return Note(r, "the first context did not go current");
         r.initialized = 1;
         r.serverPidBefore = ServerPid();
+        NoteRobustness(egl, r);
 
         // The objects of the context that is about to be lost, and device check #1 in the server
         // process: a textured draw, read back.
@@ -285,6 +352,10 @@ namespace {
         r.resetStatusLost = glGetGraphicsResetStatus();
         r.errorLost = glGetError();
         r.errorAfterLost = glGetError();
+        r.resetStatusRepeat = glGetGraphicsResetStatus();
+        using ResetStatusFn = GLenum (*)(void);
+        if (auto khr = reinterpret_cast<ResetStatusFn>(EGL::GetProcAddress("glGetGraphicsResetStatusKHR")))
+            r.resetStatusKhr = khr();
         // What an application does before it has looked: more work on the lost context - a draw,
         // and then an upload that no later verb of the lost context will ever carry (it is owed to
         // a server that is gone). None of it may surface on the fresh session.
@@ -318,6 +389,8 @@ namespace {
             (void)EGL::DestroySurface(egl.dpy, egl.surface);
             (void)EGL::Terminate(egl.dpy);
             Egl again;
+            again.api = egl.api;
+            again.contextAttribs = egl.contextAttribs;
             if (!again.Bring(r)) return;
             egl = again;
             NoteTextureBooks(oldHandle, &r.oldTexturePublishedAfter, &r.oldTextureOwedAfter);
@@ -331,6 +404,7 @@ namespace {
         if (!r.newCurrentOk) return Note(r, "the new context did not go current");
         r.serverPidAfter = ServerPid();
         r.resetStatusNew = glGetGraphicsResetStatus();
+        glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &r.strategyNew);
         r.oldNameIsTexture = glIsTexture(old.texture) == GL_TRUE ? 1 : 0;
 
         // THE NEW CONTEXT RENDERS: the same textured draw with a new program and texture, a clear of
@@ -384,7 +458,7 @@ namespace {
         Egl egl;
         RecoveryReport bring{};
         if (!egl.Bring(bring)) return Note(r, bring.note);
-        const EGLint attribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        const EGLint* attribs = kRobustAttribs;
         const EGLContext share = egl.Context();
         const EGLContext working = EGL::CreateContext(egl.dpy, egl.config, share, attribs);
         if (working == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, working) != EGL_TRUE)
@@ -562,6 +636,95 @@ namespace {
         (void)EGL::Terminate(egl.dpy);
     }
 
+    // NO RESET NOTIFICATION. Two contexts of one session that did not ask to be told of a reset,
+    // each current on its own thread when the session is lost: an explicit core-profile one, which
+    // gets KHR_robustness' NO_RESET_NOTIFICATION behavior exactly (no reset status, no
+    // GL_CONTEXT_LOST), and a compatibility-profile one, which is told all the same (the relaxed
+    // default). Both still learn it from EGL - a swap and a make-current fail with EGL_CONTEXT_LOST -
+    // and a context created afterwards renders on a fresh session.
+    const EGLint kCoreNoResetAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+    const EGLint kCompatNoResetAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                            3,
+                                            EGL_CONTEXT_MINOR_VERSION,
+                                            3,
+                                            EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                            EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
+                                            EGL_NONE};
+
+    struct UntoldReport {
+        Int32 initialized = 0;
+        Uint32 firstPixel = 0;
+        Int32 lossSeen = 0;
+        Int32 coreStrategy = 0;
+        Uint32 coreStatus = 0xFFFFFFFFu;
+        Uint32 coreError = 0xFFFFFFFFu;
+        Int32 coreSwap = -1;
+        Int32 coreSwapError = 0;
+        Uint32 compatStatus = 0;
+        Uint32 compatError = 0;
+        Int32 coreAgain = -1;
+        Int32 coreAgainError = 0;
+        Int32 freshCurrent = 0;
+        Uint32 freshStatus = 0xFFFFFFFFu;
+        Uint32 freshPixel = 0;
+        char note[256] = {};
+    };
+
+    void Note(UntoldReport& r, const char* text) {
+        if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
+    }
+
+    void RunUntoldClient(UntoldReport& r) {
+        Egl egl;
+        egl.contextAttribs = kCoreNoResetAttribs;
+        RecoveryReport bring{};
+        if (!egl.Bring(bring)) return Note(r, bring.note);
+        const EGLint pbufferAttribs[] = {EGL_WIDTH, 8, EGL_HEIGHT, 8, EGL_NONE};
+        const EGLSurface other = EGL::CreatePbufferSurface(egl.dpy, egl.config, pbufferAttribs);
+        const EGLContext core = egl.Context();
+        const EGLContext compat = EGL::CreateContext(egl.dpy, egl.config, EGL_NO_CONTEXT, kCompatNoResetAttribs);
+        if (core == EGL_NO_CONTEXT || compat == EGL_NO_CONTEXT || other == EGL_NO_SURFACE)
+            return Note(r, "the contexts or the second surface were not created");
+        Worker second;
+        Bool compatCurrent = false;
+        second.Run([&] { compatCurrent = EGL::MakeCurrent(egl.dpy, other, other, compat) == EGL_TRUE; });
+        if (!compatCurrent || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, core) != EGL_TRUE)
+            return Note(r, "the contexts did not go current");
+        r.initialized = 1;
+        glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &r.coreStrategy);
+        r.firstPixel = ClearAndRead(0.0f, 1.0f, 0.0f);   // device check #1
+        (void)ClearAndRead(0.0f, 0.0f, 1.0f);            // device check #2: lost
+        r.lossSeen = WaitFor([] { return Remote::Client::ClientSession::SessionLatchedLost(); }, 5000) ? 1 : 0;
+
+        r.coreStatus = glGetGraphicsResetStatus();
+        r.coreError = glGetError();
+        second.Run([&] {
+            r.compatStatus = glGetGraphicsResetStatus();
+            r.compatError = glGetError();
+            (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        });
+        r.coreSwap = EGL::SwapBuffers(egl.dpy, egl.surface);
+        r.coreSwapError = EGL::GetError();
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        r.coreAgain = EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, core);
+        r.coreAgainError = EGL::GetError();
+        if (r.coreAgain == EGL_TRUE) (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
+        const EGLContext fresh = egl.Context();
+        r.freshCurrent = fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
+        if (!r.freshCurrent) return Note(r, "no fresh context went current");
+        r.freshStatus = glGetGraphicsResetStatus();
+        r.freshPixel = ClearAndRead(0.0f, 0.0f, 1.0f);
+
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(egl.dpy, fresh);
+        (void)EGL::DestroyContext(egl.dpy, compat);
+        (void)EGL::DestroyContext(egl.dpy, core);
+        (void)EGL::DestroySurface(egl.dpy, other);
+        (void)EGL::DestroySurface(egl.dpy, egl.surface);
+        (void)EGL::Terminate(egl.dpy);
+    }
+
     // Runs `body` in a forked client (the environment a deployment sets, then the entry points)
     // and hands back the report it filled.
     template <class Report, class Body>
@@ -607,9 +770,163 @@ namespace {
         return report;
     }
 
-    RecoveryReport RunClient(const ServerProcess& server, Route route, const std::string& clientLogBase) {
-        return RunInClient<RecoveryReport>(server, clientLogBase,
-                                           [route](RecoveryReport& r) { RunRecoveringClient(route, r); });
+    // THE SESSION-TARGETED KNOB (MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID): one client of several is
+    // lost, whenever its session drains, whether or not it ever presents or reads back. Its pid
+    // has to be known before the server starts (the knob is the server's environment), so it is
+    // forked first and held until the server listens; the endpoint is handed to it then.
+    struct TargetedReport {
+        Int32 initialized = 0;
+        Int32 lossSeen = 0;
+        Uint32 resetStatus = 0;
+        Int32 freshCurrent = 0;
+        Uint32 freshPixel = 0;
+        Int32 freshFrames = 0;
+        Uint32 freshStatusEnd = 0xFFFFFFFFu;
+        char note[256] = {};
+    };
+
+    void Note(TargetedReport& r, const char* text) {
+        if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
+    }
+
+    // Draws until its context reports the reset, recovers on a new context, then keeps drawing
+    // for half a second - long enough for the knob to be asked again - and must not be lost again.
+    void RunTargetedClient(TargetedReport& r) {
+        Egl egl;
+        RecoveryReport bring{};
+        if (!egl.Bring(bring)) return Note(r, bring.note);
+        const EGLContext lost = egl.Context();
+        if (lost == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, lost) != EGL_TRUE)
+            return Note(r, "the first context did not go current");
+        r.initialized = 1;
+        r.lossSeen = WaitFor(
+                         [] {
+                             (void)ClearAndRead(0.0f, 1.0f, 0.0f);
+                             return glGetGraphicsResetStatus() != GL_NO_ERROR;
+                         },
+                         10000)
+                         ? 1
+                         : 0;
+        r.resetStatus = glGetGraphicsResetStatus();
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        const EGLContext fresh = egl.Context();
+        (void)EGL::DestroyContext(egl.dpy, lost);
+        r.freshCurrent = fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
+        if (!r.freshCurrent) return Note(r, "no fresh context went current");
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < until) {
+            r.freshPixel = ClearAndRead(0.0f, 0.0f, 1.0f);
+            ++r.freshFrames;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        r.freshStatusEnd = glGetGraphicsResetStatus();
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(egl.dpy, fresh);
+        (void)EGL::DestroySurface(egl.dpy, egl.surface);
+        (void)EGL::Terminate(egl.dpy);
+    }
+
+    // A client of the same server that is not the target: half a second of read-backs, untouched.
+    struct BystanderReport {
+        Int32 initialized = 0;
+        Int32 frames = 0;
+        Uint32 lastPixel = 0;
+        Uint32 resetStatus = 0xFFFFFFFFu;
+        char note[256] = {};
+    };
+
+    void Note(BystanderReport& r, const char* text) {
+        if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
+    }
+
+    void RunBystanderClient(BystanderReport& r) {
+        Egl egl;
+        RecoveryReport bring{};
+        if (!egl.Bring(bring)) return Note(r, bring.note);
+        const EGLContext context = egl.Context();
+        if (context == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, context) != EGL_TRUE)
+            return Note(r, "the context did not go current");
+        r.initialized = 1;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (std::chrono::steady_clock::now() < until) {
+            r.lastPixel = ClearAndRead(1.0f, 0.0f, 0.0f);
+            ++r.frames;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        r.resetStatus = glGetGraphicsResetStatus();
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(egl.dpy, context);
+        (void)EGL::DestroySurface(egl.dpy, egl.surface);
+        (void)EGL::Terminate(egl.dpy);
+    }
+
+    // A forked client that waits for the endpoint before it does anything.
+    template <class Report, class Body>
+    struct HeldClient {
+        pid_t pid = -1;
+        int go = -1;
+        int report = -1;
+
+        Bool Fork(const std::string& clientLogBase, Body body) {
+            int goFds[2] = {-1, -1};
+            int reportFds[2] = {-1, -1};
+            if (::pipe(goFds) != 0 || ::pipe(reportFds) != 0) return false;
+            std::fflush(nullptr);
+            pid = ::fork();
+            if (pid == 0) {
+                ::close(goFds[1]);
+                ::close(reportFds[0]);
+                char endpoint[512] = {};
+                const ssize_t got = ::read(goFds[0], endpoint, sizeof(endpoint) - 1);
+                if (got <= 0) ::_exit(0);
+                ::setenv("MOBILEGL_LOG_FILE_PATH", clientLogBase.c_str(), 1);
+                ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
+                ::setenv("MOBILEGL_IPC_CONTROL", endpoint, 1);
+                ::unsetenv("MOBILEGL_IPC_SURFACE");
+                ::unsetenv("MOBILEGL_BACKEND_TYPE");
+                ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT");
+                ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID");
+                Report r{};
+                body(r);
+                const ssize_t wrote = ::write(reportFds[1], &r, sizeof(r));
+                (void)wrote;
+                std::fflush(nullptr);
+                ::_exit(0);
+            }
+            ::close(goFds[0]);
+            ::close(reportFds[1]);
+            go = goFds[1];
+            report = reportFds[0];
+            return pid > 0;
+        }
+
+        Report Release(const std::string& endpoint) {
+            Report r{};
+            const ssize_t wrote = ::write(go, endpoint.c_str(), endpoint.size());
+            (void)wrote;
+            ::close(go);
+            pollfd pfd{report, POLLIN, 0};
+            if (::poll(&pfd, 1, 90000) > 0) {
+                if (::read(report, &r, sizeof(r)) != static_cast<ssize_t>(sizeof(r))) {
+                    r = Report{};
+                    Note(r, "the client died before reporting");
+                }
+            } else {
+                Note(r, "the client timed out");
+                ::kill(pid, SIGKILL);
+            }
+            ::close(report);
+            int status = 0;
+            ::waitpid(pid, &status, 0);
+            return r;
+        }
+    };
+
+    RecoveryReport RunClient(const ServerProcess& server, Route route, const std::string& clientLogBase,
+                             EGLenum api = EGL_OPENGL_API, const EGLint* attribs = kRobustAttribs) {
+        return RunInClient<RecoveryReport>(server, clientLogBase, [route, api, attribs](RecoveryReport& r) {
+            RunRecoveringClient(route, r, api, attribs);
+        });
     }
 
     struct ClientLog {
@@ -646,6 +963,15 @@ namespace {
             ASSERT_EQ(r.firstPixel, kGreen) << "the first draw (device check #1) did not read back: " << std::hex
                                             << r.firstPixel << "\n" << r.note << "\n" << diagnostics;
             EXPECT_NE(r.lostPixel, kBlue) << "a read-back on the lost device returned a frame";
+            // What the application checked before it asked to be told (ANGLE mirrors the EGL
+            // extension onto its own display; Chrome checks that and GL_*_robustness), and what
+            // its context then reports. Robust buffer ACCESS was not asked for and is not claimed.
+            EXPECT_EQ(r.eglRobustnessAdvertised, 1) << "EGL_EXT_create_context_robustness is not advertised";
+            EXPECT_EQ(r.glRobustnessAdvertised, 1) << "GL_KHR_robustness is not in glGetString(GL_EXTENSIONS)";
+            EXPECT_EQ(r.glRobustnessIndexed, 1) << "GL_KHR_robustness is not in glGetStringi(GL_EXTENSIONS, i)";
+            EXPECT_EQ(r.strategyBefore, GL_LOSE_CONTEXT_ON_RESET) << "GL_RESET_NOTIFICATION_STRATEGY: 0x" << std::hex
+                                                                 << r.strategyBefore;
+            EXPECT_EQ(r.robustAccess, GL_FALSE);
             // The loss is reported.
             EXPECT_TRUE(r.resetStatusLost == GL_UNKNOWN_CONTEXT_RESET || r.resetStatusLost == GL_GUILTY_CONTEXT_RESET)
                 << "glGetGraphicsResetStatus after the loss: 0x" << std::hex << r.resetStatusLost;
@@ -653,6 +979,13 @@ namespace {
                 << "glGetError after the loss: 0x" << std::hex << r.errorLost;
             EXPECT_EQ(r.errorAfterLost, static_cast<Uint32>(GL_NO_ERROR))
                 << "GL_CONTEXT_LOST must be reported once, not forever (a drain loop must end)";
+            // LOSE_CONTEXT_ON_RESET: the context stays lost, so the status does not go back to
+            // GL_NO_ERROR (that would read as a reset that completed in place), and the KHR name
+            // an ES application looks up answers the same.
+            EXPECT_EQ(r.resetStatusRepeat, r.resetStatusLost) << "the reset status of a lost context went back to 0x"
+                                                             << std::hex << r.resetStatusRepeat;
+            EXPECT_EQ(r.resetStatusKhr, r.resetStatusLost) << "glGetGraphicsResetStatusKHR: 0x" << std::hex
+                                                          << r.resetStatusKhr;
             EXPECT_EQ(r.swapLost, EGL_FALSE) << "eglSwapBuffers on the lost context succeeded";
             EXPECT_EQ(r.swapLostError, EGL_CONTEXT_LOST) << "eglSwapBuffers on the lost context: 0x" << std::hex
                                                          << r.swapLostError;
@@ -668,6 +1001,7 @@ namespace {
                                          << r.newCurrentError << ")\n" << r.note << "\n" << diagnostics;
             EXPECT_EQ(r.serverPidAfter, r.serverPidBefore) << "the new session is not on the same server process";
             EXPECT_EQ(r.resetStatusNew, static_cast<Uint32>(GL_NO_ERROR)) << "the new context reports a reset";
+            EXPECT_EQ(r.strategyNew, GL_LOSE_CONTEXT_ON_RESET) << "the replacement is not told of resets";
             EXPECT_EQ(r.oldNameIsTexture, 0) << "the old context's texture name resolves in the new context";
             // The client's books on the lost texture: before the recovery the lost session had its
             // record (the arm proof that there was something to forget), and the upload made on the
@@ -724,6 +1058,51 @@ TEST_F(ClientRecovery, ANewContextAfterADeviceLossRendersOnAFreshSession) {
     const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
     ExpectLossReportedAndRecovered(r, diagnostics);
     EXPECT_EQ(r.recordsByOldDestroy, 0) << "destroying the lost context published records on the new session";
+    // The status is UNKNOWN for a reason, and the client log names it once.
+    EXPECT_EQ(Count(client.Text(), "GL_UNKNOWN_CONTEXT_RESET for a context of a lost session"), 1u) << client.Text();
+    ExpectOneLossAndACleanSecondSession(server);
+    server.Stop();
+}
+
+// ANGLE'S OWN NATIVE CONTEXT. ANGLE's GL-on-EGL backend (Chrome's --use-angle=gles) creates one ES
+// context per display with EGL 1.5's name of the reset attribute, and learns of a reset ONLY through
+// that context's reset status - which it then hands to Chrome. The same recovery, in its shape.
+TEST_F(ClientRecovery, AnglesNativeContextShapeIsToldOfTheLossAndRecovers) {
+    ServerProcess server;
+    ASSERT_TRUE(Launch(&server, "angle")) << server.Log();
+    ClientLog client("angle");
+    const RecoveryReport r = RunClient(server, Route::NewContext, client.base, EGL_OPENGL_ES_API, kAngleNativeAttribs);
+    const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
+    ExpectLossReportedAndRecovered(r, diagnostics);
+    ExpectOneLossAndACleanSecondSession(server);
+    server.Stop();
+}
+
+// NO RESET NOTIFICATION (RunUntoldClient): the explicit core-profile context is not told through
+// GL, the compatibility-profile one is; both learn it from EGL, and the application recovers.
+TEST_F(ClientRecovery, ContextsThatDidNotAskAreToldOnlyWhereRelaxedAndStillRecoverThroughEgl) {
+    ServerProcess server;
+    ASSERT_TRUE(Launch(&server, "untold")) << server.Log();
+    ClientLog client("untold");
+    const UntoldReport r = RunInClient<UntoldReport>(server, client.base, &RunUntoldClient);
+    const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
+    ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
+    ASSERT_EQ(r.firstPixel, kGreen) << std::hex << r.firstPixel << "\n" << diagnostics;
+    ASSERT_EQ(r.lossSeen, 1) << "the injected loss never latched\n" << diagnostics;
+    EXPECT_EQ(r.coreStrategy, GL_NO_RESET_NOTIFICATION);
+    EXPECT_EQ(r.coreStatus, static_cast<Uint32>(GL_NO_ERROR))
+        << "a NO_RESET_NOTIFICATION core-profile context was told of the reset: 0x" << std::hex << r.coreStatus;
+    EXPECT_NE(r.coreError, static_cast<Uint32>(GL_CONTEXT_LOST));
+    EXPECT_EQ(r.compatStatus, static_cast<Uint32>(GL_UNKNOWN_CONTEXT_RESET))
+        << "the compatibility-profile context was not told: 0x" << std::hex << r.compatStatus;
+    EXPECT_EQ(r.compatError, static_cast<Uint32>(GL_CONTEXT_LOST));
+    EXPECT_EQ(r.coreSwap, EGL_FALSE);
+    EXPECT_EQ(r.coreSwapError, EGL_CONTEXT_LOST) << std::hex << r.coreSwapError;
+    EXPECT_EQ(r.coreAgain, EGL_FALSE);
+    EXPECT_EQ(r.coreAgainError, EGL_CONTEXT_LOST) << std::hex << r.coreAgainError;
+    ASSERT_EQ(r.freshCurrent, 1) << r.note << "\n" << diagnostics;
+    EXPECT_EQ(r.freshStatus, static_cast<Uint32>(GL_NO_ERROR));
+    EXPECT_EQ(r.freshPixel, kBlue) << std::hex << r.freshPixel << "\n" << diagnostics;
     ExpectOneLossAndACleanSecondSession(server);
     server.Stop();
 }
@@ -789,5 +1168,54 @@ TEST_F(ClientRecovery, ContextsNamingALostShareContextShareOneNewGroup) {
     EXPECT_EQ(r.drawnAcross, kRed) << "the shared texture did not draw on the other replacement: " << std::hex
                                    << r.drawnAcross << "\n" << r.note << "\n" << diagnostics;
     ExpectOneLossAndACleanSecondSession(server);
+    server.Stop();
+}
+
+// THE SESSION-TARGETED KNOB (what the device test sets on a running desktop): a bystander client
+// of the same server draws on untouched; the target is lost although it only clears and reads
+// back - no present - recovers on a fresh session, and is not lost again by the same setting.
+TEST_F(ClientRecovery, ThePidTargetedKnobLosesOnlyThatClientAndOnlyOnce) {
+    auto targetBody = [](TargetedReport& r) { RunTargetedClient(r); };
+    HeldClient<TargetedReport, decltype(targetBody)> target;
+    ClientLog targetLog("pid-target");
+    ASSERT_TRUE(target.Fork(targetLog.base, targetBody));
+
+    ServerProcess server;
+    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", std::to_string(target.pid).c_str(), 1);
+    const bool launched = LaunchUnixInProcessServer(&server, "pid");
+    ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID");
+    if (!launched) {
+        (void)target.Release("");
+        FAIL() << server.Log();
+    }
+
+    ClientLog bystanderLog("pid-bystander");
+    const BystanderReport bystander =
+        RunInClient<BystanderReport>(server, bystanderLog.base, &RunBystanderClient);
+    const TargetedReport r = target.Release(server.endpoint);
+    const std::string diagnostics = "server:\n" + server.Log() + "\ntarget:\n" + targetLog.Text() +
+                                    "\nbystander:\n" + bystanderLog.Text();
+
+    ASSERT_EQ(bystander.initialized, 1) << bystander.note << "\n" << diagnostics;
+    EXPECT_GT(bystander.frames, 5);
+    EXPECT_EQ(bystander.lastPixel, kRed) << std::hex << bystander.lastPixel;
+    EXPECT_EQ(bystander.resetStatus, static_cast<Uint32>(GL_NO_ERROR)) << "the bystander was lost";
+
+    ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
+    ASSERT_EQ(r.lossSeen, 1) << "the targeted client was never lost\n" << diagnostics;
+    EXPECT_EQ(r.resetStatus, static_cast<Uint32>(GL_UNKNOWN_CONTEXT_RESET)) << std::hex << r.resetStatus;
+    ASSERT_EQ(r.freshCurrent, 1) << r.note << "\n" << diagnostics;
+    EXPECT_GT(r.freshFrames, 5);
+    EXPECT_EQ(r.freshPixel, kBlue) << std::hex << r.freshPixel << "\n" << diagnostics;
+    EXPECT_EQ(r.freshStatusEnd, static_cast<Uint32>(GL_NO_ERROR)) << "the recovered session was lost again";
+
+    // Three sessions: the bystander's and the recovered one end cleanly, the target's latched on
+    // the knob, naming the pid.
+    ASSERT_TRUE(WaitFor([&] { return Count(server.Log(), "reaped exit=") == 3; }, 10000)) << server.Log();
+    const std::string log = server.Log();
+    EXPECT_EQ(Count(log, "SessionLatch{"), 1u) << log;
+    EXPECT_NE(log.find("injected:pid=" + std::to_string(target.pid)), std::string::npos) << log;
+    EXPECT_EQ(Count(log, "reaped exit=75"), 1u) << log;
+    EXPECT_EQ(Count(log, "reaped exit=0"), 2u) << log;
     server.Stop();
 }

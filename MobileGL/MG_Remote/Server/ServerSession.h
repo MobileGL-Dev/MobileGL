@@ -370,6 +370,9 @@ namespace MobileGL::MG_Remote::Server {
         // 0 = no context is bound. Every record the session has applied so far belongs to this
         // token; a session that never crossed a bind_context has never bound one.
         Uint64 CurrentContextToken() const { return m_currentContextToken.load(std::memory_order_acquire); }
+        // The pid the client's Hello names (its own, in its own pid namespace; 0 before Accept).
+        // What the session-targeted device-loss debug knob matches.
+        Uint32 ClientPid() const { return m_clientPid; }
         Bool HasContext(Uint64 token) const { return m_contexts.find(token) != m_contexts.end(); }
         Uint64 ContextCount() const { return static_cast<Uint64>(m_contexts.size()); }
         Uint64 ContextsCreated() const { return m_contextsCreated; }
@@ -418,6 +421,7 @@ namespace MobileGL::MG_Remote::Server {
         // P11 B2 (T0). Set by Accept from the Hello, by SettleAdoptT0AtBind on the apply thread;
         // the inbox and the counters are the apply thread's.
         Bool m_adoptT0Asked = false;
+        Uint32 m_clientPid = 0;
         Bool m_adoptT0Quiet = false;
         Uint8 m_adoptAsk = 2;
         Bool m_adoptT0Settled = false;

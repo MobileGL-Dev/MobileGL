@@ -124,6 +124,15 @@ namespace MobileGL::MG_Pipe {
     // several sessions in turn. The backends ask at their frame boundaries and readbacks; unset
     // (the default) it is one getenv.
     bool MGPipeDebugDeviceLossDue();
+    // THE SAME KNOB, AIMED AT ONE CLIENT. MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID=P (Android: the
+    // property debug.mobilegl.inject_device_lost_pid) loses the session whose client named pid P in
+    // its Hello (its own pid, as it sees it - a container's own pid namespace included), once per
+    // value, whatever the backend and whether or not that client ever presents or reads back: the
+    // server's apply thread asks after every drain. It is how one application among several is
+    // made to lose its device - a browser's GPU process, which renders into dma-bufs and never
+    // presents, included. Asked only for a session with a context bound; asks the environment /
+    // property at most every 100 ms per thread.
+    bool MGPipeDebugSessionLossDue(unsigned clientPid);
 #endif
 
 } // namespace MobileGL::MG_Pipe

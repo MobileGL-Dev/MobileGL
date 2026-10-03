@@ -435,9 +435,9 @@ DECLARE_GL_FUNCTION_HEAD(void, FramebufferTexture, GLenum target, GLenum attachm
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PrimitiveBoundingBox, GLfloat minX, GLfloat minY, GLfloat minZ, GLfloat minW, GLfloat maxX, GLfloat maxY, GLfloat maxZ, GLfloat maxW) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PrimitiveBoundingBox, minX, minY, minZ, minW, maxX, maxY, maxZ, maxW)
 DECLARE_GL_FUNCTION_HEAD(GLenum, GetGraphicsResetStatus) DECLARE_GL_FUNCTION_END(GLenum, GetGraphicsResetStatus)
 DECLARE_GL_FUNCTION_HEAD(void, ReadnPixels, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLsizei bufSize, void* data) DECLARE_GL_FUNCTION_END_NO_RETURN(void, ReadnPixels, x, y, width, height, format, type, bufSize, data)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformfv, GLuint program, GLint location, GLsizei bufSize, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformfv, program, location, bufSize, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformiv, GLuint program, GLint location, GLsizei bufSize, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformiv, program, location, bufSize, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformuiv, GLuint program, GLint location, GLsizei bufSize, GLuint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformuiv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformfv, GLuint program, GLint location, GLsizei bufSize, GLfloat* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformfv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformiv, GLuint program, GLint location, GLsizei bufSize, GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformiv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformuiv, GLuint program, GLint location, GLsizei bufSize, GLuint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformuiv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_HEAD(void, MinSampleShading, GLfloat value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, MinSampleShading, value)
 DECLARE_GL_FUNCTION_HEAD(void, PatchParameteri, GLenum pname, GLint value) DECLARE_GL_FUNCTION_END_NO_RETURN(void, PatchParameteri, pname, value)
 DECLARE_GL_FUNCTION_HEAD(void, TexParameterIiv, GLenum target, GLenum pname, const GLint* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, TexParameterIiv, target, pname, params)
@@ -1121,7 +1121,7 @@ DECLARE_GL_FUNCTION_HEAD(void, GetTextureSubImage, GLuint texture, GLint level, 
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetCompressedTextureSubImage, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetCompressedTextureSubImage, texture, level, xoffset, yoffset, zoffset, width, height, depth, bufSize, pixels)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnCompressedTexImage, GLenum target, GLint lod, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnCompressedTexImage, target, lod, bufSize, pixels)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnTexImage, GLenum target, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnTexImage, target, level, format, type, bufSize, pixels)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformdv, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformdv, program, location, bufSize, params)
+DECLARE_GL_FUNCTION_HEAD(void, GetnUniformdv, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_END_NO_RETURN(void, GetnUniformdv, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapdv, GLenum target, GLenum query, GLsizei bufSize, GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapdv, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapfv, GLenum target, GLenum query, GLsizei bufSize, GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapfv, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapiv, GLenum target, GLenum query, GLsizei bufSize, GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapiv, target, query, bufSize, v)
@@ -1292,7 +1292,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfARB, GLenum pname, GLfloat pa
 DECLARE_GL_FUNCTION_STUB_HEAD(void, PointParameterfvARB, GLenum pname, const GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, PointParameterfvARB, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnTexImageARB, GLenum target, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* img) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnTexImageARB, target, level, format, type, bufSize, img)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnCompressedTexImageARB, GLenum target, GLint lod, GLsizei bufSize, void* img) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnCompressedTexImageARB, target, lod, bufSize, img)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnUniformdvARB, GLuint program, GLint location, GLsizei bufSize, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnUniformdvARB, program, location, bufSize, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapdvARB, GLenum target, GLenum query, GLsizei bufSize, GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapdvARB, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapfvARB, GLenum target, GLenum query, GLsizei bufSize, GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapfvARB, target, query, bufSize, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMapivARB, GLenum target, GLenum query, GLsizei bufSize, GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetnMapivARB, target, query, bufSize, v)
@@ -2990,6 +2989,50 @@ MOBILEGL_GL_API void glGetnUniformivARB(GLuint program, GLint location, GLsizei 
 }
 
 MOBILEGL_GL_API void glGetnUniformuivARB(GLuint program, GLint location, GLsizei bufSize, GLuint* params) {
+    glGetnUniformuiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformdvARB(GLuint program, GLint location, GLsizei bufSize, GLdouble* params) {
+    glGetnUniformdv(program, location, bufSize, params);
+}
+
+// KHR_robustness and EXT_robustness name the same entry points with their own suffixes (an ES
+// application, ANGLE's GL backend among them, looks them up by those names).
+MOBILEGL_GL_API GLenum glGetGraphicsResetStatusKHR(void) {
+    return glGetGraphicsResetStatus();
+}
+
+MOBILEGL_GL_API GLenum glGetGraphicsResetStatusEXT(void) {
+    return glGetGraphicsResetStatus();
+}
+
+MOBILEGL_GL_API void glReadnPixelsKHR(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                      GLsizei bufSize, void* data) {
+    glReadnPixels(x, y, width, height, format, type, bufSize, data);
+}
+
+MOBILEGL_GL_API void glReadnPixelsEXT(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
+                                      GLsizei bufSize, void* data) {
+    glReadnPixels(x, y, width, height, format, type, bufSize, data);
+}
+
+MOBILEGL_GL_API void glGetnUniformfvKHR(GLuint program, GLint location, GLsizei bufSize, GLfloat* params) {
+    glGetnUniformfv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformfvEXT(GLuint program, GLint location, GLsizei bufSize, GLfloat* params) {
+    glGetnUniformfv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformivKHR(GLuint program, GLint location, GLsizei bufSize, GLint* params) {
+    glGetnUniformiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformivEXT(GLuint program, GLint location, GLsizei bufSize, GLint* params) {
+    glGetnUniformiv(program, location, bufSize, params);
+}
+
+MOBILEGL_GL_API void glGetnUniformuivKHR(GLuint program, GLint location, GLsizei bufSize, GLuint* params) {
     glGetnUniformuiv(program, location, bufSize, params);
 }
 

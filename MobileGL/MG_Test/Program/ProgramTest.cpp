@@ -661,6 +661,30 @@ TEST_F(ProgramTest, CompileAndLink) {
     GetUniformiv(program, locInt, &intVal);
     EXPECT_EQ(intVal, 114514);
 
+    // glGetnUniform* (GL 4.5 / KHR_robustness): the same answers, bounded by bufSize. A
+    // destination too small for the uniform's components is GL_INVALID_OPERATION and untouched.
+    while (GetError() != GL_NO_ERROR) {
+    }
+    float boundedRed[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    GetnUniformfv(program, locRed, static_cast<GLsizei>(3 * sizeof(float)), boundedRed);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
+    EXPECT_EQ(boundedRed[0], 1.0f);
+    EXPECT_EQ(boundedRed[2], 5.0f);
+    EXPECT_EQ(boundedRed[3], -1.0f) << "glGetnUniformfv wrote past the uniform";
+    float tooSmall[3] = {-1.0f, -1.0f, -1.0f};
+    GetnUniformfv(program, locRed, static_cast<GLsizei>(2 * sizeof(float)), tooSmall);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+    EXPECT_EQ(tooSmall[0], -1.0f) << "a refused glGetnUniformfv wrote anyway";
+    int boundedInt = 0;
+    GetnUniformiv(program, locInt, static_cast<GLsizei>(sizeof(int)), &boundedInt);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
+    EXPECT_EQ(boundedInt, 114514);
+    GetnUniformiv(program, locInt, -1, &boundedInt);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+    // Every other error is the unbounded query's: a location the program does not have.
+    GetnUniformfv(program, 4096, static_cast<GLsizei>(sizeof(boundedRed)), boundedRed);
+    EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
     auto programObj = MG_State::pGLContext->GetProgramObject(program);
     auto& shaderSpirvs = programObj->GetGeneratedSpirv();
     for (int index = 0; index < shaderSpirvs.size(); ++index) {

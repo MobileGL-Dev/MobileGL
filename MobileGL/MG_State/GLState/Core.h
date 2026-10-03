@@ -115,6 +115,13 @@ namespace MobileGL {
                     m_contextLostReported = true;
                     return true;
                 }
+                // True the first time glGetGraphicsResetStatus reports this context's reset (the
+                // one time it names the cause in the log).
+                Bool TakeResetStatusReport() {
+                    if (m_resetStatusReported) return false;
+                    m_resetStatusReported = true;
+                    return true;
+                }
 #endif
 
                 // Error
@@ -743,6 +750,7 @@ namespace MobileGL {
                 // See WireEpoch(); taken when the context is constructed.
                 Uint64 m_wireEpoch = CurrentWireEpoch();
                 Bool m_contextLostReported = false;
+                Bool m_resetStatusReported = false;
 #endif
             };
         } // namespace GLState

@@ -12,6 +12,7 @@
 #include "ApplyThreadPolicy.h"
 #include "SessionRuntime.h"
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Pipe/PipeSessionFail.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
@@ -633,6 +634,18 @@ namespace MobileGL::MG_Remote::Server {
             if (stopOrForfeit()) break;
             if (eventRingHasRoom()) DrainRing();
             if (stopOrForfeit()) break;
+            // The session-targeted device-loss debug knob (PipeSessionFail.h): asked here, after a
+            // drain, so it reaches a client that never presents or reads back, once the session
+            // has a context bound (it renders); latched as the backends latch a real loss. Unset
+            // it is one clock read per iteration.
+            if (!SessionLatched() && session.CurrentContextToken() != 0 &&
+                MG_Pipe::MGPipeDebugSessionLossDue(session.ClientPid())) {
+                (void)MG_Pipe::MGPipeSessionLatch(MG_Pipe::MGPipeFatalFamily::DeviceLost,
+                                                  "MGPipe: Fatal{BackendDeviceLost, \"injected:pid=%u\"} - the debug "
+                                                  "knob lost this session's device; the session ends and its client "
+                                                  "reads a lost context, every other session keeps running",
+                                                  session.ClientPid());
+            }
             if (eventRingHasRoom() && !SessionLatched()) verbs.ReportSignaledFences(/*flush=*/false);
             // PH-1 (3): a latched session applies nothing more, so this thread leaves the loop
             // (and does not spin on a ring whose head is still ahead of a tail DrainRing will no

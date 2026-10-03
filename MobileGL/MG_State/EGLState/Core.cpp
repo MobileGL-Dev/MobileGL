@@ -679,6 +679,31 @@ namespace MobileGL {
                     return nullptr;
                 }
 
+                // RESET NOTIFICATION (EGL_EXT_create_context_robustness, EGL 1.5): validated before
+                // anything of the context is built, since building its GL state already makes
+                // objects. Both names of the attribute are taken - the extension's (what Chrome,
+                // KWin and Qt pass) and EGL 1.5's (what ANGLE's GL-on-EGL backend passes for its
+                // own native context) - with the two values they share. Contexts that share
+                // objects must agree on it (EGL_BAD_MATCH otherwise).
+                EGLint resetStrategy = EGL_NO_RESET_NOTIFICATION;
+                for (const EGLint name :
+                     {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY}) {
+                    if (auto value = ParseAttribValue(attribList, name); value) {
+                        if (*value != EGL_NO_RESET_NOTIFICATION && *value != EGL_LOSE_CONTEXT_ON_RESET) {
+                            SetError(EGL_BAD_ATTRIBUTE);
+                            return nullptr;
+                        }
+                        resetStrategy = *value;
+                    }
+                }
+                if (shareCtx != nullptr) {
+                    const auto* shared = TryGetContext(shareCtx);
+                    if (shared != nullptr && shared->ResetNotificationStrategy != resetStrategy) {
+                        SetError(EGL_BAD_MATCH);
+                        return nullptr;
+                    }
+                }
+
                 ContextObject contextObject = {
                     .Display = display,
                     .Config = config,
@@ -688,6 +713,7 @@ namespace MobileGL {
                     .MajorVersion = 1,
                     .MinorVersion = 0,
                 };
+                contextObject.ResetNotificationStrategy = resetStrategy;
 
                 // P14 S1: the wire identity, minted where the context is born. A context that
                 // shares with an existing one joins ITS share group; EGL_NO_CONTEXT starts a new
@@ -735,7 +761,7 @@ namespace MobileGL {
                         contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
                     }
                     if (*value & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR) {
-                        contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                        contextObject.RobustAccessRequested = true;
                     }
                 }
                 if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE);
@@ -747,10 +773,17 @@ namespace MobileGL {
                     contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR;
                     contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
                 }
-                if (auto value = ParseAttribValue(attribList, EGL_CONTEXT_OPENGL_ROBUST_ACCESS);
-                    value && *value == EGL_TRUE) {
-                    contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
-                    contextObject.OpenGLContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
+                // ROBUST BUFFER ACCESS is recorded as asked for and reported only where it is
+                // provided (GL_CONTEXT_ROBUST_ACCESS, GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT; the GL
+                // layer decides). The request is not refused where it is not: compositors and
+                // browsers ask for robust access and reset notification in the same attempt, and
+                // refusing the first would cost them the second, which is the one that matters to
+                // a split client - its contexts are lost exactly when the server session is.
+                for (const EGLint name : {EGL_CONTEXT_OPENGL_ROBUST_ACCESS, EGL_CONTEXT_OPENGL_ROBUST_ACCESS_EXT}) {
+                    if (auto value = ParseAttribValue(attribList, name); value && *value == EGL_TRUE) {
+                        contextObject.EGLContextFlags |= EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR;
+                        contextObject.RobustAccessRequested = true;
+                    }
                 }
 
                 const auto context = EncodeHandle<EGLContextHandle>(m_nextContextHandle++);
@@ -911,6 +944,26 @@ namespace MobileGL {
                 }
                 const auto* ctx = TryGetContext(currentIt->second.Context);
                 return ctx ? ctx->OpenGLContextFlags : 0;
+            }
+
+            EGLint EGLContext::GetCurrentContextResetNotificationStrategy() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return EGL_NO_RESET_NOTIFICATION;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx ? ctx->ResetNotificationStrategy : EGL_NO_RESET_NOTIFICATION;
+            }
+
+            Bool EGLContext::IsCurrentContextRobustAccessRequested() const {
+                const std::lock_guard<std::recursive_mutex> lock(m_mutex);
+                auto currentIt = m_threadCurrents.find(CurrentThreadKey());
+                if (currentIt == m_threadCurrents.end()) {
+                    return false;
+                }
+                const auto* ctx = TryGetContext(currentIt->second.Context);
+                return ctx && ctx->RobustAccessRequested;
             }
 
             EGLContext::EGLSurfaceHandle EGLContext::CreateWindowSurface(EGLDisplayHandle display,

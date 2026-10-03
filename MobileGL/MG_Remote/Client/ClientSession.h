@@ -100,6 +100,10 @@ namespace MobileGL::MG_Remote::Client {
         // Arms the latch and says why, once. Safe to call repeatedly and from any thread; only
         // the first call logs.
         void LatchDeviceLost(const char* why);
+        // Why the most recent session of this process was lost, in the latch's words (empty
+        // before any loss). Kept past the recovery, because the contexts of the lost session
+        // outlive it: glGetGraphicsResetStatus names it when it first reports a context's reset.
+        static String LastLossReason();
 
         // A reply-owning record came back DECLINED where only a latched server declines (a
         // readback). The server publishes its SessionFault on the control plane BEFORE it declines,

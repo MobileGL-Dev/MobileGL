@@ -103,6 +103,27 @@ namespace MobileGL::MG_Remote::Client {
         thread_local Uint32 tl_wireMute = 0;
         thread_local Uint32 tl_currentSessionWork = 0;
         std::atomic<Uint64> g_remoteSessionsStarted{0};
+        // ClientSession::LastLossReason(). Leaked on purpose: read from GL entry points that may
+        // run during process exit.
+        std::mutex& LossReasonMutex() {
+            static auto* mutex = new std::mutex();
+            return *mutex;
+        }
+        String& LossReason() {
+            static auto* reason = new String();
+            return *reason;
+        }
+        // The latch's words for a session the server ended on a named fault: what happened, and
+        // the fault family the server named (BackendDeviceLost for a GPU device loss).
+        String FaultReason(const ::MobileGL::Wire::CtrlEnvelope* envelope, const char* what) {
+            String reason = what;
+            if (const auto* fatal = envelope->msg_as_Fatal(); fatal != nullptr && fatal->family() != nullptr) {
+                reason += " (Fatal family ";
+                reason += fatal->family()->c_str();
+                reason += ")";
+            }
+            return reason;
+        }
 
         // The same bounded handshake deadline the server uses. Bounded, not kWaitForever: a
         // bring-up that never answers has to be a red lane rather than a wedged CI job.
@@ -614,6 +635,11 @@ namespace MobileGL::MG_Remote::Client {
         return context != nullptr && context->IsFromEndedWireSession();
     }
 
+    String ClientSession::LastLossReason() {
+        const std::lock_guard<std::mutex> lock(LossReasonMutex());
+        return LossReason();
+    }
+
     Bool ClientSession::SessionLatchedLost() {
         const ClientSession* session = Active();
         return session != nullptr && session->m_deviceLost.load(std::memory_order_acquire);
@@ -632,6 +658,10 @@ namespace MobileGL::MG_Remote::Client {
         // and the event pump can all be in flight when the server goes.
         if (m_deviceLost.exchange(true, std::memory_order_acq_rel)) {
             return;
+        }
+        {
+            const std::lock_guard<std::mutex> lock(LossReasonMutex());
+            LossReason() = why == nullptr ? "the peer hung up" : why;
         }
         MGLOG_E("MGPipe: DEVICE LOST - %s. This session's server side is gone; every verb from here "
                 "is DECLINED and glGetGraphicsResetStatus reports GL_UNKNOWN_CONTEXT_RESET. This is "
@@ -1645,7 +1675,7 @@ namespace MobileGL::MG_Remote::Client {
                     MGLOG_E("MG_Remote client: the server published a SessionFault before dying - "
                             "Fatal family %s: %s", fam, msg);
                 }
-                LatchDeviceLost("the server published a SessionFault and then aborted");
+                LatchDeviceLost(FaultReason(envelope, "the server published a SessionFault and then aborted").c_str());
                 frame.ok = false;
                 return MOBILEGL_ERR_TRANSPORT_CLOSED;
             }
@@ -2742,7 +2772,7 @@ namespace MobileGL::MG_Remote::Client {
                             fatal->family() ? fatal->family()->c_str() : "<none>",
                             fatal->message() ? fatal->message()->c_str() : "");
                 }
-                LatchDeviceLost("the server published a SessionFault for this session");
+                LatchDeviceLost(FaultReason(envelope, "the server published a SessionFault for this session").c_str());
                 continue;
             }
             if (envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::CapsSnapshot) {

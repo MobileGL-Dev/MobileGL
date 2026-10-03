@@ -687,6 +687,7 @@ namespace MobileGL::MG_Remote::Server {
         m_peer = hello->dialMode() == ::MobileGL::Wire::DialMode::Connect ? ApplyPeer::Connected
                  : hello->dialMode() == ::MobileGL::Wire::DialMode::Fork  ? ApplyPeer::Forked
                                                                           : ApplyPeer::InProcess;
+        m_clientPid = hello->pid();
         const MobileGLResult compatible = ValidatePeerHandshake(transport, hello->abiMajor(),
             hello->abiMinor(), hello->wireFingerprint(), theirStamp, hello->dialMode());
         if (compatible != MOBILEGL_OK) return compatible;

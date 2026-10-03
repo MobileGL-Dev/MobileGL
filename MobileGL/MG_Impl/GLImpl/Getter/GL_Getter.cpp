@@ -592,12 +592,60 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     namespace {
-        // GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with shared
-        // images has (EGLImpl::SharedImagesAvailable). The backend's own list - the server's,
-        // under split - cannot know that, so the extension is appended after it.
-        const char* ClientSideExtension() {
-            return MG_Impl::EGLImpl::SharedImagesAvailable() ? "GL_OES_EGL_image" : nullptr;
+        // Extensions this library implements itself, appended after the backend's own list (the
+        // server's, under split), which cannot know about them:
+        //   * GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with
+        //     shared images has (EGLImpl::SharedImagesAvailable);
+        //   * the robustness family - reset notification (glGetGraphicsResetStatus, the contexts'
+        //     EGL reset strategy, GL_CONTEXT_LOST) and the bounded queries (glReadnPixels,
+        //     glGetnUniform*) are this frontend's, whatever the backend. KHR for GL and ES, ARB for
+        //     GL applications that ask for that name, EXT for ES applications that ask for that one.
+        //     Robust buffer ACCESS is a separate promise (GL_CONTEXT_ROBUST_ACCESS) and is not
+        //     implied by any of them.
+        // One list for glGetString and glGetStringi, so the two forms always agree.
+        const Vector<const char*>& ClientSideExtensions() {
+            static const Vector<const char*> withImages = {"GL_OES_EGL_image", "GL_KHR_robustness",
+                                                           "GL_ARB_robustness", "GL_EXT_robustness"};
+            static const Vector<const char*> withoutImages = {"GL_KHR_robustness", "GL_ARB_robustness",
+                                                              "GL_EXT_robustness"};
+            return MG_Impl::EGLImpl::SharedImagesAvailable() ? withImages : withoutImages;
         }
+
+        // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend
+        // promises it by listing one of the behavior extensions. Neither backend does today, so a
+        // context that asked for robust access gets it reported as absent rather than claimed.
+        Bool BackendProvidesRobustBufferAccess() {
+            const auto& backend = MG_Backend::pActiveBackendObject;
+            if (!backend) return false;
+            const auto& extensions = backend->GetRendererInfo().RendererGLInfo.Extensions;
+            return std::find(extensions.begin(), extensions.end(), E_GL_KHR_robust_buffer_access_behavior) !=
+                       extensions.end() ||
+                   std::find(extensions.begin(), extensions.end(), E_GL_ARB_robust_buffer_access_behavior) !=
+                       extensions.end();
+        }
+
+        Bool CurrentContextHasRobustAccess() {
+            return MG_State::pEGLContext && MG_State::pEGLContext->IsCurrentContextRobustAccessRequested() &&
+                   BackendProvidesRobustBufferAccess();
+        }
+
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // KHR_robustness 2.6.1: a context whose reset notification behavior is
+        // NO_RESET_NOTIFICATION is never told of a reset - glGetGraphicsResetStatus answers
+        // GL_NO_ERROR and no command raises GL_CONTEXT_LOST. That is what an explicit core-profile
+        // context gets. Everywhere else (MG_State::IsRelaxedSemanticsActive) the loss is reported
+        // to every context, as before the strategy existed: an application that queries the reset
+        // status without having asked for notification still learns that its context is gone,
+        // which on a split client it is - there is nothing to recover in place. A context created
+        // with EGL_LOSE_CONTEXT_ON_RESET is always told.
+        Bool ResetIsNotified() {
+            if (MG_State::pEGLContext &&
+                MG_State::pEGLContext->GetCurrentContextResetNotificationStrategy() == EGL_LOSE_CONTEXT_ON_RESET) {
+                return true;
+            }
+            return MG_State::IsRelaxedSemanticsActive();
+        }
+#endif
     } // namespace
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
@@ -664,7 +712,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 extensionsString += MG_Util::ConvertGLExtToString(ext);
             }
-            if (const char* extra = ClientSideExtension()) {
+            for (const char* extra : ClientSideExtensions()) {
                 if (!extensionsString.empty()) extensionsString += " ";
                 extensionsString += extra;
             }
@@ -688,8 +736,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& rendererInfo = activeBackendObject->GetRendererInfo();
 
         const auto& exts = rendererInfo.RendererGLInfo.Extensions;
-        if (index == exts.size()) {
-            if (const char* extra = ClientSideExtension()) return (const GLubyte*)extra;
+        if (index >= exts.size()) {
+            const auto& extras = ClientSideExtensions();
+            if (index - exts.size() < extras.size()) return (const GLubyte*)extras[index - exts.size()];
         }
         if (index >= exts.size()) {
             return nullptr;
@@ -1675,8 +1724,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_CONTEXT_FLAGS: {
             *params = MG_State::pEGLContext ? MG_State::pEGLContext->GetCurrentContextFlags() : 0;
+            if (CurrentContextHasRobustAccess()) *params |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT;
             return;
         }
+        case GL_CONTEXT_ROBUST_ACCESS:
+            // GL ES 3.2 / KHR_robustness: true only where it was asked for AND is provided.
+            *params = CurrentContextHasRobustAccess() ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_RESET_NOTIFICATION_STRATEGY:
+            // The EGL reset notification behavior the context was created with.
+            *params = MG_State::pEGLContext && MG_State::pEGLContext->GetCurrentContextResetNotificationStrategy() ==
+                                                   EGL_LOSE_CONTEXT_ON_RESET
+                          ? GL_LOSE_CONTEXT_ON_RESET
+                          : GL_NO_RESET_NOTIFICATION;
+            return;
         case GL_CULL_FACE:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace) ? GL_TRUE : GL_FALSE;
             return;
@@ -2812,8 +2873,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = rendererInfo.RendererGLInfo.TargetGLVersion.Minor;
             break;
         case GL_NUM_EXTENSIONS:
-            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size()) +
-                      (ClientSideExtension() != nullptr ? 1 : 0);
+            *params = static_cast<Int>(rendererInfo.RendererGLInfo.Extensions.size() + ClientSideExtensions().size());
             break;
         case GL_POINT_SIZE_GRANULARITY:
             *params = static_cast<GLint>(dynamicParameters.PointSizeGranularity);
@@ -2883,7 +2943,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // context and ahead of whatever else is queued, so an application that learns of the loss
         // from glGetError (Chromium's decoder does) learns of it, and one that drains errors in a
         // loop until GL_NO_ERROR still terminates.
-        if (MG_Remote::Client::ClientSession::DeviceLost() && MG_State::pGLContext &&
+        // Only where the reset is notified at all (ResetIsNotified: not on a NO_RESET_NOTIFICATION
+        // explicit core-profile context).
+        if (MG_Remote::Client::ClientSession::DeviceLost() && MG_State::pGLContext && ResetIsNotified() &&
             MG_State::pGLContext->TakeContextLostReport()) {
             return GL_CONTEXT_LOST;
         }
@@ -2907,13 +2969,35 @@ namespace MobileGL::MG_Impl::GLImpl {
         //
         // GL_UNKNOWN_CONTEXT_RESET, not GUILTY or INNOCENT. Those two assign BLAME - guilty
         // means this context's commands caused the reset, innocent means another context's did -
-        // and neither is knowable here: the server died for a reason that never crossed the
-        // wire, and it could as easily have been a driver fault as this client's draw. UNKNOWN is
-        // the spec's answer for exactly that, and it is the one that does not lie.
+        // and neither is knowable here:
+        //   * a session ends for a fault the server names by FAMILY only (BackendDeviceLost, a
+        //     protocol fault, ...) or by hanging up; nothing it sends attributes the fault to a
+        //     context, and a hangup is a server death, not a GPU reset at all;
+        //   * a GPU device loss is not attributable either: Vulkan's device loss carries no
+        //     culprit, and the host GL driver's own GUILTY/INNOCENT (which Espryt reads when it
+        //     latches) is about whichever backend context the server had current, while the
+        //     session ends as a whole - every context of it is lost with that one;
+        //   * INNOCENT would mean another context's fault reset this one, but a loss ends exactly
+        //     the session that faulted (every other session keeps running), so the contexts that
+        //     see it are all in the faulting session.
+        // UNKNOWN is the spec's answer for exactly that, and it is the one that does not lie. The
+        // cause - the latch's words, with the fault family where the server named one - is
+        // logged once per context, the first time its reset is reported.
+        //
+        // The status does not go back to GL_NO_ERROR: the context stays lost (KHR_robustness
+        // allows a reset status to be returned repeatedly while the reset "is in progress", and
+        // this one never completes - the context has to be recreated, which puts it on a fresh
+        // session).
         //
         // WHOLLY INSIDE THE GUARD, including the include above. In a pull build this function is
         // byte-for-byte what it was, which is what G1 measures.
         if (MG_Remote::Client::ClientSession::DeviceLost()) {
+            if (!ResetIsNotified()) return GL_NO_ERROR;
+            if (MG_State::pGLContext && MG_State::pGLContext->TakeResetStatusReport()) {
+                const String reason = MG_Remote::Client::ClientSession::LastLossReason();
+                MGLOG_W("glGetGraphicsResetStatus: GL_UNKNOWN_CONTEXT_RESET for a context of a lost session (%s)",
+                        reason.empty() ? "the session was lost" : reason.c_str());
+            }
             return GL_UNKNOWN_CONTEXT_RESET;
         }
 #endif

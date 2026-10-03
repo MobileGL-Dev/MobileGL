@@ -1380,6 +1380,36 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetUniformScalar_State(program, location, params);
     }
 
+    // glGetnUniform* (GL 4.5 core, KHR_robustness): glGetUniform* bounded by bufSize. The query
+    // writes one value per component of the uniform at `location` (an opaque uniform's unit is
+    // one), so the bound is that count times the element size; a destination smaller than that -
+    // a negative bufSize included - is GL_INVALID_OPERATION and nothing is written. Every other
+    // error is the unbounded query's, raised by it.
+    template <typename T>
+    void GetnUniform_State(GLuint program, GLint location, GLsizei bufSize, T* params) {
+        auto& programObject = TryToGetProgramObject(program);
+        if (!programObject) return;
+        if (programObject->GetLinkStatus() && programObject->IsValidUniformLocation(location)) {
+            SizeT components = 1;
+            if (!programObject->IsUniformOpaqueAtLocation(location)) {
+                const auto& type = programObject->GetUniformTypeFacts(location);
+                components = type.isMatrix   ? static_cast<SizeT>(type.matrixCols) * static_cast<SizeT>(type.matrixRows)
+                             : type.isVector ? static_cast<SizeT>(type.vectorSize)
+                                             : 1;
+            }
+            if (bufSize < 0 || components * sizeof(T) > static_cast<SizeT>(bufSize)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "the uniform's " + std::to_string(components) +
+                                                     " component(s) do not fit in bufSize " + std::to_string(bufSize) +
+                                                     "."));
+                return;
+            }
+        }
+        GetUniformScalar_State(program, location, params);
+    }
+
     GLboolean IsProgram_State(GLuint program) {
         // Deletion-flagged names stay valid while the object is still GL-visible (program in
         // use, shader attached), so name validity is exactly the Is* answer.
@@ -2551,6 +2581,22 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetUniformuiv(GLuint program, GLint location, GLuint* params) {
         GetUniformuiv_State(program, location, params);
+    }
+
+    void GetnUniformfv(GLuint program, GLint location, GLsizei bufSize, GLfloat* params) {
+        GetnUniform_State(program, location, bufSize, params);
+    }
+
+    void GetnUniformiv(GLuint program, GLint location, GLsizei bufSize, GLint* params) {
+        GetnUniform_State(program, location, bufSize, params);
+    }
+
+    void GetnUniformuiv(GLuint program, GLint location, GLsizei bufSize, GLuint* params) {
+        GetnUniform_State(program, location, bufSize, params);
+    }
+
+    void GetnUniformdv(GLuint program, GLint location, GLsizei bufSize, GLdouble* params) {
+        GetnUniform_State(program, location, bufSize, params);
     }
 
     GLboolean IsProgram(GLuint program) {
