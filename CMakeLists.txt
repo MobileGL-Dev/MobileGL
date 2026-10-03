@@ -1007,6 +1007,17 @@ if (NOT ANDROID AND NOT MOBILEGL_IOS)
     endif ()
 endif ()
 
+# Discover gtest cases when ctest starts, one binary after another, instead of in a post-build
+# step. The post-build discovery of the CMake releases that never pass the target name down
+# writes every binary's `--gtest_output=json` result to ONE per-directory file
+# (cmake_test_discovery_<hash of an empty name>.json), so binaries linked in parallel in the same
+# directory overwrite and delete each other's list: the registered count then differs between
+# runs of the same tree and a binary ends up with none or only some of its cases. The pre-test
+# mode reads the list from stdout, serially, and also works when the binary is cross-built.
+if (NOT DEFINED CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE)
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 if (NOT ANDROID)
     # Enable testing in the top-level scope so a CTestTestfile.cmake is emitted
     # at the build-tree root. This lets `ctest` be invoked from the top-level
