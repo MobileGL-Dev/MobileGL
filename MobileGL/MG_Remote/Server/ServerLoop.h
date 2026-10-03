@@ -449,6 +449,15 @@ namespace MobileGL::MG_Remote::Server {
         // suspend, for the window-loss cases). Before Start(); fails when one is already installed.
         MobileGLResult InstallBackendForTesting(UniquePtr<MG_Backend::BackendObject> backend);
 
+        // PROCESS-WIDE TEST SEAM for a server forked from a test (every session's loop reads it; null -
+        // the default - is the production path): the backend surface behind a ServerOwned window
+        // surface. A host has no window a backend can draw into, so a case that serves a stand-in
+        // window gives the backend a surface of the window's extent another way (a pbuffer). Called on
+        // the apply thread with the lease held, in place of CreateEGLWindowSurface.
+        using ServerOwnedSurfaceHook = Bool (*)(MG_Backend::BackendObject* backend, EGLSurface surface,
+                                                const MG_Backend::WindowHandle& window);
+        static void SetServerOwnedSurfaceHookForTesting(ServerOwnedSurfaceHook hook);
+
     private:
         RemoteControlSink m_remoteSink = nullptr;
         void* m_remoteSinkUser = nullptr;

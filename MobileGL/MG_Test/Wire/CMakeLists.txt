@@ -83,6 +83,11 @@ if (NOT WIN32)
     # the loss reported, creates new contexts on a FRESH session and renders. Forks the in-process
     # display server and its client, like MultiSessionTest, so it needs no server image either.
     list(APPEND MOBILEGL_WIRE_TESTS ClientRecoveryTest)
+    # A compositor outlives its lost session: a client on the server's own window (ServerOwned) that
+    # samples another client's shared image loses its session, re-creates its surface on a fresh one -
+    # waiting for the lost session's window lease - and imports the image again; the image's owner
+    # is untouched. Forks the in-process display server (with a stand-in window) and its clients.
+    list(APPEND MOBILEGL_WIRE_TESTS CompositorRecoveryTest)
     # Several contexts on several threads of one client, in one share group or one each, drawing at
     # once against the in-process display server (Qt Quick's shape, and its shape after a loss).
     list(APPEND MOBILEGL_WIRE_TESTS ConcurrentContextsTest)
@@ -114,7 +119,8 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     if (test STREQUAL "PeerLatchTest" OR test STREQUAL "InProcessServerTest" OR test STREQUAL "ServerOwnedSurfaceTest" OR
         test STREQUAL "EglInfoSequenceTest" OR test STREQUAL "GlamorEglSequenceTest" OR
         test STREQUAL "AdoptTierStreamTest" OR test STREQUAL "MultiSessionTest" OR test STREQUAL "ServerProbeTest" OR
-        test STREQUAL "ClientRecoveryTest" OR test STREQUAL "ConcurrentContextsTest")
+        test STREQUAL "ClientRecoveryTest" OR test STREQUAL "ConcurrentContextsTest" OR
+        test STREQUAL "CompositorRecoveryTest")
         # It builds records and a program archive by hand, so it reaches MG_Pipe and MG_State
         # the way the codec suites do. (P12's two server suites share PeerLatchTest's healthy
         # session, P12ServerRig.h, and so its include paths.)

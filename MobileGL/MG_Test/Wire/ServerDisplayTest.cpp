@@ -395,6 +395,90 @@ TEST(ServerDisplayTest, AWindowLeasedToOneHolderIsNotLeasedToAnother) {
     display.EndLease(&first);
 }
 
+// A LEASE WHOSE SESSION IS ENDING IS WAITED FOR. A compositor whose session was lost re-creates its
+// window surface on a fresh session at once, while the lost session's apply thread is still tearing
+// its backend down: the fresh session's request waits for that lease to end and then gets the window,
+// where it used to be refused (LeasedElsewhere) - and the compositor could never draw again. Red with
+// AcquireFor ignoring the mark: the second holder is refused at once.
+TEST(ServerDisplayTest, ALeaseWhoseSessionIsEndingIsWaitedForAndThenHandedOver) {
+    FakePlatform platform;
+    ServerDisplay display;
+    display.Install(HooksFor(platform));
+    display.Attach(FakeWindow(0), 64, 48);
+    int lost = 0;
+    int fresh = 0;
+    ServerWindowLease lease;
+    ASSERT_EQ(display.AcquireFor(0, 0, 1000, &lost, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    display.MarkLeaseEnding(&lost);
+    EXPECT_TRUE(display.LeaseEnding());
+
+    std::thread teardown([&] {
+        // The lost session's backend lets go of the window, then its lease ends.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        display.EndLease(&lost);
+    });
+    const auto started = std::chrono::steady_clock::now();
+    ServerWindowLease freshLease;
+    EXPECT_EQ(display.AcquireFor(0, 0, 5000, &fresh, nullptr, nullptr, nullptr, &freshLease),
+              ServerWindowAcquire::Acquired);
+    const auto waited =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    teardown.join();
+    EXPECT_GE(waited, 250) << "the window was handed over before the ending lease ended";
+    EXPECT_EQ(freshLease.window, FakeWindow(0));
+    EXPECT_EQ(freshLease.width, 64u);
+    EXPECT_EQ(freshLease.height, 48u);
+    EXPECT_TRUE(display.Leased());
+    EXPECT_FALSE(display.LeaseEnding()) << "the new holder's lease inherited the old one's mark";
+    // The new lease is exclusive again: a third holder is refused at once.
+    int third = 0;
+    const auto refusedAt = std::chrono::steady_clock::now();
+    EXPECT_EQ(display.AcquireFor(0, 0, 2000, &third, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::LeasedElsewhere);
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt)
+                  .count(),
+              500);
+    display.EndLease(&fresh);
+    EXPECT_EQ(platform.releases.load(), 0) << "a lease that changed hands released the window";
+}
+
+// The wait for an ending lease is bounded by the request's own timeout and then refused by name; a
+// mark from a holder that holds no lease changes nothing; the mark goes with the lease it was on.
+TEST(ServerDisplayTest, AnEndingLeaseIsWaitedForOnlyAsLongAsTheRequestWaitsAndTheMarkGoesWithIt) {
+    FakePlatform platform;
+    ServerDisplay display;
+    display.Install(HooksFor(platform));
+    display.Attach(FakeWindow(0), 10, 10);
+    int first = 0;
+    int second = 0;
+    ServerWindowLease lease;
+    ASSERT_EQ(display.AcquireFor(0, 0, 1000, &first, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    display.MarkLeaseEnding(&second);
+    EXPECT_FALSE(display.LeaseEnding()) << "a holder without the lease marked it ending";
+
+    display.MarkLeaseEnding(&first);
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_EQ(display.AcquireFor(0, 0, 200, &second, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::LeasedElsewhere);
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
+                  .count(),
+              150)
+        << "the ending lease was not waited for";
+
+    display.EndLease(&first);
+    EXPECT_FALSE(display.Leased());
+    EXPECT_FALSE(display.LeaseEnding());
+    ASSERT_EQ(display.AcquireFor(0, 0, 1000, &first, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    EXPECT_FALSE(display.LeaseEnding()) << "the mark outlived the lease it was on";
+    const auto refusedAt = std::chrono::steady_clock::now();
+    EXPECT_EQ(display.AcquireFor(0, 0, 2000, &second, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::LeasedElsewhere);
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt)
+                  .count(),
+              500);
+    display.EndLease(&first);
+}
+
 // The two ways a wait ends early, by name: the in-process server stopping (Interrupt), and the
 // caller's own cancel predicate (ServerLoop's: the loop stopping, the session latched).
 TEST(ServerDisplayTest, InterruptAndTheCancelPredicateEndAWaitByName) {

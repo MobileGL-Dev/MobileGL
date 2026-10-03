@@ -140,6 +140,14 @@ namespace MobileGL::MG_Remote {
 #endif
         SessionLatch(MGFatalFamily family, const char* fmt, ...);
 
+    // THE FIRST LATCHED FAULT OF A SESSION, OBSERVED. Called on the latching thread (its latch
+    // domain bound) once the latch is raised and BEFORE the SessionFault frame goes to the peer, so
+    // what it records about the session is in place before the client can act on the loss. One
+    // process-wide observer, replaced by the next install; it must not block. ServerLoop's marks the
+    // session's lease on the server window as ending (ServerDisplay::MarkLeaseEnding).
+    using SessionLatchObserver = void (*)();
+    void SetSessionLatchObserver(SessionLatchObserver observer);
+
     // P7 wave 0. Points MG_Pipe's MGPipeSessionFail seam (MG_Pipe/PipeSessionFail.h) at
     // SessionFail, which is what makes the three Magma wire funnels in MG_Backend's renderer
     // publish a SessionFault, bump SessionFaultCount() and appear in the census like every other

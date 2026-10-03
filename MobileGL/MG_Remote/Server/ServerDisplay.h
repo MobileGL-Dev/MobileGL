@@ -35,6 +35,14 @@
 // reference is kept and released when the lease finally ends - and Detach returns TimedOut, by
 // name, so the UI thread is never held longer than its bound.
 //
+// A LEASE THAT IS ENDING IS WAITED FOR, NOT REFUSED. A holder whose session is over - it latched a
+// fault (a device loss among them) or is stopping - says so (MarkLeaseEnding) before its client can
+// learn of it; its lease still lasts until its backend has let go of the window. A client that loses
+// its session re-creates its window surface on a fresh session at once, typically while the old
+// session's apply thread is still tearing its backend down: that request waits for the old lease
+// to end, bounded by its own timeout, instead of being refused as LeasedElsewhere. A holder whose
+// session goes on keeps the window exclusively, as before.
+//
 // SUSPEND, NOT END (screen off / lock). A holder whose backend can let go of the window and keep
 // everything else - its contexts, objects and device - ends its lease with SuspendLease instead of
 // EndLease and names a second hook: the next Attach of a NEW window calls it, so the holder can
@@ -96,7 +104,9 @@ namespace MobileGL::MG_Remote::Server {
         Interrupted,     // Interrupt() (the in-process server is stopping)
         // P14 S2: NOT A BUG ANY MORE. Several sessions share one process and the display's window
         // is one window, so a second ON-SCREEN session asking for it is refused by name here
-        // (ServerLoop logs the holder); offscreen sessions take no lease and are unaffected.
+        // (ServerLoop logs the holder); offscreen sessions take no lease and are unaffected. A holder
+        // whose session is ending (MarkLeaseEnding) is waited for instead, and this is the answer
+        // only when its lease outlasted the wait.
         LeasedElsewhere, // another session in this process holds the window: see the note above
     };
 
@@ -156,6 +166,11 @@ namespace MobileGL::MG_Remote::Server {
         // whole backend). Wakes a waiting Detach; releases a reference Detach left behind on timeout.
         // A holder that holds no lease is a no-op.
         void EndLease(void* holder);
+        // `holder`'s session is ending (it latched, or it is stopping): its lease ends once its
+        // backend has let go of the window, and another holder's AcquireFor waits for that rather
+        // than being refused (see the header block). A no-op for a holder that holds no lease; the
+        // mark ends with the lease.
+        void MarkLeaseEnding(void* holder);
         // EndLease for a holder that only SUSPENDED its use of the window (its backend let go of the
         // window and kept everything else). Also registers `onAttached`, which the next Attach of a
         // new window calls - at once when a window is already attached. The registration ends when
@@ -169,6 +184,8 @@ namespace MobileGL::MG_Remote::Server {
         // Diagnostics, for logs and tests.
         Bool Attached() const;
         Bool Leased() const;
+        // The lease is held by a holder whose session is ending (MarkLeaseEnding).
+        Bool LeaseEnding() const;
         Uint64 Generation() const;
         // How many holders wait for a window to resume on (SuspendLease).
         Uint32 SuspendedHolders() const;
@@ -207,6 +224,8 @@ namespace MobileGL::MG_Remote::Server {
         ServerWindowLostHook m_onLost = nullptr;
         ServerWindowResizedHook m_onResized = nullptr;
         Bool m_lostRequested = false;
+        // The holder's session is ending (MarkLeaseEnding); cleared with the lease.
+        Bool m_leaseEnding = false;
         // References a timed-out Detach could not release yet; EndLease releases them.
         std::vector<void*> m_releaseAfterLease;
         // SuspendLease's registrations, told about the next new window.

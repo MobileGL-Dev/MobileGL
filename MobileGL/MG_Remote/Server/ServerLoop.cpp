@@ -79,6 +79,24 @@ namespace MobileGL::MG_Remote::Server {
                 ++m_serving;
                 m_turn.notify_all();
             }
+            // Gives the turn up however deep the calling thread holds it, for a wait that does no
+            // backend work; answers the depth Resume restores (0: the thread did not hold it).
+            Uint32 YieldIfHeld() {
+                const std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_owner != std::this_thread::get_id()) return 0;
+                const Uint32 depth = m_depth;
+                m_depth = 0;
+                m_owner = std::thread::id{};
+                ++m_serving;
+                m_turn.notify_all();
+                return depth;
+            }
+            void Resume(Uint32 depth) {
+                if (depth == 0) return;
+                Lock();
+                const std::lock_guard<std::mutex> lock(m_mutex);
+                m_depth = depth;
+            }
 
         private:
             std::mutex m_mutex;
@@ -102,6 +120,31 @@ namespace MobileGL::MG_Remote::Server {
             ScopedBackendTurn(const ScopedBackendTurn&) = delete;
             ScopedBackendTurn& operator=(const ScopedBackendTurn&) = delete;
         };
+
+        // A WAIT FOR THE SERVER WINDOW HOLDS NO TURN. It can last seconds - a window that is not up
+        // yet, or the lease of a session that is ending - and the other sessions' apply threads need
+        // the turn meanwhile: the ending one to tear its backend down, which is what ends its lease.
+        // Nothing of the backend is touched while it is given up; it is taken back (a handoff, when
+        // another thread had it) before the waiter goes on.
+        class ScopedBackendTurnYield {
+        public:
+            ScopedBackendTurnYield() : m_depth(BackendTurn().YieldIfHeld()) {}
+            ~ScopedBackendTurnYield() { BackendTurn().Resume(m_depth); }
+            ScopedBackendTurnYield(const ScopedBackendTurnYield&) = delete;
+            ScopedBackendTurnYield& operator=(const ScopedBackendTurnYield&) = delete;
+
+        private:
+            const Uint32 m_depth;
+        };
+
+        // The process-wide test seam (ServerLoop.h).
+        std::atomic<ServerLoop::ServerOwnedSurfaceHook> g_serverOwnedSurfaceHook{nullptr};
+
+        // FatalFunnel's latch observer. The latching thread is one of the session's own (its scope
+        // resolves ServerLoopInstance to that session's loop): a session that latched is over, and
+        // its lease on the server window, if it holds one, ends once its apply thread has torn the
+        // backend down - which a fresh session of the same client waits for (MarkLeaseEnding).
+        void MarkLatchedSessionsLeaseEnding() { ServerDisplayInstance().MarkLeaseEnding(&ServerLoopInstance()); }
 
         // The bounded join. InProcessTransportTest.cpp:344 uses five seconds for the same
         // reason: a lost wakeup must be a RED TEST and not a hung CI job.
@@ -333,6 +376,10 @@ namespace MobileGL::MG_Remote::Server {
         return MOBILEGL_OK;
     }
 
+    void ServerLoop::SetServerOwnedSurfaceHookForTesting(ServerOwnedSurfaceHook hook) {
+        g_serverOwnedSurfaceHook.store(hook, std::memory_order_release);
+    }
+
     // ---------------------------------------------------------------------------------
     // Start / the loop / Stop
     // ---------------------------------------------------------------------------------
@@ -347,6 +394,8 @@ namespace MobileGL::MG_Remote::Server {
             return MOBILEGL_ERR_NOT_INITIALIZED;
         }
         m_session = &session;
+        // A session that latches marks its window lease as ending before its client hears of it.
+        SetSessionLatchObserver(&MarkLatchedSessionsLeaseEnding);
         m_stopRequested.store(false, std::memory_order_release);
         m_abandonQueue.store(false, std::memory_order_release);
         // PH-6 fix round: the session's copy of the request, for ReserveEventOrBlock's wait. Lowered
@@ -735,6 +784,11 @@ namespace MobileGL::MG_Remote::Server {
         // AND AFTER AbandonQueuedRecords (P12 review fix), for the forfeit's reason: the server is
         // stopping under a client that may still be streaming, and draining what it keeps queuing
         // is the unbounded hold Stop()'s bounded join turns into an abort.
+        //
+        // THE SESSION IS ENDING, whatever ended it: its lease on the server window (if it holds one)
+        // ends below, once the backend is gone, and a fresh session of the same client that asks for
+        // the window meanwhile waits for that instead of being refused.
+        ServerDisplayInstance().MarkLeaseEnding(this);
         std::optional<ScopedBackendTurn> exitTurn(std::in_place);
         const Bool forfeited = session.ReverseChannelForfeited();
         const Bool abandoned = m_abandonQueue.load(std::memory_order_acquire);
@@ -1293,6 +1347,9 @@ namespace MobileGL::MG_Remote::Server {
             m_running.store(false, std::memory_order_release);
             return;
         }
+        // As on the apply thread's own way out: the window lease ends once the thread has torn the
+        // backend down, and a fresh session waits for it meanwhile.
+        ServerDisplayInstance().MarkLeaseEnding(this);
         m_stopRequested.store(true, std::memory_order_release);
         if (m_session != nullptr) {
             // PH-6 fix round: the apply thread may be parked in ReserveEventOrBlock rather than in
@@ -1820,9 +1877,12 @@ namespace MobileGL::MG_Remote::Server {
         ServerDisplay& display = ServerDisplayInstance();
         ServerWindowLease local;
         ServerWindowLease* const lease = out != nullptr ? out : &local;
-        const ServerWindowAcquire acquired = display.AcquireFor(width, height, timeoutMs, this, &ServerWindowLostThunk,
-                                                                &ServerWindowWaitCancelled, this, lease,
-                                                                &ServerWindowResizedThunk);
+        ServerWindowAcquire acquired = ServerWindowAcquire::NoDisplay;
+        {
+            const ScopedBackendTurnYield yield;
+            acquired = display.AcquireFor(width, height, timeoutMs, this, &ServerWindowLostThunk,
+                                          &ServerWindowWaitCancelled, this, lease, &ServerWindowResizedThunk);
+        }
         switch (acquired) {
         case ServerWindowAcquire::Acquired:
             m_holdsWindowLease = true;
@@ -1902,7 +1962,10 @@ namespace MobileGL::MG_Remote::Server {
         // Review fix: the backend is told which window is the server's own, so its surface init
         // reports the extent for this window and for no window a client named (MGPipeServerOwnedWindow).
         NoteServerWindowExtent(lease.window, lease.width, lease.height);
-        frame.ok = backend->CreateEGLWindowSurface(HandleFromToken<EGLSurface>(frame.surface), window);
+        const ServerOwnedSurfaceHook surfaceHook = g_serverOwnedSurfaceHook.load(std::memory_order_acquire);
+        const EGLSurface ownedSurface = HandleFromToken<EGLSurface>(frame.surface);
+        frame.ok = surfaceHook != nullptr ? surfaceHook(backend, ownedSurface, window)
+                                          : backend->CreateEGLWindowSurface(ownedSurface, window);
         if (!frame.ok) {
             MGLOG_E("MG_Remote server: the backend could not create a window surface on the server window %p "
                     "(%ux%u) for ServerOwned seq %llu",
@@ -2084,10 +2147,14 @@ namespace MobileGL::MG_Remote::Server {
         // have survived it). Bounded by the geometry grace: the window IS attached - that is what woke
         // this - so only its size is waited for.
         ServerWindowLease lease;
-        const ServerWindowAcquire acquired =
-            ServerDisplayInstance().AcquireFor(m_serverWindowWantWidth, m_serverWindowWantHeight,
-                                               ServerDisplay::kGeometryGraceMs, this, &ServerWindowLostThunk,
-                                               &ServerWindowWaitCancelled, this, &lease, &ServerWindowResizedThunk);
+        ServerWindowAcquire acquired = ServerWindowAcquire::NoDisplay;
+        {
+            const ScopedBackendTurnYield yield;
+            acquired = ServerDisplayInstance().AcquireFor(m_serverWindowWantWidth, m_serverWindowWantHeight,
+                                                          ServerDisplay::kGeometryGraceMs, this, &ServerWindowLostThunk,
+                                                          &ServerWindowWaitCancelled, this, &lease,
+                                                          &ServerWindowResizedThunk);
+        }
         if (acquired != ServerWindowAcquire::Acquired) {
             // Still registered: the next new window wakes this again.
             MGLOG_I("MG_Remote server: a suspended on-screen session did not get the new server window (%s); it "

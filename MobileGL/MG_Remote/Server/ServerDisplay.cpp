@@ -204,7 +204,8 @@ namespace MobileGL::MG_Remote::Server {
         {
             const std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_installed) return ServerWindowAcquire::NoDisplay;
-            if (m_leaseHolder != nullptr && m_leaseHolder != holder) return ServerWindowAcquire::LeasedElsewhere;
+            if (m_leaseHolder != nullptr && m_leaseHolder != holder && !m_leaseEnding)
+                return ServerWindowAcquire::LeasedElsewhere;
             hooks = m_hooks;
             interrupts = m_interrupts;
             previousWidth = m_requestedWidth;
@@ -231,14 +232,27 @@ namespace MobileGL::MG_Remote::Server {
         std::unique_lock<std::mutex> lock(m_mutex);
         const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
         Bool attachedSeen = false;
+        Bool waitedForEndingHolder = false;
         auto geometryDeadline = deadline;
         for (;;) {
             if (!m_installed) return ServerWindowAcquire::NoDisplay;
             if (m_interrupts != interrupts) return ServerWindowAcquire::Interrupted;
             if (cancel != nullptr && cancel(cancelUser)) return ServerWindowAcquire::Cancelled;
-            if (m_leaseHolder != nullptr && m_leaseHolder != holder) return ServerWindowAcquire::LeasedElsewhere;
+            // ANOTHER HOLDER: refused at once while its session goes on, waited for while it ends
+            // (its EndLease wakes this). The window is judged only once the lease is free.
+            const Bool heldElsewhere = m_leaseHolder != nullptr && m_leaseHolder != holder;
+            if (heldElsewhere && !m_leaseEnding) return ServerWindowAcquire::LeasedElsewhere;
+            if (heldElsewhere && !waitedForEndingHolder) {
+                waitedForEndingHolder = true;
+                MGLOG_I("MG_Remote server: the server window is still leased by a session that is ending; this "
+                        "session waits for that lease to end (at most %u ms)",
+                        timeoutMs);
+            }
             const auto now = Clock::now();
-            if (m_window != nullptr) {
+            if (heldElsewhere) {
+                attachedSeen = false;
+                geometryDeadline = deadline;
+            } else if (m_window != nullptr) {
                 if (!attachedSeen) {
                     attachedSeen = true;
                     geometryDeadline = std::min(deadline, now + std::chrono::milliseconds(kGeometryGraceMs));
@@ -249,6 +263,7 @@ namespace MobileGL::MG_Remote::Server {
                     m_onLost = onLost;
                     m_onResized = onResized;
                     m_lostRequested = false;
+                    m_leaseEnding = false;
                     // A suspended holder that leased a window again waits for no other.
                     m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
                                                      [holder](const SuspendedHolder& entry) {
@@ -273,13 +288,18 @@ namespace MobileGL::MG_Remote::Server {
                                 "at that size and the client is told so",
                                 m_width, m_height, kGeometryGraceMs);
                     }
+                    if (waitedForEndingHolder) {
+                        MGLOG_I("MG_Remote server: the ending session's lease ended; the server window is leased to "
+                                "this session");
+                    }
                     return ServerWindowAcquire::Acquired;
                 }
             } else {
                 attachedSeen = false;
                 geometryDeadline = deadline;
             }
-            if (now >= deadline) return ServerWindowAcquire::NoWindow;
+            if (now >= deadline)
+                return heldElsewhere ? ServerWindowAcquire::LeasedElsewhere : ServerWindowAcquire::NoWindow;
             const auto wake = std::min({deadline, geometryDeadline, now + kCancelPollInterval});
             m_cv.wait_until(lock, wake);
         }
@@ -291,6 +311,7 @@ namespace MobileGL::MG_Remote::Server {
         m_onLost = nullptr;
         m_onResized = nullptr;
         m_lostRequested = false;
+        m_leaseEnding = false;
         releases->swap(m_releaseAfterLease);
         *hooks = m_hooks;
         // An Uninstall that ran while this lease still owed releases kept the hooks for them.
@@ -315,6 +336,16 @@ namespace MobileGL::MG_Remote::Server {
         }
         m_cv.notify_all();
         ReleaseAfterLease(hooks, releases);
+    }
+
+    void ServerDisplay::MarkLeaseEnding(void* holder) {
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            if (holder == nullptr || m_leaseHolder != holder || m_leaseEnding) return;
+            m_leaseEnding = true;
+        }
+        // A request already refused is not waiting; one made from here on waits for the EndLease.
+        m_cv.notify_all();
     }
 
     void ServerDisplay::SuspendLease(void* holder, ServerWindowAttachedHook onAttached) {
@@ -377,6 +408,11 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerDisplay::Leased() const {
         const std::lock_guard<std::mutex> lock(m_mutex);
         return m_leaseHolder != nullptr;
+    }
+
+    Bool ServerDisplay::LeaseEnding() const {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_leaseHolder != nullptr && m_leaseEnding;
     }
 
     Uint64 ServerDisplay::Generation() const {

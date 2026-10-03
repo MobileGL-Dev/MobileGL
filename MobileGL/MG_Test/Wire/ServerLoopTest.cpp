@@ -3336,6 +3336,72 @@ TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedOnTheApplyThreadBeforeDetac
 }
 
 namespace {
+    // A SESSION THAT LATCHES WHILE IT HOLDS THE SERVER WINDOW (a compositor's device loss). Its client
+    // hears of the loss at once and re-creates its window surface on a fresh session, which asks the
+    // display for the window while the lost session still holds it - its apply thread has the
+    // backend to tear down first. The latch itself marks the lease ending (before the peer is told),
+    // so the fresh session's request waits for the lease and gets the window when the session ends.
+    enum : int {
+        kEndingNotLeased = 1,     // the probe could not take the lease
+        kEndingNotMarked = 2,     // the latch did not mark the lease ending
+        kEndingRefused = 4,       // the fresh holder was refused instead of waiting
+        kEndingNotHandedOver = 8, // the fresh holder did not get the window once the session ended
+        kEndingReleased = 16,     // the window's reference was released in the hand-over
+    };
+
+    int g_freshServerWindowHolder = 0;
+
+    [[noreturn]] void LatchWhileHoldingTheServerWindowAndExit() {
+        Remote::ArmSessionLatch();
+        ServerFixture fixture;
+        if (!fixture.Handshake() || !fixture.StartLoop()) ::_exit(64);
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(65);
+        Server::ServerLoop& loop = Server::ServerLoopInstance();
+        Server::ServerDisplay& display = Server::ServerDisplayInstance();
+        display.Install(CountingWindowHooks::Hooks());
+        display.Attach(&g_fakeServerWindow, 64, 48);
+        ServerWindowProbe probe;
+        probe.width = 64;
+        probe.height = 48;
+        if (loop.RunProbeOnApplyThreadForTesting(&AcquireServerWindowOnTheApplyThread, &probe) != MOBILEGL_OK) ::_exit(66);
+        int failed = 0;
+        if (probe.rc != MOBILEGL_OK || probe.lease.window != &g_fakeServerWindow) failed |= kEndingNotLeased;
+        if (!fixture.WaitUntilTrulyParked()) ::_exit(67);
+
+        // The loss, latched by a thread of the session while its apply thread is parked.
+        (void)Remote::SessionLatch(Remote::MGFatalFamily::BackendDeviceLost,
+                                   "MGPipe: Fatal{BackendDeviceLost, \"test\"} - the session's device is lost while it "
+                                   "holds the server window");
+        if (!display.LeaseEnding()) failed |= kEndingNotMarked;
+
+        std::atomic<int> fresh{-1};
+        std::thread freshSession([&] {
+            Server::ServerWindowLease lease;
+            fresh.store(static_cast<int>(display.AcquireFor(0, 0, 5000, &g_freshServerWindowHolder, nullptr, nullptr,
+                                                            nullptr, &lease)));
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        if (fresh.load() == static_cast<int>(Server::ServerWindowAcquire::LeasedElsewhere)) failed |= kEndingRefused;
+        // The session ends: its backend goes, then its lease.
+        fixture.Stop();
+        freshSession.join();
+        if (fresh.load() != static_cast<int>(Server::ServerWindowAcquire::Acquired)) failed |= kEndingNotHandedOver;
+        if (CountingWindowHooks::releases.load() != 0) failed |= kEndingReleased;
+        display.EndLease(&g_freshServerWindowHolder);
+        ::_exit(failed);
+    }
+} // namespace
+
+// Red with the latch observer not installed (bits 2|4: the fresh session is refused at once, and a
+// compositor whose session was lost could never draw again).
+TEST(ServerLoopLatchTest, ALatchedSessionsWindowLeaseIsWaitedForAndHandedToAFreshSession) {
+    EXPECT_EXIT(LatchWhileHoldingTheServerWindowAndExit(), ::testing::ExitedWithCode(0), ".*")
+        << "bits: 1 = the lease was not taken; 2 = the latch did not mark it ending; 4 = the fresh session was "
+           "refused; 8 = it did not get the window after the session ended; 16 = the window was released "
+           "(64+ = setup)";
+}
+
+namespace {
     // P12 review fix (major): THE LOST WINDOW IS ANSWERED IN THE MIDDLE OF A BATCH. A client streaming
     // frames keeps the command ring from emptying, and the first version answered a window-lost request
     // only between batches (PumpControlRequest). The between-records hook is that stream here: after

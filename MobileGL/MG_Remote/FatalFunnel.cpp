@@ -30,10 +30,16 @@ namespace MobileGL::MG_Remote {
         // that forks a child and reads it back sees the increment even though the child is gone -
         // it reads its OWN process's counter for the funnel it drove, not the child's.
         std::atomic<std::uint64_t> g_sessionFaultCount{0};
+        // SetSessionLatchObserver's; read once per latched session.
+        std::atomic<SessionLatchObserver> g_sessionLatchObserver{nullptr};
     } // namespace
 
     std::uint64_t SessionFaultCount() {
         return g_sessionFaultCount.load(std::memory_order_relaxed);
+    }
+
+    void SetSessionLatchObserver(SessionLatchObserver observer) {
+        g_sessionLatchObserver.store(observer, std::memory_order_release);
     }
 
     namespace {
@@ -241,6 +247,10 @@ namespace MobileGL::MG_Remote {
                 "closes (exit %d) for the supervisor to serve the next connection (PH-1, "
                 "ID-P7-1)",
                 FatalFamilyName(family), kSessionLatchedExitCode);
+        // Before the peer hears of it: what the observer records must already hold when the client
+        // reacts (a lost compositor re-creates its window surface on a fresh session at once).
+        if (const SessionLatchObserver observer = g_sessionLatchObserver.load(std::memory_order_acquire))
+            observer();
         PublishSessionFault(family, line);
         return false;
     }
