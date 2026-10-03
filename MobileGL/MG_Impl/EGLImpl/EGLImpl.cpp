@@ -38,6 +38,7 @@
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <dlfcn.h>
 #endif
+#include <algorithm>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -424,6 +425,36 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return true;
         }
 
+        // THE SHARE GROUPS THAT REPLACE LOST ONES, by the lost group's token. An application that
+        // keeps one long-lived context to share with (Qt's global share context) recreates its
+        // other contexts after a loss still naming that context, which is lost and stays so. Those
+        // contexts are put in ONE new share group instead of each in a group of its own: the first
+        // starts it, the later ones share with a live member of it. Without this, every window of
+        // such an application lands in a separate share group after the loss, a shape the
+        // application never asked for. Guarded by EGLOperationMutex.
+        std::unordered_map<Uint64, Vector<EGLContext>>& ReplacementShareContexts() {
+            static auto* replacements = new std::unordered_map<Uint64, Vector<EGLContext>>();
+            return *replacements;
+        }
+
+        // The context a new context should share with in place of the lost `shareCtx`: a live
+        // member of the group that replaces the lost one, or EGL_NO_CONTEXT to start that group.
+        EGLContext ReplacementShareContext(EGLStateContext* state, EGLDisplay dpy, Uint64 lostGroup) {
+            Vector<EGLContext>& members = ReplacementShareContexts()[lostGroup];
+            members.erase(std::remove_if(members.begin(), members.end(),
+                                         [&](EGLContext member) {
+                                             return !state->ValidateContextOnDisplay(dpy, member) ||
+                                                    ContextIsLost(state, member);
+                                         }),
+                          members.end());
+            return members.empty() ? EGL_NO_CONTEXT : members.front();
+        }
+
+        void ForgetReplacementShareContext(EGLContext context) {
+            for (auto& [group, members] : ReplacementShareContexts())
+                members.erase(std::remove(members.begin(), members.end(), context), members.end());
+        }
+
         // The surface entry points' guard: a surface created after a loss is created on a fresh
         // session. EGL_BAD_ALLOC when no session could be brought up.
         Bool RecoverBeforeCreatingSurface(EGLStateContext* state) {
@@ -646,17 +677,26 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // building it already emits the creates of its default objects. Sharing with a lost
         // context would share objects no reachable server holds.
         const std::lock_guard<std::recursive_mutex> operationLock(EGLOperationMutex());
+        // The lost share group this context replaces (ReplacementShareContexts), 0 for none.
+        Uint64 replacedGroup = 0;
         if (StreamGateActive()) {
             if (!RecoverLostSession()) {
                 state->SetError(EGL_BAD_ALLOC);
                 return EGL_NO_CONTEXT;
             }
             if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
-                MGLOG_I_ONCE("eglCreateContext: refused (EGL_BAD_CONTEXT) - the share context %p was lost with its "
-                             "session (device loss), and its objects are on no server",
-                             shareCtx);
-                state->SetError(EGL_BAD_CONTEXT);
-                return EGL_NO_CONTEXT;
+                // Its objects are on no server, so the context does not share them: it joins the
+                // group that replaces the lost one (the other contexts recreated in its place).
+                if (!state->ValidateContextOnDisplay(dpy, shareCtx)) {
+                    state->SetError(EGL_BAD_CONTEXT);
+                    return EGL_NO_CONTEXT;
+                }
+                replacedGroup = state->GetContextShareGroupToken(shareCtx);
+                const EGLContext lostShare = shareCtx;
+                shareCtx = ReplacementShareContext(state, dpy, replacedGroup);
+                MGLOG_I_ONCE("eglCreateContext: the share context %p was lost with its session (device loss); "
+                             "contexts that name it share with each other in a new share group instead",
+                             lostShare);
             }
         }
         // The calling thread may still have a lost context current: what is built here is the
@@ -667,6 +707,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (context == EGL_NO_CONTEXT) {
             return EGL_NO_CONTEXT;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (replacedGroup != 0) ReplacementShareContexts()[replacedGroup].push_back(context);
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P14 S1 (docs/Disaggregated/design/11-state-ownership.md). THE TOKEN CROSSES BEFORE
         // eglCreateContext RETURNS. EGLState minted it, together with the share group it was
@@ -694,11 +737,19 @@ namespace MobileGL::MG_Impl::EGLImpl {
                     state->DestroyContext(dpy, context);
                 }
                 context = EGL_NO_CONTEXT;
-                if (RecoverLostSession()) context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+                if (RecoverLostSession()) {
+                    // The context it was to share with went with the session, too.
+                    if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
+                        replacedGroup = state->GetContextShareGroupToken(shareCtx);
+                        shareCtx = ReplacementShareContext(state, dpy, replacedGroup);
+                    }
+                    context = state->CreateContext(dpy, config, shareCtx, attrib_list);
+                }
                 if (context == EGL_NO_CONTEXT) {
                     state->SetError(EGL_BAD_ALLOC);
                     return EGL_NO_CONTEXT;
                 }
+                if (replacedGroup != 0) ReplacementShareContexts()[replacedGroup].push_back(context);
                 emitted = MG_Remote::Client::SendCreateContextFrame(state->GetContextClientToken(context),
                                                                     state->GetContextShareGroupToken(context), 0);
             }
@@ -884,6 +935,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
             return EGL_FALSE;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
+        ForgetReplacementShareContext(ctx);
         if (contextToken != 0 && !lost && MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole()) {
             const std::lock_guard<std::recursive_mutex> streamLock(EGLOperationMutex());

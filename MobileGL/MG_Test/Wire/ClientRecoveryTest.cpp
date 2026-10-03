@@ -25,7 +25,9 @@
 //     (the server's per-session refusal line stays silent), and the old texture's name is gone;
 //   * the surface the application kept works with the new context (EGL keeps surfaces across a
 //     power-management loss; only their contents go);
-//   * the other route back - eglTerminate, then eglInitialize - brings a fresh session up too.
+//   * the other route back - eglTerminate, then eglInitialize - brings a fresh session up too;
+//   * contexts recreated still naming a lost share context (Qt's global share context) share
+//     with EACH OTHER in one new group, not each in a group of its own.
 
 #include "P12ServerRig.h"
 
@@ -355,6 +357,80 @@ namespace {
 
         (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(egl.dpy, fresh);
+        (void)EGL::DestroySurface(egl.dpy, egl.surface);
+        (void)EGL::Terminate(egl.dpy);
+    }
+
+    // QT'S ROUTE. A long-lived share context the application never recreates, and its working
+    // contexts created sharing with it; after the loss the working contexts are recreated, still
+    // naming the share context, which is lost.
+    struct ShareReport {
+        Int32 initialized = 0;
+        Int32 firstOk = 0;
+        Int32 secondOk = 0;
+        Int32 firstError = 0;
+        Int32 sameGroup = -1;
+        Int32 lostGroupReused = -1;
+        Int32 textureSeenAcross = -1;
+        Uint32 drawnAcross = 0;
+        char note[256] = {};
+    };
+
+    void Note(ShareReport& r, const char* text) {
+        if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
+    }
+
+    void RunShareReplacementClient(ShareReport& r) {
+        Egl egl;
+        RecoveryReport bring{};
+        if (!egl.Bring(bring)) return Note(r, bring.note);
+        const EGLint attribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        const EGLContext share = egl.Context();
+        const EGLContext working = EGL::CreateContext(egl.dpy, egl.config, share, attribs);
+        if (working == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, working) != EGL_TRUE)
+            return Note(r, "the working context did not go current");
+        r.initialized = 1;
+        TexturedDraw old;
+        RecoveryReport built{};
+        if (!old.Build(built, kGreen)) return Note(r, built.note);
+        old.Draw();
+        (void)ReadPixel();                       // device check #1
+        (void)ClearAndRead(0.0f, 0.0f, 1.0f);    // device check #2: lost
+        (void)WaitFor([] { return glGetGraphicsResetStatus() != GL_NO_ERROR; }, 5000);
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(egl.dpy, working);
+
+        // Two windows' contexts, recreated naming the lost share context.
+        const EGLContext first = EGL::CreateContext(egl.dpy, egl.config, share, attribs);
+        r.firstError = EGL::GetError();
+        const EGLContext second = EGL::CreateContext(egl.dpy, egl.config, share, attribs);
+        r.firstOk = first != EGL_NO_CONTEXT;
+        r.secondOk = second != EGL_NO_CONTEXT;
+        if (!r.firstOk || !r.secondOk) return Note(r, "a context naming the lost share context was refused");
+        const Uint64 lostGroup = MG_State::pEGLContext->GetContextShareGroupToken(share);
+        const Uint64 firstGroup = MG_State::pEGLContext->GetContextShareGroupToken(first);
+        r.sameGroup = firstGroup == MG_State::pEGLContext->GetContextShareGroupToken(second) ? 1 : 0;
+        r.lostGroupReused = firstGroup == lostGroup ? 1 : 0;
+
+        // An object of one is the other's: a texture filled on the first is drawn on the second.
+        if (EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, first) != EGL_TRUE)
+            return Note(r, "the first replacement did not go current");
+        TexturedDraw shared;
+        if (!shared.Build(built, kRed)) return Note(r, built.note);
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, second) != EGL_TRUE)
+            return Note(r, "the second replacement did not go current");
+        r.textureSeenAcross = glIsTexture(shared.texture) == GL_TRUE ? 1 : 0;
+        GLuint vertexArray = 0;  // a vertex array is per context
+        glGenVertexArrays(1, &vertexArray);
+        shared.vertexArray = vertexArray;
+        shared.Draw();
+        r.drawnAcross = ReadPixel();
+
+        (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(egl.dpy, second);
+        (void)EGL::DestroyContext(egl.dpy, first);
+        (void)EGL::DestroyContext(egl.dpy, share);
         (void)EGL::DestroySurface(egl.dpy, egl.surface);
         (void)EGL::Terminate(egl.dpy);
     }
@@ -689,6 +765,29 @@ TEST_F(ClientRecovery, AThreadStillOnTheLostContextReachesNothingOfTheFreshSessi
     EXPECT_EQ(r.pixelAfterStale, kRed) << "the fresh context stopped rendering: " << std::hex << r.pixelAfterStale
                                        << "\n" << diagnostics;
     EXPECT_EQ(r.resetStatusAfterStale, static_cast<Uint32>(GL_NO_ERROR)) << "the fresh session was lost too";
+    ExpectOneLossAndACleanSecondSession(server);
+    server.Stop();
+}
+
+// QT'S ROUTE: the windows' contexts are recreated still naming the long-lived share context, which
+// is lost. They are created, in ONE new share group (the lost group's objects are on no server):
+// a texture made on one is drawn on the other. Red with the share refused (EGL_BAD_CONTEXT): Qt
+// then falls back to an unshared context per window.
+TEST_F(ClientRecovery, ContextsNamingALostShareContextShareOneNewGroup) {
+    ServerProcess server;
+    ASSERT_TRUE(Launch(&server, "share")) << server.Log();
+    ClientLog client("share");
+    const ShareReport r = RunInClient<ShareReport>(server, client.base, &RunShareReplacementClient);
+    const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
+    ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
+    ASSERT_EQ(r.firstOk, 1) << "eglCreateContext naming the lost share context failed (0x" << std::hex << r.firstError
+                            << ")\n" << r.note;
+    ASSERT_EQ(r.secondOk, 1) << r.note;
+    EXPECT_EQ(r.sameGroup, 1) << "the replacements landed in separate share groups";
+    EXPECT_EQ(r.lostGroupReused, 0) << "a replacement joined the lost share group";
+    EXPECT_EQ(r.textureSeenAcross, 1) << "a texture of one replacement is not the other's";
+    EXPECT_EQ(r.drawnAcross, kRed) << "the shared texture did not draw on the other replacement: " << std::hex
+                                   << r.drawnAcross << "\n" << r.note << "\n" << diagnostics;
     ExpectOneLossAndACleanSecondSession(server);
     server.Stop();
 }
