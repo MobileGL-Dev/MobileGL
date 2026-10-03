@@ -567,6 +567,7 @@ namespace {
         Int32 staleSwap = -1;
         Int32 staleSwapError = 0;
         Int32 staleRelease = 0;
+        Uint32 resetStatusAfterRelease = 0;
         Int64 recordsByStaleThread = -1;
         Uint32 pixelAfterStale = 0;
         Uint32 resetStatusAfterStale = 0xFFFFFFFFu;
@@ -621,6 +622,9 @@ namespace {
             r.staleSwap = EGL::SwapBuffers(egl.dpy, egl.surface);
             r.staleSwapError = EGL::GetError();
             r.staleRelease = EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;
+            // Released, the thread still answers as lost until it binds a context again: Qt's
+            // render threads release before they ask, and rebuild only when told.
+            r.resetStatusAfterRelease = glGetGraphicsResetStatus();
         });
         r.recordsByStaleThread = static_cast<Int64>(PublishedSeq()) - static_cast<Int64>(before);
         r.destroyOldOk = EGL::DestroyContext(egl.dpy, lost) == EGL_TRUE;
@@ -1236,6 +1240,8 @@ TEST_F(ClientRecovery, AThreadStillOnTheLostContextReachesNothingOfTheFreshSessi
     EXPECT_EQ(r.staleSwap, EGL_FALSE);
     EXPECT_EQ(r.staleSwapError, EGL_CONTEXT_LOST) << std::hex << r.staleSwapError;
     EXPECT_EQ(r.staleRelease, 1) << "the second thread could not release the lost context";
+    EXPECT_NE(r.resetStatusAfterRelease, static_cast<Uint32>(GL_NO_ERROR))
+        << "the thread that released the lost context no longer reports the reset";
     EXPECT_EQ(r.recordsByStaleThread, 0) << "the thread on the lost context published records on the fresh session";
     EXPECT_EQ(r.destroyOldOk, 1);
     EXPECT_EQ(r.pixelAfterStale, kRed) << "the fresh context stopped rendering: " << std::hex << r.pixelAfterStale

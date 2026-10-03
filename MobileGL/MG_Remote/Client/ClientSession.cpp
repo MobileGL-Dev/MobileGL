@@ -629,6 +629,8 @@ namespace MobileGL::MG_Remote::Client {
         if (session == nullptr) return false;
         if (session->m_deviceLost.load(std::memory_order_acquire)) return true;
         if (tl_currentSessionWork != 0) return false;
+        // A thread that released a lost context and has bound none since (MG_State's marker).
+        if (MG_State::tThreadReleasedLostContext) return true;
         // A thread still on a context from before a recovered loss: lost for good, whatever the
         // session it would now be writing into.
         const SharedPtr<MG_State::GLState::GLContext>& context = MG_State::pGLContext;

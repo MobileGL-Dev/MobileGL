@@ -257,6 +257,14 @@ namespace MobileGL {
                 // context's objects ended in the thread-exit destructor of that TLS: outside every
                 // entry point and its lock, writing their records into the middle of another
                 // thread's - torn records, a reply read from the wrong slot, a lost session.
+#if MOBILEGL_BUILD_DISAGGREGATED
+                {
+                    const auto released = context != nullptr ? m_contexts.find(context) : m_contexts.end();
+                    tThreadReleasedLostContext = !currentIt->second.RestoreThreadGLState && released != m_contexts.end() &&
+                                                 released->second.GLStateObject &&
+                                                 released->second.GLStateObject->IsFromEndedWireSession();
+                }
+#endif
                 pGLContext = currentIt->second.RestoreThreadGLState ? Move(currentIt->second.RestoreThreadGLState)
                                                                     : ProcessDefaultGLContext();
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1513,6 +1521,9 @@ namespace MobileGL {
                     if (const auto* contextObject = TryGetContext(context); contextObject != nullptr) {
                         pGLContext = contextObject->GLStateObject;
                     }
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    tThreadReleasedLostContext = false;
+#endif
                 }
                 return true;
             }

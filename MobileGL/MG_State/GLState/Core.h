@@ -762,6 +762,15 @@ namespace MobileGL {
         // gave it. NULL on a thread for which neither has happened, the same answer a process
         // that never reached MG_State::Init() (the spawn server image) has always given.
         extern thread_local SharedPtr<GLState::GLContext> pGLContext;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // True on a thread whose last EGL release let go of a context lost with an ended server
+        // session, until it makes a context current again. The release hands such a thread the
+        // process default rather than the lost context's GL state (which would make the thread's
+        // TLS that state's last owner), so this is what keeps the thread answering as lost: an
+        // application that releases its context before asking glGetGraphicsResetStatus - Qt's
+        // render threads do - still learns that the context is gone and rebuilds it.
+        extern thread_local Bool tThreadReleasedLostContext;
+#endif
 
         // The fallback pGLContext starts at and an EGL release edge restores to: the process's
         // one context for every thread that never bound an EGL context to itself, created on

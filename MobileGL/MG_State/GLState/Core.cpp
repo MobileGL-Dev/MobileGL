@@ -1665,4 +1665,7 @@ namespace MobileGL::MG_State {
 
     // Leak-at-exit storage; see GlobalObjects.cpp.
     thread_local SharedPtr<GLState::GLContext> pGLContext;
+#if MOBILEGL_BUILD_DISAGGREGATED
+    thread_local Bool tThreadReleasedLostContext = false;
+#endif
 } // namespace MobileGL::MG_State
