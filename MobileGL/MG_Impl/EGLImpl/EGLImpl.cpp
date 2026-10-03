@@ -652,6 +652,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 return EGL_NO_CONTEXT;
             }
             if (shareCtx != EGL_NO_CONTEXT && ContextIsLost(state, shareCtx)) {
+                MGLOG_I_ONCE("eglCreateContext: refused (EGL_BAD_CONTEXT) - the share context %p was lost with its "
+                             "session (device loss), and its objects are on no server",
+                             shareCtx);
                 state->SetError(EGL_BAD_CONTEXT);
                 return EGL_NO_CONTEXT;
             }
@@ -783,6 +786,11 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // context created before it current fails with EGL_CONTEXT_LOST. The application destroys
         // it and creates another; a release, and every context created since, go on as usual.
         if (ctx != EGL_NO_CONTEXT && ContextIsLost(state, ctx)) {
+            // Once per process: an application that keeps binding the context it lost (instead of
+            // destroying it and creating another) never reaches the recovery.
+            MGLOG_I_ONCE("eglMakeCurrent: context %p was lost with its session (device loss): EGL_CONTEXT_LOST "
+                         "until the application destroys it; a context created after the loss gets a fresh session",
+                         ctx);
             state->SetError(EGL_CONTEXT_LOST);
             return EGL_FALSE;
         }
