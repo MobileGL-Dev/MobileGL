@@ -21,6 +21,10 @@ on:
         required: false
         default: "087685d1"
 
+env:
+  # Software-rendered CI submissions may exceed the interactive GPU hang budget.
+  MOBILEGL_GPU_HANG_BUDGET_MS: "0"
+
 # ONE LIVE RUN PER BRANCH. The disaggregation branch pushes (often docs-only) commits minutes apart
 # and each push fans out to ~330 retrace legs here and ~275 jobs in apk.yml; with no group, runs
 # sat queued for 10+ hours behind their own successors. A manual dispatch gets a group of its own,

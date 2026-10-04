@@ -18,6 +18,10 @@ on:
       - '**/*.md'
   workflow_dispatch:
 
+env:
+  # Software-rendered CI submissions may exceed the interactive GPU hang budget.
+  MOBILEGL_GPU_HANG_BUDGET_MS: "0"
+
 # ONE LIVE RUN PER BRANCH, as in test.yml: a superseded push is cancelled rather than left queued
 # behind its successor; a manual dispatch gets a group of its own; dev queues rather than cancels.
 concurrency:
@@ -477,7 +481,7 @@ jobs:
           extra_retrace_args=()
           if [ "${MOBILEGL_CI_TRANSPORT}" = "inproc" ]; then
             extra_retrace_args+=(
-              --env "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1"
+              --env "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}"
               --require-inproc
             )
           elif [ "${MOBILEGL_CI_TRANSPORT}" = "spawn" ]; then
@@ -493,12 +497,12 @@ jobs:
             # into the CLIENT's process and SetWindowHandle is refused on the way across with
             # Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (Rule H).
             extra_retrace_args+=(
-              --env "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1"
+              --env "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}"
               --use-pbuffer
               --require-spawn
             )
           else
-            extra_retrace_args+=(--env "MOBILEGL_TRANSPORT=monolith")
+            extra_retrace_args+=(--env "MOBILEGL_TRANSPORT=monolith;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}")
           fi
           # Bliss needs the newer signed ANGLE variant plus sampler mipmap
           # min-filter downgrading on ANGLE llvmpipe.
