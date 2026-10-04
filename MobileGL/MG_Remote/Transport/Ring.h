@@ -164,6 +164,16 @@ namespace MobileGL::MG_Remote::Transport {
         std::atomic<std::uint32_t> producerParked;             // client asleep, server must ring
         std::atomic<std::uint32_t> eventRingFull;              // SEG_EVENT full, server stopped applying
         std::atomic<std::uint32_t> eventDropped;               // dropped lossy events
+
+        // ---- the parked producer's wake target -------------------------------
+        //
+        // What a parked client is waiting for, so the server rings only when it is there: 0 =
+        // any progress (present credit, ring space, events), otherwise the appliedSeq it needs.
+        // Without it every record the server applied while the client waited for a later one
+        // was a socket write and a futile wake-up. Written by the client before it parks (and
+        // reset to 0 after), read by the server only after it saw producerParked set; on a link
+        // without this shared page it stays 0, which is the old ring-on-any-progress rule.
+        alignas(64) std::atomic<std::uint64_t> producerWakeSeq;
     };
 
     static_assert(sizeof(RingControl) == 4096, "RingControl must be exactly one page");
@@ -232,6 +242,10 @@ namespace MobileGL::MG_Remote::Transport {
     // The page's real content must fit the page it claims. sizeof(RingControl) == 4096
     // above cannot catch a member that grew, because alignas(4096) forces that number;
     // the struct's content ends far short of it and the tail is padding.
+    static_assert(offsetof(RingControl, producerWakeSeq) / 64 != offsetof(RingControl, serverEpoch) / 64,
+                  "the wake target has a line of its own");
+    static_assert(offsetof(RingControl, producerWakeSeq) + sizeof(std::uint64_t) <= 4096,
+                  "RingControl's members must fit the page it claims to be");
     static_assert(offsetof(RingControl, eventDropped) + sizeof(std::uint32_t) <= 4096,
                   "RingControl's members must fit the page it claims to be");
     static_assert(alignof(RingControl) == 4096, "RingControl must be page aligned");

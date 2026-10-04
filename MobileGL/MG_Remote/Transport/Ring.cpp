@@ -497,11 +497,24 @@ namespace MobileGL::MG_Remote::Transport {
         return m_selfBell->Dead() ? SessionWait::ShutDown : SessionWait::TimedOut;
     }
 
+    // The wake target for the duration of one wait; 0 again afterwards, so a later wait that
+    // needs any progress (or one outside this class on the same flag) is rung as before.
+    namespace {
+        struct ScopedWakeTarget {
+            std::atomic<std::uint64_t>& target;
+            ScopedWakeTarget(std::atomic<std::uint64_t>& t, std::uint64_t seq) : target(t) {
+                target.store(seq, std::memory_order_seq_cst);
+            }
+            ~ScopedWakeTarget() { target.store(0, std::memory_order_seq_cst); }
+        };
+    } // namespace
+
     SessionWait SessionProducer::WaitForApplied(std::uint64_t seq, std::uint32_t timeoutMs) {
         if (!Valid()) {
             return SessionWait::TimedOut;
         }
         RingControl* control = m_control;
+        const ScopedWakeTarget wake(control->producerWakeSeq, seq);
         return Park([control, seq] { return Watermark::Reached(control->Progress.appliedSeq, seq); },
                     timeoutMs);
     }
@@ -527,6 +540,7 @@ namespace MobileGL::MG_Remote::Transport {
             return SessionWait::TimedOut;
         }
         RingControl* control = m_control;
+        const ScopedWakeTarget wake(control->producerWakeSeq, seq);
         return Park(
             [control, seq] {
                 return Watermark::Reached(control->Progress.appliedSeq, seq) ||
@@ -670,7 +684,16 @@ namespace MobileGL::MG_Remote::Transport {
     void SessionConsumer::NotifyClient() {
         if (m_link) m_link->ProgressChanged();
         if (m_control != nullptr && m_peerBell != nullptr) {
-            NotifyIfParked(*m_peerBell, m_control->producerParked);
+            // NotifyIfParked, narrowed by the client's wake target: a client parked for an
+            // applied sequence the server has not reached yet is not rung (unless the event
+            // ring filled, which that wait also wakes for).
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            if (m_control->producerParked.load(std::memory_order_acquire) == 0) return;
+            const std::uint64_t target = m_control->producerWakeSeq.load(std::memory_order_seq_cst);
+            if (target != 0 && !Watermark::Reached(m_control->Progress.appliedSeq, target) &&
+                m_control->eventRingFull.load(std::memory_order_acquire) == 0)
+                return;
+            m_peerBell->Notify();
         }
     }
 

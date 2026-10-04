@@ -274,7 +274,10 @@ namespace MobileGL::MG_Remote::Transport {
             for (;;) {
                 // Announce, FENCE, then re-test. The fence is the mechanism -
                 // see the file header - so setting the flag itself is relaxed.
-                parked.store(1, std::memory_order_relaxed);
+                // Release, so a notifier that acquires this 1 also sees what the waiter wrote
+                // before parking (RingControl::producerWakeSeq). The fence below is still what
+                // closes the lost-wakeup window.
+                parked.store(1, std::memory_order_release);
                 std::atomic_thread_fence(std::memory_order_seq_cst);
                 if (ready()) {
                     parked.store(0, std::memory_order_relaxed);
