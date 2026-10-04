@@ -146,6 +146,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // IBufferCopyCommandProvider: recording command buffer, outside any
         // render pass, for immediate staged buffer copies.
         VkCommandBuffer AcquireBufferCopyCommandBuffer() override;
+        // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
+        // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
+        // target keep its presented images' content from then on.
+        Int32 CurrentDrawBufferAge();
 #if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
         Bool FlushWirePendingCommandsForTextureUpdate() {
@@ -201,10 +205,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // submission's sync_file in `*fence` (-1: none, and the work is waited out here), and - for
         // a session that writes images - the boundary PublishSharedImageAccesses makes.
         Bool ExportNativeFence(int* fence);
-        // EGL_BUFFER_AGE_EXT of the active target's default framebuffer for the next frame: the age
-        // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
-        // target keep its presented images' content from then on.
-        Int32 CurrentDrawBufferAge();
         // The reading side's per-use hook (WireSharedImage.inc): every shared-image texture the
         // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
         // acquired from the foreign family before it, when it moved or is not held.

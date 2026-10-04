@@ -3988,6 +3988,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeClientDrainTextureUploads() {
+#if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         if (MG_Remote::Client::RunsAsTheServerRole()) return;
         auto* ctx = LiveContext();
@@ -3999,6 +4000,7 @@ namespace MobileGL::MG_Pipe {
             P4aFamilyDependenciesAreSet(kMGPipeSubsystemTextureResources, pushMask)) {
             (void)MGPipeTextureEmitterInstance().DrainTextureSubData(*ctx);
         }
+#endif
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED

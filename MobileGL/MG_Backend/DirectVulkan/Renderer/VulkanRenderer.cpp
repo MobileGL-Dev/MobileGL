@@ -16040,6 +16040,7 @@ void main() {
             }
         }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
         // YUV shared images (WireYuvImage.inc) are sampled through a VkSamplerYcbcrConversion, a
         // feature of its own; asked only where AHardwareBuffers are imported at all.
         m_samplerYcbcrConversion = false;
@@ -16056,6 +16057,7 @@ void main() {
                 m_samplerYcbcrConversion = true;
             }
         }
+#endif
 
         // VK_EXT_multi_draw: tier 1 of the multi-draw dispatch - one vkCmdDrawMulti(Indexed)EXT
         // for a whole glMultiDraw* batch (VkMultiDrawIndexedInfoEXT carries per-draw

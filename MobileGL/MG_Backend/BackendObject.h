@@ -9,9 +9,9 @@
 #pragma once
 #include <Includes.h>
 #include "MG_State/GLState/TextureState/TextureEnum.h"
+#include <MG_Util/Damage/Damage.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/MGPipeHandles.h>
-#include <MG_Util/Damage/Damage.h>
 #endif
 
 namespace MobileGL {
