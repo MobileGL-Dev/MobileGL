@@ -142,6 +142,31 @@ landed; the targeted wake-up removed most of what the spin bought without the re
 9. `CreateVertexElements` is re-sent per draw (ideas: 76 per frame); deduplicate by content on the
    client.
 
+## Device state at handoff (2026-10-04 ~18:50 device time)
+
+- **Up:** the MobileGL anland (`com.anland.consumer.mobilegl`) on **Magma** (DirectVulkan), Plasma
+  running (KWin + plasmashell, no sticky software renderer). The original anland
+  (`com.anland.consumer`) is force-stopped and its `arch-kde` container is stopped.
+- **Deployed build = `bb31f374`** (code of every commit above; the later commits on the branch are
+  docs and CI): the server is a RelWithDebInfo NDK build for android-29 swapped into the installed
+  APK (`/data/app/.../com.anland.consumer.mobilegl-*/lib/arm64/libMobileGL.so`), the client the
+  Release cross build in the container's `/opt/mobilegl/lib/libMobileGL.so`. The APK's previous
+  server lib (`18a5dba0`) is kept at `/data/local/tmp/anl/srv-apk.so`.
+- **Clocks: back at the original governors and limits** (CPU walt 902400-2265600 / 614400-3148800 /
+  499200-2956800 / 672000-3302400, GPU msm-adreno-tz 231-903 MHz). They were restored just before
+  the request to leave them pinned arrived, and were left as they are. The saved originals stay in
+  `/data/local/tmp/anl/pb-clocks.orig`. To pin again for measuring and to restore afterwards:
+
+  ```sh
+  adb shell 'su -c "sh /data/local/tmp/anl/pbclk.sh pin"'       # CPU 1.80/2.25/2.25/2.25 GHz, GPU 680 MHz
+  adb shell 'su -c "sh /data/local/tmp/anl/pbclk.sh restore"'   # back to pb-clocks.orig
+  # the restore did not take on two limits once; write them again if `pbclk.sh show` disagrees:
+  adb shell 'su -c "echo 614400 > /sys/devices/system/cpu/cpufreq/policy2/scaling_min_freq; echo 231000000 > /sys/class/kgsl/kgsl-3d0/devfreq/min_freq"'
+  ```
+- The MobileGL app's `extra_keys_mode` is back at its original (unset = the bar is shown).
+- The phone-side helper scripts and run outputs are in `/data/local/tmp/anl/` (`pb/`, `prof/`,
+  `pb-unpinned/`), the container's in `/root/pb` of both containers.
+
 ## How to reproduce
 
 Helper scripts: `tools/device_bench/anland_glmark2/` (copied verbatim from the session; the phone
