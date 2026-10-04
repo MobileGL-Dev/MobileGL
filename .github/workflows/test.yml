@@ -413,6 +413,12 @@ jobs:
             --discovery "${RUNNER_TEMP}/primary-inproc-lane.json" \
             --junit "${RUNNER_TEMP}/primary-inproc.xml" --output "${RUNNER_TEMP}/primary-inproc-proof.json"
 
+      # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
+      # with the lines of its output that say why, where anyone reading the run can see them.
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
+
       - name: Upload integration lane evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -1169,6 +1175,12 @@ jobs:
       # arm proof read; verify-split-logs/ is whatever the control steps left behind, which for
       # twelve entries is a deliberately red re-run under the same name. Uploading only the
       # second - which is what this step did before the copy above existed - loses the first.
+      # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
+      # with the lines of its output that say why, where anyone reading the run can see them.
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
+
       - name: Upload verify-split lane logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -1481,7 +1493,7 @@ jobs:
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-split.xml"
 
       # P7 wave 2-F, PH-7 (1). THE TCP SUPERVISOR LANE NEEDS flatc, AND CI HAD NONE.
       #
@@ -1648,6 +1660,12 @@ jobs:
           CONTROL_TMPDIR: ${{ runner.temp }}
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/split_negative_controls.sh"
 
+      # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
+      # with the lines of its output that say why, where anyone reading the run can see them.
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
+
       - name: Upload split lane logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -1737,7 +1755,7 @@ jobs:
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
           MOBILEGL_IPC_STRICT_ERRORS: "1"
-        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-strict.xml"
 
       # ---- P5e (ra), MG_Remote/CONTRACT-P5E.md §7: ONE STEP, TWO ARMS, AND THE TREE PICKS ----
       #
@@ -2246,6 +2264,12 @@ jobs:
           slp.require_green(lane, sys.argv[3], names)
           PY
 
+      # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
+      # with the lines of its output that say why, where anyone reading the run can see them.
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
+
       - name: Upload strict lane logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -2751,7 +2775,11 @@ jobs:
              && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
             export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
           fi
-          ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+          ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'             --output-junit "${RUNNER_TEMP}/retrace.xml"
+
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py --excerpts 1 "${RUNNER_TEMP}"
 
       - name: Upload core dumps
         if: failure()
