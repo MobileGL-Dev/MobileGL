@@ -34,6 +34,12 @@ namespace MobileGL::MG_Pipe {
                 MGPipeVertexInputEmitterInstance().EmitVertexBuffers(m_context, m_baseInstance);
             if (m_indexBindingChanged)
                 MGPipeVertexInputEmitterInstance().EmitIndexBuffer(m_context);
+            // The bindings no longer name them: the buffers go back to the share group for the
+            // next client-array draw. Their next respecify orphans the store this draw reads.
+            auto& group = *m_context.GetShareGroup();
+            for (auto& buffer : m_vertexBuffers)
+                if (buffer) group.ReturnClientArrayBuffer(std::move(buffer));
+            if (m_indexBuffer) group.ReturnClientArrayBuffer(std::move(m_indexBuffer));
         }
 
         Bool Prepare(MGPDrawInfo& info, const MGPDrawRange* ranges, Uint32 rangeCount,
@@ -46,7 +52,8 @@ namespace MobileGL::MG_Pipe {
             // Start remains an element offset, so base vertex and draw IDs are unchanged.
             if (clientIndexBytes != 0) {
                 if (!clientIndices || clientIndexBytes > std::numeric_limits<Uint32>::max()) return false;
-                m_indexBuffer = MakeOwnedBuffer(clientIndices, static_cast<SizeT>(clientIndexBytes), BufferTarget::Index);
+                m_indexBuffer = MakeOwnedBuffer(m_context, clientIndices, static_cast<SizeT>(clientIndexBytes),
+                                                BufferTarget::Index);
                 info.IndexResource = MGPipeResourceTrackerInstance().Find(*m_indexBuffer);
                 info.Flags &= ~static_cast<Uint8>(kDrawHasUserIndices);
                 MGPIndexBuffer binding{};
@@ -115,8 +122,14 @@ namespace MobileGL::MG_Pipe {
                     if (attribute.Offset == 0 || byteCount > std::numeric_limits<SizeT>::max() - attribute.Offset)
                         return false;
                     const auto* source = reinterpret_cast<const Uint8*>(attribute.Offset);
+                    const Uint64 first = referenced.front();
                     if (stride == 0) {
                         std::memcpy(bytes.data(), source, elementBytes);
+                    } else if (last - first + 1 == referenced.size()) {
+                        // Contiguous elements (every array draw, most indexed ones): the vertex
+                        // records from the first fetched one to the end of the last, in one copy.
+                        const SizeT begin = static_cast<SizeT>(first * stride);
+                        std::memcpy(bytes.data() + begin, source + begin, byteCount - begin);
                     } else {
                         // Only dereference fetched elements: sparse indices and first>0
                         // do not grant permission to read intervening application memory.
@@ -126,7 +139,7 @@ namespace MobileGL::MG_Pipe {
                         }
                     }
                 }
-                m_vertexBuffers[location] = MakeOwnedBuffer(bytes.data(), bytes.size(), BufferTarget::Vertex);
+                m_vertexBuffers[location] = MakeOwnedBuffer(m_context, bytes.data(), bytes.size(), BufferTarget::Vertex);
                 handles[location] = MGPipeResourceTrackerInstance().Find(*m_vertexBuffers[location]);
             }
             MGPipeVertexInputEmitterInstance().EmitVertexBuffers(m_context, info.StartInstance, &handles);
@@ -173,8 +186,11 @@ namespace MobileGL::MG_Pipe {
             return attribute.Size > 0 && attribute.Size <= 4 ? component * attribute.Size : 0;
         }
 
-        static UniquePtr<Buffer> MakeOwnedBuffer(const void* bytes, SizeT size, BufferTarget target) {
-            auto buffer = MakeUnique<Buffer>(0);
+        static UniquePtr<Buffer> MakeOwnedBuffer(Context& context, const void* bytes, SizeT size, BufferTarget target) {
+            // A kept buffer is already a published resource: respecifying it is fire-and-forget,
+            // where a new one costs a blocking create (and a destroy after the draw).
+            auto buffer = context.GetShareGroup()->TakeClientArrayBuffer();
+            if (!buffer) buffer = MakeUnique<Buffer>(0);
             const auto handle = MGPipeResourceTrackerInstance().Find(*buffer);
             MGPipeResourceTrackerInstance().NoteBoundAs(handle, target);
             buffer->SetUsage(BufferUsage::StreamDraw);

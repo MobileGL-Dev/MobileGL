@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <mutex>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "BufferState/BufferObject.h"
 #include "ProgramState/ProgramState.h"
@@ -67,6 +68,12 @@ namespace MobileGL::MG_State::GLState {
         ProgramState& Programs() { return m_programState; }
         const ProgramState& Programs() const { return m_programState; }
 
+        // Unnamed buffers that carried a draw's client-memory arrays, kept for the next such draw
+        // so it respecifies one of them (a non-blocking record) instead of creating a resource
+        // (a round trip) and destroying it again. Buffers are share-group objects, hence here.
+        UniquePtr<BufferObject> TakeClientArrayBuffer();
+        void ReturnClientArrayBuffer(UniquePtr<BufferObject> buffer);
+
     private:
         Uint64 m_token = 0;
         UnorderedMap<Uint, SharedPtr<BufferObject>> m_bufferObjects;
@@ -77,5 +84,7 @@ namespace MobileGL::MG_State::GLState {
         IndexGenerator<Uint> m_renderbufferNames{1024, 1};
         SamplerState m_samplerState;
         ProgramState m_programState;
+        std::mutex m_clientArrayBuffersMutex;
+        Vector<UniquePtr<BufferObject>> m_clientArrayBuffers;
     };
 } // namespace MobileGL::MG_State::GLState

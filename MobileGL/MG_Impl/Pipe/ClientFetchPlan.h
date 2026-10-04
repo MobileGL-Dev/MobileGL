@@ -234,7 +234,9 @@ namespace MobileGL::MG_Pipe {
                     m_vertices.push_back(static_cast<Uint64>(vertex));
                 }
             }
-            std::sort(m_vertices.begin(), m_vertices.end());
+            // An array draw's single range arrives ascending already; sorting it again was most of
+            // the client's time on a client-array draw.
+            if (!std::is_sorted(m_vertices.begin(), m_vertices.end())) std::sort(m_vertices.begin(), m_vertices.end());
             m_vertices.erase(std::unique(m_vertices.begin(), m_vertices.end()), m_vertices.end());
             return true;
         }

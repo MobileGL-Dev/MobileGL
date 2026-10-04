@@ -187,4 +187,26 @@ namespace MobileGL::MG_State::GLState {
     Bool ShareGroupState::ValidateRenderbufferObject(Uint index) const {
         return m_renderbufferObjects.find(index) != m_renderbufferObjects.end();
     }
+    UniquePtr<BufferObject> ShareGroupState::TakeClientArrayBuffer() {
+        const std::lock_guard<std::mutex> lock(m_clientArrayBuffersMutex);
+        if (m_clientArrayBuffers.empty()) return nullptr;
+        UniquePtr<BufferObject> buffer = std::move(m_clientArrayBuffers.back());
+        m_clientArrayBuffers.pop_back();
+        return buffer;
+    }
+
+    void ShareGroupState::ReturnClientArrayBuffer(UniquePtr<BufferObject> buffer) {
+        // Enough for a draw's every attribute plus its indices; more is never in use at once.
+        constexpr SizeT kKeptClientArrayBuffers = 48;
+        if (!buffer) return;
+        {
+            const std::lock_guard<std::mutex> lock(m_clientArrayBuffersMutex);
+            if (m_clientArrayBuffers.size() < kKeptClientArrayBuffers) {
+                m_clientArrayBuffers.push_back(std::move(buffer));
+                return;
+            }
+        }
+        // A surplus buffer is destroyed outside the lock (its destructor emits).
+    }
+
 } // namespace MobileGL::MG_State::GLState
