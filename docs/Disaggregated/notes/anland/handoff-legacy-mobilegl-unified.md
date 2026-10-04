@@ -1,97 +1,186 @@
-# Handoff：anland 5.x + 内置 MobileGL 统一 server（post-P14）
+# Handoff: anland 5.x + MobileGL unified server
 
-更新时间：2026-10-02。本文替换旧的 handoff-legacy-mobilegl-unified.md（那份描述的是 P14 之前的状态，已被事实淘汰）。
+Updated 2026-10-04. This replaces the 2026-10-02 (post-P14) handoff; git history keeps the old text.
 
-## 任务与路线
+## What this is
 
-anland 5.x 用 MobileGL：容器（Droidspaces，arch-kde-mgl）里的 Linux client 经 SHM pipe 连到 anland APK 内嵌的统一 server（`:mobilegl` 私有 Service，同 APK 同 UID），server 在 anland 自己的 Surface 上直接渲染（路线 B：`kgsl-as-server.md`）。不按应用 fork 渲染进程——session/context/share-group 状态归属在 MobileGL 库内解决（P14，[`../design/11-state-ownership.md`](../design/11-state-ownership.md)）。
+MobileGL runs disaggregated on a rooted Android tablet:
+- **Client:** the glibc library in the Droidspaces container `arch-kde-mgl`, where it is the system-wide glvnd EGL/GLX vendor and the GBM backend.
+- **Transport:** the client streams pipe records over abstract socket `@anland-mobilegl`.
+- **Server:** runs in-process in the anland APK's `:mobilegl` foreground service.
+- **Backends:** Espryt (DirectGLES) or Magma (DirectVulkan), chosen in the app settings.
 
-## 远端与分支
+KDE Plasma runs on top with zero-copy windows (server-allocated AHB dma-bufs over linux-dmabuf). Everything is vendor-agnostic: AHB, sync_file, EGL_ANDROID_*, VK_ANDROID_*; no kgsl or qcom specifics.
 
-- MobileGL：<https://github.com/MobileGL-Dev/MobileGL> 分支 `feat/disaggregated`
-- anland：<https://github.com/MobileGL-Dev/anland> 分支 `legacy-mobilegl-unified`
+## Remotes and heads
 
-### MobileGL 关键提交（新→旧）
+- MobileGL: <https://github.com/MobileGL-Dev/MobileGL> `feat/disaggregated`, head `2d424146`. Integration worktree: `.claude/worktrees/anland-unified`.
+- anland: <https://github.com/MobileGL-Dev/anland> `legacy-mobilegl-unified`, head `41ec066`. Integration worktree: `anland/.claude/worktrees/mgl-unified`.
+- Version: 26.10 (`MobileGL/Config.h`, `android-plugin/app/build.gradle.kts`).
 
-| Commit | 内容 |
+## Where to start reading
+
+| Topic | Doc |
 |---|---|
-| `4b388950` | Magma：VAO/元素缓冲指向一个 server 没有存储的 buffer（client 构造时就铸 handle，create 只随第一次 respecify 过线）时拒绝该 draw 而非 Fatal；纹理的内置 sampler CSO 缺失或已回收（CSO 按内容寻址、满 256 回收）时按 GL 默认参数采样——两处都与 DirectGLES 的「decline」行为对齐。glmark2 全场景（refract/effect2d 此前带走 server）通过 |
-| `7e76a98d` | **Magma 多 surface + 多 context**：一个 session 一个 `VulkanRenderer`（device 与全部 GL 资源），每个客户端 EGLSurface 只是一个「surface target」（VkSurfaceKHR + swapchain + render-finished 信号量 + 已获取图像 + pbuffer 的 AImageReader），切换时提交当前工作、用一次空提交消耗挂起的 acquire 信号量后停放，回来时原样换回（`ActivateSurfaceTarget`/`DestroySurfaceTarget`，此前每次切 surface 都重建整个 VkInstance/VkDevice，所有 buffer/纹理丢失 → Chrome `unknown-buffer-respecify`）；默认帧缓冲 render pass 的 hash 带 target 序号；`bind_context` 时 Magma 后端切回该 context 最后一次 make-current 的 surface（`OnClientContextBound`，Qt 每窗口一线程一 context，此前读回落到别的窗口的 pbuffer）；**wire resource ops 表在 server 进程里只要有 session 活着就不注销**（此前任一 session 的 renderer 关闭——比如 ksplash 退出——都把进程级表清空，之后所有 session 的 buffer create 被静默丢弃：plasmashell 面板/弹窗全透明） |
-| `15dbe78c` | **Magma 按 session 隔离**：Magma 原本一进程一 renderer，`pVulkanRenderer`、`g_activeBufferManager`、动态状态影子、render pass manager 的静态指针、各 `s_device`、renderer generation、swap interval 都是进程全局——多 session 下 KWin 的 buffer 写落进别的 session 的表（`buffer-write-range` Fatal）。新增 `MagmaSession`/`SessionLocal<T>`（`MG_Backend/DirectVulkan/MagmaSession.h`）：按调用线程绑定的 session 解析，未绑定线程（monolith、client、单测）用进程默认 session，行为不变；served session 的 apply 线程在 `ServerLoop::ApplyThreadMain` 里经 `BackendObject::BindSessionStateToThisThread` 绑定；扩展函数指针改成 renderer 成员；哈希 scratch 状态、scratch 向量改 thread_local |
-| `168808d1` | Magma 也广告 GL_ARB_shader_objects/vertex_shader/fragment_shader/texture_non_power_of_two（KWin `checkSupported` 门槛，此前 KWin 在 Magma 上 "Could not initialize rendering context"）；Android 上 `debug.mobilegl.backend` 系统属性可覆盖 `MOBILEGL_BACKEND_TYPE`（可调试 APK 换后端无需重签） |
-| `cd610934` | **锁屏花屏/桌面变噪点的根因**：`object_death` 记录到达 server 时，`SlotTable::ReleaseTwinByHandle` 遍历进程内**所有** slot table（所有 session 的所有 bucket）释放该 handle 的 twin。handle 是各 client 自己的分配器编号，不同 session 的同一 `{slot, gen}` 是各自不相干的活对象——锁屏 greeter 退出时删除自己的纹理，同时把 KWin 同 handle 的 twin 也释放了（KWin 正在用的 driver 纹理被删，plasmashell 窗口采样到已释放显存：噪点 + 别的窗口的残影）。现在 slot table 记录自己所属 session，释放只走调用线程 session 的 bucket（同 session 的各 share group 都释放；无 session 的线程保持全进程遍历）。顺带修掉另外两类跨 session 隐患：DirectGLES 进程级「容器对象」（scratch/blit/resolve FBO、staging FBO、模拟绘制的 VAO）改为按原生 context 分（`PerNativeContext`/`NativeContextName`，按 context 生命期序号，context 销毁时遗忘）；UBO/unpack/upload 三个持久映射 ring 改为每原生 context 一套，帧 fence 完成水位改为「连续」（任一更早的 fence 未 signal 都不前进，fence 环加深到 32 且回绕时等待旧 fence 而非丢弃） |
-| `4236b42a` | server：配置只在进程内第一个 session 接入时初始化一次——此前每个新 session 接入都重跑 `MG_ConfigLoader::Init()`，它先把 `Transport` 写回 Monolith 再被改回 Spawn，正在 apply 的别的 session 恰好读到就跳过 server stamp，`Fatal{UnmigratedPipeInput, "GetBoundVertexArray@DrawArrays"}` 带走整个 server 进程（整个桌面）；转译：保留下来的非零 `layout(index = 1)`（双源混合）在 ESSL 里加 `#extension GL_EXT_blend_func_extended : require`（此前 Adreno 拒绝该 stage，程序整体不画） |
-| `0b6842ac` | 让 ANGLE 的 GL 后端跑在 MobileGL 上：EGL 声明 `EGL_KHR_platform_gbm`/`EGL_MESA_platform_gbm`（GBM display 当离屏 display，拒绝 gbm 窗口 surface；Chrome 的 Wayland GL 层对每个 display 都标 GBM 平台）；平台标 GBM 但 native display 实为 wl_display 时按 Wayland 处理，wl_display 识别兼容自带一份 libwayland 的程序（按接口名 "wl_display" 判断，经 `process_vm_readv` 读，野指针不会崩）；实现 `glGetShaderPrecisionFormat`（此前是空 stub，ANGLE 读到 0 精度即拒绝 ES 2.0）；`GL_VERSION` 里不再出现 "OpenGL ES" 子串（ANGLE 用子串搜索判断 ES 驱动，"Direct (OpenGL ES) Backend" 让它把 MobileGL 当 ES 驱动、按 ES 扩展名查 BGRA 等能力，Chrome 的 shared image 全部创建失败） |
-| `47db68d5` | GLX：MobileGL 同时是 glvnd 的 GLX vendor（`__glx_Main`，装成 `/usr/lib/libGLX_mobilegl.so.0`，会话设 `__GLX_VENDOR_LIBRARY_NAME=mobilegl`；此前 X11 客户端经 Xwayland 拿到 Mesa vendor，报 `MESA-LOADER: failed to retrieve device information`）；远端 X drawable（pbuffer）每次 `glXSwapBuffers` 回读并用 `xcb_put_image`（按服务器最大请求长度分带）上屏，resize 换新 pbuffer；GLX 出口持流锁；`eglReleaseThread` 在 MobileGL 已被 `eglTerminate` 拆掉后也返回 TRUE（glmark2 退出时的 "eglReleaseThread failed"） |
-| `ccf8eb65` | 客户端：多线程 GL 流串行化——每个 GL/EGL 出口持同一把流锁，写入前按「最后真正发出的 `bind_context`」把 server 绑到调用线程的 context（Qt 每个窗口一个 QSGRenderThread，此前两线程记录在同一 ring 上交错、落进错的 applier、甚至撕裂记录）；`MGPipeTracker` 按 context 的永不复用 id 判断换 context（指针 ABA）；导出 `eglCreateImageKHR`/`eglDestroyImageKHR`（KWin 在 shm client 断开时调空指针 → 首个 KWin 约 2 秒必 SEGV）；`eglGetPlatformDisplayEXT` 的 EGLint 属性表加宽；多窗口：surface 激活不再清空别的线程的 current 记录，swap 呈现本线程的 surface；Wayland 窗口 `wl_egl_window_resize` 在下一次 make-current/swap 生效 |
-| `0b314dda` | server：所有 session 的 apply 线程在一把 FIFO「backend turn」上串行（DirectGLES 是按单 GL 线程写的：单一 owner 线程、进程级绑定影子），换手时接管 owner 并清掉绑定影子；全部原生 context 进同一 share group（环、池、scratch 纹理是进程级 GL 对象）；每个客户端 surface 一个原生 surface（激活时重绑而非新建），建 surface 后恢复当前 context 自己原来的 surface，释放 surface 只销毁它（此前 `DestroyEGLContext` 带走整个 session 的 context），`bind_context` 恢复 context 自己的 surface；pbuffer 背后的窗口 resize = 换新 pbuffer；session 结束时若别的 session 的 context 还活着，只清本 session 的东西（此前进程级 generation 被推进，所有活 session 的纹理/缓冲被当成死的空重建 → 关弹窗/退出 client 后全屏噪点）；分块上传（stage chunk 切片）的 region 偏移按整层图像校验（此前 KWin 的 wl_shm 纹理在第 819 行后读到第 0 行）；`SetSamplerViews.Count` 改为 per-session latch |
-| `30fef23d` | P14 收尾（统一 server 的两处进程级状态）：server 的两个 staged store（纹理 level 声明、buffer shadow）按调用线程的 {session, share group} 分桶（与 S6 twin 表同一个探针），`DropAll` 只清本 session；`MGPipeServerSetContextLive` 的 live 标志从进程全局移进本 session 的 PipeInputs 块。各带单测（`StagedTextureStoreTest` 两例、`ServerContextLiveTest`） |
-| `d554c87c` | EGL loader 缺 `eglSwapBuffersWithDamageEXT` 不再 FATAL（EXT→KHR→eglSwapBuffers 回退 + GLES 符号 dlsym 回退防自指）；stencil-only 存储格式配对修复；各带测试 |
-| `7a48521d` | DirectGLES：创建 server-owned window surface 前先销毁同窗口的残留 surface（此前第二个起的 session 必死 EGL_BAD_NATIVE_WINDOW） |
-| `5a0f13fd` | 广告 GL_ARB_shader_objects/vertex_shader/fragment_shader/texture_non_power_of_two（KWin `checkSupported` 的硬门槛） |
-| `ff212061` | P14 S6：后端 twin 表按 {session, share group} 键控 |
-| `4ed1c9ce` | P14 S1–S5：`bind_context`（opcode 84）+ CreateContext/DestroyContext 控制帧（control revision 6）；同进程多 session（`SessionRuntime`、线程域解析、per-session latch，inproc unix supervisor 并发上限 `MOBILEGL_IPC_INPROC_MAX_SESSIONS`=16）；前端 ShareGroupState/per-context GLContext/TLS pGLContext；DirectGLES per-(session,context) native tuple（不再无条件 teardown）；applier 按 {session,context}/{session,shareGroup} 分桶 |
-| `ebc552a0`/`6fb880cd` | Wayland Present 失败回 EGL_BAD_SURFACE；GLX drawable 走远端 pbuffer；Linux libGL 别名 |
-| `d52c031c` | P14 设计文档 |
+| Reproduce the whole setup on a new machine or phone | `.claude/skills/anland-mobilegl-plasma/reproduce.md` (and `SKILL.md`) |
+| Day-to-day bring-up and checks | `runbook-plasma.md` |
+| Zero-copy windows | `plan-ahb-dmabuf.md` |
+| X11 on the GPU (glamor, DRI3/Present GLX) | `plan-x11-gpu.md` |
+| glmark2 performance: baseline and the optimization handoff | `../../../Performance/glmark2-baseline.md`, `../../../Performance/glmark2-handoff.md` |
+| VA-API driver on MediaCodec (plan only, nothing implemented) | `../../../MobileVA/plan.md` |
 
-### anland 关键提交（新→旧）
+## State of the desktop (verified on the device, 2026-10-04)
 
-| Commit | 内容 |
+- **App-driven bring-up:** opening the anland app starts daemon → server → container → Plasma. A foreground service keeps it alive, the server idles while the app is hidden (KWin DPMS off), and the notification has a "Stop desktop" action.
+- **Both backends** run the desktop: KWin, plasmashell, Kickoff, notifications, the lock screen, resize on extra-keys-bar toggle, and suspend/resume on window loss.
+- **Buffer age and damage** work end to end on both backends.
+- **glvnd vendor:** MobileGL is the system-wide vendor (`10_mobilegl.json`, `/etc/mobilegl/client.conf`). It steps aside for `LIBGL_ALWAYS_SOFTWARE`, foreign GBM devices, and when no server answers (falls through in about 0.1 s).
+- **X11:** Xwayland glamor on MobileGL. GLX presents through DRI3 + Present shared images, with a MIT-SHM readback fallback.
+- **Chrome:**
+  - runs its GPU in a separate process with real EGL native fences, with no flicker;
+  - recovers from device loss (as do KWin and plasmashell);
+  - Shadertoy-style GPU faults are contained per session;
+  - a hanging client is cut off on Magma (watchdog `MOBILEGL_GPU_HANG_BUDGET_MS`) and on Espryt (GUILTY reset).
+- **Chrome video:** hardware decode works through the container's VA-API driver. NV12/P010 dma-bufs are sampled via `GL_OES_EGL_image_external` on both backends. Foreign YUV buffers are CPU-copied into server YUV images, and 4K60 is fine. `MOBILEGL_CHROME_VIDEO_DECODE=software` opts out.
+- **Device state at handoff:**
+  - MobileGL anland on Magma, Plasma up, server/client build `bb31f374`; later commits are docs, CI and a DirectGLES multi-session fix that is not yet deployed;
+  - clocks NOT pinned (restored); the original anland APK is stopped;
+  - pin and restore helpers: `su -c "sh /data/local/tmp/anl/pbclk.sh pin|restore"`.
+
+## Work streams and where each one stopped
+
+### 1. glmark2 performance (stopped at a handoff)
+Details: `docs/Performance/glmark2-handoff.md`.
+- **Now:** MobileGL beats the stock kgsl stack in windowed glmark2 on both backends (es2 800x600: Espryt ~1887, Magma ~1213, stock ~1100). Fullscreen is still about half of stock (Espryt ~561, Magma ~404, stock ~1177).
+- **Next, ranked:**
+  1. render straight into the window's buffers (removes the fullscreen copy);
+  2. non-blocking present;
+  3. merge Magma's per-frame submissions;
+  4. Magma descriptor and pipeline caching;
+  5. profile terrain;
+  6. Espryt per-draw state sync;
+  7. non-blocking fences.
+- Bench scripts: `tools/device_bench/anland_glmark2/`.
+
+### 2. GitHub Actions CI (stopped mid-way, no handoff from its agent)
+- **Background:** CI had been red since about 2026-09-26 (Test workflow) and since 2026-10-02 (APK workflow retraces). Most runs show `cancelled` only because each newer push cancels them.
+- **Landed:**
+
+| Commit | What |
 |---|---|
-| `5f15240` | 会话可选后端：APK 的 `:mobilegl` worker 从 `files/mobilegl-backend` 读后端（`am start ... --es mobilegl_backend DirectVulkan` 写入），容器侧 `mobilegl-startup.sh` 从 `/etc/mobilegl/backend` 读并导出给 KWin drop-in 与 dbus 激活环境（server 一进程只服务一种后端，client 必须报同一种，否则 "Hello.backendType disagrees with pinned backend"） |
-| `56b060c` | 恢复工具链入库 `producers/kde/Arch_v5/mobilegl-tools/`（KernelSU grant helper、源码同步与容器内 client 构建、EGL smoke 探针、设备侧部署/daemon 脚本） |
-| `1fb419a` | mobilegl-startup.sh：默认 socket 指向实验 daemon（/etc/environment 的 pam_env 会盖掉 systemd drop-in）；plasma 模式改走 kwin_wayland_wrapper（BusName=org.kde.KWinWrapper 只在 wrapper 注册，直跑 kwin 90 秒被 systemd 杀）；KWin 直写 surface 不加 FlipY（此前画面上下颠倒）；sync-build-kwin.sh 容器侧 canonical 同步/增量构建/原子安装管线 |
-| `118ae52` | `MOBILEGL_BACKEND_TYPE=DirectGLES`（Espryt 只是别名，写错会被 pinned-backend 拒）；eglChooseConfig 收 count≥1（MobileGL 默认有两份配置）；compositor client 日志落文件 |
-| `da03d3b`/`35699f3` | consumer flap 时不再停 compositor；APK consumer 侧不再因 Surface 生命周期事件重启 native 管线 |
-| `33e496c` | 统一内嵌 server 宿主：`:mobilegl` Service 单 endpoint `@anland-mobilegl`；移除被否定的 MobileGLAppsService/按应用 fork 路径 |
-| `2ffa1f5` | KWin anland backend 的 `ANLAND_MOBILEGL=1` 路径（跳过 GPU/DRM probing，server-owned window） |
-| `6e1fa65` | 无 fd 的 MobileGL Surface 显示协议（DATA_MSG_MOBILEGL_SURFACE=201） |
+| `eb71b669` | The pull and verify builds compile again |
+| `c1e957cb` | Retired the P3a/P4a untouched-region gates; those phases closed and later work legitimately changed the regions |
+| `78c5f8da` | Census records `Refuse{Recover}` as a local refusal |
+| `32d27b14` | Real bug: a session's backend registration no longer trips the strict apply-thread pin while another session is applying (DirectGLES) |
+| `2d424146` | Failed ctest entries are annotated with their failure lines, so failures can be read from the check-run annotations without a signed-in log reader |
 
-## 真机已验证（TB321FU，HA27Q3LQ）
+- **Run on `2d424146`:** in progress at handoff. Gates, include-closure and flatc are green; the builds and integration jobs were still running.
+- **Still open:**
+  - the APK workflow's **retrace failures** (Retrace and validate), on DirectGLES for minecraft-1.21.11-main-menu, 1.21.4 startup/in-world/main-menu, 1.17-main-menu-854 and OpenRA, and on DirectVulkan for 1.17-main-menu-854;
+  - they first appeared around `5accb098` / `8da082f8` (2026-10-02); last green APK run `2f64ede8`;
+  - not yet bisected. Candidates:
+    - the clear-colour default (0,0,0,0), which is GL-correct, so judge any golden against the spec;
+    - anonymous-struct sampler handling in glslang;
+    - sampler CSO publishing;
+    - the scissor-shadow fix;
+    - the inactive-fragment-output location fix;
+    - the external-texture and YUV changes;
+    - the perf commits.
+- **User guidance on judging checks:**
+  - phase-era process gates may be overly strict, and superseded ones may be removed with a reason;
+  - retraces and OpenGL-level checks must pass;
+  - a feature a backend does not implement (e.g. iterationRP) may be excluded narrowly per backend.
+- **Reading CI without `gh`:** `curl https://api.github.com/repos/MobileGL-Dev/MobileGL/actions/runs?branch=feat/disaggregated`, then `/actions/runs/<id>/jobs` and `/check-runs/<job>/annotations`. Raw logs need sign-in.
 
-以实际画面/输出为准：
+### 3. Chrome hardware video (landed) → vendor-agnostic VA-API (planned only)
+- **Container driver:** `/usr/lib/dri/msm_drm_drv_video.so` is an unpackaged third-party, Qualcomm-only driver. It drives V4L2 at `/dev/video32` with Qualcomm modes and copies frames on the CPU itself. libva picks it because the render node's DRM driver name is `msm_drm`.
+- **Plan in `docs/MobileVA/plan.md`:** a new `MobileVA/` directory; MediaCodec decode in the `:mobilegl` process; H.264 first, then VP9, AV1, HEVC/10-bit; the old driver kept as A/B fallback.
+- **Prerequisites the plan found:**
+  - per-plane R8/GR88 dma-buf import, which mpv's GL path and KWin's NV12 path need;
+  - YUV sampling paths that wait on the shared image's write fence (they appear not to).
 
-- **链路绿屏**：client clear → server（Adreno 750 厂商驱动）→ Android Surface → 屏幕，截图可见（win-smoke，60 帧 swap 无错误）。
-- **egl-smoke**：pbuffer + clear + readback RGBA 精确（64,128,191,255）。
-- **eglinfo**：GLVND vendor JSON 正常，EGL 1.5，两组配置。
-- **glxinfo / glmark2（X11）**：经 glvnd 的 MobileGL GLX vendor，不需 `LD_LIBRARY_PATH`；glxinfo 报 Espryt (Adreno 750) GL 4.6；glmark2（X11 窗口经 Xwayland）画面正确上屏，shading 场景约 280 fps；glmark2-wayland / glmark2-es2-wayland 正常且退出无报错。
-- **KWin 6.7.4**：合成器存活并呈现（黑桌面+光标可见）。
-- **Konsole**：窗口完整正确渲染（标题栏、工具栏、shell 提示符，方向正确）。
-- **多 session**：两个 win-smoke 连续运行同一窗口均 exit 0（stale surface 修复生效）。
-- **Chrome 跑在 MobileGL 上（2026-10-02）**：会话的 Chrome 启动项（`mobilegl-startup.sh chrome`，plasma 模式写入用户级 `google-chrome.desktop` 覆盖）用 `--use-gl=angle --use-angle=gles --in-process-gpu --render-node-override=<不存在的节点> --disable-features=WaylandFractionalScaleV1`：ANGLE 报 `ANGLE (MobileGL-Dev…, Espryt…, OpenGL 4.6.0 MobileGL…)`，GPU 合成开启，标签栏/工具栏/网页正确合成，缩放正确。为什么这样配：Chrome 的独立 GPU 进程在 Wayland 上只能经 GBM dma-buf 上屏（MobileGL 与本 KWin 都不收），放进浏览器进程后改走 wl_egl_window（MobileGL 的 wl_shm 呈现）；该路径下 Chrome 不发 fractional-scale 的 viewport，整数缩放才会发 `set_buffer_scale`。此前镜像自带的 `/usr/local/bin/google-chrome` 是 `--use-angle=vulkan` + renderD128，走的是容器里的 Turnip。
-- **Plasma 桌面可用（2026-10-02，`ccf8eb65`：server 与容器 client 同源）**：壁纸、面板、托盘、时钟、桌面图标、Kickoff 开始菜单、通知窗口都正确渲染；鼠标/触摸输入可用（点击打开 Kickoff）；KWin 过渡动画正常；开/关托盘弹窗不再花屏；按返回键收起快捷键栏时输出 resize 跟随。三线程/三 context/三 surface 并发回读探针（`anland-egl-mt-readback-probe.c`）与大纹理分块上传探针（`anland-egl-upload-probe.c`）全过。
-- **Magma（DirectVulkan）与 Espryt 同等可用（2026-10-02，`4b388950`）**：KWin 合成（约 140 fps，apply 2–3 ms/帧）、plasmashell 真正经 Magma GPU 渲染（壁纸、面板、托盘、桌面图标、带模糊的 Kickoff、通知弹窗；托盘里不再有「正在使用的软件渲染器」）、glxinfo 报 `Magma (MobileGL Core) (Adreno (TM) 750, Vulkan 1.3.128…)`、glmark2（X11）全 16 场景跑完 score 47、glmark2-es2-wayland score 50、Chrome 正常（剩余问题与 Espryt 相同：WebGL 画布空白、扩展图标黑块）、`kscreenlocker_greet --testing` 正确渲染且退出后桌面无噪点。切后端：`setprop debug.mobilegl.backend DirectVulkan` + `/etc/mobilegl/backend` 写同名 + 重启 APK 与会话。
-- **Plasma 会话（早期，`30fef23d` 的 server + `ff212061` 的容器 client）**：`desktop-session.service` 持续 active（>1 分钟，此前约 7 秒必拆）；面板完整渲染（启动器、固定应用、托盘、时钟）；光标尺寸正常；多个 session 并发、逐个 reap 而其余继续服务。截图里壁纸有横向条带错位（见下面第 1 条）。
+### 4. MobileGL work landed since the previous handoff (newest first, grouped)
+- **Perf:**
+  - `bb31f374` Magma keeps render passes open across draws;
+  - `e5ee31b0` android-30 for native TLS;
+  - `915882b2` record timing only with stats on;
+  - `963f4d81` Magma command buffer reuse;
+  - `d627fca3` the server wakes a parked client only when its sequence is applied;
+  - `2de0d6dd` client-array buffer reuse;
+  - `66b47a10` glFinish waits for the GPU, plus ES OES strings.
+- **YUV:** `7218bacb` NV12/P010 shared images, `GL_OES_EGL_image_external`, Espryt `GL_EXT_YUV_target`, Magma Ycbcr conversion.
+- **Device loss and hangs:**
+  - `287e1df8` cut off the session that hangs the GPU;
+  - `7823bcd9` client fresh-session recovery;
+  - `90e63c9e` robustness extensions;
+  - `58c3d9bd` per-session device-loss latch;
+  - `36190b7c`, `cf763b40`, `1dd888cb`, `f22ae625`, `f52a5467` loss and teardown edge cases.
+- **Multi-thread and multi-context fixes:** `a9f22ebb`, `25a76c1b`, `393002a4`, `a84104a4`, `2acc6c41`, `8024b645`.
+- **Chrome:**
+  - `4f6f4125` real EGL native fences;
+  - `30977c18` opt-in ES identity for ES contexts (the GPU process on ANGLE);
+  - `5accb098` glslang anonymous-struct samplers (Shadertoy page fault).
+- **X11:**
+  - `198d6fea` GLX via DRI3/Present;
+  - `08f23543` glFlush implicit sync for glamor;
+  - `5de6ecd4`, `7fd965ce` shared-image upload and publish;
+  - `cd58f048` inactive fragment output location;
+  - `316ffe02` never dial its own X display.
+- **glvnd:** `69e96f5b`, `4095624f`, `4f679d66`, `3d69c375`, `552dd3d3`.
+- **Present:**
+  - `74919a3b` / `7090e31d` buffer age and damage;
+  - Espryt fixes `815217cc` (scissor shadow is per-session), `c822a9fe`, `228bd24c`;
+  - `1ff7ca53` / `caa00995` frame-callback pacing;
+  - `5a7b23f6` / `258b9460` / `16b07cf4` suspend, resume and resize.
+- **Shared images:** `38842985`, `3d17e8c1`, `350fc699`, `67226176`, `b5cab441`, `7520e53b`.
+- **Misc:**
+  - `8da082f8` clear colour starts at (0,0,0,0);
+  - `51c37bcb` sampler param conversion;
+  - `15f9b27a` sampler CSO per share group;
+  - `239fc228` gl_FragCoord access chains;
+  - `bfa7987c` Magma declines invalid SPIR-V;
+  - `6125f941` surfaceless/no-config EGL;
+  - `4633ca22` frame-stats log gated (`MOBILEGL_SERVER_FRAME_STATS`);
+  - `2a1889b8` gtest discovery at ctest start.
 
-## 未完成 / 已知问题（按优先级）
+### 5. anland work landed (newest first)
+- `41ec066` / `f60b261`: Chrome video decode modes.
+- `e48874c`: KWin recovers from its own session loss.
+- `b9f8162` / `cf07bc7`: Chrome GPU process by default.
+- `3d8c4dd` / `5d30340`: Xwayland glamor.
+- `89894f1` / `a55e975`: DPMS off while hidden.
+- `74bd2d3`: the app starts the desktop, foreground service.
+- `0fd5d01` / `144f55c`: APK build guards.
+- `90c44d7`: system-wide vendor.
+- `23fc73f`: buffer age and damage in KWin.
+- `9773d1e` / `2dfda4a`: resize follow.
+- `f9e41df`: GBM device for linux-dmabuf.
+- `5f15240`: backend choice.
 
-1. **Plasma：桌面已落地、基本可用，剩余问题**（按优先级）：
-   - ~~启动 Chrome 时 KWin 崩溃~~ 已修（anland `kwin.patch`）：无 DRM 设备分支里 `waylandServer()->linuxDmabuf()` 会创建 linux-dmabuf global，而空 tranche 不建格式表，Chrome 请求 default feedback 时 KWin 解引用空表（`LinuxDmaBufV1FeedbackPrivate::send` → `FileDescriptor::get`）。现在该分支不碰 dmabuf，client 回落 wl_shm；Chrome 新标签页正常渲染。KWin shim 现在在 `/tmp/kwin-cores/<pid>/` 下运行，core 不会再被覆盖。
-   - **某个 client 退出时 KWin 偶发 SEGV**（rc=139，core 被覆盖未取到）；KWin 在 server 进程被杀时也会 SEGV（设备丢失路径），后者是预期外但可接受。
-   - **ksplash 启动动画闪黑**：开机时 ksplash 帧间偶有整帧黑；单独 `ksplashqml --test` 在会话内不复现。约 13–15 fps（每帧 2560x1412 全尺寸回读 + wl_shm + KWin 重新上传），见第 3 条。
-   - 合成成本：每个 Wayland 窗口每帧整幅 glReadPixels（2 MiB 一片）+ KWin 整幅 glTexSubImage，是当前帧率上限。
-   - DirectGLES 里少量进程级「容器」对象（resolve FBO、scratch FBO、XFB helper、timer query 探测）不在 share group 里共享，多 session 交替使用时理论上会拿到别的 context 的名字——尚未观察到症状。
-   - **Chrome 剩余渲染问题**：WebGL 画布不显示（get.webgl.org 的立方体区域空白、aquarium 只有底色，fps 计数正常），工具栏两个扩展图标是黑块；两边日志都无报错，待查（怀疑 shared image 的某种格式/swizzle 或画布合成路径）。
-   - ~~锁屏界面花屏~~ 已修（见上表）：复现方式 `kscreenlocker_greet --testing` 起一个测试模式 greeter 再杀掉（本会话的 logind session 类型不支持 `loginctl lock-session`，真锁屏后只能输密码解锁）；修复前几乎每次都让桌面/面板变噪点，修复后多次 + 并发 client 压测均正常。定位手段：给 `BackendTextureObject` 记录创建 session，析构时 session 不符就打 `_Unwind_Backtrace` 栈（符号用 NDK `llvm-addr2line` 对未 strip 的 build-android/libMobileGL.so 解）。
-   - **Plasma 的软件渲染回退是粘滞的**：server 崩溃时 plasmashell 收到 device lost，Plasma 会把 `[QtQuickRendererSettings] SceneGraphBackend=software` 写进 `~/.config/kdeglobals`，之后每次会话都用 CPU 渲染 Qt Quick（托盘出现「正在使用的软件渲染器」图标），即使 GL 已经修好。排查任何 plasmashell 渲染问题前先确认该键不存在：`kwriteconfig6 --file kdeglobals --group QtQuickRendererSettings --key SceneGraphBackend --delete`。
-   - Magma 每个 session 自建 VkInstance/VkDevice（无跨 session 共享），首帧 apply 约 100 ms；内存开销随 client 数线性增长。
-2. **光标巨大化**：2026-10-02 的 Plasma 会话截图里光标尺寸正常，未再复现；若再现，查 output scale 与 cursor layer 的 buffer scale。
-3. **CPU blit 禁令**：用户明确要求最终形态上屏路径无 CPU blit——当前 Wayland wl_shm client 走 readback（`32c79f41`），只是过渡。目标：应用窗口内容也由 server 在 GPU 侧直接给 KWin 合成（server 侧 GPU buffer → 同进程共享给 compositor 的 share group → 合成上屏），不经过 CPU 回读。设计要进 11-state-ownership.md 的后续切片。
-4. **GLX 上屏是 CPU 回读**：每帧整幅 glReadPixels + `xcb_put_image`，同第 3 条的过渡方案；只处理 24/32 位深窗口；直接拿 X 窗口（未经 glXCreateWindow）当 drawable 的 surface 不会随窗口销毁回收。
-5. **surface loss**：Wayland 窗口 resize 已跟随（`ccf8eb65`）；surface loss 仍结束活动 session（无损挂起未实现）；server 进程被杀后，新进程下 KWin 拿不到窗口 surface（KWin 不会重连，需重启会话）。
-6. **AVC 审计未做**：全程在 Enforcing 下跑通（容器侧有 droidspacesd 的既有 permissive 规则），SCM_RIGHTS/memfd 的精确 AVC 采集没做。
-7. **wire stamp 漂移**：容器构建的 `MGGitHash.h` 因 tar 无 .git 而陈旧（日志 WARN "compatible wire with different build"）；两端应同 commit + 显式 `-DMOBILEGL_BUILD_STAMP` 重建。
+## Known open issues (rough priority)
 
-## 设备与环境要点（复现用）
+1. **CI:** retrace failures (see stream 2) and whatever the `2d424146` run still shows red.
+2. **Fullscreen performance** at about half of stock (see stream 1).
+3. **Espryt's ~10 s Preemption-Fault hang path:** the driver doesn't report the reset to the server's contexts, so a hanging client stalls the desktop for 10 s per hang there.
+4. **YUV gaps:**
+   - YUV sampling doesn't wait on the write fence (suspected);
+   - no single-channel (R8/GR88) dma-buf import, so KWin advertises no YUV formats and mpv's GL interop won't work;
+   - the CPU copy for foreign YUV buffers is a fallback, not zero-copy.
+5. **Chrome** doesn't use buffer age (full-frame repaints). The Magma text-caret frame costs about 24 ms.
+6. **A rare Magma X11 rectangle glitch.** The readback GLX fallback is slower with glamor.
+7. **Two GoldControllerTest failures** on Windows hosts. MSVC builds of this branch are broken; build tests in WSL with clang.
+8. **Leftovers:**
+   - container probe files under `~swung0x48/yuvtest` and the local `v.html` tabs in the Chrome profile;
+   - an empty directory `.claude/worktrees/quirky-poincare-df3f3e` (locked by Windows);
+   - WSL `~/mgl-espryt*` / `~/mgl-magma*` directories of unknown owner (kept).
 
-- 设备 HA27Q3LQ（Y700 TB321FU），clone `arch-kde-mgl`（arch-kde 保持不动），容器内 `/opt/mobilegl/{lib,bin,kwin}`。
-- **KernelSU grant**：`ksud profile` 无直授命令；管理器专属 ioctl 的解法：root 下 setuid 到 manager UID（10255）→ `reboot(0xDEADBEEF,0xCAFEBABE)` 拿 `[ksu_driver]` fd → `SET_APP_PROFILE`。helper 源码在 anland `producers/kde/Arch_v5/mobilegl-tools/ksu_grant.c`。已持久化进 `/data/adb/ksu/.allowlist`。
-- 实验 daemon：独立实例 `display_daemon /data/local/tmp/anland-mobilegl/display.sock`（原 daemon 不动）；socket 需 666、目录 777（容器内 uid1000 要连）。
-- clone config 的目录 bind：`/data/local/tmp/display_daemon.sock:/run/display.sock`、`/data/local/tmp/anland-mobilegl:/run/anland-mobilegl`。
-- KWin 启动：`desktop-session.service` + drop-in ExecStart=mobilegl-startup.sh compositor|plasma；Qt 日志默认只出 warning（info 要 QT_LOGGING_RULES）。
-- **当前设备上的 server 库是手工替换的**：`libMobileGL.so` 直接 root 覆盖到已装 APK 的 `/data/app/.../lib/arm64/`（保留 owner/SELinux context，原件备份在 `/data/local/tmp/anland-mobilegl/libMobileGL.so.orig`）。这样不用重签 APK（换签名要卸载重装，UID 会变，KernelSU grant 要重做）。本机构建：NDK 27.2 + `cmake -DCMAKE_TOOLCHAIN_FILE=.../android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_BUILD_STAMP=<commit>`，`llvm-strip --strip-debug` 后推送。
-- **复现用探针**（anland `producers/kde/Arch_v5/mobilegl-tools/`）：`anland-egl-upload-probe.c`（2560x1412 纹理整幅 + 跨分片的局部 TexSubImage 回读校验）、`anland-egl-mt-readback-probe.c`（三线程各自 context/pbuffer 并发绘制+整幅回读）；在容器里以 swung0x48 身份、带 MobileGL 的 `__EGL_VENDOR_LIBRARY_FILENAMES`/`MOBILEGL_*` 环境运行。注入点击要用 `input mouse tap`（anland 抓了触摸屏 EVIOCGRAB，`input tap` 无效）；不要对容器进程用 `debuggerd -b`（发 signal 35，glibc 进程直接被杀）。
-- **Chrome/ANGLE 排查手段**：`--gpu-launcher=<脚本>` 包 GPU 进程（strace 每进程 `-o file.$$`，Chrome 会多次重启 GPU 进程）；ANGLE 只 `dlsym` 一个 `eglGetProcAddress`，其余入口全经它取，LD_PRELOAD 拦 `dlsym` 再包 `eglGetProcAddress` 才能看到 display 调用；headless Chrome + `--remote-debugging-port` + CDP `SystemInfo.getInfo` 能拿到 GL_RENDERER/扩展列表/featureStatus（`--dump-dom chrome://gpu` 在 headless 下拿到的是新标签页）。user manager 里 PAM 带进来的 Mesa/KGSL 变量 `systemctl --user unset-environment` 删不掉（返回 0 但无效），对 MobileGL 会话无害。
-- **诊断用的容器改动**：`/opt/mobilegl/kwin/bin/kwin_wayland` 现在是 shim（设 `MOBILEGL_LOG_FILE_PATH=/tmp/mgl-kwin-$$.log` 后 exec `/opt/mobilegl/kwin/real/kwin_wayland`；真二进制必须仍叫 `kwin_wayland`，否则 KWin 内置 QPA 插件拒绝加载）；`~swung0x48/.config/systemd/user/plasma-plasmashell.service.d/mobilegl-log.conf` 给 plasmashell 单独日志 `/tmp/mgl-plasmashell.log`。MobileGL 打开日志是截断写，所以必须每进程一个文件。
-- 构建（之前那台机器的环境，本机没有 `/root/anland-mgl-build` 也没有 gitignored 的 `build_bundled_apk.sh`；APK 按 `consumers/anland_v5/android_consumer/MOBILEGL.md` 用 gradle + `MOBILEGL_DIST` 构建）：Android dist 用 WSL（NDK r27c，stamp 显式指定）；APK 用 anland worktree 的 `build/build_bundled_apk.sh`；容器 client 用 `producers/kde/Arch_v5/mobilegl-tools/anland-sync-source.sh build`（`MOBILEGL_REPO` 指向已 init 子模块的 MobileGL worktree；注意 `tools/trace_replay` 789MB 必须排除）。
-- 设备 30 秒无操作熄屏——熄屏可能 kill SurfaceView；长跑验证前 `svc power stayon true` 或调 screen_off_timeout。
+## Rules this work follows
+
+- **Commits:** `--no-verify`, one short sentence, no Co-Authored-By trailer. No external project names in code or comments.
+- **Tests:** never run the DirectVulkan integration tests (`ctest -E DirectVulkan`); never run two ctest suites at once.
+- **Worktrees:** one worktree and build directory per task; remove the worktree, branch and build directories right after merging. Keep `anland-unified`, `mgl-unified`, WSL `~/mgl-xbuild-a64`, `~/mgl-anl-bld` and `~/sysroots`. Don't touch `wgl-host` or `~/repos/mobilegl-cts-gl33`.
+- **Core profile only:** don't use fixed-function test apps such as glxgears.
+- **Device:**
+  - stop device work while the user is using the phone;
+  - on USB power, watch the battery (stop below 40%);
+  - wireless adb needs re-enabling after a reboot.
