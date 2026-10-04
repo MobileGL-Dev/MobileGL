@@ -3903,8 +3903,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_Pipe::MGPipeSetResourceOps(&g_glesResourceOps);
 #endif
             // Frontend writes issued while ops were unregistered advanced change
-            // serials with no per-op bump; re-open every draw-clean memo.
-            BumpBufferMutationEpoch();
+            // serials with no per-op bump; re-open every draw-clean memo. Advanced directly,
+            // past BumpBufferMutationEpoch's apply-thread pin: a registration mutates no buffer
+            // and only makes every memo probe again, and with several sessions in one process
+            // a new session's backend registers on its own thread while another session's
+            // apply thread is already running - which the pin would otherwise read as a
+            // client-thread producer and, under the strict lane, abort the server for.
+            g_bufferMutationEpoch.fetch_add(1, std::memory_order_release);
         }
 
         void UnregisterBufferBackendOps() {
