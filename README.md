@@ -34,7 +34,7 @@ The repository is organized into following top-level modules:
 2. **MG_Impl** — front-end implementations of Graphics APIs that interact with `MG_State` and `MG_Backend`: OpenGL, plus the window-system APIs EGL, GLX, WGL, CGL and NSOpenGL.
 3. **MG_Backend** — per-backend translation layer that maps front-end Graphics APIs' semantics and state into concrete backend API calls (e.g. OpenGL ES, Vulkan).
 4. **MG_Pipe** and **MG_Remote** — the command stream between front-end and backend, and the client/server transport that lets the backend run in a separate process (see `docs/Disaggregated`).
-5. **MG_Gbm** — a GBM backend whose buffers are images shared with the MobileGL server, so Wayland clients and compositors can exchange them as dma-bufs.
+5. **MG_Gbm** — a GBM backend whose buffers are images shared with the MobileGL server, so Wayland clients and compositors can exchange them as dma-bufs (RGBA, and NV12/P010 YUV where the server's platform allocates them). YUV dma-bufs - the server's own or a video decoder's - import through `EGL_EXT_image_dma_buf_import` and are sampled through `GL_OES_EGL_image_external(_essl3)`: the backend converts the image into the texture's RGBA level at its first use in each frame (zero-copy for a server image; a foreign buffer, which the platform cannot import, is first copied into one by the CPU).
 6. **MG_Util** and other utility modules.
 
 ## Third-party components
@@ -173,6 +173,7 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER` | Avoid sampler mipmap minification filters. | `0`, `1` | `0` |
 | `MOBILEGL_COHERENT_AS_FLUSH` | Treat persistent `GL_MAP_FLUSH_EXPLICIT_BIT` maps as coherent (app-compat for engines like Flywheel that never flush them). | `0`, `1` | `0` |
 | `MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION` | Always emulate depth/stencil `glReadPixels`/`glGetTexImage` by shader sampling on Espryt, instead of using the driver's own depth/stencil readback where it has one. | `0`, `1` | `0` |
+| `MOBILEGL_YUV_DRIVER_CONVERSION` | Espryt: convert YUV images with the driver's external-sampler conversion (its own colour space) instead of `GL_EXT_YUV_target` with the import's `EGL_YUV_COLOR_SPACE_HINT_EXT` / `EGL_SAMPLE_RANGE_HINT_EXT`. | `0`, `1` | `0` |
 | `MOBILEGL_SERVER_FRAME_STATS` | Log one `P65ServerFrame` timing line per presented frame on the server (apply vs. wall time, socket read rate). On Android also `debug.mobilegl.server_frame_stats`. | `0`, `1` | `0` |
 | `VK_ICD_FILENAMES`      | Select the Vulkan ICD used by the Vulkan loader. | Path to an ICD JSON file             | Loader default |
 

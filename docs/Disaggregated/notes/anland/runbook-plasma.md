@@ -124,6 +124,8 @@ sleep 8; grep -a "presented through" /tmp/mgl-run.client.log
 
 Chrome：`bash scripts/chrome-launch.sh <tag> [参数]`（日志 `/tmp/mgl-chrome-<tag>.client.log`，截图 `ch-<tag>.png`）。探针：`scripts/probes/texfmt.c`（各纹理格式是否保住 alpha）、`dmahash.c`（对某进程的 dma-buf 取样哈希）；放进容器 `/root` 编，例如 `gcc -O1 /root/texfmt.c -o /usr/local/bin/mgl-texfmt -lEGL`，用 `mgrun offscreen` 跑（之前的确切编译参数未验证）。
 
+视频：Chrome 走硬解（VaapiVideoDecoder）。容器的 VA-API 驱动（`msm_drm_drv_video.so`，V4L2 解码）自己分配 surface 并导出 NV12 dma-buf（单 fd，R8 + GR88 两层），Chrome 以 NV12/P010 EGLImage 绑到 `GL_TEXTURE_EXTERNAL_OES`。这种**外来** YUV dma-buf 平台导入不了，MobileGL 走明确标注的 CPU 拷贝兜底：server 映射它、每帧首次使用时拷进自己的 YUV AHB（`AHardwareBuffer_lockPlanes`），再在 GPU 上转换进纹理的 RGBA 层（Espryt：`GL_EXT_YUV_target` + 导入时的色彩 hint，`MOBILEGL_YUV_DRIVER_CONVERSION=1` 改用驱动的 external sampler；Magma：AHB external format 上的 `VkSamplerYcbcrConversion`）。server 自己分配的 NV12/P010（GBM）零拷贝。`MOBILEGL_CHROME_VIDEO_DECODE=software` 恢复 `--disable-accelerated-video-decode`。检查：容器里 `python3 scripts/probes/cdpmedia.py <port> <秒>`（CDP `Media.enable`，`kVideoDecoderName`），`scripts/probes/yuvprobe.c` 像素校验外来 NV12/P010 导入、逐帧刷新和 GBM NV12。KWin 自己的 NV12 路径（拆成 R8 + GR88 两个导入）不支持，KWin 不通告 YUV 格式。
+
 结论成立要同时满足：
 
 - client 日志是 `presented through linux-dmabuf shared images`，不是 `wl_shm`；出现 `could not be presented through a linux-dmabuf shared image` 说明退回了；
