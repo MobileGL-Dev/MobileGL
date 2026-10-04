@@ -299,6 +299,7 @@
         begin.renderPass = target->renderPass;
         begin.framebuffer = framebuffer;
         begin.renderArea = {{0, 0}, destination.extent};
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, target->pipeline);
         const VkViewport viewport{0.0f, 0.0f, static_cast<float>(destination.extent.width),

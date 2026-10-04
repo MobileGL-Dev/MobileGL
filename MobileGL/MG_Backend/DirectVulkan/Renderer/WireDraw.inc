@@ -215,7 +215,10 @@
         MakeXfbWritesVisible();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
-        RetireWireDrawPass();
+        // THE PREVIOUS DRAW'S RENDER PASS STAYS OPEN until this draw's attachments are known: a
+        // draw to the same attachments continues it (below), and on a tiler a pass per draw also
+        // loaded and stored every attachment once per draw. Resource work in between that may not
+        // sit inside a pass (a barrier, a copy, a clear) closes it itself (RenderPassGuard.h).
         // CPU preparation may synchronize GPU-produced vertex/index bytes. Do
         // not rewind an arena while this draw owns as-yet-unrecorded slices.
         WirePreparationScope preparing(m_wirePreparationDepth);
@@ -490,6 +493,7 @@
             // attachments below resolve the same index, so this key has to be taken after it.
             passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
         }
+        Vector<WireImage> sameLayoutAttachments;
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
@@ -499,7 +503,10 @@
                     MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
             const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
                 VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
-            TransitionWireImage(image, layout);
+            // Already in its attachment layout: its barrier (which closes any open pass) waits until
+            // it is known whether the open pass continues with this very attachment.
+            if (image.layout == layout) sameLayoutAttachments.push_back(image);
+            else TransitionWireImage(image, layout);
             VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             info.image = image.image;
             info.viewType = image.viewType;
@@ -565,7 +572,17 @@
         passInfo.pAttachments = attachments.data();
         passInfo.subpassCount = 1;
         passInfo.pSubpasses = &subpass;
-        if (!AcquireCachedWireDrawPass(passKey)) {
+        const Bool continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
+        {
+            const auto* active = VkRenderPassManager::GetActiveRenderPass();
+            const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
+            // A new pass orders itself after earlier writes to its attachments; a continued one
+            // is the same pass, whose attachment writes are ordered by rasterization.
+            if (!stillOpen)
+                for (auto& image : sameLayoutAttachments) TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
+        }
+        if (!continuing) RetireWireDrawPass();
+        if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
             m_wireDrawPassKey = Move(passKey);
             Vector<VkImageView> views;
             views.reserve(viewInfos.size());
@@ -629,13 +646,20 @@
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
         }
         if (indexSlice.IsValid()) vkCmdBindIndexBuffer(frame.commandBuffer, indexSlice.buffer, indexSlice.offset, indexType);
-        if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) {
+        // Still open from the previous draw (nothing closed it, same command buffer): continue.
+        const auto* active = VkRenderPassManager::GetActiveRenderPass();
+        const Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
+                          active->hash == pass.hash;
+        if (!open && active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        if (!open && !VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) {
             MGL_WIRE_DECLINE_AT(BeginRenderPass, "the render pass for this draw could not be begun");
             return false;
         }
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
+        // Storage images this draw writes are what the next sampled-image barrier must cover.
+        if (programObj.hasStorageImages) BumpWireImageWriteEpoch();
         if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
         return true;
     }
@@ -800,6 +824,7 @@
             return;
         }
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdDispatch(frame.commandBuffer, x, y, z);
     }
 
@@ -878,6 +903,7 @@
             return;
         }
         vkCmdBindPipeline(dispatchFrame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+        EndActiveRenderPassOn(dispatchFrame.commandBuffer);
         vkCmdDispatchIndirect(dispatchFrame.commandBuffer, parameters.buffer,
                               parameters.offset + static_cast<VkDeviceSize>(offset));
         if (MG_Util::PipeStats::Enabled())

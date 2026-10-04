@@ -215,6 +215,7 @@
                 VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
                 begin.renderPass = image.clearPass; begin.framebuffer = image.clearFramebuffer;
                 begin.renderArea.extent = {1, 1}; begin.clearValueCount = 1; begin.pClearValues = &clear;
+                EndActiveRenderPassOn(commands);
                 vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
                 vkCmdEndRenderPass(commands);
                 image.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -226,6 +227,7 @@
                 const VkImageSubresourceRange range{image.aspect, 0, 1, 0, image.layers};
                 if (shadow) {
                     const VkClearDepthStencilValue depth{0.0f, 0};
+                    EndActiveRenderPassOn(commands);
                     vkCmdClearDepthStencilImage(commands, image.image, image.layout, &depth, 1, &range);
                 } else vkCmdClearColorImage(commands, image.image, image.layout, &clear.color, 1, &range);
                 if (!VkTextureManager::TransitionImageLayout(commands, image.image, image.layout,
@@ -236,6 +238,7 @@
             VkMemoryBarrier visible{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             visible.srcAccessMask = multisample ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
             visible.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            EndActiveRenderPassOn(commands);
             vkCmdPipelineBarrier(commands, multisample ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &visible, 0, nullptr, 0, nullptr);
         }

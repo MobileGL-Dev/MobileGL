@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include "RenderPassGuard.h"
 #include "VulkanRenderer.h"
 #include "SubmitFencePrefix.h"
 #include "MG_Util/X11/DisplayGuard.h"
@@ -5200,6 +5201,7 @@ void main() {
                 static_cast<Uint32>(dstTexelSize.x()), static_cast<Uint32>(dstTexelSize.y())
             };
 
+            EndActiveRenderPassOn(frame.commandBuffer);
             vkCmdBeginRenderPass(frame.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
             VkViewport viewport{};
@@ -7829,6 +7831,7 @@ void main() {
         }
 
         MGLOG_D("DirectVulkan: glDispatchCompute(%u, %u, %u)", numGroupsX, numGroupsY, numGroupsZ);
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdDispatch(frame.commandBuffer, numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -7906,6 +7909,7 @@ void main() {
         }
 
         MGLOG_D("DirectVulkan: glDispatchComputeIndirect(offset=%zu)", static_cast<SizeT>(indirect));
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdDispatchIndirect(frame.commandBuffer, slice.buffer, slice.offset + static_cast<VkDeviceSize>(indirect));
     }
 
@@ -8750,6 +8754,7 @@ void main() {
         beginInfo.clearValueCount = 1;
         beginInfo.pClearValues = &clearValue;
         // The load op is the whole operation: begin and end with nothing in between.
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdBeginRenderPass(commandBuffer, &beginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(commandBuffer);
 

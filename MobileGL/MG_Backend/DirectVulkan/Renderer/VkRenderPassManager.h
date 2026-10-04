@@ -185,6 +185,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     struct ActiveRenderPassInfo {
         Uint64 hash = 0;
         Uint64 compatibilityHash = 0;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         Vector<TrackedAttachmentLayoutInfo> trackedAttachmentLayouts;
         IntVec2 extent = {0, 0};
 

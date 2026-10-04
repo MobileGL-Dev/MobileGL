@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include "RenderPassGuard.h"
 #include "VkTextureManager.h"
 
 #include "ProgramFactory.h"
@@ -376,6 +377,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copyRegions.push_back(copy);
         }
 
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdCopyImage(commandBuffer,
                        oldResource.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                        newResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -1658,6 +1660,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                            std::max(source->depth >> level, 1u)};
             copyRegions.push_back(copy);
         }
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdCopyImage(commandBuffer, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, snapshot.image,
                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<Uint32>(copyRegions.size()), copyRegions.data());
 
@@ -1772,6 +1775,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // slices" but will read as "depth slice 0" once VK_KHR_maintenance9 is enabled. The
         // validation layer warns about that literal 1 by name.
         barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         trackedLayout = newLayout;
@@ -2734,9 +2738,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 stencilCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
                 stencilCopy.bufferOffset = stagingBase + item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
                 const VkBufferImageCopy copies[2] = {depthCopy, stencilCopy};
+                EndActiveRenderPassOn(commandBuffer);
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, resource.image,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies);
             } else {
+                EndActiveRenderPassOn(commandBuffer);
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, resource.image,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             }
@@ -3211,6 +3217,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if ((aspect & copyAspect) == 0) continue;
                 copy.srcSubresource.aspectMask = copyAspect;
                 copy.dstSubresource.aspectMask = copyAspect;
+                EndActiveRenderPassOn(commandBuffer);
                 vkCmdCopyImage(commandBuffer, old.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, grown.image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             }
@@ -4770,6 +4777,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     rectCopies[rectCopyCount++] = rectCopy;
                     runningOffset += static_cast<VkDeviceSize>(rect.TexelCount() * item.texelBytes);
                 }
+                EndActiveRenderPassOn(commandBuffer);
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, rectCopyCount, rectCopies.data());
                 continue;
@@ -4811,10 +4819,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 stencilCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
                 stencilCopy.bufferOffset = stagingBase + item.offset + static_cast<VkDeviceSize>(texelCount) * 4;
                 const VkBufferImageCopy copies[2] = {depthCopy, stencilCopy};
+                EndActiveRenderPassOn(commandBuffer);
                 vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image,
                                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, copies);
                 continue;
             }
+            EndActiveRenderPassOn(commandBuffer);
             vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, outResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    1, &copy);
         }

@@ -410,6 +410,7 @@
         acquire.dstQueueFamilyIndex = family;
         acquire.image = source->image;
         acquire.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &acquire);
 
@@ -487,6 +488,7 @@
         release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         release.srcQueueFamilyIndex = family;
         release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+        EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &release);
         // GENERAL, the layout every wire descriptor samples in, with the pass's writes made visible.

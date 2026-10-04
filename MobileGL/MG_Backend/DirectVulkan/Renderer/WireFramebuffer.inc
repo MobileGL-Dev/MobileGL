@@ -326,6 +326,7 @@
             if (!color) clear.clearValue.depthStencil = {payload.depth, payload.stencil};
             VkClearRect rect{area, 0, image.layers};
             auto& frame = m_frameContext.GetCurrent();
+            EndActiveRenderPassOn(frame.commandBuffer);
             vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
             vkCmdClearAttachments(frame.commandBuffer, 1, &clear, 1, &rect);
             vkCmdEndRenderPass(frame.commandBuffer);
@@ -837,6 +838,7 @@
         begin.renderPass = pass;
         begin.framebuffer = framebuffer;
         begin.renderArea = {{sxMin, syMin}, {static_cast<Uint32>(width), static_cast<Uint32>(height)}};
+        EndActiveRenderPassOn(m_frameContext.GetCurrent().commandBuffer);
         vkCmdBeginRenderPass(m_frameContext.GetCurrent().commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(m_frameContext.GetCurrent().commandBuffer);
         } else if (!resolvedByShader) {

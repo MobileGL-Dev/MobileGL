@@ -11,6 +11,7 @@
 // PrimitivesGeneratedNoXfbProbe.cpp): one throwaway command buffer, a bounded fence wait that
 // leaks rather than idle-waits a hung GPU, teardown on every other path.
 
+#include "RenderPassGuard.h"
 #include "WireDepthResolveProbe.h"
 
 #include <MG_Util/Debug/Log.h>
@@ -237,6 +238,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The RECTANGLE is the render area, exactly as the render-pass arm's renderArea is - the
         // scratch outside it is never read.
         begin.renderArea = rect;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         // THE VIEWPORT IS THE WHOLE ATTACHMENT AND THE SCISSOR IS THE RECT, and the two are not
@@ -746,6 +748,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             begin.renderPass = clear.pass;
             begin.framebuffer = clear.framebuffer;
             begin.renderArea = fullRect;
+            EndActiveRenderPassOn(cmd);
             vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
             VkClearAttachment attachment{};
             attachment.aspectMask = clear.aspects;
@@ -772,6 +775,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 begin.renderPass = item.resolvePass;
                 begin.framebuffer = item.resolveFramebuffer;
                 begin.renderArea = fullRect;
+                EndActiveRenderPassOn(cmd);
                 vkCmdBeginRenderPass(cmd, &begin, VK_SUBPASS_CONTENTS_INLINE);
                 vkCmdEndRenderPass(cmd);
             }

@@ -660,5 +660,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_samplerResolveMemoHighWater = binding + 1;
             }
         }
+        // WireImageWriteEpoch() when ResolveWireImageDescriptor last made image writes visible.
+        mutable Uint64 m_wireImageBarrierEpoch = 0;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include "RenderPassGuard.h"
 #include "VkBufferManager.h"
 #include "../DirectVulkan.h"
 #include "VulkanRenderer.h"
@@ -337,6 +338,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                              0, 1, &barrier, 0, nullptr, 0, nullptr);
         // P8-D: counted here, past the idle early-out, so `whw` is waits TAKEN, not calls.
@@ -531,13 +533,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
         before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
         const VkBufferCopy copy{offset, dst.offset, size};
+        EndActiveRenderPassOn(commands);
         vkCmdCopyBuffer(commands, resource->buffer.GetHandle(), dst.buffer, 1, &copy);
         VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                              0, 1, &after, 0, nullptr, 0, nullptr);
         resource->lastUseSerial = m_frameSerial;
@@ -575,22 +580,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier before{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         before.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT;
         before.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
         const VkBufferCopy widen{alignedOffset, staging.offset, stagedSize};
+        EndActiveRenderPassOn(commands);
         vkCmdCopyBuffer(commands, resource->buffer.GetHandle(), staging.buffer, 1, &widen);
         // The shift reads what the widening copy just wrote, so it needs its own edge even
         // though both halves are transfers on one command buffer.
         VkMemoryBarrier staged{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         staged.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         staged.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                              0, 1, &staged, 0, nullptr, 0, nullptr);
         const VkBufferCopy shift{staging.offset + headPad, dst.offset + dstSkip, size};
+        EndActiveRenderPassOn(commands);
         vkCmdCopyBuffer(commands, staging.buffer, dst.buffer, 1, &shift);
         VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        EndActiveRenderPassOn(commands);
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                              0, 1, &after, 0, nullptr, 0, nullptr);
         resource->lastUseSerial = m_frameSerial;
@@ -908,14 +918,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkMemoryBarrier hostWrites{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             hostWrites.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
             hostWrites.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            EndActiveRenderPassOn(commands);
             vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
                                  &hostWrites, 0, nullptr, 0, nullptr);
             VkBufferCopy region{0, 0, kWords * 4};
+            EndActiveRenderPassOn(commands);
             vkCmdCopyBuffer(commands, imported.buffer, staging.buffer, 1, &region);
+            EndActiveRenderPassOn(commands);
             vkCmdFillBuffer(commands, imported.buffer, kFillAt, kWords * 4, kFillWord);
             VkMemoryBarrier toHost{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
             toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+            EndActiveRenderPassOn(commands);
             vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
                                  0, nullptr, 0, nullptr);
             vkEndCommandBuffer(commands);
@@ -965,11 +979,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 verdict = "steady: the second submission could not be recorded";
                 break;
             }
+            EndActiveRenderPassOn(commands);
             vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
                                  &hostWrites, 0, nullptr, 0, nullptr);
             VkBufferCopy steadyRegion{kSteadyAt, 0, kWords * 4};
+            EndActiveRenderPassOn(commands);
             vkCmdCopyBuffer(commands, imported.buffer, staging.buffer, 1, &steadyRegion);
+            EndActiveRenderPassOn(commands);
             vkCmdFillBuffer(commands, imported.buffer, kFillAt, kWords * 4, kSteadyFillWord);
+            EndActiveRenderPassOn(commands);
             vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
                                  0, nullptr, 0, nullptr);
             vkEndCommandBuffer(commands);
@@ -1488,6 +1506,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier beforeBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         beforeBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         beforeBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
                              &beforeBarrier, 0, nullptr, 0, nullptr);
 
@@ -1495,11 +1514,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         region.srcOffset = staging.offset;
         region.dstOffset = static_cast<VkDeviceSize>(offset);
         region.size = static_cast<VkDeviceSize>(size);
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdCopyBuffer(commandBuffer, staging.buffer, resource.buffer.GetHandle(), 1, &region);
 
         VkMemoryBarrier afterBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         afterBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         afterBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
                              &afterBarrier, 0, nullptr, 0, nullptr);
 
@@ -1534,6 +1555,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier beforeBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         beforeBarrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         beforeBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
                              &beforeBarrier, 0, nullptr, 0, nullptr);
 
@@ -1541,11 +1563,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         region.srcOffset = staging.offset;
         region.dstOffset = static_cast<VkDeviceSize>(offset);
         region.size = static_cast<VkDeviceSize>(size);
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdCopyBuffer(commandBuffer, staging.buffer, resource.buffer.GetHandle(), 1, &region);
 
         VkMemoryBarrier afterBarrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         afterBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         afterBarrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        EndActiveRenderPassOn(commandBuffer);
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1,
                              &afterBarrier, 0, nullptr, 0, nullptr);
 

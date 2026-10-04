@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include "RenderPassGuard.h"
 #include "UniformManager.h"
 
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
@@ -251,11 +252,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             WireDescriptorFatal("image-descriptor-transition");
         // A second descriptor/draw can keep GENERAL after a shader write. A layout
         // equality fast return is not a memory dependency for that prior write.
-        VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-        memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                             0, 1, &memory, 0, nullptr, 0, nullptr);
+        // Only when something may have written an image since the last such barrier
+        // (WireImageWriteEpoch): with nothing written in between, consecutive draws keep their
+        // render pass open instead of closing it for a barrier that orders nothing.
+        if (WireImageWriteEpoch() != m_wireImageBarrierEpoch) {
+            VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            EndActiveRenderPassOn(commandBuffer);
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0, 1, &memory, 0, nullptr, 0, nullptr);
+            m_wireImageBarrierEpoch = WireImageWriteEpoch();
+        }
         VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         info.image = resource->image;
         info.viewType = type;

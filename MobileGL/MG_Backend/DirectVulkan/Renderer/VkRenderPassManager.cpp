@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #include "VkRenderPassManager.h"
+#include "RenderPassGuard.h"
+#include <atomic>
 
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
@@ -1666,6 +1668,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 s_clearManager.Get()->PopPendingClear(pending.key);
             }
         }
+        s_activeRenderPass.Get().commandBuffer = commandBuffer;
         s_activeRenderPass.Get().hash = renderPassEntry.hash;
         s_activeRenderPass.Get().compatibilityHash = renderPassEntry.compatibilityHash;
         s_activeRenderPass.Get().trackedAttachmentLayouts = renderPassEntry.trackedAttachmentLayouts;
@@ -1676,6 +1679,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkRenderPassManager::EndRenderPass(VkCommandBuffer commandBuffer) {
+        BumpWireImageWriteEpoch();
         auto* activeRenderPass = GetActiveRenderPass();
         vkCmdEndRenderPass(commandBuffer);
         // The fast-path memo reuses the ACTIVE render pass; once the pass ends it must not carry
@@ -1734,4 +1738,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     ActiveRenderPassInfo* VkRenderPassManager::GetActiveRenderPass() {
         return s_hasActiveRenderPass.Get() ? &s_activeRenderPass.Get() : nullptr;
     }
+    namespace {
+        std::atomic<Uint64> g_wireImageWriteEpoch{1};
+    }
+    Uint64 WireImageWriteEpoch() { return g_wireImageWriteEpoch.load(std::memory_order_relaxed); }
+    void BumpWireImageWriteEpoch() { g_wireImageWriteEpoch.fetch_add(1, std::memory_order_relaxed); }
+
+    void EndActiveRenderPassOn(VkCommandBuffer commandBuffer) {
+        BumpWireImageWriteEpoch();
+        const auto* active = VkRenderPassManager::GetActiveRenderPass();
+        if (active != nullptr && active->commandBuffer == commandBuffer && commandBuffer != VK_NULL_HANDLE)
+            VkRenderPassManager::EndRenderPass(commandBuffer);
+    }
+
 } // namespace MobileGL::MG_Backend::DirectVulkan
