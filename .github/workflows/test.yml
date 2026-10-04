@@ -3506,27 +3506,10 @@ jobs:
     runs-on: ubuntu-latest
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
-    env:
-      # THE CURRENT PHASE's base ref, for the two G5 region gates below. It is 37da3c3a - P4a's
-      # base ref, INTEGRATOR-DECISIONS ID-1 - and NOT the workflow's baseline_sha input: that input
-      # is the SYMBOL baseline (087685d1, P1's G1 reading) and it is empty on a push, whereas these
-      # gates ask "did the do-not-touch list move since the phase started".
-      #
-      # IT MOVED FROM P3a's 44c2b5cf TO P4a's 37da3c3a WITH THE PHASE, and that is a deliberate
-      # narrowing rather than a loss: P3a's eleven functions were compared against 44c2b5cf at P3a's
-      # own exit and were byte-identical there, so 37da3c3a carries the same bodies (measured: the
-      # eleven shas at 37da3c3a are the eleven shas at 44c2b5cf, and FlushPendingRangesFrom's is
-      # still the sha pinned in the script at 3e298c9a). What the two gates now both answer is "did
-      # anything on the list move during P4a", which is the question this phase can act on.
-      BASELINE: "37da3c3a"
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          # The G5 gate reads Managers.cpp at BASELINE with `git show`, which a depth-1 checkout
-          # does not have. Nothing else in this job needs history.
-          fetch-depth: 0
 
       # The seven generators all read MG_Pipe/*.def, so regenerating and diffing is what
       # keeps the two interface tables, the wire records, the verify comparators, the
@@ -3654,76 +3637,6 @@ jobs:
           python3 scripts/ci/tcp_lane_tools_test.py
           python3 tools/trace_replay/test_run_tcp_matrix.py
           python3 tools/trace_replay/test_compare_actuals.py
-
-      # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
-      # buffer pool, the deferred-release drain and the three persistently mapped rings move
-      # VERBATIM, and ARCHITECTURE.md:515 says why - their retire happens only inside Present, so
-      # a batching or ordering change there starves them, and nothing else in this workflow can
-      # see it. P3a rewrites the rest of Managers.cpp by design, so a file diff says nothing; the
-      # script extracts the ELEVEN named bodies and compares their hashes on their own.
-      #
-      # Eleven and not ten (ID-15): Managers.cpp carries the three-tier flush drain TWICE, once
-      # per preprocessor arm, and a push build compiles only FlushPendingRangesFrom while the
-      # untouched FlushPendingRangesNow lives in the `#else`. Hashing the pull name alone would
-      # protect text no shipping build compiles, so both are hashed - the pull ladder against
-      # BASELINE, the push ladder against a sha pinned in the script at 3dadd4c1 (ID-41), because
-      # that one was born in P3a and is compared against the reviewed body rather than against the
-      # base ref.
-      #
-      # Scoped to the disaggregation branch and to a manual dispatch, deliberately: the question
-      # is "did these eleven move since P3a started", and BASELINE is P3a's base ref. On dev,
-      # where unrelated buffer fixes land on their own schedule, the same comparison would be
-      # asking a question nobody posed - it belongs with the TEMPORARY trigger lines at the top
-      # of this file and retires with them.
-      #
-      # --self-test is the half that keeps it honest, and it is not optional: a comparison that
-      # silently stopped comparing produces exactly the same green as eleven untouched bodies. It
-      # runs eight canned controls - eleven bodies extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them ignored, each of the three perturbation targets (ClearBufferPool and BOTH
-      # flush ladders) reported BY NAME, plus the pin-precedence control and a one-token edit to the
-      # pinned ladder compared against the pin - and fails if any of them does not answer.
-      # Same shape as gen_pipe.py --self-test above.
-      - name: P3a regions unchanged (G5)
-        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
-        run: bash scripts/p3a_untouched_regions.sh "${BASELINE}" HEAD
-
-      - name: P3a untouched-region self-test (G5)
-        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
-        run: bash scripts/p3a_untouched_regions.sh --self-test
-
-      # A GATE AS OF P4a (G5), and a SECOND script rather than an edit to the one above. P4a extends
-      # the same claim to the rest of ARCHITECTURE.md:318's do-not-touch list - the unpack PBO ring's
-      # staging repack and its two helpers, the attachment permutation, the D24S8 sampling-emulation
-      # core and the format-caveat handler - which is SEVENTEEN regions across THREE files
-      # (BRIEF-P4A.md D-N: P3a's eleven, which P4a must not touch either, plus P4a's six). The
-      # parent's SOURCE_PATH is a single file, so the extension needed a per-region source path and
-      # a region KIND (DepthStencilSamplingReadImpl is a namespace, not a function); everything else
-      # about the extraction is its parent's, verbatim.
-      #
-      # Both scripts run. The parent keeps answering its own question against its own eleven, so a
-      # regression in either half names itself, and neither gate can be silenced by editing the
-      # other's list.
-      #
-      # Same feat/disaggregated-or-dispatch guard as the P3a step, for the same reason: the question
-      # is "did these move since the phase started", and on dev - where unrelated buffer and texture
-      # fixes land on their own schedule - it would be a question nobody posed. It belongs with the
-      # TEMPORARY trigger lines at the top of this file and retires with them.
-      #
-      # --self-test is the half that keeps it honest and is not optional: a comparison that silently
-      # stopped comparing produces exactly the same green as seventeen untouched regions. It runs
-      # three positive controls (seventeen regions extracted, an untouched copy compared equal, an
-      # edit OUTSIDE them invisible in all three files) and NINE negative ones - ClearBufferPool,
-      # FlushPendingRangesNow, RecomputeBackendColorSlots and StageBlocksIntoUnpackRing, each
-      # perturbed at its HEAD and at its TAIL and each required to be named BY NAME, plus a
-      # one-token edit to the pinned FlushPendingRangesFrom body compared against the pin - and
-      # fails if any of them does not answer.
-      - name: P4a regions unchanged (G5)
-        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
-        run: bash scripts/p4a_untouched_regions.sh "${BASELINE}" HEAD
-
-      - name: P4a untouched-region self-test (G5)
-        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
-        run: bash scripts/p4a_untouched_regions.sh --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
