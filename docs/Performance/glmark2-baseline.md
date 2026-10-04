@@ -1,6 +1,6 @@
 # glmark2 baseline: MobileGL (Espryt, Magma) vs the stock kgsl driver stack on anland
 
-Measured 2026-10-04 on the anland Plasma desktop. This is the phase-1 baseline for the
+Measured 2026-10-04 on the anland Plasma desktop. **What was optimized since, the current numbers and the remaining work: [glmark2-handoff.md](glmark2-handoff.md).** This is the phase-1 baseline for the
 performance work: approximate numbers, how they were taken, where MobileGL loses, and a ranked list
 of general fixes. The goal was "where does MobileGL fall short", not lab-grade accuracy, so the
 scores are **approximate** (1-3 valid runs per configuration, see n in the tables); the profiling
