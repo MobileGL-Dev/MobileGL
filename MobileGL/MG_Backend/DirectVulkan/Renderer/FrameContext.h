@@ -150,5 +150,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Stored at Initialize for retired-command-buffer management.
         VkDevice m_device = VK_NULL_HANDLE;
         VkCommandPool m_commandPool = VK_NULL_HANDLE;
+        // Completed command buffers kept for the next retirement instead of being freed and
+        // reallocated: the pool resets a buffer implicitly at its next vkBeginCommandBuffer.
+        Vector<VkCommandBuffer> m_spareCommandBuffers;
+        VkResult TakeCommandBuffer(VkCommandBuffer& out);
+        void RecycleCommandBuffer(VkCommandBuffer commandBuffer);
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

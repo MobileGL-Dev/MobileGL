@@ -66,7 +66,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 FreeRetiredCommandBuffers(frame);
             }
             vkFreeCommandBuffers(device, commandPool, frameCount * 2, commandBuffers.data());
+            if (!m_spareCommandBuffers.empty())
+                vkFreeCommandBuffers(device, commandPool, static_cast<Uint32>(m_spareCommandBuffers.size()),
+                                     m_spareCommandBuffers.data());
         }
+        m_spareCommandBuffers.clear();
         m_frames.clear();
         currentFrameIndex = 0;
         m_device = VK_NULL_HANDLE;
@@ -362,21 +366,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(!frame.isPreCommandRecording,
                         "RetireCurrentCommandBuffer called while the pre-pass stream is still recording");
 
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = m_commandPool;
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1;
         VkCommandBuffer replacement = VK_NULL_HANDLE;
-        VkResult result = vkAllocateCommandBuffers(m_device, &allocInfo, &replacement);
+        VkResult result = TakeCommandBuffer(replacement);
         if (result != VK_SUCCESS) {
             return result;
         }
         if (retirePreCommandBuffer) {
             VkCommandBuffer preReplacement = VK_NULL_HANDLE;
-            result = vkAllocateCommandBuffers(m_device, &allocInfo, &preReplacement);
+            result = TakeCommandBuffer(preReplacement);
             if (result != VK_SUCCESS) {
-                vkFreeCommandBuffers(m_device, m_commandPool, 1, &replacement);
+                RecycleCommandBuffer(replacement);
                 return result;
             }
             frame.retiredCommandBuffers.push_back({frame.preCommandBuffer, frame.lastSubmitIndex});
@@ -411,8 +410,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             SizeT completedCount = 0;
             while (completedCount < frame.retiredCommandBuffers.size() &&
                    frame.retiredCommandBuffers[completedCount].submitIndex <= completedSubmitIndex) {
-                vkFreeCommandBuffers(m_device, m_commandPool, 1,
-                                     &frame.retiredCommandBuffers[completedCount].commandBuffer);
+                RecycleCommandBuffer(frame.retiredCommandBuffers[completedCount].commandBuffer);
                 ++completedCount;
             }
             if (completedCount > 0) {
@@ -420,6 +418,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   frame.retiredCommandBuffers.begin() + completedCount);
             }
         }
+    }
+
+    VkResult FrameContext::TakeCommandBuffer(VkCommandBuffer& out) {
+        if (!m_spareCommandBuffers.empty()) {
+            out = m_spareCommandBuffers.back();
+            m_spareCommandBuffers.pop_back();
+            return VK_SUCCESS;
+        }
+        VkCommandBufferAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocInfo.commandPool = m_commandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = 1;
+        return vkAllocateCommandBuffers(m_device, &allocInfo, &out);
+    }
+
+    void FrameContext::RecycleCommandBuffer(VkCommandBuffer commandBuffer) {
+        // A handful covers the buffers in flight between two completions; beyond that, free.
+        constexpr SizeT kSpareCommandBuffers = 8;
+        if (commandBuffer == VK_NULL_HANDLE) return;
+        if (m_spareCommandBuffers.size() < kSpareCommandBuffers) {
+            m_spareCommandBuffers.push_back(commandBuffer);
+            return;
+        }
+        vkFreeCommandBuffers(m_device, m_commandPool, 1, &commandBuffer);
     }
 
     void FrameContext::FreeAllRetiredCommandBuffers() {
