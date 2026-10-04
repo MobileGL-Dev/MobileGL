@@ -1085,6 +1085,7 @@ namespace MobileGL::MG_Remote::Server {
         static std::uint64_t sFrameRecords = 0;
         static std::uint64_t sFrameIndex = 0;
         Uint64 applied = 0;
+        const bool timed = ServerFrameStatsEnabled();
         for (;;) {
             if (SessionLatched()) break;
             if (m_windowRequests.load(std::memory_order_acquire) != 0) {
@@ -1093,15 +1094,21 @@ namespace MobileGL::MG_Remote::Server {
             }
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
-                [this, &applier](const Transport::RingRecordView& record) {
-                    const auto applyStarted = std::chrono::steady_clock::now();
-                    applier.ApplyOne(record);
+                [this, &applier, timed](const Transport::RingRecordView& record) {
                     // P65ServerFrame: timed around the ONE call that is the server's work, and
                     // summed across the drains a frame spans. See the block above DrainRing's loop.
-                    sFrameApplyNs += static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() - applyStarted)
-                            .count());
+                    // Only when the line is on: two clock reads per record were a measurable part
+                    // of a record's cost.
+                    if (timed) {
+                        const auto applyStarted = std::chrono::steady_clock::now();
+                        applier.ApplyOne(record);
+                        sFrameApplyNs += static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - applyStarted)
+                                .count());
+                    } else {
+                        applier.ApplyOne(record);
+                    }
                     ++sFrameRecords;
                     // P9 W3, F2: outside the apply timing above; 0 in every run that is not F2.
                     if (m_testLogFloodLines != 0) FloodLogForTest(m_testLogFloodLines);
