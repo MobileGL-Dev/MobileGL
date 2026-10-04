@@ -233,6 +233,13 @@
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& payload, GLint drawbuffer) {
         RetireWireDrawPass();
+        // A stream that neither presents nor finishes (an off-screen loop) never submits, so its
+        // recording and the per-clear objects retired below would grow until host memory runs
+        // out. Past a bound, submit what is recorded: the objects then retire with that work.
+        constexpr SizeT kRetiredObjectsBeforeSubmit = 1024;
+        if (m_wireRetiredObjects.size() >= kRetiredObjectsBeforeSubmit && m_wirePreparationDepth == 0 &&
+            HasPendingRecordedWork())
+            (void)FlushPendingCommands();
         if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         const auto clearSurface = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                       Uint32 colorIndex) {

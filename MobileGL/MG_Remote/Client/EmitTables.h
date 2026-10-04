@@ -291,6 +291,8 @@ namespace MobileGL::MG_Remote::Client {
     //
     // The event drain's half: the server reported `fence` signaled (kEventFenceSignaled). Every
     // later glClientWaitSync / glGetSynciv(GL_SYNC_STATUS) on it answers without a round trip.
+    // glFinish's wait for the GPU (a server fence created, waited and destroyed).
+    void EmitFinishWait();
     void NoteFenceSignaledByServer(MG_Pipe::MGPipeHandle fence);
 
     // What the fence polls cost, for the lanes. `LocalAnswers` = polls answered with no record

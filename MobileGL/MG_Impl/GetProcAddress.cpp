@@ -246,6 +246,10 @@ namespace MobileGL::MG_Impl {
         GETPROC(glBufferSubData, name);
         GETPROC(glGetBufferSubData, name);
         GETPROC(glMapBuffer, name);
+        // GL_OES_mapbuffer (ES contexts): the same three calls under their OES names.
+        if (strcmp(name, "glMapBufferOES") == 0) return (void*)glMapBuffer;
+        if (strcmp(name, "glUnmapBufferOES") == 0) return (void*)glUnmapBuffer;
+        if (strcmp(name, "glGetBufferPointervOES") == 0) return (void*)glGetBufferPointerv;
         GETPROC(glUnmapBuffer, name);
         GETPROC(glGetBufferParameteriv, name);
         GETPROC(glGetBufferPointerv, name);

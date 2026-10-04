@@ -610,7 +610,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // GL_OES_EGL_image_external(_essl3) only where the server samples YUV images: an
             // external texture is a 2D texture holding the image converted to RGBA, which needs
             // the server to hold the YUV image in the first place (EGLImpl::SharedImageYuvAvailable).
-            static const auto build = [](Bool images, Bool external, Bool es) {
+            static const auto build = [](Bool images, Bool external, Bool es, Bool esApi) {
                 Vector<const char*> list;
                 if (images) list.push_back("GL_OES_EGL_image");
                 if (images && external) {
@@ -627,15 +627,30 @@ namespace MobileGL::MG_Impl::GLImpl {
                     list.push_back("GL_EXT_texture_format_BGRA8888");
                     list.push_back("GL_EXT_read_format_bgra");
                 }
+                // Any context created for the OpenGL ES API, whatever it calls itself: the ES 2.0
+                // names of what desktop GL has in core - RGB8/RGBA8 and DEPTH_COMPONENT24
+                // renderbuffers, and glMapBuffer (exported under its OES names as well).
+                if (esApi) {
+                    list.push_back("GL_OES_rgb8_rgba8");
+                    list.push_back("GL_OES_depth24");
+                    list.push_back("GL_OES_mapbuffer");
+                }
                 return list;
             };
-            static const Vector<const char*> lists[8] = {
-                build(false, false, false), build(false, false, true), build(false, true, false),
-                build(false, true, true),   build(true, false, false), build(true, false, true),
-                build(true, true, false),   build(true, true, true)};
+            static const Vector<const char*> lists[16] = {
+                build(false, false, false, false), build(false, false, false, true),
+                build(false, false, true, false),  build(false, false, true, true),
+                build(false, true, false, false),  build(false, true, false, true),
+                build(false, true, true, false),   build(false, true, true, true),
+                build(true, false, false, false),  build(true, false, false, true),
+                build(true, false, true, false),   build(true, false, true, true),
+                build(true, true, false, false),   build(true, true, false, true),
+                build(true, true, true, false),    build(true, true, true, true)};
             const Bool images = MG_Impl::EGLImpl::SharedImagesAvailable();
             const Bool external = images && MG_Impl::EGLImpl::SharedImageYuvAvailable();
-            return lists[(images ? 4 : 0) + (external ? 2 : 0) + (EsIdentityActive() ? 1 : 0)];
+            const Bool esApi = MG_State::pEGLContext &&
+                               MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
+            return lists[(images ? 8 : 0) + (external ? 4 : 0) + (EsIdentityActive() ? 2 : 0) + (esApi ? 1 : 0)];
         }
 
         // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend

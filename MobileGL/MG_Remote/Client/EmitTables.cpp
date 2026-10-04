@@ -2085,6 +2085,23 @@ namespace MobileGL::MG_Remote::Client {
 
     } // namespace
 
+    // glFinish's GPU half: a server fence created after everything the client issued, waited
+    // with GL_SYNC_FLUSH_COMMANDS_BIT, then destroyed. Waiting for the apply thread alone left
+    // the GPU queue unbounded behind a "finished" glFinish.
+    void EmitFinishWait() {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || !session->Started() || session->DeviceLost()) return;
+        const std::lock_guard<std::mutex> lock(g_fenceMutex);
+        const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeSlots().Allocate(MG_Pipe::MGPipeKind::Fence);
+        const MG_Pipe::MGPHandleOnly desc{handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
+        session->EmitAndWait(MG_Pipe::MGPWireOp::FenceCreate, &desc, sizeof(desc), nullptr, 0, nullptr, 0, nullptr);
+        constexpr GLuint64 kFinishTimeoutNs = 10ull * 1000 * 1000 * 1000;
+        const MG_Pipe::MGPFenceWait request{handle, kFinishTimeoutNs, GL_SYNC_FLUSH_COMMANDS_BIT, 0};
+        (void)ReadFenceReply(*session, MG_Pipe::MGPWireOp::FenceWait, &request, sizeof(request));
+        session->EmitAndWait(MG_Pipe::MGPWireOp::FenceDestroy, &desc, sizeof(desc), nullptr, 0, nullptr, 0, nullptr);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Fence, handle);
+    }
+
     void NoteFenceSignaledByServer(MG_Pipe::MGPipeHandle fence) {
         RememberFenceSignaled(fence);
         g_fenceServerReports.fetch_add(1, std::memory_order_relaxed);

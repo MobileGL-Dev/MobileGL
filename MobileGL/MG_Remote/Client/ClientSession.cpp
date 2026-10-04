@@ -2551,8 +2551,10 @@ namespace MobileGL::MG_Remote::Client {
         // glFinish. Nothing goes on the wire - Flush and Finish have no record (ARCHITECTURE
         // §11) - and under lockstep there was nothing to do, because the client had already
         // waited out every command it issued. Under run-ahead "the commands issued so far have
-        // completed" is a promise the queue can break, so this is where it is kept.
+        // completed" is a promise the queue can break, so this is where it is kept - and
+        // "completed" includes the GPU, so a fence round trip follows the apply.
         WaitForApplyToCatchUp("glFinish");
+        EmitFinishWait();
     }
 
     Uint64 ClientSession::AcquirePresentCredit() {
