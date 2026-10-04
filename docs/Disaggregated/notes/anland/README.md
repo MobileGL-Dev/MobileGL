@@ -8,6 +8,7 @@
 | [`report-mobilegl.md`](report-mobilegl.md) | MobileGL 侧：Linux client 构建与导出、EGL / GLX 能力、split 的 present 路径、AHB / fd / fence 现状、会话与多窗口限制、GL 覆盖面、文档漂移 |
 | [`kgsl-as-server.md`](kgsl-as-server.md) | 把内核 kgsl 看成 server：A / B 实为"缓冲归谁"之分，6.x + Mesa 是 A、5.x 是 B；拆分层级与 virtio-gpu native context / virgl 的对应 |
 | [`plan-ahb-dmabuf.md`](plan-ahb-dmabuf.md) | 计划：server 分配 AHB 当 dma-buf，linux-dmabuf + GBM 后端 + 薄节点，窗口零拷贝；厂商中立规则与分阶段 |
+| [`../../../MobileVA/plan.md`](../../../MobileVA/plan.md) | 计划（未实现）：MobileVA，基于 Android MediaCodec 的厂商中立 VA-API 驱动，解码进 server 的 YUV 共享图像、全程无 CPU 拷贝；旧的高通专用驱动留作 A/B 回退；H.264 先行，VP9 / AV1 / HEVC 的 TODO 与待定问题 |
 | [`runbook-plasma.md`](runbook-plasma.md) | 操作手册：在 Windows 主机 + 平板上从零拉起 / 重启后拉起 MobileGL + anland + KDE Plasma，server / client / KWin 的构建部署循环、切后端、验证、日志与常见坑（配套 skill `.claude/skills/anland-mobilegl-plasma/`） |
 | [`brief-anland.md`](brief-anland.md)、[`brief-mobilegl.md`](brief-mobilegl.md) | 派给 Codex 的原始提示词。**两份都把后端名写反了**：Espryt = DirectGLES（GLES），Magma = DirectVulkan（Vulkan）；报告已纠正 |
 
