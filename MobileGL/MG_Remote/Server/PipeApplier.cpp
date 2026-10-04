@@ -1517,6 +1517,8 @@ namespace MobileGL::MG_Remote::Server {
             reply.Format = image.Fourcc;
             reply.Stride = image.Stride;
             reply.Offset = image.Offset;
+            reply.Plane1Stride = image.Plane1Stride;
+            reply.Plane1Offset = image.Plane1Offset;
         };
         switch (op.Op) {
         case MG_Pipe::kMGPSharedImageAllocate: {
@@ -1554,12 +1556,53 @@ namespace MobileGL::MG_Remote::Server {
                 return false;
             }
             SI::ImageRef image = SI::Identify(fd, why);
+            // YUV: the planes and colour hints ride in Damage (MGPImportPlaneWord). A buffer this
+            // server did not allocate is taken too, through the labelled CPU-copy fallback
+            // (SharedImageRegistry.h, Image::ForeignSource); RGBA ones never are.
+            const Bool yuv = SI::FourccIsYuv(op.Format) && op.DamageCount == MG_Pipe::kMGPImportPlaneWords;
+            if (image == nullptr && yuv) {
+                SI::PlaneLayout layout;
+                layout.Count = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportPlaneCount]);
+                layout.Offset[0] = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportPlane0Offset]);
+                layout.Offset[1] = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportPlane1Offset]);
+                layout.Pitch[0] = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportPlane0Pitch]);
+                layout.Pitch[1] = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportPlane1Pitch]);
+                // The copy reads rows: only a buffer said to be linear (or said nothing) is one.
+                const Uint64 modifier =
+                    static_cast<Uint64>(static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportModifierLo])) |
+                    (static_cast<Uint64>(static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportModifierHi])) << 32);
+                if (op.Damage[MG_Pipe::kMGPImportHasModifier] != 0 && modifier != SI::kModifierLinear &&
+                    modifier != SI::kModifierInvalid) {
+                    char text[96];
+                    std::snprintf(text, sizeof(text), "; a foreign buffer of modifier 0x%016llx is not linear",
+                                  static_cast<unsigned long long>(modifier));
+                    why += text;
+                } else {
+                    std::string foreignWhy;
+                    image = SI::ImportForeignYuv(fd, op.Width, op.Height, op.Format, layout, foreignWhy);
+                    if (image == nullptr) why += "; as a foreign YUV buffer: " + foreignWhy;
+                }
+            }
 #if !defined(_WIN32)
             ::close(fd);
 #endif
             if (image == nullptr) {
                 MGLOG_W_ONCE("MG_Remote server: a dma-buf import was refused: %s", why.c_str());
                 return false;
+            }
+            if (SI::FourccIsYuv(image->Fourcc) != SI::FourccIsYuv(op.Format) ||
+                (SI::FourccIsYuv(op.Format) && image->Fourcc != op.Format)) {
+                MGLOG_W("MG_Remote server: a dma-buf import of image %llu (fourcc 0x%08x) as fourcc 0x%08x was refused",
+                        static_cast<unsigned long long>(image->Id), image->Fourcc, op.Format);
+                return false;
+            }
+            if (yuv) {
+                SI::Yuv::Hints hints;
+                hints.ColorSpace = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportYuvColorSpace]);
+                hints.Range = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportYuvRange]);
+                hints.SitingX = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportYuvSiting]) & 0xffffu;
+                hints.SitingY = static_cast<Uint32>(op.Damage[MG_Pipe::kMGPImportYuvSiting]) >> 16;
+                SI::SetYuvHints(*image, hints);
             }
             if (image->Width != op.Width || image->Height != op.Height || !SI::FourccSupported(op.Format)) {
                 MGLOG_W("MG_Remote server: a dma-buf import of image %llu (%ux%u) as %ux%u fourcc 0x%08x was refused",

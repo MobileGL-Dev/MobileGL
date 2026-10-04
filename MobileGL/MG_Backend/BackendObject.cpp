@@ -97,6 +97,8 @@ namespace MobileGL::MG_Backend {
             static_cast<SizeT>(target) >= kFormatCapabilityTextureTargetCount) {
             return kFormatCapabilityTargetCount;
         }
+        // An external texture is a 2D one wherever a format can go.
+        if (target == TextureTarget::External) return static_cast<SizeT>(TextureTarget::Texture2D);
         return static_cast<SizeT>(target);
     }
 

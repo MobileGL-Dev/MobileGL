@@ -704,7 +704,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // region (kMGPMaxDamageRects rectangles), as the present record carries its frame's damage.
     EXPECT_EQ(sizeof(MGPSharedImageOp), 296u);
     EXPECT_EQ(sizeof(MGPPresent), 272u);
-    EXPECT_EQ(sizeof(MGPSharedImageReply), 40u);
+    EXPECT_EQ(sizeof(MGPSharedImageReply), 48u);
     EXPECT_EQ(sizeof(MGPSharedImageFdOffer), 32u);
     EXPECT_EQ(sizeof(MGPHandleOnly), 16u);
     // rv's two (§5.3/§7.6): the residual-value POD - 2 + 15 Uint32s, 2 Uint8s and 2 pad bytes,

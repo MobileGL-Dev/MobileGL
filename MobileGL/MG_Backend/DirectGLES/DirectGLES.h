@@ -548,6 +548,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // landed since this context last waited, the context's later commands wait for its fence
         // on the GPU; and the image is noted as read by the calling session's current frame.
         void AcquireForSampling(const EglImageRef& image);
+        // YUV IMAGES (NV12/P010, MG_Remote/Server/SharedImageYuv.h) are never a name's level 0: the
+        // name keeps its own RGBA8 storage `target` (width x height), into which the image is
+        // converted at its first use in each of the calling session's frames - the image bound as
+        // an external texture, one triangle drawn - after the registry's CPU copy for a foreign
+        // buffer. Every touched binding is put back. Called after AcquireForSampling.
+        Bool IsYuv(const EglImageRef& image);
+        void ConvertYuvForSampling(const EglImageRef& image, GLuint target, Uint32 width, Uint32 height);
         // The calling session's frame boundary for what it has read: hands a fence for everything
         // the current context has submitted to every image noted since the last boundary. Called
         // at Present and wherever the current native context stops being current (its reads can

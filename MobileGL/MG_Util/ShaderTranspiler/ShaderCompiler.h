@@ -666,6 +666,12 @@ namespace MobileGL {
             // reflection needs those spelled out. A uniform declared in several stages must
             // agree, which the caller enforces across stages.
             UnorderedMap<String, Int> CollectExplicitUniformLocations(const glslang::TShader& shader);
+
+            // `source` run through glslang's PREPROCESSOR only (inactive #if branches gone, macros
+            // expanded), under the same preamble a parse would use, into `out`. For questions about
+            // the text a parse actually sees - which of two #if-alternative declarations is live.
+            // False (and `out` untouched) when glslang refuses it.
+            Bool PreprocessForInspection(GLenum shaderType, const String& source, String& out);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL

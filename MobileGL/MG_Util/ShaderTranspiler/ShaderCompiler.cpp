@@ -465,6 +465,30 @@ namespace MobileGL {
                 }
             } // namespace
 
+            Bool PreprocessForInspection(GLenum shaderType, const String& source, String& out) {
+                const EShLanguage lang = MG_Util::ConvertGLEnumToEShLanguage(shaderType);
+                if (lang == EShLanguage::EShLangCount) return false;
+                Bool ok = false;
+                {
+                    glslang::TShader shader(lang);
+                    const char* strings[] = {source.c_str()};
+                    shader.setStrings(strings, 1);
+                    const String preamble = String("#undef VULKAN\n") + CollectEsPreambleMacroDefines(source);
+                    shader.setPreamble(preamble.c_str());
+                    shader.setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientVulkan, 450);
+                    shader.setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+                    shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
+                    const auto resources = BuildTBuiltInResource(&*GetDefaultCompileEnv());
+                    glslang::TShader::ForbidIncluder includer;
+                    std::string text;
+                    ok = shader.preprocess(&resources, 460, ECoreProfile, false, true, EShMsgDefault, &text, includer);
+                    if (ok) out = text;
+                }
+                // The shader's pool is gone with it; leave no dangling thread allocator behind.
+                glslang::SetThreadPoolAllocator(nullptr);
+                return ok;
+            }
+
             UnorderedMap<String, Int> CollectExplicitUniformLocations(const glslang::TShader& shader) {
                 UnorderedMap<String, Int> locations;
                 const glslang::TIntermediate* intermediate = shader.getIntermediate();

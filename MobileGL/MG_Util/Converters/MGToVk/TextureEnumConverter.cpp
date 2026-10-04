@@ -30,6 +30,7 @@ namespace MobileGL {
             case TextureTarget::Texture1DArray:
                 return VK_IMAGE_VIEW_TYPE_1D_ARRAY;
             case TextureTarget::TextureRectangle:
+            case TextureTarget::External:
                 return VK_IMAGE_VIEW_TYPE_2D;
             case TextureTarget::Texture2DMultisampleArray:
                 return VK_IMAGE_VIEW_TYPE_2D_ARRAY;

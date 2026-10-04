@@ -51,6 +51,8 @@ namespace MobileGL {
             case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
             case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
                 return TextureTarget::Texture2DMultisampleArray;
+            case GL_TEXTURE_EXTERNAL_OES:
+                return TextureTarget::External;
             default:
                 return TextureTarget::Unknown;
             }

@@ -127,7 +127,9 @@ namespace MobileGL {
             TextureObjectBase::TextureObjectBase(TextureTarget target, Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()), m_target(target) {
                 m_sampler = MakeShared<SamplerObject>(0);
-                if (target == TextureTarget::TextureRectangle) {
+                if (target == TextureTarget::TextureRectangle || target == TextureTarget::External) {
+                    // (An external texture, GL_OES_EGL_image_external, starts the same way: LINEAR
+                    // and CLAMP_TO_EDGE, and it has no mip chain either.)
                     // A rectangle texture has no mip chain, so its initial sampler state is not
                     // the shared one: TEXTURE_MIN_FILTER is LINEAR and TEXTURE_WRAP_S/T are
                     // CLAMP_TO_EDGE (GL 4.6 core table 23.15). Leaving the 2D default of

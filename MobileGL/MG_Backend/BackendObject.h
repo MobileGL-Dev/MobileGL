@@ -610,6 +610,24 @@ namespace MobileGL {
             Uint32 Stride = 0;
             Uint32 Offset = 0;
             Uint64 Modifier = 0;
+            // A YUV image's Cb Cr plane: in the same descriptor, at this offset and pitch.
+            Uint32 Plane1Stride = 0;
+            Uint32 Plane1Offset = 0;
+        };
+
+        // An import of a two-plane (YUV) dma-buf: where its planes are in the one descriptor, and
+        // EGL_EXT_image_dma_buf_import's colour hints (0 = not given).
+        struct SharedImageImportLayout {
+            Uint32 PlaneCount = 1;
+            Uint32 Offset[2] = {0, 0};
+            Uint32 Pitch[2] = {0, 0};
+            Uint32 ColorSpace = 0;
+            Uint32 Range = 0;
+            Uint32 SitingX = 0;
+            Uint32 SitingY = 0;
+            // The DRM format modifier the import named; HasModifier false = none (the implicit one).
+            Bool HasModifier = false;
+            Uint64 Modifier = 0;
         };
 
         // THE DAMAGE OF THE PRESENT BEING APPLIED on this thread: the server's apply thread sets it
@@ -695,6 +713,13 @@ namespace MobileGL {
             // server's images, or the size/format disagree.
             virtual Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) {
                 (void)fd, (void)width, (void)height, (void)fourcc, (void)outId;
+                return false;
+            }
+            // The same for a YUV fourcc, whose planes and hints `layout` gives. A YUV buffer the
+            // server did not export is taken too (its labelled CPU-copy fallback).
+            virtual Bool ImportSharedImagePlanes(int fd, Uint32 width, Uint32 height, Uint32 fourcc,
+                                                 const SharedImageImportLayout& layout, Uint64* outId) {
+                (void)fd, (void)width, (void)height, (void)fourcc, (void)layout, (void)outId;
                 return false;
             }
             // Drops this client's reference (an allocation's or an import's).

@@ -15,6 +15,7 @@
 #include <Defines.h>
 #include <Init.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/EGLImpl/EGLImpl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -26,14 +27,19 @@
 namespace {
     using MobileGL::MG_Backend::BackendObject;
 
-    constexpr uint32_t kFormats[] = {MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888, MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888,
-                                     MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888, MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888};
+    constexpr uint32_t kRgbFormats[] = {MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888, MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888,
+                                        MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888, MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888};
+    constexpr uint32_t kYuvFormats[] = {MOBILEGL_SHARED_IMAGE_FOURCC_NV12, MOBILEGL_SHARED_IMAGE_FOURCC_P010};
+
+    bool FourccIsYuv(uint32_t fourcc) {
+        return fourcc == MOBILEGL_SHARED_IMAGE_FOURCC_NV12 || fourcc == MOBILEGL_SHARED_IMAGE_FOURCC_P010;
+    }
 
     bool FourccSupported(uint32_t fourcc) {
-        for (uint32_t format : kFormats) {
+        for (uint32_t format : kRgbFormats) {
             if (format == fourcc) return true;
         }
-        return false;
+        return FourccIsYuv(fourcc);
     }
 
     // Serializes the calls against each other (not against GL calls: see the header).
@@ -54,10 +60,20 @@ MOBILEGL_EXPORT uint32_t mobilegl_shared_image_abi_version(void) {
     return MOBILEGL_SHARED_IMAGE_ABI_VERSION;
 }
 
+// The YUV formats only when the server holds them, which takes the session (and one round trip,
+// once): a caller asking which formats exist is about to allocate one.
 MOBILEGL_EXPORT int mobilegl_shared_image_formats(uint32_t* formats, uint32_t capacity) {
-    constexpr uint32_t total = sizeof(kFormats) / sizeof(kFormats[0]);
     if (formats == nullptr && capacity != 0) return -EINVAL;
-    for (uint32_t i = 0; i < total && i < capacity; ++i) formats[i] = kFormats[i];
+    const std::lock_guard<std::mutex> lock(g_apiMutex);
+    uint32_t total = 0;
+    const auto put = [&](uint32_t format) {
+        if (total < capacity) formats[total] = format;
+        ++total;
+    };
+    for (uint32_t format : kRgbFormats) put(format);
+    if (ActiveBackend(true) != nullptr && MobileGL::MG_Impl::EGLImpl::SharedImageYuvAvailable()) {
+        for (uint32_t format : kYuvFormats) put(format);
+    }
     return static_cast<int>(total);
 }
 
@@ -83,6 +99,8 @@ MOBILEGL_EXPORT int mobilegl_shared_image_allocate(uint32_t width, uint32_t heig
     answer.stride = image.Stride;
     answer.offset = image.Offset;
     answer.modifier = image.Modifier;
+    answer.plane1_stride = image.Plane1Stride;
+    answer.plane1_offset = image.Plane1Offset;
     // An older caller's struct is a prefix of this one; a newer caller's tail stays as it was.
     std::memcpy(out, &answer, std::min<size_t>(out->struct_size, sizeof(answer)));
     return 0;
@@ -90,12 +108,37 @@ MOBILEGL_EXPORT int mobilegl_shared_image_allocate(uint32_t width, uint32_t heig
 
 MOBILEGL_EXPORT int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
                                                  uint64_t* out_id) {
-    if (fd < 0 || out_id == nullptr || width == 0 || height == 0 || !FourccSupported(fourcc)) return -EINVAL;
+    if (fd < 0 || out_id == nullptr || width == 0 || height == 0 || !FourccSupported(fourcc) || FourccIsYuv(fourcc))
+        return -EINVAL;
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(true);
     if (backend == nullptr) return -EIO;
     uint64_t id = 0;
     if (!backend->ImportSharedImage(fd, width, height, fourcc, &id)) return -EIO;
+    *out_id = id;
+    return 0;
+}
+
+MOBILEGL_EXPORT int mobilegl_shared_image_import_planes(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
+                                                        const struct mobilegl_shared_image_planes* planes,
+                                                        uint64_t* out_id) {
+    if (fd < 0 || out_id == nullptr || planes == nullptr || width == 0 || height == 0 || !FourccIsYuv(fourcc) ||
+        planes->struct_size < sizeof(mobilegl_shared_image_planes) || planes->plane_count != 2)
+        return -EINVAL;
+    const std::lock_guard<std::mutex> lock(g_apiMutex);
+    BackendObject* backend = ActiveBackend(true);
+    if (backend == nullptr) return -EIO;
+    MobileGL::MG_Backend::SharedImageImportLayout layout;
+    layout.PlaneCount = 2;
+    for (int i = 0; i < 2; ++i) {
+        layout.Offset[i] = planes->offset[i];
+        layout.Pitch[i] = planes->pitch[i];
+    }
+    constexpr uint64_t kModifierInvalid = 0x00ffffffffffffffull;
+    layout.HasModifier = planes->modifier != kModifierInvalid;
+    layout.Modifier = planes->modifier;
+    uint64_t id = 0;
+    if (!backend->ImportSharedImagePlanes(fd, width, height, fourcc, layout, &id)) return -EIO;
     *out_id = id;
     return 0;
 }

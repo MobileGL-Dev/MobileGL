@@ -25,6 +25,8 @@
 #pragma once
 #include <Includes.h>
 
+#include "SharedImageYuv.h"
+
 #include <mutex>
 #include <string>
 
@@ -44,6 +46,11 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // client renders as red samples as red, whichever of the four names it allocated under.
     inline constexpr Uint32 kFourccArgb8888 = FourCC('A', 'R', '2', '4');
     inline constexpr Uint32 kFourccXrgb8888 = FourCC('X', 'R', '2', '4');
+    // YUV 4:2:0, two planes: Y, then Cb Cr interleaved at half resolution (8-bit samples; P010 the
+    // same with 10 significant bits in the high end of 16). A YUV image is never rendered to: it is
+    // SAMPLED, converted into RGBA by whoever binds it (SharedImageYuv.h).
+    inline constexpr Uint32 kFourccNv12 = FourCC('N', 'V', '1', '2');
+    inline constexpr Uint32 kFourccP010 = FourCC('P', '0', '1', '0');
     // "The layout is the allocator's": what an AHardwareBuffer is to anybody but its allocator.
     inline constexpr Uint64 kModifierInvalid = 0x00ffffffffffffffull;
     inline constexpr Uint64 kModifierLinear = 0;
@@ -52,6 +59,20 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     Bool FourccSupported(Uint32 fourcc);
     // The X formats: alpha reads as 1 whatever is stored.
     Bool FourccIgnoresAlpha(Uint32 fourcc);
+    // NV12 / P010.
+    Bool FourccIsYuv(Uint32 fourcc);
+    // Bytes of one sample of a YUV fourcc (1, or 2 for P010); 0 for anything else.
+    Uint32 FourccYuvSampleBytes(Uint32 fourcc);
+    // Whether this server can allocate images of a YUV fourcc (the platform's allocator takes the
+    // format for sampling). Asked once per format, cached.
+    Bool YuvFourccAllocatable(Uint32 fourcc);
+
+    // Where an imported dma-buf's planes are: byte offset and row pitch of each.
+    struct PlaneLayout {
+        Uint32 Count = 1;
+        Uint32 Offset[2] = {0, 0};
+        Uint32 Pitch[2] = {0, 0};
+    };
 
     struct Image {
         Uint64 Id = 0;
@@ -61,6 +82,11 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         Uint32 Stride = 0; // bytes
         Uint32 Offset = 0;
         Uint64 Modifier = kModifierInvalid;
+        // A YUV image's second plane (Cb Cr): same descriptor, this offset and pitch. The layout is
+        // still the allocator's - these are what it reported when the buffer was locked, so a
+        // client can name the plane, not a promise that the descriptor maps that way.
+        Uint32 Plane1Stride = 0;
+        Uint32 Plane1Offset = 0;
         // AHardwareBuffer* on Android; null on a host, where the memory is a memfd (unit tests).
         void* Native = nullptr;
         // The descriptor clients receive duplicates of. Owned.
@@ -77,6 +103,31 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         mutable Uint64 WriteGeneration = 0;
         mutable Vector<int> ReadFences;
 
+        // FOREIGN YUV - THE CPU-COPY FALLBACK. A YUV dma-buf this server did not allocate (a video
+        // decoder's frame) cannot be imported vendor-neutrally: neither the platform's EGL nor its
+        // Vulkan takes a raw dma-buf. Such an import becomes a YUV image of this server's (Native,
+        // an AHardwareBuffer the CPU can write) whose content is COPIED from a CPU mapping of the
+        // foreign buffer (RefreshForeign) at a reader's first use of it in each of its frames - the
+        // moments the producer's content can have moved for that reader. Every other image is
+        // zero-copy; this one costs a frame's worth of memcpy per refresh, and its log says so.
+        struct ForeignSource {
+            int Fd = -1; // a duplicate, owned
+            PlaneLayout Layout;
+            void* Map = nullptr;
+            SizeT MapSize = 0;
+            std::mutex Mutex; // one refresh at a time
+            Uint64 Copies = 0;
+            // The foreign buffer's identity, under which a later import of it finds this image.
+            Uint64 IdentityDev = 0;
+            Uint64 IdentityIno = 0;
+        };
+        UniquePtr<ForeignSource> Foreign;
+        Bool IsForeign() const { return Foreign != nullptr; }
+
+        // How the samples of a YUV image convert to RGB: the EGL_EXT_image_dma_buf_import hints
+        // of its last import. Guarded by SyncMutex.
+        mutable Yuv::Hints YuvHints;
+
         Image() = default;
         Image(const Image&) = delete;
         Image& operator=(const Image&) = delete;
@@ -90,6 +141,22 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // The live image `fd` was exported from, or null (`why` says which test failed): a descriptor
     // this server never exported, or one whose identity the kernel does not keep unique.
     ImageRef Identify(int fd, std::string& why);
+
+    // A YUV import of a dma-buf this server did not export (Image::ForeignSource): the live
+    // foreign image already made from the same buffer with the same shape, or a new one, which
+    // keeps a duplicate of `fd`. Null with `why` when the buffer cannot be mapped, its planes do
+    // not fit in it, or no YUV image can be allocated to copy it into.
+    ImageRef ImportForeignYuv(int fd, Uint32 width, Uint32 height, Uint32 fourcc, const PlaneLayout& layout,
+                              std::string& why);
+
+    // A foreign image's content brought up to date from its source (the copy). Waits for the
+    // image's pending reads first, so a frame still sampling the old content keeps it. True for an
+    // image that is not foreign: there is nothing to do.
+    Bool RefreshForeign(const Image& image, std::string& why);
+
+    // The colour hints a YUV image is converted with.
+    void SetYuvHints(const Image& image, const Yuv::Hints& hints);
+    Yuv::Hints GetYuvHints(const Image& image);
 
     // The live image with this id, or null.
     ImageRef Find(Uint64 id);

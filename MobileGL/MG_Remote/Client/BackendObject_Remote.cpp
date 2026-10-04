@@ -604,6 +604,8 @@ namespace MobileGL::MG_Remote::Client {
         out->Stride = reply.Stride;
         out->Offset = reply.Offset;
         out->Modifier = reply.Modifier;
+        out->Plane1Stride = reply.Plane1Stride;
+        out->Plane1Offset = reply.Plane1Offset;
         {
             const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
             ++m_sessionSharedImages[reply.ImageId];
@@ -620,6 +622,40 @@ namespace MobileGL::MG_Remote::Client {
         op.Format = fourcc;
         op.Width = width;
         op.Height = height;
+        MG_Pipe::MGPSharedImageReply reply{};
+        if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
+        if (outId != nullptr) *outId = reply.ImageId;
+        {
+            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            ++m_sessionSharedImages[reply.ImageId];
+        }
+        return true;
+    }
+
+    Bool BackendObject_Remote::ImportSharedImagePlanes(int fd, Uint32 width, Uint32 height, Uint32 fourcc,
+                                                       const MG_Backend::SharedImageImportLayout& layout,
+                                                       Uint64* outId) {
+        ClientSession* session = ClientSession::Active();
+        if (session == nullptr || fd < 0) return false;
+        const ClientSession::ScopedCurrentSessionWork tableOp;
+        MG_Pipe::MGPSharedImageOp op{};
+        op.Op = MG_Pipe::kMGPSharedImageImport;
+        op.Format = fourcc;
+        op.Width = width;
+        op.Height = height;
+        // The planes and hints ride in Damage (MGPImportPlaneWord).
+        op.DamageCount = MG_Pipe::kMGPImportPlaneWords;
+        op.Damage[MG_Pipe::kMGPImportPlaneCount] = static_cast<Int32>(layout.PlaneCount);
+        op.Damage[MG_Pipe::kMGPImportPlane0Offset] = static_cast<Int32>(layout.Offset[0]);
+        op.Damage[MG_Pipe::kMGPImportPlane1Offset] = static_cast<Int32>(layout.Offset[1]);
+        op.Damage[MG_Pipe::kMGPImportPlane0Pitch] = static_cast<Int32>(layout.Pitch[0]);
+        op.Damage[MG_Pipe::kMGPImportPlane1Pitch] = static_cast<Int32>(layout.Pitch[1]);
+        op.Damage[MG_Pipe::kMGPImportYuvColorSpace] = static_cast<Int32>(layout.ColorSpace);
+        op.Damage[MG_Pipe::kMGPImportYuvRange] = static_cast<Int32>(layout.Range);
+        op.Damage[MG_Pipe::kMGPImportYuvSiting] = static_cast<Int32>((layout.SitingX & 0xffffu) | (layout.SitingY << 16));
+        op.Damage[MG_Pipe::kMGPImportModifierLo] = static_cast<Int32>(static_cast<Uint32>(layout.Modifier));
+        op.Damage[MG_Pipe::kMGPImportModifierHi] = static_cast<Int32>(static_cast<Uint32>(layout.Modifier >> 32));
+        op.Damage[MG_Pipe::kMGPImportHasModifier] = layout.HasModifier ? 1 : 0;
         MG_Pipe::MGPSharedImageReply reply{};
         if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
         if (outId != nullptr) *outId = reply.ImageId;

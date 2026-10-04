@@ -1875,8 +1875,25 @@ namespace MobileGL::MG_State::GLState {
         artifacts.uniformReflection.reserve(static_cast<SizeT>(uniformCount));
         artifacts.uniformIndexByName.clear();
         artifacts.uniformIndexByName.reserve(static_cast<SizeT>(uniformCount));
+        // GL_OES_EGL_image_external: the uniforms a stage declared samplerExternalOES were
+        // compiled as sampler2D (LowerExternalSamplers) and are reported with their own type,
+        // which is what sends their units to the external binding point.
+        Vector<String> externalSamplers;
+        for (const LinkShaderInput& shader : in.shaders) {
+            if (shader.compiled == nullptr) continue;
+            for (String& name :
+                 MG_Util::ShaderTranspiler::ExternalSamplerUniformNames(CompiledArtifacts(shader.compiled).preprocessedSource))
+                externalSamplers.push_back(Move(name));
+        }
+        const auto isExternalSampler = [&externalSamplers](const String& reflected) {
+            if (externalSamplers.empty()) return false;
+            const String base = reflected.substr(0, reflected.find('['));
+            return std::find(externalSamplers.begin(), externalSamplers.end(), base) != externalSamplers.end();
+        };
         for (Int i = 0; i < uniformCount; ++i) {
             ProgramObject::UniformReflection record = MakeResourceReflection(program.getUniform(i));
+            if (record.glDefineType == GL_SAMPLER_2D && isExternalSampler(record.name))
+                record.glDefineType = GL_SAMPLER_EXTERNAL_OES;
             // A block-level layout(row_major)/(column_major) that the member did not inherit
             // in its own qualifier. Resolved once HERE rather than at every GL_UNIFORM_* query,
             // which is what the getUniformBlock() fallback in the old accessors was doing.

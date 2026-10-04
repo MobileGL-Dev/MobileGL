@@ -36,7 +36,9 @@
 extern "C" {
 #endif
 
-#define MOBILEGL_SHARED_IMAGE_ABI_VERSION 1u
+/* 2: YUV images (NV12, P010), the plane-1 fields of mobilegl_shared_image, and
+ * mobilegl_shared_image_import_planes. */
+#define MOBILEGL_SHARED_IMAGE_ABI_VERSION 2u
 
 /* DRM fourccs (little-endian packed). ABGR8888 is R, G, B, A in memory - GL's RGBA8. */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888 0x34324241u /* 'AB24' */
@@ -46,6 +48,12 @@ extern "C" {
  * writes them, so the name an image is allocated under never changes its colours. */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 0x34325241u /* 'AR24' */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888 0x34325258u /* 'XR24' */
+/* Two-plane YUV 4:2:0 (ABI 2), when the server's platform allocates it (listed by
+ * mobilegl_shared_image_formats only then): plane 0 is Y, plane 1 Cb Cr interleaved, both in the one
+ * descriptor at the offsets and pitches the allocation reports. They are SAMPLED only - an EGLImage
+ * of one binds through GL_OES_EGL_image_external - and their layout is still the allocator's. */
+#define MOBILEGL_SHARED_IMAGE_FOURCC_NV12 0x3231564Eu /* 'NV12' */
+#define MOBILEGL_SHARED_IMAGE_FOURCC_P010 0x30313050u /* 'P010' */
 
 /* One allocated image. VERSIONED BY SIZE: the caller sets struct_size to the sizeof it was built
  * against and the library writes no byte past it, so fields are only ever appended. */
@@ -60,6 +68,18 @@ struct mobilegl_shared_image {
     uint32_t offset;   /* plane 0, bytes */
     uint32_t reserved; /* zero */
     uint64_t modifier; /* DRM format modifier of the layout (DRM_FORMAT_MOD_INVALID today) */
+    /* ABI 2: a YUV image's plane 1 (same fd); zero for the one-plane formats. */
+    uint32_t plane1_stride;
+    uint32_t plane1_offset;
+};
+
+/* Where an imported two-plane buffer's planes are (ABI 2). */
+struct mobilegl_shared_image_planes {
+    uint32_t struct_size;
+    uint32_t plane_count; /* 2 */
+    uint32_t offset[2];
+    uint32_t pitch[2];
+    uint64_t modifier;    /* DRM_FORMAT_MOD_INVALID when none was given */
 };
 
 /* MOBILEGL_SHARED_IMAGE_ABI_VERSION of the library. */
@@ -78,6 +98,11 @@ int mobilegl_shared_image_allocate(uint32_t width, uint32_t height, uint32_t fou
  * -EIO: not one of the server's images, or the size/format disagree. */
 int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32_t fourcc, uint64_t* out_id);
 
+/* The same for a YUV fourcc whose two planes are in `fd` as `planes` says (ABI 2). A YUV buffer the
+ * server did not allocate is taken too, read through the server's CPU-copy fallback. */
+int mobilegl_shared_image_import_planes(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
+                                        const struct mobilegl_shared_image_planes* planes, uint64_t* out_id);
+
 /* Drops this process's reference (an allocation's or an import's). */
 int mobilegl_shared_image_release(uint64_t id);
 
@@ -95,6 +120,8 @@ typedef int (*PFN_mobilegl_shared_image_formats)(uint32_t*, uint32_t);
 typedef int (*PFN_mobilegl_shared_image_allocate)(uint32_t, uint32_t, uint32_t, struct mobilegl_shared_image*);
 typedef int (*PFN_mobilegl_shared_image_import)(int, uint32_t, uint32_t, uint32_t, uint64_t*);
 typedef int (*PFN_mobilegl_shared_image_release)(uint64_t);
+typedef int (*PFN_mobilegl_shared_image_import_planes)(int, uint32_t, uint32_t, uint32_t,
+                                                       const struct mobilegl_shared_image_planes*, uint64_t*);
 
 #ifdef __cplusplus
 }

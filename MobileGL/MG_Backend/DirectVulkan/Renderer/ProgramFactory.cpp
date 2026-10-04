@@ -2529,6 +2529,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return SamplerNumericDomain::UnsignedInteger;
         case GL_SAMPLER_1D:
         case GL_SAMPLER_2D:
+        case GL_SAMPLER_EXTERNAL_OES:
         case GL_SAMPLER_3D:
         case GL_SAMPLER_CUBE:
         case GL_SAMPLER_2D_RECT:
@@ -2719,6 +2720,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY:
             return TextureTarget::TextureCubeMapArray;
         case GL_SAMPLER_2D:
+        case GL_SAMPLER_EXTERNAL_OES: // a 2D texture below the frontend
         case GL_SAMPLER_2D_SHADOW:
         case GL_INT_SAMPLER_2D:
         case GL_UNSIGNED_INT_SAMPLER_2D:

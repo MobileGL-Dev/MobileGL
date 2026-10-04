@@ -68,6 +68,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
     // a split client's does, a monolith's does not. Decides the dma-buf EGL extensions, the
     // Wayland linux-dmabuf presentation and GL_OES_EGL_image.
     Bool SharedImagesAvailable();
+    // Whether the server also holds YUV (NV12/P010) images: decides the YUV dma-buf formats and
+    // GL_OES_EGL_image_external. One round trip the first time it is asked, cached after.
+    Bool SharedImageYuvAvailable();
     // Under a dispatching libEGL the dispatcher, not this library, owns eglBindAPI's state: it does
     // not forward a bind of the API it already reports (EGL_OPENGL_ES_API, EGL's default), so a
     // context would otherwise be created for whatever this library assumed. The glvnd vendor

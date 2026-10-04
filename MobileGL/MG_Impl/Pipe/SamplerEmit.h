@@ -629,6 +629,9 @@ namespace MobileGL::MG_Pipe {
     // sample this unit".
     inline MobileGL::TextureTarget MGPipeSamplerUniformTextureTarget(GLenum uniformType) {
         switch (uniformType) {
+        // GL_OES_EGL_image_external: the unit's external binding, whose texture is a 2D one below.
+        case GL_SAMPLER_EXTERNAL_OES:
+            return TextureTarget::External;
         case GL_SAMPLER_1D:
         case GL_INT_SAMPLER_1D:
         case GL_UNSIGNED_INT_SAMPLER_1D:
@@ -995,7 +998,7 @@ namespace MobileGL::MG_Pipe {
             // and not the storage owner's, which is the whole point of the call; for an
             // ordinary texture it is simply its format.
             m_lastView.InternalFormat = static_cast<Uint32>(texture.GetFormat());
-            m_lastView.Target = static_cast<Uint8>(texture.GetTarget());
+            m_lastView.Target = static_cast<Uint8>(MGPipeWireTextureTarget(texture.GetTarget()));
             // THE FOUR RESTRICTIONS COME FROM ONE PLACE. TextureObjectBase leaves all four at
             // 0 for an ordinary texture and glTextureView writes them for a view, and a view
             // always has NumLevels >= 1 - so a zero here unambiguously means "no restriction,

@@ -19,6 +19,8 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
 #include "EsslBuiltinFunctionNames.h"
@@ -1813,6 +1815,84 @@ namespace {
             "#define gl_NumSamples mg_NumSamples\n";
         source.insert(afterVersion.Get(source), shim);
     }
+
+    // The uniforms `text` declares with the external sampler type, and (into `others`) the names it
+    // declares with any other type - the same name can be both in a source whose #if branches pick
+    // one (a compositor's shader generator does exactly that).
+    void ScanExternalSamplerDeclarations(const MobileGL::String& text, Vector<MobileGL::String>& external,
+                                         Vector<MobileGL::String>* others) {
+        const Vector<CodeToken> tokens = TokenizeCode(text);
+        for (SizeT i = 0; i < tokens.size(); ++i) {
+            if (tokens[i].text != "uniform") continue;
+            // The type is the first identifier after `uniform` that is not a precision qualifier.
+            SizeT type = i + 1;
+            while (type < tokens.size() && (tokens[type].text == "lowp" || tokens[type].text == "mediump" ||
+                                            tokens[type].text == "highp"))
+                ++type;
+            if (type >= tokens.size() || !IsIdentifierToken(tokens[type])) continue;
+            const bool isExternal = tokens[type].text == "samplerExternalOES";
+            Vector<MobileGL::String>* into = isExternal ? &external : others;
+            // `name`, `name[N]`, and comma-separated lists of them, up to the `;` (a block's `{`
+            // ends the scan: its members are not samplers).
+            for (SizeT j = type + 1; j < tokens.size() && tokens[j].text != ";" && tokens[j].text != "{";) {
+                if (IsIdentifierToken(tokens[j])) {
+                    if (into != nullptr && std::find(into->begin(), into->end(), tokens[j].text) == into->end())
+                        into->push_back(tokens[j].text);
+                    ++j;
+                    if (j < tokens.size() && tokens[j].text == "[") {
+                        while (j < tokens.size() && tokens[j].text != "]") ++j;
+                        ++j;
+                    }
+                    continue;
+                }
+                ++j;
+            }
+        }
+    }
+
+    // GL_OES_EGL_image_external's sampler type, which the desktop profile the shader is compiled
+    // under has no texture() overloads for. Below the frontend an external texture IS a 2D one (its
+    // EGLImage arrives converted to RGBA), so the type becomes sampler2D, and the names of the
+    // uniforms declared with it ride in a marker (kExternalSamplerMarkerPrefix) to the reflection,
+    // which reports them as GL_SAMPLER_EXTERNAL_OES and so sends their units to the external binding.
+    // The marker is also what keeps such a shader's caches apart from a sampler2D twin's.
+    //
+    // THE NAMES COME FROM THE PREPROCESSED TEXT. A source may declare one name as samplerExternalOES
+    // in one #if branch and as sampler2D in another (a compositor's shader generator does, per trait); only
+    // the branch the preprocessor keeps says what the uniform is. Should glslang's preprocessor
+    // refuse the source, a name declared both ways is left out - a 2D binding is the safe reading.
+    constexpr const char* kExternalSamplerMarkerPrefix = "/*mobilegl-external-samplers:";
+
+    void LowerExternalSamplers(MobileGL::ShaderStage stage, MobileGL::String& source, AfterVersionAnchor& afterVersion) {
+        if (source.find("samplerExternalOES") == MobileGL::String::npos) return;
+        Vector<MobileGL::String> names;
+        MobileGL::String preprocessed;
+        if (MobileGL::MG_Util::ShaderTranspiler::PreprocessForInspection(
+                MobileGL::MG_Util::ConvertShaderStageToGLEnum(stage), source, preprocessed)) {
+            ScanExternalSamplerDeclarations(preprocessed, names, nullptr);
+        } else {
+            Vector<MobileGL::String> external, others;
+            ScanExternalSamplerDeclarations(source, external, &others);
+            for (const MobileGL::String& name : external) {
+                if (std::find(others.begin(), others.end(), name) == others.end()) names.push_back(name);
+            }
+        }
+        // Every spelling of the type, in any branch: what the preprocessor drops does not matter.
+        Vector<SizeT> typeOffsets;
+        for (const CodeToken& token : TokenizeCode(source)) {
+            if (token.text == "samplerExternalOES") typeOffsets.push_back(token.begin);
+        }
+        if (typeOffsets.empty()) return;
+        for (auto offset = typeOffsets.rbegin(); offset != typeOffsets.rend(); ++offset)
+            source.replace(*offset, std::strlen("samplerExternalOES"), "sampler2D");
+        MobileGL::String marker = kExternalSamplerMarkerPrefix;
+        for (SizeT i = 0; i < names.size(); ++i) {
+            if (i != 0) marker += ',';
+            marker += names[i];
+        }
+        marker += "*/\n";
+        source.insert(afterVersion.Get(source), marker);
+    }
 } // namespace
 
 namespace MobileGL {
@@ -1870,10 +1950,28 @@ namespace MobileGL {
 
                 RenameBuiltinShadowingFunctions(source);
 
+                LowerExternalSamplers(stage, source, afterVersion);
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
                 InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
 
+            }
+
+            Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource) {
+                Vector<String> names;
+                const SizeT start = preprocessedSource.find(kExternalSamplerMarkerPrefix);
+                if (start == String::npos) return names;
+                const SizeT from = start + std::strlen(kExternalSamplerMarkerPrefix);
+                const SizeT end = preprocessedSource.find("*/", from);
+                if (end == String::npos) return names;
+                SizeT at = from;
+                while (at < end) {
+                    SizeT comma = preprocessedSource.find(',', at);
+                    if (comma == String::npos || comma > end) comma = end;
+                    if (comma > at) names.push_back(preprocessedSource.substr(at, comma - at));
+                    at = comma + 1;
+                }
+                return names;
             }
 
             String CollectEsPreambleMacroDefines(const String& preprocessedSource) {

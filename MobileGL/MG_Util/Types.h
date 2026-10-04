@@ -13,6 +13,20 @@
 
 #define GL_UNKNOWN_MGL 0
 
+// GL_OES_EGL_image_external, which the desktop headers do not carry.
+#ifndef GL_TEXTURE_EXTERNAL_OES
+#define GL_TEXTURE_EXTERNAL_OES 0x8D65
+#endif
+#ifndef GL_SAMPLER_EXTERNAL_OES
+#define GL_SAMPLER_EXTERNAL_OES 0x8D66
+#endif
+#ifndef GL_TEXTURE_BINDING_EXTERNAL_OES
+#define GL_TEXTURE_BINDING_EXTERNAL_OES 0x8D67
+#endif
+#ifndef GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES
+#define GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES 0x8D68
+#endif
+
 #define THROW_EXCEPTION(msg) throw std::runtime_error(msg)
 
 #define THROW_UNIMPL_EXCEPTION THROW_EXCEPTION("Unimplemented function called!")

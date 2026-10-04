@@ -43,6 +43,8 @@ namespace MobileGL::MG_State::GLState {
             return MakeShared<TextureObjectCubeMapArray>(index);
         case TextureTarget::Texture2DMultisampleArray:
             return MakeShared<TextureObject2DMultisampleArray>(index);
+        case TextureTarget::External:
+            return MakeShared<TextureObjectExternal>(index);
         default:
             MOBILEGL_ASSERT(false, "Unimplemented texture type when creating texture object!: %d", (int)target);
             return nullptr;

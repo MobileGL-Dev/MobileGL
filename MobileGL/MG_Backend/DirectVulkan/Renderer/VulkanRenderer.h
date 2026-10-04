@@ -717,6 +717,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // one entry point the import needs (PFN_vkGetAndroidHardwareBufferPropertiesANDROID).
         Bool m_wireAhbImport = false;
         void* m_wireGetAhbProperties = nullptr;
+        // YUV shared images (WireYuvImage.inc): the device enabled samplerYcbcrConversion, and the
+        // conversion pipelines made so far (one per buffer format and colour conversion).
+        Bool m_samplerYcbcrConversion = false;
+        struct WireYuvResources;
+        WireYuvResources* m_wireYuvResources = nullptr;
+        void DestroyWireYuvResources();
+        // A YUV texture's first use in a frame converts its image (yuvConvertedFrame against this,
+        // which every frame boundary - present, publishing flush, native fence - moves).
+        Uint64 m_yuvFrameSerial = 1;
+        Bool ConvertYuvSharedImage(VkTextureManager::TextureResource& resource);
         // Shared images this session presents into, imported once each and keyed by the image's
         // id (monotonic, never reused). `owner` watches the registry's image: an entry whose image
         // died is dropped at a later present once `lastSubmit`, its last copy, has completed.

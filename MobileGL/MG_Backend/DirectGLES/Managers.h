@@ -1944,6 +1944,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             switch (target) {
             case TextureTarget::Texture1D:
             case TextureTarget::TextureRectangle:
+            case TextureTarget::External:
                 return TextureTarget::Texture2D;
             case TextureTarget::Texture1DArray:
                 return TextureTarget::Texture2DArray;

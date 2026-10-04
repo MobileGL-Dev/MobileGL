@@ -6789,3 +6789,59 @@ TEST_F(TextureTest, GenerateMipmapKeepsA2DArrayLayerCountAtEveryLevel) {
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
     DrainPendingGlErrors();
 }
+
+// GL_OES_EGL_image_external: the external target is a binding point of its own on every unit,
+// with the extension's restrictions - no data upload, no mipmaps, clamp-to-edge and non-mipmapped
+// filtering, LINEAR from birth - and one image unit per texture.
+TEST_F(TextureTest, TheExternalTargetIsABindingPointOfItsOwn) {
+    using namespace MG_Impl::GLImpl;
+    GLuint names[2] = {};
+    GenTextures(2, names);
+    ActiveTexture(GL_TEXTURE3);
+    BindTexture(GL_TEXTURE_2D, names[0]);
+    BindTexture(GL_TEXTURE_EXTERNAL_OES, names[1]);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GLint bound2D = 0, boundExternal = 0;
+    GetIntegerv(GL_TEXTURE_BINDING_2D, &bound2D);
+    GetIntegerv(GL_TEXTURE_BINDING_EXTERNAL_OES, &boundExternal);
+    EXPECT_EQ(static_cast<GLuint>(bound2D), names[0]);
+    EXPECT_EQ(static_cast<GLuint>(boundExternal), names[1]);
+    EXPECT_EQ(MG_State::pGLContext->GetTextureObject(names[1])->GetTarget(), TextureTarget::External);
+
+    // A texture first bound as external stays external.
+    BindTexture(GL_TEXTURE_2D, names[1]);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    GLint value = 0;
+    GetTexParameteriv(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, &value);
+    EXPECT_EQ(value, GL_LINEAR);
+    GetTexParameteriv(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, &value);
+    EXPECT_EQ(value, GL_CLAMP_TO_EDGE);
+    GetTexParameteriv(GL_TEXTURE_EXTERNAL_OES, GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES, &value);
+    EXPECT_EQ(value, 1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetTexParameteriv(GL_TEXTURE_2D, GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES, &value);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    TexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    TexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    TexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    TexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    TexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_BASE_LEVEL, 1);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // Its only storage is an EGLImage.
+    TexImage2D(GL_TEXTURE_EXTERNAL_OES, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    GenerateMipmap(GL_TEXTURE_EXTERNAL_OES);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    BindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+    BindTexture(GL_TEXTURE_2D, 0);
+    ActiveTexture(GL_TEXTURE0);
+    DeleteTextures(2, names);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

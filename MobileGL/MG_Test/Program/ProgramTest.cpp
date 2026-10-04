@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 #include <spirv_reflect.h>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -5274,5 +5275,103 @@ TEST_F(ProgramTest, ASpirvModulesXfbDecorationsDoNotSurviveIntoTheTranslatedSour
     GetShaderInfoLog(shader, sizeof(shaderLog), nullptr, shaderLog);
     EXPECT_EQ(compiled, GL_TRUE) << shaderLog;
 
+    DrainProgramTestErrors();
+}
+
+// GL_OES_EGL_image_external. A samplerExternalOES uniform is compiled as a sampler2D (the desktop
+// profile the shader is compiled under has no external overloads; below the frontend an external
+// texture is a 2D one) and reported with its own type, which is what sends its unit to the
+// external binding point.
+namespace {
+    GLuint LinkExternalSamplerProgram(const char* vertexSource, const char* fragmentSource, String& log) {
+        char info[2048] = "";
+        const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(vs, 1, &vertexSource, nullptr);
+        CompileShader(vs);
+        const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fs, 1, &fragmentSource, nullptr);
+        CompileShader(fs);
+        GLint compiled = GL_FALSE;
+        GetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+        GetShaderInfoLog(fs, sizeof(info), nullptr, info);
+        log = info;
+        if (compiled != GL_TRUE) return 0;
+        const GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, fs);
+        LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        GetProgramInfoLog(program, sizeof(info), nullptr, info);
+        log += info;
+        return linked == GL_TRUE ? program : 0;
+    }
+
+    GLenum UniformTypeByName(GLuint program, const char* wanted) {
+        GLint count = 0;
+        GetProgramiv(program, GL_ACTIVE_UNIFORMS, &count);
+        for (GLint i = 0; i < count; ++i) {
+            char name[64] = "";
+            GLsizei length = 0;
+            GLint size = 0;
+            GLenum type = 0;
+            GetActiveUniform(program, static_cast<GLuint>(i), sizeof(name), &length, &size, &type, name);
+            if (String(name) == wanted) return type;
+        }
+        return GL_NONE;
+    }
+
+    const char* kExternalVertexSource = "#version 300 es\n"
+                                        "out vec2 uv;\n"
+                                        "void main() { uv = vec2(0.5); gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+} // namespace
+
+TEST_F(ProgramTest, AnEsslExternalSamplerReportsItsOwnType) {
+    DrainProgramTestErrors();
+    const char* fs = "#version 300 es\n"
+                     "#extension GL_OES_EGL_image_external_essl3 : require\n"
+                     "precision mediump float;\n"
+                     "uniform highp samplerExternalOES videoFrame;\n"
+                     "uniform sampler2D overlay;\n"
+                     "in vec2 uv;\n"
+                     "out vec4 color;\n"
+                     "void main() { color = texture(videoFrame, uv) + texture(overlay, uv); }\n";
+    String log;
+    const GLuint program = LinkExternalSamplerProgram(kExternalVertexSource, fs, log);
+    ASSERT_NE(program, 0u) << log;
+    EXPECT_EQ(UniformTypeByName(program, "videoFrame"), static_cast<GLenum>(GL_SAMPLER_EXTERNAL_OES));
+    EXPECT_EQ(UniformTypeByName(program, "overlay"), static_cast<GLenum>(GL_SAMPLER_2D));
+    DrainProgramTestErrors();
+}
+
+// A compositor's shader generator declares one name both ways, picking by #if: only the branch the
+// preprocessor keeps says what the uniform is.
+TEST_F(ProgramTest, AnExternalSamplerInAnInactiveBranchLeavesTheSampler2DAlone) {
+    DrainProgramTestErrors();
+    const char* fsTemplate = "#version 140\n"
+                             "%s"
+                             "#if TRAIT_MAP_TEXTURE\n"
+                             "uniform sampler2D sampler;\n"
+                             "#endif\n"
+                             "#if TRAIT_MAP_EXTERNAL_TEXTURE\n"
+                             "#extension GL_OES_EGL_image_external : require\n"
+                             "uniform samplerExternalOES sampler;\n"
+                             "#endif\n"
+                             "in vec2 uv;\n"
+                             "out vec4 color;\n"
+                             "void main() { color = texture(sampler, uv); }\n";
+    const char* vs = "#version 140\n"
+                     "out vec2 uv;\n"
+                     "void main() { uv = vec2(0.5); gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+    for (const auto& [traits, expected] :
+         {std::pair{"#define TRAIT_MAP_TEXTURE 1\n", static_cast<GLenum>(GL_SAMPLER_2D)},
+          std::pair{"#define TRAIT_MAP_EXTERNAL_TEXTURE 1\n", static_cast<GLenum>(GL_SAMPLER_EXTERNAL_OES)}}) {
+        char fs[1024];
+        std::snprintf(fs, sizeof(fs), fsTemplate, traits);
+        String log;
+        const GLuint program = LinkExternalSamplerProgram(vs, fs, log);
+        ASSERT_NE(program, 0u) << traits << log;
+        EXPECT_EQ(UniformTypeByName(program, "sampler"), expected) << traits;
+    }
     DrainProgramTestErrors();
 }

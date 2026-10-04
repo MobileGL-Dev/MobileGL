@@ -263,6 +263,11 @@ namespace MobileGL::MG_Pipe {
             return static_cast<Uint32>(MGPipeResourceTarget::TexCubeArray);
         case MobileGL::TextureTarget::Texture2DMultisampleArray:
             return static_cast<Uint32>(MGPipeResourceTarget::Tex2DMSArray);
+        // THE ONE FOLD (rather than an enumerator of its own, D-A3): an external texture
+        // (GL_OES_EGL_image_external) is a 2D texture to every backend - a single RGBA level 0,
+        // sampled through a sampler2D - and only the frontend tells the two binding points apart.
+        case MobileGL::TextureTarget::External:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex2D);
         // NOT TEXTURE TARGETS. Listed rather than defaulted so the completeness assert still
         // sees them, and mapped to the sentinel because no descriptor may carry either: the
         // count is the enum's bound and Unknown is what an unresolved GL enum becomes.
@@ -271,6 +276,12 @@ namespace MobileGL::MG_Pipe {
             return kMGPipeResourceTargetUnmapped;
         }
         return kMGPipeResourceTargetUnmapped;
+    }
+
+    // The TextureTarget a record that carries one raw (MGPSamplerView, MGPSurface) names: the
+    // frontend's own, but for the external target, which is a 2D texture below the frontend.
+    constexpr MobileGL::TextureTarget MGPipeWireTextureTarget(MobileGL::TextureTarget target) {
+        return target == MobileGL::TextureTarget::External ? MobileGL::TextureTarget::Texture2D : target;
     }
 
     constexpr Bool MGPipeEveryTextureTargetIsMapped() {
@@ -2044,6 +2055,25 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 kMGPBufferAgeDamageRegionFollows = 1u;
     inline constexpr Uint32 kMGPNativeFenceFdFollows = 1u;
 
+    // An Import of a YUV fourcc (NV12, P010) carries its planes and colour hints in Damage, with
+    // DamageCount = kMGPImportPlaneWords (the field is a Present's otherwise, and 0 on an RGBA
+    // Import): both planes live in the one descriptor the Import sends, at these byte offsets and
+    // row pitches. The hints are EGL_EXT_image_dma_buf_import's values, 0 where not given.
+    enum MGPImportPlaneWord : Uint32 {
+        kMGPImportPlaneCount = 0,
+        kMGPImportPlane0Offset = 1,
+        kMGPImportPlane1Offset = 2,
+        kMGPImportPlane0Pitch = 3,
+        kMGPImportPlane1Pitch = 4,
+        kMGPImportYuvColorSpace = 5,
+        kMGPImportYuvRange = 6,
+        kMGPImportYuvSiting = 7, // horizontal | vertical << 16
+        kMGPImportModifierLo = 8,
+        kMGPImportModifierHi = 9,
+        kMGPImportHasModifier = 10,
+        kMGPImportPlaneWords = 11,
+    };
+
     struct MGPSharedImageOp {
         Uint32 Op;
         Uint32 Format; // DRM fourcc
@@ -2067,8 +2097,11 @@ namespace MobileGL::MG_Pipe {
         Uint32 Stride;
         Uint32 Offset;
         Int32 BufferAge; // QueryBufferAge only
+        // A YUV image's Cb Cr plane (Allocate, Import): same descriptor, this offset and pitch.
+        Uint32 Plane1Stride;
+        Uint32 Plane1Offset;
     };
-    MGP_ASSERT_POD(MGPSharedImageReply, 40);
+    MGP_ASSERT_POD(MGPSharedImageReply, 48);
 
     // The aux-socket sideband an Import's descriptor travels with (and an Allocate's answer).
     inline constexpr Uint32 kMGPSharedImageFdMagic = 0x49534D47u; // 'MGSI'

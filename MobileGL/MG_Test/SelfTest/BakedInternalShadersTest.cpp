@@ -60,6 +60,7 @@ using Uint32 = std::uint32_t;
 #include <MG_Backend/DirectVulkan/Renderer/WireColorBlitSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthMipmapSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h>
 
 struct BakedShader {
     const char* name;            // ctest entry name, and the bake file's stem
@@ -92,6 +93,18 @@ const BakedShader kBakedShaders[] = {
                   "kWireColorBlitFragmentSpirv", EShLangFragment,
                   glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
                   kWireColorBlitFragmentSpirv),
+    MGL_BAKED_ROW("WireYuvConvertVertex",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvert.vert",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h",
+                  "kWireYuvConvertVertexSpirv", EShLangVertex,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireYuvConvertVertexSpirv),
+    MGL_BAKED_ROW("WireYuvConvertFragment",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvert.frag",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h",
+                  "kWireYuvConvertFragmentSpirv", EShLangFragment,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireYuvConvertFragmentSpirv),
     MGL_BAKED_ROW("WireDepthMipmapVertex",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmap.vert",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmapSpirv.h",

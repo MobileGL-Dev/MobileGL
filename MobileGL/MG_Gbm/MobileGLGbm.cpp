@@ -17,9 +17,14 @@
 // process's MobileGL client session. Whatever node the caller holds is therefore equally good,
 // and none is vendor-specific.
 //
-// THE LAYOUT IS THE ALLOCATOR'S. Buffers report DRM_FORMAT_MOD_INVALID and a single plane; a
-// request that needs a known layout (LINEAR, or a modifier list without INVALID) is refused
-// rather than answered with a buffer whose layout is not what was asked for.
+// THE LAYOUT IS THE ALLOCATOR'S. Buffers report DRM_FORMAT_MOD_INVALID and a single plane (two for
+// the YUV formats, both in the one descriptor); a request that needs a known layout (LINEAR, or a
+// modifier list without INVALID) is refused rather than answered with a buffer whose layout is not
+// what was asked for.
+//
+// YUV (NV12, P010) buffers exist when the server's platform allocates them (the shared-image ABI's
+// format list says so). They are sampled, never rendered to: a GBM_BO_USE_RENDERING request for one
+// is refused.
 //
 // Buffer operations reach the server through libMobileGL.so's shared-image C ABI
 // (MG_Impl/SharedImageApi.h), resolved with dlsym on first use - preferably from the instance the
@@ -40,6 +45,7 @@
 
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define MOBILEGL_GBM_EXPORT extern "C" __attribute__((visibility("default")))
@@ -65,6 +71,10 @@ namespace {
         int fd; // owned; every get_fd hands out a duplicate
         uint32_t offset;
         uint64_t modifier;
+        // A YUV buffer's plane 1, in the same descriptor.
+        uint32_t planes;
+        uint32_t plane1Stride;
+        uint32_t plane1Offset;
     };
 
     // ---- libMobileGL's shared-image ABI -----------------------------------------------------
@@ -74,6 +84,9 @@ namespace {
         PFN_mobilegl_shared_image_import import = nullptr;
         PFN_mobilegl_shared_image_release release = nullptr;
         PFN_mobilegl_server_available serverAvailable = nullptr; // optional (older libraries lack it)
+        // ABI 2 (YUV); null on an older library.
+        PFN_mobilegl_shared_image_formats formats = nullptr;
+        PFN_mobilegl_shared_image_import_planes importPlanes = nullptr;
     };
 
     // The library the process already has (by its soname: glvnd loads it by path, which records
@@ -107,6 +120,12 @@ namespace {
                 std::fprintf(stderr, "mobilegl_gbm: this libMobileGL.so has no shared-image ABI\n");
                 return;
             }
+            if (version() >= 2) {
+                api.formats = reinterpret_cast<PFN_mobilegl_shared_image_formats>(
+                    dlsym(lib, "mobilegl_shared_image_formats"));
+                api.importPlanes = reinterpret_cast<PFN_mobilegl_shared_image_import_planes>(
+                    dlsym(lib, "mobilegl_shared_image_import_planes"));
+            }
             resolved = true;
         });
         return resolved ? &api : nullptr;
@@ -125,9 +144,39 @@ namespace {
     // What a shared image can be. The ARGB/XRGB orders are stored like the ABGR/XBGR ones: the
     // layout is the server's (modifier INVALID, no map is offered), so no reader can tell, and
     // every GL that touches the image addresses its channels logically.
+    bool FormatIsYuv(uint32_t format) {
+        return format == MOBILEGL_SHARED_IMAGE_FOURCC_NV12 || format == MOBILEGL_SHARED_IMAGE_FOURCC_P010;
+    }
+
+    // Whether the server holds YUV images: the library's format list, asked once (it takes the
+    // process's session, which the first buffer would anyway).
+    bool YuvFormatAvailable(uint32_t format) {
+        static std::once_flag once;
+        static bool nv12 = false, p010 = false;
+        std::call_once(once, [] {
+            const SharedImageApi* api = Api();
+            if (api == nullptr || api->formats == nullptr || api->importPlanes == nullptr) return;
+            uint32_t formats[16] = {};
+            const int total = api->formats(formats, 16);
+            for (int i = 0; i < total && i < 16; ++i) {
+                nv12 |= formats[i] == MOBILEGL_SHARED_IMAGE_FOURCC_NV12;
+                p010 |= formats[i] == MOBILEGL_SHARED_IMAGE_FOURCC_P010;
+            }
+        });
+        return format == MOBILEGL_SHARED_IMAGE_FOURCC_NV12 ? nv12 : format == MOBILEGL_SHARED_IMAGE_FOURCC_P010 && p010;
+    }
+
     bool FormatSupported(uint32_t format) {
+        if (FormatIsYuv(format)) return YuvFormatAvailable(format);
         return format == MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888 ||
                format == MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888;
+    }
+
+    uint32_t PlaneCount(uint32_t format) { return FormatIsYuv(format) ? 2 : 1; }
+
+    // A YUV buffer is sampled only.
+    uint32_t RefusedUsage(uint32_t format) {
+        return kRefusedUsage | (FormatIsYuv(format) ? static_cast<uint32_t>(GBM_BO_USE_RENDERING) : 0u);
     }
 
     bool ModifierAcceptable(uint64_t modifier) { return modifier == kModifierInvalid || modifier == kModifierLinear; }
@@ -142,7 +191,8 @@ namespace {
     }
 
     gbm_bo* NewBo(gbm_device* gbm, uint64_t imageId, int fd, uint32_t width, uint32_t height, uint32_t format,
-                  uint32_t stride, uint32_t offset, uint64_t modifier) {
+                  uint32_t stride, uint32_t offset, uint64_t modifier, uint32_t plane1Stride = 0,
+                  uint32_t plane1Offset = 0) {
         auto* bo = new (std::nothrow) Bo{};
         if (bo == nullptr) {
             errno = ENOMEM;
@@ -158,6 +208,9 @@ namespace {
         bo->fd = fd;
         bo->offset = offset;
         bo->modifier = modifier;
+        bo->planes = PlaneCount(format);
+        bo->plane1Stride = plane1Stride;
+        bo->plane1Offset = plane1Offset;
         return &bo->base;
     }
 
@@ -168,18 +221,20 @@ namespace {
     void DeviceDestroy(gbm_device* gbm) { delete reinterpret_cast<Device*>(gbm); }
 
     int IsFormatSupported(gbm_device*, uint32_t format, uint32_t usage) {
-        return FormatSupported(Canonical(format)) && (usage & kRefusedUsage) == 0 ? 1 : 0;
+        format = Canonical(format);
+        return FormatSupported(format) && (usage & RefusedUsage(format)) == 0 ? 1 : 0;
     }
 
     int GetFormatModifierPlaneCount(gbm_device*, uint32_t format, uint64_t modifier) {
-        if (!FormatSupported(Canonical(format)) || !ModifierAcceptable(modifier)) return -1;
-        return 1;
+        format = Canonical(format);
+        if (!FormatSupported(format) || !ModifierAcceptable(modifier)) return -1;
+        return static_cast<int>(PlaneCount(format));
     }
 
     gbm_bo* BoCreate(gbm_device* gbm, uint32_t width, uint32_t height, uint32_t format, uint32_t usage,
                      const uint64_t* modifiers, const unsigned int count) {
         format = Canonical(format);
-        if (!FormatSupported(format) || (usage & kRefusedUsage) != 0) {
+        if (!FormatSupported(format) || (usage & RefusedUsage(format)) != 0) {
             errno = EINVAL;
             return nullptr;
         }
@@ -207,12 +262,19 @@ namespace {
             return nullptr;
         }
         gbm_bo* bo = NewBo(gbm, image.id, image.fd, image.width, image.height, image.fourcc, image.stride,
-                           image.offset, image.modifier);
+                           image.offset, image.modifier, image.plane1_stride, image.plane1_offset);
         if (bo == nullptr) {
             api->release(image.id);
             ::close(image.fd);
         }
         return bo;
+    }
+
+    // Whether two descriptors name one dma-buf: a YUV buffer's planes must be in one.
+    bool SameBuffer(int a, int b) {
+        if (a == b) return true;
+        struct stat sa {}, sb {};
+        return ::fstat(a, &sa) == 0 && ::fstat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
     }
 
     gbm_bo* BoImport(gbm_device* gbm, uint32_t type, void* buffer, uint32_t usage) {
@@ -223,6 +285,7 @@ namespace {
         }
         int fd = -1;
         uint32_t width = 0, height = 0, format = 0, stride = 0, offset = 0;
+        uint32_t plane1Stride = 0, plane1Offset = 0;
         uint64_t modifier = kModifierInvalid;
         switch (type) {
         case GBM_BO_IMPORT_FD: {
@@ -232,11 +295,19 @@ namespace {
             height = data->height;
             format = data->format;
             stride = data->stride;
+            // One fd and one stride cannot say where a second plane is.
+            if (FormatIsYuv(Canonical(format))) {
+                errno = EINVAL;
+                return nullptr;
+            }
             break;
         }
         case GBM_BO_IMPORT_FD_MODIFIER: {
             const auto* data = static_cast<const gbm_import_fd_modifier_data*>(buffer);
-            if (data->num_fds != 1 || !ModifierAcceptable(data->modifier)) {
+            const bool yuv = FormatIsYuv(Canonical(data->format));
+            const unsigned int planes = yuv ? 2u : 1u;
+            if (data->num_fds < 1 || data->num_fds > planes || !ModifierAcceptable(data->modifier) ||
+                (data->num_fds == 2 && !SameBuffer(data->fds[0], data->fds[1]))) {
                 errno = EINVAL;
                 return nullptr;
             }
@@ -246,6 +317,10 @@ namespace {
             format = data->format;
             stride = static_cast<uint32_t>(data->strides[0]);
             offset = static_cast<uint32_t>(data->offsets[0]);
+            if (yuv) {
+                plane1Stride = static_cast<uint32_t>(data->strides[1]);
+                plane1Offset = static_cast<uint32_t>(data->offsets[1]);
+            }
             modifier = data->modifier;
             break;
         }
@@ -269,13 +344,26 @@ namespace {
         const int owned = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
         if (owned < 0) return nullptr;
         uint64_t id = 0;
-        const int rc = api->import(owned, width, height, format, &id);
+        int rc = 0;
+        if (FormatIsYuv(format)) {
+            mobilegl_shared_image_planes planes{};
+            planes.struct_size = sizeof(planes);
+            planes.plane_count = 2;
+            planes.offset[0] = offset;
+            planes.offset[1] = plane1Offset;
+            planes.pitch[0] = stride;
+            planes.pitch[1] = plane1Stride;
+            planes.modifier = modifier;
+            rc = api->importPlanes(owned, width, height, format, &planes, &id);
+        } else {
+            rc = api->import(owned, width, height, format, &id);
+        }
         if (rc != 0) {
             ::close(owned);
             errno = -rc;
             return nullptr;
         }
-        gbm_bo* bo = NewBo(gbm, id, owned, width, height, format, stride, offset, modifier);
+        gbm_bo* bo = NewBo(gbm, id, owned, width, height, format, stride, offset, modifier, plane1Stride, plane1Offset);
         if (bo == nullptr) {
             api->release(id);
             ::close(owned);
@@ -299,11 +387,14 @@ namespace {
 
     int BoGetFd(gbm_bo* bo) { return ::fcntl(AsBo(bo)->fd, F_DUPFD_CLOEXEC, 0); }
 
-    int BoGetPlanes(gbm_bo*) { return 1; }
+    int BoGetPlanes(gbm_bo* bo) { return static_cast<int>(AsBo(bo)->planes); }
 
+    bool ValidPlane(gbm_bo* bo, int plane) { return plane >= 0 && static_cast<uint32_t>(plane) < AsBo(bo)->planes; }
+
+    // Every plane is in the one buffer, so every plane has its handle.
     gbm_bo_handle BoGetHandle(gbm_bo* bo, int plane) {
         gbm_bo_handle handle{};
-        if (plane != 0) {
+        if (!ValidPlane(bo, plane)) {
             errno = EINVAL;
             handle.s32 = -1;
             return handle;
@@ -312,16 +403,22 @@ namespace {
     }
 
     int BoGetPlaneFd(gbm_bo* bo, int plane) {
-        if (plane != 0) {
+        if (!ValidPlane(bo, plane)) {
             errno = EINVAL;
             return -1;
         }
         return BoGetFd(bo);
     }
 
-    uint32_t BoGetStride(gbm_bo* bo, int plane) { return plane == 0 ? bo->v0.stride : 0; }
+    uint32_t BoGetStride(gbm_bo* bo, int plane) {
+        if (plane == 0) return bo->v0.stride;
+        return plane == 1 && AsBo(bo)->planes == 2 ? AsBo(bo)->plane1Stride : 0;
+    }
 
-    uint32_t BoGetOffset(gbm_bo* bo, int plane) { return plane == 0 ? AsBo(bo)->offset : 0; }
+    uint32_t BoGetOffset(gbm_bo* bo, int plane) {
+        if (plane == 0) return AsBo(bo)->offset;
+        return plane == 1 && AsBo(bo)->planes == 2 ? AsBo(bo)->plane1Offset : 0;
+    }
 
     uint64_t BoGetModifier(gbm_bo* bo) { return AsBo(bo)->modifier; }
 

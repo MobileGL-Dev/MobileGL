@@ -90,6 +90,8 @@ namespace MobileGL::MG_Remote::Client {
         Bool AllocateSharedImage(Uint32 width, Uint32 height, Uint32 fourcc,
                                  MG_Backend::SharedImageExport* out) override;
         Bool ImportSharedImage(int fd, Uint32 width, Uint32 height, Uint32 fourcc, Uint64* outId) override;
+        Bool ImportSharedImagePlanes(int fd, Uint32 width, Uint32 height, Uint32 fourcc,
+                                     const MG_Backend::SharedImageImportLayout& layout, Uint64* outId) override;
         Bool ReleaseSharedImage(Uint64 id) override;
         Bool PresentToSharedImage(Uint64 id, const MG_Util::Damage::Region& region) override;
         Bool QueryBufferAge(Bool damageRegionFollows, EGLint* age) override;

@@ -200,6 +200,15 @@ namespace MobileGL {
                     EGLint Pitch = 0;
                     Bool HasModifier = false;
                     Uint64 Modifier = 0;
+                    // YUV (two planes): the second plane, and the colour hints (0 = not given).
+                    Uint32 PlaneCount = 1;
+                    int Plane1Fd = -1;
+                    EGLint Plane1Offset = 0;
+                    EGLint Plane1Pitch = 0;
+                    Uint32 ColorSpace = 0;
+                    Uint32 Range = 0;
+                    Uint32 SitingX = 0;
+                    Uint32 SitingY = 0;
                 };
                 struct SharedImageInfo {
                     Uint64 Id = 0;
@@ -215,11 +224,16 @@ namespace MobileGL {
                 static constexpr Uint32 kDrmFourccXbgr8888 = 0x34324258u; // 'XB24'
                 static constexpr Uint32 kDrmFourccArgb8888 = 0x34325241u; // 'AR24'
                 static constexpr Uint32 kDrmFourccXrgb8888 = 0x34325258u; // 'XR24'
+                // Two-plane YUV 4:2:0, sampled only (through GL_OES_EGL_image_external, or as RGBA).
+                static constexpr Uint32 kDrmFourccNv12 = 0x3231564Eu; // 'NV12'
+                static constexpr Uint32 kDrmFourccP010 = 0x30313050u; // 'P010'
                 static Bool IsDmaBufFourccSupported(Uint32 fourcc);
+                static Bool IsDmaBufFourccYuv(Uint32 fourcc);
 
                 // The checks eglCreateImage owes an EGL_LINUX_DMA_BUF_EXT target before anything
-                // is imported: the display, a null context and buffer, and a complete single-plane
-                // attribute list of a supported format. False with the EGL error set.
+                // is imported: the display, a null context and buffer, and a complete attribute
+                // list of a supported format - one plane, or two for YUV. False with the EGL error
+                // set. Whether the YUV formats can be served at all is the caller's question.
                 Bool PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context, EGLClientBuffer buffer,
                                          const EGLAttrib* attribList, DmaBufImportAttribs* out);
                 // An EGLImage naming an imported shared image.
@@ -230,10 +244,12 @@ namespace MobileGL {
                 // Shared images whose EGLImages went with an eglTerminate: the caller releases them.
                 Vector<Uint64> TakeOrphanedSharedImages();
                 // eglQueryDmaBufFormatsEXT / eglQueryDmaBufModifiersEXT. `available` is whether the
-                // backend has shared images at all; without them the lists are empty.
-                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, EGLint maxFormats, EGLint* formats,
-                                        EGLint* numFormats);
-                Bool QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, EGLint format,
+                // backend has shared images at all; without them the lists are empty. `yuvAvailable`
+                // adds the YUV formats, which are external-only (OES_EGL_image_external) and LINEAR
+                // as far as an explicit modifier goes.
+                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
+                                        EGLint maxFormats, EGLint* formats, EGLint* numFormats);
+                Bool QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, Bool yuvAvailable, EGLint format,
                                           EGLint maxModifiers, Uint64* modifiers, EGLBoolean* externalOnly,
                                           EGLint* numModifiers);
 

@@ -372,6 +372,15 @@ public:
         Bool sharedImageHeld = false;
         Uint64 sharedImageGeneration = 0;
         Uint64 sharedImageKey = 0;
+        // A YUV shared image (NV12/P010) is never the texture's image: the texture keeps its own
+        // RGBA8 level 0, into which the renderer converts the image at its first use in each frame
+        // (WireYuvImage.inc) - `yuvSource` being that conversion's import of the buffer, made on
+        // first use, and `yuvConvertedFrame` the frame it last ran in. `yuvOwner` holds the
+        // registry's image for as long as the texture names it.
+        Uint64 yuvImageId = 0;
+        SharedPtr<const void> yuvOwner;
+        SharedPtr<void> yuvSource;
+        Uint64 yuvConvertedFrame = 0;
 #endif
 
         TextureResource() = default;
@@ -415,6 +424,10 @@ public:
             std::swap(this->sharedImageHeld, that.sharedImageHeld);
             std::swap(this->sharedImageGeneration, that.sharedImageGeneration);
             std::swap(this->sharedImageKey, that.sharedImageKey);
+            std::swap(this->yuvImageId, that.yuvImageId);
+            std::swap(this->yuvOwner, that.yuvOwner);
+            std::swap(this->yuvSource, that.yuvSource);
+            std::swap(this->yuvConvertedFrame, that.yuvConvertedFrame);
 #endif
         }
 
@@ -465,6 +478,10 @@ public:
             sharedImageHeld = false;
             sharedImageGeneration = 0;
             sharedImageKey = 0;
+            yuvImageId = 0;
+            yuvOwner.reset();
+            yuvSource.reset();
+            yuvConvertedFrame = 0;
 #endif
             fullView = VK_NULL_HANDLE;
             sampledView = VK_NULL_HANDLE;
@@ -882,6 +899,8 @@ private:
     // Active only between BeginDrawSyncScope/EndDrawSyncScope; identities of
     // textures already fully synced in the current draw (small N -> flat scan).
     Bool m_drawSyncScopeActive = false;
+    // SyncWireTextureShape defining the RGBA8 storage a YUV shared image is converted into.
+    Bool m_syncingYuvTextureStorage = false;
     // Per-draw sync memo: the identity plus the resolved resource pointer. The pointer is stable
     // across rehash in the node-based m_textureResources and stays valid for the draw (a texture
     // synced this draw is alive and is not erased mid-draw), so a repeat sync of the same texture

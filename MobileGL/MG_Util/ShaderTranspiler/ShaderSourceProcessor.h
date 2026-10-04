@@ -61,6 +61,11 @@ namespace MobileGL {
             // GetNormalizedVersionDirective records why that has not happened.
             String CollectEsPreambleMacroDefines(const String& preprocessedSource);
 
+            // The uniforms a shader declared as samplerExternalOES (GL_OES_EGL_image_external),
+            // which PreprocessShaderSource turned into sampler2D and named in a marker: the
+            // reflection reports them as GL_SAMPLER_EXTERNAL_OES. Empty for every other shader.
+            Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource);
+
             // GLSL reserves a few names glslang happily accepts as identifiers ("packed",
             // "row_major" outside a layout(...) list, the image*Shadow family). Returns the
             // compile-error text for the first violation, or nullopt for a clean source.

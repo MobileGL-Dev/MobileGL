@@ -38,6 +38,10 @@
 #include <cstring>
 #include <mutex>
 #include <sstream>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <dlfcn.h>
 #endif
@@ -1608,6 +1612,38 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #endif
     }
 
+    // Whether the server can hold YUV images (its platform allocates the formats): asked once, by
+    // allocating and dropping a small NV12 image, and only when a YUV question first comes up.
+    Bool SharedImageYuvAvailable() {
+        if (!SharedImagesAvailable()) return false;
+        static std::atomic<Int> answer{-1};
+        const Int known = answer.load(std::memory_order_acquire);
+        if (known >= 0) return known != 0;
+        auto* backendObject = MG_Backend::pActiveBackendObject.get();
+        if (backendObject == nullptr) return false;
+        MG_Backend::SharedImageExport probe{};
+        const Bool allocated = backendObject->AllocateSharedImage(
+            16, 16, MG_State::EGLState::EGLContext::kDrmFourccNv12, &probe);
+#if !defined(_WIN32)
+        if (probe.Fd >= 0) ::close(probe.Fd);
+#endif
+        if (allocated && probe.Id != 0) (void)backendObject->ReleaseSharedImage(probe.Id);
+        answer.store(allocated ? 1 : 0, std::memory_order_release);
+        MGLOG_I("Shared images: the server %s YUV (NV12) images", allocated ? "holds" : "has no");
+        return allocated;
+    }
+
+    // Whether two descriptors name one dma-buf (a YUV import's planes must be in one buffer).
+    Bool SameDmaBuf(int a, int b) {
+        if (a == b) return true;
+#if defined(_WIN32)
+        return false;
+#else
+        struct stat sa {}, sb {};
+        return ::fstat(a, &sa) == 0 && ::fstat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+    }
+
     Bool LookupSharedImage(EGLImage image, Uint64* id, EGLint* width, EGLint* height) {
         auto* state = GetState();
         MG_State::EGLState::EGLContext::SharedImageInfo info;
@@ -1673,10 +1709,41 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         auto* backendObject = GetBackendObject(state);
         Uint64 sharedImageId = 0;
-        if (!backendObject ||
-            !backendObject->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
-                                              static_cast<Uint32>(request.Height), request.Fourcc, &sharedImageId) ||
-            sharedImageId == 0) {
+        Bool imported = false;
+        if (MG_State::EGLState::EGLContext::IsDmaBufFourccYuv(request.Fourcc)) {
+            // YUV: both planes in one buffer (what video decoders and this server's allocator hand
+            // out), sampled through GL_OES_EGL_image_external. Planes in two buffers are refused.
+            if (!SharedImageYuvAvailable() || !SameDmaBuf(request.Fd, request.Plane1Fd)) {
+                MGLOG_I_ONCE("eglCreateImage: a %dx%d YUV dma-buf cannot be imported (%s); refused (EGL_BAD_MATCH)",
+                             request.Width, request.Height,
+                             SharedImageYuvAvailable() ? "its planes are in two buffers"
+                                                       : "the server has no YUV images");
+                state->SetError(EGL_BAD_MATCH);
+                return EGL_NO_IMAGE;
+            }
+            MG_Backend::SharedImageImportLayout layout;
+            layout.PlaneCount = 2;
+            layout.Offset[0] = static_cast<Uint32>(request.Offset);
+            layout.Offset[1] = static_cast<Uint32>(request.Plane1Offset);
+            layout.Pitch[0] = static_cast<Uint32>(request.Pitch);
+            layout.Pitch[1] = static_cast<Uint32>(request.Plane1Pitch);
+            layout.ColorSpace = request.ColorSpace;
+            layout.Range = request.Range;
+            layout.SitingX = request.SitingX;
+            layout.SitingY = request.SitingY;
+            layout.HasModifier = request.HasModifier;
+            layout.Modifier = request.Modifier;
+            imported = backendObject != nullptr &&
+                       backendObject->ImportSharedImagePlanes(request.Fd, static_cast<Uint32>(request.Width),
+                                                              static_cast<Uint32>(request.Height), request.Fourcc,
+                                                              layout, &sharedImageId);
+        } else {
+            imported = backendObject != nullptr &&
+                       backendObject->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
+                                                        static_cast<Uint32>(request.Height), request.Fourcc,
+                                                        &sharedImageId);
+        }
+        if (!imported || sharedImageId == 0) {
             MGLOG_I_ONCE("eglCreateImage: a %dx%d dma-buf is not one of the server's shared images; refused "
                          "(EGL_BAD_MATCH)",
                          request.Width, request.Height);
@@ -1731,7 +1798,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->QueryDmaBufFormats(dpy, SharedImagesAvailable(), max_formats, formats, num_formats)
+        return state->QueryDmaBufFormats(dpy, SharedImagesAvailable(), SharedImageYuvAvailable(), max_formats, formats, num_formats)
                    ? EGL_TRUE
                    : EGL_FALSE;
     }
@@ -1743,7 +1810,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state) {
             return EGL_FALSE;
         }
-        return state->QueryDmaBufModifiers(dpy, SharedImagesAvailable(), format, max_modifiers,
+        return state->QueryDmaBufModifiers(dpy, SharedImagesAvailable(), SharedImageYuvAvailable(), format, max_modifiers,
                                            reinterpret_cast<Uint64*>(modifiers), external_only, num_modifiers)
                    ? EGL_TRUE
                    : EGL_FALSE;

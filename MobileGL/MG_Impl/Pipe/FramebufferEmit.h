@@ -132,7 +132,7 @@ namespace MobileGL::MG_Pipe {
             // TextureUploadTarget -> TextureTarget inverse exists anywhere in the tree, so
             // without this the inline InternalFormat cannot make them fall out at push time and
             // the backend keeps reading the frontend attachment objects.
-            surface.TextureTarget = static_cast<Uint16>(texture->GetTarget());
+            surface.TextureTarget = static_cast<Uint16>(MGPipeWireTextureTarget(texture->GetTarget()));
             return surface;
         }
         const auto& renderbuffer = attachment.GetRenderbuffer();

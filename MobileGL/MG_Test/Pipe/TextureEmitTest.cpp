@@ -384,6 +384,13 @@ TEST(TextureEmit, EveryTextureTargetMapsToItsOwnResourceTarget) {
             << "TextureTarget " << i << " maps onto the BUFFER row, which the ack predicate reads";
         EXPECT_NE(resourceTarget, static_cast<Uint32>(MGPipeResourceTarget::Renderbuffer))
             << "TextureTarget " << i << " maps onto the RENDERBUFFER row";
+        // The one deliberate fold: an external texture (GL_OES_EGL_image_external) is a 2D texture
+        // below the frontend.
+        if (target == TextureTarget::External) {
+            EXPECT_EQ(resourceTarget, static_cast<Uint32>(MGPipeResourceTarget::Tex2D));
+            seen.push_back(resourceTarget);
+            continue;
+        }
         for (const Uint32 previous : seen) {
             EXPECT_NE(previous, resourceTarget)
                 << "TextureTarget " << i << " shares its resource target with an earlier one";

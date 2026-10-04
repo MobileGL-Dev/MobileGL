@@ -8893,7 +8893,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return true;
             }
             Bind(GL_TEXTURE_2D);
-            if (!SharedImageImpl::TargetBoundTexture2D(image)) {
+            if (SharedImageImpl::IsYuv(image)) {
+                // A YUV image is CONVERTED into the name's own RGBA8 level at each frame's first use
+                // (SharedImageImpl::ConvertYuvForSampling), never made its storage.
+                while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                }
+                g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, static_cast<GLsizei>(record.Desc.Width),
+                                           static_cast<GLsizei>(record.Desc.Height));
+                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    MGLOG_E_ONCE("Shared image texture %u: no %ux%u RGBA8 storage for YUV image %llu; left empty",
+                                 record.Desc.GlNameForDiag, record.Desc.Width, record.Desc.Height,
+                                 static_cast<unsigned long long>(imageId));
+                    return true;
+                }
+            } else if (!SharedImageImpl::TargetBoundTexture2D(image)) {
                 MGLOG_E_ONCE("Shared image texture %u: glEGLImageTargetTexture2DOES refused image %llu; left empty",
                              record.Desc.GlNameForDiag, static_cast<unsigned long long>(imageId));
                 return true;
@@ -9042,6 +9055,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // before the command this sync is for, and the session's frame notes the read.
                 if (m_sharedImage != nullptr) SharedImageImpl::AcquireForSampling(m_sharedImage);
                 ReplaySharedImageUploads(*pushedStorage);
+                // A YUV image is converted into the name at the frame's first use.
+                if (m_sharedImage != nullptr && SharedImageImpl::IsYuv(m_sharedImage))
+                    SharedImageImpl::ConvertYuvForSampling(m_sharedImage, GetBackendTextureId(),
+                                                           pushedStorage->Desc.Width, pushedStorage->Desc.Height);
                 return;
             }
             // P5e (tx2), CONTRACT-P5E §5.2 (scout G-S2-2): THE VIEW TEST MOVES BEHIND THE

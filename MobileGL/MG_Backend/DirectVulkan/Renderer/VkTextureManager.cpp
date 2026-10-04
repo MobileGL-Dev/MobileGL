@@ -2115,9 +2115,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkTextureManager::SyncWireTextureShape(const MG_Pipe::MGPipeResourceRecord& record,
                                                 TextureResource& resource, Bool requireStorage) {
         const MG_Pipe::MGPResourceDesc& desc = record.Desc;
+        // A YUV shared image is converted INTO the texture's own RGBA8 storage, which the rest of
+        // this function defines as for any texture; the image is only named here, and the
+        // renderer converts it at its first use in each frame (WireYuvImage.inc).
+        if (record.SharedImageId != resource.yuvImageId && !m_syncingYuvTextureStorage) {
+            // Respecified away from (or to another) YUV image: its source goes with it, once the
+            // GPU is done with it (a released resource's Reset is deferred).
+            if (resource.yuvSource != nullptr) {
+                TextureResource retired;
+                retired.yuvSource = std::move(resource.yuvSource);
+                DeferResourceRelease(Move(retired));
+            }
+            resource.yuvImageId = 0;
+            resource.yuvOwner.reset();
+            resource.yuvSource.reset();
+            resource.yuvConvertedFrame = 0;
+        }
+        if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
+            const auto yuv = MG_Remote::Server::SharedImages::Find(record.SharedImageId);
+            if (yuv != nullptr && MG_Remote::Server::SharedImages::FourccIsYuv(yuv->Fourcc)) {
+                m_syncingYuvTextureStorage = true;
+                const Bool defined = SyncWireTextureShape(record, resource, requireStorage);
+                m_syncingYuvTextureStorage = false;
+                if (!defined) return false;
+                if (resource.yuvImageId != record.SharedImageId) {
+                    resource.yuvImageId = record.SharedImageId;
+                    resource.yuvOwner = yuv;
+                    resource.yuvSource.reset();
+                    resource.yuvConvertedFrame = 0;
+                }
+                return true;
+            }
+        }
         // Level 0 is a shared image: bind its buffer. An image that cannot be bound here leaves
         // the texture the storage its NULL-data definition asked for, below.
-        if (record.SharedImageId != 0) {
+        if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
             const SharedImageBind bound = SyncWireSharedImage(record, resource, requireStorage);
             if (bound != SharedImageBind::Unresolved) return bound == SharedImageBind::Bound;
         }
@@ -3057,7 +3089,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 handle.Slot, handle.Gen);
             return nullptr;
         }
-        resource.sharedImageKey = resource.sharedImageId != 0 ? key : 0;
+        resource.sharedImageKey = resource.sharedImageId != 0 || resource.yuvImageId != 0 ? key : 0;
         resource.syncedWireSerial = record.Serial;
         return &resource;
     }
@@ -3774,7 +3806,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.sampledView == VK_NULL_HANDLE &&
             resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
             resource.attachmentViews.empty() && resource.alternateSampledViews.empty() &&
-            resource.storageImageViews.empty()) {
+            resource.storageImageViews.empty()
+#if MOBILEGL_BUILD_DISAGGREGATED
+            && resource.yuvSource == nullptr
+#endif
+        ) {
             return;
         }
 

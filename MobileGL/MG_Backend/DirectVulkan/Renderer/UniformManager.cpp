@@ -3198,7 +3198,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     const auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
                     if (resource == nullptr) return false;
                     // Another session writes it: the renderer acquires it before this use.
-                    if (resource->sharedImageId != 0) m_textureManager->NoteSharedImageUse(*resource);
+                    if (resource->sharedImageId != 0 || resource->yuvImageId != 0)
+                        m_textureManager->NoteSharedImageUse(*resource);
                 }
             }
         }

@@ -3525,6 +3525,7 @@ void main() {
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
         DestroyWireColorBlitResources();
+        DestroyWireYuvResources();
         DestroyWireDepthMipmapResources();
         DestroyWireMultisampleResolveResources();
         DestroySharedImagePresentTargets(false);
@@ -8107,6 +8108,8 @@ void main() {
     #include "WireDraw.inc"
     // AFTER WireFramebuffer.inc: the shared-image present is that file's readback, into an image.
     #include "WireSharedImage.inc"
+    // AFTER WireSharedImage.inc: a YUV image is that file's reading side, converted on the way.
+    #include "WireYuvImage.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -16029,6 +16032,23 @@ void main() {
                 hostQueryResetFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
                 deviceCreateInfo.pNext = &hostQueryResetFeatures;
                 m_hostQueryResetEnabled = true;
+            }
+        }
+
+        // YUV shared images (WireYuvImage.inc) are sampled through a VkSamplerYcbcrConversion, a
+        // feature of its own; asked only where AHardwareBuffers are imported at all.
+        m_samplerYcbcrConversion = false;
+        VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcrFeatures{};
+        ycbcrFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES;
+        if (m_wireAhbImport && getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &ycbcrFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (ycbcrFeatures.samplerYcbcrConversion == VK_TRUE) {
+                ycbcrFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &ycbcrFeatures;
+                m_samplerYcbcrConversion = true;
             }
         }
 

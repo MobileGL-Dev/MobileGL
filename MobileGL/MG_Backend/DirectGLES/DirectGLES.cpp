@@ -427,6 +427,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // targets with no mip chain map to Unknown so the lookup falls back to no bias.
     TextureTarget SamplerUniformTextureTarget(GLenum uniformType) {
         switch (uniformType) {
+        case GL_SAMPLER_EXTERNAL_OES:
+            return TextureTarget::External;
         case GL_SAMPLER_1D:
         case GL_INT_SAMPLER_1D:
         case GL_UNSIGNED_INT_SAMPLER_1D:
@@ -18604,6 +18606,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 WaitSyncKhrFn WaitSync = nullptr;
                 ClientWaitSyncKhrFn ClientWaitSync = nullptr;
                 DupNativeFenceFdFn DupNativeFenceFd = nullptr;
+                // YUV images: sampled as external textures (GL_OES_EGL_image_external_essl3), and
+                // through GL_EXT_YUV_target's raw Y'CbCr sampler where the driver has it, so the
+                // conversion is the import's own (its colour hints) rather than the driver's guess.
+                Bool ExternalEssl3 = false;
+                Bool YuvTarget = false;
             };
 
             Bool HasExtensionWord(const char* list, const char* word) {
@@ -18667,6 +18674,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     entry->Why = "GL_OES_EGL_image is not advertised";
                     return *entry;
                 }
+                entry->ExternalEssl3 = HasExtensionWord(gl, "GL_OES_EGL_image_external_essl3");
+                entry->YuvTarget = HasExtensionWord(gl, "GL_EXT_YUV_target");
                 entry->GetNativeClientBuffer = reinterpret_cast<GetNativeClientBufferFn>(
                     g_EGLFuncs.eglGetProcAddress("eglGetNativeClientBufferANDROID"));
                 entry->CreateImage =
@@ -18706,6 +18715,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 WaitedGeneration = 0;
             Uint64 WaitedContext = 0;
             Uint64 NotedFrame = 0;
+            // A YUV image (ConvertYuvForSampling): an external texture over the EGLImage, the source
+            // of the conversion into the texture's own RGBA storage, and the reader's frame the
+            // conversion last ran in.
+            GLuint ExternalTexture = 0;
+            Uint64 ConvertedFrame = 0;
 
             ~EglImage() {
                 // eglDestroyImageKHR needs the display, not a context, so a session's twin teardown
@@ -18713,6 +18727,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // display - which destroyed the image itself - skip it.
                 if (Handle == nullptr || Destroy == nullptr || InProcessExit()) return;
                 if (g_displayTerminations.load(std::memory_order_acquire) != DisplayTerminations) return;
+                // Texture names are the share group's: deleting one needs any context of it, and
+                // without one current the name goes with the display.
+                if (ExternalTexture != 0 && t_boundNativeContext != EGL_NO_CONTEXT)
+                    g_GLESFuncs.glDeleteTextures(1, &ExternalTexture);
                 Destroy(Display, Handle);
             }
 #endif
@@ -18938,13 +18956,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The session ends frames at publishing flushes (PublishPendingAccesses): it writes
                 // images, so its first use of one in a frame waits for that image's pending reads.
                 Bool ImplicitSync = false;
+                // When a YUV image is converted again (ConvertYuvForSampling): renewed at EVERY
+                // boundary - present, publishing flush, and each native fence whatever the session
+                // is - since an offscreen producer (a browser's GPU process) may have no other.
+                Uint64 YuvEpoch = 0;
             };
             std::atomic<Uint64> g_readFrameIds{0};
 
             ReadFrame& CurrentReadFrame() {
                 thread_local ReadFrame frame;
                 if (frame.Id == 0) frame.Id = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (frame.YuvEpoch == 0) frame.YuvEpoch = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
                 return frame;
+            }
+
+            void RenewYuvEpoch(ReadFrame& frame) {
+                frame.YuvEpoch = g_readFrameIds.fetch_add(1, std::memory_order_relaxed) + 1;
             }
         } // namespace
 
@@ -18975,9 +19002,201 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        Bool IsYuv(const EglImageRef& image) {
+            return image != nullptr && image->Image != nullptr && SI::FourccIsYuv(image->Image->Fourcc);
+        }
+
+        namespace {
+            // THE CONVERSION PASS: one triangle over the texture, sampling the image through an
+            // external texture. Programs are the share group's and rebuilt with a new context
+            // generation; the framebuffer and vertex array are per context (never shared).
+            struct YuvConversion {
+                Uint ContextGeneration = ~0u;
+                GLuint ExternalProgram = 0; // the driver's conversion (samplerExternalOES)
+                GLuint TargetProgram = 0;   // the import's own (GL_EXT_YUV_target)
+                GLint TargetMatrix = -1;
+                GLint TargetOffset = -1;
+                Bool Failed = false;
+                NativeContextName Framebuffer;
+                NativeContextName VertexArray;
+            };
+            YuvConversion& Conversion() {
+                static auto* conversion = new YuvConversion();
+                return *conversion;
+            }
+
+            constexpr const char* kYuvVertexSource =
+                "#version 300 es\n"
+                "out vec2 vUv;\n"
+                "void main() {\n"
+                "    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+                "    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+                "    vUv = p;\n"
+                "}\n";
+            constexpr const char* kYuvExternalFragmentSource =
+                "#version 300 es\n"
+                "#extension GL_OES_EGL_image_external_essl3 : require\n"
+                "precision highp float;\n"
+                "uniform samplerExternalOES uSource;\n"
+                "in vec2 vUv;\n"
+                "out vec4 oColor;\n"
+                "void main() { oColor = vec4(texture(uSource, vUv).rgb, 1.0); }\n";
+            constexpr const char* kYuvTargetFragmentSource =
+                "#version 300 es\n"
+                "#extension GL_EXT_YUV_target : require\n"
+                "precision highp float;\n"
+                "uniform __samplerExternal2DY2YEXT uSource;\n"
+                "uniform mat3 uMatrix;\n"
+                "uniform vec3 uOffset;\n"
+                "in vec2 vUv;\n"
+                "out vec4 oColor;\n"
+                "void main() {\n"
+                "    vec3 ycbcr = texture(uSource, vUv).xyz;\n"
+                "    oColor = vec4(clamp(uMatrix * (ycbcr - uOffset), 0.0, 1.0), 1.0);\n"
+                "}\n";
+
+            GLuint BuildYuvProgram(const char* fragmentSource) {
+                const GLuint vertexShader = g_GLESFuncs.glCreateShader(GL_VERTEX_SHADER);
+                const GLuint fragmentShader = g_GLESFuncs.glCreateShader(GL_FRAGMENT_SHADER);
+                GLint linked = GL_FALSE;
+                GLuint program = 0;
+                if (vertexShader != 0 && fragmentShader != 0) {
+                    g_GLESFuncs.glShaderSource(vertexShader, 1, &kYuvVertexSource, nullptr);
+                    g_GLESFuncs.glCompileShader(vertexShader);
+                    g_GLESFuncs.glShaderSource(fragmentShader, 1, &fragmentSource, nullptr);
+                    g_GLESFuncs.glCompileShader(fragmentShader);
+                    program = g_GLESFuncs.glCreateProgram();
+                    if (program != 0) {
+                        g_GLESFuncs.glAttachShader(program, vertexShader);
+                        g_GLESFuncs.glAttachShader(program, fragmentShader);
+                        g_GLESFuncs.glLinkProgram(program);
+                        g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                    }
+                }
+                if (vertexShader != 0) g_GLESFuncs.glDeleteShader(vertexShader);
+                if (fragmentShader != 0) g_GLESFuncs.glDeleteShader(fragmentShader);
+                if (linked != GL_TRUE) {
+                    if (program != 0) g_GLESFuncs.glDeleteProgram(program);
+                    return 0;
+                }
+                return program;
+            }
+
+            // MOBILEGL_YUV_DRIVER_CONVERSION=1: always the driver's conversion (samplerExternalOES),
+            // even where GL_EXT_YUV_target would let the import's hints decide.
+            Bool DriverConversionForced() {
+                static const Bool forced = [] {
+                    const char* value = std::getenv("MOBILEGL_YUV_DRIVER_CONVERSION");
+                    return value != nullptr && value[0] == '1';
+                }();
+                return forced;
+            }
+        } // namespace
+
+        void ConvertYuvForSampling(const EglImageRef& image, GLuint target, Uint32 width, Uint32 height) {
+            if (!IsYuv(image) || target == 0 || width == 0 || height == 0) return;
+            EglImage& state = *image;
+            ReadFrame& frame = CurrentReadFrame();
+            if (state.ConvertedFrame == frame.YuvEpoch) return;
+            // Whatever happens below, this frame does not try again.
+            state.ConvertedFrame = frame.YuvEpoch;
+            const EntryPoints& entry = ResolvedEntryPoints();
+            if (!entry.Usable || !entry.ExternalEssl3) {
+                MGLOG_E_ONCE("Shared images: a YUV image cannot be sampled here (%s)",
+                             entry.Usable ? "no GL_OES_EGL_image_external_essl3" : entry.Why.c_str());
+                return;
+            }
+            // THE CPU-COPY FALLBACK, for a buffer this server did not allocate (SharedImageRegistry.h).
+            String why;
+            if (state.Image->IsForeign() && !SI::RefreshForeign(*state.Image, why)) {
+                MGLOG_E_ONCE("Shared images: foreign YUV image %llu could not be refreshed: %s",
+                             static_cast<unsigned long long>(state.Image->Id), why.c_str());
+            }
+
+            YuvConversion& conversion = Conversion();
+            if (conversion.ContextGeneration != g_backendContextGeneration) {
+                conversion.ExternalProgram = 0;
+                conversion.TargetProgram = 0;
+                conversion.TargetMatrix = conversion.TargetOffset = -1;
+                conversion.Failed = false;
+                conversion.ContextGeneration = g_backendContextGeneration;
+            }
+            if (conversion.Failed) return;
+            const Bool ownConversion = entry.YuvTarget && !DriverConversionForced();
+            GLuint& program = ownConversion ? conversion.TargetProgram : conversion.ExternalProgram;
+            if (program == 0) {
+                program = BuildYuvProgram(ownConversion ? kYuvTargetFragmentSource : kYuvExternalFragmentSource);
+                if (program == 0) {
+                    conversion.Failed = true;
+                    MGLOG_E_ONCE("Shared images: the YUV conversion program could not be built");
+                    return;
+                }
+                if (ownConversion) {
+                    conversion.TargetMatrix = g_GLESFuncs.glGetUniformLocation(program, "uMatrix");
+                    conversion.TargetOffset = g_GLESFuncs.glGetUniformLocation(program, "uOffset");
+                }
+                MGLOG_I("Shared images: YUV images convert through %s",
+                        ownConversion ? "GL_EXT_YUV_target with the import's colour hints"
+                                      : "the driver's external-sampler conversion");
+            }
+            if (conversion.Framebuffer == 0) g_GLESFuncs.glGenFramebuffers(1, &conversion.Framebuffer);
+            if (conversion.VertexArray == 0) g_GLESFuncs.glGenVertexArrays(1, &conversion.VertexArray);
+            if (conversion.Framebuffer == 0 || conversion.VertexArray == 0) return;
+
+            // Every binding goes through Espryt's shadows or a guard that puts it back.
+            ScopedEmulationDrawState drawState; // also activates TextureImpl::TempTextureUnit
+            ScopedFramebufferBinding binding(/*saveRead=*/false, /*saveDraw=*/true);
+            DrainErrors();
+            if (state.ExternalTexture == 0) {
+                g_GLESFuncs.glGenTextures(1, &state.ExternalTexture);
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_EXTERNAL_OES, state.ExternalTexture);
+                entry.TargetTexture2D(GL_TEXTURE_EXTERNAL_OES, state.Handle);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                g_GLESFuncs.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                const GLenum error = g_GLESFuncs.glGetError();
+                if (error != GL_NO_ERROR) {
+                    MGLOG_E_ONCE("Shared images: YUV image %llu cannot be bound as an external texture (0x%04x)",
+                                 static_cast<unsigned long long>(state.Image->Id), static_cast<unsigned>(error));
+                }
+            } else {
+                g_GLESFuncs.glBindTexture(GL_TEXTURE_EXTERNAL_OES, state.ExternalTexture);
+            }
+            FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, conversion.Framebuffer);
+            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+            const GLenum status = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+            if (status == GL_FRAMEBUFFER_COMPLETE) {
+                VertexArrayImpl::BindBackendVAOId(conversion.VertexArray);
+                g_GLESFuncs.glUseProgram(program);
+                g_GLESFuncs.glUniform1i(g_GLESFuncs.glGetUniformLocation(program, "uSource"),
+                                        static_cast<GLint>(TextureImpl::TempTextureUnit));
+                if (ownConversion) {
+                    // A Y2Y sample is the stored code normalized as the format stores it: 8 bits, or
+                    // P010's 10 in the high end of 16.
+                    const double sampleMax = state.Image->Fourcc == SI::kFourccP010 ? 65535.0 / 64.0 : 255.0;
+                    const auto c = SI::Yuv::ConversionFor(SI::GetYuvHints(*state.Image), sampleMax);
+                    g_GLESFuncs.glUniformMatrix3fv(conversion.TargetMatrix, 1, GL_FALSE, c.Matrix);
+                    g_GLESFuncs.glUniform3fv(conversion.TargetOffset, 1, c.Offset);
+                }
+                g_GLESFuncs.glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+                g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
+                const GLenum error = g_GLESFuncs.glGetError();
+                if (error != GL_NO_ERROR) {
+                    MGLOG_E_ONCE("Shared images: the YUV conversion draw failed (0x%04x)", static_cast<unsigned>(error));
+                }
+            } else {
+                MGLOG_E_ONCE("Shared images: a YUV conversion target is not renderable (0x%04x)",
+                             static_cast<unsigned>(status));
+            }
+            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+            g_GLESFuncs.glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+        }
+
         Bool PublishPendingAccesses() {
             ReadFrame& frame = CurrentReadFrame();
             frame.ImplicitSync = true;
+            RenewYuvEpoch(frame);
             // Sub-data waiting for a sync that nothing of this session would otherwise trigger.
             if (t_boundNativeContext != EGL_NO_CONTEXT) TextureImpl::WritePendingSharedImageUploads();
             if (frame.Tracker.Pending() == 0) return true;
@@ -18994,6 +19213,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool ExportNativeFence(int* fence) {
             *fence = -1;
             ReadFrame& frame = CurrentReadFrame();
+            RenewYuvEpoch(frame);
             // No context current: nothing of this session is in flight to fence.
             if (t_boundNativeContext == EGL_NO_CONTEXT) return true;
             TextureImpl::WritePendingSharedImageUploads();
@@ -19015,6 +19235,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void PublishPendingReads() {
             ReadFrame& frame = CurrentReadFrame();
+            RenewYuvEpoch(frame);
             if (frame.Tracker.Pending() == 0) return;
             int fence = -1;
             // No context current: the reads' context is gone (and its work with it), and there is
@@ -19207,6 +19428,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         void AcquireForSampling(const EglImageRef& image) { (void)image; }
+
+        Bool IsYuv(const EglImageRef& image) {
+            (void)image;
+            return false;
+        }
+
+        void ConvertYuvForSampling(const EglImageRef& image, GLuint target, Uint32 width, Uint32 height) {
+            (void)image, (void)target, (void)width, (void)height;
+        }
         void PublishPendingReads() {}
         Bool PublishPendingAccesses() { return true; }
         Bool ExportNativeFence(int* fence) {

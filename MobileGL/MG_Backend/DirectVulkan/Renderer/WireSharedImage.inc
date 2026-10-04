@@ -499,6 +499,11 @@
 
     void VulkanRenderer::AcquireSharedImage(VkTextureManager::TextureResource& resource) {
         namespace SI = MG_Remote::Server::SharedImages;
+        // A YUV image is converted into the texture's own image instead (WireYuvImage.inc).
+        if (resource.yuvImageId != 0) {
+            (void)ConvertYuvSharedImage(resource);
+            return;
+        }
         if (resource.sharedImageId == 0 || resource.image == VK_NULL_HANDLE || resource.sharedImageOwner == nullptr)
             return;
         const auto image = std::static_pointer_cast<const SI::Image>(resource.sharedImageOwner);
@@ -567,6 +572,8 @@
     // family in the frame's last recording, and that recording's submission signals the semaphore
     // whose sync_file is published as the frame's read fence for all of them at once.
     void VulkanRenderer::ReleaseHeldSharedImages() {
+        // A frame boundary: a YUV texture's next use converts its image again.
+        ++m_yuvFrameSerial;
         if (m_sharedImagesHeld.empty()) return;
         const Uint32 family = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
         Vector<VkImageMemoryBarrier> releases;
@@ -633,6 +640,9 @@
     // submission, and it is tracked like any other (the semaphore's reuse waits for it).
     Bool VulkanRenderer::ExportNativeFence(int* fence) {
         *fence = -1;
+        // Every fence the application asks for ends one of its frames as far as a YUV texture is
+        // concerned (an offscreen producer - a browser's GPU process - has no present to do it).
+        ++m_yuvFrameSerial;
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0)
             return true; // nothing was ever submitted: nothing to fence
         // A session that writes images ends its frame here, as at a flush; a compositor that only

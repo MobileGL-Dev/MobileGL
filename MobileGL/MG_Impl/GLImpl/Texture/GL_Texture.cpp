@@ -1194,6 +1194,25 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // GL_OES_EGL_image_external: base level 0, CLAMP_TO_EDGE only, NEAREST or LINEAR only.
+        if (target == TextureTarget::External) {
+            if (pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "External texture base level must be zero."));
+                return false;
+            }
+            if (((pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R) &&
+                 param != GL_CLAMP_TO_EDGE) ||
+                (pname == GL_TEXTURE_MIN_FILTER && param != GL_NEAREST && param != GL_LINEAR)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "External textures clamp to edge and filter without mipmaps."));
+                return false;
+            }
+        }
+
         if (target == TextureTarget::TextureRectangle && pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1635,6 +1654,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_CUBE_MAP_ARRAY:
         case GL_TEXTURE_2D_MULTISAMPLE:
         case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+        case GL_TEXTURE_EXTERNAL_OES:
             return true;
         default:
             return false;
@@ -3145,6 +3165,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureObject(textureObject)) return false;
 
         switch (pname) {
+        // GL_OES_EGL_image_external: one unit per external texture (the image arrives as RGBA).
+        case GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES:
+            if (textureTarget != TextureTarget::External) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES is an external texture's."));
+                return false;
+            }
+            if (params) *params = 1;
+            break;
         case GL_TEXTURE_MAG_FILTER:
             if (params) {
                 *params = (GLint)MG_Util::ConvertSamplerFilterModeToGLEnum(
@@ -6805,6 +6836,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        const char* caller) {
         if (!textureObject) return false;
         const auto target = textureObject->GetTarget();
+        // GL_OES_EGL_image_external: an external texture has no mip chain to generate.
+        if (target == TextureTarget::External) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "External textures have no mipmaps."));
+            return false;
+        }
         if ((target == TextureTarget::TextureCubeMap || target == TextureTarget::TextureCubeMapArray) &&
             !textureObject->IsComplete()) {
             MG_State::pGLContext->RecordError(
@@ -7138,15 +7176,20 @@ namespace MobileGL::MG_Impl::GLImpl {
     // GL_OES_EGL_image. The only EGLImages with storage behind them are the server's shared images
     // (EGL_LINUX_DMA_BUF_EXT): level 0 of the bound texture is defined at the image's size through
     // glTexImage2D's own path - so the respecification is recorded and announced as for any other
-    // - and the backend then swaps that storage for the image. The frontend has no external-image
-    // target, so GL_TEXTURE_2D is the only one taken.
+    // - and the backend then swaps that storage for the image.
+    //
+    // GL_OES_EGL_image_external's target takes it the same way: an external texture is a 2D one
+    // below the frontend. A YUV image (NV12/P010) is taken by either target; the backend converts it
+    // into the texture's RGBA level at the first use in each frame (SharedImageYuv.h).
     void EGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image) {
-        if (target != GL_TEXTURE_2D) {
+        if (target != GL_TEXTURE_2D && target != GL_TEXTURE_EXTERNAL_OES) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "target must be GL_TEXTURE_2D."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "target must be GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES."));
             return;
         }
+        const Bool external = target == GL_TEXTURE_EXTERNAL_OES;
         Uint64 sharedImageId = 0;
         EGLint width = 0;
         EGLint height = 0;
@@ -7158,17 +7201,27 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         const SharedPtr<MG_State::GLState::ITextureObject> textureObject =
-            activeUnit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+            activeUnit.GetBindingSlot(external ? TextureTarget::External : TextureTarget::Texture2D).GetBoundObject();
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!ValidateTextureMutable(textureObject, __func__)) return;
         if (!TextureImpl::ValidateTextureSizeRange(width, height, 1)) return;
 
-        // NULL is an offset into a bound unpack buffer; the definition must read nothing.
-        GLint unpackBuffer = 0;
-        GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpackBuffer);
-        if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-        TexImage2D_State(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpackBuffer));
+        if (external) {
+            // glTexImage2D does not take the external target, so its level 0 is defined here the way
+            // that call defines a 2D one without data: an RGBA8 base, any older chain dropped.
+            textureObject->SetInternalFormat(TextureInternalFormat::RGBA8);
+            auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            DiscardMipmapChainOnBaseRespecification(mipmapObject, TextureUploadTarget::Texture2D, 0);
+            mipmapObject->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                                          {{width, height, 1}, static_cast<SizeT>(width) * height * 4});
+        } else {
+            // NULL is an offset into a bound unpack buffer; the definition must read nothing.
+            GLint unpackBuffer = 0;
+            GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpackBuffer);
+            if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            TexImage2D_State(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpackBuffer));
+        }
 
         auto* backendObject = MG_Backend::pActiveBackendObject.get();
         if (backendObject == nullptr ||

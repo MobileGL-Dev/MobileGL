@@ -180,3 +180,59 @@ TEST_F(GbmGlamor, AForeignDmaBufIsRefused) {
     EXPECT_EQ(gbm_bo_import(m_gbm, GBM_BO_IMPORT_FD, &data, GBM_BO_USE_RENDERING), nullptr);
     ::close(foreign);
 }
+
+// YUV buffers (ABI 2): NV12 where the library lists it, two planes in one descriptor, sampled only.
+TEST_F(GbmGlamor, AnNv12BufferHasTwoPlanesInOneDescriptor) {
+    EXPECT_EQ(gbm_device_is_format_supported(m_gbm, GBM_FORMAT_NV12, 0), 1);
+    EXPECT_EQ(gbm_device_is_format_supported(m_gbm, GBM_FORMAT_NV12, GBM_BO_USE_RENDERING), 0);
+    EXPECT_EQ(gbm_device_is_format_supported(m_gbm, 0x30313050u /* P010 */, 0), 0) << "the library does not list P010";
+    EXPECT_EQ(gbm_device_get_format_modifier_plane_count(m_gbm, GBM_FORMAT_NV12, DRM_FORMAT_MOD_INVALID), 2);
+    EXPECT_EQ(gbm_bo_create(m_gbm, 64, 32, GBM_FORMAT_NV12, GBM_BO_USE_RENDERING), nullptr);
+
+    gbm_bo* bo = gbm_bo_create(m_gbm, 64, 32, GBM_FORMAT_NV12, 0);
+    ASSERT_NE(bo, nullptr);
+    EXPECT_EQ(gbm_bo_get_plane_count(bo), 2);
+    EXPECT_EQ(gbm_bo_get_stride_for_plane(bo, 0), 64u);
+    EXPECT_EQ(gbm_bo_get_stride_for_plane(bo, 1), 64u);
+    EXPECT_EQ(gbm_bo_get_offset(bo, 1), 64u * 32u);
+    EXPECT_EQ(gbm_bo_get_handle_for_plane(bo, 1).u32, gbm_bo_get_handle(bo).u32);
+    const int fd = gbm_bo_get_fd(bo);
+    const int plane1 = gbm_bo_get_fd_for_plane(bo, 1);
+    ASSERT_GE(fd, 0);
+    ASSERT_GE(plane1, 0);
+
+    // Imported back with both planes, through one descriptor or two of the same buffer.
+    gbm_import_fd_modifier_data data{};
+    data.width = 64;
+    data.height = 32;
+    data.format = GBM_FORMAT_NV12;
+    data.num_fds = 2;
+    data.fds[0] = fd;
+    data.fds[1] = plane1;
+    data.strides[0] = data.strides[1] = 64;
+    data.offsets[1] = 64 * 32;
+    data.modifier = DRM_FORMAT_MOD_INVALID;
+    gbm_bo* imported = gbm_bo_import(m_gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0);
+    ASSERT_NE(imported, nullptr);
+    EXPECT_EQ(gbm_bo_get_plane_count(imported), 2);
+    EXPECT_EQ(gbm_bo_get_offset(imported, 1), 64u * 32u);
+
+    // Planes in two different buffers, and a one-plane import that cannot say where plane 1 is.
+    const int other = ::memfd_create("other", MFD_CLOEXEC);
+    data.fds[1] = other;
+    EXPECT_EQ(gbm_bo_import(m_gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, 0), nullptr);
+    gbm_import_fd_data plain{};
+    plain.fd = fd;
+    plain.width = 64;
+    plain.height = 32;
+    plain.stride = 64;
+    plain.format = GBM_FORMAT_NV12;
+    EXPECT_EQ(gbm_bo_import(m_gbm, GBM_BO_IMPORT_FD, &plain, 0), nullptr);
+
+    ::close(other);
+    gbm_bo_destroy(imported);
+    gbm_bo_destroy(bo);
+    ::close(fd);
+    ::close(plane1);
+    EXPECT_EQ(m_live(), m_liveAtStart) << "every reference was dropped";
+}

@@ -1874,9 +1874,14 @@ namespace MobileGL {
             }
 
             Bool EGLContext::IsDmaBufFourccSupported(Uint32 fourcc) {
-                // The four orders a shared image can be allocated under (SharedImageApi.h).
+                // The four orders a shared image can be allocated under (SharedImageApi.h), and the
+                // two YUV ones that are sampled only.
                 return fourcc == kDrmFourccAbgr8888 || fourcc == kDrmFourccXbgr8888 || fourcc == kDrmFourccArgb8888 ||
-                       fourcc == kDrmFourccXrgb8888;
+                       fourcc == kDrmFourccXrgb8888 || IsDmaBufFourccYuv(fourcc);
+            }
+
+            Bool EGLContext::IsDmaBufFourccYuv(Uint32 fourcc) {
+                return fourcc == kDrmFourccNv12 || fourcc == kDrmFourccP010;
             }
 
             Bool EGLContext::PrepareDmaBufImport(EGLDisplayHandle display, EGLContextHandle context,
@@ -1899,9 +1904,11 @@ namespace MobileGL {
                 }
 
                 DmaBufImportAttribs attribs;
-                Bool hasWidth = false, hasHeight = false, hasFourcc = false, hasFd = false, hasOffset = false,
-                     hasPitch = false, hasModifierLo = false, hasModifierHi = false, otherPlane = false;
-                Uint64 modifierLo = 0, modifierHi = 0;
+                Bool hasWidth = false, hasHeight = false, hasFourcc = false;
+                // Per plane: fd, offset, pitch, modifier lo, modifier hi.
+                Bool has[2][5] = {};
+                Uint64 modifierLo[2] = {0, 0}, modifierHi[2] = {0, 0};
+                Bool laterPlane = false;
                 for (SizeT i = 0; attribList != nullptr && attribList[i] != EGL_NONE; i += 2) {
                     const EGLAttrib value = attribList[i + 1];
                     switch (attribList[i]) {
@@ -1919,29 +1926,44 @@ namespace MobileGL {
                         break;
                     case EGL_DMA_BUF_PLANE0_FD_EXT:
                         attribs.Fd = static_cast<int>(value);
-                        hasFd = true;
+                        has[0][0] = true;
                         break;
                     case EGL_DMA_BUF_PLANE0_OFFSET_EXT:
                         attribs.Offset = static_cast<EGLint>(value);
-                        hasOffset = true;
+                        has[0][1] = true;
                         break;
                     case EGL_DMA_BUF_PLANE0_PITCH_EXT:
                         attribs.Pitch = static_cast<EGLint>(value);
-                        hasPitch = true;
+                        has[0][2] = true;
                         break;
                     case EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT:
-                        modifierLo = static_cast<Uint32>(value);
-                        hasModifierLo = true;
+                        modifierLo[0] = static_cast<Uint32>(value);
+                        has[0][3] = true;
                         break;
                     case EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT:
-                        modifierHi = static_cast<Uint32>(value);
-                        hasModifierHi = true;
+                        modifierHi[0] = static_cast<Uint32>(value);
+                        has[0][4] = true;
                         break;
                     case EGL_DMA_BUF_PLANE1_FD_EXT:
+                        attribs.Plane1Fd = static_cast<int>(value);
+                        has[1][0] = true;
+                        break;
                     case EGL_DMA_BUF_PLANE1_OFFSET_EXT:
+                        attribs.Plane1Offset = static_cast<EGLint>(value);
+                        has[1][1] = true;
+                        break;
                     case EGL_DMA_BUF_PLANE1_PITCH_EXT:
+                        attribs.Plane1Pitch = static_cast<EGLint>(value);
+                        has[1][2] = true;
+                        break;
                     case EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT:
+                        modifierLo[1] = static_cast<Uint32>(value);
+                        has[1][3] = true;
+                        break;
                     case EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT:
+                        modifierHi[1] = static_cast<Uint32>(value);
+                        has[1][4] = true;
+                        break;
                     case EGL_DMA_BUF_PLANE2_FD_EXT:
                     case EGL_DMA_BUF_PLANE2_OFFSET_EXT:
                     case EGL_DMA_BUF_PLANE2_PITCH_EXT:
@@ -1952,14 +1974,22 @@ namespace MobileGL {
                     case EGL_DMA_BUF_PLANE3_PITCH_EXT:
                     case EGL_DMA_BUF_PLANE3_MODIFIER_LO_EXT:
                     case EGL_DMA_BUF_PLANE3_MODIFIER_HI_EXT:
-                        otherPlane = true;
+                        laterPlane = true;
                         break;
-                    // Hints for YUV formats, and EGL_KHR_image_base's own attribute: meaningless
-                    // for a single-plane RGB image, accepted and ignored.
+                    // The YUV hints: kept for a YUV import, which is converted with them; meaningless
+                    // for an RGB one and ignored there. EGL_KHR_image_base's own attribute likewise.
                     case EGL_YUV_COLOR_SPACE_HINT_EXT:
+                        attribs.ColorSpace = static_cast<Uint32>(value);
+                        break;
                     case EGL_SAMPLE_RANGE_HINT_EXT:
+                        attribs.Range = static_cast<Uint32>(value);
+                        break;
                     case EGL_YUV_CHROMA_HORIZONTAL_SITING_HINT_EXT:
+                        attribs.SitingX = static_cast<Uint32>(value);
+                        break;
                     case EGL_YUV_CHROMA_VERTICAL_SITING_HINT_EXT:
+                        attribs.SitingY = static_cast<Uint32>(value);
+                        break;
                     case EGL_IMAGE_PRESERVED_KHR:
                         break;
                     default:
@@ -1967,8 +1997,8 @@ namespace MobileGL {
                         return false;
                     }
                 }
-                if (!hasWidth || !hasHeight || !hasFourcc || !hasFd || !hasOffset || !hasPitch ||
-                    hasModifierLo != hasModifierHi) {
+                if (!hasWidth || !hasHeight || !hasFourcc || !has[0][0] || !has[0][1] || !has[0][2] ||
+                    has[0][3] != has[0][4]) {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
@@ -1976,23 +2006,37 @@ namespace MobileGL {
                     SetError(EGL_BAD_MATCH);
                     return false;
                 }
-                // Every supported format has exactly one plane.
-                if (otherPlane) {
+                const Bool yuv = IsDmaBufFourccYuv(attribs.Fourcc);
+                attribs.PlaneCount = yuv ? 2u : 1u;
+                const Bool anyPlane1 = has[1][0] || has[1][1] || has[1][2] || has[1][3] || has[1][4];
+                // Planes the format does not have are an attribute error; planes it has but the
+                // list leaves out (or half a modifier) a parameter error.
+                if (laterPlane || (!yuv && anyPlane1)) {
                     SetError(EGL_BAD_ATTRIBUTE);
                     return false;
                 }
-                if (attribs.Width <= 0 || attribs.Height <= 0 || attribs.Fd < 0) {
+                if (yuv && (!has[1][0] || !has[1][1] || !has[1][2] || has[1][3] != has[1][4] || has[1][3] != has[0][3])) {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
-                if (attribs.Offset < 0 || attribs.Pitch <= 0) {
+                if (attribs.Width <= 0 || attribs.Height <= 0 || attribs.Fd < 0 || (yuv && attribs.Plane1Fd < 0)) {
+                    SetError(EGL_BAD_PARAMETER);
+                    return false;
+                }
+                if (attribs.Offset < 0 || attribs.Pitch <= 0 || (yuv && (attribs.Plane1Offset < 0 || attribs.Plane1Pitch <= 0))) {
                     SetError(EGL_BAD_ACCESS);
                     return false;
                 }
-                // Any modifier is taken: the image is identified by its descriptor, never read
-                // through the layout a modifier describes.
-                attribs.HasModifier = hasModifierLo;
-                attribs.Modifier = (modifierHi << 32) | modifierLo;
+                // Every plane names the one modifier of the buffer.
+                if (yuv && has[0][3] && (modifierLo[0] != modifierLo[1] || modifierHi[0] != modifierHi[1])) {
+                    SetError(EGL_BAD_MATCH);
+                    return false;
+                }
+                // An RGBA image is identified by its descriptor, never read through the layout a
+                // modifier describes, so any modifier is taken; a YUV one may be a buffer the server
+                // copies (a foreign one), which it reads as linear rows - the server decides.
+                attribs.HasModifier = has[0][3];
+                attribs.Modifier = (modifierHi[0] << 32) | modifierLo[0];
                 if (out != nullptr) *out = attribs;
                 return true;
             }
@@ -2034,8 +2078,8 @@ namespace MobileGL {
                 return orphaned;
             }
 
-            Bool EGLContext::QueryDmaBufFormats(EGLDisplayHandle display, Bool available, EGLint maxFormats,
-                                                EGLint* formats, EGLint* numFormats) {
+            Bool EGLContext::QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
+                                                EGLint maxFormats, EGLint* formats, EGLint* numFormats) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 if (!ValidateDisplay(display)) {
                     SetError(EGL_BAD_DISPLAY);
@@ -2050,8 +2094,10 @@ namespace MobileGL {
                     return false;
                 }
                 static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888, kDrmFourccArgb8888,
-                                                      kDrmFourccXrgb8888};
-                const EGLint total = available ? static_cast<EGLint>(std::size(kFormats)) : 0;
+                                                      kDrmFourccXrgb8888, kDrmFourccNv12, kDrmFourccP010};
+                constexpr EGLint kRgbCount = 4;
+                const EGLint total =
+                    !available ? 0 : (yuvAvailable ? static_cast<EGLint>(std::size(kFormats)) : kRgbCount);
                 if (maxFormats == 0) {
                     *numFormats = total;
                     return true;
@@ -2062,11 +2108,10 @@ namespace MobileGL {
                 return true;
             }
 
-            Bool EGLContext::QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, EGLint format,
-                                                  EGLint maxModifiers, Uint64* modifiers,
+            Bool EGLContext::QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
+                                                  EGLint format, EGLint maxModifiers, Uint64* modifiers,
                                                   EGLBoolean* externalOnly, EGLint* numModifiers) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
-                (void)externalOnly;
                 if (!ValidateDisplay(display)) {
                     SetError(EGL_BAD_DISPLAY);
                     return false;
@@ -2075,14 +2120,27 @@ namespace MobileGL {
                     SetError(EGL_NOT_INITIALIZED);
                     return false;
                 }
-                if (!available || !IsDmaBufFourccSupported(static_cast<Uint32>(format)) || maxModifiers < 0 ||
-                    numModifiers == nullptr || (maxModifiers > 0 && modifiers == nullptr)) {
+                const Bool yuv = IsDmaBufFourccYuv(static_cast<Uint32>(format));
+                if (!available || !IsDmaBufFourccSupported(static_cast<Uint32>(format)) || (yuv && !yuvAvailable) ||
+                    maxModifiers < 0 || numModifiers == nullptr || (maxModifiers > 0 && modifiers == nullptr)) {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
-                // No explicit modifiers: an image's layout is its allocator's, which is what an
-                // import without modifier attributes (the implicit modifier) means.
-                *numModifiers = 0;
+                if (!yuv) {
+                    // No explicit modifiers: an image's layout is its allocator's, which is what an
+                    // import without modifier attributes (the implicit modifier) means.
+                    *numModifiers = 0;
+                    return true;
+                }
+                // A YUV buffer is taken as linear rows when it is not one of the server's own (which
+                // are identified, whatever modifier is named), and only ever sampled: external only.
+                if (maxModifiers == 0) {
+                    *numModifiers = 1;
+                    return true;
+                }
+                modifiers[0] = 0; // DRM_FORMAT_MOD_LINEAR
+                if (externalOnly != nullptr) externalOnly[0] = EGL_TRUE;
+                *numModifiers = 1;
                 return true;
             }
         } // namespace EGLState

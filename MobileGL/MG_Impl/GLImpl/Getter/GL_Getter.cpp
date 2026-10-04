@@ -434,6 +434,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_TEXTURE_BINDING_CUBE_MAP: outTarget = TextureTarget::TextureCubeMap; return true;
             case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY: outTarget = TextureTarget::TextureCubeMapArray; return true;
             case GL_TEXTURE_BINDING_RECTANGLE: outTarget = TextureTarget::TextureRectangle; return true;
+            case GL_TEXTURE_BINDING_EXTERNAL_OES: outTarget = TextureTarget::External; return true;
             default: return false;
             }
         }
@@ -606,23 +607,35 @@ namespace MobileGL::MG_Impl::GLImpl {
         Bool EsIdentityActive();
 
         const Vector<const char*>& ClientSideExtensions() {
-            static const Vector<const char*> withImages = {"GL_OES_EGL_image", "GL_KHR_robustness",
-                                                           "GL_ARB_robustness", "GL_EXT_robustness"};
-            static const Vector<const char*> withoutImages = {"GL_KHR_robustness", "GL_ARB_robustness",
-                                                              "GL_EXT_robustness"};
-            // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
-            // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
-            // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
-            // pixel transfer format's, as on desktop GL.
-            static const Vector<const char*> esWithImages = {
-                "GL_OES_EGL_image",  "GL_KHR_robustness",      "GL_ARB_robustness",
-                "GL_EXT_robustness", "GL_EXT_texture_format_BGRA8888", "GL_EXT_read_format_bgra"};
-            static const Vector<const char*> esWithoutImages = {"GL_KHR_robustness", "GL_ARB_robustness",
-                                                                "GL_EXT_robustness", "GL_EXT_texture_format_BGRA8888",
-                                                                "GL_EXT_read_format_bgra"};
+            // GL_OES_EGL_image_external(_essl3) only where the server samples YUV images: an
+            // external texture is a 2D texture holding the image converted to RGBA, which needs
+            // the server to hold the YUV image in the first place (EGLImpl::SharedImageYuvAvailable).
+            static const auto build = [](Bool images, Bool external, Bool es) {
+                Vector<const char*> list;
+                if (images) list.push_back("GL_OES_EGL_image");
+                if (images && external) {
+                    list.push_back("GL_OES_EGL_image_external");
+                    list.push_back("GL_OES_EGL_image_external_essl3");
+                }
+                for (const char* name : {"GL_KHR_robustness", "GL_ARB_robustness", "GL_EXT_robustness"})
+                    list.push_back(name);
+                // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
+                // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
+                // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
+                // pixel transfer format's, as on desktop GL.
+                if (es) {
+                    list.push_back("GL_EXT_texture_format_BGRA8888");
+                    list.push_back("GL_EXT_read_format_bgra");
+                }
+                return list;
+            };
+            static const Vector<const char*> lists[8] = {
+                build(false, false, false), build(false, false, true), build(false, true, false),
+                build(false, true, true),   build(true, false, false), build(true, false, true),
+                build(true, true, false),   build(true, true, true)};
             const Bool images = MG_Impl::EGLImpl::SharedImagesAvailable();
-            if (EsIdentityActive()) return images ? esWithImages : esWithoutImages;
-            return images ? withImages : withoutImages;
+            const Bool external = images && MG_Impl::EGLImpl::SharedImageYuvAvailable();
+            return lists[(images ? 4 : 0) + (external ? 2 : 0) + (EsIdentityActive() ? 1 : 0)];
         }
 
         // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend

@@ -405,38 +405,141 @@ TEST(EGLStateDmaBufImport, SharedImageLifetime) {
 TEST(EGLStateDmaBufImport, FormatAndModifierQueries) {
     auto fixture = CreateFixture();
     EGLint count = -1;
-    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 0, nullptr, &count));
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, 0, nullptr, &count));
     EXPECT_EQ(count, 4);
     EGLint formats[4] = {};
-    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 4, formats, &count));
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, 4, formats, &count));
     ASSERT_EQ(count, 4);
     EXPECT_EQ(formats[0], static_cast<EGLint>(kAbgr8888));
     EXPECT_EQ(formats[1], static_cast<EGLint>(kXbgr8888));
     EXPECT_EQ(formats[2], static_cast<EGLint>(kArgb8888));
     EXPECT_EQ(formats[3], static_cast<EGLint>(kXrgb8888));
-    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 1, formats, &count));
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, 1, formats, &count));
     EXPECT_EQ(count, 1);
 
     // Without shared images there is nothing to import.
-    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, false, 0, nullptr, &count));
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, false, false, 0, nullptr, &count));
     EXPECT_EQ(count, 0);
-    EXPECT_FALSE(fixture->State.QueryDmaBufFormats(fixture->Display, true, -1, formats, &count));
+    EXPECT_FALSE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, -1, formats, &count));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
 
     // No explicit modifiers: importers fall back to the implicit one.
     uint64_t modifiers[2] = {};
     EGLBoolean externalOnly[2] = {};
     count = -1;
-    ASSERT_TRUE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, static_cast<EGLint>(kAbgr8888), 2,
+    ASSERT_TRUE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, false, static_cast<EGLint>(kAbgr8888), 2,
                                                     modifiers, externalOnly, &count));
     EXPECT_EQ(count, 0);
-    EXPECT_FALSE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, static_cast<EGLint>(kRgb565), 0,
+    EXPECT_FALSE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, false, static_cast<EGLint>(kRgb565), 0,
                                                      nullptr, nullptr, &count));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
 
     ASSERT_TRUE(fixture->State.TerminateDisplay(fixture->Display));
-    EXPECT_FALSE(fixture->State.QueryDmaBufFormats(fixture->Display, true, 0, nullptr, &count));
+    EXPECT_FALSE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, 0, nullptr, &count));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_NOT_INITIALIZED);
+}
+
+namespace {
+    constexpr EGLAttrib kNv12 = StateContext::kDrmFourccNv12;
+    constexpr EGLAttrib kP010 = StateContext::kDrmFourccP010;
+
+    // A complete NV12 import as a video decoder exports one: both planes in one buffer.
+    std::vector<EGLAttrib> Nv12Attribs(EGLAttrib fourcc = kNv12) {
+        return {EGL_WIDTH,
+                1280,
+                EGL_HEIGHT,
+                720,
+                EGL_LINUX_DRM_FOURCC_EXT,
+                fourcc,
+                EGL_DMA_BUF_PLANE0_FD_EXT,
+                7,
+                EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                0,
+                EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                1280,
+                EGL_DMA_BUF_PLANE1_FD_EXT,
+                9,
+                EGL_DMA_BUF_PLANE1_OFFSET_EXT,
+                942080,
+                EGL_DMA_BUF_PLANE1_PITCH_EXT,
+                1280,
+                EGL_NONE};
+    }
+} // namespace
+
+TEST(EGLStateDmaBufImport, ParsesATwoPlaneYuvImportWithItsHints) {
+    auto fixture = CreateFixture();
+    auto attribs = WithAttrib(Nv12Attribs(), EGL_YUV_COLOR_SPACE_HINT_EXT, EGL_ITU_REC709_EXT);
+    attribs = WithAttrib(attribs, EGL_SAMPLE_RANGE_HINT_EXT, EGL_YUV_NARROW_RANGE_EXT);
+    attribs = WithAttrib(attribs, EGL_YUV_CHROMA_HORIZONTAL_SITING_HINT_EXT, EGL_YUV_CHROMA_SITING_0_5_EXT);
+    StateContext::DmaBufImportAttribs parsed;
+    ASSERT_TRUE(fixture->State.PrepareDmaBufImport(fixture->Display, EGL_NO_CONTEXT, nullptr, attribs.data(), &parsed));
+    EXPECT_EQ(parsed.PlaneCount, 2u);
+    EXPECT_EQ(parsed.Fd, 7);
+    EXPECT_EQ(parsed.Plane1Fd, 9);
+    EXPECT_EQ(parsed.Plane1Offset, 942080);
+    EXPECT_EQ(parsed.Plane1Pitch, 1280);
+    EXPECT_EQ(parsed.ColorSpace, static_cast<uint32_t>(EGL_ITU_REC709_EXT));
+    EXPECT_EQ(parsed.Range, static_cast<uint32_t>(EGL_YUV_NARROW_RANGE_EXT));
+    EXPECT_EQ(parsed.SitingX, static_cast<uint32_t>(EGL_YUV_CHROMA_SITING_0_5_EXT));
+    EXPECT_EQ(parsed.SitingY, 0u);
+    EXPECT_FALSE(parsed.HasModifier);
+    EXPECT_EQ(PrepareError(*fixture, Nv12Attribs(kP010)), EGL_SUCCESS);
+
+    // One modifier for the buffer: the same on both planes, or none on either.
+    auto linear = WithAttrib(WithAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0),
+                             EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0);
+    EXPECT_EQ(PrepareError(*fixture, linear), EGL_BAD_PARAMETER);
+    linear = WithAttrib(WithAttrib(linear, EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, 0), EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, 0);
+    EXPECT_EQ(PrepareError(*fixture, linear), EGL_SUCCESS);
+    auto mixed = WithAttrib(WithAttrib(WithoutAttrib(WithoutAttrib(linear, EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT),
+                                                     EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT),
+                                       EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, 1),
+                            EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, 0);
+    EXPECT_EQ(PrepareError(*fixture, mixed), EGL_BAD_MATCH);
+}
+
+TEST(EGLStateDmaBufImport, RefusesAnIncompleteYuvImport) {
+    auto fixture = CreateFixture();
+    for (const EGLAttrib required :
+         {EGL_DMA_BUF_PLANE1_FD_EXT, EGL_DMA_BUF_PLANE1_OFFSET_EXT, EGL_DMA_BUF_PLANE1_PITCH_EXT}) {
+        EXPECT_EQ(PrepareError(*fixture, WithoutAttrib(Nv12Attribs(), required)), EGL_BAD_PARAMETER)
+            << "missing 0x" << std::hex << required;
+    }
+    // NV12 has two planes, not three.
+    EXPECT_EQ(PrepareError(*fixture, WithAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE2_FD_EXT, 7)), EGL_BAD_ATTRIBUTE);
+    auto badPitch = WithAttrib(WithoutAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE1_PITCH_EXT), EGL_DMA_BUF_PLANE1_PITCH_EXT, 0);
+    EXPECT_EQ(PrepareError(*fixture, badPitch), EGL_BAD_ACCESS);
+}
+
+TEST(EGLStateDmaBufImport, YuvFormatsAreListedOnlyWhenTheServerHoldsThem) {
+    auto fixture = CreateFixture();
+    EGLint count = -1;
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, false, 0, nullptr, &count));
+    EXPECT_EQ(count, 4);
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, true, 0, nullptr, &count));
+    EXPECT_EQ(count, 6);
+    EGLint formats[6] = {};
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, true, true, 6, formats, &count));
+    EXPECT_EQ(formats[4], static_cast<EGLint>(kNv12));
+    EXPECT_EQ(formats[5], static_cast<EGLint>(kP010));
+    ASSERT_TRUE(fixture->State.QueryDmaBufFormats(fixture->Display, false, true, 0, nullptr, &count));
+    EXPECT_EQ(count, 0);
+
+    // A YUV format: LINEAR, external only.
+    uint64_t modifiers[2] = {99, 99};
+    EGLBoolean externalOnly[2] = {EGL_FALSE, EGL_FALSE};
+    ASSERT_TRUE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, true, static_cast<EGLint>(kNv12), 0,
+                                                    nullptr, nullptr, &count));
+    EXPECT_EQ(count, 1);
+    ASSERT_TRUE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, true, static_cast<EGLint>(kNv12), 2,
+                                                    modifiers, externalOnly, &count));
+    EXPECT_EQ(count, 1);
+    EXPECT_EQ(modifiers[0], 0u);
+    EXPECT_EQ(externalOnly[0], EGL_TRUE);
+    EXPECT_FALSE(fixture->State.QueryDmaBufModifiers(fixture->Display, true, false, static_cast<EGLint>(kNv12), 0,
+                                                     nullptr, nullptr, &count));
+    EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_PARAMETER);
 }
 
 // EGL_EXT_create_context_robustness / EGL 1.5: the reset notification behavior a context is
