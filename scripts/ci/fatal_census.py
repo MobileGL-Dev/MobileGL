@@ -209,6 +209,10 @@ LOCAL_REFUSAL_WORDS = {
         "ServerSession.cpp / ClientSession.cpp (P11 B2) - one T0 map_persistent answered DECLINED "
         "because its store never reached the server (the Offer's bounded wait, or no hop socket on "
         "the client); that store runs T2 and the session goes on",
+    "Recover":
+        "ClientSession.cpp RecoverAfterDeviceLoss - the CLIENT declining to dial a fresh session after "
+        "a device loss (MOBILEGL_IPC_RECOVER=0, or a transport it cannot redial); the lost session is "
+        "already gone, so there is no peer to send a Refuse frame to",
 }
 
 
