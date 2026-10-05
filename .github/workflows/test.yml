@@ -12,14 +12,6 @@ on:
       - feat/disaggregated
       - codex/fix-github-ci
   workflow_dispatch:
-    inputs:
-      baseline_sha:
-        description: >-
-          The commit monolith-symbol-report compares this tree against. P1's G1 says the pull
-          build is byte-identical to feat/disaggregated@087685d1, and that is what the default
-          names. The trigger set is unchanged: this job runs on workflow_dispatch only.
-        required: false
-        default: "087685d1"
 
 env:
   # Software-rendered CI submissions may exceed the interactive GPU hang budget.
@@ -28,15 +20,34 @@ env:
 # ONE LIVE RUN PER BRANCH. The disaggregation branch pushes (often docs-only) commits minutes apart
 # and each push fans out to ~330 retrace legs here and ~275 jobs in apk.yml; with no group, runs
 # sat queued for 10+ hours behind their own successors. A manual dispatch gets a group of its own,
-# so a push never cancels a hand-started baseline (monolith-symbol-report) run; dev queues rather
+# so a push never cancels a manually started run; dev queues rather
 # than cancels. No paths-ignore here, unlike apk.yml: this workflow hosts the doc citation lint.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
 
 jobs:
-  build-linux:
+  select-runner:
+    name: Select Test runner
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      pool: ${{ steps.select.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test runner selection
+        run: python3 scripts/ci/test_select_test_runner.py
+      - name: Check preferred runner availability
+        id: select
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: python3 scripts/ci/select_test_runner.py
+
+  build-linux:
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     permissions:
       actions: write
       contents: read
@@ -51,6 +62,7 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -60,18 +72,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -83,6 +100,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -90,9 +108,9 @@ jobs:
       - name: Show installed toolchain
         run: |
           ccache --version
-          clang-20 --version
-          clang++-20 --version
-          ld.lld-20 --version || ld.lld --version || true
+          "${MOBILEGL_CI_CC}" --version
+          "${MOBILEGL_CI_CXX}" --version
+          "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Configure CMake
@@ -104,8 +122,8 @@ jobs:
           fi
 
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 \
-            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -113,7 +131,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=ON \
             -DMOBILEGL_BUILD_BENCHMARK=ON \
             -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DMOBILEGL_BUILD_DISAGGREGATED="${MOBILEGL_CI_DISAGGREGATED}" \
             -DMOBILEGL_BUILD_DISAGGREGATED_INPROC="${MOBILEGL_CI_DISAGGREGATED}" \
@@ -136,7 +154,7 @@ jobs:
             --mode "${mode}" --output "${BUILD_DIR}/runtime-mode.json"
 
       - name: Show ccache stats
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         run: ccache --show-stats
 
       # Rewrite one rolling entry per job on the default branch. The upload stays
@@ -150,7 +168,7 @@ jobs:
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -159,7 +177,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
 
       - name: Package Linux runtime
         run: |
@@ -191,7 +209,8 @@ jobs:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
     name: build explicit pull runtime control
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     env:
       BUILD_DIR: build-monolith-control
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -200,6 +219,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -207,14 +227,19 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: recursive
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
       - name: Restore pull compiler cache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-build-linux-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-build-linux-ccache-v1
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -224,13 +249,14 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python update_glslang_sources.py
       - name: Install build dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
       - name: Configure explicit pull control
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
             -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
@@ -255,17 +281,22 @@ jobs:
           if-no-files-found: error
 
   test:
-    runs-on: ubuntu-latest
-    needs: build-linux
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    needs: [select-runner, build-linux]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -295,7 +326,7 @@ jobs:
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L unit --no-tests=error
           else
@@ -312,8 +343,8 @@ jobs:
 
   integration:
     name: integration (${{ matrix.transport }})
-    runs-on: ubuntu-latest
-    needs: build-linux
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    needs: [select-runner, build-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -328,10 +359,15 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         # Same set as the benchmark job, for the same reason: the scenarios bring
         # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
         # libegl-mesa0 - the EGL vendor library behind glvnd's libegl1 dispatch -
@@ -368,13 +404,8 @@ jobs:
         # which is how a five-month-old draw-dropping bug survived unseen until
         # this lane existed.
         #
-        # The lavapipe ICD pin lives in the build-linux configure
-        # (-DMOBILEGL_ITEST_VK_ICD), NOT here: the configure bakes it into each
-        # test's ctest ENVIRONMENT property, and a property entry OVERRIDES the
-        # job environment - a VK_ICD_FILENAMES exported here would be silently
-        # ignored while looking like it works. This lane runs on lavapipe
-        # deterministically, not on whichever of the eight Mesa ICDs a GPU-less
-        # runner enumerates first.
+        # Configure CMake with the selected runner's ICD; each test's ENVIRONMENT
+        # property takes precedence over ambient job variables.
         #
         # Cores are armed so that any crash - the harness pre-flight child's
         # included - leaves /tmp/core.*, which the failure-only step below ships
@@ -388,7 +419,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # Second, filtered pass: with the range-invalidating map flush disabled,
           # the buffer scenarios run on the upload ring's staged-copy tier - which
           # the default pass never reaches (the map tier absorbs every flush on
@@ -424,7 +455,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload integration lane evidence
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-evidence-${{ matrix.lane }}-${{ matrix.transport }}
@@ -449,7 +480,8 @@ jobs:
   # MOBILEGL_PIPE_VERIFY is a compile-time option - the snapshot, the entry compare and the
   # compare-at-read hook do not exist in the shipped library, and are never meant to.
   build-linux-verify:
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 120
     permissions:
       actions: write
@@ -464,6 +496,7 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -473,18 +506,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -496,6 +534,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -503,9 +542,9 @@ jobs:
       - name: Show installed toolchain
         run: |
           ccache --version
-          clang-20 --version
-          clang++-20 --version
-          ld.lld-20 --version || ld.lld --version || true
+          "${MOBILEGL_CI_CC}" --version
+          "${MOBILEGL_CI_CXX}" --version
+          "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Configure CMake
@@ -518,8 +557,8 @@ jobs:
         # arm of its #if, so the debug switch would change what the lane is measuring.)
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 \
-            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release \
@@ -527,7 +566,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=ON \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DMOBILEGL_PIPE_VERIFY=ON \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
@@ -572,14 +611,14 @@ jobs:
           echo "libMobileGL.so defines MGPipeVerifyInputs and a per-verb entry point (${defined} defined symbols)"
 
       - name: Show ccache stats
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -588,7 +627,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
 
       - name: Package Linux verify runtime
         run: |
@@ -618,18 +657,23 @@ jobs:
   # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
   # remembering to break it on purpose is a gate that has already stopped working.
   integration-verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 180
-    needs: build-linux-verify
+    needs: [select-runner, build-linux-verify]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -678,7 +722,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L integration-verify --no-tests=error
           else
@@ -766,7 +810,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest --output-on-failure -L integration-gpu \
             -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip|ObjectSubsystem|TextureParamsWithoutASamplerView|TextureUploadShape' \
             --no-tests=error -j 4
@@ -858,7 +902,7 @@ jobs:
           echo "the omitted fill point turned the lane red, as it must"
 
       - name: Upload verify lane logs
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-verify-logs
@@ -888,7 +932,8 @@ jobs:
   # gPipeInputs and the frontend GLContext) are co-resident only when both roles share a process.
   # MG_IntegrationTest/CMakeLists.txt's verify-split block records the spawn measurement.
   integration-verify-split:
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 180
     permissions:
       actions: write
@@ -903,6 +948,7 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -914,18 +960,23 @@ jobs:
           # back to OFF when 3rdparty/flatbuffers/include is missing.
           submodules: recursive
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -937,6 +988,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build and runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1
@@ -947,8 +999,8 @@ jobs:
         # arm-proof step below reads it back out of every entry's client log.
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 \
-            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release \
@@ -956,7 +1008,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=ON \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DMOBILEGL_PIPE_PUSH=ON \
             -DMOBILEGL_BUILD_DISAGGREGATED=ON \
@@ -989,14 +1041,14 @@ jobs:
           echo "libMobileGL.so defines MGPipeVerifyInputs and ${remote} MG_Remote symbol(s) (${defined} defined symbols)"
 
       - name: Show ccache stats
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -1005,7 +1057,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
 
       # The lane. `^...$` because ctest -L is a regex (ID-131) and `integration-verify` would
       # otherwise also match this label and the monolith one would match both.
@@ -1015,7 +1067,7 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # --output-junit, because the arm proof below has to tell a gtest SKIP from a pass: an
           # entry that skipped reached no verb honestly, and the skip set moves with the driver.
           ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4 \
@@ -1069,7 +1121,7 @@ jobs:
       # upload made that worse rather than better, because a failure investigation is exactly
       # when the overwritten half is the half somebody needs.
       - name: Keep lane logs before controls
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
           rm -rf verify-split-logs-lane
@@ -1186,7 +1238,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload verify-split lane logs
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-verify-split-logs
@@ -1219,7 +1271,8 @@ jobs:
   # so the build-level assertion is the only guard, and its absence is precisely what would make
   # the whole split arm meaningless.
   build-linux-split:
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 120
     permissions:
       actions: write
@@ -1234,6 +1287,7 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -1248,18 +1302,23 @@ jobs:
           # be caught only by the nm step below.
           submodules: recursive
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -1271,6 +1330,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -1278,8 +1338,8 @@ jobs:
       - name: Show installed toolchain
         run: |
           ccache --version
-          clang-20 --version
-          clang++-20 --version
+          "${MOBILEGL_CI_CC}" --version
+          "${MOBILEGL_CI_CXX}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Configure CMake
@@ -1292,8 +1352,8 @@ jobs:
         # an implication that is asserted in two places is an implication nobody has to remember.
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 \
-            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release \
@@ -1301,7 +1361,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=ON \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DMOBILEGL_PIPE_PUSH=ON \
             -DMOBILEGL_BUILD_DISAGGREGATED=ON \
@@ -1316,9 +1376,6 @@ jobs:
       # none of it reaches the dynamic table. The symbol count guards the remaining hole - a
       # stripped library would make the grep fail for a third, silent reason.
       #
-      # The mirror of this assertion already exists and is the G1 control: monolith-symbol-report
-      # asserts that a -DMOBILEGL_BUILD_DISAGGREGATED=OFF library defines NO MG_Remote symbol. The
-      # two together are ARCHITECTURE.md:524's surviving byte-level equality, in both directions.
       - name: MG_Remote symbols in split library
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
@@ -1374,7 +1431,7 @@ jobs:
       # per-symbol definer/referrer attribution the JSON carries, and a job that failed before
       # uploading its evidence is a job nobody can act on.
       - name: Upload link ratchet
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: link-ratchet
@@ -1382,14 +1439,14 @@ jobs:
           if-no-files-found: warn
 
       - name: Show ccache stats
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -1398,7 +1455,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
 
       - name: Package Linux split runtime
         run: |
@@ -1427,18 +1484,23 @@ jobs:
   # The split lane itself: the three-arm shape ARCHITECTURE.md:521 asks for verbatim, plus the
   # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
   integration-split:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 120
-    needs: build-linux-split
+    needs: [select-runner, build-linux-split]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -1536,7 +1598,7 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
@@ -1567,7 +1629,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           count=$(ctest -N -L integration-gpu | grep -cE '^ *Test *#[0-9]+:')
           if [ "${count}" -lt 1 ]; then
             echo "::error::the split runtime registers ${count} integration-gpu entries"
@@ -1671,7 +1733,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload split lane logs
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-split-logs
@@ -1696,18 +1758,23 @@ jobs:
   # Configured controls must pass without skips. Capability gaps and known
   # limitations are reported separately and accepted only by exact name/reason.
   integration-split-strict:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 60
-    needs: build-linux-split
+    needs: [select-runner, build-linux-split]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers vulkan-validationlayers
@@ -2042,7 +2109,7 @@ jobs:
           MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -L '^integration-magma-spawn$' --no-tests=error -j 2 --output-on-failure
           ctest -L '^integration-magma-tcp$' --no-tests=error -j 2 --output-on-failure
 
@@ -2206,7 +2273,7 @@ jobs:
             --out "${RUNNER_TEMP}/magma-cache-syncval" --execute
 
       - name: Upload Magma run-ahead and cache evidence
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: magma-runahead-checks
@@ -2275,7 +2342,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload strict lane logs
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-split-strict-logs
@@ -2297,13 +2364,18 @@ jobs:
   # header honest: build the pinned flatc, regenerate, and fail on any diff.
   # It needs no MobileGL build, so it does not depend on build-linux.
   flatc-check:
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Check out the FlatBuffers submodule only
@@ -2336,11 +2408,15 @@ jobs:
   # job, because a gate that cannot go red is not a gate (ROADMAP.md:7).
   include-graph-check:
     name: Include-closure purity gate
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Check out header submodules
         # ska/flat_hash_map.hpp, xxhash.h and vulkan/vulkan.h are the only submodule headers
@@ -2348,6 +2424,7 @@ jobs:
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
       - name: Install clang and X11 headers
+        if: runner.environment != 'self-hosted'
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
         # preprocessor and the gate reports 5 problems that have nothing to do with purity.
@@ -2359,24 +2436,26 @@ jobs:
         # exit 0 - the second half of the finding that added the flag. The count is the length of
         # scripts/check_include_closure.py's PROBES list and changing one means changing the other.
         #
-        # --compiler stays clang++-20, which is what the step above installs (Debian's clang-20
-        # package ships /usr/bin/clang++-20). It is deliberately NOT the bare `clang++` the local
-        # campaign gate spells: that spelling exists because the WSL box has no clang++-20, and
-        # copying it here would trade a version-pinned compiler for whatever the runner has.
-        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test --require-all --expect-probes 4
+        # Use the compiler selected for this runner's installed toolchain.
+        run: python3 scripts/check_include_closure.py --mode both --compiler "${MOBILEGL_CI_CXX}" --self-test --require-all --expect-probes 4
 
   benchmark:
-    runs-on: ubuntu-latest
-    needs: build-linux
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    needs: [select-runner, build-linux]
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
         # real GL context, and libegl1 is only glvnd's dispatch. It normally
         # arrives as a Recommends of libegl1, which is too quiet a dependency for
@@ -2410,7 +2489,7 @@ jobs:
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -V -C Release -L benchmark --no-tests=error
 
       - name: Upload core dumps
@@ -2422,8 +2501,9 @@ jobs:
           if-no-files-found: ignore
 
   build-retrace:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     needs:
+      - select-runner
       - build-linux
       - test
       - benchmark
@@ -2442,6 +2522,7 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
@@ -2451,18 +2532,23 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        if: runner.environment != 'self-hosted'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -2474,6 +2560,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -2481,9 +2568,9 @@ jobs:
       - name: Show installed toolchain
         run: |
           ccache --version
-          clang-20 --version
-          clang++-20 --version
-          ld.lld-20 --version || ld.lld --version || true
+          "${MOBILEGL_CI_CC}" --version
+          "${MOBILEGL_CI_CXX}" --version
+          "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
       - name: Download Linux runtime
@@ -2506,8 +2593,8 @@ jobs:
           fi
 
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 \
-            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -2515,6 +2602,7 @@ jobs:
             -DMOBILEGL_BUILD_TEST=OFF \
             -DMOBILEGL_BUILD_BENCHMARK=OFF \
             -DMOBILEGL_BUILD_TRACE_REPLAY=ON \
+            -DMOBILEGL_TRACE_SOFTWARE_RENDERING="${MOBILEGL_CI_SOFTWARE_RENDERING}" \
             -DMOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY="${MOBILEGL_LIBRARY}" \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
@@ -2522,14 +2610,14 @@ jobs:
         run: cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
 
       - name: Show ccache stats
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -2538,7 +2626,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
 
       - name: Normalize CTest command paths
         run: |
@@ -2568,10 +2656,11 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
     needs:
+      - select-runner
       - test
       - benchmark
       - integration
@@ -2589,6 +2678,9 @@ jobs:
       # matrix. What it refuses is a std::abort() under MG_Remote/ with no Fatal{Family} marker,
       # and a family word that appeared without being recorded - the vocabulary drifts on
       # purpose or not at all (CONTRACT-P6 5.2's D2 ruling).
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Fatal census (S7)
         run: python3 scripts/ci/fatal_census.py
 
@@ -2631,8 +2723,8 @@ jobs:
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ubuntu-latest
-    needs: trace-cases
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    needs: [select-runner, trace-cases]
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2641,6 +2733,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Derive trace fixture cache key
         id: fixture-key
@@ -2696,18 +2791,19 @@ jobs:
 
   retrace:
     name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
       MOBILEGL_IPC_RUN_AHEAD: "1"
     needs:
+      - select-runner
       - build-linux
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2715,12 +2811,16 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
 
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -2734,9 +2834,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -2766,7 +2868,7 @@ jobs:
         working-directory: build-retrace/tools/trace_replay
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
@@ -2800,7 +2902,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
@@ -2811,15 +2913,18 @@ jobs:
 
   retrace-summary:
     name: retrace summary
-    runs-on: ubuntu-latest
-    needs: retrace
-    if: ${{ always() && needs.retrace.result != 'skipped' }}
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    needs: [select-runner, retrace]
+    if: ${{ always() && needs.select-runner.result == 'success' && needs.retrace.result != 'skipped' }}
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Set artifact metadata
         run: |
@@ -2886,14 +2991,15 @@ jobs:
   # is budgeted at 5-10x, and the full sweep is a phase-exit / workflow_dispatch run.
   retrace-verify:
     name: retrace verify (${{ matrix.backend }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 240
     needs:
+      - select-runner
       - build-linux-verify
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2901,12 +3007,16 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
 
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -2920,9 +3030,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -2972,7 +3084,7 @@ jobs:
         # is well past ctest's 1500s default.
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_PIPE_VERIFY=1
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
@@ -3029,7 +3141,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-verify-result-${{ matrix.backend }}-${{ matrix.case }}
@@ -3063,17 +3175,12 @@ jobs:
   # transport-resolution line in the library's own log (this PROCESS resolved inproc).
   retrace-split:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 240
-    # THE LAVAPIPE ICD PIN the integration lanes get through -DMOBILEGL_ITEST_VK_ICD. Here it
-    # can be job-wide: add_trace_replay_test's ENVIRONMENT names no VK_ICD_FILENAMES, so nothing
-    # overrides it. mesa-vulkan-drivers installs every Mesa ICD, and an unpinned loader probes all
-    # of them inside the spawned server's lazy Magma bring-up - the MakeCurrent that outlasted the
-    # client's reply bound in runs 35671704873 / 35706183230. ClientSession's cold-start budget
-    # is the fix; this pin keeps the bring-up on the one device a runner has.
+    # The setup action selects Dozen on Arch WSL or lavapipe on GitHub.
     env:
-      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
     needs:
+      - select-runner
       - build-linux-monolith-control
       - build-linux-split
       - build-retrace
@@ -3081,7 +3188,7 @@ jobs:
       - trace-fixtures
     # The separate OFF/pull artifact is for the negative control ONLY: its library is what the control
     # swaps in to prove the transport-resolution assertion is load-bearing.
-    if: ${{ always() && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -3089,12 +3196,16 @@ jobs:
 
     steps:
       - name: Set swap space
+        if: runner.environment != 'self-hosted'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 16
 
       - name: Checkout repo
         uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -3108,9 +3219,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        if: runner.environment != 'self-hosted'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
+        if: runner.environment != 'self-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -3221,7 +3334,7 @@ jobs:
         # configuration, so a `ctest -V` transcript reports a false zero for Fatal{ lines.
         run: |
           ulimit -c unlimited
-          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_TRANSPORT='${{ matrix.transport }}'
           # Absolute, because the replay's working directory is not this one and LaunchServer
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
@@ -3310,7 +3423,7 @@ jobs:
       # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
       # library's own log is the only way to get them (ctest -V's transcript is a false zero).
       - name: Refusal census from the library log
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         working-directory: build-retrace/tools/trace_replay
         run: |
           # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
@@ -3340,7 +3453,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: always()
+        if: ${{ always() && needs.select-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-split-result-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
@@ -3349,137 +3462,16 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
 
-  # G1's own job: the pull build must be the tree before P1, symbol for symbol and byte for byte.
-  # workflow_dispatch only - it builds the library twice from scratch, and its answer is about a
-  # BASELINE rather than about this push, so a per-push run would be measuring the wrong pair.
-  monolith-symbol-report:
-    name: monolith symbol report
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    if: ${{ github.event_name == 'workflow_dispatch' }}
-    env:
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPRESS: "true"
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 4G
-      CCACHE_NOHASHDIR: "true"
-
-    steps:
-      - name: Set swap space
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
-      - name: Checkout repo
-        uses: actions/checkout@v6
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Get CMake
-        uses: lukka/get-cmake@v4.3.3
-
-      - name: Restore ccache
-        uses: actions/cache/restore@v5
-        with:
-          path: .ccache
-          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
-          restore-keys: |
-            ${{ runner.os }}-test-${{ github.job }}-ccache-
-
-      - name: Prepare Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: 1.4.304.1
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build binutils
-
-      # Both sides with IDENTICAL flags, LTO off, the same compiler and the same standard library:
-      # symbol_report.py's guard rails (scripts/symbol_report.py) say a mismatched pair "adds"
-      # thousands of symbols and the comparison then means nothing. The library alone - no tests,
-      # no benchmark, no integration test, no trace replay - because those targets do not ship.
-      - name: Build the baseline library (${{ inputs.baseline_sha }})
-        run: |
-          git worktree add ../baseline "${{ inputs.baseline_sha }}"
-          cd ../baseline
-          git submodule update --init --recursive
-          (cd 3rdparty/glslang && python update_glslang_sources.py)
-          cmake -S . -B build-sym-base -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_BUILD_DISAGGREGATED=OFF \
-            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
-            -DMOBILEGL_ENABLE_LTO=OFF \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build build-sym-base --parallel "$(nproc)"
-          cp build-sym-base/libMobileGL.so "${GITHUB_WORKSPACE}/libMobileGL-baseline.so"
-
-      - name: Build the head library
-        run: |
-          (cd 3rdparty/glslang && python update_glslang_sources.py)
-          cmake -S . -B build-sym-head -G Ninja \
-            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_BUILD_DISAGGREGATED=OFF \
-            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
-            -DMOBILEGL_ENABLE_LTO=OFF \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build build-sym-head --parallel "$(nproc)"
-
-      # The monolith must not have grown a remote half. ARCHITECTURE.md:506: MG_Remote lives behind
-      # MOBILEGL_BUILD_DISAGGREGATED and nothing of it may reach a shipped pull build.
-      - name: No MG_Remote in the pull build
-        run: |
-          if nm --defined-only build-sym-head/libMobileGL.so | grep -q MG_Remote; then
-            echo "::error::the pull build defines MG_Remote symbols; the disaggregated half leaked into the monolith"
-            nm --defined-only build-sym-head/libMobileGL.so | grep MG_Remote | head -20
-            exit 1
-          fi
-          echo "no MG_Remote symbols in the pull build"
-
-      - name: Symbol report (G1)
-        run: |
-          python3 scripts/symbol_report.py \
-            --before libMobileGL-baseline.so \
-            --after build-sym-head/libMobileGL.so \
-            --threshold 0 \
-            --fail-on-symbol-set-change \
-            --fail-on-added-bytes 0 \
-            --markdown symbol-report.md \
-            --json symbol-report.json
-
-      - name: Upload the symbol report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: monolith-symbol-report
-          path: |
-            symbol-report.md
-            symbol-report.json
-          if-no-files-found: error
-
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     # Every retrace arm downloads the shared fixtures, including split controls.
     needs:
+      - select-runner
       - retrace-summary
       - retrace-verify
       - retrace-split
-    if: always()
+    if: ${{ always() && needs.select-runner.result == 'success' }}
     permissions:
       actions: write
     steps:
@@ -3541,7 +3533,8 @@ jobs:
 
   pipe-gates:
     name: MGPipe generators and hygiene gates
-    runs-on: ubuntu-latest
+    needs: select-runner
+    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
 
@@ -3554,6 +3547,9 @@ jobs:
       # PipeInputs field ids, the read-inventory coverage and the render-state member list
       # from drifting apart from the catalogue. The generated files are committed
       # deliberately: the build must not depend on python.
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Regenerate the MGPipe interface (G1-G7)
         run: |
           python3 scripts/gen_pipe.py

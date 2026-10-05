@@ -44,7 +44,7 @@ def run_arm(build, out, case, forward):
     if Path('/usr/share/glvnd/egl_vendor.d/50_mesa.json').exists():
         env['__EGL_VENDOR_LIBRARY_FILENAMES'] = '/usr/share/glvnd/egl_vendor.d/50_mesa.json'
     if Path('/usr/share/vulkan/icd.d/lvp_icd.json').exists():
-        env['VK_ICD_FILENAMES'] = '/usr/share/vulkan/icd.d/lvp_icd.json'
+        env.setdefault('VK_ICD_FILENAMES', '/usr/share/vulkan/icd.d/lvp_icd.json')
     peer_env = dict(env, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
                     MOBILEGL_IPC_LOG_FORWARD=str(int(forward)), MOBILEGL_LOG_FILE_PATH=str(out / 'peer.log'))
     for name in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB'):

@@ -1,0 +1,33 @@
+name: Configure Test runner
+description: Select the installed compiler and graphics stack without modifying the host
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+          for tool in clang clang++ cmake ninja ccache; do command -v "$tool"; done
+          test -r /usr/share/vulkan/icd.d/dzn_icd.json
+          test -e /dev/dxg
+          {
+            echo 'MOBILEGL_CI_CC=clang'
+            echo 'MOBILEGL_CI_CXX=clang++'
+            echo 'MOBILEGL_CI_LLD=ld.lld'
+            echo 'MOBILEGL_CI_SOFTWARE_RENDERING=OFF'
+            echo 'VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/dzn_icd.json'
+            echo 'VK_DRIVER_FILES=/usr/share/vulkan/icd.d/dzn_icd.json'
+            echo 'EGL_PLATFORM=surfaceless'
+            echo 'LIBGL_ALWAYS_SOFTWARE=0'
+            echo 'GALLIUM_DRIVER=d3d12'
+            echo 'MESA_LOADER_DRIVER_OVERRIDE=d3d12'
+          } >> "$GITHUB_ENV"
+        else
+          {
+            echo 'MOBILEGL_CI_CC=clang-20'
+            echo 'MOBILEGL_CI_CXX=clang++-20'
+            echo 'MOBILEGL_CI_LLD=ld.lld-20'
+            echo 'MOBILEGL_CI_SOFTWARE_RENDERING=ON'
+            echo 'VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json'
+            echo 'VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json'
+          } >> "$GITHUB_ENV"
+        fi

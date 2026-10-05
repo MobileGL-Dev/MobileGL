@@ -5,6 +5,8 @@ if(NOT UNIX)
     return()
 endif()
 
+option(MOBILEGL_TRACE_SOFTWARE_RENDERING "Force Mesa software rendering for trace tests" ON)
+
 set(MOBILEGL_TRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}")
 set(MOBILEGL_TRACE_SHARED_CPP_DIR "${CMAKE_SOURCE_DIR}/android-plugin/app/src/trace/cpp")
 set(APITRACE_ROOT "${CMAKE_SOURCE_DIR}/3rdparty/apitrace")
@@ -445,15 +447,16 @@ function(add_trace_replay_test CASE_NAME BACKEND)
         set(trace_case_labels "retrace\;retrace-${TRACE_CASE_VARIANT}")
         string(TOLOWER "${trace_case_labels}" trace_case_labels)
     endif()
-    if(BACKEND STREQUAL "DirectGLES")
-        set_tests_properties(${trace_case_name} PROPERTIES
-                ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
-                LABELS "${trace_case_labels}")
-    else()
-        set_tests_properties(${trace_case_name} PROPERTIES
-                ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
-                LABELS "${trace_case_labels}")
+    set(trace_case_environment "")
+    if(MOBILEGL_TRACE_SOFTWARE_RENDERING)
+        list(APPEND trace_case_environment LIBGL_ALWAYS_SOFTWARE=1
+             MESA_GL_VERSION_OVERRIDE=3.3 MESA_GLSL_VERSION_OVERRIDE=330)
     endif()
+    if(BACKEND STREQUAL "DirectGLES")
+        list(APPEND trace_case_environment EGL_PLATFORM=surfaceless)
+    endif()
+    set_tests_properties(${trace_case_name} PROPERTIES
+        ENVIRONMENT "${trace_case_environment}" LABELS "${trace_case_labels}")
     if(TRACE_CASE_IPC_CONTROL)
         set_tests_properties(${trace_case_name} PROPERTIES RESOURCE_LOCK mobilegl-tcp-trace)
     endif()
