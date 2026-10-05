@@ -38,6 +38,7 @@
 #include "SpirvPasses/FixIterationRPBarrierPass.h"
 #include "SpirvPasses/FixIterationRPSubgroupScratchPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
+#include "SpirvPasses/DeduplicateImageTypesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/Lower1DSampledImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
@@ -1814,7 +1815,7 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
                 // Rect and 2D images of the same format become the same type after lowering.
-                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
+                optimizer.RegisterPass(DeduplicateImageTypesPass::Create());
 
                 return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
@@ -2106,10 +2107,9 @@ namespace MobileGL {
                 outputBinary.insert(outputBinary.begin() + static_cast<std::ptrdiff_t>(capabilityInsertOffset),
                                     addedCapabilities.begin(), addedCapabilities.end());
                 // Erasing the format can make distinct image types identical. Use the same
-                // cleanup as the image-widening/lowering paths to merge their dependent types
-                // and update every use before validating the rewritten module.
+                // image-only cleanup as rectangle lowering; named blocks retain their identity.
                 spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(spvtools::CreateRemoveDuplicatesPass());
+                optimizer.RegisterPass(DeduplicateImageTypesPass::Create());
                 Vector<Uint32> rewrittenBinary = std::move(outputBinary);
                 return RunOptimizerChecked("UseUnformattedFloatStorageImagesForVulkan", optimizer,
                                            rewrittenBinary, outputBinary, true, enableSpirvValidation);

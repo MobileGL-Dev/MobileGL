@@ -124,12 +124,16 @@ layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 layout(rgba16, binding = 0) uniform image2D floatImage;
 layout(r32ui, binding = 1) uniform uimage2D atomicImage;
 layout(rgba32f, binding = 2) uniform image2D otherFloatImages[2];
+layout(std430, binding = 3) buffer Output0 { uint value0; };
+layout(std430, binding = 4) buffer Output1 { uint value1; };
 
 void main() {
     ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
     imageStore(floatImage, coordinate, imageLoad(floatImage, coordinate));
     imageStore(otherFloatImages[1], coordinate, imageLoad(otherFloatImages[0], coordinate));
     imageAtomicAdd(atomicImage, coordinate, 1u);
+    value0 = 11u;
+    value1 = 22u;
 }
 )";
 
@@ -180,6 +184,8 @@ void main() {
     EXPECT_NE(outputText.find("Binding 0"), String::npos) << outputText;
     EXPECT_NE(outputText.find("Binding 1"), String::npos) << outputText;
     EXPECT_NE(outputText.find("Binding 2"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output0\""), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output1\""), String::npos) << outputText;
     EXPECT_TRUE(tools.Validate(outputBinary));
 
     Vector<Uint32> secondOutputBinary;
@@ -195,12 +201,28 @@ TEST_F(ProgramUtilTest, LowerRectImagesMergesWithExisting2DImageTypes) {
                OpMemoryModel Logical GLSL450
                OpEntryPoint GLCompute %main "main"
                OpExecutionMode %main LocalSize 1 1 1
+               OpName %Output0 "Output0"
+               OpName %Output1 "Output1"
+               OpDecorate %Output0 Block
+               OpDecorate %Output1 Block
+               OpMemberDecorate %Output0 0 Offset 0
+               OpMemberDecorate %Output1 0 Offset 0
+               OpDecorate %buffer0 DescriptorSet 0
+               OpDecorate %buffer0 Binding 2
+               OpDecorate %buffer1 DescriptorSet 0
+               OpDecorate %buffer1 Binding 3
                OpDecorate %rect DescriptorSet 0
                OpDecorate %rect Binding 0
                OpDecorate %flat DescriptorSet 0
                OpDecorate %flat Binding 1
        %void = OpTypeVoid
        %uint = OpTypeInt 32 0
+    %Output0 = OpTypeStruct %uint
+    %Output1 = OpTypeStruct %uint
+ %outputPtr0 = OpTypePointer StorageBuffer %Output0
+ %outputPtr1 = OpTypePointer StorageBuffer %Output1
+    %buffer0 = OpVariable %outputPtr0 StorageBuffer
+    %buffer1 = OpVariable %outputPtr1 StorageBuffer
    %rectType = OpTypeImage %uint Rect 0 0 0 2 R32ui
    %flatType = OpTypeImage %uint 2D 0 0 0 2 R32ui
     %rectPtr = OpTypePointer UniformConstant %rectType
@@ -228,6 +250,8 @@ TEST_F(ProgramUtilTest, LowerRectImagesMergesWithExisting2DImageTypes) {
     const auto firstImage = outputText.find("OpTypeImage");
     ASSERT_NE(firstImage, String::npos);
     EXPECT_EQ(outputText.find("OpTypeImage", firstImage + 1), String::npos);
+    EXPECT_NE(outputText.find("\"Output0\""), String::npos) << outputText;
+    EXPECT_NE(outputText.find("\"Output1\""), String::npos) << outputText;
 }
 
 TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepFloatAtomicImageTypesTyped) {

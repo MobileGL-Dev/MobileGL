@@ -372,6 +372,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FixIterationRPSubgroupScratchPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateSubgroupsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NormalizeRectCoordinatesPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeduplicateImageTypesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/Lower1DArrayImagesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/Lower1DSampledImagesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/BakeImageFormatsPass.cpp
