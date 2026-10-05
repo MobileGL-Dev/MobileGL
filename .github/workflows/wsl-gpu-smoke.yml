@@ -1,0 +1,31 @@
+name: Arch WSL GPU smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ci/arch-wsl-gpu-runner
+    paths:
+      - .github/workflows/wsl-gpu-smoke.yml
+      - docs/ci/arch-wsl-gpu-runner.md
+
+permissions: {}
+
+concurrency:
+  group: arch-wsl-gpu-smoke
+  cancel-in-progress: false
+
+jobs:
+  gpu-smoke:
+    runs-on: [self-hosted, Linux, X64, arch, wsl, gpu, gles, vulkan]
+    timeout-minutes: 5
+    steps:
+      - name: Report runner identity
+        shell: bash
+        run: |
+          printf 'Runner: %s\n' "$RUNNER_NAME"
+          hostname
+          uname -a
+      - name: Verify hardware GLES and Vulkan
+        shell: bash
+        run: /usr/local/libexec/mobilegl-runner/gpu-smoke
