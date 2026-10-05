@@ -124,7 +124,7 @@ namespace MobileGL {
             EGL_FUNC_DECL(eglSurfaceAttrib)
             EGL_FUNC_DECL(eglSwapBuffers)
             // Holds whichever spelling of the damage-based present the driver provided, EXT
-            // preferred; null when it provides neither (see AcquireEGLFunctions).
+            // preferred; resolved after making the display current.
             EGL_FUNC_DECL(eglSwapBuffersWithDamageEXT)
             EGL_FUNC_DECL(eglSwapInterval)
             EGL_FUNC_DECL(eglTerminate)
@@ -1369,14 +1369,14 @@ namespace MobileGL {
         void AcquireGLESFunctions(MG_External::GLESFunctionsTable& funcs,
                                   MG_External::EGL::eglGetProcAddress_PTR procAddress);
         void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs);
-        // The EXT -> KHR -> nothing chain for the damage-based present entry point. A null
+        // Query the current display's extensions before resolving EXT -> KHR -> nothing.
+        // Requires a current, initialized EGL display. A null
         // result is not a failure: it means this driver offers neither spelling, and the
         // caller presents with plain eglSwapBuffers, which a zero-rectangle call to either
         // spelling is defined to be equivalent to anyway. Exposed so MG_Test can pin the
         // preference order without a driver.
         MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR
-        ResolveSwapBuffersWithDamage(MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ext,
-                                     MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR khr);
+        ResolveSwapBuffersWithDamage(const MG_External::EGLFunctionsTable& funcs);
         Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps,
                                     const MG_External::GLESFunctionsTable& glesFuncs);
         // Detects whether indirect draws leak the command's baseInstance word into

@@ -1590,12 +1590,33 @@ TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
 }
 
 namespace {
+    const char* g_damageExtensions = nullptr;
+    EGLDisplay g_damageDisplay = EGL_NO_DISPLAY;
+    bool g_damageExtAvailable = false;
+    bool g_damageKhrAvailable = false;
+    std::vector<std::string> g_damageQueries;
+
+    EGLDisplay FakeDamageDisplay() { return g_damageDisplay; }
+    const char* FakeDamageQueryString(EGLDisplay display, EGLint name) {
+        EXPECT_EQ(display, g_damageDisplay);
+        EXPECT_EQ(name, EGL_EXTENSIONS);
+        return g_damageExtensions;
+    }
+
     EGLBoolean FakeSwapBuffersWithDamage(EGLDisplay dpy, EGLSurface surface, const EGLint* rects, EGLint nRects) {
         (void)dpy;
         (void)surface;
         (void)rects;
         (void)nRects;
         return EGL_TRUE;
+    }
+
+    __eglMustCastToProperFunctionPointerType FakeDamageGetProcAddress(const char* name) {
+        g_damageQueries.emplace_back(name);
+        const bool available = std::string(name) == "eglSwapBuffersWithDamageEXT"
+                                   ? g_damageExtAvailable : g_damageKhrAvailable;
+        return available ? reinterpret_cast<__eglMustCastToProperFunctionPointerType>(&FakeSwapBuffersWithDamage)
+                         : nullptr;
     }
 } // namespace
 
@@ -1609,13 +1630,46 @@ namespace {
 // call to either spelling is defined to be equivalent to that anyway.
 TEST(SwapBuffersWithDamageResolution, PrefersExtThenKhrThenAnswersNothing) {
     using namespace MobileGL;
-    MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ext = &FakeSwapBuffersWithDamage;
-    MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR khr = &FakeSwapBuffersWithDamage;
+    MG_External::EGLFunctionsTable funcs{};
+    funcs.eglGetCurrentDisplay = &FakeDamageDisplay;
+    funcs.eglQueryString = &FakeDamageQueryString;
+    funcs.eglGetProcAddress = &FakeDamageGetProcAddress;
+    g_damageDisplay = reinterpret_cast<EGLDisplay>(1);
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage";
+    g_damageExtAvailable = g_damageKhrAvailable = true;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageEXT"}));
 
-    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(ext, khr), ext)
-        << "a driver that exports both spellings is answered with the EXT one";
-    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(nullptr, khr), khr)
-        << "the KHR spelling alone must still fill the slot";
-    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(nullptr, nullptr), nullptr)
-        << "neither spelling stays null, so the caller keeps eglSwapBuffers";
+    g_damageExtAvailable = false;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageEXT", "eglSwapBuffersWithDamageKHR"}));
+
+    g_damageExtensions = "EGL_KHR_swap_buffers_with_damage";
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), &FakeSwapBuffersWithDamage);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageKHR"}));
+
+    g_damageKhrAvailable = false;
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage";
+    g_damageQueries.clear();
+    g_damageKhrAvailable = true;
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+    EXPECT_EQ(g_damageQueries, (std::vector<std::string>{"eglSwapBuffersWithDamageEXT"}));
+
+    g_damageExtAvailable = true;
+    for (const char* extensions : {"", "EGL_EXT_swap_buffers_with_damage_extra", static_cast<const char*>(nullptr)}) {
+        g_damageExtensions = extensions;
+        g_damageQueries.clear();
+        EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+        EXPECT_TRUE(g_damageQueries.empty());
+    }
+    g_damageExtensions = "EGL_EXT_swap_buffers_with_damage EGL_KHR_swap_buffers_with_damage";
+    g_damageDisplay = EGL_NO_DISPLAY;
+    g_damageQueries.clear();
+    EXPECT_EQ(MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(funcs), nullptr);
+    EXPECT_TRUE(g_damageQueries.empty());
 }

@@ -17767,6 +17767,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
+        g_EGLFuncs.eglSwapBuffersWithDamageEXT =
+            MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(g_EGLFuncs);
         InvalidateEglVerifiedStamp();
         t_boundNativeContext = tuple.Context;
         t_boundNativeDraw = session.Draw;

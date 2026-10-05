@@ -181,12 +181,30 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR
-    ResolveSwapBuffersWithDamage(MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ext,
-                                 MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR khr) {
-        if (ext != nullptr) {
-            return ext;
+    ResolveSwapBuffersWithDamage(const MG_External::EGLFunctionsTable& funcs) {
+        if (!funcs.eglGetCurrentDisplay || !funcs.eglQueryString || !funcs.eglGetProcAddress) {
+            return nullptr;
         }
-        return (MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR)khr;
+        const EGLDisplay display = funcs.eglGetCurrentDisplay();
+        if (display == EGL_NO_DISPLAY) {
+            return nullptr;
+        }
+        const char* extensions = funcs.eglQueryString(display, EGL_EXTENSIONS);
+        if (HasExtensionWord(extensions, "EGL_EXT_swap_buffers_with_damage")) {
+            auto ext = reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR>(
+                funcs.eglGetProcAddress("eglSwapBuffersWithDamageEXT"));
+            if (ext != nullptr) {
+                return ext;
+            }
+        }
+        if (HasExtensionWord(extensions, "EGL_KHR_swap_buffers_with_damage")) {
+            auto khr = reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR>(
+                funcs.eglGetProcAddress("eglSwapBuffersWithDamageKHR"));
+            if (khr != nullptr) {
+                return khr;
+            }
+        }
+        return nullptr;
     }
 
     void AcquireGLESFunctions(MG_External::GLESFunctionsTable& funcs,
@@ -817,25 +835,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_EGL_FUNC(eglWaitSync)
         }
 
-        {
-            // One slot, two names. EGL_EXT_swap_buffers_with_damage and
-            // EGL_KHR_swap_buffers_with_damage define the same entry point with the same
-            // signature, and a driver may expose either, both or neither - Adreno exposes only
-            // the KHR spelling - so the winner of the EXT -> KHR chain lands in the EXT slot.
-            // Null when the driver offers neither, which is the normal "no damage-based present
-            // here" answer: the caller keeps plain eglSwapBuffers (and note that a call with
-            // n_rects == 0 is defined to be equivalent to eglSwapBuffers anyway).
-            funcs.eglSwapBuffersWithDamageEXT = ResolveSwapBuffersWithDamage(
-                reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR>(
-                    resolveEGLProc("eglSwapBuffersWithDamageEXT")),
-                reinterpret_cast<MG_External::EGL::eglSwapBuffersWithDamageKHR_PTR>(
-                    resolveEGLProc("eglSwapBuffersWithDamageKHR")));
-            if (funcs.eglSwapBuffersWithDamageEXT == nullptr) {
-                MGLOG_I_ONCE("This driver has no damage-based present entry point (neither "
-                             "eglSwapBuffersWithDamageEXT nor eglSwapBuffersWithDamageKHR); "
-                             "present calls fall back to eglSwapBuffers");
-            }
-        }
+        // Display extensions can only be checked after the display is initialized.
+        funcs.eglSwapBuffersWithDamageEXT = nullptr;
     }
 
     // Detects whether indirect draws leak the command's baseInstance word ("reserved, must
