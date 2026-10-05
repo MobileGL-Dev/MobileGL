@@ -322,11 +322,14 @@ TEST_F(MagmaRunAheadScenario, PresentCreditActuallyParksTheClientAtItsConfigured
     Gl().EndFrame(); // credit + 1 must park before it can publish its present.
     stop.store(true); observer.join(); hold.Release();
     EXPECT_TRUE(sawPark.load()) << "no real producer park while the present window was full";
+    const auto issuedBeforeFinish = PeekSplitRuntime().emitSeq;
     glFinish();
     const auto after=PeekSplitRuntime();
     EXPECT_EQ(after.presentCreditWaits,before.presentCreditWaits+1);
     EXPECT_EQ(after.presentAckSerial,before.presentCredit+1);
-    EXPECT_EQ(after.appliedSeq,after.emitSeq);
+    // Finish waits for prior work, then asynchronously destroys its internal fence.
+    // That cleanup may still be queued when Finish returns.
+    EXPECT_GE(after.appliedSeq,issuedBeforeFinish);
     RecordProperty("observed_present_credit",std::to_string(before.presentCredit));
     RecordProperty("observed_producer_park",sawPark.load() ? "yes" : "no");
 }
