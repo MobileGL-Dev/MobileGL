@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           printf 'Runner: %s\n' "$RUNNER_NAME"
-          hostname
+          uname -n
           uname -a
       - name: Verify hardware GLES and Vulkan
         shell: bash
