@@ -322,12 +322,13 @@ namespace {
         EXPECT_EQ(r.glxLoaded, 1);
         EXPECT_EQ(r.clientQueries, 1);
 
-        // A process that asked for software rendering is left to the system's other GL, server or not.
+        // Mesa's software-renderer selection must not disable MobileGL's EGL/GLX entry points.
         const EntryReport software = RunEntryPoints(server.endpoint, logBase, true);
-        EXPECT_EQ(software.vendorDisplay, 0);
-        EXPECT_EQ(software.getDisplay, 0);
-        EXPECT_EQ(software.vendorDevices, 0);
-        EXPECT_EQ(software.glxLoaded, 0);
+        EXPECT_EQ(software.vendorDisplay, 1);
+        EXPECT_EQ(software.getDisplay, 1);
+        EXPECT_EQ(software.vendorDevices, 1);
+        EXPECT_EQ(software.glxLoaded, 1);
+        EXPECT_EQ(software.clientQueries, 1);
         std::error_code ec;
         std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
     }
