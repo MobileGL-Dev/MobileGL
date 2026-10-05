@@ -1,15 +1,25 @@
 name: Configure Test runner
 description: Select the installed compiler and graphics stack without modifying the host
+inputs:
+  gpu:
+    description: Require the native GPU stack when running on 8845
+    default: "false"
 runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        NEED_GPU: ${{ inputs.gpu }}
       run: |
-        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+        if [ "$NEED_GPU" != true ] && [ -f /.dockerenv ]; then
+          bash "$GITHUB_WORKSPACE/scripts/ci/setup_cpu_container.sh"
+        fi
+        if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ] && [ "$NEED_GPU" = true ]; then
           for tool in clang clang++ cmake ninja ccache; do command -v "$tool"; done
           test -r /usr/share/vulkan/icd.d/dzn_icd.json
           test -e /dev/dxg
           {
+            echo 'MOBILEGL_CI_NATIVE_GPU=1'
             echo 'MOBILEGL_CI_CC=clang'
             echo 'MOBILEGL_CI_CXX=clang++'
             echo 'MOBILEGL_CI_LLD=ld.lld'
@@ -23,6 +33,7 @@ runs:
           } >> "$GITHUB_ENV"
         else
           {
+            echo 'MOBILEGL_CI_NATIVE_GPU=0'
             echo 'MOBILEGL_CI_CC=clang-20'
             echo 'MOBILEGL_CI_CXX=clang++-20'
             echo 'MOBILEGL_CI_LLD=ld.lld-20'

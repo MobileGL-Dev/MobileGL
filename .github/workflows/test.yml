@@ -26,9 +26,90 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  select-runner:
-    name: Select Test runner
+  select-integration-runner:
+    name: Select GPU runner (integration)
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      pool: ${{ steps.select.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test runner selection
+        run: python3 scripts/ci/test_select_test_runner.py
+      - name: Check preferred runner availability
+        id: select
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: python3 scripts/ci/select_test_runner.py
+
+  select-verify-runner:
+    name: Select GPU runner (verify)
+    needs: [build-linux-verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      pool: ${{ steps.select.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test runner selection
+        run: python3 scripts/ci/test_select_test_runner.py
+      - name: Check preferred runner availability
+        id: select
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: python3 scripts/ci/select_test_runner.py
+
+  select-verify-split-runner:
+    name: Select GPU runner (verify-split)
+    needs: [build-linux-verify-split]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      pool: ${{ steps.select.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test runner selection
+        run: python3 scripts/ci/test_select_test_runner.py
+      - name: Check preferred runner availability
+        id: select
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: python3 scripts/ci/select_test_runner.py
+
+  select-split-runner:
+    name: Select GPU runner (split)
+    needs: [build-linux-split]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      pool: ${{ steps.select.outputs.pool }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test runner selection
+        run: python3 scripts/ci/test_select_test_runner.py
+      - name: Check preferred runner availability
+        id: select
+        env:
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+        run: python3 scripts/ci/select_test_runner.py
+
+  select-retrace-runner:
+    name: Select GPU runner (retrace)
+    needs: [build-retrace, trace-fixtures]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -46,8 +127,8 @@ jobs:
         run: python3 scripts/ci/select_test_runner.py
 
   build-linux:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     permissions:
       actions: write
       contents: read
@@ -61,11 +142,8 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -76,19 +154,19 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -100,7 +178,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -154,7 +232,7 @@ jobs:
             --mode "${mode}" --output "${BUILD_DIR}/runtime-mode.json"
 
       - name: Show ccache stats
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() }}
         run: ccache --show-stats
 
       # Rewrite one rolling entry per job on the default branch. The upload stays
@@ -168,7 +246,7 @@ jobs:
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -177,7 +255,10 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
       - name: Package Linux runtime
         run: |
@@ -192,7 +273,7 @@ jobs:
             --exclude='cmake_install.cmake' \
             -czf ci-artifacts/mobilegl-linux-runtime.tgz \
             "${BUILD_DIR}/runtime-mode.json" \
-            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_Benchmark" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
@@ -209,8 +290,8 @@ jobs:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
     name: build explicit pull runtime control
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     env:
       BUILD_DIR: build-monolith-control
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -218,11 +299,9 @@ jobs:
       CCACHE_COMPRESS: "true"
       CCACHE_NOHASHDIR: "true"
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
@@ -231,15 +310,15 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
       - name: Restore pull compiler cache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-build-linux-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-build-linux-ccache-v1
       - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -249,7 +328,7 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python update_glslang_sources.py
       - name: Install build dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -269,10 +348,13 @@ jobs:
           cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
           python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
             --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
+
       - name: Package pull control
         run: |
           tar -czf mobilegl-linux-monolith-control.tgz \
-            "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json"
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json"
       - name: Upload pull control
         uses: actions/upload-artifact@v7
         with:
@@ -281,10 +363,14 @@ jobs:
           if-no-files-found: error
 
   test:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
-    needs: [select-runner, build-linux]
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
+    needs: [build-linux]
 
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -292,11 +378,11 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -310,23 +396,17 @@ jobs:
       - name: Unpack Linux runtime
         run: tar -xzf mobilegl-linux-runtime.tgz
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
       - name: Test
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L unit --no-tests=error
           else
@@ -343,8 +423,8 @@ jobs:
 
   integration:
     name: integration (${{ matrix.transport }})
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
-    needs: [select-runner, build-linux]
+    runs-on: ${{ fromJSON(needs.select-integration-runner.outputs.runner) }}
+    needs: [select-integration-runner, build-linux]
     strategy:
       fail-fast: false
       matrix:
@@ -361,13 +441,15 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Same set as the benchmark job, for the same reason: the scenarios bring
         # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
         # libegl-mesa0 - the EGL vendor library behind glvnd's libegl1 dispatch -
@@ -385,17 +467,11 @@ jobs:
       - name: Unpack Linux runtime
         run: tar -xzf mobilegl-linux-runtime.tgz
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
       - name: Integration scenarios
         working-directory: build-linux
@@ -419,7 +495,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # Second, filtered pass: with the range-invalidating map flush disabled,
           # the buffer scenarios run on the upload ring's staged-copy tier - which
           # the default pass never reaches (the map tier absorbs every flush on
@@ -455,7 +531,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload integration lane evidence
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-integration-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-evidence-${{ matrix.lane }}-${{ matrix.transport }}
@@ -480,8 +556,8 @@ jobs:
   # MOBILEGL_PIPE_VERIFY is a compile-time option - the snapshot, the entry compare and the
   # compare-at-read hook do not exist in the shipped library, and are never meant to.
   build-linux-verify:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     timeout-minutes: 120
     permissions:
       actions: write
@@ -495,11 +571,8 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -510,19 +583,19 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -534,7 +607,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -611,14 +684,14 @@ jobs:
           echo "libMobileGL.so defines MGPipeVerifyInputs and a per-verb entry point (${defined} defined symbols)"
 
       - name: Show ccache stats
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -627,7 +700,10 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
       - name: Package Linux verify runtime
         run: |
@@ -641,7 +717,7 @@ jobs:
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
             -czf ci-artifacts/mobilegl-linux-runtime-verify.tgz \
-            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
@@ -657,9 +733,9 @@ jobs:
   # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
   # remembering to break it on purpose is a gate that has already stopped working.
   integration-verify:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-verify-runner.outputs.runner) }}
     timeout-minutes: 180
-    needs: [select-runner, build-linux-verify]
+    needs: [select-verify-runner, build-linux-verify]
 
     steps:
       - name: Checkout repo
@@ -667,13 +743,15 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -689,17 +767,11 @@ jobs:
           tar -xzf mobilegl-linux-runtime-verify.tgz
           test -f build-verify/libMobileGL.so
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          for path in Path('build-verify').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
       - name: Integration scenarios (verify)
         working-directory: build-verify
@@ -722,7 +794,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L integration-verify --no-tests=error
           else
@@ -810,7 +882,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest --output-on-failure -L integration-gpu \
             -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip|ObjectSubsystem|TextureParamsWithoutASamplerView|TextureUploadShape' \
             --no-tests=error -j 4
@@ -902,7 +974,7 @@ jobs:
           echo "the omitted fill point turned the lane red, as it must"
 
       - name: Upload verify lane logs
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-verify-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-verify-logs
@@ -932,142 +1004,47 @@ jobs:
   # gPipeInputs and the frontend GLContext) are co-resident only when both roles share a process.
   # MG_IntegrationTest/CMakeLists.txt's verify-split block records the spawn measurement.
   integration-verify-split:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-verify-split-runner.outputs.runner) }}
+    needs: [select-verify-split-runner, build-linux-verify-split]
     timeout-minutes: 180
-    permissions:
-      actions: write
-      contents: read
-    env:
-      BUILD_DIR: build-verify-split
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPRESS: "true"
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 4G
-      CCACHE_NOHASHDIR: "true"
-
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
-
       - name: Checkout repo
         uses: actions/checkout@v6
-        with:
-          # recursive for build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself
-          # back to OFF when 3rdparty/flatbuffers/include is missing.
-          submodules: recursive
-
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
-
+        with:
+          gpu: "true"
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
-
-      - name: Restore ccache
-        uses: actions/cache/restore@v5
-        with:
-          path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
-          restore-keys: |
-            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
-
-      - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: 1.4.304.1
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
-
-      - name: Update glslang external sources
-        working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
-
-      - name: Install build and runtime dependencies
-        if: runner.environment != 'self-hosted'
+      - name: Install runtime dependencies
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1
-
-      - name: Configure CMake
-        # Release/INFO for build-linux-verify's reason, and INFO is load-bearing here for
-        # build-linux-split's: ConfigLoader's resolved-transport line is logged at INFO and the
-        # arm-proof step below reads it back out of every entry's client log.
-        run: |
-          cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
-            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=ON \
-            -DMOBILEGL_BUILD_BENCHMARK=OFF \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
-            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_PIPE_PUSH=ON \
-            -DMOBILEGL_BUILD_DISAGGREGATED=ON \
-            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
-            -DMOBILEGL_PIPE_VERIFY=ON \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-
-      - name: Build
-        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
-
-      # Both options, both directions of "did it take" - the two jobs this one is the product of
-      # each check one of them, and this library has to pass both checks.
-      - name: Comparator and MG_Remote symbols
-        run: |
-          test -f "${BUILD_DIR}/libMobileGL.so"
-          defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
-          if [ "${defined}" -lt 1000 ]; then
-            echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the checks below could not have failed honestly"
-            exit 1
-          fi
-          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "MGPipeVerifyInputs"; then
-            echo "::error::libMobileGL.so defines no MGPipeVerifyInputs: -DMOBILEGL_PIPE_VERIFY=ON did not take, and the verify-split lane would compare nothing"
-            exit 1
-          fi
-          remote=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -c -i "MG_Remote" || true)
-          if [ "${remote}" -lt 1 ]; then
-            echo "::error::libMobileGL.so defines no MG_Remote symbol: -DMOBILEGL_BUILD_DISAGGREGATED=ON did not take, and every entry would run monolith under a name that says split"
-            exit 1
-          fi
-          echo "libMobileGL.so defines MGPipeVerifyInputs and ${remote} MG_Remote symbol(s) (${defined} defined symbols)"
-
-      - name: Show ccache stats
-        if: ${{ always() && needs.select-runner.result == 'success' }}
-        run: ccache --show-stats
-
-      - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
-
-      - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
-        continue-on-error: true
-        uses: actions/cache/save@v5
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+      - name: Download verify-split runtime
+        uses: actions/download-artifact@v8
         with:
-          path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          name: mobilegl-linux-runtime-verify-split
+          path: .
+      - name: Unpack verify-split runtime
+        run: tar -xzf mobilegl-linux-runtime-verify-split.tgz
 
       # The lane. `^...$` because ctest -L is a regex (ID-131) and `integration-verify` would
       # otherwise also match this label and the monolith one would match both.
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
+
       - name: Verify-split scenarios (inproc)
         working-directory: build-verify-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # --output-junit, because the arm proof below has to tell a gtest SKIP from a pass: an
           # entry that skipped reached no verb honestly, and the skip set moves with the driver.
           ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4 \
@@ -1121,7 +1098,7 @@ jobs:
       # upload made that worse rather than better, because a failure investigation is exactly
       # when the overwritten half is the half somebody needs.
       - name: Keep lane logs before controls
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-verify-split-runner.result == 'success' }}
         working-directory: build-verify-split/MobileGL/MG_IntegrationTest
         run: |
           rm -rf verify-split-logs-lane
@@ -1238,7 +1215,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload verify-split lane logs
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-verify-split-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-verify-split-logs
@@ -1271,8 +1248,8 @@ jobs:
   # so the build-level assertion is the only guard, and its absence is precisely what would make
   # the whole split arm meaningless.
   build-linux-split:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     timeout-minutes: 120
     permissions:
       actions: write
@@ -1286,11 +1263,8 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -1306,19 +1280,19 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -1330,7 +1304,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install build dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -1431,7 +1405,7 @@ jobs:
       # per-symbol definer/referrer attribution the JSON carries, and a job that failed before
       # uploading its evidence is a job nobody can act on.
       - name: Upload link ratchet
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: link-ratchet
@@ -1439,14 +1413,14 @@ jobs:
           if-no-files-found: warn
 
       - name: Show ccache stats
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -1455,7 +1429,10 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
       - name: Package Linux split runtime
         run: |
@@ -1469,7 +1446,7 @@ jobs:
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
             -czf ci-artifacts/mobilegl-linux-runtime-split.tgz \
-            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
             "${SHARED_LIBS[@]}"
@@ -1484,9 +1461,9 @@ jobs:
   # The split lane itself: the three-arm shape ARCHITECTURE.md:521 asks for verbatim, plus the
   # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
   integration-split:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-split-runner.outputs.runner) }}
     timeout-minutes: 120
-    needs: [select-runner, build-linux-split]
+    needs: [select-split-runner, build-linux-split]
 
     steps:
       - name: Checkout repo
@@ -1494,13 +1471,15 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
@@ -1516,26 +1495,12 @@ jobs:
           tar -xzf mobilegl-linux-runtime-split.tgz
           test -f build-split/libMobileGL.so
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
-          for path in Path('build-split').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
-
-      # THE FIRST REAL RUN OF MG_Test/Wire. Those five suites - Framing, Ring, InProcessTransport,
-      # ProtocolSmoke and FdPassing - are registered only under MOBILEGL_BUILD_DISAGGREGATED
-      # (MG_Test/CMakeLists.txt), and before this job existed NO cmake invocation anywhere in this
-      # workflow passed that option. They had never been compiled by CI, let alone run.
-      # Exit gate 9.2. BEFORE the lanes run, because it costs a `ctest -N` and answers the one
-      # question a green lane cannot: did the spawn arm cover the same cases the split arm did?
-      # A spawn lane registered with fewer cases goes green while proving less, and nothing about
-      # a smaller green lane looks wrong.
       - name: Spawn/split lane parity (9.2)
         run: python3 scripts/ci/spawn_lane_parity.py build-split
 
@@ -1598,7 +1563,7 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
@@ -1629,7 +1594,7 @@ jobs:
           MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           count=$(ctest -N -L integration-gpu | grep -cE '^ *Test *#[0-9]+:')
           if [ "${count}" -lt 1 ]; then
             echo "::error::the split runtime registers ${count} integration-gpu entries"
@@ -1733,7 +1698,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload split lane logs
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-split-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-split-logs
@@ -1758,9 +1723,9 @@ jobs:
   # Configured controls must pass without skips. Capability gaps and known
   # limitations are reported separately and accepted only by exact name/reason.
   integration-split-strict:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-split-runner.outputs.runner) }}
     timeout-minutes: 60
-    needs: [select-runner, build-linux-split]
+    needs: [select-split-runner, build-linux-split]
 
     steps:
       - name: Checkout repo
@@ -1768,13 +1733,15 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers vulkan-validationlayers
@@ -1790,21 +1757,12 @@ jobs:
           tar -xzf mobilegl-linux-runtime-split.tgz
           test -f build-split/libMobileGL.so
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
-          for path in Path('build-split').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
-
-      # The green half: no unit case may pull harder under strict. This includes the
-      # RemoteGuards suite (the layer-1/layer-2 Fatal drives) and FieldOwnershipTest's strict
-      # arms, so the guards are provably armed in the lane that gates on them.
       - name: Unit tests on the split runtime (strict)
         working-directory: build-split
         env:
@@ -2109,7 +2067,7 @@ jobs:
           MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -L '^integration-magma-spawn$' --no-tests=error -j 2 --output-on-failure
           ctest -L '^integration-magma-tcp$' --no-tests=error -j 2 --output-on-failure
 
@@ -2273,7 +2231,7 @@ jobs:
             --out "${RUNNER_TEMP}/magma-cache-syncval" --execute
 
       - name: Upload Magma run-ahead and cache evidence
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-split-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: magma-runahead-checks
@@ -2342,7 +2300,7 @@ jobs:
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
 
       - name: Upload strict lane logs
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-split-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: integration-split-strict-logs
@@ -2364,10 +2322,13 @@ jobs:
   # header honest: build the pinned flatc, regenerate, and fail on any diff.
   # It needs no MobileGL build, so it does not depend on build-linux.
   flatc-check:
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
 
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2375,7 +2336,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Check out the FlatBuffers submodule only
@@ -2408,10 +2369,13 @@ jobs:
   # job, because a gate that cannot go red is not a gate (ROADMAP.md:7).
   include-graph-check:
     name: Include-closure purity gate
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
 
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2424,7 +2388,7 @@ jobs:
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
       - name: Install clang and X11 headers
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
         # preprocessor and the gate reports 5 problems that have nothing to do with purity.
@@ -2440,8 +2404,8 @@ jobs:
         run: python3 scripts/check_include_closure.py --mode both --compiler "${MOBILEGL_CI_CXX}" --self-test --require-all --expect-probes 4
 
   benchmark:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
-    needs: [select-runner, build-linux]
+    runs-on: ${{ fromJSON(needs.select-integration-runner.outputs.runner) }}
+    needs: [select-integration-runner, build-linux]
 
     steps:
       - name: Checkout repo
@@ -2449,13 +2413,15 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
         # real GL context, and libegl1 is only glvnd's dispatch. It normally
         # arrives as a Recommends of libegl1, which is too quiet a dependency for
@@ -2473,23 +2439,17 @@ jobs:
       - name: Unpack Linux runtime
         run: tar -xzf mobilegl-linux-runtime.tgz
 
-      - name: Normalize CTest command paths
+      - name: Prepare downloaded test metadata
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          for path in Path('build-linux').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
       - name: Benchmark
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -V -C Release -L benchmark --no-tests=error
 
       - name: Upload core dumps
@@ -2501,13 +2461,10 @@ jobs:
           if-no-files-found: ignore
 
   build-retrace:
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     needs:
-      - select-runner
       - build-linux
-      - test
-      - benchmark
-      - integration
     permissions:
       actions: write
       contents: read
@@ -2521,11 +2478,8 @@ jobs:
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
-      - name: Set swap space
-        if: runner.environment != 'self-hosted'
-        uses: pierotofy/set-swap-space@v1.0
-        with:
-          swap-size-gb: 32
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -2536,19 +2490,19 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -2560,7 +2514,7 @@ jobs:
         run: python update_glslang_sources.py
 
       - name: Install dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
@@ -2583,6 +2537,12 @@ jobs:
         run: |
           tar -xzf mobilegl-linux-runtime.tgz
           test -f "${MOBILEGL_LIBRARY}"
+
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
 
       - name: Configure CMake
         run: |
@@ -2610,14 +2570,14 @@ jobs:
         run: cmake --build "${BUILD_DIR}" --target mobilegl_trace_replay --parallel "$(nproc)"
 
       - name: Show ccache stats
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() }}
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" || true
 
       - name: Save ccache
@@ -2626,24 +2586,16 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-${{ needs.select-runner.outputs.pool }}-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
 
-      - name: Normalize CTest command paths
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          for path in Path('build-retrace').rglob('CTestTestfile.cmake'):
-              text = path.read_text()
-              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
-              path.write_text(text)
-          PY
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
       - name: Package trace replay
         run: |
           mkdir -p ci-artifacts
           tar -czf ci-artifacts/mobilegl-trace-replay.tgz \
+            build-retrace/.ci-source-root \
             build-retrace/tools/trace_replay/mobilegl_trace_replay \
             build-retrace/tools/trace_replay/CTestTestfile.cmake
 
@@ -2656,20 +2608,19 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
-    needs:
-      - select-runner
-      - test
-      - benchmark
-      - integration
     outputs:
       matrix: ${{ steps.trace-cases.outputs.matrix }}
       names: ${{ steps.trace-cases.outputs.names }}
       verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
       split-matrix: ${{ steps.trace-cases.outputs.split-matrix }}
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2723,14 +2674,18 @@ jobs:
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
-    needs: [select-runner, trace-cases]
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
+    needs: [trace-cases]
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
         case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2791,19 +2746,19 @@ jobs:
 
   retrace:
     name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-retrace-runner.outputs.runner) }}
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
       MOBILEGL_IPC_RUN_AHEAD: "1"
     needs:
-      - select-runner
+      - select-retrace-runner
       - build-linux
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-retrace-runner.result == 'success' && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2821,6 +2776,8 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -2834,11 +2791,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -2864,11 +2821,17 @@ jobs:
           test -f build-linux/libMobileGL.so
           test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
 
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
+
       - name: Retrace and validate
         working-directory: build-retrace/tools/trace_replay
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
@@ -2902,7 +2865,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-retrace-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ matrix.backend }}-${{ matrix.case }}
@@ -2913,13 +2876,17 @@ jobs:
 
   retrace-summary:
     name: retrace summary
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
-    needs: [select-runner, retrace]
-    if: ${{ always() && needs.select-runner.result == 'success' && needs.retrace.result != 'skipped' }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
+    needs: [retrace]
+    if: ${{ always() && needs.retrace.result != 'skipped' }}
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
 
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2991,15 +2958,15 @@ jobs:
   # is budgeted at 5-10x, and the full sweep is a phase-exit / workflow_dispatch run.
   retrace-verify:
     name: retrace verify (${{ matrix.backend }}, ${{ matrix.case }})
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-retrace-runner.outputs.runner) }}
     timeout-minutes: 240
     needs:
-      - select-runner
+      - select-retrace-runner
       - build-linux-verify
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-retrace-runner.result == 'success' && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -3017,6 +2984,8 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -3030,11 +2999,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -3075,6 +3044,12 @@ jobs:
           fi
           echo "the library at build-linux/libMobileGL.so is the verify build"
 
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
+
       - name: Retrace and validate (verify)
         working-directory: build-retrace/tools/trace_replay
         # run_trace_case.cmake turns MOBILEGL_PIPE_VERIFY into three assertions of its own (the
@@ -3084,7 +3059,7 @@ jobs:
         # is well past ctest's 1500s default.
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_PIPE_VERIFY=1
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
@@ -3141,7 +3116,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-retrace-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-verify-result-${{ matrix.backend }}-${{ matrix.case }}
@@ -3175,11 +3150,11 @@ jobs:
   # transport-resolution line in the library's own log (this PROCESS resolved inproc).
   retrace-split:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.select-retrace-runner.outputs.runner) }}
     timeout-minutes: 240
     # The setup action selects Dozen on Arch WSL or lavapipe on GitHub.
     needs:
-      - select-runner
+      - select-retrace-runner
       - build-linux-monolith-control
       - build-linux-split
       - build-retrace
@@ -3187,7 +3162,7 @@ jobs:
       - trace-fixtures
     # The separate OFF/pull artifact is for the negative control ONLY: its library is what the control
     # swaps in to prove the transport-resolution assertion is load-bearing.
-    if: ${{ always() && needs.select-runner.result == 'success' && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ always() && needs.select-retrace-runner.result == 'success' && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -3205,6 +3180,8 @@ jobs:
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
 
       - name: Download trace fixture
         uses: actions/download-artifact@v8
@@ -3218,11 +3195,11 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
 
       - name: Install runtime dependencies
-        if: runner.environment != 'self-hosted'
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
@@ -3253,6 +3230,12 @@ jobs:
           tar -xzf pull-runtime/mobilegl-linux-monolith-control.tgz -C pull-runtime
           test -f pull-runtime/build-monolith-control/libMobileGL.so
 
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
+
       - name: Unpack split runtime (library under test)
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
@@ -3276,6 +3259,12 @@ jobs:
       # build-linux-split's `find -name '*.so'` sweep - libMobileGLServer.so is an executable that
       # wears a .so name so an APK will install it somewhere exec-able - and a missing one must be
       # a NAMED failure here rather than a LaunchServer refusal 78 jobs deep.
+      - name: Prepare downloaded test metadata
+        run: |
+          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
+          done
+
       - name: Place the server image (spawn arm only)
         if: ${{ matrix.transport == 'spawn' }}
         run: |
@@ -3333,7 +3322,7 @@ jobs:
         # configuration, so a `ctest -V` transcript reports a false zero for Fatal{ lines.
         run: |
           ulimit -c unlimited
-          if [ "$RUNNER_ENVIRONMENT" != self-hosted ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
+          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_TRANSPORT='${{ matrix.transport }}'
           # Absolute, because the replay's working directory is not this one and LaunchServer
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
@@ -3422,7 +3411,7 @@ jobs:
       # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
       # library's own log is the only way to get them (ctest -V's transcript is a false zero).
       - name: Refusal census from the library log
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-retrace-runner.result == 'success' }}
         working-directory: build-retrace/tools/trace_replay
         run: |
           # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
@@ -3452,7 +3441,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload actual image
-        if: ${{ always() && needs.select-runner.result == 'success' }}
+        if: ${{ always() && needs.select-retrace-runner.result == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: retrace-split-result-${{ matrix.transport }}-${{ matrix.backend }}-${{ matrix.case }}
@@ -3463,17 +3452,25 @@ jobs:
 
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     # Every retrace arm downloads the shared fixtures, including split controls.
     needs:
-      - select-runner
       - retrace-summary
       - retrace-verify
       - retrace-split
-    if: ${{ always() && needs.select-runner.result == 'success' }}
+    if: ${{ always() }}
     permissions:
       actions: write
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
       - name: Delete intermediate Linux retrace artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3532,12 +3529,15 @@ jobs:
 
   pipe-gates:
     name: MGPipe generators and hygiene gates
-    needs: select-runner
-    runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
 
     steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -3548,6 +3548,10 @@ jobs:
       # deliberately: the build must not depend on python.
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
+
+      - name: Test CTest runtime metadata preparation
+        run: python3 scripts/ci/test_prepare_test_runtime.py
+
 
       - name: Regenerate the MGPipe interface (G1-G7)
         run: |
@@ -3683,3 +3687,146 @@ jobs:
             exit 0
           fi
           python3 scripts/check_doc_citations.py "${documents[@]}" || true
+  build-linux-verify-split:
+    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
+    container: ubuntu:24.04
+    timeout-minutes: 180
+    permissions:
+      actions: write
+      contents: read
+    env:
+      BUILD_DIR: build-verify-split
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Prepare checkout tools
+        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          # recursive for build-linux-split's reason: MOBILEGL_BUILD_DISAGGREGATED shadows itself
+          # back to OFF when 3rdparty/flatbuffers/include is missing.
+          submodules: recursive
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+
+      - name: Get CMake
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+
+      - name: Prepare Vulkan SDK
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+
+      - name: Install build and runtime dependencies
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1
+
+      - name: Configure CMake
+        # Release/INFO for build-linux-verify's reason, and INFO is load-bearing here for
+        # build-linux-split's: ConfigLoader's resolved-transport line is logged at INFO and the
+        # arm-proof step below reads it back out of every entry's client log.
+        run: |
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
+            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=ON \
+            -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
+            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
+            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_PIPE_PUSH=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED=ON \
+            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
+            -DMOBILEGL_PIPE_VERIFY=ON \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      # Both options, both directions of "did it take" - the two jobs this one is the product of
+      # each check one of them, and this library has to pass both checks.
+      - name: Comparator and MG_Remote symbols
+        run: |
+          test -f "${BUILD_DIR}/libMobileGL.so"
+          defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
+          if [ "${defined}" -lt 1000 ]; then
+            echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the checks below could not have failed honestly"
+            exit 1
+          fi
+          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "MGPipeVerifyInputs"; then
+            echo "::error::libMobileGL.so defines no MGPipeVerifyInputs: -DMOBILEGL_PIPE_VERIFY=ON did not take, and the verify-split lane would compare nothing"
+            exit 1
+          fi
+          remote=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -c -i "MG_Remote" || true)
+          if [ "${remote}" -lt 1 ]; then
+            echo "::error::libMobileGL.so defines no MG_Remote symbol: -DMOBILEGL_BUILD_DISAGGREGATED=ON did not take, and every entry would run monolith under a name that says split"
+            exit 1
+          fi
+          echo "libMobileGL.so defines MGPipeVerifyInputs and ${remote} MG_Remote symbol(s) (${defined} defined symbols)"
+
+      - name: Show ccache stats
+        if: ${{ always() }}
+        run: ccache --show-stats
+
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
+
+      - name: Package verify-split runtime
+        run: |
+          mkdir -p ci-artifacts
+          mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
+          tar --exclude='*/CMakeFiles' --exclude='*.o' --exclude='*.a' --exclude='*.ninja*' \
+            --exclude='build.ninja' --exclude='cmake_install.cmake' \
+            -czf ci-artifacts/mobilegl-linux-runtime-verify-split.tgz \
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" "${BUILD_DIR}/MobileGL/MG_Test" \
+            "${BUILD_DIR}/MobileGL/MG_IntegrationTest" "${SHARED_LIBS[@]}"
+      - name: Upload verify-split runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-runtime-verify-split
+          path: ci-artifacts/mobilegl-linux-runtime-verify-split.tgz
+          if-no-files-found: error

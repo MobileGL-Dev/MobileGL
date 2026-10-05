@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Choose one execution platform for the entire Test artifact dependency graph."""
+"""Choose a GPU runner after the consuming stage has its build artifacts."""
 import json
 import os
 import sys
@@ -48,7 +48,7 @@ def main():
         labels, pool, reason = choose(runners)
     except (ValueError, KeyError, OSError, urllib.error.URLError) as error:
         # An API/auth error is not evidence that the machine is offline. Do not
-        # silently send the whole matrix to GitHub when the status cannot be read.
+        # silently send GPU tests to GitHub when the status cannot be read.
         print(f"::error::Cannot determine runner availability: {error}", file=sys.stderr)
         return 1
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:

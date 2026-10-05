@@ -111,28 +111,41 @@ Clash must be running for the runner's configured GitHub connection to work.
 
 ## Main Test workflow
 
-`test.yml` uses a small GitHub-hosted `select-runner` job to query this repository's
-runner inventory. Every subsequent job uses its single decision, so artifacts built
-against Arch's compiler/libc/Mesa cannot accidentally be consumed by Ubuntu jobs.
-An online runner is preferred even when busy. Offline, unregistered, or mismatched
-labels select `ubuntu-latest` for the whole run. Test failures do not cause fallback.
+CPU jobs do not query GPU availability. They default to GitHub `ubuntu-latest`.
+Repository variable `CI_CPU_RUNNER` may specify a JSON runner label array, for example
+`["self-hosted", "Linux", "X64", "cpu"]`. A self-hosted CPU runner needs Docker and
+permission to run job containers. CPU builds/tests run in `ubuntu:24.04` on either
+host type, with Clang 20 and the same userspace ABI. They do not require `/dev/dxg`.
+GitHub Actions has no native "any hosted OR self-hosted" selector; the variable
+chooses the CPU pool independently, without reserving this GPU machine.
 
-Configure repository Actions secret `RUNNER_STATUS_TOKEN` with a fine-grained PAT
-restricted to this repository and **Administration: Read-only**. The ordinary
-`GITHUB_TOKEN` cannot generally list repository runners. A missing/expired token or
-API failure stops selection with an error: unknown availability is not treated as
-an offline machine. The token is passed only to the GitHub-hosted selector.
+After each runtime build completes, a small GitHub-hosted selection job queries
+this repository's runner inventory for the corresponding GPU stage. Integration,
+verify, split and retrace select independently. Benchmark uses the integration
+selection. `integration-verify-split` has a separate CPU build and GPU test job.
+Retrace compilation and fixture preparation no longer wait for integration tests.
 
-Availability is sampled at workflow start. If the machine disconnects after
-selection, GitHub queues its remaining jobs; rerunning the workflow while it is
-offline chooses Ubuntu. GitHub Actions does not migrate already scheduled jobs
-between runner types. Keeping one platform per run avoids incompatible artifacts.
+An online 8845 runner is preferred even when busy. Offline, unregistered, or
+mismatched labels select `ubuntu-latest`. Test failures never trigger fallback.
+Configure Actions secret `RUNNER_STATUS_TOKEN` with repository Administration:
+Read-only access. The secret is passed only to the selection jobs. A missing token,
+expired credential or API failure is an error, not evidence that the runner is offline.
 
-The local composite setup action uses Arch's installed Clang/CMake and Dozen ICD.
-Ubuntu package installation, swap provisioning, SDK download, and privileged core
-pattern changes are skipped on this no-sudo host. Compiler caches are separated by
-runner pool. Trace tests disable forced software-rendering environment overrides
-on this machine; the Ubuntu fallback retains its existing Mesa software settings.
-Hardware capability differences remain visible as test results, not fallback triggers.
-The dedicated `wsl-gpu-smoke.yml` workflow has been removed; the host's installed
-probe remains available to its operator.
+`prepare_test_runtime.py` runs when producing and consuming runtime artifacts. It
+records/relocates workspace paths, resolves CMake module paths on the execution
+host, and repairs escaped ENVIRONMENT/LABELS separators before GoogleTest discovery.
+This prevents a backend value like `DirectVulkan;MOBILEGL_TRANSPORT=inproc;...`.
+At test time it replaces the built-in ICD path and removes software-rendering
+and Mesa version overrides on the hardware runner. Thus an Ubuntu build can be
+tested on Arch WSL with Dozen/D3D12 without recompiling or using the build host's
+software driver configuration. Capability failures remain visible test failures.
+
+Each GPU stage samples availability after its inputs are ready. A disconnection
+later still leaves already scheduled jobs queued: GitHub cannot migrate those
+jobs automatically. Rerun the workflow to select again. Arch-built native artifacts
+are not mixed with Ubuntu consumers; CPU artifacts use the common Ubuntu container.
+
+Native GPU jobs use Arch's installed tools and do not install packages, provision
+swap, download an SDK or change privileged core settings. The old standalone
+`wsl-gpu-smoke.yml` has been removed; the host's installed probe remains available
+for manual diagnostics.
