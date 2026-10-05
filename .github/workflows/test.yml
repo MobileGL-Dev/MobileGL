@@ -3178,7 +3178,6 @@ jobs:
     runs-on: ${{ fromJSON(needs.select-runner.outputs.runner) }}
     timeout-minutes: 240
     # The setup action selects Dozen on Arch WSL or lavapipe on GitHub.
-    env:
     needs:
       - select-runner
       - build-linux-monolith-control
