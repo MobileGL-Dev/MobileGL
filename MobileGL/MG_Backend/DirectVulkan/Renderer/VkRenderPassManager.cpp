@@ -1681,14 +1681,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkRenderPassManager::EndRenderPass(VkCommandBuffer commandBuffer) {
         BumpWireImageWriteEpoch();
         auto* activeRenderPass = GetActiveRenderPass();
+        Vector<TrackedAttachmentLayoutInfo> trackedAttachmentLayouts;
+        if (activeRenderPass != nullptr) {
+            trackedAttachmentLayouts = Move(activeRenderPass->trackedAttachmentLayouts);
+        }
         vkCmdEndRenderPass(commandBuffer);
+        // Layout reconciliation below may record barriers, whose guard closes an active
+        // pass. Detach the ended pass first so that guard cannot recursively end it again.
+        s_activeRenderPass.Get() = {};
+        s_hasActiveRenderPass.Get() = false;
         // The fast-path memo reuses the ACTIVE render pass; once the pass ends it must not carry
         // over (the next span may be a different FBO resolved before its render pass is begun).
         if (s_renderPassManager.Get() != nullptr) {
             s_renderPassManager.Get()->m_rpFastValid = false;
         }
-        if (activeRenderPass != nullptr && !activeRenderPass->trackedAttachmentLayouts.empty()) {
-            for (const auto& trackedAttachment : activeRenderPass->trackedAttachmentLayouts) {
+        if (!trackedAttachmentLayouts.empty()) {
+            for (const auto& trackedAttachment : trackedAttachmentLayouts) {
                 switch (trackedAttachment.target) {
                     case TrackedAttachmentTarget::Texture:
                         MOBILEGL_ASSERT(s_textureManager.Get() != nullptr, "EndRenderPass: texture manager is null");
@@ -1730,8 +1738,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
         }
-        s_activeRenderPass.Get() = {};
-        s_hasActiveRenderPass.Get() = false;
         return true;
     }
 

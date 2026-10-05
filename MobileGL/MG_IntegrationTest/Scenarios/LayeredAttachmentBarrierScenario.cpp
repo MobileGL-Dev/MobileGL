@@ -374,5 +374,47 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 << (std::fabs(blitted - 0.125f) < 1e-3f ? " - the destination kept its own clear" : "");
         }
 
+        TEST_F(LayeredAttachmentBarrierScenario, EndingAMiddleMipDrawPreservesOtherLevels) {
+            if (!Ready()) return;
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            m_textures.push_back(texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 3, GL_RGBA8, 16, 16);
+            for (int level = 0; level < 3; ++level) {
+                const int size = 16 >> level;
+                const std::vector<Rgba8> initial(size * size, LayerFill(level));
+                glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size,
+                               GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
+            }
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+            m_fbos.push_back(fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE);
+            glViewport(0, 0, 8, 8);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            DrawFullViewportQuad(m_program);
+            // Ending this pass reconciles both lower and upper mip layouts. Their barriers
+            // must not see the pass as active and recursively end it a second time.
+            glFinish();
+            for (int level = 0; level < 3; ++level) {
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, level);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                Rgba8 actual{};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &actual);
+                const Rgba8 expected = level == 1 ? kPaintedColor : LayerFill(level);
+                EXPECT_NEAR(actual.r, expected.r, 2) << "level " << level;
+                EXPECT_NEAR(actual.g, expected.g, 2);
+                EXPECT_NEAR(actual.b, expected.b, 2);
+                EXPECT_EQ(actual.a, expected.a);
+            }
+            EXPECT_EQ(FirstGLError(), 0u);
+        }
+
     } // namespace
 } // namespace MGITest
