@@ -70,6 +70,11 @@ namespace MobileGL::MG_Pipe {
     // The one door into PipeInputs' storage on the client side. A struct rather than a
     // list of friend functions so the header names exactly one friend.
     struct MGPipeFillAccess {
+        static void CopyServerPackReference(PipeInputs& dst, const PipeInputs& actual,
+                                             const PixelStoreParameters& pack) {
+            dst.m_pixelStore[0] = pack;
+            dst.m_pixelStore[1] = actual.m_pixelStore[1];
+        }
         // Copies ONE field's storage out of the live context by calling the GLContext
         // accessor of the same name (P1 brief D4: no derivation logic is re-implemented
         // here, which is what keeps the copy semantically identical by construction).
@@ -659,56 +664,6 @@ namespace MobileGL::MG_Pipe {
             if (!MGPipeVerifyInputs(inputs, g_snapshot, mask, &differing)) ReportDivergence(differing, "entry");
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // ---- P7 wave 3 (V1): the compare-at-read oracle inside the server's read_pixels ----
-        //
-        // WHAT THE SPLIT ARM FOUND THE FIRST TIME VERIFY AND SPLIT SHARED A BUILD. Every
-        // glReadPixels on the inproc arm - 8530 reads over 220 of the lane's 1068 entries, and the
-        // VerifySplitArming. entries on both backends - aborted with
-        //
-        //   MGPipe: verify read of GetPixelStoreParameters (index 0, 0) differs from the live context
-        //   MGPipe: Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels", verb=6, where=read}
-        //
-        // on the server's apply thread, and it was the ONLY field that diverged anywhere in the
-        // lane. The mechanism is ID-49 and is deliberate: the pack state never shapes the wire
-        // answer, so MG_Remote/Server/PipeApplier.cpp's read_pixels body writes a NEUTRAL pack
-        // into the applier's copy of the field (MGPipeApplySetPixelPackState), makes the backend
-        // read, and restores the pushed one; the client then scatters the tight reply through the
-        // application's own pack state. The frontend context - this comparator's oracle - still
-        // holds the application's pack (Alignment 4 by default), so the backend's read of the
-        // pack half answers {Alignment 1} where the live context says {Alignment 4}. On the
-        // monolith arm the same neutral window is opened on the frontend context itself
-        // (GL_Texture.cpp's ScopedNeutralPackState), which is why the monolith lane never saw it.
-        //
-        // SO THE ORACLE, NOT THE RULE, IS WHAT CHANGES, AND ONLY IN THAT WINDOW: under a server
-        // stamp, on the ReadPixels verb, the pack half's expected value is the neutral pack the
-        // applier reads with, and the UNPACK half and every other field keep the live context as
-        // their oracle. A server read of the pack half that is neither the application's value
-        // nor exactly the neutral one is still a divergence and still Fatal.
-        //
-        // WHAT THIS GIVES UP IS ONE VALUE, NOT THE FIELD (corrected in P7 wave 3's V1 fix round;
-        // the first statement of it here said the comparator could no longer see a client that
-        // pushed a WRONG pack state at all, which is too broad). PipeApplier.cpp's read_pixels
-        // reads `savedPack` THROUGH THE ACCESSOR - and therefore through this hook - BEFORE it
-        // installs the neutral value, so the pushed pack has already been compared against the
-        // live one by then: a correct push is equal and returns, and a wrong push that is not
-        // exactly the neutral pack fails both compares and is still Fatal. The blind spot is the
-        // single value {SwapBytes 0, LSBFirst 0, RowLength 0, ImageHeight 0, Skip* 0, Alignment 1},
-        // and only while the application's own pack differs from it. The client-side scatter that
-        // consumes the real pack is covered by the readback matrix cases, which compare bytes,
-        // not fields.
-        Bool ServerReadsInsideTheNeutralPackWindow(const PipeInputs& self, MGPipeInputField field) {
-            return field == MGPipeInputField::GetPixelStoreParameters && self.ServerStampedVerb() &&
-                   self.CurrentVerb() == MGPipeVerb::ReadPixels;
-        }
-
-        // The constant itself is MG_Pipe's (MGPipeTypes.h's MGPipeNeutralReadPixelsPack), which is
-        // the same function MG_Remote/Server/PipeApplier.cpp's read_pixels installs. It used to be
-        // re-typed here, field for field, to avoid reaching into MG_Remote/Server from MG_Impl -
-        // but the owner of MGPPixelPackState is MG_Pipe, both sites already include it, and a
-        // drift between the two spellings would have cost a false divergence rather than a build
-        // break.
-#endif // MOBILEGL_BUILD_DISAGGREGATED
 #endif // MOBILEGL_PIPE_VERIFY
     } // namespace
 
@@ -726,9 +681,28 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeVerifyReadHook(const PipeInputs& self, MGPipeInputField field, Uint index0, Uint index1) {
-        if (&self != &gPipeInputs || !g_verify.Enabled || g_verify.InHook) return;
+        if (&self != &gPipeInputs || !g_verify.Enabled) return;
         const auto index = static_cast<SizeT>(field);
         if (kMGPipeInputFieldSticky[index]) return;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        if (self.ServerStampedVerb() && field == MGPipeInputField::GetPixelStoreParameters) {
+            // Compare the backend's pack field against the last payload applied to this
+            // context, including the neutral-pack override during readback. Never obtain
+            // the reference by reading the field being checked, or consult the client's
+            // GLContext from the server thread. Unpack has no server-side reader.
+            static thread_local PipeInputs reference;
+            MGPipeFillAccess::CopyServerPackReference(reference, self, MGPipeApplier().VerifyPixelPack);
+            if (g_verify.Corrupt && *g_verify.Corrupt == field) {
+                MGPipeApplyVerifyCorruption(reference, field);
+            }
+            if (!MGPipeInputsFieldEqual(field, self, reference)) {
+                MGLOG_E("MGPipe: verify read of pixel pack differs from the applied pack payload");
+                ReportDivergence(field, "read");
+            }
+            return;
+        }
+#endif
+        if (g_verify.InHook) return;
         auto* ctx = LiveContext();
         if (ctx == nullptr) return;
         // The whole field is re-read and compared - a superset of "the same indices", so a
@@ -743,68 +717,13 @@ namespace MobileGL::MG_Pipe {
         // never recurses (and never reports the inner read against a half-copied scratch).
         g_verify.InHook = true;
         MGPipeFillAccess::CopyField(g_readScratch, *ctx, field);
-        // P7 wave 3 (V1): NEGATIVE CONTROL A REACHES THIS ARM TOO. Until this line the knob only
-        // ever perturbed EntryCompare's snapshot, so every red it could produce said `where=entry`
-        // and was produced on the CLIENT thread - which left the compare-at-read hook, the arm
-        // that runs on the server's apply thread and does the whole of the split lane's per-read
-        // work, with no falsifier at all: a hook that had stopped comparing would have looked
-        // exactly like a hook with nothing to report. The perturbation goes on the ORACLE, for
-        // EntryCompare's reason: the arm under test is the stored value, so corrupting THAT would
-        // be testing the corruption.
-        //
-        // WHICH READ THIS BLOCK TURNS RED (V1 fix round 2). The server reads the pack field TWICE
-        // inside the ReadPixels verb window, and both reads sit inside
-        // ServerReadsInsideTheNeutralPackWindow below (the verb stamp is up for the whole apply):
-        // PipeApplier::read_pixels saves the application's pack through the accessor BEFORE it
-        // installs the neutral one, and the backend's ReadPixels reads the field AFTER. This block
-        // is what turns the FIRST of them red: at that read `self` still holds the application's
-        // pack, so the first compare only reaches the window if this perturbation made it differ,
-        // and inside the window the application's pack against the neutral oracle differs on its
-        // own. It does nothing for the second read - `self` IS the neutral pack there - which is
-        // what the re-application inside the window is for.
+        // Corrupt the reference, not the backend field, to test the comparison itself.
         if (g_verify.Corrupt && *g_verify.Corrupt == field) {
             MGPipeApplyVerifyCorruption(g_readScratch, field);
         }
         const Bool equal = MGPipeInputsFieldEqual(field, self, g_readScratch);
         g_verify.InHook = false;
         if (equal) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
-        if (ServerReadsInsideTheNeutralPackWindow(self, field)) {
-            // The live context is the application's pack state and the server is, by ID-49,
-            // reading with the neutral one; the oracle for THAT HALF is the neutral pack, and
-            // every other byte of the field still has to match the live context.
-            g_verify.InHook = true;
-            PipeInputs::VisitStorage(field, g_readScratch, g_readScratch, [](auto& live, auto&) {
-                if constexpr (std::is_same_v<std::remove_reference_t<decltype(live)>, PixelStoreParameters[2]>) {
-                    live[0] = MGPipeNeutralReadPixelsPack().Pack;
-                }
-                return true;
-            });
-            // AND THE CONTROL IS RE-APPLIED, because the overwrite above replaces the pack half
-            // WHOLESALE - the corruption included, since CorruptStorage perturbs an array's FIRST
-            // ELEMENT and the pack half is element 0. This is the block for the POST-INSTALL read
-            // (the backend's ReadPixels, after PipeApplier::read_pixels installed the neutral pack
-            // into gPipeInputs): there `self` is the neutral pack, the overwrite just made the
-            // oracle equal to it, and only a perturbation applied AFTER the overwrite can make
-            // that compare differ - the block above cannot reach it. Without this line the one
-            // window in which this arm is most load-bearing (the server's read_pixels, 8530 reads
-            // over 220 of the lane's entries) would be the one window MOBILEGL_PIPE_VERIFY_CORRUPT=
-            // GetPixelStoreParameters cannot turn red - and a control that accepted ONE report
-            // would never notice, because the saved-pack read still reports through the block
-            // above. The VerifySplitReadCorrupted. entries and the CI step therefore require at
-            // least TWO `where=read` reports in the server half (V1 fix round 2). Measured: 3 on
-            // DirectGLES (its backend reads the field twice after the install) / 2 on
-            // DirectVulkan; without this block both drop to 1, without the block above
-            // DirectVulkan drops to 1 while DirectGLES's two post-install reports keep it at 2 -
-            // so this block is falsified on both backends and the one above on DirectVulkan.
-            if (g_verify.Corrupt && *g_verify.Corrupt == field) {
-                MGPipeApplyVerifyCorruption(g_readScratch, field);
-            }
-            const Bool equalToTheNeutralPack = MGPipeInputsFieldEqual(field, self, g_readScratch);
-            g_verify.InHook = false;
-            if (equalToTheNeutralPack) return;
-        }
-#endif
         MGLOG_E("MGPipe: verify read of %s (index %u, %u) differs from the live context", kMGPipeInputFieldNames[index],
                 index0, index1);
         ReportDivergence(field, "read");

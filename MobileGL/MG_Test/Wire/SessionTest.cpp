@@ -470,6 +470,23 @@ TEST(SessionTest, AppliedSeqAdvancesExactlyOncePerRecordAndIsNeverBatched) {
     EXPECT_EQ(applied, kRecords);
 }
 
+TEST(SessionTest, TerminalApplyRejectionDoesNotAcknowledgeTheRecord) {
+    SessionFixture session;
+    ASSERT_TRUE(session.Build(TestSizes()));
+    ASSERT_NE(session.cmdProducer.Reserve(1, kRecNone, 8), nullptr);
+    ASSERT_NE(session.cmdProducer.Reserve(1, kRecNone, 8), nullptr);
+    session.producer.PublishAndNotify(2);
+    ASSERT_TRUE(session.consumer.ApplyOne([](const RingRecordView&) { return true; }));
+    bool checked = false;
+    EXPECT_FALSE(session.consumer.ApplyOne([&](const RingRecordView&) {
+        checked = true;
+        return false;
+    }));
+    EXPECT_TRUE(checked);
+    EXPECT_EQ(session.consumer.AppliedSeq(), 1u);
+    EXPECT_EQ(session.Control().Progress.appliedSeq.load(), 1u);
+}
+
 // retiredSeq: advanced once the SEG_STAGE bytes a record referenced are finished with, and the
 // staging allocator reclaims behind it. Late is merely slow; EARLY hands live bytes back to the
 // producer, so the advance clamps to appliedSeq rather than believing its caller.

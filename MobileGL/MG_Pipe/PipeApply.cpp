@@ -2097,6 +2097,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplySetPixelPackState(const MGPPixelPackState& pack) {
+#if MOBILEGL_PIPE_VERIFY
+        MGPipeApplier().VerifyPixelPack = pack.Pack;
+#endif
         MGPipeApplyAccess::PackState(gPipeInputs) = pack.Pack;
     }
 

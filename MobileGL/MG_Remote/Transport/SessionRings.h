@@ -73,6 +73,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 namespace MobileGL::MG_Remote::Transport {
 
@@ -462,7 +463,14 @@ namespace MobileGL::MG_Remote::Transport {
             if (!m_cmd->Pop(view, outCorrupt)) {
                 return false;
             }
-            apply(view);
+            // A terminal rejection after Pop must not acknowledge an unapplied record.
+            // A bool callback returning false ends this consumer's session; it cannot retry
+            // the popped record. Existing void callbacks retain their original semantics.
+            if constexpr (std::is_same_v<std::invoke_result_t<Apply, const RingRecordView&>, bool>) {
+                if (!apply(view)) return false;
+            } else {
+                apply(view);
+            }
             ++m_appliedSeq;
             Watermark::AdvanceApplied(*m_control, m_appliedSeq);
             m_cmd->PublishApplied();

@@ -1095,6 +1095,10 @@ namespace MobileGL::MG_Remote::Server {
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
                 [this, &applier, timed](const Transport::RingRecordView& record) {
+                    // Check after acquiring each record: a producer may publish more work
+                    // while this drain is running, after the outer-loop reset check.
+                    if (m_backend != nullptr && m_backend->LatchIfGpuFaulted()) return false;
+                    if (SessionLatched()) return false;
                     // P65ServerFrame: timed around the ONE call that is the server's work, and
                     // summed across the drains a frame spans. See the block above DrainRing's loop.
                     // Only when the line is on: two clock reads per record were a measurable part
@@ -1162,6 +1166,7 @@ namespace MobileGL::MG_Remote::Server {
                     // DrainedRecords() one behind appliedSeq on 1 run in ~40 under `-j 8`.
                     // Per-record, before the publish, it can never be behind.
                     m_drained.fetch_add(1, std::memory_order_acq_rel);
+                    return true;
                 },
                 &corrupt);
             if (corrupt) {

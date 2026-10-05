@@ -602,6 +602,11 @@ namespace MobileGL::MG_Pipe {
     // The per-context half. Everything here is cleared by MGPipeApplierReset, EXCEPT the serials,
     // which only ever advance (see there).
     struct MGPipeWorkingState {
+#if MOBILEGL_PIPE_VERIFY
+        // Reference from the pack-state payload, separate from the backend-visible storage.
+        // The server has no frontend GLContext to use as a read-time oracle.
+        PixelStoreParameters VerifyPixelPack{};
+#endif
         // Indexed by slot; slot 0 is the reserved null handle and is never live
         // (MGPipeHandles.h kMGPipeFirstAllocatableSlot).
         Vector<MGPipeRenderStateCsoRecord> RenderStateCsos;
