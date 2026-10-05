@@ -2492,38 +2492,47 @@ namespace MobileGL::MG_Remote::Client {
         // LastPublishedSeq by construction and a second wait would only add a park on a
         // watermark that is already reached.
         if (!m_runAheadArmed || !m_started) return;
-        const Uint64 target = m_producer.LastPublishedSeq();
-        if (target == 0) return;
+        if (m_producer.LastPublishedSeq() == 0) return;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kBarrierTimeoutMs);
         const BarrierWaitScope waiting;
-        const Transport::SessionWait wait =
-            WaitForAppliedBudget(m_producer, *m_events, target, kBarrierTimeoutMs);
-        if (wait == Transport::SessionWait::ShutDown) {
-            // `dl`: the same two-events distinction the verb barrier makes. Only a peer that
-            // HUNG UP is a device loss; Stop() reaches this path too.
-            if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
-                bell != nullptr && bell->PeerHungUp()) {
-                LatchDeviceLost("a forced run-ahead wait woke on a peer that had hung up");
+        for (;;) {
+            const Uint64 target = m_producer.LastPublishedSeq();
+            const auto now = std::chrono::steady_clock::now();
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+            const Transport::SessionWait wait = now >= deadline
+                ? Transport::SessionWait::TimedOut
+                : m_producer.WaitForAppliedOrEventBacklog(
+                      target, static_cast<Uint32>(std::max<Int64>(remaining, 1)));
+            if (wait == Transport::SessionWait::ShutDown) {
+                // Only a peer that hung up is a device loss; Stop() reaches this path too.
+                if (const Transport::Doorbell* bell = m_producer.SelfDoorbell();
+                    bell != nullptr && bell->PeerHungUp()) {
+                    LatchDeviceLost("a forced run-ahead wait woke on a peer that had hung up");
+                }
+                if (!DeviceLost())
+                    MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "
+                            "server is gone", why);
+                return;
             }
-            // The doorbell died: teardown, not a fault - the same answer EmitAndWaitTails
-            // gives, and for the same reason.
-            if (!DeviceLost()) // see the barrier above: the latch already said it
-                MGLOG_E("MG_Remote client: the forced wait for %s woke on a dead doorbell; the "
-                        "server is gone", why);
-            return;
+            if (wait != Transport::SessionWait::Reached) {
+                SessionFail(MGFatalFamily::BarrierTimeout, "MGPipe: Fatal{BarrierTimeout, \"%s\"} - a forced run-ahead wait did not "
+                        "reach appliedSeq %llu within %u ms. The forced waits of CONTRACT-P5E §2.5 "
+                        "are the points at which the client must be in step again, so a wedge here "
+                        "is a wedge in the queue and not a slow frame",
+                        why, static_cast<unsigned long long>(target), kBarrierTimeoutMs);
+            }
+            // Drain even when only the event backlog woke us: the server may need that
+            // space before it can advance appliedSeq. SurfaceChanged callbacks and pin
+            // destruction can themselves publish records, so the original target alone
+            // no longer proves the applier is idle after these operations.
+            DrainEventRing(*m_events);
+            ReleaseFillPins();
+            const auto* progress = m_producer.Progress();
+            if (m_producer.LastPublishedSeq() == target && progress != nullptr &&
+                Transport::Watermark::Reached(progress->appliedSeq, target)) {
+                return;
+            }
         }
-        if (wait != Transport::SessionWait::Reached) {
-            SessionFail(MGFatalFamily::BarrierTimeout, "MGPipe: Fatal{BarrierTimeout, \"%s\"} - a forced run-ahead wait did not "
-                    "reach appliedSeq %llu within %u ms. The forced waits of CONTRACT-P5E §2.5 "
-                    "are the points at which the client must be in step again, so a wedge here "
-                    "is a wedge in the queue and not a slow frame",
-                    why, static_cast<unsigned long long>(target), kBarrierTimeoutMs);
-        }
-        // EVERY WAIT EXIT DRAINS (§2.6). It is what the flow-control deadlock argument rests
-        // on: the server blocks only on a full event ring, the client blocks only on
-        // watermarks the server advances, and every client wait drains - so at most one side
-        // is parked at any instant.
-        DrainEventRing(*m_events);
-        ReleaseFillPins();
 #else
         (void)why;
 #endif
