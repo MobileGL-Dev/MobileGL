@@ -123,10 +123,12 @@ TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepIntegerAtomicImagesType
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 layout(rgba16, binding = 0) uniform image2D floatImage;
 layout(r32ui, binding = 1) uniform uimage2D atomicImage;
+layout(rgba32f, binding = 2) uniform image2D otherFloatImages[2];
 
 void main() {
     ivec2 coordinate = ivec2(gl_GlobalInvocationID.xy);
     imageStore(floatImage, coordinate, imageLoad(floatImage, coordinate));
+    imageStore(otherFloatImages[1], coordinate, imageLoad(otherFloatImages[0], coordinate));
     imageAtomicAdd(atomicImage, coordinate, 1u);
 }
 )";
@@ -174,11 +176,58 @@ void main() {
         << outputText;
     EXPECT_EQ(countOccurrences(outputText, "OpCapability StorageImageWriteWithoutFormat"), 1u)
         << outputText;
+    EXPECT_EQ(countOccurrences(outputText, "2D 0 0 0 2 Unknown"), 1u) << outputText;
+    EXPECT_NE(outputText.find("Binding 0"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("Binding 1"), String::npos) << outputText;
+    EXPECT_NE(outputText.find("Binding 2"), String::npos) << outputText;
     EXPECT_TRUE(tools.Validate(outputBinary));
 
     Vector<Uint32> secondOutputBinary;
     ASSERT_TRUE(ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(outputBinary, secondOutputBinary));
     EXPECT_EQ(secondOutputBinary, outputBinary);
+}
+
+TEST_F(ProgramUtilTest, LowerRectImagesMergesWithExisting2DImageTypes) {
+    using namespace MG_Util::ShaderTranspiler;
+    const String spirvText = R"(
+               OpCapability Shader
+               OpCapability ImageRect
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %rect DescriptorSet 0
+               OpDecorate %rect Binding 0
+               OpDecorate %flat DescriptorSet 0
+               OpDecorate %flat Binding 1
+       %void = OpTypeVoid
+       %uint = OpTypeInt 32 0
+   %rectType = OpTypeImage %uint Rect 0 0 0 2 R32ui
+   %flatType = OpTypeImage %uint 2D 0 0 0 2 R32ui
+    %rectPtr = OpTypePointer UniformConstant %rectType
+    %flatPtr = OpTypePointer UniformConstant %flatType
+       %rect = OpVariable %rectPtr UniformConstant
+       %flat = OpVariable %flatPtr UniformConstant
+   %mainType = OpTypeFunction %void
+       %main = OpFunction %void None %mainType
+      %entry = OpLabel
+          %r = OpLoad %rectType %rect
+          %f = OpLoad %flatType %flat
+               OpReturn
+               OpFunctionEnd
+)";
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    Vector<Uint32> inputBinary;
+    ASSERT_TRUE(tools.Assemble(spirvText, &inputBinary));
+    Vector<Uint32> outputBinary;
+    ASSERT_TRUE(ShaderCompiler::LowerRectImages(inputBinary, outputBinary));
+    EXPECT_TRUE(tools.Validate(outputBinary));
+    String outputText;
+    ASSERT_TRUE(tools.Disassemble(outputBinary, &outputText));
+    EXPECT_NE(outputText.find("Binding 0"), String::npos);
+    EXPECT_NE(outputText.find("Binding 1"), String::npos);
+    const auto firstImage = outputText.find("OpTypeImage");
+    ASSERT_NE(firstImage, String::npos);
+    EXPECT_EQ(outputText.find("OpTypeImage", firstImage + 1), String::npos);
 }
 
 TEST_F(ProgramUtilTest, UnformattedFloatStorageImagesKeepFloatAtomicImageTypesTyped) {

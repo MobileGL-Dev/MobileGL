@@ -1813,6 +1813,8 @@ namespace MobileGL {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
+                // Rect and 2D images of the same format become the same type after lowering.
+                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
                 return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
@@ -2103,11 +2105,14 @@ namespace MobileGL {
                 }
                 outputBinary.insert(outputBinary.begin() + static_cast<std::ptrdiff_t>(capabilityInsertOffset),
                                     addedCapabilities.begin(), addedCapabilities.end());
-                // Hand-rolled word walk, so no Optimizer wrapper ever sees this rewrite;
-                // check the modified module explicitly in validating lanes.
-                ValidateOrLatch("UseUnformattedFloatStorageImagesForVulkan", outputBinary,
-                                enableSpirvValidation);
-                return true;
+                // Erasing the format can make distinct image types identical. Use the same
+                // cleanup as the image-widening/lowering paths to merge their dependent types
+                // and update every use before validating the rewritten module.
+                spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(spvtools::CreateRemoveDuplicatesPass());
+                Vector<Uint32> rewrittenBinary = std::move(outputBinary);
+                return RunOptimizerChecked("UseUnformattedFloatStorageImagesForVulkan", optimizer,
+                                           rewrittenBinary, outputBinary, true, enableSpirvValidation);
             }
 
             namespace {
