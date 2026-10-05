@@ -56,6 +56,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
     static SessionLocal<SampledReadStages> s_sampledReadStagesSlot;
 
+    static VkImageUsageFlags ResolveTextureUsage(VkImageAspectFlags aspect,
+                                                 VkFormatFeatureFlags formatFeatures,
+                                                 Bool supportsStorageImage) {
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (supportsStorageImage) usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+        // A color aspect does not imply renderability (for example, RGB9_E5).
+        if ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) &&
+            (formatFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+            usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        }
+        if (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+            usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        }
+        return usage;
+    }
+
     static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
         Int maxDimension = std::max<Int>(baseTexelSize.x(),
                                          std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
@@ -2256,13 +2272,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         VkImageUsageFlags desiredUsage =
-            VK_IMAGE_USAGE_SAMPLED_BIT | (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) &&
-             (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
-                 ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
-            (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT))
-                 ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                 : 0);
+            ResolveTextureUsage(aspect, formatProperties.optimalTilingFeatures, supportsStorageImage);
         // Multisample attachments are also transfer sources for vkCmdResolveImage.
         desiredUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
@@ -3513,12 +3523,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         VkImageUsageFlags desiredUsage =
-            VK_IMAGE_USAGE_SAMPLED_BIT |
-            (supportsStorageImage ? VK_IMAGE_USAGE_STORAGE_BIT : 0) |
-            ((aspect & VK_IMAGE_ASPECT_COLOR_BIT) ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0) |
-            (((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) ?
-                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT :
-                 0);
+            ResolveTextureUsage(aspect, formatProperties.optimalTilingFeatures, supportsStorageImage);
         if (!isMultisampleTexture) {
             desiredUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         }

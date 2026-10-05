@@ -10678,15 +10678,6 @@ void main() {
             return;
         }
 
-        auto& frame = m_frameContext.GetCurrent();
-        if (!frame.isCommandRecording) {
-            m_frameContext.BeginCommandRecording();
-        }
-
-        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
-            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
-        }
-
         // One resolver for both object kinds. The texture arm is the same
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
@@ -10937,6 +10928,16 @@ void main() {
             }
         }
 #endif
+
+        // Syncing either endpoint can flush and retire the current command buffer for
+        // a texture upload. Prepare recording only after both images and uploads are ready.
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) {
+            m_frameContext.BeginCommandRecording();
+        }
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
