@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <memory>
+#include <unordered_map>
 #include <thread>
 
 namespace {
@@ -56,6 +58,7 @@ EglFns gEgl;
 EGLDisplay gDisplay = EGL_NO_DISPLAY;
 void *gMobileGl = nullptr;
 const glws::Drawable *gCurrentDrawable = nullptr;
+const glws::Drawable *gCurrentReadable = nullptr;
 EGLContext gCurrentContext = EGL_NO_CONTEXT;
 ANativeWindow *gNativeWindow = nullptr;
 int gRequestedWidth = 0;
@@ -158,6 +161,16 @@ public:
     explicit AndroidVisual(glws::Profile prof) : Visual(prof) {}
 };
 
+// Desktop traces can keep a probe drawable alive while creating the real window.
+// Both map to the Activity's single ANativeWindow, which accepts only one producer.
+struct AndroidWindowSurface {
+    EGLDisplay display;
+    EGLConfig config;
+    EGLSurface surface;
+    ~AndroidWindowSurface() { gEgl.destroySurface(display, surface); }
+};
+std::unordered_map<ANativeWindow *, std::weak_ptr<AndroidWindowSurface>> gWindowSurfaces;
+
 class AndroidDrawable final : public glws::Drawable {
 public:
     EGLSurface surface = EGL_NO_SURFACE;
@@ -177,12 +190,36 @@ public:
         if (w == width && h == height) {
             return;
         }
+        const auto *draw = static_cast<const AndroidDrawable *>(gCurrentDrawable);
+        const auto *read = static_cast<const AndroidDrawable *>(gCurrentReadable);
+        const EGLContext context = gCurrentContext;
+        const bool wasCurrent = context != EGL_NO_CONTEXT && (draw == this || read == this);
+        if (wasCurrent) {
+            // Destroying a current EGL surface only defers its destruction. Release it
+            // first so its Vulkan surface disconnects from the window before recreation.
+            if (gEgl.makeCurrent(gDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) != EGL_TRUE) {
+                std::cerr << "error: eglMakeCurrent release before resize failed: 0x"
+                          << std::hex << gEgl.getError() << std::dec << "\n";
+                return;
+            }
+            gCurrentDrawable = nullptr;
+            gCurrentReadable = nullptr;
+            gCurrentContext = EGL_NO_CONTEXT;
+        }
         destroySurface();
         width = w;
         height = h;
         createSurface();
-        if (gCurrentDrawable == this && gCurrentContext != EGL_NO_CONTEXT) {
-            gEgl.makeCurrent(gDisplay, surface, surface, gCurrentContext);
+        if (wasCurrent && surface != EGL_NO_SURFACE) {
+            if (gEgl.makeCurrent(gDisplay, draw ? draw->surface : EGL_NO_SURFACE,
+                                 read ? read->surface : EGL_NO_SURFACE, context) == EGL_TRUE) {
+                gCurrentDrawable = draw;
+                gCurrentReadable = read;
+                gCurrentContext = context;
+            } else {
+                std::cerr << "error: eglMakeCurrent restore after resize failed: 0x"
+                          << std::hex << gEgl.getError() << std::dec << "\n";
+            }
         }
     }
 
@@ -203,17 +240,31 @@ public:
     }
 
 private:
+    std::shared_ptr<AndroidWindowSurface> windowSurface;
+
     void createSurface() {
         const int surfaceWidth = ResolveWidth(width);
         const int surfaceHeight = ResolveHeight(height);
         if (!pbuffer && gNativeWindow != nullptr) {
+            const auto config = static_cast<const AndroidVisual *>(visual)->config;
+            windowSurface = gWindowSurfaces[gNativeWindow].lock();
+            if (windowSurface && windowSurface->config != config) {
+                windowSurface.reset();
+                std::cerr << "error: replay window already has a surface with a different EGL config\n";
+                return;
+            }
             EGLint nativeVisualId = static_cast<const AndroidVisual *>(visual)->nativeVisualId;
             ANativeWindow_setBuffersGeometry(gNativeWindow, surfaceWidth, surfaceHeight, nativeVisualId);
-            surface = gEgl.createWindowSurface(
-                    gDisplay,
-                    static_cast<const AndroidVisual *>(visual)->config,
-                    gNativeWindow,
-                    nullptr);
+            if (windowSurface) {
+                surface = windowSurface->surface;
+            } else {
+                surface = gEgl.createWindowSurface(gDisplay, config, gNativeWindow, nullptr);
+                if (surface != EGL_NO_SURFACE) {
+                    windowSurface = std::shared_ptr<AndroidWindowSurface>(
+                        new AndroidWindowSurface{gDisplay, config, surface});
+                    gWindowSurfaces[gNativeWindow] = windowSurface;
+                }
+            }
         } else if (!pbuffer && WantsServerOwnedWindow()) {
             // HEADLESS COMMAND-LINE REPLAY (P12 D9, same shape as the desktop glws_egl path):
             // the window is the MobileGL SERVER's (MOBILEGL_IPC_SURFACE=server,
@@ -249,7 +300,11 @@ private:
 
     void destroySurface() {
         if (surface != EGL_NO_SURFACE) {
-            gEgl.destroySurface(gDisplay, surface);
+            if (windowSurface) {
+                windowSurface.reset();
+            } else {
+                gEgl.destroySurface(gDisplay, surface);
+            }
             surface = EGL_NO_SURFACE;
         }
     }
@@ -395,8 +450,11 @@ bool makeCurrentInternal(Drawable *drawable, Drawable *readable, Context *contex
     EGLSurface readSurface = readable == nullptr ? drawSurface : AsAndroidDrawable(readable)->surface;
     EGLContext eglContext = context == nullptr ? EGL_NO_CONTEXT : AsAndroidContext(context)->context;
     if (drawSurface == EGL_NO_SURFACE && readSurface == EGL_NO_SURFACE && eglContext == EGL_NO_CONTEXT) {
-        gEgl.makeCurrent(gDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (gEgl.makeCurrent(gDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) != EGL_TRUE) {
+            return false;
+        }
         gCurrentDrawable = nullptr;
+        gCurrentReadable = nullptr;
         gCurrentContext = EGL_NO_CONTEXT;
         return true;
     }
@@ -404,6 +462,7 @@ bool makeCurrentInternal(Drawable *drawable, Drawable *readable, Context *contex
         return false;
     }
     gCurrentDrawable = drawable;
+    gCurrentReadable = readable == nullptr ? drawable : readable;
     gCurrentContext = eglContext;
     mobilegl_trace_dump::InstallIfRequested();
     return true;
