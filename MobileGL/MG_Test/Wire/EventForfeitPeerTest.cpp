@@ -141,7 +141,7 @@ namespace {
     // F2 (P9 W3). The flood: kFloodRecords records published while the peer reads nothing, each of
     // which makes the server's apply thread log kFloodWarnLinesPerRecord WARN lines of ~650 bytes and
     // one ERROR line (ServerLoop.cpp, MOBILEGL_TEST_APPLY_LOG_FLOOD) - about 16 MiB, against a
-    // server send buffer this host caps at 4 MiB and a forward queue of 1 MiB for <= WARN.
+    // deliberately small server send buffer and a forward queue of 1 MiB for <= WARN.
     constexpr std::uint32_t kFloodWarnLinesPerRecord = 64;
     constexpr std::uint32_t kFloodRecords = 400;
     // THE PEER'S RECEIVE BUFFER WHILE IT IS NOT READING. Without this the kernel absorbs the flood
@@ -225,7 +225,10 @@ namespace {
         env.emplace_back("MOBILEGL_IPC_ROLE=server");
         env.emplace_back("MOBILEGL_IPC_DIAL=no");
         env.emplace_back(forwardLog ? "MOBILEGL_IPC_LOG_FORWARD=1" : "MOBILEGL_IPC_LOG_FORWARD=0");
-        if (floodLines != 0) env.emplace_back("MOBILEGL_TEST_APPLY_LOG_FLOOD=" + std::to_string(floodLines));
+        if (floodLines != 0) {
+            env.emplace_back("MOBILEGL_TEST_APPLY_LOG_FLOOD=" + std::to_string(floodLines));
+            env.emplace_back("MOBILEGL_TEST_LOG_SMALL_SNDBUF=1");
+        }
         env.emplace_back(WaitKnobEntry(waitMs));
         env.emplace_back("MOBILEGL_LOG_FILE_PATH=" + logBase);
         const std::string image = ServerImage();
@@ -358,6 +361,7 @@ namespace {
         // F2 (P9 W3).
         kNoControlReader = 22,
         kFloodPublish = 23,
+        kControlBuffer = 24,
     };
 
     // A pbuffer context on the server's apply thread, through the same forwarders
@@ -381,11 +385,19 @@ namespace {
     // kFloodRecords set_patch_state records are published without waiting. set_patch_state because it
     // is pure applier state: no GL call, no reply, no event, so the only thing each one produces on
     // the server is the flood's log lines.
-    int StopReadingControlAndFlood(Client::ClientSession& client) {
+    int StopReadingControlAndFlood(Client::ClientSession& client, int& originalReceiveBuffer) {
         auto* control = client.ControlSocketForTest();
         if (control == nullptr) return kNoControlReader;
+        socklen_t size = sizeof(originalReceiveBuffer);
+        if (::getsockopt(control->StreamFd(), SOL_SOCKET, SO_RCVBUF, &originalReceiveBuffer, &size) != 0)
+            return kControlBuffer;
+#if defined(__linux__)
+        // Linux reports twice the SO_RCVBUF request, including bookkeeping space.
+        originalReceiveBuffer /= 2;
+#endif
         const int receiveBuffer = kStalledReceiveBufferBytes;
-        (void)::setsockopt(control->StreamFd(), SOL_SOCKET, SO_RCVBUF, &receiveBuffer, sizeof(receiveBuffer));
+        if (::setsockopt(control->StreamFd(), SOL_SOCKET, SO_RCVBUF, &receiveBuffer, sizeof(receiveBuffer)) != 0)
+            return kControlBuffer;
         if (!client.PauseControlReaderForTest(true)) return kNoControlReader;
         for (std::uint32_t i = 0; i < kFloodRecords; ++i) {
             MGP::MGPPatchState patch{};
@@ -900,13 +912,16 @@ namespace {
         ConfigureClient(control);
         auto& client = Client::ClientSessionInstance();
         if (client.StartSpawned() != MOBILEGL_OK) ::_exit(kNoWelcome);
+        int originalReceiveBuffer = 0;
         if (alsoStopDraining) {
-            const int filled = FillTheEventRingWithoutDraining(client, [&client] { return StopReadingControlAndFlood(client); });
+            const int filled = FillTheEventRingWithoutDraining(client, [&] {
+                return StopReadingControlAndFlood(client, originalReceiveBuffer);
+            });
             if (filled != kChildOk) ::_exit(filled);
         } else {
             const int up = BringUpPbufferContext();
             if (up != kChildOk) ::_exit(up);
-            const int flooded = StopReadingControlAndFlood(client);
+            const int flooded = StopReadingControlAndFlood(client, originalReceiveBuffer);
             if (flooded != kChildOk) ::_exit(flooded);
         }
         const char one = 1;
@@ -914,7 +929,11 @@ namespace {
         char go = 0;
         (void)::read(release, &go, 1);
         if (alsoStopDraining) ::_exit(kChildOk);
-        client.PauseControlReaderForTest(false);
+        // End the receive-window fault before waiting for the ack behind the queued logs.
+        if (::setsockopt(client.ControlSocketForTest()->StreamFd(), SOL_SOCKET, SO_RCVBUF,
+                         &originalReceiveBuffer, sizeof(originalReceiveBuffer)) != 0)
+            ::_exit(kControlBuffer);
+        if (!client.PauseControlReaderForTest(false)) ::_exit(kNoControlReader);
         client.SyncPeerLog();
         (void)::write(synced, &one, 1);
         (void)::read(release, &go, 1);

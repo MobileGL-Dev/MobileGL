@@ -663,6 +663,16 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
 
     const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
     if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0)) {
+        // F2 fault injection: bound the kernel queue as well as the log queue so a
+        // non-reading peer reliably blocks the sender, regardless of host autotuning.
+        if (const char* stalled = std::getenv("MOBILEGL_TEST_LOG_SMALL_SNDBUF");
+            stalled && std::strcmp(stalled, "1") == 0) {
+            const int bytes = 16 * 1024;
+            if (::setsockopt(control->StreamFd(), SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes)) != 0) {
+                WireLogError("MG_Remote server: could not set F2 control send buffer");
+                return endSession(70);
+            }
+        }
         // P9 W3: the forward is a queue with a sender thread of its own, graded by severity
         // (LogForward.h): a client that stops reading control no longer holds any logging thread -
         // the apply thread above all - inside a socket write.
