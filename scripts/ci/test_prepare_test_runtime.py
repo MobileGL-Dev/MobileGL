@@ -15,11 +15,10 @@ spec.loader.exec_module(runtime)
 
 
 class MetadataTest(unittest.TestCase):
-    def test_environment_and_labels_are_lists(self):
+    def test_legacy_environment_and_labels_escaping_is_preserved(self):
         text = r'[[ENVIRONMENT]] [[MOBILEGL_BACKEND_TYPE=DirectVulkan\;MOBILEGL_TRANSPORT=inproc]] [[LABELS]] [[gpu\;split]]'
         fixed = runtime.normalize(text, '', '/new', '/cmake')
-        self.assertNotIn(r'\;', fixed)
-        self.assertIn('DirectVulkan;MOBILEGL_TRANSPORT=inproc', fixed)
+        self.assertEqual(fixed, text)
 
     def test_other_escaped_values_are_preserved(self):
         text = r'COMMAND "argument\;with-semicolon"'
@@ -41,6 +40,11 @@ class MetadataTest(unittest.TestCase):
         self.assertNotIn('VERSION_OVERRIDE', fixed)
         self.assertIn('LIBGL_ALWAYS_SOFTWARE=1', runtime.normalize(text, '', '/new', '/cmake'))
 
+    def test_hardware_driver_change_preserves_legacy_separators(self):
+        text = r'ENVIRONMENT "A=x\;VK_ICD_FILENAMES=/lvp.json\;LIBGL_ALWAYS_SOFTWARE=1\;B=y"'
+        fixed = runtime.normalize(text, '', '/new', '/cmake', True, '/dzn.json')
+        self.assertEqual(fixed, r'ENVIRONMENT "A=x\;VK_ICD_FILENAMES=/dzn.json\;B=y"')
+
     def test_preparation_is_idempotent_and_drops_discovery_cache(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -55,6 +59,8 @@ class MetadataTest(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'posix' and shutil.which('cmake'), 'requires POSIX CMake')
     def test_real_ctest_discovery_separates_environment(self):
+        version = subprocess.check_output(['cmake', '--version'], text=True).splitlines()[0]
+        self.assertIn('3.31.10', version, 'CI must use its pinned legacy GoogleTest discovery version')
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             probe = root / 'probe.py'

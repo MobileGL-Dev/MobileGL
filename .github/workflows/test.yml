@@ -127,8 +127,7 @@ jobs:
         run: python3 scripts/ci/select_test_runner.py
 
   build-linux:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
@@ -142,8 +141,10 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -154,8 +155,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
@@ -175,7 +177,7 @@ jobs:
 
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -290,8 +292,7 @@ jobs:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
     name: build explicit pull runtime control
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     env:
       BUILD_DIR: build-monolith-control
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -299,8 +300,10 @@ jobs:
       CCACHE_COMPRESS: "true"
       CCACHE_NOHASHDIR: "true"
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -310,8 +313,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
       - name: Restore pull compiler cache
         uses: actions/cache/restore@v5
         with:
@@ -326,7 +330,7 @@ jobs:
           vulkan-use-cache: true
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
       - name: Install build dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
@@ -363,14 +367,10 @@ jobs:
           if-no-files-found: error
 
   test:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     needs: [build-linux]
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -378,8 +378,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -445,8 +446,9 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -556,8 +558,7 @@ jobs:
   # MOBILEGL_PIPE_VERIFY is a compile-time option - the snapshot, the entry compare and the
   # compare-at-read hook do not exist in the shipped library, and are never meant to.
   build-linux-verify:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       actions: write
@@ -571,8 +572,10 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -583,8 +586,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
@@ -604,7 +608,7 @@ jobs:
 
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -747,8 +751,9 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -1015,8 +1020,9 @@ jobs:
         with:
           gpu: "true"
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
@@ -1248,8 +1254,7 @@ jobs:
   # so the build-level assertion is the only guard, and its absence is precisely what would make
   # the whole split arm meaningless.
   build-linux-split:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       actions: write
@@ -1263,8 +1268,10 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -1280,8 +1287,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
@@ -1301,7 +1309,7 @@ jobs:
 
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -1475,8 +1483,9 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -1737,8 +1746,9 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -2322,13 +2332,9 @@ jobs:
   # header honest: build the pinned flatc, regenerate, and fail on any diff.
   # It needs no MobileGL build, so it does not depend on build-linux.
   flatc-check:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2336,8 +2342,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Check out the FlatBuffers submodule only
         # Just this one: the schema check has nothing to do with glslang,
@@ -2369,13 +2376,9 @@ jobs:
   # job, because a gate that cannot go red is not a gate (ROADMAP.md:7).
   include-graph-check:
     name: Include-closure purity gate
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2417,8 +2420,9 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -2461,8 +2465,7 @@ jobs:
           if-no-files-found: ignore
 
   build-retrace:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     needs:
       - build-linux
     permissions:
@@ -2478,8 +2481,10 @@ jobs:
       MOBILEGL_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -2490,8 +2495,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
@@ -2511,7 +2517,7 @@ jobs:
 
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
 
       - name: Install dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -2608,8 +2614,7 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
     outputs:
@@ -2618,9 +2623,6 @@ jobs:
       verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
       split-matrix: ${{ steps.trace-cases.outputs.split-matrix }}
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2674,8 +2676,7 @@ jobs:
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     needs: [trace-cases]
     strategy:
       fail-fast: false
@@ -2683,9 +2684,6 @@ jobs:
       matrix:
         case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2791,8 +2789,9 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -2876,17 +2875,13 @@ jobs:
 
   retrace-summary:
     name: retrace summary
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     needs: [retrace]
     if: ${{ always() && needs.retrace.result != 'skipped' }}
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -2999,8 +2994,9 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -3195,8 +3191,9 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -3452,8 +3449,7 @@ jobs:
 
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     # Every retrace arm downloads the shared fixtures, including split controls.
     needs:
       - retrace-summary
@@ -3463,9 +3459,6 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
       - name: Configure runner environment
@@ -3529,15 +3522,11 @@ jobs:
 
   pipe-gates:
     name: MGPipe generators and hygiene gates
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
-
       - name: Checkout repo
         uses: actions/checkout@v6
 
@@ -3549,6 +3538,10 @@ jobs:
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
 
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
       - name: Test CTest runtime metadata preparation
         run: python3 scripts/ci/test_prepare_test_runtime.py
 
@@ -3688,8 +3681,7 @@ jobs:
           fi
           python3 scripts/check_doc_citations.py "${documents[@]}" || true
   build-linux-verify-split:
-    runs-on: ${{ fromJSON(vars.CI_CPU_RUNNER || '["ubuntu-latest"]') }}
-    container: ubuntu:24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
       actions: write
@@ -3703,8 +3695,10 @@ jobs:
       CCACHE_NOHASHDIR: "true"
 
     steps:
-      - name: Prepare checkout tools
-        run: apt-get update && apt-get install -y sudo git python3 ca-certificates
+      - name: Set swap space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
 
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -3717,8 +3711,9 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
-        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
 
       - name: Restore ccache
         uses: actions/cache/restore@v5
@@ -3738,7 +3733,7 @@ jobs:
 
       - name: Update glslang external sources
         working-directory: 3rdparty/glslang
-        run: python update_glslang_sources.py
+        run: python3 update_glslang_sources.py
 
       - name: Install build and runtime dependencies
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'

@@ -16,16 +16,16 @@ def normalize(text, old_root, new_root, cmake_root, hardware=False, icd=None):
                   lambda m: cmake_root + '/Modules/' + m[1], text)
     lines = []
     for line in text.splitlines(keepends=True):
-        if re.search(r'ENVIRONMENT|LABELS', line):
-            # GoogleTest discovery receives list properties, not one value with
-            # escaped separators. Otherwise BACKEND becomes "DirectVulkan;...".
-            line = line.replace('\\;', ';')
+        # Keep list escaping intact. All CI builders and consumers use CMake
+        # 3.31.10, whose GoogleTest module needs these escaped separators.
         if icd:
-            line = re.sub(r'VK_ICD_FILENAMES=[^;"\]\s]+', 'VK_ICD_FILENAMES=' + icd, line)
+            line = re.sub(r'VK_ICD_FILENAMES=[^;\\"\]\s]+', 'VK_ICD_FILENAMES=' + icd, line)
         if hardware:
             for value in ('LIBGL_ALWAYS_SOFTWARE=1', 'MESA_GL_VERSION_OVERRIDE=3.3',
                           'MESA_GLSL_VERSION_OVERRIDE=330'):
-                line = line.replace(value + ';', '').replace(';' + value, '').replace(value, '')
+                line = re.sub(re.escape(value) + r'\\*;', '', line)
+                line = re.sub(r'\\*;' + re.escape(value), '', line)
+                line = line.replace(value, '')
         lines.append(line)
     return ''.join(lines)
 

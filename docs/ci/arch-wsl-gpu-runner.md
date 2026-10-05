@@ -111,13 +111,18 @@ Clash must be running for the runner's configured GitHub connection to work.
 
 ## Main Test workflow
 
-CPU jobs do not query GPU availability. They default to GitHub `ubuntu-latest`.
-Repository variable `CI_CPU_RUNNER` may specify a JSON runner label array, for example
-`["self-hosted", "Linux", "X64", "cpu"]`. A self-hosted CPU runner needs Docker and
-permission to run job containers. CPU builds/tests run in `ubuntu:24.04` on either
-host type, with Clang 20 and the same userspace ABI. They do not require `/dev/dxg`.
-GitHub Actions has no native "any hosted OR self-hosted" selector; the variable
-chooses the CPU pool independently, without reserving this GPU machine.
+CPU jobs do not query GPU availability. They run directly on the original GitHub
+`ubuntu-latest` environment, without a job container. This preserves the installed
+Git/Python/toolchain behavior and leaves 8845 free for GPU testing. Ubuntu-built
+artifacts are consumed by either Ubuntu or the newer Arch userspace; metadata paths
+and driver selection are relocated at the consuming stage.
+
+All build and test hosts install **CMake 3.31.10**, including the native Arch GPU
+runner. The GitHub action tag alone does not pin the installed CMake version, so
+`cmakeVersion` is explicit. The existing escaped GoogleTest property lists work in
+3.31.10. Newer GoogleTest implementations preserve those escapes differently;
+`CMP0178=OLD` does not restore PROPERTIES parsing. No generated-file separator
+unescaping is performed: the CMake/CTest version is consistent at both ends.
 
 After each runtime build completes, a small GitHub-hosted selection job queries
 this repository's runner inventory for the corresponding GPU stage. Integration,
@@ -133,7 +138,7 @@ expired credential or API failure is an error, not evidence that the runner is o
 
 `prepare_test_runtime.py` runs when producing and consuming runtime artifacts. It
 records/relocates workspace paths, resolves CMake module paths on the execution
-host, and repairs escaped ENVIRONMENT/LABELS separators before GoogleTest discovery.
+host, and preserves the 3.31.10 ENVIRONMENT/LABELS escaping through GoogleTest discovery.
 This prevents a backend value like `DirectVulkan;MOBILEGL_TRANSPORT=inproc;...`.
 At test time it replaces the built-in ICD path and removes software-rendering
 and Mesa version overrides on the hardware runner. Thus an Ubuntu build can be
@@ -143,9 +148,9 @@ software driver configuration. Capability failures remain visible test failures.
 Each GPU stage samples availability after its inputs are ready. A disconnection
 later still leaves already scheduled jobs queued: GitHub cannot migrate those
 jobs automatically. Rerun the workflow to select again. Arch-built native artifacts
-are not mixed with Ubuntu consumers; CPU artifacts use the common Ubuntu container.
+are not mixed with Ubuntu consumers; CPU artifacts are built on GitHub Ubuntu.
 
-Native GPU jobs use Arch's installed tools and do not install packages, provision
-swap, download an SDK or change privileged core settings. The old standalone
+Native GPU jobs use Arch's compiler and drivers plus the pinned user-space CMake;
+they do not install OS packages, provision swap, download an SDK or change privileged core settings. The old standalone
 `wsl-gpu-smoke.yml` has been removed; the host's installed probe remains available
 for manual diagnostics.
