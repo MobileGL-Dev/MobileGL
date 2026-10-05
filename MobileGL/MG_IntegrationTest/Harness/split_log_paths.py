@@ -181,6 +181,81 @@ DUALBLOCK_ALLOWED_SKIPS = {
 }
 
 
+# Capability gaps are not successful coverage. Keep them distinct from known
+# implementation limitations, and print both categories in the strict report.
+DUALBLOCK_CAPABILITY_SKIPS = {
+    "DirectGLES.Split.IterationRPFirstReductionScenario.SampledRgba32fFirstAverage":
+        "subgroup probe requires GL_KHR_shader_subgroup",
+    "DirectGLES.Split.IterationRPFirstReductionScenario.IndexedInputTopologyAndReduction":
+        "subgroup probe requires GL_KHR_shader_subgroup",
+    "DirectGLES.Split.IterationRPProgram203Scenario.FixedCompleteInputProducesFixedCompleteGoldenOutput":
+        "requires 512-invocation basic+arithmetic compute subgroups",
+    "DirectGLES.Split.IterationRPScratchFixScenario.FixtureShapedReductionSumsEveryInvocation":
+        "needs GL_KHR_shader_subgroup basic+arithmetic in compute",
+    "DirectGLES.Split.IterationRPScratchFixScenario.WideFixtureShapedReductionSumsEveryInvocation":
+        "needs GL_KHR_shader_subgroup basic+arithmetic in compute",
+}
+
+# Outstanding behavior, not a claim that another backend covers these semantics.
+# See strict-known-limitations.md for the missing assertions and their scope.
+DUALBLOCK_KNOWN_LIMITATIONS = {
+    "DirectGLES.Split.ClipDistanceScenario.ADisabledClipDistanceRemovesNothing":
+        "clips by a DISABLED gl_ClipDistance",
+    "DirectGLES.Split.ClipDistanceScenario.TheEnablesAreIndependentPerDistance":
+        "clips by every declared gl_ClipDistance regardless of the enables",
+    "DirectVulkan.Split.GpuContent.PartialUploadOverGpuContentScenario.OneDimensionalArraySubImageKeepsTheGpuClearedLayer":
+        "a 1D array layer does not attach on backend DirectVulkan",
+    "DirectGLES.Split.SsboDeclarationFormScenario.PackedBlockWithAnUnsizedArrayBeforeAnotherMember":
+        "known: a non-trailing unsized array overlaps the member after it",
+    "DirectGLES.Split.SsboDeclarationFormScenario.TwoUnsizedArraysInOneBlock":
+        "known: two runtime arrays in one block overlap",
+}
+# The older Magma ClipDistance exceptions describe the same unresolved behavior.
+for _case in ("ADisabledClipDistanceRemovesNothing", "TheEnablesAreIndependentPerDistance"):
+    _name = "DirectVulkan.Split.Fm.ClipDistanceScenario." + _case
+    DUALBLOCK_KNOWN_LIMITATIONS[_name] = DUALBLOCK_ALLOWED_SKIPS.pop(_name)
+
+
+def specialized_required():
+    """Exact configured entries replacing inapplicable generic copies; no skip allowed."""
+    names = {
+        "DirectGLES.MapPersistentRoundtrips.LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip",
+        "DirectGLES.Spawn.AdoptT0Disallowed.LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName",
+    }
+    for backend in ("DirectGLES", "DirectVulkan"):
+        names.add(f"{backend}.Tcp.AdoptTier0.LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName")
+        for arm in ("Split", "Spawn"):
+            names.add(f"{backend}.{arm}.AdoptTier0.LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName")
+    for arm in ("Split", "Spawn"):
+        for case in ("Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName",
+                     "Rgb16fUploadedBaseWithARefusedReadbackIsFilteredFromTheStore"):
+            names.add(f"DirectGLES.{arm}.CpuMipRefused.GenerateMipmapServerScenario.{case}")
+        names.add(f"DirectVulkan.{arm}.ShaderMipDepth1D.WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName")
+    for arm in ("", "Split.", "Spawn.", "Tcp."):
+        for tail, case in (
+            ("NoViewportArrayEmulation", "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero"),
+            ("UnlocatedIoBlocks", "UnlocatedIoBlockScenario.TheEmulationIsActuallyArmedWhenTheEnvironmentPinsItOn"),
+            ("PointSizeDemotion", "PointSizeDemotionScenario.ACaptureSurvivesAStageThatOnlyReadsThePointSize"),
+            ("PointSizeDemotion", "PointSizeDemotionScenario.TheDemotionIsActuallyArmedWhenTheEnvironmentPinsItOn"),
+        ):
+            names.add(f"DirectGLES.{arm}{tail}.{case}")
+    for arm in ("Split", "Spawn", "Tcp"):
+        names.add(f"DirectVulkan.{arm}.Indirect.WireIndirectDrawScenario.ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered")
+        names.add(f"DirectVulkan.{arm}.IndirectDispatch.WireIndirectDispatchScenario.ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered")
+    for case in ("ACaptureSurvivesAStageThatOnlyReadsThePointSize", "TheDemotionIsActuallyArmedWhenTheEnvironmentPinsItOn"):
+        names.add(f"DirectVulkan.PointSizeDemotion.PointSizeDemotionScenario.{case}")
+    return names
+
+
+def select_specialized(document):
+    required = specialized_required()
+    tests = [t for t in document.get("tests", []) if t["name"] in required]
+    names = [t["name"] for t in tests]
+    if set(names) != required or len(names) != len(required):
+        raise ValueError(f"specialized controls missing or duplicated: missing={sorted(required - set(names))}")
+    return {"tests": tests}
+
+
 def complete_results(document, junit_path, allowed_skips=None):
     expected = [test["name"] for test in document.get("tests", [])]
     if not expected or len(expected) != len(set(expected)):
@@ -196,14 +271,17 @@ def complete_results(document, junit_path, allowed_skips=None):
     if missing or extra:
         raise ValueError(f"result accounting: missing {sorted(missing)}, unexpected {sorted(extra)}")
     allowed_skips = allowed_skips or {}
+    problems = []
     for name, case in by_name.items():
         if case.find("skipped") is not None:
             reason = allowed_skips.get(name)
             text = " ".join(" ".join(case.itertext()).split())
             if reason is None or reason not in text:
-                raise ValueError(f"result accounting: unexpected skip/reason for {name}")
+                problems.append(f"unexpected skip/reason for {name}")
         elif case.get("status") in ("notrun", "disabled"):
-            raise ValueError(f"result accounting: {name} did not execute ({case.get('status')})")
+            problems.append(f"{name} did not execute ({case.get('status')})")
+    if problems:
+        raise ValueError("result accounting: " + " | ".join(problems))
     return by_name
 
 
@@ -342,7 +420,14 @@ def expect_fatal(document, junit_path, expected_path):
     empty expected file IS the P5f exit state, which this mode then verifies rather than
     obstructs."""
     logs = marker_log_paths(document)
-    by_name = complete_results(document, junit_path, DUALBLOCK_ALLOWED_SKIPS)
+    by_name = complete_results(document, junit_path, {
+        **DUALBLOCK_ALLOWED_SKIPS, **DUALBLOCK_CAPABILITY_SKIPS, **DUALBLOCK_KNOWN_LIMITATIONS})
+    for category, entries in (("capability gaps (not covered)", DUALBLOCK_CAPABILITY_SKIPS),
+                              ("known limitations (unresolved)", DUALBLOCK_KNOWN_LIMITATIONS)):
+        skipped_entries = sorted(n for n in entries if n in by_name and by_name[n].find("skipped") is not None)
+        print(f"SplitLogPaths {category}: {len(skipped_entries)}")
+        for name in skipped_entries:
+            print(f"  {name}: {entries[name]}")
     problems = []
     fatal, admitted, escalated = {}, {}, {}
     scanned = skipped = green = red = 0
@@ -475,6 +560,29 @@ def markers(document, selector, allowed_path, expected_path, require_no_fatal):
 
 def main():
     mode = sys.argv[1]
+    if mode == "select-specialized":
+        selected = select_specialized(json.loads(Path(sys.argv[2]).read_text()))
+        Path(sys.argv[3]).write_text(json.dumps(selected))
+        Path(sys.argv[4]).write_text("\n".join(t["name"] for t in selected["tests"]) + "\n")
+        return
+    if mode == "specialized-results":
+        document = json.loads(Path(sys.argv[2]).read_text())
+        # CTest adds fixture setup/cleanup entries to JUnit; require those to pass too.
+        required = specialized_required()
+        fixture_names = set()
+        by_name = {t["name"]: t for t in document.get("tests", [])}
+        for test in select_specialized(document)["tests"]:
+            for prop in test.get("properties", []):
+                if prop["name"] == "FIXTURES_REQUIRED":
+                    fixture_names.update(prop["value"])
+        selected = []
+        for test in by_name.values():
+            is_fixture = any(p["name"] in ("FIXTURES_SETUP", "FIXTURES_CLEANUP") and
+                             fixture_names.intersection(p["value"]) for p in test.get("properties", []))
+            if test["name"] in required or is_fixture:
+                selected.append(test)
+        require_green({"tests": selected}, sys.argv[3], [t["name"] for t in selected])
+        return
     if mode == "check":
         data = subprocess.check_output([sys.argv[2], "--test-dir", sys.argv[3],
                                         "--show-only=json-v1"], text=True)

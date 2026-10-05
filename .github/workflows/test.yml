@@ -1690,27 +1690,11 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
-  # P5c gt (CONTRACT-P5C §6): the strict twin of integration-split. The role guards (the two
-  # layers of Fatal{RoleViolation, ...}) are COMPILED into every split build - there is no
-  # knob to arm them - so "guards armed" below means MOBILEGL_IPC_STRICT_ERRORS=1, the knob
-  # that promotes a BARRIER-PULLED residual read from counted debt to a named abort.
-  #
-  # TWO ASSERTIONS, NOT ONE, because the two halves of "strict is armed" are different
-  # statements:
-  #
-  #   * the unit label must stay GREEN under it. A unit case that newly aborts under strict
-  #     is a value-class read that crept back in (P5c rv's exit line is value-class = 0), and
-  #     this step is what says so. FieldOwnershipTest owns the strict arms' behaviour cases;
-  #
-  #   * the integration-split scenarios must all ABORT under it, BY DESIGN: the remaining
-  #     residual pulls are the pinned object-class rows (GetFramebufferBindingSlot & co.,
-  #     P3b/P4b/P7's), every drawing scenario reads one, and strict turns the first read into
-  #     Fatal{UnmigratedPipeInput, ...} [BARRIER-PULLED, MOBILEGL_IPC_STRICT_ERRORS=1, ...].
-  #     A lane that "passed" a scenario here would mean strict never armed - the same
-  #     two-state shape as the E1/E3(a) negative controls, so the step asserts the abort AND
-  #     greps the entry's private split-log for the strict marker. This half flips meaning
-  #     when the object-class rows retire (P7): the scenarios then PASS under strict and the
-  #     step is rewritten as an ordinary green lane.
+  # Shares build-linux-split with the functional/transport job above. This job
+  # checks state ownership: strict residual-read rules, distinct client/server
+  # blocks, zero-residual assertions, and complete per-entry result accounting.
+  # Configured controls must pass without skips. Capability gaps and known
+  # limitations are reported separately and accepted only by exact name/reason.
   integration-split-strict:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -1918,6 +1902,22 @@ jobs:
       # ---- P5f (f1), P5F-WIRE-COMPLETENESS.md §4: THE DUAL-BLOCK CENSUS LANE ---------------
       #
       # The same integration-split entries (plus Magma's own lane), re-run under
+      # These entries own assertions removed from generic transport registrations.
+      # Discovery, execution and zero-skip accounting must agree on the exact set.
+      - name: Specialized configuration controls
+        working-directory: build-split
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          helper="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
+          ctest --show-only=json-v1 > "${RUNNER_TEMP}/specialized-all.json"
+          python3 "${helper}" select-specialized "${RUNNER_TEMP}/specialized-all.json" \
+            "${RUNNER_TEMP}/specialized-selected.json" "${RUNNER_TEMP}/specialized-tests.txt"
+          ctest --tests-from-file "${RUNNER_TEMP}/specialized-tests.txt" --no-tests=error -j 4 \
+            --output-on-failure --output-junit "${RUNNER_TEMP}/specialized.xml"
+          python3 "${helper}" specialized-results "${RUNNER_TEMP}/specialized-all.json" \
+            "${RUNNER_TEMP}/specialized.xml"
+
       # MOBILEGL_IPC_ROLE_SPLIT_STATE=1: the client's residual fill writes a client-role block
       # and the backend reads a server-role one, so every BARRIER-PULLED read aborts with a
       # named Fatal{UnmigratedPipeInput, "<field>@<verb>"}. THE RED IS THE CENSUS - it is the
@@ -2282,6 +2282,12 @@ jobs:
           path: |
             build-split/MobileGL/MG_IntegrationTest/*.log*
             build-split/MobileGL/MG_IntegrationTest/split-logs/*.log
+            ${{ runner.temp }}/specialized*.json
+            ${{ runner.temp }}/specialized-tests.txt
+            ${{ runner.temp }}/specialized.xml
+            ${{ runner.temp }}/dualblock-lane.json
+            ${{ runner.temp }}/dualblock.xml
+            ${{ runner.temp }}/dualblock-split.txt
           if-no-files-found: warn
 
   # MobileGL/MG_Remote/Protocol/generated/protocol_generated.h is COMMITTED, and

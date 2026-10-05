@@ -132,7 +132,7 @@ PRIMGEN_REROUTE_CASES = ("CountsADrawMadeWithNoCaptureSpan",
                          "APausedSpanCountsATessellatedPatchExactlyOnce",
                          "APausedSpanCountsAnInstancedDrawExactlyOnce",
                          "TheRerouteIsActuallyArmedWhenTheEnvironmentPinsItOn")
-MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
+MAGMA_SERVER_ENV_KNOB_NO_TCP = (".AdoptTier0.LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName", ".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
                                 ".DefaultBlitShape1.", ".MsResolve1.", ".StaleSerial.", ".MsFlip1.",
                                 ".MsResolveBug.", ".MsFlipBug.", ".MsResolveElide.",
                                 ".ImageUnitPrivate.InvalidImageUnitScenario.AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself",
@@ -150,12 +150,10 @@ MAGMA_SERVER_ENV_KNOB_NO_TCP = (".ShaderMip1.", ".ShaderMip2.", ".DepthMip.",
     ".ShaderMipDepth1D.",)
 
 
-# THE MIRROR SHAPE - entries that exist on tcp ALONE, by construction. Each tail must match at least
-# one tcp entry, or the exception names nothing. P11 A1 put `.AdoptTier0.` here (over shared segments
-# MOBILEGL_IPC_ADOPT_TIER=0 died at the handshake); P11 B2 made that knob an ASK that falls back to T2
-# by name, so the Magma `.AdoptTier0.` lane now runs on all three arms with one case set and is
-# compared like any other. The mechanism stays for the next tcp-only lane.
-MAGMA_TCP_ONLY = ()
+# The stream-refusal assertion is TCP-only. The shared-segment fallback assertion
+# is required on split/spawn and listed in no_tcp above. Neither transport should
+# register the other assertion merely to skip it.
+MAGMA_TCP_ONLY = (".AdoptTier0.LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName",)
 
 
 def lane_names(build_dir, label):

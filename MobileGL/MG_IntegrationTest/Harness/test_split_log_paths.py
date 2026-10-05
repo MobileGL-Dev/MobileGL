@@ -123,6 +123,43 @@ class ResultAccountingTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "unexpected skip"):
                         self.census()
 
+    def test_all_unexpected_skips_are_reported_together(self):
+        self.results([(A, "notrun", "skipped"), (B, "notrun", "skipped")])
+        with self.assertRaises(ValueError) as error:
+            self.census()
+        self.assertIn(A, str(error.exception))
+        self.assertIn(B, str(error.exception))
+
+    def test_capability_and_known_limitation_reasons_are_not_interchangeable(self):
+        for table in (helper.DUALBLOCK_CAPABILITY_SKIPS, helper.DUALBLOCK_KNOWN_LIMITATIONS):
+            name, reason = next(iter(table.items()))
+            for actual, accepted in ((reason, True), ("preflight failed: no EGL display", False)):
+                with self.subTest(name=name, accepted=accepted):
+                    self.document = self.discovery([name])
+                    self.results([(name, "notrun", "skipped")])
+                    tree = ET.parse(self.xml)
+                    ET.SubElement(tree.getroot().find("testcase"), "system-out").text = actual
+                    tree.write(self.xml)
+                    if accepted:
+                        self.census()
+                    else:
+                        with self.assertRaisesRegex(ValueError, "unexpected skip"):
+                            self.census()
+
+    def test_specialized_control_missing_or_skipped_is_rejected(self):
+        names = sorted(helper.specialized_required())
+        document = self.discovery(names)
+        helper.select_specialized(document)
+        with self.assertRaisesRegex(ValueError, "missing or duplicated"):
+            helper.select_specialized({"tests": document["tests"][1:]})
+        self.results([(n, "run", None) for n in names])
+        with contextlib.redirect_stdout(io.StringIO()):
+            helper.require_green(document, self.xml, names)
+        self.results([(n, "notrun", "skipped") if i == 0 else (n, "run", None)
+                      for i, n in enumerate(names)])
+        with self.assertRaisesRegex(ValueError, "unexpected skip"):
+            helper.require_green(document, self.xml, names)
+
     def test_admitted_or_fatal_on_passed_case_is_not_hidden(self):
         for marker in ['Admitted{UnmigratedPipeInput, "GetProgramObject@Clear"}',
                        'Fatal{UnmigratedPipeInput, "GetProgramObject@Clear"}']:

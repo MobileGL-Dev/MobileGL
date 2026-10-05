@@ -2407,6 +2407,34 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     #
     # NO TcpDevice ARM ON MAGMA: the device endpoint is one phone, run serially, and doubling
     # its matrix before the host lane is even green buys nothing. Stated rather than implied.
+    # Generic transport entries exercise ordinary behavior. Configuration-specific
+    # assertions run only in their pinned entries below, where CI requires a pass.
+    function(mgl_itest_generic_split_filter input backend output)
+        set(excluded
+            LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip
+            LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName
+            LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName
+            FencePollScenario.PacedFrameFenceWaitsBench
+            GenerateMipmapServerScenario.Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName
+            GenerateMipmapServerScenario.Rgb16fUploadedBaseWithARefusedReadbackIsFilteredFromTheStore
+            ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero
+            UnlocatedIoBlockScenario.TheEmulationIsActuallyArmedWhenTheEnvironmentPinsItOn
+            PointSizeDemotionScenario.TheDemotionIsActuallyArmedWhenTheEnvironmentPinsItOn
+            WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName)
+        if(backend STREQUAL "DirectGLES")
+            list(APPEND excluded
+                PointSizeDemotionScenario.ACaptureSurvivesAStageThatOnlyReadsThePointSize
+                WireIndirectDrawScenario.ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered
+                WireIndirectDispatchScenario.ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered)
+        endif()
+        list(JOIN excluded ":" excluded)
+        if(input MATCHES "-")
+            set(${output} "${input}:${excluded}" PARENT_SCOPE)
+        else()
+            set(${output} "${input}-${excluded}" PARENT_SCOPE)
+        endif()
+    endfunction()
+
     macro(mgl_itest_register_split_arms_for_backend mglItestBackend scenarioFilter prefixTail)
         # QUOTED DEREFERENCE, NOT A BARE NAME: a macro parameter is a textual substitution and
         # not a variable, so `if(mglItestBackend STREQUAL ...)` would compare the literal string
@@ -2448,10 +2476,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             #
             # IT MATTERS MORE ON THE SPAWN ARM: there TWO PROCESSES append to the path, so two
             # entries sharing one file is not merely ambiguous, it interleaves two sessions.
+            mgl_itest_generic_split_filter("${scenarioFilter}" "${mglItestBackend}" mglItestGenericFilter)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "${mglItestBackend}.${mglItestArm}.${prefixTail}"
                 TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "${scenarioFilter}"
+                TEST_FILTER "${mglItestGenericFilter}"
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES
                     LABELS "${mglItestArmLabels}"
@@ -2486,7 +2515,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
     # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case
     # is declared emulated per entry by SplitLogPaths (T2: every acquisition declines); the mpr and
-    # adopt-tier-refusal cases skip here for want of their lane markers. The Magma arms are the
+    # adopt-tier assertions are registered only in their configured controls. The Magma arms are the
     # gated `Arena.` block beside `Pbo.` / `Fence.` below, plus the Buffers lane.
     mgl_itest_register_split_arms("LargeArenaAdoptionScenario.*" "")
     # P11 B2 addendum: A BUFFER DELETED WHILE BOUND TO AN INDEXED POINT (storage, uniform, atomic
@@ -2529,7 +2558,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectGLES.Tcp.AdoptTier0."
         TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-        TEST_FILTER "LargeArenaAdoptionScenario.*"
+        TEST_FILTER "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName"
         DISCOVERY_TIMEOUT 30
         PROPERTIES
             LABELS "integration-gpu\;integration-tcp"
@@ -2552,7 +2581,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.${mglT0Arm}.AdoptTier0."
             TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-            TEST_FILTER "LargeArenaAdoptionScenario.*"
+            TEST_FILTER "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName"
             DISCOVERY_TIMEOUT 30
             PROPERTIES
                 LABELS "integration-gpu\;integration-${mglT0ArmLower}"
@@ -4061,8 +4090,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # table's FenceSync / GetSyncStatus / ClientWaitSync), so the same three cases.
         foreach(fenceCase ZeroTimeoutPollLoopsEndInBoundedTime
                           PollsOfASignaledFenceCrossNothing
-                          AFenceThatFinishesWhileTheClientOnlyPollsIsReported
-                          PacedFrameFenceWaitsBench)
+                          AFenceThatFinishesWhileTheClientOnlyPollsIsReported)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.Fence."
                 TEST_FILTER "FencePollScenario.${fenceCase}"
@@ -4118,15 +4146,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # On tcp a stream refuses the tier by name at the client's handshake (A1, the stream case
         # reads the line); over shared segments (split, spawn) the knob ASKS T0, a host has no
         # AHardwareBuffer, and the session falls back to T2 by name (B2, the fallback case reads
-        # both lines). Each arm's marker makes the other arm's case skip, so the three arms carry
-        # the same names and spawn_lane_parity.py compares them like any other lane.
+        # both lines). Register only the assertion applicable to each transport; the
+        # parity check names these two transport-specific exceptions explicitly.
         if(mglItestArm STREQUAL "Tcp")
             set(mglItestAdoptTier0Env "MGITEST_ADOPT_TIER_REFUSAL=T0")
+            set(mglItestAdoptTier0Case AStreamSessionRefusesTheAdoptTierOnceByName)
         else()
             set(mglItestAdoptTier0Env "MGITEST_ADOPT_T0_FALLBACK=no AHardwareBuffer")
+            set(mglItestAdoptTier0Case ASessionThatCannotRunT0FallsBackToT2OnceByName)
         endif()
-        foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS AStreamSessionRefusesTheAdoptTierOnceByName
-                                                         ASessionThatCannotRunT0FallsBackToT2OnceByName)
+        foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS ${mglItestAdoptTier0Case})
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.AdoptTier0."
                 TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"

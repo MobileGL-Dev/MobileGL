@@ -63,3 +63,10 @@ ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline no-rec
 
 # ---- pending-fix -------------------------------------------------------------------------------
 # (none: P8-SE fixed the default-framebuffer depth/stencil case and registered it, notes/p8/SE.md)
+
+# These ambient copies cannot run their assertion; pinned controls are checked separately.
+LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip mechanism synchronous monolith accounting; required DirectGLES.MapPersistentRoundtrips control
+DirectGLES:FencePollScenario.PacedFrameFenceWaitsBench mechanism optional measurement requiring MGITEST_FENCE_PACE_BENCH=1, not a correctness gate
+DirectGLES:WireIndirectDrawScenario.ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered single-backend Vulkan implicit indirect-command barrier
+DirectGLES:WireIndirectDispatchScenario.ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered single-backend Vulkan implicit indirect-command barrier
+DirectGLES:WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName single-backend Vulkan forced shader-mip decline; DirectGLES generates the chain
