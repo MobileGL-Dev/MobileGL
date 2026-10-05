@@ -2898,16 +2898,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 kT0MapReadBit | kT0MapWriteBit | kMapPersistentBit | kMapCoherentBit | kDynamicStorageBit;
             constexpr GLbitfield kT0MapFlags = kT0MapReadBit | kT0MapWriteBit | kMapPersistentBit | kMapCoherentBit;
 
-            Bool HasExtensionWord(const char* list, const char* word) {
-                if (list == nullptr) return false;
-                const SizeT n = std::strlen(word);
-                for (const char* at = std::strstr(list, word); at != nullptr; at = std::strstr(at + 1, word)) {
-                    const Bool startOk = at == list || at[-1] == ' ';
-                    const Bool endOk = at[n] == '\0' || at[n] == ' ';
-                    if (startOk && endOk) return true;
-                }
-                return false;
-            }
+            using MG_Util::BackendLoader::HasExtensionWord;
 
             Bool ResolveT0EntryPoints(String& why) {
                 if (g_t0GetNativeClientBuffer != nullptr && g_t0BufferStorageExternal != nullptr) return true;

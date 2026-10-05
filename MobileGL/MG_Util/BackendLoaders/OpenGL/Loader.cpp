@@ -21,6 +21,17 @@
 #endif
 
 namespace MobileGL::MG_Util::BackendLoader {
+    Bool HasExtensionWord(const char* list, const char* word) {
+        if (list == nullptr || word == nullptr || *word == '\0') return false;
+        const SizeT n = std::strlen(word);
+        for (const char* at = std::strstr(list, word); at != nullptr; at = std::strstr(at + 1, word)) {
+            const Bool startOk = at == list || at[-1] == ' ';
+            const Bool endOk = at[n] == '\0' || at[n] == ' ';
+            if (startOk && endOk) return true;
+        }
+        return false;
+    }
+
     static Bool UseAngle() {
         return MG_Config::Features.EsprytUseAngle;
     }

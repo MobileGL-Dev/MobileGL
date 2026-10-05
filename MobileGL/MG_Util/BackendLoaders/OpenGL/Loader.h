@@ -1364,6 +1364,8 @@ namespace MobileGL {
     } // namespace MG_External
 
     namespace MG_Util::BackendLoader {
+        // Match a complete name in a space-separated GLES/EGL extension string.
+        Bool HasExtensionWord(const char* list, const char* word);
         void AcquireGLESFunctions(MG_External::GLESFunctionsTable& funcs,
                                   MG_External::EGL::eglGetProcAddress_PTR procAddress);
         void AcquireEGLFunctions(MG_External::EGLFunctionsTable& funcs);

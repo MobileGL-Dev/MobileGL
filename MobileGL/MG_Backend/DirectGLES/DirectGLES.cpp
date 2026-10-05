@@ -18613,16 +18613,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Bool YuvTarget = false;
             };
 
-            Bool HasExtensionWord(const char* list, const char* word) {
-                if (list == nullptr) return false;
-                const SizeT n = std::strlen(word);
-                for (const char* at = std::strstr(list, word); at != nullptr; at = std::strstr(at + 1, word)) {
-                    const Bool startOk = at == list || at[-1] == ' ';
-                    const Bool endOk = at[n] == '\0' || at[n] == ' ';
-                    if (startOk && endOk) return true;
-                }
-                return false;
-            }
+            using MG_Util::BackendLoader::HasExtensionWord;
 
             // None of these is in the loader's tables, and eglGetProcAddress hands back live-looking
             // stubs for entry points a driver lacks, so the extension strings decide first. Resolved
