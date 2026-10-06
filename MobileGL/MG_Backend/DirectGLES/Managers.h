@@ -1150,7 +1150,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
         GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd): the staged-coverage assertion (StagedShadowStore::RequireCoverage) for a
         // read of the server shadow outside the upload ladders - the indirect command-byte
         // resolver. A no-op for a base that is not this resource's server shadow.
@@ -1324,7 +1324,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // conjunction in MultiDraw.cpp would satisfy in letter while giving the family two
         // selectors that can drift apart. One definition, spelled at every site that reads it.
         inline Bool VertexInputReadsRecords() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             return MG_Config::DataArmIsRecord() &&
                    VertexInputSubsystemEnabled();
 #else
@@ -1366,7 +1366,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P11 B2: the T0 half of that drain - run right after it (retired AHardwareBuffers).
         void ProcessDeferredT0Retires();
 #endif
@@ -1828,7 +1828,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Drives the actual unpack save/restore helper without needing a texture upload.
         void ExerciseDefaultUnpackScopeForTesting();
 #endif
@@ -1966,7 +1966,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
             //
             // `Desc.ViewOf` names the storage owner BY HANDLE, so the STEADY question - "is my ES
@@ -2050,7 +2050,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bool IsDrawSyncClean(const MG_State::GLState::ITextureObject* t, Uint64 contextId,
                                  Uint64 samplingGeneration) const {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // A shared image's texels move with its producer's presents, which nothing here
                 // sees: every use goes through SyncMipmapsToBackend's shared-image arm, which waits
                 // for a write that landed since the last one (SharedImageImpl::AcquireForSampling).
@@ -2365,7 +2365,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glCopyImageSubData passes: it tries FollowCopyImageInStagedStore first and marks the store
         // itself when that fails.
         void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture, Bool storeFollowsTheWrite = false);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P8-E (notes/p8/E.md): make glCopyImageSubData's texel-block move in the server's staged
         // store too (StagedTextureStore::FollowCopy), so the destination level's bytes stay its
         // content. Box in each image's own texel grid. False when the store cannot follow: a cube
@@ -2422,7 +2422,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // "one object is bound to BOTH bindings" skip, where the DRAW pass already did the
             // attachment work and only glReadBuffer is READ-target-specific.
             void SyncReadBufferToBackendByHandle(MG_Pipe::MGPipeHandle fbo);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.2): the framebuffer handle the CURRENT sync is keyed on.
             // A caller applying a record sets it before SyncToBackend / SyncReadBufferToBackend,
             // which then read the applier's record for THAT handle instead of probing the
@@ -3122,7 +3122,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
             // uniform write, and only such a program needs the reset after one.
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P8-C: same for the gl_BaseInstance uniform - which an indirect draw feeds from the
             // command on the CPU only when the mg_IndirectParams view is absent.
             Bool ReadsBaseInstance() const { return m_baseInstanceUniformLocation >= 0; }

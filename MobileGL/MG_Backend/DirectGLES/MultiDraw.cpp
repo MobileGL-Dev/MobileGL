@@ -179,7 +179,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
         BoundIndexBufferView ResolveBoundIndexBuffer(IndexBufferQuestion question, const char* entry) {
             BoundIndexBufferView view;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (BufferImpl::VertexInputReadsRecords()) {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 const MG_Pipe::MGPipeHandle res = BufferImpl::ResolveDrawIndexBufferFromRecord(st).Res;
@@ -293,7 +293,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // an empty slot, and not the arm test (ID-110: the arm was decided by the transport
         // above, never inferred from a null).
         Uint BoundDrawIndirectBufferId() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
                 if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;

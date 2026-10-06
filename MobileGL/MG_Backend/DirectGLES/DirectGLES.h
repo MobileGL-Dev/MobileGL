@@ -30,7 +30,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool ReadTextureLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
                                TextureInternalFormat logicalFormat, GLint level, const IntVec3& logicalExtent,
                                Bool sourceUsesImageCarrier, GLenum format, GLenum type, Vector<Uint8>& bytes);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& bytes);
     // Whether the NATIVE texture currently holds `level` of `uploadTarget` at `logicalExtent`
     // (glGetTexLevelParameteriv). False for a level the driver never allocated - one defined after
@@ -432,7 +432,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // native context already current on this thread IS that one - so the single-context world pays
     // nothing for it. Called from the bind_context path on the apply thread.
     Bool MakeNativeContextCurrentForBoundToken();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P14: the server's backend turn moved to the calling apply thread (ServerLoop.cpp's
     // BackendTurnLock). Takes the backend's GL ownership for this thread and drops every
     // binding shadow, which still describes the previous holder's native context.

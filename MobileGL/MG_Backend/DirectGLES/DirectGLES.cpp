@@ -75,7 +75,7 @@
 #endif
 
 namespace MobileGL::MG_Backend::DirectGLES {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // A readback on the server writes REPLY SCRATCH, so it has no pack buffer - and this
     // function is how every pack-PBO lookup in this file says so under a transport.
     //
@@ -179,7 +179,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return target == FramebufferTarget::Draw ? st.DrawFramebuffer() : st.ReadFramebuffer();
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P5e (fb, CONTRACT-P5E.md §5.4 and §0's rule F). THE DECLINE BECOMES THE DETECTOR.
     //
     // Every framebuffer decline in this file used to fall back to the pre-handle arm, which
@@ -200,7 +200,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Pipe::MGPipeInputPoisonFatalForVerb(MG_Pipe::MGPipeInputField::GetFramebufferBindingSlot,
                                                MG_Pipe::gPipeInputs.CurrentVerb());
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
         switch (v) {
@@ -234,7 +234,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // grep and a comment naming it is a hit) and for an MG_State type inside
     // MGPipeResourceOps, and this is neither.
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             static UniquePtr<SamplerImpl::BackendSamplerObject> native;
             static Uint generation = 0;
@@ -357,7 +357,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): under an active transport the command buffer resolves
         // from the handle the verb record carried, and its CPU bytes are the SERVER's staged
         // shadow (rule E) - the client's GL_DRAW_INDIRECT_BUFFER binding slot, the frontend
@@ -496,7 +496,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // path and has to select the same arm; a copy of the conjunction there would be two
         // selectors for one family. Its rationale travelled with it.
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (vi): "does this draw fetch any attribute out of the application's own memory",
         // answered FROM THE RECORD instead of from the frontend VAO. The emitter publishes
         // Res == kMGPipeNullHandle for a client-memory array (VertexInputEmit.h says so in as
@@ -572,9 +572,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             request.Serial = st.IndexBufferSerial;
             return request;
         }
-#endif // MOBILEGL_BUILD_DISAGGREGATED - vi's record arm ends here; sb's opens below
+#endif // MOBILEGL_BUILD_RECORD_ARM - vi's record arm ends here; sb's opens below
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6): THE INDEXED BINDING POINTS BY RECORD --
         //
         // WHICH ARM THIS SERVER TAKES, resolved once. Two conjuncts and both are the phase's
@@ -802,7 +802,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the frontend's CPU shadow. Flagging them makes the next MapBuffer/GetBufferSubData
         // pull the real contents back (BufferObject::SyncGpuWrites).
         void MarkShaderStorageBuffersGpuWritten() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (sb, CONTRACT-P5E.md §5.6): DELETED UNDER A TRANSPORT, and this is the one
             // site of the three that cannot merely be re-expressed by handle. The walk is over
             // CLIENT memory - the frontend's binding-point array and the BufferObject it names -
@@ -837,7 +837,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (sb, §5.6): THE RECORD ARM. `glBindings` stays the backend program's own list
             // - it is server-owned since the link and names which GL counter bindings THIS
             // program declares - and only the points themselves move sides. The bound is the
@@ -1180,7 +1180,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             ProcessDeferredBufferReleases();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             ProcessDeferredT0Retires(); // P11 B2
 #endif
 
@@ -1374,7 +1374,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Indirect Buffer Object - must also be bound to GL_DRAW_INDIRECT_BUFFER on the ES
             // context since indirect draws now execute natively on the GPU.
             if (includeIndirectBuffer) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5c (hd, CONTRACT-P5C §3.5): under an active transport the buffer is the verb
                 // record's handle; the frontend binding slot and the client allocator are
                 // never read (T2). The twin's ensure is what SyncBoundBuffer's did.
@@ -1407,7 +1407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // SSBOs are different: their block bindings are baked into the ESSL at compile time and
             // BindCurrentProgramWithResources binds no SSBO points, so this is their sole draw-path
             // binder (e.g. Flywheel's indirect vertex shaders pull instance data from storage buffers).
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (sb, §5.6): the record arm, selected by transport + bit 13. Same `if (…) else`
             // shape the indirect buffer above already uses.
             if (BindingPointsComeFromRecords()) {
@@ -1426,14 +1426,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             ProcessDeferredBufferReleases();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             ProcessDeferredT0Retires(); // P11 B2
 #endif
             // THE COMPUTE PATH IS THE ONE THAT NEEDS THE FRONTEND-INDEXED UNIFORM PASS, and it
             // is why the uniform class is emitted at all: compute does NOT go through the
             // per-program block remap in BindCurrentProgramWithResources, so these are the
             // points a compute shader actually reads.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (BindingPointsComeFromRecords()) {
                 SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassUniform,
                                                 GL_UNIFORM_BUFFER);
@@ -1447,7 +1447,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             MarkShaderStorageBuffersGpuWritten();
             if (includeDispatchIndirectBuffer) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5c (hd, CONTRACT-P5C §3.5): see the draw-indirect twin above - the verb
                 // record's handle, never the frontend binding slot or the client allocator.
                 if (MG_Config::DataArmIsRecord()) {
@@ -1494,13 +1494,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // gl_NextBuffer is the shape that makes them differ: buffer 0 has stride 0
                 // and nothing bound, so target 0 describes buffer 1.
                 SizeT bufferIndex = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 MG_Pipe::MGPipeHandle handle = MG_Pipe::kMGPipeNullHandle;
 #endif
             };
 
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             struct XfbProgramSource {
                 SharedPtr<MG_State::GLState::ProgramObject> Frontend;
                 SharedPtr<const MG_State::GLState::ProgramArchive> Archive;
@@ -1541,7 +1541,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // End scatters them into `targets`.
                 Bool scattered = false;
                 SharedPtr<MG_State::GLState::ProgramObject> scatterProgram;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 SharedPtr<const MG_State::GLState::ProgramArchive> scatterArchive;
                 // Paused spans in different served contexts may coexist. Their captured
                 // bytes must not share the monolith's one reusable scratch buffer.
@@ -1569,7 +1569,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // null instead of reasoning about stability, and CurrentXfb re-resolves lazily.
             XfbObjectState* g_currentXfbState = nullptr;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             struct RoleXfbState {
                 Uint NativeGeneration = 0;
                 // Server keys are record-supplied, never-reused XFB lifetime ids.
@@ -1600,7 +1600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
 
             XfbObjectState& CurrentXfb() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 auto& state = ActiveXfbState();
                 if (MG_Config::DataArmIsRecord()) {
                     const Uint64 lifetime = MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId;
@@ -1649,7 +1649,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        g_GLESFuncs.glResumeTransformFeedback != nullptr;
             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // How wide one OnBufferWriteback may be for a capture range of `rangeBytes`, which is
             // the whole range when the transport imposes no limit (monolith, where the callback is
             // a direct call with no ring under it) or when the range already fits one.
@@ -1683,7 +1683,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
                     for (const auto& target : targets) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                         if (!MG_Config::DataArmIsRecord())
 #endif
                         if (!target.buffer) continue;
@@ -1787,7 +1787,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // scratch storage cannot be provided, in which case the caller falls back to the
             // direct binding (which produces a wrong layout, but is what happened before).
             Bool BindScatterCaptureBuffer(SizeT packedStride, SizeT capacityVertices) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 const Bool server = MG_Config::DataArmIsRecord();
                 auto& g_scatterBufferId = server ? CurrentXfb().serverScatterBuffer : ActiveXfbState().ScatterBuffer;
                 auto& g_scatterBufferSize = server ? CurrentXfb().serverScatterSize : ActiveXfbState().ScatterSize;
@@ -1828,11 +1828,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // occupies are written, so the holes gl_SkipComponents asks for keep whatever the
             // application had put there - which is the whole point of the feature.
             void ScatterCapturedRecords(XfbObjectState& xfb) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 auto& g_scatterBufferId = MG_Config::DataArmIsRecord()
                     ? xfb.serverScatterBuffer : ActiveXfbState().ScatterBuffer;
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 const XfbProgramSource program{xfb.scatterProgram, xfb.scatterArchive};
 #else
                 const auto& program = xfb.scatterProgram;
@@ -1873,7 +1873,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // whole range down once.
                 for (SizeT targetIndex = 0; targetIndex < xfb.targets.size(); ++targetIndex) {
                     const auto& target = xfb.targets[targetIndex];
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     if (!MG_Config::DataArmIsRecord())
 #endif
                     if (!target.buffer) continue;
@@ -1882,7 +1882,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (stride == 0) continue;
                     const SizeT rangeBytes = target.end - target.start;
                     Vector<Uint8> staged(rangeBytes);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     // P5c: under an active transport BufferObject::MappedData on the apply
                     // thread is Fatal{RoleViolation, "buffer-legacy-arm"} (CONTRACT-P5C §3.8) -
                     // the pre-capture bytes are the SERVER's staged shadow, and the reconciled
@@ -1947,7 +1947,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     if (MG_Config::DataArmIsRecord()) {
                         if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
                             // Sliced for the reason the readback path above is sliced: the bytes
@@ -2026,7 +2026,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not captured, and opening the span would also subject it to the capture
             // primitive-mode rule the paused draw is exempt from.
             if (!xfb.pending || xfb.paused) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             XfbProgramSource program;
             const MG_Pipe::MGPStreamOutputBegin* span = nullptr;
             if (MG_Config::DataArmIsRecord()) {
@@ -2062,7 +2062,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // recording it here keeps End independent of the frontend capture state.
             const SizeT bufferCount = program->GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (MG_Config::DataArmIsRecord()) {
                     if (!span || i >= 4) continue;
                     const auto& range = span->Targets[i];
@@ -2089,7 +2089,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 xfb.targets.push_back({bufferObject, backendResource->id, start, end, i});
             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (!MG_Config::DataArmIsRecord())
 #endif
             BufferImpl::SyncTransformFeedbackBindingPoints(bufferCount);
@@ -2098,7 +2098,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // capture gap-free into scratch storage and place the records at End instead.
             xfb.scattered = false;
             xfb.scatterProgram.reset();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             xfb.scatterArchive.reset();
 #endif
             xfb.scatterCapacityVertices = 0;
@@ -2116,7 +2116,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (capacityVertices == ~SizeT(0)) capacityVertices = 0;
                 if (BindScatterCaptureBuffer(program->GetTransformFeedbackPackedStride(), capacityVertices)) {
                     xfb.scattered = true;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     xfb.scatterProgram = program.Frontend;
                     xfb.scatterArchive = program.Archive;
 #else
@@ -2206,7 +2206,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ScatterCapturedRecords(xfb);
                 xfb.scattered = false;
                 xfb.scatterProgram.reset();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 xfb.scatterArchive.reset();
 #endif
             } else {
@@ -2231,7 +2231,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void BindTransformFeedback(GLuint name) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             auto& roleState = ActiveXfbState();
             auto& g_currentXfbState = roleState.Cached;
             auto& g_xfbObjects = roleState.Objects;
@@ -2249,14 +2249,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Without driver objects there is only the default span; keep the frontend
                 // name so the bookkeeping below stays consistent.
                 g_currentXfbName =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     key;
 #else
                     name;
 #endif
                 return;
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             auto& xfb = g_xfbObjects[key];
             // Even each virtual context's name-0 object gets its own native object.
             if ((server || name != 0) && xfb.esId == 0) {
@@ -2268,7 +2268,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             g_GLESFuncs.glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb.esId);
             g_currentXfbName =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 key;
 #else
                 name;
@@ -2276,7 +2276,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void DeleteTransformFeedback(GLuint name) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             auto& roleState = ActiveXfbState();
             auto& g_currentXfbState = roleState.Cached;
             auto& g_xfbObjects = roleState.Objects;
@@ -2297,13 +2297,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_xfbObjects.erase(it);
             // The frontend reverts to the default object when the bound one is deleted.
             if (g_currentXfbName ==
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 key
 #else
                 name
 #endif
             ) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (server) {
                     // The following BindStreamOutput names this context's actual
                     // default lifetime. Never create a native object for key 0.
@@ -2320,7 +2320,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The ES context went away (or is being torn down): the spans, their buffer ids, the
         // driver objects and the frontend objects they pinned all belonged to it.
         void OnBackendContextDestroyed() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             for (auto& state : g_roleXfbState) state = {};
             g_activeXfbRole = -1;
 #endif
@@ -2384,7 +2384,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             vaoTwin->SyncToBackend(currentVAOObject);
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (vi): the record arm's entry, and it takes NO frontend object - CONTRACT-P5E §4.1
         // ("the object parameter is deleted from the transport overload, not defaulted to
         // null"). A null twin here is the null BoundVertexElements, i.e. "no VAO bound", which
@@ -2401,7 +2401,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!vaoTwin) return;
             vaoTwin->SyncToBackendFromApplier();
         }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
         // THE CLIENT-MEMORY VERTEX ARRAY UPLOAD, and the one read of this family that P5e does
         // NOT retire - it MOVES the decision instead, which is what ID-82 / ruling 2 settles.
@@ -2630,7 +2630,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         static void SyncClientSideVertexArraysForDrawArrays(GLint first, GLsizei count) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (BufferImpl::VertexInputReadsRecords()) {
                 if (!BufferImpl::AnyClientSideVertexArrayInRecord()) return;
                 if (MG_Pipe::MGPipeApplierIsUnbarrieredApply()) {
@@ -2671,7 +2671,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!program) return;
             if (!vaoTwin) return;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (vi), CONTRACT-P5E §5.1: the bound-VAO row is retired here. On the record arm
             // the twin IS the bound vertex-elements CSO (the caller resolved it from
             // st.BoundVertexElements), so "is a VAO bound" is already answered by vaoTwin being
@@ -2725,7 +2725,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // cycled section VAOs, re-reading the cold attribute slots each time; here a
             // cycle re-hits every VAO's own entry. The rebuild visits only ACTIVE locations.
             auto& memo = vaoTwin->GetPendingAttribValueMaskMemo();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (fromRecords) {
                 // The re-keyed memo: {elementsHandle, ContentSerial, activeMask}. Every
                 // Enable/DisableVertexAttribArray moves the frontend configuration version, the
@@ -2971,7 +2971,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (G6, CONTRACT-P5C §5.4): this sync still arrives holding the FRONTEND object
             // (the object-class rows) and resolves its twin by frontend identity - the
             // frontend-keyed registry P3b/P4b rekeys onto handles. The probe (and the mint on
@@ -3340,7 +3340,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return true;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2), CONTRACT-P5E §5.8 / ruling 1: THE ARM SELECTOR for every by-handle site in
         // this family. Under ANY active transport (lockstep or run-ahead, so RUN_AHEAD=0 stays a
         // pure wait-rule A/B on identical server code), and only with BOTH family bits set: a
@@ -3559,7 +3559,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Uint64 g_readFboTextureSyncListContentHash = 0;
         static Bool g_readFboTextureSyncListRecordKeyed = false;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb, CONTRACT-P5E.md §5.4): THE RECORD ARM OF BOTH ATTACHMENT LISTS, and it is
         // the package's core - this is the one unconditional per-draw live read the framebuffer
         // family had, taken on every draw whether the memo hit or missed.
@@ -3625,7 +3625,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_readFboAttachmentSyncListContextGeneration = g_backendContextGeneration;
             g_readFboAttachmentSyncListValid = true;
         }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
         static void SyncReadFramebufferTextureAttachments(const DrawTextureSyncKeys& keys,
                                                           const MG_State::GLState::FramebufferObject* drawFbo) {
@@ -3717,7 +3717,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int maxTouchedUnit = keys.maxTouchedUnit;
             const Uint64 samplingGeneration = keys.samplingGeneration;
             const Uint64 unitBindingsEpoch = keys.unitBindingsEpoch;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (tx2), CONTRACT-P5E §5.2. THE UNIT HALF, BY HANDLE.
             //
             // set_sampler_views is the RESOLVED answer to the question this walk asks - which
@@ -3849,7 +3849,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // registry keeps a backend object alive until its frontend texture expires, which an
             // attached texture cannot. A renderbuffer-only FBO - the common Minecraft frame -
             // reduces to the key compare and an empty loop.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (fb): under a transport with the framebuffer bit set, BOTH attachment lists
             // are answered from the two records and neither binding slot is touched. The
             // pre-handle pair below stays compiled and stays the monolith path (ruling 1).
@@ -3991,7 +3991,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // draw-path staleness check below at one integer test.
         static Uint g_imageUnitHighWaterMark = 0;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb): the eager glBindImageTexture funnel's HANDLE ARM, and it binds nothing.
         //
         // `bind_shader_image` is an unbarriered row (§2.2) whose backend entry point takes GL
@@ -4249,7 +4249,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // there is one statement of it, and the unit-tracking bookkeeping below stays out of
         // reach of an apply thread entirely.
         void MarkWritableImageBufferTexturesGpuWritten() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 // P8-C: the SERVER's twin of the buffer behind each writable buffer image, for
                 // this side's CPU readers (SplitHostBytesForCpuRead). Every read is a record:
@@ -4283,7 +4283,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     static_cast<MG_State::GLState::TextureObjectBuffer*>(imageBinding.Texture.get());
                 const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
                 BufferImpl::MarkBufferGpuWritten(bufferObject);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P13 W4a: image units stay on this arm until W4c, but monolith's buffer readers
                 // are already the record arm's (SplitHostBytesForCpuRead), and they ask the TWIN.
                 if (MG_Config::DataArmIsRecord() && bufferObject) {
@@ -4364,7 +4364,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         std::max<Uint32>(st.ShaderImageStart + st.ShaderImageCount,
                                          static_cast<Uint32>(g_imageUnitHighWaterMark)),
                         static_cast<Uint32>(unitCount));
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     if (MG_Config::DataArmIsRecord()) {
                         for (Uint32 unit = 0; unit < end; ++unit) {
                             if (unit >= st.BoundShaderImages.size()) break;
@@ -4386,7 +4386,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // The wide pre-handle sweep reads the frontend binding of every unit, which an
             // apply thread may not do. Under a transport there is nothing for it to do anyway:
             // g_imageUnitHighWaterMark is raised only by the funnel above, so if no set has
@@ -4411,7 +4411,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Uint64 g_imageSweepSamplingGeneration = 0;
         static Uint g_imageSweepBackendContextGeneration = 0;
         static Bool g_imageSweepValid = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb, ruling 7 / ID-86): the record arm's three applier serials. Held in their own
         // fields beside the frontend pair rather than reusing them, for the reason the two
         // framebuffer list keys are held apart - one field carrying two key shapes is how a
@@ -4462,7 +4462,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ES context is rebuilt, which no sweep does.
         void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
             if (g_imageUnitHighWaterMark == 0) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 if (g_imageSweepValid && g_imageSweepShaderImagesSerial == st.ShaderImagesSerial &&
@@ -4602,7 +4602,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // not run at all, rather than running on a value it is not allowed to have.
         static Bool FramebufferRecordMatchesBinding(FramebufferTarget target,
                                                     const MG_Pipe::MGPFramebufferState& record) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (FramebufferRecordArmIsMandatory()) return true;
 #endif
             const auto& bound = GetFramebufferBindingSlotChecked(target).GetBoundObject();
@@ -4610,7 +4610,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 !bound || bound == MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO;
             if ((record.IsDefault != 0) != boundIsDefault) return false;
             if (boundIsDefault) return true;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd): the object-handle half of the identity check is a client-allocator
             // probe (T2). Under an active transport the record is the only statement of
             // identity (rule E) and the check does not run - the record was resolved from the
@@ -4808,7 +4808,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)] ==
                         boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)];
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (FramebufferRecordArmIsMandatory()) {
                     if (sameObjectOnBothBindings) {
                         backendObj->SyncReadBufferToBackendByHandle(record.Fbo);
@@ -4837,7 +4837,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_fboRecordsTrusted = false;
                     return false;
                 }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5c (hd): the push-monolith twin keys its applier-record lookup on the
                 // record's own handle (m_pushedSyncHandle) rather than on the client allocator.
                 // The state note is GONE with P5e: nothing resolves a framebuffer by handle and
@@ -4871,7 +4871,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   IS D's FramebufferSubsystemEnabled() now. Silent, confirmed at the
             //   verification round.
             if (FramebufferSubsystemEnabled() && SyncCurrentFBOByRecord()) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (fb, CONTRACT-P5E.md §5.4): AND UNDER A TRANSPORT THE DECLINE IS THE END OF
             // IT. The fallback below reads GetFramebufferBindingSlot, a BARRIER_PULLED row; the
             // value it would read belongs to a client this apply is no longer synchronous with,
@@ -4891,7 +4891,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_State::GLState::FramebufferObject* lastUpdatedFBO = nullptr;
 
             for (auto& target : fboTargets) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5c (G6, CONTRACT-P5C §5.4): the twin resolutions this iteration may run
                 // below are frontend-keyed, named debt inside the scope - P3b/P4b rekeys the
                 // registry onto handles.
@@ -5957,7 +5957,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // token for token.
         static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
             const MG_State::GLState::ProgramObject* program) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
             // scope. P5e does not delete it - it stops REACHING it under a transport, which is
             // the thing the allocator guard measures.
@@ -6073,7 +6073,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (G6, CONTRACT-P5C §5.4): the twin resolution below still keys on the frontend
             // program object - named debt inside the scope - P3b/P4b rekeys the registry onto
             // handles.
@@ -6308,7 +6308,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb, §5.4): the pre-handle arm below reads the binding slot, so under a transport
         // reaching it is the same refusal SyncCurrentFBO takes. Reaching it means either the
         // sync's trust latch is clear - and the sync aborted before it could be - or this bind
@@ -6332,7 +6332,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and the twin memo replaces even that with an array probe on the steady path.
         const auto& currentFBO = slot.GetBoundObject();
         if (currentFBO && currentFBO != MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside
             // the scope - P3b/P4b rekeys the registry onto handles.
             const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -6397,7 +6397,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         backendObj->Bind(target);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P5c (hd, CONTRACT-P5C §3.2/§3.3): the handle-keyed form of SyncAndBindFramebufferObject.
     // With an active transport a framebuffer reaches the server as the handle a record
     // carried - the named blit's ReadFbo/DrawFbo, or the applier's own bound handle for a
@@ -6451,13 +6451,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         backendObj->SyncToBackendByHandle(fbo, target);
         backendObj->Bind(target);
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
     void ForceBindCurrentFBO(FramebufferTarget target) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd): with an active transport the bound framebuffer's handle is the applier's
         // own working state; the object form's registry probe never runs (T2).
         //
@@ -6541,7 +6541,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // conjunct only exists there (UnitTexturesByHandle is tx2's, split-only); a push-VERIFY build
     // therefore keeps the frontend hoist, which is what the comparator compares against.
     inline Bool DrawProgramFromRecords() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return ProgramHandleArm() && TextureImpl::UnitTexturesByHandle();
 #else
         return false;
@@ -6569,7 +6569,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& currentVAO = vertexInputFromRecords ? noFrontendVao : MG_Pipe::gPipeInputs.GetBoundVertexArray();
         VertexArrayImpl::BackendVertexArrayObject* vaoTwin = nullptr;
         Uint32 vaoConfigVersion = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (vertexInputFromRecords) {
             vaoTwin = VertexArrayImpl::ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
         } else
@@ -6616,7 +6616,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion,
                                           syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (vertexInputFromRecords) {
             VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin);
         } else
@@ -6697,7 +6697,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedNC("ResolveAndBindUnitTextures", TRACY_ZONECOLOR_BACKEND);
 #endif
         Bool fullyResolved = true;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2), CONTRACT-P5E §5.2. ONE PASS OVER THE SAMPLER-VIEW WINDOW, AND THEN AN
         // UNBIND OF EVERY TARGET THE WINDOW DID NOT CLAIM.
         //
@@ -6860,7 +6860,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
                     // Bind texture object
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt
                     // inside the scope - P3b/P4b rekeys the registry onto handles.
                     const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -6922,7 +6922,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static SamplerImpl::BackendSamplerObject* ResolveUnitSamplerBackend(
         Int unit, const SharedPtr<MG_State::GLState::SamplerObject>& samplerObject) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2), CONTRACT-P5E §4.2's last paragraph: THE IDENTITY SAMPLER FAMILY IS DELETED
         // UNDER A TRANSPORT AND BECOMES A NAMED REFUSAL.
         //
@@ -7039,7 +7039,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   empty window is the correct emission. All 161 hits of the unnarrowed line were
             //   that shape - the log said `units 0..-1` on every one of them.
             if (st.SamplerStateCount == 0 && maxTouchedUnit >= 0) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5e (tx2), CONTRACT-P5E §5.3: the same refusal CurrentUnitBindingsEpoch makes -
                 // the frontend walk below reads GetTextureUnitObject per unit, which an active
                 // transport may not do for a record whose client has moved on.
@@ -7184,7 +7184,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // travels) and BindingsSerial on every applied set_program_bindings (how a glUniform1i
         // on a sampler travels). Both are needed - ruling 6's "both" - because a relink with
         // UNCHANGED texture resolution still hands the twin new unit assignments.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2), CONTRACT-P5E §5.3 / ruling 6 (ID-86): THE KEY IS BOTH HALVES.
         //
         // S2 argued SamplerViewsSerial alone - it already mixes the program-resolved opaque units,
@@ -7238,7 +7238,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Units past the frontend's high-water mark have provably-empty slots.
         const Int maxTouchedUnit = keys.maxTouchedUnit;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2) / ruling 6: on the handle arm the key is the applier's rows and nothing
         // frontend - INCLUDING the entry selection, which used the frontend program's address.
         // maxTouchedUnit stays in it because the unbind sweep this memo replays is bounded by it.
@@ -7269,13 +7269,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // looks at this value, but it was still being loaded out of the caller's SharedPtr every
         // draw - and once the caller stops holding one there is nothing there to load.
         const void* programKey =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             byHandle ? nullptr :
 #endif
                      static_cast<const void*>(currentProgram.get());
         ResolvedTextureBindingMemo* memoSlot = nullptr;
         for (auto& candidate : g_resolvedTextureBindingMemos) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (byHandle) {
                 if (candidate.valid && candidate.byHandle && candidate.drawProgram.Slot == drawProgram.Slot &&
                     candidate.drawProgram.Gen == drawProgram.Gen) {
@@ -7318,7 +7318,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                memo.programLinked == (currentProgram && currentProgram->GetLinkStatus()) &&
                                memo.contextGeneration == g_backendContextGeneration);
         };
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const Bool keysMatch =
             byHandle ? (memo.valid && memo.byHandle && memo.maxTouchedUnit == maxTouchedUnit &&
                         memo.contextSerial == contextSerial && memo.samplerViewsSerial == samplerViewsSerial &&
@@ -7340,7 +7340,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo.unitBindingsEpoch = unitBindingsEpoch;
                 memo.samplingResolutionGeneration = keys.samplingGeneration;
                 memo.program = programKey;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5e (pa): the four frontend program rows belong to the LEGACY key and are not
                 // written on the handle arm - decided by `byHandle`, which is the arm, and not by
                 // the object happening to be null, which is only a consequence of it. They are
@@ -7358,7 +7358,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     memo.programLinked = currentProgram && currentProgram->GetLinkStatus();
                 }
                 memo.contextGeneration = g_backendContextGeneration;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 memo.byHandle = byHandle;
                 memo.drawProgram = drawProgram;
                 memo.shaderCsoSerial = shaderCsoSerial;
@@ -7433,7 +7433,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!twin) twin = PrgramImpl::ResolveProgramTwin(programCso);
             } else
             {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5c (G6, CONTRACT-P5C §5.4): MONOLITH GLUE ONLY now. The frontend-keyed twin
                 // resolution below is the fourth of this family's five named scope sites, and
                 // P5e does not delete it - it stops reaching it under a transport, which is what
@@ -7997,7 +7997,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (PrgramImpl::g_currentDrawFrontendProgram == currentProgram.get()) {
             return PrgramImpl::g_currentDrawBackendProgram;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (G6, CONTRACT-P5C §5.4): MONOLITH GLUE ONLY now - the fifth of this family's five
         // named scope sites, unreachable under a transport by the arm above.
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -8253,7 +8253,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return g_GLESCapabilities.SupportsDrawIndirect;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P8-C: the command bytes an indirect executor is about to CONSUME on the CPU, made current.
     // Consumed means: every field on the CPU path (no native indirect), or on the native path the
     // uniforms fed from the command - gl_BaseVertex whenever the program reads it, and
@@ -8306,7 +8306,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!restart.DrawIsValid()) return;
         type = restart.IndexType();
         indexSize = MG_Util::GetGLTypeSize(type);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): under an active transport the command buffer is the
         // handle the verb record carried (MGPipeApplier's verb stash) and the SSBO view's
         // resource resolves from it by handle - the frontend binding slot and the client slot
@@ -8317,13 +8317,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 : MG_Pipe::kMGPipeNullHandle;
 #endif
         const Bool useNative =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws()
                 :
 #endif
             drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
                                                    /*indexed=*/true);
 #endif
@@ -8334,7 +8334,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
             if (paramsBinding >= 0) {
                 auto* resource =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     MG_Config::DataArmIsRecord()
                         ? BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle)
                         :
@@ -8410,7 +8410,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // draw is what leaves a stale value, and restoring afterwards would only protect the
         // NEXT draw while these commands ran with the stale one.
         SetCurrentBaseVertex(0);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): see ExecuteIndexedIndirectCommands - the verb's handle,
         // never the frontend binding slot or the client allocator.
         const MG_Pipe::MGPipeHandle verbBufferHandle =
@@ -8419,13 +8419,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 : MG_Pipe::kMGPipeNullHandle;
 #endif
         const Bool useNative =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws()
                 :
 #endif
             drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
                                                    /*indexed=*/false);
 #endif
@@ -8434,7 +8434,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
             if (paramsBinding >= 0) {
                 auto* resource =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     MG_Config::DataArmIsRecord()
                         ? BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle)
                         :
@@ -8550,7 +8550,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         );
     }
 
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
     // P5f (fr): no declaration, dispatch-table slot or caller remains for this legacy
     // helper. Exclude it from the server-capable build; retain non-D-P bytes for G1.
     GLuint GetBackendProgramId(GLuint program) {
@@ -8565,7 +8565,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return 0;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
         // scope - P3b/P4b rekeys the registry onto handles.
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -8688,7 +8688,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const GLenum rbErr = g_GLESFuncs.glGetError();
                         int feDb0 = -1, feDb1 = -1;
                         Uint feIdx = 0, feVer = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                         // P5e (fb): DEBUG-ONLY, and still a BARRIER_PULLED read. A diagnostic
                         // is not a reason to touch the binding slot on an apply thread, so
                         // under a transport the same four numbers come off the draw record -
@@ -8877,7 +8877,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // from the apply thread aborts by name instead of pulling GetBoundVertexArray behind
         // the family's back.
         void RefuseElementArrayBufferFromTheFrontend(const char* entry) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (!MG_Config::DataArmIsRecord()) return;
             if (!BufferImpl::VertexInputReadsRecords()) return;
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - %s read the frontend VAO's "
@@ -8964,13 +8964,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SizeT indexCount = 0;
         SizeT sourceByteOffset = 0;
         Bool hasElementBuffer = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // -1: monolith, or this arm never resolved a backend id, and the tail asks
         // BoundElementArrayBufferId() exactly as it always did.
         Int serverElementBinding = -1;
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): with an active transport this constructor runs on the
         // apply thread, where the frontend BufferObject's legacy accessors are Fatal by name
         // (BufferObject.cpp's "buffer-legacy-arm" refusal). The element buffer therefore
@@ -9133,7 +9133,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         m_previousBinding = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (serverElementBinding >= 0) {
             m_previousBinding = static_cast<Uint>(serverElementBinding);
         } else
@@ -9276,7 +9276,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
@@ -9315,7 +9315,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): with an active transport both buffers resolve from the
         // verb record's handles (MGPDrawIndirect::Buffer / ParameterBuffer) and the count
         // reads from the SERVER's staged shadow - the frontend binding slots, the frontend
@@ -9445,7 +9445,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
@@ -9484,7 +9484,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.5): see the indexed twin - the verb record's handles and
         // the SERVER's staged shadow, never the frontend bindings or the client allocator.
         if (MG_Config::DataArmIsRecord()) {
@@ -9716,7 +9716,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
@@ -9765,7 +9765,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
@@ -10988,7 +10988,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.3): THE NAMED ARM. A blit record whose ReadFbo/DrawFbo are
         // non-null is a glBlitNamedFramebuffer: both framebuffers resolve from the record's
         // handles through the FBO twin table (the client's ScopedBlitBindings staging and this
@@ -11062,7 +11062,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
         // A no-op on every driver that honours a non-zero destination array layer, which is all
         // of them but the probed one. Whatever it performs itself is taken out of the mask.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb, §5.4): the bound arm's two binding-slot reads were the last GetBoundObject
         // pair on this path; under a transport the two bound RECORDS answer instead
         // (FramebufferRecordFor(st.BoundFramebuffer[t]), through BlitEndpointRecord's null
@@ -11145,7 +11145,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ZoneScopedNC(__func__, TRACY_ZONECOLOR_BACKEND);
 #endif
         auto unit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(unit);
 #endif
 
@@ -11156,7 +11156,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.4): under an active transport the destination is the handle
         // the copy_framebuffer_to_texture record carried; the unit binding slot and the client
         // allocator are never read (T2/T4).
@@ -11179,7 +11179,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(unit);
 #endif
         const auto& bindingSlot = textureUnit.GetBindingSlot(textureTarget);
@@ -11547,7 +11547,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     class ScopedDetachedTextureFramebufferAttachments {
     public:
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2). THE SAME SWEEP, KEYED BY THE TEXTURE'S HANDLE.
         //
         // The frontend constructor below answers "which framebuffers attach this texture" by
@@ -11627,7 +11627,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside
             // the scope - P3b/P4b rekeys the registry onto handles.
             const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -11700,7 +11700,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (fb, CONTRACT-P5E.md §5.4): THE REVERSE INDEX REPLACES THE WALK. id's note
             // above names this package as the one that does it, and the reason is the line it
             // points at: StateForHandle handed the server a frontend FramebufferObject per live
@@ -12345,7 +12345,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint activeTextureUnit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
         TextureImpl::BackendTextureObject* dstBackendTexture = nullptr;
         TextureInternalFormat mgInternalFormat{};
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.4): with an active transport the destination resolves from
         // the handle the copy_framebuffer_to_texture record carried (MGPCopyFromFramebuffer::
         // Dst, the verb stash) and its format is the applier descriptor's - the client's
@@ -12471,7 +12471,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BindCurrentFBO(FramebufferTarget::Read);
         auto activeTextureUnit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
         TextureImpl::BackendTextureObject* dstBackendTexture = nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.4): see CopyTexImage2D - the record's Dst handle, never the
         // client's unit binding slot or the client allocator (T2/T4).
         if (MG_Config::DataArmIsRecord()) {
@@ -13091,7 +13091,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool MakeGLESCopyImageEndpoint(const CopyImageEndpoint& endpoint, GLenum appTarget, GLint x, GLint y,
                                           GLint z, GLESCopyImageEndpoint& out) {
         if (endpoint.IsRenderbuffer()) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 if (!PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)) return false;
                 auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreateByHandle(endpoint.RenderbufferHandle);
@@ -13121,7 +13121,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
         // reaches here - but the assertion that says so is compiled out of a release build, and
         // SyncTextureObjectToBackend would register a null state object.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             out.texture = TextureImpl::SyncTextureToBackendByHandle(endpoint.TextureHandle);
         } else
@@ -13147,7 +13147,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto* record = endpoint.IsRenderbuffer()
                 ? PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)
@@ -13193,7 +13193,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* srcMipmap = MG_State::GLState::AsMipmapTexture(srcEndpoint.Texture.get());
         auto* dstMipmap = MG_State::GLState::AsMipmapTexture(dstEndpoint.Texture.get());
         if (!srcMipmap || !dstMipmap) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // UNDER A REAL TRANSPORT THE SERVER HAS NO FRONTEND SHADOW TO MIRROR INTO (P5b i1, ruling
         // §6.7), and P8-E settled where the move lives instead - not on the client (ROADMAP P8's
         // original row) but in the server's staged store: CopyImageSubData's handle arm makes the
@@ -13282,7 +13282,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!dstEndpoint.IsRenderbuffer() && dstEndpoint.Texture) {
             TextureImpl::NoteDriverSideTextureWrite(dstEndpoint.Texture);
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The handle arm's endpoint names its texture by handle, and the server has no frontend
         // object to note. The staged store's half of the note waits for the copy (P8-E, below).
         const Bool handleArmDestination =
@@ -13296,7 +13296,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
             return;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P8-E (notes/p8/E.md): THE SERVER'S STAGED STORE FOLLOWS THE COPY. Both endpoints are synced,
         // so every byte the store holds for them is on the driver, and the copy below is a raw
         // texel-block move - the store makes the same move, which keeps the destination level
@@ -13389,7 +13389,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                          MG_Util::ConvertGLEnumToString(dst.target).c_str(),
                          MG_Util::ConvertGLEnumToString(dstTarget).c_str());
             MOBILEGL_ASSERT(false, "glCopyImageSubData failed after frontend validation accepted the request.");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P8-E: the store already made the move the driver just refused.
             if (MG_Config::DataArmIsRecord() && handleArmDestination) {
                 TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
@@ -13413,7 +13413,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         (void)layer;
         (void)access;
         (void)format;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (fb): see NoteImageUnitBoundWithoutReadingTheFrontend. Under a transport this
         // entry point records the high-water mark and lets the next validate point's sweep do
         // the bind from the record; reading the frontend image binding here is the
@@ -13465,7 +13465,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // effect by the block's next use.
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         if (!storageBlockName) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto handle = MG_Pipe::MGPipeApplier().VerbStorageBlockProgram;
             auto* slot = PrgramImpl::g_backendProgramObjects.FindByHandle(handle);
@@ -13480,7 +13480,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto& programObject = MG_Pipe::gPipeInputs.GetProgramObject(program);
         if (!programObject) return;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
         // scope - P3b/P4b rekeys the registry onto handles.
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -13686,7 +13686,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
         const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
@@ -14707,7 +14707,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
@@ -14941,7 +14941,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const void* shadow = textureMipmapObject->MapMipmapData(uploadTarget, level);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P4a (D-M) SAID "a split server holds no shadow to convert" AND ABORTED. That is the
         // premise this row of P3b/P4b re-examined, and it is wrong in the only case that can
         // get here: the level storage this converts IS the server's own, fed by the staged
@@ -14978,7 +14978,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
         const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
@@ -15301,7 +15301,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the driver-level binding used to stay on the user PBO after this call,
         // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
@@ -15425,7 +15425,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("GetTexImage: bound texture object = %p (name=%u)", textureObject.get(),
                 textureObject ? textureObject->GetExternalIndex() : 0);
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
         // scope - P3b/P4b rekeys the registry onto handles.
         const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
@@ -15748,7 +15748,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
         // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
@@ -16600,7 +16600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 break;
             }
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P14: AND OTHERWISE ANY LIVE NATIVE CONTEXT IN THE PROCESS. The backend keeps buffers,
         // textures and syncs of its own in process-wide state (the UBO/unpack/upload rings, the
         // buffer pool, scratch textures, frame fences) and every session's apply thread uses
@@ -17326,7 +17326,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P14: THE BACKEND'S TURN MOVED TO ANOTHER APPLY THREAD (ServerLoop's BackendTurn). Each
     // session's apply thread keeps its own native context current, but the backend's owner
     // thread and every binding shadow are process-wide and still describe the context of the

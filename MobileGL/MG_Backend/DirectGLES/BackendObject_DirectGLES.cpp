@@ -32,7 +32,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ID-54 / ID-67 (v1, under ID-52/ID-59's grant for this file). Which VIRTUAL (dpy, draw,
         // read, ctx) the process's one native ES context is currently bound FOR, on the apply
         // thread. DirectGLES has one native context and one native surface (g_Context, g_Surface)
@@ -860,7 +860,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Int maxSamples = 0;
         const SizeT formatIndex = static_cast<SizeT>(logicalFormat);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // C6 / ID-52: read the ROLE's own cache. Under split that is the server's private backend
         // (ActiveBackendFormatCaps), not pActiveBackendObject, which holds the client's mirror.
         const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
@@ -962,7 +962,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool BackendObject_DirectGLES::LatchIfGpuFaulted() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return LatchIfGuiltyBeforeApply();
 #else
         return false;
@@ -1085,7 +1085,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
         // arm below is the original statement, byte for byte (G1).
         const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
@@ -1139,7 +1139,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!DirectGLES::ReleaseCurrent()) {
                 return false;
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             NoteNativeContextGone();
 #endif
             return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
@@ -1212,7 +1212,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
             (void)DirectGLES::ReleaseCurrent();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             NoteNativeContextGone();
 #endif
             return false;
@@ -1267,7 +1267,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BackendObject_DirectGLES::ReleaseEGLResources() {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         DestroyEGLContext();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
 #endif
         m_suspendedWindowSurfaces.clear();
@@ -1295,7 +1295,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             m_suspendedWindowSurfaces.push_back(client);
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The native binding moved onto the placeholder: the next make-current binds for real.
         NoteNativeContextGone();
 #endif
@@ -1327,7 +1327,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (surface == EGL_NO_SURFACE) return false;
             native->second = surface;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
 #endif
         MGLOG_I("DirectGLES: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
@@ -1366,7 +1366,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // every object the client had built - which a multi-window client hit on its first closed
         // popup.
         (void)surface;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
 #endif
     }

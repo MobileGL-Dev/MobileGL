@@ -37,7 +37,7 @@
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
     // emission, so no frontend pack binding can affect this destination.
     static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
@@ -108,7 +108,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        SizeT targetIndex,
                                        Bool caveat,
                                        FormatCapability capability) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
             if (activeCaps == nullptr || targetIndex >= kFormatCapabilityTargetCount) {
                 return false;
@@ -123,7 +123,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             const FormatCapabilityCache& cache = *activeCaps;
 #else
             const FormatCapabilityCache& cache = pActiveBackendObject->GetFormatCapabilities();
@@ -171,7 +171,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             using namespace MobileGL::MG_Util::TextureFormatProcessor;
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (ActiveBackendFormatCaps() == nullptr || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
 #else
             if (!pActiveBackendObject || ShouldUseCaveatFormat(internalFormat, targetIndex)) {
@@ -269,7 +269,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not be resolved yet - a probe run then would latch "cannot tell" as "clean"
             // forever. Once the backend exists, the first narrow-format image this process
             // creates runs the probe on a live context.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (ActiveBackendFormatCaps() == nullptr) {
                 return false;
             }
@@ -315,7 +315,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!TargetRequiresRenderableFormat(targetIndex)) {
                     return false;
                 }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (ActiveBackendFormatCaps() != nullptr && !ShouldUseCaveatFormat(internalFormat, targetIndex)) {
                     return false;
                 }
@@ -2362,7 +2362,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
