@@ -304,9 +304,11 @@ namespace MobileGL::MG_Remote::Server {
         // in place: a run records the address it arrived at (minus its offset in the level) and
         // nothing is copied. The readers then ask exactly what they ask under split - is the
         // level covered, what are its bytes - and get the same answers from memory that is
-        // already there. The two copy-only operations (FollowCopy, AdoptClientBoxes) stay
-        // copy-only: this store never writes frontend memory, so a copy it cannot follow marks
-        // the destination driver-written, which sends its readers to the driver.
+        // already there. This store never writes frontend memory: a copy it follows
+        // (FollowCopy) first takes the destination level into a server-owned copy, which is then
+        // what AdoptClientBoxes lands the client's later boxes on - exactly the split store's
+        // shape for that level - and a copy it cannot follow marks the destination
+        // driver-written, which sends its readers to the driver.
         Bool Aliases() const { return !m_copies && MG_Config::RecordArmAliasesFrontend(); }
         // Does this store answer at all: a copying store, or an aliasing one.
         Bool Holds() const { return m_copies || Aliases(); }
@@ -555,7 +557,7 @@ namespace MobileGL::MG_Remote::Server {
         Bool FollowCopy(Uint64 srcKey, Uint16 srcTarget, Uint16 srcLevel, const IntVec3& srcOrigin,
                         Uint64 dstKey, Uint16 dstTarget, Uint16 dstLevel, const IntVec3& dstOrigin,
                         const IntVec3& size) {
-            if (!m_copies) return false;
+            if (!Holds()) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
             if (m_driverWritten.find(Bucketed(srcKey)) != m_driverWritten.end()) return false;
             const LevelShadow* src = FindLevel(srcKey, srcTarget, srcLevel);
@@ -569,13 +571,21 @@ namespace MobileGL::MG_Remote::Server {
             // Gathered first, so a copy within one level cannot read rows it has already written.
             const SizeT rowBytes = static_cast<SizeT>(size.x()) * texel;
             Vector<Uint8> rows(rowBytes * static_cast<SizeT>(size.y()) * static_cast<SizeT>(size.z()));
+            const Uint8* srcBytes = LevelData(*src);
             for (Int z = 0; z < size.z(); ++z) {
                 for (Int y = 0; y < size.y(); ++y) {
                     std::memcpy(rows.data() + (static_cast<SizeT>(z) * size.y() + y) * rowBytes,
-                                src->Bytes.data() + TexelOffset(src->Extent, srcOrigin.x(), srcOrigin.y() + y,
-                                                                srcOrigin.z() + z, texel),
+                                srcBytes + TexelOffset(src->Extent, srcOrigin.x(), srcOrigin.y() + y,
+                                                       srcOrigin.z() + z, texel),
                                 rowBytes);
                 }
+            }
+            if (dst->Alias != nullptr) {
+                // P13 W4b, the aliasing mode: the destination's bytes are the frontend's level
+                // shadow, which never sees the copy and which this store does not write. The level
+                // becomes server-owned here, from the bytes it stood for, as under split.
+                dst->Bytes.assign(dst->Alias, dst->Alias + static_cast<SizeT>(dst->DeclaredByteBound));
+                dst->Alias = nullptr;
             }
             if (!LevelComplete(*dst)) {
                 dst->Bytes.assign(static_cast<SizeT>(dst->DeclaredByteBound), Uint8{0});
@@ -609,10 +619,13 @@ namespace MobileGL::MG_Remote::Server {
         Bool AdoptClientBoxes(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                               Uint64 imageOffset, const void* bytes, SizeT byteSize,
                               const ClientTexelBox* boxes, SizeT boxCount) {
-            if (!m_copies || bytes == nullptr || (boxCount != 0 && boxes == nullptr)) return false;
+            if (!Holds() || bytes == nullptr || (boxCount != 0 && boxes == nullptr)) return false;
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow* shadow = FindLevelMutable(key, uploadTarget, level);
-            if (shadow == nullptr || !shadow->HoldsFollowedCopy || !LevelComplete(*shadow) || shadow->Extent != extent) {
+            // Alias is null on a level holding a followed copy (FollowCopy took it server-owned);
+            // checked anyway, because the boxes below are written into Bytes.
+            if (shadow == nullptr || !shadow->HoldsFollowedCopy || shadow->Alias != nullptr || !LevelComplete(*shadow) ||
+                shadow->Extent != extent) {
                 return false;
             }
             const SizeT texel = LevelTexelBytes(*shadow);

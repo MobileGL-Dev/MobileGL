@@ -454,6 +454,64 @@ TEST(StagedTextureStoreTest, AFollowedCopyMovesTheWindowAndLeavesTheSourceAlone)
     }
 }
 
+// P13 W4b: THE ALIASING STORE FOLLOWS TOO, WITHOUT WRITING FRONTEND MEMORY. On monolith's record
+// arm both levels are the frontend's own level shadows, held by address. The copy takes the
+// destination into a server-owned copy and moves the window there; the frontend bytes it stood for
+// stay exactly as they were, and a later client run lands only its boxes on the copy.
+#if MOBILEGL_BUILD_DISAGGREGATED
+TEST(StagedTextureStoreTest, AnAliasingStoreFollowsACopyIntoAServerOwnedDestination) {
+    const auto savedTransport = MG_Config::Transport;
+    const Bool savedArm = MG_Config::MonolithTakesRecordArm;
+    MG_Config::Transport = MG_Config::TransportMode::Monolith;
+    MG_Config::MonolithTakesRecordArm = true;
+    struct Restore {
+        MG_Config::TransportMode transport;
+        Bool arm;
+        ~Restore() {
+            MG_Config::Transport = transport;
+            MG_Config::MonolithTakesRecordArm = arm;
+        }
+    } restore{savedTransport, savedArm};
+    Server::StagedTextureStore store(/*copies=*/false);
+    ASSERT_TRUE(store.Aliases());
+    const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(66, 1));
+    const Uint64 dst = Server::StagedTextureStore::KeyForHandle(TestHandle(67, 1));
+    const auto srcBytes = FollowPattern(0x00);
+    auto dstFrontend = FollowPattern(0x80);
+    const auto dstBefore = dstFrontend;
+    store.NoteLevelDefined(src, kTex2DTarget, 0, kFollowExtent);
+    store.Adopt(src, kTex2DTarget, 0, kFollowExtent, srcBytes.data(), srcBytes.size(), /*frontendShadow=*/true);
+    store.NoteLevelDefined(dst, kTex2DTarget, 0, kFollowExtent);
+    store.Adopt(dst, kTex2DTarget, 0, kFollowExtent, dstFrontend.data(), dstFrontend.size(), /*frontendShadow=*/true);
+    ASSERT_EQ(store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit"), dstFrontend.data()) << "the level is aliased";
+
+    ASSERT_TRUE(store.FollowCopy(src, kTex2DTarget, 0, IntVec3{1, 1, 0}, dst, kTex2DTarget, 0, IntVec3{2, 0, 0},
+                                 IntVec3{2, 3, 1}));
+    EXPECT_TRUE(store.LevelHoldsFollowedCopy(dst, kTex2DTarget, 0));
+    EXPECT_EQ(dstFrontend, dstBefore) << "the copy wrote the frontend's level shadow";
+    const Uint8* got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    ASSERT_NE(got, dstFrontend.data()) << "the destination is still aliased after a followed copy";
+    for (Int y = 0; y < 4; ++y) {
+        for (Int x = 0; x < 4; ++x) {
+            const Bool copied = x >= 2 && y < 3;
+            for (Int c = 0; c < 4; ++c) {
+                const Uint8 want = copied ? srcBytes[At(x - 2 + 1, y + 1, c)] : dstBefore[At(x, y, c)];
+                ASSERT_EQ(got[At(x, y, c)], want) << "destination texel (" << x << ", " << y << ")";
+            }
+        }
+    }
+
+    // The client then writes texel (0, 3) of its shadow: only that box lands on the copy.
+    dstFrontend[At(0, 3, 0)] = 0x11;
+    const Server::StagedTextureStore::ClientTexelBox box{0, 3, 0, 1, 1, 1};
+    ASSERT_TRUE(store.AdoptClientBoxes(dst, kTex2DTarget, 0, kFollowExtent, 0, dstFrontend.data(), dstFrontend.size(),
+                                       &box, 1));
+    got = store.RequireLevelBytes(dst, kTex2DTarget, 0, "unit");
+    EXPECT_EQ(got[At(0, 3, 0)], 0x11);
+    EXPECT_EQ(got[At(2, 0, 0)], srcBytes[At(1, 1, 0)]) << "the client's box wiped the followed copy";
+}
+#endif
+
 // Every shape the store cannot address, and a source it can no longer vouch for, is REFUSED with
 // the destination untouched - the caller marks it driver-written instead. The monolith store
 // follows nothing at all.

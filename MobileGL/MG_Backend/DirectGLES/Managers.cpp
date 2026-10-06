@@ -10692,7 +10692,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
                                           const IntVec3& destinationOrigin, const IntVec3& size) {
             auto& store = MG_Remote::Server::ServerStagedTexture();
-            if (!store.CopiesIntoServerStorage()) return false;
+            // P13 W4b: an aliasing store (monolith's record arm) follows too; see FollowCopy.
+            if (!store.Holds()) return false;
             // The store's level key for an endpoint copy-image addresses as ONE image with its
             // layers on z: exactly one upload target (not a cube map, whose faces are six store
             // levels) and not a 1D array (the store keeps its layers as rows). A view's own levels
