@@ -38,6 +38,8 @@ TEST = ROOT / "MobileGL" / "MG_Test" / "Wire" / "PeerLatchTest.cpp"
 FILES = {
     "PipeWireCodec.cpp": ROOT / "MobileGL" / "MG_Remote" / "Wire" / "PipeWireCodec.cpp",
     "PipeApplier.cpp": ROOT / "MobileGL" / "MG_Remote" / "Server" / "PipeApplier.cpp",
+    # P13 W5: the record verbs ServerVerbSink applied moved to their own consumer, with their latches.
+    "RecordVerbSink.cpp": ROOT / "MobileGL" / "MG_Backend" / "Record" / "RecordVerbSink.cpp",
     "ServerLoop.cpp": ROOT / "MobileGL" / "MG_Remote" / "Server" / "ServerLoop.cpp",
     "SurfaceOpCodec.cpp": ROOT / "MobileGL" / "MG_Remote" / "Protocol" / "SurfaceOpCodec.cpp",
 }
@@ -75,7 +77,7 @@ UNREACHABLE = [
      "peer's bytes; ServerLoopTest's lost-window case is its negative control"),
     # P9 (CONTRACT-P9.md §1): the pack-buffer read's decline. The reply form's twin answers
     # DECLINED for the same case and has no row either.
-    ("PipeApplier.cpp", 'Fatal{ReadbackDeclined, "ReadPixelsToBuffer"}',
+    ("RecordVerbSink.cpp", 'Fatal{ReadbackDeclined, "ReadPixelsToBuffer"}',
      "both server backends install GL.ReadPixels; no record bytes can take the slot away, so the "
      "arm exists only for a backend that never had one"),
 ]
@@ -154,7 +156,8 @@ def print_mechanics():
               ", ".join(f"`{case_suite(f, c)}.{c}` ({f})" for f, c in cases) + " |")
 
 
-LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])(SessionLatch|WireProtocolLatchAt|WireProtocolLatch)\s*\(")
+# P13 W5: MGPipeRecordLatch is SessionLatch through the record arm's seam (MG_Pipe/PipeSessionFail.h).
+LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])(SessionLatch|MGPipeRecordLatch|WireProtocolLatchAt|WireProtocolLatch)\s*\(")
 STRING = re.compile(r'"((?:[^"\\]|\\.)*)"')
 CONVERSION = re.compile(r"%[-+ #0-9.]*(?:hh|h|ll|l|z|j|t)?[diouxXcsp]")
 
@@ -282,7 +285,7 @@ def latch_sites():
                 if re.search(r"\bBool\s+WireProtocolLatch(At)?\s*\(", previous):
                     continue  # the SessionLatch inside the helper: its callers are the sites
                 args = string_args(call_text(lines, index, match.start()))
-                if match.group(1) == "SessionLatch":
+                if match.group(1) in ("SessionLatch", "MGPipeRecordLatch"):
                     fmt = next((a for a in args[1:] if a is not None), None)
                 elif match.group(1) == "WireProtocolLatch":
                     fmt = None if args[0] is None else (

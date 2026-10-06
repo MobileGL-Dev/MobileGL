@@ -1152,7 +1152,7 @@ namespace {
          }},
         // P8-F: ProtocolCorruption, no longer UnmigratedVerb - our client cannot send this shape
         // (nor +CLIENT_INDICES, the same site), so only a foreign peer like this one reaches it.
-        {"MultiDrawInstanced", "PipeApplier.cpp", "MultiDraw*+INSTANCED", Outcome::Latched,
+        {"MultiDrawInstanced", "RecordVerbSink.cpp", "MultiDraw*+INSTANCED", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"MultiDrawArrays+INSTANCED\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPDrawInfo info{};
@@ -1165,7 +1165,7 @@ namespace {
              std::memcpy(tail.data(), ranges, sizeof(ranges));
              return Forge(c, r, P::MGPWireOp::DrawVbo, Bytes(info), {tail});
          }},
-        {"UnitWindowSamplerViews", "PipeApplier.cpp", "SetSamplerViews.Count (unit window)", Outcome::Latched,
+        {"UnitWindowSamplerViews", "RecordVerbSink.cpp", "SetSamplerViews.Count (unit window)", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - draw_vbo applies", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPContextValues values{};
@@ -1185,7 +1185,7 @@ namespace {
              const P::MGPDrawRange range{0, 3, 0};
              return Forge(c, r, P::MGPWireOp::DrawVbo, Bytes(info), {Bytes(range)});
          }},
-        {"UnitWindowSamplerStates", "PipeApplier.cpp", "BindSamplerStates.Count (unit window)", Outcome::Latched,
+        {"UnitWindowSamplerStates", "RecordVerbSink.cpp", "BindSamplerStates.Count (unit window)", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - draw_vbo applies", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPContextValues values{};
@@ -1248,7 +1248,7 @@ namespace {
         // P9 (CONTRACT-P9.md §1): the pack-buffer readbacks. Each sink has ONE shape site, fed by
         // every check (box, extent, PH-3 bound, Src.DstSize, the layout), so one row per sink
         // covers them; the texture sink's unreadable-level site is the third.
-        {"ReadPixelsToBufferShape", "PipeApplier.cpp", "ReadPixelsToBuffer.shape", Outcome::Latched,
+        {"ReadPixelsToBufferShape", "RecordVerbSink.cpp", "ReadPixelsToBuffer.shape", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"ReadPixelsToBuffer.shape\"} the read box or its format is invalid", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPReadbackToBuffer rec{};
@@ -1259,7 +1259,7 @@ namespace {
              rec.RowStride = 16;
              return Forge(c, r, P::MGPWireOp::ReadPixelsToBuffer, Bytes(rec));
          }},
-        {"GetTextureImageToBufferShape", "PipeApplier.cpp", "GetTextureImageToBuffer.shape", Outcome::Latched,
+        {"GetTextureImageToBufferShape", "RecordVerbSink.cpp", "GetTextureImageToBuffer.shape", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"GetTextureImageToBuffer.shape\"} the image extent is not a whole level's", false,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPReadbackToBuffer rec{};
@@ -1275,7 +1275,7 @@ namespace {
         // A well-shaped record naming a texture the server never created: the level cannot be
         // read, and with no reply to answer ERROR in, the session latches under the reply form's
         // family word.
-        {"GetTextureImageToBufferUnreadable", "PipeApplier.cpp", "GetTextureImageToBuffer", Outcome::Latched,
+        {"GetTextureImageToBufferUnreadable", "RecordVerbSink.cpp", "GetTextureImageToBuffer", Outcome::Latched,
          "Fatal{ReplyError, \"GetTextureImageToBuffer\"}", true,
          [](Client::ClientSession& c, PeerReport& r) {
              P::MGPReadbackToBuffer rec{};
