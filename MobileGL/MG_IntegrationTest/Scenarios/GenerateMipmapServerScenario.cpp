@@ -133,6 +133,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 m_wire = SplitRuntimeSkipReason().empty();
+                // P13 W4b: monolith on the record arm runs the server's generation in this process.
+                m_recordArm = m_wire || PeekSplitRuntime().dataArmIsRecord;
                 m_espryt = Gl().BackendName() == "DirectGLES";
                 m_forcedCpu = std::getenv(kForceCpuMipmap) != nullptr;
                 m_refusedReadback = std::getenv(kRefuseReadback) != nullptr;
@@ -293,10 +295,13 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
             }
 
             // Under the knob the SERVER must say it filtered on the CPU; without that line the entry
-            // ran the native arm and its green says nothing about the arm it is named for.
+            // ran the native arm and its green says nothing about the arm it is named for. On
+            // monolith's record arm (P13 W4b) the same backend code runs in this process, so the
+            // whole lane log is where its line lands.
             void ExpectCpuArmNamed() {
-                if (!m_forcedCpu || !m_wire || !m_espryt) return;
-                const std::string log = PipeStatsWindow::ReadServerLogSince(m_mark);
+                if (!m_forcedCpu || !m_recordArm || !m_espryt) return;
+                const std::string log = m_wire ? PipeStatsWindow::ReadServerLogSince(m_mark)
+                                               : PipeStatsWindow::ReadLaneLogSince(m_mark);
                 EXPECT_NE(log.find(kCpuMipmapMarker), std::string::npos)
                     << kForceCpuMipmap << " is set but the server log after glGenerateMipmap carries no '"
                     << kCpuMipmapMarker << "' line: the knob did not reach the server, or the three-channel "
@@ -486,6 +491,7 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
             }
 
             bool m_wire = false;
+            bool m_recordArm = false;
             bool m_espryt = false;
             bool m_forcedCpu = false;
             bool m_refusedReadback = false;

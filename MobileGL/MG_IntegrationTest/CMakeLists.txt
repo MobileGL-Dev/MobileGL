@@ -3442,6 +3442,35 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-cpu-mip-${mglItestArmLower}-${cpuMipCase}.log")
         endforeach()
     endforeach()
+    # P13 W4b: MONOLITH TAKES THE SAME KNOBS. On the record arm the monolith runs the server's
+    # generation and the server's store read in its own process, so both knobs reach it and each
+    # entry asserts its arm's line in its private log. Ambient monolith environment; integration-gpu.
+    foreach(cpuMipCase Rgb16fUploadedBaseGeneratesItsChain
+                       Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
+                       Rgb32fUploadedBaseGeneratesItsChain
+                       Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Monolith.CpuMip."
+            TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-cpu-mip-monolith-${cpuMipCase}.log")
+    endforeach()
+    foreach(storeReadCase AnUploadedLevelReadsBackExactly
+                          ACopiedWindowReadsBackOverTheUpload
+                          ACopiedWindowReadsBackFromAnImmutableLevel
+                          APartialUploadAfterTheCopyKeepsTheCopiedWindow)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectGLES.Monolith.StoreRead."
+            TEST_FILTER "CopyImageStoreReadbackScenario.${storeReadCase}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES
+                LABELS "integration-gpu"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-store-read-monolith-${storeReadCase}.log")
+    endforeach()
 
     # P8-C: draw inputs a compute shader wrote, read on the CPU by the side that applies the draw
     # (restart rewrite, multi-draw rebase, *IndirectCount, indirect gl_BaseVertex, an orphaned

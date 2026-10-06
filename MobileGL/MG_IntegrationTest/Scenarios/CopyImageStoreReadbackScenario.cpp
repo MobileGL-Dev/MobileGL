@@ -129,6 +129,8 @@ namespace MGITest {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 m_wire = SplitRuntimeSkipReason().empty();
+                // P13 W4b: monolith on the record arm reads back through the server's store route.
+                m_recordArm = m_wire || PeekSplitRuntime().dataArmIsRecord;
                 m_espryt = Gl().BackendName() == "DirectGLES";
                 if (const char* knob = std::getenv(kRefuseExtentKnob)) {
                     int width = 0, height = 0;
@@ -219,10 +221,12 @@ namespace MGITest {
             }
 
             // Under the knob the Espryt server must have answered from its store at least once;
-            // otherwise the entry proves nothing about that route.
+            // otherwise the entry proves nothing about that route. On monolith's record arm (P13
+            // W4b) that server code runs in this process and logs into the whole lane log.
             void ExpectStoreReadNamedSince(const PipeStatsWindow::LogMark& mark) {
-                if (!m_forced || !m_espryt || !m_wire) return;
-                const std::string log = PipeStatsWindow::ReadServerLogSince(mark);
+                if (!m_forced || !m_espryt || !m_recordArm) return;
+                const std::string log = m_wire ? PipeStatsWindow::ReadServerLogSince(mark)
+                                               : PipeStatsWindow::ReadLaneLogSince(mark);
                 EXPECT_NE(log.find(kStoreReadMarker), std::string::npos)
                     << kRefuseExtentKnob << " is set but the server log carries no '" << kStoreReadMarker
                     << "' line: the knob did not reach the server, or no read took the store route";
@@ -238,6 +242,7 @@ namespace MGITest {
             }
 
             bool m_wire = false;
+            bool m_recordArm = false;
             bool m_espryt = false;
             bool m_forced = false;
             int m_width = kDefaultWidth;
