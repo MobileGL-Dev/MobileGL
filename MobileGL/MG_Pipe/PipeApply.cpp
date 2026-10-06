@@ -1495,7 +1495,7 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Texture records can have a server consumer without the buffer ops table (Magma).
         // Their staged bytes still belong to the server before SEG_STAGE retires. Keep the
         // existing backend hooks authoritative when present, and use this fallback otherwise.

@@ -1687,7 +1687,7 @@ void main() {
             return true;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (T5 / tx): the split arm of EnsureGenerateMipmapStorageAllocated. Under an active
         // transport the apply thread may not WRITE the client's level storage - AllocateStorage
         // and MarkStorageDirty on a frontend TextureObjectMipmap are §6 layer-1 surfaces

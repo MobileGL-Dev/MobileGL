@@ -173,6 +173,9 @@ namespace MobileGL::MG_Pipe {
     // presents, included. Asked only for a session with a context bound; asks the environment /
     // property at most every 100 ms per thread.
     bool MGPipeDebugSessionLossDue(unsigned clientPid);
+#else
+    // P13 W5: the device-loss knobs end a SESSION; a library without a transport has none to end.
+    inline bool MGPipeDebugDeviceLossDue() { return false; }
 #endif
 
 } // namespace MobileGL::MG_Pipe

@@ -352,6 +352,10 @@ namespace MobileGL::MG_Pipe {
     namespace {
         GLContext* LiveContext() { return MG_State::pGLContext.get(); }
 
+#if !MOBILEGL_BUILD_DISAGGREGATED
+        // P13 W5: no transport, no run-ahead client.
+        Bool ClientRunsAhead() { return false; }
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // ---- P5e (ra): the fill decision (CONTRACT-P5E §3.1) -----------------------------
         //
@@ -3618,7 +3622,7 @@ namespace MobileGL::MG_Pipe {
             }
 #endif
             MGPipeCsoCacheInstance().Reset();
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
             if (!resetCrossed)
 #endif
                 MGPipeApplierReset();

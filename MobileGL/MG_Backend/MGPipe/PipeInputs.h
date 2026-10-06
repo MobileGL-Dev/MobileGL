@@ -1006,6 +1006,8 @@ namespace MobileGL::MG_Pipe {
     // inline that no caller in such a build ever has a reason to call twice - the disaggregated
     // arm above is the real one.
     inline PipeInputs& MGPipeClientInputs() { return gPipeInputs; }
+    // P13 W5: one block, no client-role stamp to withdraw.
+    inline void MGPipeClientClearVerbBoundary() {}
 #endif
 
     // Every field has storage or is forwarded, and nothing else.

@@ -962,7 +962,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Bool BackendObject_DirectGLES::LatchIfGpuFaulted() {
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         return LatchIfGuiltyBeforeApply();
 #else
         return false;
