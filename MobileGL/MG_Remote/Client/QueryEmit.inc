@@ -128,7 +128,7 @@
         }
 
         void EmitDeleteTransformFeedback(GLuint name) {
-            auto& session = RequireSession("DeleteTransformFeedback");
+            VerbChannel session = ChannelFor("DeleteTransformFeedback");
             BeforeReadOnlyVerb();
             const auto& context = *MG_State::pGLContext;
             const MG_Pipe::MGPStreamOutputBind object{name, 0, context.GetTransformFeedbackLifetimeId(name)};

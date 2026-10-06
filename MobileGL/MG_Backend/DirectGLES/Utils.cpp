@@ -2363,7 +2363,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();

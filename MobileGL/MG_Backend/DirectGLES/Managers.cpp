@@ -2247,6 +2247,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->syncedChangeSerial = ResourceSerialOf(res);
                     return;
                 }
+                // P13 W4b: A SERVER-ORIGINATED WRITE INTO AN ALIASING STORE (monolith's record arm)
+                // lands in the GL store, never in the base: the bytes are the sink's scratch, and the
+                // base is the frontend's shadow, which this side does not write. Queued uploads land
+                // first, so they cannot later overwrite these bytes from the stale shadow; the store
+                // is then marked GPU-written, which sends the frontend (its own pack-buffer mark) and
+                // every CPU reader here (SplitHostBytesForCpuRead) back to the GL store for them.
+                if (MG_Pipe::MGPipeApplyingServerOriginatedWrite() && MG_Config::RecordArmAliasesFrontend() &&
+                    bytes != nullptr && size != 0) {
+                    // The store must exist to take them: a pack buffer is often never drawn from, so
+                    // nothing else has built it. Only a store that does not exist yet is ensured: the
+                    // applier has already counted THIS write into the record's serial, so the ensure
+                    // of a built store would read it as an untracked mutation and re-upload the
+                    // shadow over the runs this landing wrote before it.
+                    if (CanTouchGLNow() && (resource->id == 0 || !resource->storageInitialized ||
+                                            resource->pendingRespecify ||
+                                            resource->contextGeneration != g_bufferContextGeneration)) {
+                        resource = EnsureBufferResourceForHandle(nullptr, res);
+                    }
+                    if (resource != nullptr && CanTouchGLNow() && resource->id != 0 && resource->storageInitialized &&
+                        !resource->persistentMapped && !resource->pendingRespecify &&
+                        resource->contextGeneration == g_bufferContextGeneration &&
+                        StorageMatchesSize(*resource, ResourceWidthOf(res))) {
+                        FlushPendingRangesFrom(*resource, resource->hostBytes, ResourceWidthOf(res));
+                        BindBufferId(TempBufferTarget, resource->id);
+                        g_GLESFuncs.glBufferSubData(TempBufferTarget, static_cast<GLintptr>(offset),
+                                                    static_cast<GLsizeiptr>(size), bytes);
+                        // The store holds everything the record now says (the applier bumped its
+                        // serial for this write): without the stamp the next ensure would see a
+                        // newer serial and re-upload the shadow over the bytes that just landed.
+                        resource->syncedChangeSerial = ResourceSerialOf(res);
+                    } else if (resource != nullptr) {
+                        const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                        auto& write = resource->pendingResidentWrites.emplace_back();
+                        write.offset = offset;
+                        const auto* source = static_cast<const Uint8*>(bytes);
+                        write.bytes.assign(source, source + size);
+                    }
+                    if (resource != nullptr) resource->serverGpuWritten = true;
+                    return;
+                }
 #endif
                 // M-2: UNDER pendingMutex, because this line runs BEFORE the CanTouchGLNow()
                 // test below - i.e. on the arm D-A2 deliberately keeps reachable off the render
@@ -3093,7 +3133,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // the level image when the record carries a piece of the level rather than the
                 // whole of it (fix A2), which is why it is read here now.
                 auto& store = MG_Remote::Server::ServerStagedTexture();
-                if (!store.CopiesIntoServerStorage()) return;
+                // P13 W4b: an aliasing store (monolith's record arm) adopts too - it records where
+                // the run sits in the frontend's level shadow instead of copying it.
+                if (!store.Holds()) return;
                 // The applier's gate has already faulted every shape that reaches here without
                 // bytes, and under split the codec declared the run's length (Blob.Size) -
                 // TextureEmit.h's "the bytes this record declares ARE the level shadow".
@@ -3132,19 +3174,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // RegionCount == 0 IS the whole-level spelling - "the run is the level shadow",
                 // beginning at the level's first byte - so it is adopted with the spelling that
                 // replaces the level; every other record names a RUN of the level by its own box.
+                // A client record's run: under monolith's record arm it IS the frontend level shadow,
+                // the one source an aliasing store keeps by address.
                 if (record.RegionCount == 0) {
-                    store.Adopt(key, uploadTarget, record.Level, extent, bytes, runBytes);
+                    store.Adopt(key, uploadTarget, record.Level, extent, bytes, runBytes, /*frontendShadow=*/true);
                     return;
                 }
                 store.AdoptRun(key, uploadTarget, record.Level, extent,
                                MG_Remote::Server::StagedTextureRunImageOffset(record, regions), bytes,
-                               runBytes);
+                               runBytes, /*frontendShadow=*/true);
             }
 
             void Ops_H_TextureRespecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
                                         const MG_Pipe::MGPRespecifiedLevel* level) {
                 auto& store = MG_Remote::Server::ServerStagedTexture();
-                if (!store.CopiesIntoServerStorage()) return;
+                if (!store.Holds()) return;
                 const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
                 if (level != nullptr) {
                     // ONE glTexImage*D redefined one level: its exact extent crossed with the
@@ -5044,7 +5088,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle g_fboSynced* arm");
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemFramebuffer (bit 9)",
@@ -5089,7 +5133,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "cheap-gate trio");
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemTextureResources (bit 10)",
@@ -5125,7 +5169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "arm and SamplerPassMemo's raw-pointer rows");
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemSamplers (bit 11)",
@@ -5154,7 +5198,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables g_programTwinLookupMemo");
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemPrograms (bit 12)",
@@ -6501,7 +6545,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            // P13 W4b (defect h): monolith's record arm takes the body too; its old arm only
+            // cleared m_isInitialized and replayed the frontend shadow at the next sync.
+            if (MG_Config::DataArmIsRecord()) {
                 const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
                 // ES image binding needs immutable storage, but an already
                 // immutable core-format allocation needs no replacement. Keep
@@ -7806,7 +7852,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // re-open ID-107's hole somewhere else.
 #if MOBILEGL_BUILD_DISAGGREGATED
 #define MGB_TEXTURE_RECORD_ARM_SELECTED()                                                                          \
-    (MG_Config::Transport != MG_Config::TransportMode::Monolith && TextureResourceSubsystemEnabled())
+    (MG_Config::DataArmIsRecord() && TextureResourceSubsystemEnabled())
 #else
 #define MGB_TEXTURE_RECORD_ARM_SELECTED() (false)
 #endif
@@ -8092,7 +8138,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // monolith). MGB_STAGED_TEXTURE_LIVE is the runtime discriminator; pushedStorage/pushedRes
 // are the function's own locals. All are #undef'd with the rest after the function.
 #define MGB_STAGED_TEXTURE_LIVE                                                                                        \
-    (pushedStorage != nullptr && MG_Remote::Server::ServerStagedTexture().CopiesIntoServerStorage())
+    (pushedStorage != nullptr && MG_Remote::Server::ServerStagedTexture().Holds())
 #define MGB_TEXTURE_TARGET(obj)                                                                                        \
     (MGB_STAGED_TEXTURE_LIVE ? BufferImpl::StagedTextureTargetForPipeTarget(pushedStorage->Desc.Target)                \
                              : (obj)->GetTarget())
@@ -8450,12 +8496,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Ruling 1's arm: the push-monolith build keeps the frontend test below token for
             // token, because there the two answers are the same answer and the verify comparator
             // needs the frontend arm.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith && pushedStorage != nullptr &&
+            if (MG_Config::DataArmIsRecord() && pushedStorage != nullptr &&
                 !MG_Pipe::MGPipeHandleIsNull(pushedStorage->Desc.ViewOf)) {
                 SyncTextureViewToBackendByRecord(pushedRes, *pushedStorage, stateTextureObject);
                 return;
             }
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith && pushedStorage != nullptr) {
+            if (MG_Config::DataArmIsRecord() && pushedStorage != nullptr) {
                 // Not a view: fall through to the storage body with the frontend test skipped.
             } else
 #endif
@@ -8510,7 +8556,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // P5e (tx2), ruling 1's arm: under a transport the re-dirty half is a NAMED
                     // refusal at its entry (§5.2) instead of a walk of the client's level shadows;
                     // the push-monolith build keeps the frontend transition exactly as it is.
-                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    if (MG_Config::DataArmIsRecord()) {
                         RequireImageBindableStorageByHandle(pushedRes, *pushedStorage);
                     } else
 #endif
@@ -11238,7 +11284,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // because tx2's record arm inside SyncMipmapsToBackend is itself selected by
                 // `Transport != Monolith` and cannot answer here.
 #if MOBILEGL_BUILD_DISAGGREGATED
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
                     // From here on every draw, clear and blit into this framebuffer can write the
                     // texture behind the staged shadow's back (the frontend arm's note, by handle).
@@ -11327,7 +11373,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // under a transport there is no application on this side to report it to. On the
                 // push-monolith arm there is, so the monolith arm keeps the object form.
 #if MOBILEGL_BUILD_DISAGGREGATED
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
                 } else
 #endif
@@ -11379,7 +11425,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the storage holds whatever the draw wrote there, so the readback has to overwrite it.
         Bool IsAlphaWidenedFallbackReadAttachment() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
                 return record && IsAlphaWidenedColorSurface(record->ReadSurface);
             }
@@ -11393,7 +11439,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool IsFixedPointFallbackReadAttachment() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
                 return record && record->ReadSurface.Kind != MG_Pipe::kMGPipeSurfaceKindNone &&
                     IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
@@ -11566,7 +11612,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // (m_pushedSyncHandle), never the client allocator's - see SyncToBackend.
                 const MG_Pipe::MGPipeHandle fbo =
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    MG_Config::DataArmIsRecord()
                         ? m_pushedSyncHandle
                         :
 #endif
@@ -11744,7 +11790,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // record, which the null-record refusal below names.
                 const MG_Pipe::MGPipeHandle fbo =
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    MG_Config::DataArmIsRecord()
                         ? m_pushedSyncHandle
                         :
 #endif
@@ -13057,7 +13103,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // it - MGPImageView::InternalFormat is that same GLenum, copied by the client
                 // out of the unit's own binding. A unit the applier has never been told about
                 // answers 0, which is what an unbound unit answers on the frontend arm too.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     const auto& st = MG_Pipe::MGPipeApplier();
                     if (static_cast<SizeT>(unit) >= st.BoundShaderImages.size()) return 0;
                     return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);

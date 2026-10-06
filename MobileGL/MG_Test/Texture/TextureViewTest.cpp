@@ -23,6 +23,7 @@
 
 #include "Includes.h"
 #include "Init.h"
+#include <MG_Test/ScopedMonolithFrontendArm.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -521,6 +522,7 @@ namespace {
     // resolves the face into a Vulkan baseArrayLayer and was always right, which is what made this
     // a disagreement between the two backends rather than a uniform wrong answer.)
     TEST_F(TextureViewTest, CubeMapViewOfAnArrayReadsTheFaceEachTokenNames) {
+        const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
         constexpr GLint kLayers = 8;
         constexpr GLint kViewMinLayer = 2;
 

@@ -20,33 +20,11 @@
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GetProcAddress.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Test/ScopedMonolithFrontendArm.h>
 
 using namespace MobileGL;
 
-namespace {
-    // P13 W4a: THE MONOLITH FRONTEND ARM, PINNED. The cases that use this assert how the frontend
-    // object pushes a map's bytes when the backend reads the object itself - the arm W4 retires
-    // family by family and W6 deletes. On the record arm (every wire, and monolith's from W4a) the
-    // client's persistent-map tracker owns that push instead, which the split lanes cover. When
-    // W6 deletes the frontend arm, these cases go with it.
-    class ScopedMonolithFrontendArm {
-    public:
-        ScopedMonolithFrontendArm() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            m_saved = MG_Config::MonolithTakesRecordArm;
-            MG_Config::MonolithTakesRecordArm = false;
-#endif
-        }
-        ~ScopedMonolithFrontendArm() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::MonolithTakesRecordArm = m_saved;
-#endif
-        }
-
-    private:
-        Bool m_saved = false;
-    };
-} // namespace
+using MobileGL::MG_Test::ScopedMonolithFrontendArm;
 
 class BufferTest : public ::testing::Test {
 protected:

@@ -361,7 +361,7 @@
         const SizeT texels = static_cast<SizeT>(std::max(extent.x(), 0)) * static_cast<SizeT>(std::max(extent.y(), 0)) *
                              static_cast<SizeT>(std::max(extent.z(), 0));
         const char* declined = nullptr;
-        if (!store.CopiesIntoServerStorage()) {
+        if (!store.Holds()) {
             declined = "this arm keeps no staged store";
         } else if (store.IsDriverWritten(key)) {
             declined = "the driver has written the texture since its bytes crossed";

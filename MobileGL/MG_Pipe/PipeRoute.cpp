@@ -32,6 +32,8 @@
 
 
 #include <MG_Util/Debug/Log.h>
+#include <Config.h>
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -308,6 +310,21 @@ namespace MobileGL::MG_Pipe {
             // the monolith twin reads GetLinkedShaderStages() off the frontend object it is
             // handed. Named and discarded rather than left out of the signature, so the two
             // arms stay one row.
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // P13 W4c: MONOLITH'S RECORD ARM READS THE RECORD'S ARCHIVE (ProgramHandleArm), so it
+            // gets one: the link's snapshot, taken here, once per link - the same thing the wire
+            // decodes into the record, without the codec. A copy rather than a borrow, because the
+            // record is a snapshot of THIS link and the frontend object's artefacts are replaced
+            // by the next one while the record may still be in use.
+            if (MG_Config::RecordArmAliasesFrontend() && link != nullptr && spirv != nullptr) {
+                auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
+                archive->Link = *link;
+                archive->Spirv = *spirv;
+                if (linkedStages != nullptr) archive->LinkedStages.assign(linkedStages, linkedStages + linkedStageCount);
+                MGPipeApplyCreateShaderState(*desc, link, spirv, std::move(archive));
+                return;
+            }
+#endif
             (void)linkedStages;
             (void)linkedStageCount;
             // P5e (pg): NO ARCHIVE ON THIS ARM, and the null is the arm selection rather than a

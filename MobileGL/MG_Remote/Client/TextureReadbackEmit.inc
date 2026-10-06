@@ -94,7 +94,7 @@
                 return;
             }
             const Uint64 tight = layout.Tight;
-            ClientSession& session = RequireSession("GetTextureImage");
+            VerbChannel session = ChannelFor("GetTextureImage");
             BeforeReadOnlyVerb();
             // A by-name texture need not occur in any currently bound sampler.
             MG_Pipe::MGPipeTextureEmitterInstance().DrainTextureSubData(*MG_State::pGLContext);

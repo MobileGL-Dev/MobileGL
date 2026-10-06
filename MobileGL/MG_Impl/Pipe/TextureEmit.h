@@ -1585,6 +1585,9 @@ namespace MobileGL::MG_Pipe {
                 Bool pieceAccepted = true;
                 if constexpr (MGPipeTextureRecordsReachTheApplier()) {
                     dispatched = true;
+                    // P13 W4b: monolith's record arm keeps a staged-texture store that ALIASES the
+                    // level shadow, and it needs the run's length the way a split server does.
+                    if (MG_Config::RecordArmAliasesFrontend()) m_lastSubData.Blob.Size = runBytes;
                     // `runBytes` closes CONTRACT-P5 table 1 row 7's open half. The record still
                     // declares Blob.Size 0 on the monolith arm - where the applier reads the
                     // companion pointer and the destination box bounds the write - but under split

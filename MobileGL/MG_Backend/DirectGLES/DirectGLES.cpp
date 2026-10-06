@@ -194,7 +194,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // push-monolith build keeps its frontend arms token for token, and a mask that never
     // armed framebuffers has no record to decline from.
     static Bool FramebufferRecordArmIsMandatory() {
-        return MG_Config::Transport != MG_Config::TransportMode::Monolith && FramebufferSubsystemEnabled();
+        return MG_Config::DataArmIsRecord() && FramebufferSubsystemEnabled();
     }
     [[noreturn]] static void RefuseFramebufferBindingSlotRead() {
         MG_Pipe::MGPipeInputPoisonFatalForVerb(MG_Pipe::MGPipeInputField::GetFramebufferBindingSlot,
@@ -235,7 +235,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // MGPipeResourceOps, and this is neither.
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             static UniquePtr<SamplerImpl::BackendSamplerObject> native;
             static Uint generation = 0;
             if (generation != g_backendContextGeneration) {
@@ -1585,7 +1585,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int g_activeXfbRole = -1;
 
             RoleXfbState& ActiveXfbState() {
-                const Int role = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+                const Int role = MG_Config::DataArmIsRecord();
                 auto& state = g_roleXfbState[role];
                 if (state.NativeGeneration != g_backendContextGeneration) {
                     state = {};
@@ -1602,7 +1602,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             XfbObjectState& CurrentXfb() {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 auto& state = ActiveXfbState();
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     const Uint64 lifetime = MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId;
                     if (state.Current != lifetime || state.Cached == nullptr || state.NeedsBind)
                         BindTransformFeedback(0); // identity is the applier's lifetime, not this argument
@@ -1684,7 +1684,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
                     for (const auto& target : targets) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                        if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+                        if (!MG_Config::DataArmIsRecord())
 #endif
                         if (!target.buffer) continue;
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1692,7 +1692,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // memory (rule E), so the persistence question is the server
                         // resource's and the captured bytes go back as a writeback EVENT -
                         // WritebackFromBackend from the apply thread is the R1/R2 shape.
-                        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                        if (MG_Config::DataArmIsRecord()) {
                             const MG_Pipe::MGPipeHandle res = target.handle;
                             auto* resource = BufferImpl::FindBufferResourceForHandle(res);
                             if (resource == nullptr) continue;
@@ -1788,7 +1788,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // direct binding (which produces a wrong layout, but is what happened before).
             Bool BindScatterCaptureBuffer(SizeT packedStride, SizeT capacityVertices) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+                const Bool server = MG_Config::DataArmIsRecord();
                 auto& g_scatterBufferId = server ? CurrentXfb().serverScatterBuffer : ActiveXfbState().ScatterBuffer;
                 auto& g_scatterBufferSize = server ? CurrentXfb().serverScatterSize : ActiveXfbState().ScatterSize;
 #endif
@@ -1829,7 +1829,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // application had put there - which is the whole point of the feature.
             void ScatterCapturedRecords(XfbObjectState& xfb) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                auto& g_scatterBufferId = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                auto& g_scatterBufferId = MG_Config::DataArmIsRecord()
                     ? xfb.serverScatterBuffer : ActiveXfbState().ScatterBuffer;
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1874,7 +1874,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (SizeT targetIndex = 0; targetIndex < xfb.targets.size(); ++targetIndex) {
                     const auto& target = xfb.targets[targetIndex];
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+                    if (!MG_Config::DataArmIsRecord())
 #endif
                     if (!target.buffer) continue;
                     // By BUFFER index, not by position in the compacted list - see XfbCaptureTarget.
@@ -1890,7 +1890,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // poke into client memory.
                     MG_Pipe::MGPipeHandle splitRes = MG_Pipe::kMGPipeNullHandle;
                     BufferImpl::GLESBufferResource* splitResource = nullptr;
-                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    if (MG_Config::DataArmIsRecord()) {
                         splitRes = target.handle;
                         splitResource = BufferImpl::FindBufferResourceForHandle(splitRes);
                         if (splitResource == nullptr) {
@@ -1948,7 +1948,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    if (MG_Config::DataArmIsRecord()) {
                         if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
                             // Sliced for the reason the readback path above is sliced: the bytes
                             // are INLINE in a SEG_EVENT record and the ring refuses a record wider
@@ -2029,7 +2029,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
             XfbProgramSource program;
             const MG_Pipe::MGPStreamOutputBegin* span = nullptr;
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const auto& state = MG_Pipe::MGPipeApplier();
                 const auto found = state.StreamOutputSpans.find(state.BoundStreamOutputLifetimeId);
                 if (found != state.StreamOutputSpans.end()) {
@@ -2063,7 +2063,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const SizeT bufferCount = program->GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     if (!span || i >= 4) continue;
                     const auto& range = span->Targets[i];
                     if (MG_Pipe::MGPipeHandleIsNull(range.Res) || range.Size == 0) continue;
@@ -2090,7 +2090,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport == MG_Config::TransportMode::Monolith)
+            if (!MG_Config::DataArmIsRecord())
 #endif
             BufferImpl::SyncTransformFeedbackBindingPoints(bufferCount);
 
@@ -2236,7 +2236,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto& g_currentXfbState = roleState.Cached;
             auto& g_xfbObjects = roleState.Objects;
             auto& g_currentXfbName = roleState.Current;
-            const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+            const Bool server = MG_Config::DataArmIsRecord();
             const Uint64 key = server ? MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId : name;
             roleState.NeedsBind = false;
 #endif
@@ -2281,7 +2281,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto& g_currentXfbState = roleState.Cached;
             auto& g_xfbObjects = roleState.Objects;
             auto& g_currentXfbName = roleState.Current;
-            const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+            const Bool server = MG_Config::DataArmIsRecord();
             const Uint64 key = server ? MG_Pipe::MGPipeApplier().VerbDeleteStreamOutputLifetimeId : name;
             // A generated but never-bound name has no native object or lifetime.
             if (server && key == 0) return;
@@ -3209,7 +3209,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // right. Ruling 19 makes the missing window unrepresentable at the sink; this is
                 // the same statement one level down, for the backend that would have papered over
                 // it. Under monolith the fall-back is correct and stays.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith && maxTouchedUnit >= 0) {
+                if (MG_Config::DataArmIsRecord() && maxTouchedUnit >= 0) {
                     // The windows are the PEER's records, so in a served session this ends THAT
                     // session (the in-process display server serves every client from one
                     // process; an abort here took the compositor down with the offender). The
@@ -3348,7 +3348,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // texture-resource record, and half of each is not an arm. The push-monolith build keeps
         // the frontend walk token for token - there is no server to answer from there.
         static Bool UnitTexturesByHandle() {
-            return MG_Config::Transport != MG_Config::TransportMode::Monolith && SamplerSubsystemEnabled() &&
+            return MG_Config::DataArmIsRecord() && SamplerSubsystemEnabled() &&
                    TextureResourceSubsystemEnabled();
         }
 
@@ -4250,7 +4250,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reach of an apply thread entirely.
         void MarkWritableImageBufferTexturesGpuWritten() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 // P8-C: the SERVER's twin of the buffer behind each writable buffer image, for
                 // this side's CPU readers (SplitHostBytesForCpuRead). Every read is a record:
                 // the unit set SyncImageTextureBinding(view) tracked, the applier's image view,
@@ -4365,7 +4365,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          static_cast<Uint32>(g_imageUnitHighWaterMark)),
                         static_cast<Uint32>(unitCount));
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    if (MG_Config::DataArmIsRecord()) {
                         for (Uint32 unit = 0; unit < end; ++unit) {
                             if (unit >= st.BoundShaderImages.size()) break;
                             // The union can include a slot no set_shader_images
@@ -4392,7 +4392,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // g_imageUnitHighWaterMark is raised only by the funnel above, so if no set has
             // ever arrived no unit has ever been given an image, and re-binding 0 on units that
             // never held one is the no-op the comment above already proved.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+            if (MG_Config::DataArmIsRecord()) return;
 #endif
             for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
@@ -4463,7 +4463,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
             if (g_imageUnitHighWaterMark == 0) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 if (g_imageSweepValid && g_imageSweepShaderImagesSerial == st.ShaderImagesSerial &&
                     g_imageSweepTextureShutterSerial == st.TextureShutterSerial &&
@@ -4616,7 +4616,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // identity (rule E) and the check does not run - the record was resolved from the
             // applier's OWN bound handle, so it is this binding's by construction (ID-19).
             // Monolith keeps the corroboration verbatim.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            if (MG_Config::DataArmIsRecord()) return true;
 #endif
             return record.Fbo == g_backendFramebufferObjects.HandleOf(bound.get());
         }
@@ -6933,7 +6933,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the window rule (§5.3) makes the case it exists for UNREPRESENTABLE: a unit whose
         // BoundSamplerStates[u] is null while the frontend held a sampler is a MISSING RECORD,
         // not a unit to be served from the client's object.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - unit %d holds a "
                     "frontend sampler object that the applied bind_sampler_states window does not "
                     "describe. Minting a twin for it would probe the client's allocator from the "
@@ -7043,7 +7043,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // P5e (tx2), CONTRACT-P5E §5.3: the same refusal CurrentUnitBindingsEpoch makes -
                 // the frontend walk below reads GetTextureUnitObject per unit, which an active
                 // transport may not do for a record whose client has moved on.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - a draw "
                             "touches units 0..%d and no bind_sampler_states has ever been applied "
                             "while the sampler subsystem bit is set; the pre-handle sampler walk "
@@ -10995,7 +10995,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // function's binding-slot read at the bottom are gone from the split path), and the
         // sink is told the pair was consumed - a backend that reaches here without consuming
         // it has no named arm and the verb declines there.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             auto& applierState = MG_Pipe::MGPipeApplier();
             const MG_Pipe::MGPipeHandle readFbo = applierState.VerbBlitReadFbo;
             const MG_Pipe::MGPipeHandle drawFbo = applierState.VerbBlitDrawFbo;
@@ -11160,7 +11160,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // P5c (hd, CONTRACT-P5C §3.4): under an active transport the destination is the handle
         // the copy_framebuffer_to_texture record carried; the unit binding slot and the client
         // allocator are never read (T2/T4).
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
             auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.GetOrCreateByHandle(dstHandle);
             if (backendTextureSlot == nullptr) {
@@ -12350,7 +12350,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the handle the copy_framebuffer_to_texture record carried (MGPCopyFromFramebuffer::
         // Dst, the verb stash) and its format is the applier descriptor's - the client's
         // texture-unit binding slot and the client slot allocator are never read (T2/T4).
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
             const auto* dstRecord = PipeTextureRecordForHandle(dstHandle);
             // P5e (tx2): SYNCED, not merely looked up. The destination of a copy is not sampled
@@ -12474,7 +12474,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5c (hd, CONTRACT-P5C §3.4): see CopyTexImage2D - the record's Dst handle, never the
         // client's unit binding slot or the client allocator (T2/T4).
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const MG_Pipe::MGPipeHandle dstHandle = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
             // P5e (tx2): synced by handle - see CopyTexImage2D's note. A copy destination is not
             // in the sampler-view window, so nothing else on this path would build its twin.
@@ -12691,7 +12691,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // whose level the driver cannot read has no answer here.
         if (!MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
             declined = "a view has no staged level of its own";
-        } else if (!store.CopiesIntoServerStorage()) {
+        } else if (!store.Holds()) {
             declined = "this arm keeps no staged store";
         } else if (driverWrittenBefore) {
             declined = "the driver has written the texture since its bytes crossed";
@@ -12914,7 +12914,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // so that the unit it reads is the unit the call was made on. With the unit read gone the
         // wait has nothing left to protect, which is what lets PipeCalls.def's WaitClass column
         // for GenerateMipmap move to kWaitNone.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto mipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
             // P8-SE: whether the staged store still stands for the texture is read BEFORE the note
             // below sets the mark, or the CPU arm's store route could never answer at all.
@@ -13092,7 +13092,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           GLint z, GLESCopyImageEndpoint& out) {
         if (endpoint.IsRenderbuffer()) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 if (!PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)) return false;
                 auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreateByHandle(endpoint.RenderbufferHandle);
                 if (!slot) return false;
@@ -13122,7 +13122,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reaches here - but the assertion that says so is compiled out of a release build, and
         // SyncTextureObjectToBackend would register a null state object.
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             out.texture = TextureImpl::SyncTextureToBackendByHandle(endpoint.TextureHandle);
         } else
 #endif
@@ -13148,7 +13148,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto* record = endpoint.IsRenderbuffer()
                 ? PipeRenderbufferRecordForHandle(endpoint.RenderbufferHandle)
                 : PipeTextureRecordForHandle(endpoint.TextureHandle);
@@ -13207,7 +13207,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and the arm is the TRANSPORT and not the build - build-split runs its unit and
         // integration-gpu lanes under MOBILEGL_TRANSPORT=monolith, where this mirror is on an
         // ordinary correct path and must still run.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+        if (MG_Config::DataArmIsRecord()) return;
 #endif
         // P4a (D-M) named this site `copy-image-shadow-mirror` with MGPipeUnmigratedEmulation.
         // P8-SE removed the call: the return above means no transport reaches it, and on a
@@ -13306,7 +13306,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // renderbuffer, a cube or 1D-array endpoint, a source the driver has written, a level whose
         // bytes did not all cross) it is marked driver-written instead, so it declines rather than
         // answering with stale bytes. Nothing moves to the client (ROADMAP P8's original row).
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && handleArmDestination) {
+        if (MG_Config::DataArmIsRecord() && handleArmDestination) {
             const Bool followed =
                 !srcEndpoint.IsRenderbuffer() && !MG_Pipe::MGPipeHandleIsNull(srcEndpoint.TextureHandle) &&
                 TextureImpl::FollowCopyImageInStagedStore(
@@ -13391,7 +13391,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MOBILEGL_ASSERT(false, "glCopyImageSubData failed after frontend validation accepted the request.");
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P8-E: the store already made the move the driver just refused.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith && handleArmDestination) {
+            if (MG_Config::DataArmIsRecord() && handleArmDestination) {
                 TextureImpl::NoteDriverSideTextureWriteByHandle(dstEndpoint.TextureHandle);
             }
 #endif
@@ -13419,7 +13419,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the bind from the record; reading the frontend image binding here is the
         // GetImageTextureBinding row that rule F forbids, and `bind_shader_image` is not a
         // barriered row.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             TextureImpl::NoteImageUnitBoundWithoutReadingTheFrontend(unit, texture != 0);
             return;
         }
@@ -13466,7 +13466,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         if (!storageBlockName) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto handle = MG_Pipe::MGPipeApplier().VerbStorageBlockProgram;
             auto* slot = PrgramImpl::g_backendProgramObjects.FindByHandle(handle);
             if (slot && *slot && (*slot)->GetBackendProgramId()) {
@@ -13687,7 +13687,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
         const auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
@@ -14708,7 +14708,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         const auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
@@ -14961,7 +14961,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (P8-SE dropped copy-image-shadow-mirror, a site no transport reached). Only this call
         // site is retired here, and only because its own premise did not hold (texture-remint-pull
         // went the same way in P9 W2, and P8-B the two split generate-mipmap names, likewise).
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             if (shadow == nullptr) {
                 MGLOG_E_ONCE("GetTexImage: no level shadow on this side for target=0x%x level=%d, and under an "
                              "active transport there is no client shadow to fall back to - the read is "
@@ -14979,7 +14979,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
         const auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
@@ -15302,7 +15302,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
@@ -15749,7 +15749,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SplitReadbackPackBuffer() :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();

@@ -13,6 +13,7 @@
 
 #include "Includes.h"
 #include "Init.h"
+#include <MG_Test/ScopedMonolithFrontendArm.h>
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
@@ -1065,6 +1066,7 @@ TEST_F(TextureTest, EverySamplerScalarPnameConvertsToTheQueriedType) {
 // caller's buffer: on glGetTexImage, which has no bufSize argument, that is a heap overflow of
 // (shadowTexelSize - clientTexelSize) * texelCount bytes. It must refuse instead.
 TEST_F(TextureTest, ShadowReadbackRefusesALayoutItCannotProduceInsteadOfOverrunningTheBuffer) {
+    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
     ASSERT_NE(texture, 0u);
@@ -1106,6 +1108,7 @@ TEST_F(TextureTest, ShadowReadbackRefusesALayoutItCannotProduceInsteadOfOverrunn
 // readback path DOES write it. Refusing keeps the two paths from answering the same call with two
 // different destination layouts.
 TEST_F(TextureTest, ShadowReadbackRefusesAPackStateItCannotHonour) {
+    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
     ASSERT_NE(texture, 0u);
@@ -2144,6 +2147,7 @@ TEST_F(TextureTest, GetTextureSubImageSelectsTheCubeFaceZOffsetNames) {
 // precisely. glGetTexImage passes no bufSize, which skips the destination-size branch but NOT the
 // PBO one, so this is the only spelling where the six-face sizing was reachable at all.
 TEST_F(TextureTest, GetTexImageOfOneCubeFacePacksIntoAOneFacePixelPackBuffer) {
+    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
     constexpr GLsizei kEdge = 2;
     constexpr SizeT kFaceBytes = static_cast<SizeT>(kEdge) * kEdge * 4;
 

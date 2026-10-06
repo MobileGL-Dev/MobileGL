@@ -261,22 +261,46 @@ namespace MobileGL::MG_Remote::Client {
             return sink;
         }
 
-        // The session a ported verb emits through - or null, which is the monolith port.
-        ClientSession* VerbSessionFor(const char* slot) {
-            if (g_monolithVerbPort) return nullptr;
-            return &RequireSession(slot);
-        }
+        // The answer of a reply row on the port: written straight into the caller's buffer, which
+        // is what the session's reply slot would have been copied into.
+        class MonolithReplySink final : public Wire::ReplySink {
+        public:
+            MonolithReplySink(void* out, Uint64 capacity) : m_out(out), m_capacity(capacity) {}
+            void PostReply(Uint64, Int32 status, const void* bytes, Uint64 size) override {
+                m_posted = true;
+                m_status = status;
+                m_size = size;
+                if (status == kStatusOk && bytes != nullptr && m_out != nullptr && size != 0) {
+                    std::memcpy(m_out, bytes, static_cast<SizeT>(std::min(size, m_capacity)));
+                }
+            }
+            Bool Posted() const { return m_posted; }
+            Int32 Status() const { return m_status; }
+            Uint64 Size() const { return m_size; }
 
-        void ApplyOnMonolithPort(MG_Pipe::MGPWireOp op, const void* payload, const Wire::WireTail* tails,
-                                 Uint32 tailCount) {
+        private:
+            void* m_out;
+            Uint64 m_capacity;
+            Bool m_posted = false;
+            Int32 m_status = kStatusError;
+            Uint64 m_size = 0;
+        };
+
+        // The port's reply cap: one band answers any read a process can hold (PlanReadbackBands
+        // still cuts a row wider than this, as it would for a slot).
+        constexpr Uint32 kMonolithMaxReplyBytes = 0x7fffffffu;
+
+        Bool ApplyOnMonolithPort(MG_Pipe::MGPWireOp op, const void* payload, const Wire::WireTail* tails,
+                                 Uint32 tailCount, Wire::ReplySink* replies) {
             Server::ServerVerbSink& sink = MonolithVerbSink();
             MG_Backend::BackendObject* backend = MG_Backend::pActiveBackendObject.get();
-            if (sink.Backend() != backend) sink.SetBackend(backend);
-            Bool applied = false;
-            const char* row = nullptr;
+            if (sink.Backend() != backend) {
+                sink.SetBackend(backend);
+                sink.SetMaxReplyBytes(kMonolithMaxReplyBytes);
+            }
+            using Op = MG_Pipe::MGPWireOp;
             switch (op) {
-            case MG_Pipe::MGPWireOp::DrawVbo: {
-                row = "draw_vbo";
+            case Op::DrawVbo: {
                 const auto& info = *static_cast<const MG_Pipe::MGPDrawInfo*>(payload);
                 const auto* ranges = (tailCount > 0 && tails[0].Size != 0)
                                          ? static_cast<const MG_Pipe::MGPDrawRange*>(tails[0].Bytes)
@@ -284,42 +308,132 @@ namespace MobileGL::MG_Remote::Client {
                 const auto* indirect = ((info.Flags & MG_Pipe::kDrawIsIndirect) != 0 && tailCount > 1)
                                            ? static_cast<const MG_Pipe::MGPDrawIndirect*>(tails[1].Bytes)
                                            : nullptr;
-                applied = sink.OnDrawVbo(info, ranges, nullptr, indirect);
-                break;
+                return sink.OnDrawVbo(info, ranges, nullptr, indirect);
             }
-            case MG_Pipe::MGPWireOp::LaunchGrid:
-                row = "launch_grid";
-                applied = sink.OnLaunchGrid(*static_cast<const MG_Pipe::MGPGridInfo*>(payload));
-                break;
+            case Op::LaunchGrid:
+                return sink.OnLaunchGrid(*static_cast<const MG_Pipe::MGPGridInfo*>(payload));
+            // ---- W4b: the texture family's verbs ----
+            case Op::GenerateMipmap:
+                return sink.OnGenerateMipmap(*static_cast<const MG_Pipe::MGPMipPlan*>(payload));
+            case Op::CopyFramebufferToTexture:
+                return sink.OnCopyFramebufferToTexture(*static_cast<const MG_Pipe::MGPCopyFromFramebuffer*>(payload));
+            case Op::ResourceCopyRegion:
+                return sink.OnResourceCopyRegion(*static_cast<const MG_Pipe::MGPCopyRegion*>(payload));
+            // ---- W4b: the readbacks. The reply rows answer through `replies`, which writes the
+            // caller's buffer; the pack-buffer rows land in the buffer through the applier.
+            case Op::ReadPixels:
+                return sink.OnReadPixels(*static_cast<const MG_Pipe::MGPReadbackInfo*>(payload), 0, replies);
+            case Op::GetTextureImage:
+                return sink.OnGetTextureImage(*static_cast<const MG_Pipe::MGPReadbackInfo*>(payload), 0, replies);
+            case Op::ReadPixelsToBuffer:
+                return sink.OnReadPixelsToBuffer(*static_cast<const MG_Pipe::MGPReadbackToBuffer*>(payload));
+            case Op::GetTextureImageToBuffer:
+                return sink.OnGetTextureImageToBuffer(*static_cast<const MG_Pipe::MGPReadbackToBuffer*>(payload));
+            // ---- W4c: framebuffers, image units, storage-block bindings ----
+            case Op::Clear:
+                return sink.OnClear(*static_cast<const MG_Pipe::MGPClear*>(payload));
+            case Op::Blit:
+                return sink.OnBlit(*static_cast<const MG_Pipe::MGPBlit*>(payload));
+            case Op::BindShaderImage:
+                return sink.OnBindShaderImage(*static_cast<const MG_Pipe::MGPImageBind*>(payload));
+            // ---- W4a's XFB half: the capture span and its object, by lifetime id ----
+            case Op::BeginStreamOutput:
+                return sink.OnBeginStreamOutput(*static_cast<const MG_Pipe::MGPStreamOutputBegin*>(payload));
+            case Op::EndStreamOutput:
+                return sink.OnEndStreamOutput(*static_cast<const MG_Pipe::MGPXfbAccounting*>(payload));
+            case Op::PauseStreamOutput:
+                return sink.OnPauseStreamOutput(*static_cast<const MG_Pipe::MGPStreamOutputControl*>(payload));
+            case Op::ResumeStreamOutput:
+                return sink.OnResumeStreamOutput(*static_cast<const MG_Pipe::MGPStreamOutputControl*>(payload));
+            case Op::BindStreamOutput:
+                return sink.OnBindStreamOutput(*static_cast<const MG_Pipe::MGPStreamOutputBind*>(payload));
+            case Op::DeleteStreamOutput:
+                return sink.OnDeleteStreamOutput(*static_cast<const MG_Pipe::MGPStreamOutputBind*>(payload));
+            case Op::SetStorageBlockBinding: {
+                // The name is the emitter's own NUL-terminated string (VerbChannel::StageBytes on
+                // the port names it by address), alive for this call.
+                const auto& record = *static_cast<const MG_Pipe::MGPStorageBlockBinding*>(payload);
+                const auto* name = reinterpret_cast<const char*>(static_cast<std::uintptr_t>(record.Name.Offset));
+                return sink.OnSetStorageBlockBinding(record, name);
+            }
             default:
                 // A slot InstallMonolithVerbPort routes here whose row this switch does not know:
                 // the two lists drifted, and falling through to the driver would be the very
                 // "ran the other arm and looked fine" this port exists to end.
                 UnmigratedVerbFatal("MonolithVerbPort");
             }
-            if (!applied) {
-                MGLOG_E_ONCE("MGPipe: the monolith verb port's %s was declined by the sink; nothing was "
-                             "drawn or dispatched",
-                             row);
-            }
         }
 
-        // The emission of a ported verb: the session's, or the port's.
-        void EmitVerbTails(ClientSession* session, MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                           const Wire::WireTail* tails, Uint32 tailCount) {
-            if (session != nullptr) {
-                session->EmitAndWaitTails(op, payload, payloadBytes, tails, tailCount, nullptr, 0, nullptr);
-                return;
+        // WHERE A PORTED EMITTER'S RECORD GOES: the session's ring, or - on monolith's record arm -
+        // the in-process sink above. Spelled like the session (EmitAndWait / EmitAndWaitTails /
+        // MaxReplyBytes / ...) so an emitter reads the same either way.
+        class VerbChannel {
+        public:
+            explicit VerbChannel(ClientSession* session) : m_session(session) {}
+
+            Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                               const void* varTail, Uint64 varTailBytes, void* replyOut, Uint64 replyBytes,
+                               Int32* statusOut, Uint64* replySizeOut = nullptr) {
+                if (m_session != nullptr) {
+                    return m_session->EmitAndWait(op, payload, payloadBytes, varTail, varTailBytes, replyOut,
+                                                  replyBytes, statusOut, replySizeOut);
+                }
+                const Wire::WireTail tail{varTail, varTailBytes};
+                Port(op, payload, &tail, varTail != nullptr ? 1u : 0u, replyOut, replyBytes, statusOut, replySizeOut);
+                return 0;
             }
-            ApplyOnMonolithPort(op, payload, tails, tailCount);
-        }
-        void EmitVerbNoTail(ClientSession* session, MG_Pipe::MGPWireOp op, const void* payload,
-                            Uint64 payloadBytes) {
-            if (session != nullptr) {
-                session->EmitAndWait(op, payload, payloadBytes, nullptr, 0, nullptr, 0, nullptr);
-                return;
+            Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                                    const Wire::WireTail* tails, Uint32 tailCount, void* replyOut, Uint64 replyBytes,
+                                    Int32* statusOut, Uint64* replySizeOut = nullptr) {
+                if (m_session != nullptr) {
+                    return m_session->EmitAndWaitTails(op, payload, payloadBytes, tails, tailCount, replyOut,
+                                                       replyBytes, statusOut, replySizeOut);
+                }
+                Port(op, payload, tails, tailCount, replyOut, replyBytes, statusOut, replySizeOut);
+                return 0;
             }
-            ApplyOnMonolithPort(op, payload, nullptr, 0);
+            Uint32 MaxReplyBytes() const {
+                return m_session != nullptr ? m_session->MaxReplyBytes() : kMonolithMaxReplyBytes;
+            }
+            void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type,
+                                            Uint64 bytes) const {
+                if (m_session != nullptr) m_session->RequireReadPixelsReplyFits(width, height, format, type, bytes);
+            }
+            // A blob the record names by reference: staged in SEG_STAGE under a session, its own
+            // address on the port (kMGHostSpanSegNone, the monolith spelling MGPipeHostBytes reads).
+            MG_Pipe::MGPBlobRef StageBytes(const void* bytes, Uint64 size) {
+                if (m_session != nullptr) return m_session->Encoder().StageBytes(bytes, size);
+                return MG_Pipe::MGPBlobRef{static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(bytes)), size,
+                                           MG_Pipe::kMGHostSpanSegNone, 0};
+            }
+
+        private:
+            void Port(MG_Pipe::MGPWireOp op, const void* payload, const Wire::WireTail* tails, Uint32 tailCount,
+                      void* replyOut, Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) {
+                MonolithReplySink replies(replyOut, replyBytes);
+                const Bool applied = ApplyOnMonolithPort(op, payload, tails, tailCount, &replies);
+                // A sink that declined without answering is the decoder's DECLINED; an answer it
+                // posted is the answer, whatever the return.
+                const Int32 status = replies.Posted()
+                                         ? replies.Status()
+                                         : (applied ? Wire::ReplySink::kStatusOk : Wire::ReplySink::kStatusDeclined);
+                if (statusOut != nullptr) *statusOut = status;
+                if (replySizeOut != nullptr) *replySizeOut = replies.Posted() ? replies.Size() : 0;
+                if (!applied && replyOut == nullptr) {
+                    MGLOG_E_ONCE("MGPipe: the monolith verb port's op %u was declined by the sink; nothing was "
+                                 "drawn, dispatched or changed",
+                                 static_cast<unsigned>(op));
+                }
+            }
+
+            ClientSession* m_session;
+        };
+
+        // The channel a ported emitter uses: the port when monolith's record arm installed it
+        // (only the ported slots reach an emitter there), the active session otherwise.
+        VerbChannel ChannelFor(const char* slot) {
+            if (g_monolithVerbPort) return VerbChannel(nullptr);
+            return VerbChannel(&RequireSession(slot));
         }
 
         // =============================================================================
@@ -327,7 +441,7 @@ namespace MobileGL::MG_Remote::Client {
         // =============================================================================
 
         void EmitClear(GLbitfield mask) {
-            ClientSession& session = RequireSession("Clear");
+            VerbChannel session = ChannelFor("Clear");
             BeforeReadOnlyVerb();
 
             if (g_dropClearEmission) {
@@ -359,7 +473,7 @@ namespace MobileGL::MG_Remote::Client {
         void EmitF1Clear(const char* slot, MG_Pipe::MGPipeHandle fbo, GLenum buffer,
                          GLint drawbuffer, Uint8 valueClass, const void* value,
                          GLfloat depth = 0, GLint stencil = 0) {
-            auto& session = RequireSession(slot);
+            VerbChannel session = ChannelFor(slot);
             BeforeReadOnlyVerb();
             MG_Pipe::MGPClear record{};
             record.Fbo = fbo;
@@ -435,7 +549,7 @@ namespace MobileGL::MG_Remote::Client {
         }
         void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y,
                         GLsizei width, GLsizei height, GLint xoffset, GLint yoffset, Bool subImage) {
-            auto& session = RequireSession(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+            VerbChannel session = ChannelFor(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
             BeforeReadOnlyVerb();
             MG_Pipe::MGPCopyFromFramebuffer record{};
             record.Dst = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*F1BoundTexture(target));
@@ -458,7 +572,7 @@ namespace MobileGL::MG_Remote::Client {
             EmitF1Copy(target, level, 0, x, y, width, height, xoffset, yoffset, true);
         }
         void EmitGenerateMipmap(GLenum target) {
-            auto& session = RequireSession("GenerateMipmap");
+            VerbChannel session = ChannelFor("GenerateMipmap");
             BeforeReadOnlyVerb();
             const auto& texture = F1BoundTexture(target);
             MG_Pipe::MGPMipPlan record{};
@@ -602,7 +716,7 @@ namespace MobileGL::MG_Remote::Client {
                             const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
                             const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
-            ClientSession* session = VerbSessionFor(slot);
+            VerbChannel session = ChannelFor(slot);
             PersistentMapTracker::Instance().PushDrawConsumers();
             MG_Pipe::MGPipeDrainDeferredDestroys();
             // Snapshot before marking THIS draw's potential GPU writes: resolving
@@ -637,7 +751,8 @@ namespace MobileGL::MG_Remote::Client {
                 tails[1] = {indirect, sizeof(*indirect)};
                 tailCount = 2;
             }
-            EmitVerbTails(session, MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails, tailCount);
+            session.EmitAndWaitTails(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails,
+                                     tailCount, nullptr, 0, nullptr);
         }
 
         // ---- the single-draw indexed family: DrawElements, DrawElementsBaseVertex, the two
@@ -849,7 +964,7 @@ namespace MobileGL::MG_Remote::Client {
         void EmitBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
                                  GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,
                                  GLenum filter) {
-            ClientSession& session = RequireSession("BlitFramebuffer");
+            VerbChannel session = ChannelFor("BlitFramebuffer");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPBlit record{};
@@ -877,7 +992,7 @@ namespace MobileGL::MG_Remote::Client {
             const SharedPtr<MG_State::GLState::FramebufferObject>& draw,
             GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
             GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
-            ClientSession& session = RequireSession("BlitNamedFramebuffer");
+            VerbChannel session = ChannelFor("BlitNamedFramebuffer");
             // P5c (hd, CONTRACT-P5C §3.3): the scoped rebind of the client's own read/draw
             // binding slots is DELETED. It existed only to stage values for the server's
             // binding-slot read, and that read is gone: the sink resolves both framebuffers
@@ -1035,7 +1150,7 @@ namespace MobileGL::MG_Remote::Client {
 
         void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                             GLenum type, void* pixels) {
-            ClientSession& session = RequireSession("ReadPixels");
+            VerbChannel session = ChannelFor("ReadPixels");
 
             // A bound PACK buffer makes pixels an offset. The owned reply is
             // packed on this thread and only the requested rows are uploaded.
@@ -1342,7 +1457,7 @@ namespace MobileGL::MG_Remote::Client {
         // same maps twice per dispatch and inflate b1's per-row counters.
         void EmitBindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered,
                                   GLint layer, GLenum access, GLenum format) {
-            ClientSession& session = RequireSession("BindImageTexture");
+            VerbChannel session = ChannelFor("BindImageTexture");
 
             MG_Pipe::MGPImageBind record{};
             // The unit's binding is the frontend's and has just been written by the caller, so
@@ -1375,7 +1490,7 @@ namespace MobileGL::MG_Remote::Client {
         // carried both calls before its Fatal precisely so that the package which flipped this
         // slot would inherit a call site that was already correct.
         void EmitDispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
-            ClientSession* session = VerbSessionFor("DispatchCompute");
+            VerbChannel session = ChannelFor("DispatchCompute");
             PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
@@ -1389,11 +1504,12 @@ namespace MobileGL::MG_Remote::Client {
             record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
             record.IndirectOffset = 0;
             record.IsIndirect = 0;
-            EmitVerbNoTail(session, MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record));
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
         }
 
         void EmitDispatchComputeIndirect(GLintptr indirect) {
-            ClientSession* session = VerbSessionFor("DispatchComputeIndirect");
+            VerbChannel session = ChannelFor("DispatchComputeIndirect");
             PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
@@ -1414,7 +1530,8 @@ namespace MobileGL::MG_Remote::Client {
                         MG_Pipe::MGPipeKind::Buffer, bound->GetLifetimeId());
                 }
             }
-            EmitVerbNoTail(session, MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record));
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
         }
 
         // glMemoryBarrier / glMemoryBarrierByRegion. The bits cross VERBATIM: the frontend has
@@ -1427,7 +1544,7 @@ namespace MobileGL::MG_Remote::Client {
         // No pre-verb hook: a barrier orders memory the GPU already holds. It starts no shader
         // and reads no mapped buffer.
         void EmitMemoryBarrier(GLbitfield barriers) {
-            ClientSession& session = RequireSession("MemoryBarrier");
+            VerbChannel session = ChannelFor("MemoryBarrier");
             MG_Pipe::MGPMemoryBarrier record{};
             record.Bits = static_cast<Uint32>(barriers);
             record.ByRegion = 0;
@@ -1436,7 +1553,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitMemoryBarrierByRegion(GLbitfield barriers) {
-            ClientSession& session = RequireSession("MemoryBarrierByRegion");
+            VerbChannel session = ChannelFor("MemoryBarrierByRegion");
             MG_Pipe::MGPMemoryBarrier record{};
             record.Bits = static_cast<Uint32>(barriers);
             record.ByRegion = 1;
@@ -1451,7 +1568,7 @@ namespace MobileGL::MG_Remote::Client {
                                   const MG_Backend::CopyImageEndpoint& dst, GLenum dstTarget,
                                   GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                   GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-            ClientSession& session = RequireSession("CopyImageSubData");
+            VerbChannel session = ChannelFor("CopyImageSubData");
 
             // The GL target selects the texture or renderbuffer handle namespace.
             MG_Pipe::MGPCopyRegion record{};
@@ -1493,7 +1610,7 @@ namespace MobileGL::MG_Remote::Client {
         // (BackendObject.h:216-221) - the name is the one coordinate all three agree on.
         void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName,
                                            GLuint storageBlockBinding) {
-            ClientSession& session = RequireSession("ShaderStorageBlockBinding");
+            VerbChannel session = ChannelFor("ShaderStorageBlockBinding");
             // The backend slot's own first line (DirectGLES.cpp:9201), kept here so a null name
             // never becomes a zero-size blob - which rule A forbids spelling at all.
             if (storageBlockName == nullptr) return;
@@ -1520,7 +1637,7 @@ namespace MobileGL::MG_Remote::Client {
             // decoder re-terminates into a bounded local and refuses a run whose last byte is
             // not NUL, so the two sides agree on where the name ends.
             const Uint64 nameBytes = static_cast<Uint64>(std::strlen(storageBlockName)) + 1ull;
-            record.Name = session.Encoder().StageBytes(storageBlockName, nameBytes);
+            record.Name = session.StageBytes(storageBlockName, nameBytes);
             session.EmitAndWait(MG_Pipe::MGPWireOp::SetStorageBlockBinding, &record, sizeof(record),
                                 nullptr, 0, nullptr, 0, nullptr);
         }
@@ -1548,7 +1665,7 @@ namespace MobileGL::MG_Remote::Client {
         // this state changes at the capture-span boundary, so it rides Begin itself.
 
         void EmitBeginTransformFeedback(GLenum primitiveMode) {
-            ClientSession& session = RequireSession("BeginTransformFeedback");
+            VerbChannel session = ChannelFor("BeginTransformFeedback");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPStreamOutputBegin record{};
@@ -1578,7 +1695,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitEndTransformFeedback() {
-            ClientSession& session = RequireSession("EndTransformFeedback");
+            VerbChannel session = ChannelFor("EndTransformFeedback");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPXfbAccounting record{};
@@ -1598,7 +1715,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitPauseTransformFeedback() {
-            ClientSession& session = RequireSession("PauseTransformFeedback");
+            VerbChannel session = ChannelFor("PauseTransformFeedback");
             BeforeReadOnlyVerb();
 
             // Reserved IS zero and the contract says so (MGPStreamOutputControl{Reserved = 0}).
@@ -1611,7 +1728,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitResumeTransformFeedback() {
-            ClientSession& session = RequireSession("ResumeTransformFeedback");
+            VerbChannel session = ChannelFor("ResumeTransformFeedback");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPStreamOutputControl record{};
@@ -1621,7 +1738,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitBindTransformFeedback(GLuint name) {
-            ClientSession& session = RequireSession("BindTransformFeedback");
+            VerbChannel session = ChannelFor("BindTransformFeedback");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPStreamOutputBind record{};
@@ -1640,7 +1757,7 @@ namespace MobileGL::MG_Remote::Client {
         }
 
         void EmitPatchParameteri(GLenum pname, GLint value) {
-            ClientSession& session = RequireSession("PatchParameteri");
+            VerbChannel session = ChannelFor("PatchParameteri");
             BeforeReadOnlyVerb();
 
             MG_Pipe::MGPPatchParameter record{};
@@ -2230,6 +2347,39 @@ namespace MobileGL::MG_Remote::Client {
         table.GL.MultiDrawElementsIndirectCount = &EmitMultiDrawElementsIndirectCount;
         table.GL.DispatchCompute = &EmitDispatchCompute;
         table.GL.DispatchComputeIndirect = &EmitDispatchComputeIndirect;
+        // P13 W4b: the texture family - its record arm resolves the texture from the verb's own
+        // handle (VerbMipRes, VerbCopyTexDst, the copy's two endpoints).
+        table.GL.GenerateMipmap = &EmitGenerateMipmap;
+        table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
+        table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
+        table.GL.CopyImageSubData = &EmitCopyImageSubData;
+        table.GL.ReadPixels = &EmitReadPixels;
+        table.GL.GetTexImage = &EmitGetTexImage;
+        table.GL.GetTextureImage = &EmitGetTextureImage;
+        // P13 W4c: framebuffer verbs name their framebuffers by handle (MGPClear::Fbo, the blit's
+        // pair), image binds and storage-block bindings carry their objects' handles.
+        table.GL.Clear = &EmitClear;
+        table.GL.ClearBufferfi = &EmitClearBufferfi;
+        table.GL.ClearBufferfv = &EmitClearBufferfv;
+        table.GL.ClearBufferiv = &EmitClearBufferiv;
+        table.GL.ClearBufferuiv = &EmitClearBufferuiv;
+        table.GL.ClearNamedFramebufferfi = &EmitClearNamedFramebufferfi;
+        table.GL.ClearNamedFramebufferfv = &EmitClearNamedFramebufferfv;
+        table.GL.ClearNamedFramebufferiv = &EmitClearNamedFramebufferiv;
+        table.GL.ClearNamedFramebufferuiv = &EmitClearNamedFramebufferuiv;
+        table.GL.BlitFramebuffer = &EmitBlitFramebuffer;
+        table.GL.BlitNamedFramebuffer = &EmitBlitNamedFramebuffer;
+        table.GL.BindImageTexture = &EmitBindImageTexture;
+        table.GL.ShaderStorageBlockBinding = &EmitShaderStorageBlockBinding;
+        // The XFB family: the span's capture program and targets ride Begin; the object is named
+        // by lifetime id. It follows the program family because Begin names the capture program
+        // by its shader CSO, whose archive monolith records carry from W4c.
+        table.GL.BeginTransformFeedback = &EmitBeginTransformFeedback;
+        table.GL.EndTransformFeedback = &EmitEndTransformFeedback;
+        table.GL.PauseTransformFeedback = &EmitPauseTransformFeedback;
+        table.GL.ResumeTransformFeedback = &EmitResumeTransformFeedback;
+        table.GL.BindTransformFeedback = &EmitBindTransformFeedback;
+        table.GL.DeleteTransformFeedback = &EmitDeleteTransformFeedback;
         g_monolithVerbPort = true;
     }
 

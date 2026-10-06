@@ -703,6 +703,7 @@ namespace MobileGL::MG_Remote::Server {
                 ++m_bufferReadbackWrites;
                 // The acceptance is the applier's (a dead handle is a counted no-op, a range
                 // past the store a trip wire), so a refused write ends the landing here.
+                const MG_Pipe::MGPipeServerOriginatedWriteScope serverWrite;
                 if (!MG_Pipe::MGPipeApplyResourceSubData(write, bytes, nullptr)) return false;
             }
         }

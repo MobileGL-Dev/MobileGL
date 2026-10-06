@@ -1440,6 +1440,25 @@ namespace MobileGL::MG_Pipe {
     // name a TEXTURE target: Buffer, Renderbuffer and anything at or above
     // MGPipeResourceTarget::Count are Fatal{ProtocolCorruption} rather than an upload onto
     // whatever object holds that slot in the texture slot space.
+    // P13 W4b: A WRITE THE SERVER PRODUCED, going through the ordinary resource_subdata gate - the
+    // pack-buffer landing of a readback (PipeApplier.cpp LandReadbackInBuffer) is the one producer.
+    // Its bytes are the server's own scratch and live for the call only, so a store that ALIASES
+    // the frontend's shadow (monolith's record arm) must not take them as its base: it lands them
+    // in the GL store and marks it GPU-written instead, which is how the frontend and every CPU
+    // reader learn of them (SyncGpuWrites / SplitHostBytesForCpuRead). A copying store takes them
+    // as it always has. Thread-local; scoped by the producer.
+    Bool MGPipeApplyingServerOriginatedWrite();
+    class MGPipeServerOriginatedWriteScope {
+    public:
+        MGPipeServerOriginatedWriteScope();
+        ~MGPipeServerOriginatedWriteScope();
+        MGPipeServerOriginatedWriteScope(const MGPipeServerOriginatedWriteScope&) = delete;
+        MGPipeServerOriginatedWriteScope& operator=(const MGPipeServerOriginatedWriteScope&) = delete;
+
+    private:
+        Bool m_previous;
+    };
+
     Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
                                     const MGPSubRegion* regions = nullptr);
     // buffer_subdata_resident: same shape; `bytes` is the application's staging store and is

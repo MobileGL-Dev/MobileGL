@@ -298,6 +298,18 @@ namespace MobileGL::MG_Remote::Server {
         explicit StagedTextureStore(Bool copies) : m_copies(copies) {}
 
         Bool CopiesIntoServerStorage() const { return m_copies; }
+        // P13 W4b: THE ALIASING MODE - monolith's record arm. The store keeps every piece of
+        // bookkeeping it keeps under split (definitions, extents, the exact covered runs, the
+        // driver-written and GPU-dirty marks), but a level's bytes are the FRONTEND's level shadow
+        // in place: a run records the address it arrived at (minus its offset in the level) and
+        // nothing is copied. The readers then ask exactly what they ask under split - is the
+        // level covered, what are its bytes - and get the same answers from memory that is
+        // already there. The two copy-only operations (FollowCopy, AdoptClientBoxes) stay
+        // copy-only: this store never writes frontend memory, so a copy it cannot follow marks
+        // the destination driver-written, which sends its readers to the driver.
+        Bool Aliases() const { return !m_copies && MG_Config::RecordArmAliasesFrontend(); }
+        // Does this store answer at all: a copying store, or an aliasing one.
+        Bool Holds() const { return m_copies || Aliases(); }
         void SetDeviceLimits(Int maxTextureSize, Int max3DTextureSize, Int maxCubeMapTextureSize,
                              Int maxArrayTextureLayers, Int maxTextureBufferSize) {
             const std::lock_guard<std::mutex> lock(m_mutex);
@@ -330,9 +342,13 @@ namespace MobileGL::MG_Remote::Server {
         // reallocates it, which is StagedShadowStore::Adopt's note one level down. Nothing needs
         // the base while a level is still being assembled - the readers run at the barrier, after
         // the last piece - so callers here ignore it.
+        // `frontendShadow`: the bytes ARE the frontend's level shadow (a client record's run) - the
+        // one source an aliasing store may keep by address. Every other adoption (the server's own
+        // readbacks, regenerations and promotions) is server memory that dies with the call, and is
+        // copied even by an aliasing store.
         const Uint8* AdoptRun(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
-                              Uint64 imageOffset, const void* bytes, SizeT byteSize) {
-            if (!m_copies) return nullptr;
+                              Uint64 imageOffset, const void* bytes, SizeT byteSize, Bool frontendShadow = false) {
+            if (!Holds()) return nullptr;
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
@@ -348,6 +364,7 @@ namespace MobileGL::MG_Remote::Server {
             // belt that keeps B4's rule if that refusal is ever relaxed.
             if (!shadow.Defined || shadow.Extent != extent) {
                 shadow.Bytes.clear();
+                shadow.Alias = nullptr;
                 shadow.Covered.clear();
             }
 #endif
@@ -358,7 +375,7 @@ namespace MobileGL::MG_Remote::Server {
                 m_driverWritten[bucketed] = true;
             }
             shadow.GpuDirty = false;
-            return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize);
+            return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize, frontendShadow);
         }
 
         // THE WHOLE-LEVEL SPELLING: the run is the level's COMPLETE current content, beginning at
@@ -368,8 +385,8 @@ namespace MobileGL::MG_Remote::Server {
         // into; under monolith both do nothing and return nullptr, and the caller
         // (Ops_H_TextureSubData) has already returned before reaching either.
         const Uint8* Adopt(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
-                           const void* bytes, SizeT byteSize) {
-            if (!m_copies) return nullptr;
+                           const void* bytes, SizeT byteSize, Bool frontendShadow = false) {
+            if (!Holds()) return nullptr;
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
@@ -378,8 +395,9 @@ namespace MobileGL::MG_Remote::Server {
             // P8-E: the caller states these bytes ARE the level, which a followed copy is part of.
             shadow.HoldsFollowedCopy = false;
             shadow.Bytes.clear();
+            shadow.Alias = nullptr;
             shadow.Covered.clear();
-            return CopyRunInto(shadow, key, uploadTarget, level, 0, bytes, byteSize);
+            return CopyRunInto(shadow, key, uploadTarget, level, 0, bytes, byteSize, frontendShadow);
         }
 
         // A storage-defining respecify named this level: it EXISTS from here on, at the exact
@@ -408,7 +426,7 @@ namespace MobileGL::MG_Remote::Server {
         void NoteLevelDefined(Uint64 key, Uint16 uploadTarget, Uint16 level, const IntVec3& extent,
                               Uint8 resourceTarget = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D),
                               Uint32 internalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8)) {
-            if (!m_copies) return;
+            if (!Holds()) return;
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             Uint64 byteBound = 0;
@@ -431,6 +449,8 @@ namespace MobileGL::MG_Remote::Server {
             if (!shadow.Defined || shadow.Extent != extent || shadow.InternalFormat != internalFormat ||
                 shadow.ResourceTarget != resourceTarget || shadow.DeclaredByteBound != byteBound) {
                 shadow.Bytes.clear();
+                // An aliased level's base is the frontend allocation this redefinition replaced.
+                shadow.Alias = nullptr;
                 // The covered set is a statement about THIS coordinate system, so it goes with
                 // the bytes it described.
                 shadow.Covered.clear();
@@ -460,7 +480,7 @@ namespace MobileGL::MG_Remote::Server {
         // never crossed - and the mark is what answers "dirty region, level has no pending
         // upload" without asking the client (§2.2's last row).
         void MarkLevelGpuDirty(Uint64 key, Uint16 uploadTarget, Uint16 level, Bool dirty) {
-            if (!m_copies) return;
+            if (!Holds()) return;
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)].GpuDirty = dirty;
@@ -510,7 +530,7 @@ namespace MobileGL::MG_Remote::Server {
         //     next run for it is the CLIENT's shadow, which never saw the copy: AdoptClientBoxes
         //     lands only the texels that run says the client wrote.
         void MarkDriverWritten(Uint64 key) {
-            if (!m_copies) return;
+            if (!Holds()) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_driverWritten[Bucketed(key)] = true;
             m_any.store(true, std::memory_order_release);
@@ -645,15 +665,10 @@ namespace MobileGL::MG_Remote::Server {
         // reads the level image WHOLE (LevelByteSize / the sync's texel base), so a level with
         // one piece missing is as unreadable as one with none.
         const Uint8* RequireLevelBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, const char* site) const {
-            if (!m_copies) return nullptr;
+            if (!Holds()) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
-            if (shadow != nullptr && shadow->Defined && shadow->DeclaredByteBound != 0 &&
-                shadow->Bytes.size() == shadow->DeclaredByteBound &&
-                StagedShadowStore::CoverageHas(shadow->Covered, 0,
-                                               static_cast<SizeT>(shadow->DeclaredByteBound))) {
-                return shadow->Bytes.data();
-            }
+            if (shadow != nullptr && LevelComplete(*shadow)) return LevelData(*shadow);
             // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
             SessionFail(MGFatalFamily::StageSnapshotTooNarrow,
                     "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
@@ -675,7 +690,7 @@ namespace MobileGL::MG_Remote::Server {
         // covered level answers, and nothing is fatal: an uncovered box is the caller's to skip.
         const Uint8* CoveredBoxBytes(Uint64 key, Uint16 uploadTarget, Uint16 level, Int x, Int y, Uint32 w, Uint32 h,
                                      SizeT texel, Int* rowTexels) const {
-            if (!m_copies) return nullptr;
+            if (!Holds()) return nullptr;
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
             if (shadow == nullptr || !shadow->Defined || x < 0 || y < 0 || w == 0 || h == 0 ||
@@ -684,11 +699,11 @@ namespace MobileGL::MG_Remote::Server {
             for (Uint32 row = 0; row < h; ++row) {
                 const SizeT begin = TexelOffset(shadow->Extent, x, y + static_cast<Int>(row), 0, texel);
                 const SizeT end = begin + static_cast<SizeT>(w) * texel;
-                if (end > shadow->Bytes.size() || !StagedShadowStore::CoverageHas(shadow->Covered, begin, end))
+                if (end > LevelBytesHeld(*shadow) || !StagedShadowStore::CoverageHas(shadow->Covered, begin, end))
                     return nullptr;
             }
             *rowTexels = shadow->Extent.x();
-            return shadow->Bytes.data();
+            return LevelData(*shadow);
         }
 
         // Diagnostics the sync path and the unit cases read, so that a check can assert WHAT
@@ -697,7 +712,7 @@ namespace MobileGL::MG_Remote::Server {
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
             if (shadow == nullptr || !shadow->Defined || shadow->DeclaredByteBound == 0 ||
-                shadow->Bytes.size() != shadow->DeclaredByteBound) return false;
+                LevelBytesHeld(*shadow) != shadow->DeclaredByteBound) return false;
             // THE WHOLE LEVEL, not merely the currently assembled prefix: all runs must cover
             // the server-derived bound before a reader can treat the level as complete.
             return StagedShadowStore::CoverageHas(
@@ -737,7 +752,7 @@ namespace MobileGL::MG_Remote::Server {
             const std::lock_guard<std::mutex> lock(m_mutex);
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
             if (shadow == nullptr || !shadow->Defined) return 0;
-            return shadow->Bytes.size();
+            return LevelBytesHeld(*shadow);
         }
         Uint64 LevelDeclaredByteBound(Uint64 key, Uint16 uploadTarget, Uint16 level) const {
             if (!m_any.load(std::memory_order_acquire)) return 0;
@@ -820,7 +835,20 @@ namespace MobileGL::MG_Remote::Server {
             Bool GpuDirty = false;
             // P8-E: FollowCopy wrote server-side texels into Bytes that the client's shadow lacks.
             Bool HoldsFollowedCopy = false;
+            // P13 W4b, the aliasing mode: the level's first byte in the FRONTEND's level shadow,
+            // learned from the first run that arrived (its address minus its offset in the level).
+            // Null until then, and nulled with the coordinate system it belongs to. Bytes stays
+            // empty in this mode; LevelData / LevelBytesHeld are the two readers' spellings.
+            const Uint8* Alias = nullptr;
         };
+        static const Uint8* LevelData(const LevelShadow& shadow) {
+            return shadow.Alias != nullptr ? shadow.Alias : shadow.Bytes.data();
+        }
+        // How many bytes of the level image this store can hand out: an aliased level is the
+        // frontend's whole level allocation, which is exactly its declared bound.
+        static SizeT LevelBytesHeld(const LevelShadow& shadow) {
+            return shadow.Alias != nullptr ? static_cast<SizeT>(shadow.DeclaredByteBound) : shadow.Bytes.size();
+        }
         struct TextureShadow {
             ska::flat_hash_map<Uint32, LevelShadow> Levels;
         };
@@ -872,7 +900,7 @@ namespace MobileGL::MG_Remote::Server {
         // Check the run's exclusive end against the extent recorded by the server's prior
         // resource_respecify before any cast, coverage edit, or vector growth.
         const Uint8* CopyRunInto(LevelShadow& shadow, Uint64 key, Uint16 uploadTarget, Uint16 level,
-                                 Uint64 imageOffset, const void* bytes, SizeT byteSize) {
+                                 Uint64 imageOffset, const void* bytes, SizeT byteSize, Bool frontendShadow) {
             if (bytes != nullptr && byteSize != 0) {
                 constexpr Uint64 max = std::numeric_limits<Uint64>::max();
                 const Uint64 runBytes = static_cast<Uint64>(byteSize);
@@ -901,11 +929,35 @@ namespace MobileGL::MG_Remote::Server {
                 const auto* raw = static_cast<const Uint8*>(bytes);
                 const SizeT begin = static_cast<SizeT>(imageOffset);
                 const SizeT needed = static_cast<SizeT>(end);
+                if (!m_copies && frontendShadow) {
+                    // The aliasing mode: the run IS the frontend level shadow at `begin`, so the
+                    // level's base is one subtraction away and nothing is copied. Every run of one
+                    // level comes from one allocation; a run from another is a level redefined
+                    // without a respecify (or one the server had been holding a copy of), which
+                    // would leave earlier coverage describing other memory - so it starts the
+                    // coverage over.
+                    const Uint8* base = raw - begin;
+                    if (shadow.Alias != base) {
+                        shadow.Covered.clear();
+                        shadow.Bytes.clear();
+                        shadow.Alias = base;
+                    }
+                    StagedShadowStore::CoverageAdd(shadow.Covered, begin, needed);
+                    m_any.store(true, std::memory_order_release);
+                    return shadow.Alias;
+                }
+                if (shadow.Alias != nullptr) {
+                    // A server copy landing on an aliased level: the level becomes server-owned, so
+                    // the bytes it already stands for are taken into it first.
+                    shadow.Bytes.assign(shadow.Alias, shadow.Alias + static_cast<SizeT>(shadow.DeclaredByteBound));
+                    shadow.Alias = nullptr;
+                }
                 if (shadow.Bytes.size() < needed) shadow.Bytes.resize(needed, 0);
                 std::memcpy(shadow.Bytes.data() + begin, raw, byteSize);
                 StagedShadowStore::CoverageAdd(shadow.Covered, begin, needed);
             }
             m_any.store(true, std::memory_order_release);
+            if (shadow.Alias != nullptr) return shadow.Alias;
             return shadow.Bytes.empty() ? nullptr : shadow.Bytes.data();
         }
 
@@ -927,7 +979,7 @@ namespace MobileGL::MG_Remote::Server {
         // that does not divide evenly is a level this cannot address texel by texel.
         static Bool LevelComplete(const LevelShadow& shadow) {
             return shadow.Defined && shadow.DeclaredByteBound != 0 &&
-                   shadow.Bytes.size() == shadow.DeclaredByteBound &&
+                   LevelBytesHeld(shadow) == shadow.DeclaredByteBound &&
                    StagedShadowStore::CoverageHas(shadow.Covered, 0, static_cast<SizeT>(shadow.DeclaredByteBound));
         }
         static SizeT LevelTexelBytes(const LevelShadow& shadow) {

@@ -172,6 +172,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
             // knob runs it anyway, which is how each defect is shown red and how dev's fix is checked.
             bool MonolithDefect(bool onEspryt, bool onMagma) const {
                 if (m_wire || std::getenv(kRunMonolithDefects) != nullptr) return false;
+                // P13 W4b: a monolith on the record arm runs the wire's generation, so it meets none.
+                if (PeekSplitRuntime().dataArmIsRecord) return false;
                 return m_espryt ? onEspryt : onMagma;
             }
             static constexpr const char* kM1 =

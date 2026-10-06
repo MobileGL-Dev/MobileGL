@@ -3946,6 +3946,16 @@ namespace MobileGL::MG_Pipe {
     // build would turn 1117 integration cases red for running code that is correct in the role
     // they run it in. None of the five is on P5's reduced path, so under a real transport this
     // costs nothing and catches a lot.
+    namespace {
+        thread_local Bool tl_serverOriginatedWrite = false;
+    } // namespace
+
+    Bool MGPipeApplyingServerOriginatedWrite() { return tl_serverOriginatedWrite; }
+    MGPipeServerOriginatedWriteScope::MGPipeServerOriginatedWriteScope() : m_previous(tl_serverOriginatedWrite) {
+        tl_serverOriginatedWrite = true;
+    }
+    MGPipeServerOriginatedWriteScope::~MGPipeServerOriginatedWriteScope() { tl_serverOriginatedWrite = m_previous; }
+
     void MGPipeUnmigratedEmulation(const char* name) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {

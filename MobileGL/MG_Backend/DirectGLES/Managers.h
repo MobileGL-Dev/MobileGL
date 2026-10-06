@@ -794,7 +794,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // ProgramSubsystemEnabled() already latches, so this is one load and one test, and a latch
     // here would only hide which half answered.
     inline Bool ProgramHandleArm() {
-        return MG_Config::Transport != MG_Config::TransportMode::Monolith && ProgramSubsystemEnabled();
+        return MG_Config::DataArmIsRecord() && ProgramSubsystemEnabled();
     }
 
     // ---- P4a: what the twins read INSTEAD of the frontend object ----
