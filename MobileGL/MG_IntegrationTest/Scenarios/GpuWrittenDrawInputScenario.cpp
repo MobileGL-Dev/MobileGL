@@ -859,9 +859,14 @@ void main() { command[0] = 6u; command[1] = 1u; command[2] = 3u; command[3] = 0u
         ASSERT_TRUE(PeekWireIndirectCounters(&after));
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_TRUE(IsGreen(Half(image, 0))) << "the client-array control did not draw (" << Half(image, 0) << ")";
-        EXPECT_GE(after.resourceReadbacks - before.resourceReadbacks, 1u)
-            << "the positive control read nothing back: either the counter is dead or the command words "
-               "a client-array snapshot needs were taken from a stale shadow";
+        // The words are read from the frontend SHADOW by Espryt (and by every client that
+        // snapshots), so there the readback is required; Magma's monolith arm reads them from its
+        // own host-visible store and needs none, and asserting one there would be asserting a cost.
+        if (Gl().BackendName() == "DirectGLES" || PeekSplitRuntime().transportName != "monolith") {
+            EXPECT_GE(after.resourceReadbacks - before.resourceReadbacks, 1u)
+                << "the positive control read nothing back: either the counter is dead or the command "
+                   "words a client-array snapshot needs were taken from a stale shadow";
+        }
     }
 
 } // namespace MGITest
