@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include <MG_Backend/Record/ApplyRoleBackend.h>
 #include "VertexInputStateFactory.h"
 #include "MagmaPipeArms.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
@@ -464,7 +465,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                attr.IsBgra, attr.IsLong);
             auto conversion = VertexStreamConversion::None;
             if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
-                const auto* backend = MG_Remote::Server::ServerLoopInstance().Backend();
+                const auto* backend = MG_Backend::ApplyRoleBackend();
                 if (backend && backend->GetDynamicParameters().SupportsFloat64VertexAttributes) {
                     // Exactly the monolith arm's answer for the same state: with native fp64
                     // the module KEPT its 64-bit inputs (DemoteFloat64Pass did not run), so

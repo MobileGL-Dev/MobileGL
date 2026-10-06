@@ -66,6 +66,9 @@ namespace MobileGL::MG_State::GLState {
             if (!MG_Record::PersistentMapTracker::OnServerRole()) return;
             FatalLegacyBufferArmFromApplyThread(accessor);
         }
+#else
+        // P13 W5: no transport, no apply thread to refuse.
+        inline void RefuseLegacyBufferArmFromApplyThread(const char*) {}
 #endif
     }
 

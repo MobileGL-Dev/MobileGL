@@ -9,6 +9,7 @@
 // P5 package v1: the apply thread, its affinity, its parking, and the EGL ownership move.
 
 #include "ServerLoop.h"
+#include <MG_Backend/Record/ApplyRoleBackend.h>
 #include "ApplyThreadPolicy.h"
 #include "SessionRuntime.h"
 #include <MG_Remote/FatalFunnel.h>
@@ -1459,6 +1460,18 @@ namespace MobileGL::MG_Remote::Server {
         static ServerLoop& instance = *new ServerLoop{};
         return instance;
     }
+
+    // P13 W5: the record arm asks for the apply side's backend through MG_Backend's hook
+    // (Record/ApplyRoleBackend.h), which has no MG_Remote to name. Installed at static init so it
+    // answers from the first record on, exactly as the direct ServerLoopInstance().Backend() did.
+    namespace {
+        [[maybe_unused]] const bool g_applyRoleBackendHookInstalled = [] {
+            MG_Backend::gApplyRoleBackendHook = []() -> MG_Backend::BackendObject* {
+                return ServerLoopInstance().Backend();
+            };
+            return true;
+        }();
+    } // namespace
 
     // ---------------------------------------------------------------------------------
     // The control-frame dispatch and the twelve EGL forwarders (P5f, package fc)
