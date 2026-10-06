@@ -125,7 +125,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             const Uint8* HostBytes = nullptr; // HostBytes: null when there is no CPU copy
         };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // A missing record on the handle arm is a NAMED refusal and never a quiet fall-back to
         // the frontend (TASK-mv requirement 2; the shape is Managers.cpp's
         // RefuseNullFrontendTextureOffTheHandleArm). The frontend element slot is not a second

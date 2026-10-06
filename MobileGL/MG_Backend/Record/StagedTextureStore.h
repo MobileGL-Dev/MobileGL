@@ -114,7 +114,7 @@
 #include <mutex>
 #include <limits>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <Config.h>
 #endif
 
@@ -355,7 +355,7 @@ namespace MobileGL::MG_Record {
             const std::lock_guard<std::mutex> lock(m_mutex);
             LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
             RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // A run can be the first piece of a redefined level. Old coverage
             // belongs to the previous coordinate system even when the new run
             // happens to touch its old range; retaining it invents bytes that
@@ -1030,7 +1030,7 @@ namespace MobileGL::MG_Record {
         std::atomic<Bool> m_any{false};
     };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ONE PER PROCESS, and its copying arm is decided ONCE at first use - StagedShadow's
     // ServerStaged() ruling verbatim: the two arms hold the authoritative bytes in DIFFERENT
     // places, so an answer that changed mid-run would strand every level already staged.

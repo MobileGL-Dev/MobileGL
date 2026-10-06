@@ -3130,7 +3130,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 default: return TextureTarget::Unknown;
                 }
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 
             void Ops_H_TextureSubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
                                       const void* bytes, const MG_Pipe::MGPSubRegion* regions) {
@@ -3232,7 +3232,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Record::ServerStagedTexture().Drop(
                     MG_Record::StagedTextureStore::KeyForHandle(res));
             }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
             const MG_Pipe::MGPipeResourceOps g_glesResourceOps = {
                 .Create = Ops_H_Create,
@@ -3248,7 +3248,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .TextureSubData = Ops_H_TextureSubData,
                 .TextureRespecify = Ops_H_TextureRespecify,
                 .TextureDestroy = Ops_H_TextureDestroy,
-#if defined(__ANDROID__)
+#if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
                 // P11 B2 (T0). Android only: nowhere else is there an AHardwareBuffer to import.
                 .ImportExternal = Ops_H_ImportExternalTracked,
                 .SelfTestExternal = Ops_H_SelfTestExternal,
@@ -8126,7 +8126,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // pre-P4a expression exactly when MOBILEGL_PIPE_PUSH is off, so the pull build's
         // preprocessed text, and therefore its object code, is unchanged. Both are #undef'd
         // immediately after the function.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P5c (tx): THE READS THE FOUR UPLOAD ARMS MAKE, re-sourced. With an active transport the
 // apply thread may not name the client's TextureObjectMipmap at all (rule E), so on the
 // handle arm:
@@ -8180,7 +8180,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_LEVEL_TEXELS(obj, tgt, lvl, site) ((obj)->MapMipmapData(tgt, lvl))
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P5c (tx): the disaggregated pair adds ONE term and ONE clear to the P4a shapes - the
 // staged-texture store's GPU-dirty mark (T5: a level the GPU generated dirties the SERVER's
 // shadow, and the pending set cannot see it). The mark is never set on Espryt today - its

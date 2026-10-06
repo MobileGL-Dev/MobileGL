@@ -28,7 +28,7 @@
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
 #include <Config.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/PipeApply.h>
 // P7 wave 0: the seam WireDescriptorFatal dies through. See MG_Pipe/PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
@@ -43,7 +43,7 @@
 #include <limits>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     SizeT UniformManager::WireImageViewKeyHash::operator()(const WireImageViewKey& key) const {
         SizeT hash = std::hash<VkImage>{}(key.image);
         const auto mix = [&hash](Uint64 value) {

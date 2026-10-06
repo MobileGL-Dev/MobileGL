@@ -209,12 +209,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
         // acquired from the foreign family before it, when it moved or is not held.
         void AcquireNotedSharedImages() {
+#if MOBILEGL_BUILD_DISAGGREGATED
             if (m_textureManager && m_textureManager->HasNotedSharedImageUses()) AcquireNotedSharedImagesSlow();
+#endif
         }
         // One shared-image texture, before a use: a new write generation, or an image released at
         // the last frame boundary, is acquired here - an ownership barrier recorded ahead of the
         // use, the write's fence a wait of the submission carrying it - and noted as read.
+#if MOBILEGL_BUILD_DISAGGREGATED
         void AcquireSharedImage(VkTextureManager::TextureResource& resource);
+#else
+        // P13 W5: no transport, no shared image (only a server allocates one), so a texture's
+        // sharedImageId is never set and there is nothing to acquire.
+        void AcquireSharedImage(VkTextureManager::TextureResource&) {}
+#endif
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query

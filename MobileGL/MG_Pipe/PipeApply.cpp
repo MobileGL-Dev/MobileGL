@@ -182,7 +182,7 @@ namespace MobileGL::MG_Pipe {
     MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() { return g_recordLatchHook; }
     MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() { return g_recordLatchedHook; }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ----------------------------------------------------------------------------
     // THE BACKEND-SIDE SESSION-FAIL SEAM (P7 wave 0). PipeSessionFail.h holds the argument;
     // this is the whole implementation.
@@ -223,6 +223,9 @@ namespace MobileGL::MG_Pipe {
         std::abort();
     }
 
+#endif // MOBILEGL_BUILD_RECORD_ARM
+
+#if MOBILEGL_BUILD_DISAGGREGATED
     namespace {
         MGPipeSessionLatchHook g_sessionLatchHook = nullptr;
         MGPipeSessionLatchArmedHook g_sessionLatchArmedHook = nullptr;
