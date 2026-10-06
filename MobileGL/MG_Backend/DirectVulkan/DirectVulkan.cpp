@@ -40,7 +40,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
 #if MOBILEGL_BUILD_DISAGGREGATED
         void RejectWireLegacyBuffer() {
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
                 std::abort();
             }
@@ -647,7 +647,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
             return;
         }
@@ -658,7 +658,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
             return;
         }
@@ -715,7 +715,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
             return;
         }
@@ -727,7 +727,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
             return;
         }
@@ -805,7 +805,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, 1, 0, true);
             return;
         }
@@ -870,7 +870,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, 1, 0, false);
             return;
         }
@@ -948,7 +948,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // DispatchComputeIndirect takes its transport branch into DispatchWireComputeIndirect
         // (WireDraw.inc), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
         // that was here (ReadWireBuffer, a whole-GPU wait once a shader had written the store) is gone.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             pVulkanRenderer->DispatchComputeIndirect(indirect);
             return;
         }
@@ -1015,7 +1015,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             auto& state = MG_Pipe::MGPipeApplier();
             const auto handle = state.VerbStorageBlockProgram;
             if (handle.Slot >= state.ShaderCsos.size() || !state.ShaderCsos[handle.Slot].Live ||
@@ -1141,7 +1141,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
                                            Vector<Uint32>& outIndices) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const SizeT width = MG_Util::GetGLTypeSize(type);
             if ((width != 1 && width != 2 && width != 4) || count < 2) return false;
             const auto& bound = MG_Pipe::MGPipeApplier().IndexBuffer;
@@ -1249,7 +1249,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // batch that command buffer belongs to - the handle SetupDraw is holding goes stale, and
         // the next vkCmd* records into a command buffer that is no longer the frame's. Reconciling
         // HERE, before SetupDraw starts recording, keeps the wait out of the recording.
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+        if (!MG_Config::DataArmIsRecord()) {
             const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             Bool clientArray = false;
             if (currentVAO) {
@@ -1319,7 +1319,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // offset is a hardcoded 0, so UploadAndBindIndexBuffer saw a null client pointer,
         // declined the whole batch and painted nothing.)
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const Bool noIndexBuffer = MG_Config::Transport != MG_Config::TransportMode::Monolith
+        const Bool noIndexBuffer = MG_Config::DataArmIsRecord()
             ? MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeApplier().IndexBuffer.Res)
             : MG_Pipe::gPipeInputs.GetBoundVertexArray()->GetIndexBufferBindingSlot().GetBoundObject() == nullptr;
         if (noIndexBuffer) {
@@ -1451,6 +1451,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // old renderer's GPU work is long complete, and the index must
             // not be compared against the new renderer's restarted counter.
             Uint64 rendererGeneration = 0;
+            // P13 W4: status polls answered "not yet" while the batch was still unsubmitted.
+            mutable Uint32 unsubmittedPolls = 0;
         };
     } // namespace
 
@@ -1509,7 +1511,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
         // Pure status read (glGetSynciv must not flush).
-        return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex);
+        if (pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex)) return true;
+#if MOBILEGL_BUILD_DISAGGREGATED
+        // P13 W4: A STATUS POLL THAT CAN NEVER BE ANSWERED. On the record arm a frame's draws stay
+        // in one command buffer (and one render pass) until something submits it, so a client that
+        // only polls - glGetSynciv in a loop, no flush bit, no swap - waits for work nothing will
+        // ever hand the GPU. Under split the apply thread submits when it goes idle (the server's
+        // fence report, one ClientWaitSync(FLUSH, 0)); monolith has no idle moment, so a poller that
+        // keeps asking the same unsubmitted fence is that moment. The threshold keeps an ordinary
+        // once-a-frame status read from splitting the frame it is polled in.
+        constexpr Uint32 kPollsBeforeIdleFlush = 64;
+        if (MG_Config::RecordArmAliasesFrontend() && ++sync->unsubmittedPolls >= kPollsBeforeIdleFlush) {
+            sync->unsubmittedPolls = 0;
+            pVulkanRenderer->FlushForSyncPoint(sync->submitIndex);
+            return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex);
+        }
+#endif
+        return false;
     }
 
     namespace {

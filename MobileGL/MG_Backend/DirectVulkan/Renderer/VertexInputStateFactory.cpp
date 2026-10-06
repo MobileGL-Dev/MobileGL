@@ -802,7 +802,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto found = m_wireVertexFormatSupport.find(format);
             if (found != m_wireVertexFormatSupport.end()) return found->second;
             VkFormatProperties properties{};

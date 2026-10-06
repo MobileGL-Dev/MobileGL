@@ -153,6 +153,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // applies unchanged. The T2 store it replaces goes through DeferWireRelease. False = not
         // imported (the T2 store is untouched and the client is DECLINED).
         Bool ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size);
+        // P13 W4: monolith's record arm donates the wire store itself as the client's persistent
+        // map (see the definition). Null when the store cannot be handed over.
+        void* DonateWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes);
         // The POST self-test of the sustained-lock pattern on this device (see the definition).
         static Bool SelfTestWireImport(char* why, Uint64 whyBytes);
 #endif

@@ -90,6 +90,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 if (!Ready()) return;
                 m_magma = Gl().BackendName() == "DirectVulkan";
                 m_transport = PeekSplitRuntime().transportName;
+                m_recordArm = PeekSplitRuntime().dataArmIsRecord;
                 std::string error;
                 m_program = CompileProgram(kVertexSource, kFragmentSource, &error);
                 ASSERT_NE(m_program, 0u) << error;
@@ -203,7 +204,10 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
 
             // Magma's server in THIS process: the inproc arm. Spawn and tcp servers are other
             // processes, and the monolith arm never takes the wire path at all.
-            bool CountersReadable() const { return m_magma && m_transport == "inproc"; }
+            // The counters are this process's: inproc, and (P13 W4) monolith on the record arm.
+            bool CountersReadable() const {
+                return m_magma && (m_transport == "inproc" || (m_transport == "monolith" && m_recordArm));
+            }
 
             WireIndirectCounters Delta() const {
                 WireIndirectCounters now{};
@@ -215,6 +219,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
 
             bool m_magma = false;
             std::string m_transport;
+            bool m_recordArm = false;
             WireIndirectCounters m_before{};
             GLuint m_program = 0, m_copy = 0, m_vao = 0, m_vbo = 0, m_ebo = 0;
             GLuint m_indirect = 0, m_parameter = 0, m_source = 0;
@@ -304,7 +309,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
         // monolith defects), left to P13 (ID-P8-13).
         TEST_F(WireIndirectDrawScenario, ComputeWrittenCountWordIsTheOneTheGpuReads) {
             if (!Ready() || IsSkipped()) return;
-            if (!m_magma && m_transport == "monolith" && !PeekSplitRuntime().dataArmIsRecord) {
+            if (!m_magma && !m_recordArm) {
                 GTEST_SKIP() << "Espryt's monolith arm reads the count word from the frontend shadow without "
                                 "a sync (OQ15; recorded for P13, ID-P8-13)";
             }
@@ -316,7 +321,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 3, 0);
             });
             ExpectStrips(image, {true, false, false, false}, "glMultiDrawElementsIndirectCount, shader-written count 1");
-            if (m_transport == "monolith") {
+            if (!m_recordArm) {
                 // DirectVulkan.cpp's monolith MultiDrawArraysIndirectCount reads this word from the
                 // frontend shadow without SyncGpuWrites: recorded for dev (ID-P8-3), not this lane's.
                 return;
@@ -344,7 +349,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
         // arm records no dependency here (recorded for dev), and Espryt's is its driver's.
         TEST_F(WireIndirectDrawScenario, ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered) {
             if (!Ready() || IsSkipped()) return;
-            if (!m_magma || m_transport == "monolith") {
+            if (!m_magma || !m_recordArm) {
                 GTEST_SKIP() << "the implicit INDIRECT_COMMAND_READ barrier is the Magma wire arm's (P8-D)";
             }
             Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER, std::vector<ArraysCommand>{Arrays(3), Arrays(2)});

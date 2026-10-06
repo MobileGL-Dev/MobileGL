@@ -1251,8 +1251,12 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" ${MGL_ITEST_HANDLES_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+# P13 W4: THE ABA CONTROL'S SUBJECT IS THE FRONTEND ARM. The knob defeats the identity half of
+# Magma's frontend-arm keys (MagmaPipeIdentityTables); monolith's record arm keys every object on
+# the applier's {slot, gen}, which the knob does not - and must not - reach. So the lane pins the
+# frontend arm (MOBILEGL_PIPE_DATA_ARM, a W4-W6 knob) and goes with that arm in W6.
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
+    "MOBILEGL_TRANSPORT=monolith" "MOBILEGL_PIPE_DATA_ARM=frontend"
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba"
     ${MGL_ITEST_HANDLES_ARM_KNOBS} ${MGL_ITEST_ABA_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})

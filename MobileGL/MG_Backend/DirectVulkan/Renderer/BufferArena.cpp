@@ -132,7 +132,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Split staging may also be the destination of a GPU UBO range copy.
         // Persistent host writes must be coherent: Upload deliberately writes
         // the mapped pointer without a per-range VMA flush.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && m_desc.persistentlyMapped) {
+        if (MG_Config::DataArmIsRecord() && m_desc.persistentlyMapped) {
             bufferDesc.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         }
 #endif

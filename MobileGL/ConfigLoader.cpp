@@ -465,10 +465,10 @@ namespace MobileGL::MG_ConfigLoader {
         String lowered = value;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        // P13 W4: the backends switch one at a time. Espryt's record arm runs in monolith from W4a;
-        // Magma's verb entry points pick one arm for every family at once, so it joins at its
-        // single flip, after Espryt's last family.
-        const Bool backendReady = MG_Config::ActiveBackendType == BackendType::DirectGLES;
+        // P13 W4: both backends' monolith runs the record arm - Espryt's from W4a, family by family;
+        // Magma's at its single flip (its verb entry points pick one arm for every family at once).
+        const Bool backendReady = MG_Config::ActiveBackendType == BackendType::DirectGLES ||
+                                  MG_Config::ActiveBackendType == BackendType::DirectVulkan;
         MG_Config::MonolithTakesRecordArm = backendReady;
         if (lowered.empty() || lowered == "record") return;
         if (lowered == "frontend") {

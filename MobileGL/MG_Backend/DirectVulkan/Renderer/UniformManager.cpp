@@ -591,7 +591,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_programFactory = programFactory;
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
             m_wireStorageOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minStorageBufferOffsetAlignment);

@@ -73,6 +73,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 if (!Ready()) return;
                 m_magma = Gl().BackendName() == "DirectVulkan";
                 m_transport = PeekSplitRuntime().transportName;
+                m_recordArm = PeekSplitRuntime().dataArmIsRecord;
                 m_mark = CompileCompute(kMarkSource);
                 ASSERT_NE(m_mark, 0u);
                 m_copy = CompileCompute(kCopySource);
@@ -192,7 +193,10 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
 
             // Magma's server in THIS process: the inproc arm. Spawn and tcp servers are other
             // processes, and the monolith arm never takes the wire path at all.
-            bool CountersReadable() const { return m_magma && m_transport == "inproc"; }
+            // The counters are this process's: inproc, and (P13 W4) monolith on the record arm.
+            bool CountersReadable() const {
+                return m_magma && (m_transport == "inproc" || (m_transport == "monolith" && m_recordArm));
+            }
 
             WireIndirectCounters Delta() const {
                 WireIndirectCounters now{};
@@ -209,6 +213,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
 
             bool m_magma = false;
             std::string m_transport;
+            bool m_recordArm = false;
             WireIndirectCounters m_before{};
             GLuint m_mark = 0, m_copy = 0, m_groupCounts = 0, m_source = 0;
             std::vector<GLuint> m_marks;
@@ -266,7 +271,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
         // dependency here (P8-D recorded that half for dev), and Espryt's is its driver's.
         TEST_F(WireIndirectDispatchScenario, ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered) {
             if (!Ready() || IsSkipped()) return;
-            if (!m_magma || m_transport == "monolith") {
+            if (!m_magma || !m_recordArm) {
                 GTEST_SKIP() << "the implicit INDIRECT_COMMAND_READ barrier is the Magma wire arm's (P8-D, P8-SV)";
             }
             Parameters({1, 1, 1});

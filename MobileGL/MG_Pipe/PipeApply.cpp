@@ -1435,7 +1435,7 @@ namespace MobileGL::MG_Pipe {
         // existing backend hooks authoritative when present, and use this fallback otherwise.
         void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
                                            const void* bytes, const MGPSubRegion* regions) {
-            if (MG_Config::Transport == MG_Config::TransportMode::Monolith || !bytes || upload.Blob.Size == 0) return;
+            if (!MG_Config::DataArmIsRecord() || !bytes || upload.Blob.Size == 0) return;
             auto& store = MG_Remote::Server::ServerStagedTexture();
             const auto& desc = stored.Desc;
             const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res);
@@ -1445,18 +1445,20 @@ namespace MobileGL::MG_Pipe {
             // is adopted with the spelling that replaces the level; every other record names a RUN
             // of the level by its own box (fix A2: a level too large to stage whole crosses as
             // slabs, one record each, and the first of them is at the level's first byte).
+            // A client record's run: on monolith's record arm it is the frontend level shadow, which
+            // an aliasing store keeps by address (P13 W4).
             if (upload.RegionCount == 0) {
                 store.Adopt(key, target, upload.Level, extent, bytes,
-                            static_cast<SizeT>(upload.Blob.Size));
+                            static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
                 return;
             }
             store.AdoptRun(key, target, upload.Level, extent,
                            MG_Remote::Server::StagedTextureRunImageOffset(upload, regions), bytes,
-                           static_cast<SizeT>(upload.Blob.Size));
+                           static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
         }
 
         void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
-            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            if (!MG_Config::DataArmIsRecord()) return;
             auto& store = MG_Remote::Server::ServerStagedTexture();
             const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(desc.Resource);
             const auto define = [&](Uint16 target, Uint16 mip, const IntVec3& extent) {
@@ -1910,7 +1912,7 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeApplierReleaseObjectRecords() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             (g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
             MG_Remote::Server::ServerStagedTexture().DropAll();
         }
@@ -2686,7 +2688,7 @@ namespace MobileGL::MG_Pipe {
         if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture) {
             if (g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr)
                 g_resourceOps->TextureDestroy(handle.Handle);
-            else if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            else if (MG_Config::DataArmIsRecord())
                 MG_Remote::Server::ServerStagedTexture().Drop(
                     MG_Remote::Server::StagedTextureStore::KeyForHandle(handle.Handle));
         }

@@ -3220,7 +3220,7 @@ void main() {
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        const Bool wire = MG_Config::DataArmIsRecord();
         const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
@@ -5632,7 +5632,7 @@ void main() {
         // image is a packed depth-stencil texture attached through only one half.
         {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                 if (fbo && !fbo->IsDefault) {
                     if (fbo->Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) depthTestEnabled = false;
@@ -5866,7 +5866,7 @@ void main() {
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
+        const auto* wireFbo = MG_Config::DataArmIsRecord() ?
             MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
@@ -6551,7 +6551,7 @@ void main() {
         MOBILEGL_ASSERT(
             [&] {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                     return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
                 }
@@ -6984,7 +6984,7 @@ void main() {
         // the same loading frame grows it the same way there.
         SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return false;
             // The wire route returns before the monolith branch's draw-gated
             // sweep. Dead wire texture/renderbuffer records otherwise live
@@ -7619,7 +7619,7 @@ void main() {
         // Before the wire branch, for SetupDraw's reason.
         SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
             DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
@@ -7685,7 +7685,7 @@ void main() {
         SplitOversizedRecording();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
             DispatchWireComputeIndirect(indirect);
@@ -7797,7 +7797,7 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
                              // ALL_COMMANDS does not include HOST. The barrier's
                              // HOST_WRITE access must have a matching source stage.
-                             MG_Config::Transport != MG_Config::TransportMode::Monolith
+                             MG_Config::DataArmIsRecord()
                                  ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT
                                  : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 #else
@@ -7963,7 +7963,7 @@ void main() {
 
     void VulkanRenderer::Clear(GLbitfield mask) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-framebuffer-record");
             ClearAttachmentPayload payload{};
@@ -8367,7 +8367,7 @@ void main() {
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
             ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
@@ -9506,7 +9506,7 @@ void main() {
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
             return;
         }
@@ -10148,7 +10148,7 @@ void main() {
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
             return;
         }
@@ -10467,7 +10467,7 @@ void main() {
 
         Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+            if (MG_Config::DataArmIsRecord())
                 return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
 #endif
             if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetExternalIndex();
@@ -10481,7 +10481,7 @@ void main() {
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        const Bool wire = MG_Config::DataArmIsRecord();
         MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
         if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) {
             if (LatchWireDeviceLoss("copy-image-flush")) return;
@@ -10529,7 +10529,7 @@ void main() {
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const Bool renderbuffer = endpoint.IsRenderbuffer();
                 // The same handle-keyed allocation used by wire FBO clear/draw/read.
                 // The legacy render-pass manager owns a different, frontend-keyed map.
@@ -10787,7 +10787,7 @@ void main() {
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            if (MG_Config::DataArmIsRecord()) return true;
 #endif
             if (endpoint.IsRenderbuffer()) {
                 return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
@@ -11067,7 +11067,7 @@ void main() {
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             ReadWirePixels(x,y,width,height,format,type,pixels);
             return;
         }
@@ -11769,7 +11769,7 @@ void main() {
 #endif
         const auto& pixelPackBufferObject =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith ? wireReplyHasNoPackBuffer :
+            MG_Config::DataArmIsRecord() ? wireReplyHasNoPackBuffer :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
@@ -12047,7 +12047,7 @@ void main() {
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             GenerateWireMipmap();
             return;
         }
@@ -12156,7 +12156,7 @@ void main() {
         // server's staged shadow (keyed by the synced TextureResource above) and the client's
         // level storage is never written; in monolith the client-object path runs unchanged.
         const Bool allocatedMipmapStorage =
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, uploadTargets)
                 : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
 #else
@@ -12452,7 +12452,7 @@ void main() {
             return false;
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
+        if (MG_Config::DataArmIsRecord())
             return BeginWireXfbCaptureForDraw(frame);
 #endif
         const auto& program = MG_Pipe::gPipeInputs.GetTransformFeedbackProgram();
@@ -13474,7 +13474,7 @@ void main() {
         vertexRange.instanceCount = 1;
         // MONOLITH ONLY: with a transport the frontend VAO is not this side's to read at all
         // (the client owns those bytes and stages them itself), and this runs on the apply thread.
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+        if (!MG_Config::DataArmIsRecord()) {
             const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             Bool clientArray = false;
             if (currentVAO) {
@@ -13865,7 +13865,7 @@ void main() {
         }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             // Texture uploads submit on this queue with their own fences. The
             // renderer watermark alone cannot prove images/views are idle.
             if (m_textureManager && !m_textureManager->WireUploadsAreIdle()) return false;
@@ -15344,7 +15344,7 @@ void main() {
             // CreateInstance requests Vulkan 1.1 on these platforms. A 1.2+ GPU
             // does not promote descriptor indexing into that application's core
             // API; the wire path must enable VK_EXT_descriptor_indexing instead.
-            (MG_Config::Transport == MG_Config::TransportMode::Monolith) &&
+            (!MG_Config::DataArmIsRecord()) &&
 #endif
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
         const Bool descriptorIndexingExtension =
@@ -15367,7 +15367,7 @@ void main() {
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
             IsExtensionSupported(availableExtensions, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
-        const Bool wireDepthResolveEnabled = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        const Bool wireDepthResolveEnabled = MG_Config::DataArmIsRecord() &&
             getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
         m_wireCreateRenderPass2 = nullptr;
         m_wireDepthResolveModes = m_wireStencilResolveModes = 0;
@@ -15391,7 +15391,7 @@ void main() {
         // write the stencil aspect without it. Enabled on the same terms as the resolve
         // extensions above - wire arms only - and the arm declines stencil where it is absent
         // rather than producing an undefined aspect.
-        m_wireShaderStencilExport = MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        m_wireShaderStencilExport = MG_Config::DataArmIsRecord() &&
             IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
         if (m_wireShaderStencilExport)
             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
@@ -15408,7 +15408,7 @@ void main() {
         m_wireGetAhbProperties = nullptr;
         m_sharedImageSyncFd = false;
 #if defined(__ANDROID__)
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+        if (MG_Config::DataArmIsRecord() &&
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
             IsExtensionSupported(availableExtensions, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
@@ -15963,7 +15963,7 @@ void main() {
             IsExtensionSupported(availableExtensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
             : IsExtensionSupported(availableExtensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
                                                                                             : nullptr;
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && robustness2Name != nullptr &&
+        if (MG_Config::DataArmIsRecord() && robustness2Name != nullptr &&
             getPhysicalDeviceFeatures2 != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             featureQuery.pNext = &robustness2Features;
@@ -15977,7 +15977,7 @@ void main() {
                 m_wireNullDescriptor = true;
             }
         }
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             MGLOG_I("Magma wire: robustness2 nullDescriptor %s (%s)", m_wireNullDescriptor ? "enabled" : "unavailable",
                     robustness2Name != nullptr ? robustness2Name : "no robustness2 extension");
         }
@@ -16216,7 +16216,7 @@ void main() {
     // red when the real recording, readback or tally stops detecting it too.
     void VulkanRenderer::ArmWireDepthResolveOrder() {
         m_wirePreferShaderDepthResolve = false;
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+        if (!MG_Config::DataArmIsRecord()) return;
         // ResolveWireDepthStencil's own test for the render-pass arm, less its per-format half
         // (the probe asks that per format): without it the shader pass is the only arm.
         const Bool renderPassArmAvailable = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&

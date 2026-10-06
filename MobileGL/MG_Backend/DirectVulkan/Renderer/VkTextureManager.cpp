@@ -2487,9 +2487,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
         auto& store = MG_Remote::Server::ServerStagedTexture();
-        // This arm is only ever entered under an active transport, where the store copies.
-        MOBILEGL_ASSERT(store.CopiesIntoServerStorage(),
-                        "UploadPendingWireLevels under a non-copying staged store: the wire arm is transport-only");
+        // This arm runs under a transport (the store copies) or on monolith's record arm (it
+        // aliases the frontend's level shadows); a store that holds neither has nothing to upload.
+        MOBILEGL_ASSERT(store.Holds(),
+                        "UploadPendingWireLevels under a staged store that holds no levels: the wire arm needs one");
         const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
         const TextureInternalFormat internalFormat = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(internalFormat);

@@ -109,7 +109,8 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
         constexpr std::uint64_t kWireDescriptorSetBudget = 2048;
         std::uint64_t BurstSetsHeldAtOnce() {
             const std::uint64_t draws = static_cast<std::uint64_t>(kDraws);
-            return PeekSplitRuntime().transportResolved ? std::min(draws, kWireDescriptorSetBudget) : draws;
+            // The wire budget binds the RECORD arm, which monolith takes too from P13 W4.
+            return PeekSplitRuntime().dataArmIsRecord ? std::min(draws, kWireDescriptorSetBudget) : draws;
         }
 
         // Pools a geometric policy adds for n sets from an empty flavour: 64, 128, ... up to the cap,

@@ -216,8 +216,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             },
             .Destroy = [](auto res) { if (auto* m = WireManager("destroy")) m->DestroyWireBuffer(res); },
             // Split mapping remains T2: the client owns its map and pushes exact
-            // modified ranges. A server pointer is never donated across the wire.
-            .MapPersistent = [](MG_Pipe::MGPipeHandle, Uint64, const void*) -> void* { return nullptr; },
+            // modified ranges. A server pointer is never donated across the wire. Monolith's record
+            // arm (P13 W4) is one process: there the store IS handed over, as the legacy arm's
+            // AcquirePersistentMap always did.
+            .MapPersistent = [](MG_Pipe::MGPipeHandle res, Uint64 size, const void* seed) -> void* {
+                if (!MG_Config::RecordArmAliasesFrontend()) return nullptr;
+                auto* m = WireManager("map_persistent");
+                return m != nullptr ? m->DonateWireBuffer(res, size, seed) : nullptr;
+            },
             .UnmapPersistent = [](MG_Pipe::MGPipeHandle) {},
 #if defined(__ANDROID__)
             // P11 B2 (T0): the one door a server pointer is still never donated through stays shut;
@@ -236,7 +242,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     void VkBufferManager::RegisterWireResourceOps() {
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);
         }
     }
@@ -770,6 +776,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     } // namespace
 #endif
+
+    // P13 W4: THE IN-PROCESS DONATION. Every wire store is already host-visible, coherent and
+    // persistently mapped (RespecifyWireBuffer), so in one process the client can write straight
+    // into it, exactly as the legacy arm's persistent maps did. The store is then the client's
+    // pages - T0's shape without an AHardwareBuffer - so it takes T0's flag: a readback is "done, no
+    // bytes" (the client reads its own pointer once this side's GPU is through with it) and a
+    // respecify retires the store behind the serial. It is seeded from the client's shadow, after
+    // any GPU use of the store has drained, because the shadow is what the application sees.
+    void* VkBufferManager::DonateWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes) {
+        auto* resource = FindWireBuffer(res);
+        if (resource == nullptr || size == 0 || size != resource->size) return nullptr;
+        void* mapped = resource->buffer.GetMappedData();
+        if (mapped == nullptr) return nullptr;
+        if (resource->imported) return mapped; // already donated: the same pointer
+        if (!WaitForWireBufferHostAccess(*resource)) return nullptr;
+        if (seedBytes != nullptr) std::memcpy(mapped, seedBytes, static_cast<SizeT>(size));
+        resource->imported = true;
+        resource->gpuWritesPending = false;
+        resource->stagedCoverage.clear();
+        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
+        ++m_sliceEpochCounter;
+        return mapped;
+    }
 
     Bool VkBufferManager::ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) {
 #if defined(__ANDROID__)
@@ -1371,7 +1400,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
 #if MOBILEGL_BUILD_DISAGGREGATED
-                     (MG_Config::Transport != MG_Config::TransportMode::Monolith ? VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT} : 0u) |
+                     (MG_Config::DataArmIsRecord() ? VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT} : 0u) |
 #endif
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
