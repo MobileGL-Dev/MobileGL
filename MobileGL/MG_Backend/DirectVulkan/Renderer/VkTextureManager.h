@@ -19,20 +19,16 @@
 #include <unordered_set>
 
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 // The handle-keyed arm's key type. Header-only POD, disagg-only, exactly the shape
 // MagmaPipeArms.h already gives this directory.
 #include <MG_Pipe/MGPipeHandles.h>
-#endif
 
 namespace MobileGL::MG_State::GLState {
 class ITextureObject;
 }
-#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Pipe {
 struct MGPipeResourceRecord;
 }
-#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
 enum class SamplerNumericDomain : Uint8;
@@ -355,7 +351,6 @@ public:
         // Serial at the last successful sync. 0 also means "this resource has only ever been
         // synced by the frontend arm" - a wire record's Serial starts at 0 on a create and moves
         // on every mutation, so the first handle sync of a fresh image always re-checks.
-#if MOBILEGL_BUILD_RECORD_ARM
         Uint64 syncedWireSerial = 0;
         // SHARED IMAGES: level 0 is a server shared image (an imported AHardwareBuffer), not a
         // VMA allocation. The resource owns the image and its dedicated imported memory, and
@@ -381,7 +376,6 @@ public:
         SharedPtr<const void> yuvOwner;
         SharedPtr<void> yuvSource;
         Uint64 yuvConvertedFrame = 0;
-#endif
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -415,7 +409,6 @@ public:
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
             std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
-#if MOBILEGL_BUILD_RECORD_ARM
             std::swap(this->syncedWireSerial, that.syncedWireSerial);
             std::swap(this->importedMemory, that.importedMemory);
             std::swap(this->sharedImageId, that.sharedImageId);
@@ -428,7 +421,6 @@ public:
             std::swap(this->yuvOwner, that.yuvOwner);
             std::swap(this->yuvSource, that.yuvSource);
             std::swap(this->yuvConvertedFrame, that.yuvConvertedFrame);
-#endif
         }
 
         void Reset() {
@@ -466,7 +458,6 @@ public:
             if (image != VK_NULL_HANDLE && allocation != nullptr) {
                 vmaDestroyImage(s_allocator.Get(), image, allocation);
             }
-#if MOBILEGL_BUILD_RECORD_ARM
             if (importedMemory != VK_NULL_HANDLE) {
                 if (image != VK_NULL_HANDLE) vkDestroyImage(s_device.Get(), image, nullptr);
                 vkFreeMemory(s_device.Get(), importedMemory, nullptr);
@@ -482,7 +473,6 @@ public:
             yuvOwner.reset();
             yuvSource.reset();
             yuvConvertedFrame = 0;
-#endif
             fullView = VK_NULL_HANDLE;
             sampledView = VK_NULL_HANDLE;
             perMipViews.clear();
@@ -510,9 +500,7 @@ public:
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
             syncedShapeVersion = 0;
-#if MOBILEGL_BUILD_RECORD_ARM
             syncedWireSerial = 0;
-#endif
         }
 
         ~TextureResource() {
@@ -539,11 +527,9 @@ public:
     // preserve-on-recreate copy are the existing callers. No-op when the
     // batch is empty.
     void FlushPendingUploads();
-#if MOBILEGL_BUILD_RECORD_ARM
     // Non-blocking idle proof for wire-object retirement. Independent texture
     // submissions are not represented by VulkanRenderer's submit counter.
     Bool WireUploadsAreIdle();
-#endif
 
     // Drains every frame slot's deferred image/view releases. Only valid when
     // the caller has proven every queue submission complete; used by the
@@ -604,7 +590,6 @@ public:
 
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);
-#if MOBILEGL_BUILD_RECORD_ARM
     // P5f (fm): THE HANDLE-KEYED ARM of SyncTextureAndGetDescriptor. Under an active transport
     // the apply thread may not name the client's ITextureObject (rule E), so the clear / blit /
     // readback / mipmap verbs resolve their attachment textures from the wire handle the
@@ -679,7 +664,6 @@ public:
         const auto it = m_wireTextureResources.find(key);
         return it != m_wireTextureResources.end() && it->second.image != VK_NULL_HANDLE ? &it->second : nullptr;
     }
-#endif
     VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
                                                     Uint32 baseArrayLayer, Uint32 layerCount,
@@ -856,7 +840,6 @@ private:
     void EraseTrackedTexture(const TextureIdentity& identity);
     void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
     SizeT PruneDeadTextures();
-#if MOBILEGL_BUILD_RECORD_ARM
     // The two halves of SyncTextureResourceByHandle: shape from the resource record's
     // descriptor (create / recreate / compatibility), then the pending-upload walk against the
     // server's staged store. UploadPendingWireLevels mutates the applier's record (consumed
@@ -879,7 +862,6 @@ private:
     Vector<Uint64> m_sharedImageUses;
     // Handles are per-kind; a renderbuffer and texture may have identical slot/gen.
     std::unordered_map<Uint64, TextureResource> m_wireRenderbufferResources;
-#endif
 
     VkDevice m_device = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;

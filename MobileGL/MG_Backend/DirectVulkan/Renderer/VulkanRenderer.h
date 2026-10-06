@@ -22,12 +22,10 @@
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
 #include "VkTimerQueryManager.h"
-#if MOBILEGL_BUILD_RECORD_ARM
 #include "GpuProgressMarkers.h"
 #include "WireRenderPassCompatibility.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/SharedImageRegistry.h>
-#endif
 #endif
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
@@ -150,7 +148,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
         // target keep its presented images' content from then on.
         Int32 CurrentDrawBufferAge();
-#if MOBILEGL_BUILD_RECORD_ARM
         VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
         Bool FlushWirePendingCommandsForTextureUpdate() {
             // A new texture upload must not race graphics work that samples
@@ -222,7 +219,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P13 W5: no transport, no shared image (only a server allocates one), so a texture's
         // sharedImageId is never set and there is nothing to acquire.
         void AcquireSharedImage(VkTextureManager::TextureResource&) {}
-#endif
 #endif
 
         // FrameContext::IRecordingObserver: prepares the frame's timer-query
@@ -296,11 +292,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                               GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
         void GenerateMipmap(GLenum target);
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-#if MOBILEGL_BUILD_RECORD_ARM
         // Server resource handle in, tightly packed owned bytes out. No frontend
         // texture, pixel-pack state or PBO is consulted by this readback.
         Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& ownedBytes);
-#endif
         // GL_DEPTH_COMPONENT / GL_DEPTH_STENCIL / GL_STENCIL_INDEX readback from the
         // read framebuffer's depth/stencil attachment (per-aspect buffer copies with
         // CPU repacking into the requested client layout).
@@ -410,7 +404,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // loss here is this session's alone.
         void NoteDeviceLoss(VkResult result, const char* where);
         Bool IsDeviceLost();
-#if MOBILEGL_BUILD_RECORD_ARM
         // For a wire site whose submit or wait just failed: true when the failure is a lost
         // device, in which case this session has been latched (MGPipeSessionLatch - it ends, the
         // display server's other sessions do not) and the caller must return from its verb
@@ -422,7 +415,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is latched, and the caller returns from its verb without submitting anything more. Asked
         // before every frame submission and by the apply loop before it applies another record.
         Bool LatchIfGpuHung(const char* site);
-#endif
         // Flush gated on usefulness: only flushes when `submitIndex` is still
         // unsubmitted, so poll loops on already-submitted fences do not split
         // the frame's render pass (a full tile load/store on TBDR GPUs).
@@ -581,26 +573,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The structs stay, empty, so ShutdownBlitResources and the two `= {}` assignments read
         // the same on both builds.
         struct BlitResources {
-#if !MOBILEGL_BUILD_RECORD_ARM
-            SharedPtr<MG_State::GLState::ProgramObject> program;
-            SharedPtr<MG_State::GLState::SamplerObject> nearestSampler;
-            SharedPtr<MG_State::GLState::SamplerObject> linearSampler;
-            Int srcRectLocation = -1;
-            Int dstRectLocation = -1;
-            Int surfaceTransformLocation = -1;
-            Uint32 samplerBinding = 0;
-#endif
         };
 
         struct DepthMipmapResources {
-#if !MOBILEGL_BUILD_RECORD_ARM
-            SharedPtr<MG_State::GLState::ProgramObject> program;
-            Int srcRectLocation = -1;
-            Int dstRectLocation = -1;
-            Int surfaceTransformLocation = -1;
-            Int srcTexelSizeLocation = -1;
-            Uint32 samplerBinding = 0;
-#endif
         };
 
         // A single-sample staging image for multisample-resolve blits that also have to change
@@ -639,7 +614,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See NoteDeviceLoss. Set once, never cleared: a lost VkDevice stays lost.
         Bool m_deviceLost = false;
         Bool m_deviceLossLatched = false;
-#if MOBILEGL_BUILD_RECORD_ARM
         // Brackets this device's frame submissions for the GPU hang watch (LatchIfGpuHung).
         GpuProgressMarkers m_progressMarkers;
         struct WireImage {
@@ -925,7 +899,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height);
-#endif
         void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
                                                   GLenum buffer, GLint drawbuffer,
                                                   const ClearAttachmentPayload& clearPayload);
@@ -972,11 +945,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // was waited or the device was idled); drops their records and
         // recycles pooled fences.
         void OnSubmitsCompletedUpTo(Uint64 submitIndex);
-#if MOBILEGL_BUILD_RECORD_ARM
         // A later fence alone cannot retire earlier submissions. Wait for the
         // whole still-live prefix before advancing the completed submit floor.
         Bool WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs);
-#endif
         VkFence AcquirePooledSubmitFence();
         void DestroySubmitFencePool();
         Bool HasPendingRecordedWork() const;
@@ -1160,12 +1131,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                  VkDeviceSize countBufferOffset, Uint32 maxDrawCount,
                                                                  Uint32 stride);
         PFNDrawIndexedIndirectCountFunc s_vkCmdDrawIndexedIndirectCount = nullptr;
-#if MOBILEGL_BUILD_RECORD_ARM
         // P8-D: vkCmdDrawIndirectCount (same signature, same extension), for the wire arm's
         // glMultiDrawArraysIndirectCount. The monolith arm never loads it: it reads that count on
         // the CPU (DirectVulkan.cpp's MultiDrawArraysIndirectCount).
         PFNDrawIndexedIndirectCountFunc s_vkCmdWireDrawIndirectCount = nullptr;
-#endif
         // VK_EXT_multi_draw entry points, loaded at device creation when the extension
         // (and its multiDraw feature) is enabled; null otherwise.
         PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
@@ -1233,9 +1202,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 count,
                                        const VkBuffer* buffers, const VkDeviceSize* offsets,
                                        const VkDeviceSize* sizes);
-#if MOBILEGL_BUILD_RECORD_ARM
         Bool BeginWireXfbCaptureForDraw(FrameContext::FrameData& frame);
-#endif
         Uint32 m_currentDrawXfbBufferCount = 0;
         Uint32 m_currentDrawXfbBufferMask = 0;
         void EndXfbCaptureForDraw(FrameContext::FrameData& frame, Bool began);
@@ -1383,9 +1350,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 programHash = 0;
             Uint64 vertexInputHash = 0;
             Uint64 renderPassHash = 0;
-#if MOBILEGL_BUILD_RECORD_ARM
             Uint64 wireRenderPassCompatibilityId = 0;
-#endif
             // The PRE-HANDLE arm's key component (P2 brief D12.1), and 0 in every entry the
             // handle arm mints. VALUE hash of the pipeline-relevant fixed-function state (see
             // ComputePipelineStateHash), not the monotonic pipeline-state version: the version
@@ -2158,12 +2123,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
             VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
             const ClearAttachmentPayload& payload);
-#if !MOBILEGL_BUILD_RECORD_ARM
-        // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the hidden blit program's pipeline. A
-        // disaggregated build has no hidden program on either arm, so this has neither a body
-        // nor a caller there.
-        VkPipeline GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry);
-#endif
         Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                            MG_State::GLState::ITextureObject& texture,
                                            VkTextureManager::TextureResource& resource,

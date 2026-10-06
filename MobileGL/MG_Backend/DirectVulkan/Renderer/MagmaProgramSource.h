@@ -3,7 +3,6 @@
 
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include "../DirectVulkanResourceState.h"
@@ -12,10 +11,8 @@
 // the archive (LinkArtifacts::storageBlocks), so the SPIR-V reflector is off the Magma wire
 // draw path entirely. A future edit that re-adds the include is re-adding a per-draw reflect,
 // because a MagmaProgramSource is constructed once per draw and can memoise nothing.
-#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-#if MOBILEGL_BUILD_RECORD_ARM
     // A borrowed view, valid only while its frontend object or server record lives.
     // It never constructs a ProgramObject on the server. Post-link mutable values
     // come from the record tails, not from the archive's link-time defaults.
@@ -218,7 +215,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // also why they never helped: a view lives for one draw, so the latch was cold every
         // time it was read.
     };
-#else
-    using MagmaProgramSource = MG_State::GLState::ProgramObject;
-#endif
 }

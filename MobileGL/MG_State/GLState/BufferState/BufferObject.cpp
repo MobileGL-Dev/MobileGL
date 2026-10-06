@@ -17,14 +17,12 @@
 // role IS MG_State plus MG_Impl - and the edge exists only in a build that has the transport at all.
 #include <MG_Remote/Client/GpuWritePending.h>
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
 // The client role's persistent-map tracker (P13 W5: the record arm's, so beside this file).
 #include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
 #include <MG_Util/Metrics/PipeStats.h>
-#endif
 
 namespace MobileGL::MG_State::GLState {
     namespace {
@@ -32,7 +30,6 @@ namespace MobileGL::MG_State::GLState {
         // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
         std::atomic<Uint64> g_nextBufferLifetimeId{1};
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.8 / §6 layer 1): the frontend BufferObject's legacy
         // accessors are a layer-1 surface. With an active transport, the pre-handle buffer
         // arm that reads them (Managers.cpp's RespecifyStorageNow / UploadRangeNow /
@@ -66,10 +63,6 @@ namespace MobileGL::MG_State::GLState {
             if (!MG_Record::PersistentMapTracker::OnServerRole()) return;
             FatalLegacyBufferArmFromApplyThread(accessor);
         }
-#else
-        // No record arm, no apply thread to refuse.
-        inline void RefuseLegacyBufferArmFromApplyThread(const char*) {}
-#endif
     }
 
     Uint64 BufferObject::AllocateLifetimeId() {
@@ -97,13 +90,11 @@ namespace MobileGL::MG_State::GLState {
     }
 
     BufferObject::~BufferObject() {
-#if MOBILEGL_BUILD_RECORD_ARM
         // Unconditional, not behind PushIsArmed(): the transport mode cannot change, but the
         // tracker is a leaked singleton whose entries are raw pointers, and an entry that
         // outlives its object is the one failure this set must not have. Forget is a no-op
         // for a buffer that was never a member.
         MG_Record::PersistentMapTracker::Instance().Forget(*this);
-#endif
         // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalogue
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
         // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
@@ -215,12 +206,10 @@ namespace MobileGL::MG_State::GLState {
         }
         m_size = size;
         m_resource.ResizeShadow(size);
-#if MOBILEGL_BUILD_RECORD_ARM
         // The store this buffer's membership was about no longer exists, and ResizeShadow is
         // reserve+resize - a grow past the reserve reallocates - so a pushed block's source
         // base has moved too. Both are the same event to the tracker: re-read the predicate.
         NotePersistentMapStateChanged();
-#endif
     }
 
     void BufferObject::Respecify(SizeT size, const void* data) {
@@ -364,12 +353,10 @@ namespace MobileGL::MG_State::GLState {
         m_mappedRange = {0, 0};
         m_stagingBias = 0;
         m_ownsStagingData = false;
-#if MOBILEGL_BUILD_RECORD_ARM
         // AFTER the reset, so the predicate reads the post-unmap state, and after the landing
         // above, so the last bytes of a write map are already on the wire when the record
         // that says "no live writer" goes out behind them.
         NotePersistentMapStateChanged();
-#endif
     }
 
     void BufferObject::FlushMemoryRange(SizeT offset, SizeT length) {
@@ -406,7 +393,6 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::SyncPersistentMappedRange() {
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd): the named refusal comes FIRST - a silent return here used to let a
         // server-side caller slip through with one MGLOG_D's worth of evidence (B3).
         //
@@ -431,7 +417,6 @@ namespace MobileGL::MG_State::GLState {
             MG_Record::PersistentMapTracker::Instance().PushBlocksFor(*this);
             return;
         }
-#endif
         if (!m_isMapped) return;
         // GPU-resident: the app already wrote directly into coherent GPU memory. This is
         // the whole point of the persistent-map path - the per-draw whole-buffer re-upload
@@ -445,7 +430,6 @@ namespace MobileGL::MG_State::GLState {
         NotifySubData(m_mappedRange.start, m_mappedRange.end - m_mappedRange.start);
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     void BufferObject::PushMappedSpanBlock(SizeT offset, SizeT size) {
         // NotifySubData and not MGPipeEmitResourceSubData directly: the serial bump, the
         // defined-content promotion and the legacy-ops fallback are what the monolith span
@@ -532,7 +516,6 @@ namespace MobileGL::MG_State::GLState {
     Bool BufferObject::HasLiveHostWritesForWire() const {
         return m_publishedLiveHostWrites;
     }
-#endif
 
     void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset) {
         MOBILEGL_ASSERT(atOffset + data.size <= m_size,
@@ -541,7 +524,6 @@ namespace MobileGL::MG_State::GLState {
         Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         ++m_changeSerial;
         MGP_NOTE_AGGREGATE(BufferChange);
-#if MOBILEGL_BUILD_RECORD_ARM
         // THE THIRD STATE'S ONLY EXIT. In a split build SyncGpuWrites does NOT clear the
         // flag before emitting, because between the emission and the answer the shadow is
         // stale and the object has no way to say so; the answer landing here is what makes it
@@ -556,7 +538,6 @@ namespace MobileGL::MG_State::GLState {
         if (MG_Config::DataArmIsRecord() && atOffset == 0 && data.size >= m_size) {
             m_gpuWritePending = false;
         }
-#endif
     }
 
     void BufferObject::MarkGpuWritten() {
@@ -824,12 +805,10 @@ namespace MobileGL::MG_State::GLState {
             m_mappingAccess = (read ? BufferMappingAccessBit::Read : BufferMappingAccessBit::Null) |
                               (write ? BufferMappingAccessBit::Write : BufferMappingAccessBit::Null);
             m_mappedRange = {0, m_size};
-#if MOBILEGL_BUILD_RECORD_ARM
             // glMapBuffer never takes the Persistent bit, so this buffer can never join the
             // push set - but a WRITE map still mutates the shadow with no call, which is the
             // half of the live-host-writes bit that is not about the push at all.
             NotePersistentMapStateChanged();
-#endif
 
             if (m_mappingAccess & BufferMappingAccessBit::Write) {
                 // glMapBuffer maps from offset 0, so no bias: the allocation's own
@@ -909,7 +888,6 @@ namespace MobileGL::MG_State::GLState {
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;
-#if MOBILEGL_BUILD_RECORD_ARM
         // BEFORE the adoption attempt below, deliberately. Under R-6 the acquisition always
         // declines, so the predicate this publishes is already final; if a later phase ever
         // mints one, the adoption path notes the change itself (it does now - the call is
@@ -917,7 +895,6 @@ namespace MobileGL::MG_State::GLState {
         // having been made, which is the order that keeps the set conservative under both
         // answers.
         NotePersistentMapStateChanged();
-#endif
 
         if (access & BufferMappingAccessBit::Persistent) {
             m_ownsStagingData = false;
@@ -931,14 +908,11 @@ namespace MobileGL::MG_State::GLState {
                 !(access & BufferMappingAccessBit::FlushExplicit) &&
                 MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
-#if MOBILEGL_BUILD_RECORD_ARM
                     // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
                     // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and
                     // an untrack after that would mprotect pages the buffer no longer owns.
                     MG_Record::PersistentMapTracker::Instance().Forget(*this);
-#endif
                     m_resource.AdoptPersistentMap(pushedBase);
-#if MOBILEGL_BUILD_RECORD_ARM
                     // An adoption takes the buffer OUT of the push set and out of the
                     // live-host-writes state: the application now writes coherent GPU memory
                     // and there is nothing to ship. Under R-6 this is unreachable; it is here
@@ -946,7 +920,6 @@ namespace MobileGL::MG_State::GLState {
                     // entry and nothing did, which would have left the published bit true
                     // across an adoption until unmap (latent for P11).
                     NotePersistentMapStateChanged();
-#endif
                 }
                 return m_resource.Bytes() + range.start;
             }
@@ -994,7 +967,6 @@ namespace MobileGL::MG_State::GLState {
         return m_resource.Bytes();
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     SizeT BufferObject::ShadowAllocationBytes() const {
         // The extent of the very pointer MappedData() hands out, read by the same caller
         // (the tracker's registration) on the same thread: the same rule-E surface, the
@@ -1002,7 +974,6 @@ namespace MobileGL::MG_State::GLState {
         RefuseLegacyBufferArmFromApplyThread("ShadowAllocationBytes");
         return m_resource.ShadowAllocationBytes();
     }
-#endif
 
     Bool BufferObject::IsBackendPersistentMapped() const {
         return m_resource.IsGpuResident();

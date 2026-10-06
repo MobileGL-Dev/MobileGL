@@ -9,7 +9,6 @@
 // Client memory becomes ordinary owned buffer resources before a draw.
 #pragma once
 
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Impl/Pipe/ClientFetchPlan.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
@@ -207,4 +206,3 @@ namespace MobileGL::MG_Pipe {
         Bool m_indexBindingChanged = false;
     };
 } // namespace MobileGL::MG_Pipe
-#endif

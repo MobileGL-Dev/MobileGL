@@ -478,27 +478,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!EsprytSlotTablesEnabled()) return nullptr;
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
             if (handle.Slot >= SlotTable::kMaxHandleSlot) {
-#if MOBILEGL_BUILD_RECORD_ARM
                 MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
                     "GetOrCreateByHandle named slot %u, past this table's %u bound",
                     handle.Slot, SlotTable::kMaxHandleSlot);
-#else
-                return nullptr;
-#endif
             }
             const Uint32 liveGen = m_slotTables.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
-#if MOBILEGL_BUILD_RECORD_ARM
                 MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
                     "GetOrCreateByHandle named generation %u at slot %u, behind live generation %u",
                     handle.Gen, handle.Slot, liveGen);
-#else
-                return nullptr;
-#endif
             }
             return &m_slotTables.GetOrCreate(handle);
         }
@@ -940,7 +932,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // AcquirePersistentMap or (FLUSH_EXPLICIT) publish only via FlushMappedRange.
         Uint64 CurrentBufferMutationEpoch();
         void BumpBufferMutationEpoch();
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (vi), CONTRACT-P5E §5.1's first pin: how many bumps came from a thread other than
         // the apply thread WHILE an apply thread was running, under a live transport. The
         // record arm's clean gate stamps this counter and skips its probes while the stamp
@@ -985,7 +976,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 Serial = 0;
         };
         DrawIndexBufferRequest ResolveDrawIndexBufferFromRecord(const MG_Pipe::MGPipeApplierState& st);
-#endif
 
         // The DirectGLES storage behind one frontend buffer. Owned (refcounted) by
         // the frontend BufferObject; immediate BufferBackendOps keep it current, so
@@ -1073,7 +1063,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the legacy arm did; this member exists for the drains that have no object, which
             // in P3a is the readback flush and the fp64 narrowing.
             const Uint8* hostBytes = nullptr;
-#if MOBILEGL_BUILD_RECORD_ARM
             // P11 B2 (T0): the client's AHardwareBuffer this store IS - imported with
             // glBufferStorageExternalEXT, so `id` is immutable, persistentMapped and
             // persistentPtr is this server's own coherent map of the client's pages. The
@@ -1092,7 +1081,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // record arm) keeps no coverage, so the twin says it - the streaming idiom (orphan, then
             // glBufferSubData) defines content no descriptor declares.
             Bool contentSinceRespecify = false;
-#endif
         };
 
         // P3a (D-A4): the SEVENTH Espryt slot table, and the first one keyed by a handle the
@@ -1152,7 +1140,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
         GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd): the staged-coverage assertion (StagedShadowStore::RequireCoverage) for a
         // read of the server shadow outside the upload ladders - the indirect command-byte
         // resolver. A no-op for a base that is not this resource's server shadow.
@@ -1201,7 +1188,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ladder and DirectGLES.cpp's XFB scatter are its two callers and they must not be able
         // to answer it differently.
         Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res);
-#endif
 
         // MONOLITH GLUE, and named as such: the handle of a resource this backend is looking
         // at through a frontend object, resolved through the client allocator's lifetime-id
@@ -1326,12 +1312,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // conjunction in MultiDraw.cpp would satisfy in letter while giving the family two
         // selectors that can drift apart. One definition, spelled at every site that reads it.
         inline Bool VertexInputReadsRecords() {
-#if MOBILEGL_BUILD_RECORD_ARM
             return MG_Config::DataArmIsRecord() &&
                    VertexInputSubsystemEnabled();
-#else
-            return false;
-#endif
         }
 
         // Registered as the frontend's BufferBackendOps at backend init and on
@@ -1830,10 +1812,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
-#if MOBILEGL_BUILD_RECORD_ARM
         // Drives the actual unpack save/restore helper without needing a texture upload.
         void ExerciseDefaultUnpackScopeForTesting();
-#endif
         inline Bool IsSupportedTextureTarget(TextureTarget target) {
             // Every desktop-only target is stored on an ES one; see MapToBackendTextureTarget.
             (void)target;
@@ -1968,7 +1948,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-#if MOBILEGL_BUILD_RECORD_ARM
             // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
             //
             // `Desc.ViewOf` names the storage owner BY HANDLE, so the STEADY question - "is my ES
@@ -1983,7 +1962,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncTextureViewToBackendByRecord(
                 MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record,
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-#endif
             // The storage half of the sync for a texture created by glTextureView. Instead of
             // allocating storage and replaying uploads, it makes this object's ES name BE a view
             // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
@@ -2367,7 +2345,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glCopyImageSubData passes: it tries FollowCopyImageInStagedStore first and marks the store
         // itself when that fails.
         void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture, Bool storeFollowsTheWrite = false);
-#if MOBILEGL_BUILD_RECORD_ARM
         // P8-E (notes/p8/E.md): make glCopyImageSubData's texel-block move in the server's staged
         // store too (StagedTextureStore::FollowCopy), so the destination level's bytes stay its
         // content. Box in each image's own texel grid. False when the store cannot follow: a cube
@@ -2377,7 +2354,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
                                           MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
                                           const IntVec3& destinationOrigin, const IntVec3& size);
-#endif
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.
@@ -2424,14 +2400,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // "one object is bound to BOTH bindings" skip, where the DRAW pass already did the
             // attachment work and only glReadBuffer is READ-target-specific.
             void SyncReadBufferToBackendByHandle(MG_Pipe::MGPipeHandle fbo);
-#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (hd, CONTRACT-P5C §3.2): the framebuffer handle the CURRENT sync is keyed on.
             // A caller applying a record sets it before SyncToBackend / SyncReadBufferToBackend,
             // which then read the applier's record for THAT handle instead of probing the
             // client's slot allocator for the frontend object's lifetime id (T2). Read only
             // with an active transport; monolith resolves through HandleOf as it always did.
             MG_Pipe::MGPipeHandle m_pushedSyncHandle = MG_Pipe::kMGPipeNullHandle;
-#endif
             void InvalidateSyncedState();
             Uint GetBackendFramebufferId() const { return m_backendFBOId; }
             void Bind(FramebufferTarget target) const;
@@ -3124,11 +3098,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
             // uniform write, and only such a program needs the reset after one.
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
-#if MOBILEGL_BUILD_RECORD_ARM
             // P8-C: same for the gl_BaseInstance uniform - which an indirect draw feeds from the
             // command on the CPU only when the mg_IndirectParams view is absent.
             Bool ReadsBaseInstance() const { return m_baseInstanceUniformLocation >= 0; }
-#endif
             // Which viewport indices the next draw's fragments may keep, one bit each. Written
             // once per replay pass; see ForEachViewportRoutingPass.
             void SetViewportPassMask(Uint32 indexMask) const;
@@ -3672,7 +3644,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P5c (ct), CONTRACT-P5C.md §5.2: object_death's per-kind release, one entry point for all
     // seven kinds for the same reason the notice switch is one - the answer is the same for
     // all of them: every holder of the kind's twin table lets go of the twin at this handle.
@@ -3704,5 +3675,4 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // destructor calls into the driver (there is no current context, and the ids name nothing).
     // A no-op once exit() has begun (the statics may already be gone). Monolith never calls it.
     void DropEveryTwinForEndedServerSession();
-#endif
 } // namespace MobileGL::MG_Backend::DirectGLES

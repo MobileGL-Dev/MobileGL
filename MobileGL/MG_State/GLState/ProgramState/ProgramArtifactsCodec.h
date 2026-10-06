@@ -60,7 +60,6 @@ namespace MobileGL::MG_State::GLState {
 
     // Bumped whenever the byte format changes in a way a previous reader would misread. A
     // reader that sees a different word REFUSES; it never tries to guess a layout.
-#if MOBILEGL_BUILD_RECORD_ARM
     // 3 since P7 wave 2 package C (OQ-8): LinkArtifacts gained `storageBlocks`, so a v2 reader
     // would run out of bytes in the middle of the stream rather than notice. The schema
     // fingerprint beside the version would catch it on its own - it is derived from the
@@ -72,9 +71,6 @@ namespace MobileGL::MG_State::GLState {
     // Derived from the actual VisitFields order/names, container element schemas and scalar
     // representations. No native container size/offset is included. Also checked in Hello.
     Uint64 ProgramArtifactsSchemaFingerprint();
-#else
-    inline constexpr Uint32 kProgramArtifactsCodecVersion = 1;
-#endif
 
     // Appends the archive to `out` (which is not cleared, so a caller may frame it). Never
     // fails: everything it walks is owned plain data.

@@ -899,7 +899,6 @@ namespace MobileGL::MG_Pipe {
                     MGPRespecifiedLevel key{};
                     key.UploadTarget = packedTarget;
                     key.Level = static_cast<Uint16>(firstLevel + i);
-#if MOBILEGL_BUILD_RECORD_ARM
                     const auto* mipmap = MG_State::GLState::AsMipmapTexture(&texture);
                     if (mipmap == nullptr) {
                         MGLOG_E_ONCE("MGPipe: a per-level texture respecify had no mipmap storage; it was not emitted");
@@ -910,7 +909,6 @@ namespace MobileGL::MG_Pipe {
                     key.Width = static_cast<Uint32>(exactLevelExtent.x());
                     key.Height = static_cast<Uint32>(exactLevelExtent.y());
                     key.Depth = static_cast<Uint32>(exactLevelExtent.z());
-#endif
                     accepted = RespecifyOnce(texture, handle, entry, desc, &key, viewOf, bufferHandle, bufOffset,
                                              bufSize);
                     if (!accepted) break;

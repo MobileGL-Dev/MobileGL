@@ -18,7 +18,6 @@
 #include "MG_Util/Metrics/PipeStats.h"
 
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 // P5f (fm): the handle-keyed texture arm's two sources - the applier's resource records
 // (shape) and the server's staged-texture store (texels).
 #include <MG_Pipe/PipeApply.h>
@@ -26,7 +25,6 @@
 #include "../DirectVulkan.h"
 // P7 wave 2 package B3: rule I's tally for the silent exits on this file's wire arm.
 #include "WireDeclineTally.h"
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 // Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
 #include <MG_Remote/Server/SharedImageRegistry.h>
@@ -319,9 +317,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   VkQueue graphicsQueue,
                                                   const VkTextureManager::TextureResource& oldResource,
                                                   VkTextureManager::TextureResource& newResource
-#if MOBILEGL_BUILD_RECORD_ARM
                                                   , Bool splitAspects = false
-#endif
                                                   ) {
         MOBILEGL_ASSERT(device != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: device is null");
         MOBILEGL_ASSERT(commandPool != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: commandPool is null");
@@ -380,7 +376,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.extent.width = std::max(oldResource.extent.width >> level, 1u);
             copy.extent.height = std::max(oldResource.extent.height >> level, 1u);
             copy.extent.depth = std::max(oldResource.depth >> level, 1u);
-#if MOBILEGL_BUILD_RECORD_ARM
             if (splitAspects) {
                 for (const VkImageAspectFlags aspect : {VK_IMAGE_ASPECT_COLOR_BIT,
                                                         VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -391,7 +386,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     copyRegions.push_back(copy);
                 }
             } else
-#endif
             copyRegions.push_back(copy);
         }
 
@@ -723,12 +717,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyDeferredReleases();
         ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
         m_textureResources.clear();
-#if MOBILEGL_BUILD_RECORD_ARM
         // Destroy images while the device/allocator still exist, including after context death.
         m_wireTextureResources.clear();
         m_wireRenderbufferResources.clear();
         m_sharedImageUses.clear();
-#endif
         m_aliveObjects.clear();
         m_storageImageTextures.clear();
 
@@ -1846,7 +1838,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             EraseTrackedTexture(identity);
         }
         prunedCount += orphanIdentities.size();
-#if MOBILEGL_BUILD_RECORD_ARM
         const auto pruneWire = [&](auto& resources, const auto& records) {
             for (auto it = resources.begin(); it != resources.end();) {
                 const Uint32 slot = static_cast<Uint32>(it->first >> 32) & 0x7fffffffu;
@@ -1864,11 +1855,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto& applier = MG_Pipe::MGPipeApplier();
         pruneWire(m_wireTextureResources, applier.TextureResources);
         pruneWire(m_wireRenderbufferResources, applier.RenderbufferResources);
-#endif
         return prunedCount;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // ---------------------------------------------------------------------------------
     // P5f (fm): THE HANDLE-KEYED TEXTURE ARM
     // ---------------------------------------------------------------------------------
@@ -3275,7 +3264,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         std::construct_at(&resource, Move(grown));
         return true;
     }
-#endif // MOBILEGL_BUILD_RECORD_ARM
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {
@@ -3832,9 +3820,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
             resource.attachmentViews.empty() && resource.alternateSampledViews.empty() &&
             resource.storageImageViews.empty()
-#if MOBILEGL_BUILD_RECORD_ARM
             && resource.yuvSource == nullptr
-#endif
         ) {
             return;
         }
@@ -4006,7 +3992,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return current->mapped + alignedCursor;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VkTextureManager::WireUploadsAreIdle() {
         // An open batch still owns references even before it has a fence. Poll
         // submitted batches without waiting; reclamation is deferred if any lives.
@@ -4014,7 +3999,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ReclaimCompletedUploads();
         return m_pendingUploadReclaims.empty();
     }
-#endif
 
     void VkTextureManager::FlushPendingUploads() {
         if (!m_uploadBatchOpen) {

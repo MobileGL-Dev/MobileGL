@@ -394,7 +394,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return entry;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
             const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
         out = BackendVertexInputState{};
@@ -532,7 +531,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         return true;
     }
-#endif
 
     void VertexInputStateFactory::OnFrameBoundary() {
         ++m_frameBoundaryCounter;
@@ -802,7 +800,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
             return false;
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto found = m_wireVertexFormatSupport.find(format);
             if (found != m_wireVertexFormatSupport.end()) return found->second;
@@ -812,7 +809,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_wireVertexFormatSupport.emplace(format, supported);
             return supported;
         }
-#endif
         VkFormatProperties properties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
         return (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;

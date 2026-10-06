@@ -39,10 +39,8 @@ namespace MobileGL::MG_Config {
     Bool SplitTransportRequestedByConfig = false;
     IpcTable Ipc;
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool MonolithTakesRecordArm = false;
     RecordArmTable RecordArm;
-#endif
 } // namespace MobileGL::MG_Config
 
 namespace MobileGL::MG_ConfigLoader {
@@ -678,7 +676,6 @@ namespace MobileGL::MG_ConfigLoader {
     }
 #endif
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P13 W4 (Config.h DataArmIsRecord). Read after InitTransport: `frontend` names monolith's
     // arm only - a wire has no frontend objects on its server half to read, so there it is
     // ignored by name rather than half-honoured.
@@ -737,7 +734,6 @@ namespace MobileGL::MG_ConfigLoader {
                     "the persistent-map push is OFF and a coherent-map scenario must go red");
         }
     }
-#endif
 
     void Init() {
         MGLOG_D("Loading configuration from environment variables...");
@@ -745,17 +741,13 @@ namespace MobileGL::MG_ConfigLoader {
 
         InitBackendType();
         InitFeatures();
-#if MOBILEGL_BUILD_RECORD_ARM
         InitRecordArm();
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // After InitFeatures, so the one line InitIpc logs is the last word on this run's
         // configuration, and before the accepted-env map is destroyed just below.
         InitTransport();
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
         InitDataArm();
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         InitIpc();
 #endif

@@ -106,7 +106,6 @@ namespace {
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 OQ-8. ShaderStage -> EShLanguage, so a reflection record's `stages` mask (which is an
     // EShLanguageMask) can be tested against the stage of a snapshotted shader. Written here
     // rather than lifted into a shared header because this is the only caller and
@@ -127,7 +126,6 @@ namespace {
         }
         return EShLangCount;
     }
-#endif
 
     // Element index of an arrayed interface-block instance: "GOKU[3]" -> 3, "GOKU" -> 0.
     // Reflection spells arrayed instances exactly this way (glslang expands the instance
@@ -1758,17 +1756,14 @@ namespace MobileGL::MG_State::GLState {
         }
 
         SnapshotGlslangReflection();
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 OQ-8. Guarded at the CALL as well as at the definition, which is not belt and
         // braces: LinkArtifacts::storageBlocks does not exist in a pull build, so neither can
         // the function that fills it, and G1 requires this translation unit to be statement
         // for statement what it was there.
         SnapshotStorageBlockIndexSpace();
-#endif
         return true;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): DIRECTVULKAN'S STORAGE-BLOCK INDEX SPACE,
     // BUILT ONCE HERE INSTEAD OF PER DRAW.
     //
@@ -1847,7 +1842,6 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: Reflection - %zu storage block(s) in the backend index space",
                 in.externalIndex, artifacts.storageBlocks.size());
     }
-#endif
 
     // The last thing DoReflection does, and the thing that lets everything after it stop
     // caring that a glslang::TProgram ever existed: copy every reflection record the GL query

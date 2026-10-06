@@ -108,7 +108,6 @@ namespace MobileGL::MG_Pipe {
         void (*Destroy)(MGPipeHandle res);
         void* (*MapPersistent)(MGPipeHandle res, Uint64 size, const void* seedBytes);
         void (*UnmapPersistent)(MGPipeHandle res);
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (tx): the TEXTURE half of the resource family, appended so every positional
         // initialiser of the nine P3a members keeps its meaning. TextureSubData is called
         // from ApplyTextureUpload AFTER the gate, the accumulation and the serial, while
@@ -143,7 +142,6 @@ namespace MobileGL::MG_Pipe {
         // pattern of its own, and read that back through the held pointer (and through the
         // backend's own host map of the import). False with the reason in `why`.
         Bool (*SelfTestExternal)(char* why, Uint64 whyBytes);
-#endif
     };
 
     // Install / read the table. A null argument uninstalls, which is what a backend does at
@@ -873,7 +871,6 @@ namespace MobileGL::MG_Pipe {
         Uint64 TextureShutterSerial = 0;
         Uint64 ContextSerial = 0;
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P5c (hd, CONTRACT-P5C §3.2): THE CURRENT VERB'S OWN HANDLES. ----------------
         //
         // Server state, written by ServerVerbSink at the top of a verb's dispatch and read by
@@ -932,7 +929,6 @@ namespace MobileGL::MG_Pipe {
             VerbIndirectParameterBuffer = kMGPipeNullHandle;
             VerbDispatchIndirectBuffer = kMGPipeNullHandle;
         }
-#endif
 
     };
 
@@ -1309,13 +1305,11 @@ namespace MobileGL::MG_Pipe {
     struct MGPRespecifiedLevel {
         Uint16 UploadTarget = 0;
         Uint16 Level = 0;
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 PH-4: mutable mip dimensions do not follow from the base descriptor. These fields
         // are carried by the split resource_respecify record; the pull helper remains 4 bytes.
         Uint32 Width = 0;
         Uint32 Height = 0;
         Uint32 Depth = 0;
-#endif
     };
 
     inline MGPRespecifiedLevel MGPipeMakeRespecifiedLevel(Uint16 uploadTarget, Uint16 level,
@@ -1324,15 +1318,9 @@ namespace MobileGL::MG_Pipe {
         MGPRespecifiedLevel value{};
         value.UploadTarget = uploadTarget;
         value.Level = level;
-#if MOBILEGL_BUILD_RECORD_ARM
         value.Width = width;
         value.Height = height;
         value.Depth = depth;
-#else
-        (void)width;
-        (void)height;
-        (void)depth;
-#endif
         return value;
     }
 
@@ -1483,14 +1471,12 @@ namespace MobileGL::MG_Pipe {
     // unmap_persistent: the donation ends. Never emitted by P3a's own paths; the call exists
     // so the pair is complete and the transport has both halves.
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle);
-#if MOBILEGL_BUILD_RECORD_ARM
     // P11 B2 (T0): the split server's map_persistent for a session that runs T0. The client's
     // AHardwareBuffer `ahb` (`size` bytes) becomes buffer `handle`'s resident store through the
     // backend's ImportExternal. A handle that is not a live buffer of that width, or a backend
     // without the member, declines (false); the codec answers DECLINED and the store runs T2.
     // MapPersistentRoundtrips is not moved: under split the server never counted map_persistent.
     Bool MGPipeApplyAdoptExternal(const MGPHandleOnly& handle, void* ahb, Uint64 size);
-#endif
 
     // ---------------------------------------------------------------------------------
     // P3a: the five vertex-input entry points (D-G, D-H, D-I)

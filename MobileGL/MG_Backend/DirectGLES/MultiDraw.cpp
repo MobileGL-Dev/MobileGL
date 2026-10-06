@@ -125,7 +125,6 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             const Uint8* HostBytes = nullptr; // HostBytes: null when there is no CPU copy
         };
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // A missing record on the handle arm is a NAMED refusal and never a quiet fall-back to
         // the frontend (TASK-mv requirement 2; the shape is Managers.cpp's
         // RefuseNullFrontendTextureOffTheHandleArm). The frontend element slot is not a second
@@ -175,11 +174,9 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             if (!candidate.Live || candidate.Gen != res.Gen) return false;
             return candidate.Desc.HasDefinedContent != 0;
         }
-#endif
 
         BoundIndexBufferView ResolveBoundIndexBuffer(IndexBufferQuestion question, const char* entry) {
             BoundIndexBufferView view;
-#if MOBILEGL_BUILD_RECORD_ARM
             if (BufferImpl::VertexInputReadsRecords()) {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 const MG_Pipe::MGPipeHandle res = BufferImpl::ResolveDrawIndexBufferFromRecord(st).Res;
@@ -219,7 +216,6 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 }
                 return view;
             }
-#endif
             // MONOLITH GLUE from here down, token for token what each call site did before.
             const auto& vao = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             if (!vao) return view;
@@ -293,7 +289,6 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // an empty slot, and not the arm test (ID-110: the arm was decided by the transport
         // above, never inferred from a null).
         Uint BoundDrawIndirectBufferId() {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
                 if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
@@ -303,7 +298,6 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 }
                 return resource->id;
             }
-#endif
             // MONOLITH GLUE from here down, token for token what this function did before.
             const auto& indirect =
                 MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();

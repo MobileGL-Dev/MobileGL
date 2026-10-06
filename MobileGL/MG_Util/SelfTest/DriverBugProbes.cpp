@@ -11,9 +11,7 @@
 
 #include <Config.h>
 #include <MG_Util/Debug/Log.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h>
-#endif
 
 #include <algorithm>
 #include <cstring>
@@ -2479,7 +2477,6 @@ namespace MobileGL::MG_Util::SelfTest {
         return findings;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Optional<DriverBugFinding> DescribeDepthStencilResolvePassBug(
         const MG_Backend::DirectVulkan::WireDepthResolveProbeMeasurement& measurement, Bool shaderStencilExport) {
         using namespace MG_Backend::DirectVulkan;
@@ -2546,5 +2543,4 @@ namespace MobileGL::MG_Util::SelfTest {
         }
         return findings;
     }
-#endif
 } // namespace MobileGL::MG_Util::SelfTest

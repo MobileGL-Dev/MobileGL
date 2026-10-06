@@ -9,9 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveArm.h>
-#endif
 
 namespace MobileGL::MG_Util::SelfTest {
     // ===================== KNOWN DRIVER BUGS =====================
@@ -347,7 +345,6 @@ namespace MobileGL::MG_Util::SelfTest {
     // so an unaffected device renders an empty section rather than a wall of "not affected".
     Vector<DriverBugFinding> CollectGlesKnownDriverBugs(const MG_External::GLESFunctionsTable& gl);
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // ===================== KNOWN VULKAN DRIVER BUGS =====================
     //
     // The DirectVulkan (Magma) backend's table, under the rules above: a control per probe, an
@@ -376,5 +373,4 @@ namespace MobileGL::MG_Util::SelfTest {
 
     // Every known driver bug this Vulkan driver actually has.
     Vector<DriverBugFinding> CollectVulkanKnownDriverBugs(const VulkanDriverBugProbeContext& context);
-#endif
 } // namespace MobileGL::MG_Util::SelfTest

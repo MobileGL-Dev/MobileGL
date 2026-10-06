@@ -1,5 +1,4 @@
 // Server-owned draw/dispatch setup. The legacy setup remains the monolith implementation.
-#if MOBILEGL_BUILD_RECORD_ARM
     static MagmaProgramSource WireProgramSource(MG_Pipe::MGPipeHandle handle) {
         auto& state = MG_Pipe::MGPipeApplier();
         const Bool composite = handle.Slot >= MG_Pipe::kMGPipeShaderCsoCompositeSlotBase;
@@ -909,4 +908,3 @@
         if (MG_Util::PipeStats::Enabled())
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectNativeDispatches, 1);
     }
-#endif

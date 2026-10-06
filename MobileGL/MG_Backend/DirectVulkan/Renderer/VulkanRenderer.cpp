@@ -42,7 +42,6 @@
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 // P7 wave 0: the seam WireFramebuffer.inc's MagmaWireFatal and WireDraw.inc's
 // WireBufferLegacyFatal die through. Declared by MG_Pipe on purpose - see PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
@@ -55,7 +54,6 @@
 #include "WireColorBlitFilter.h"
 #include "WireDepthResolveArm.h"
 #include "WireDepthResolveProbe.h"
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/ServerLoop.h>
 // Shared images: the present side resolves the image it imports (WireSharedImage.inc).
@@ -1484,96 +1482,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     namespace {
         static constexpr Uint32 kDescriptorSetsPerFrame = 64;
-#if !MOBILEGL_BUILD_RECORD_ARM
-        // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE HIDDEN GL PROGRAMS ONLY EXIST IN THE PULL
-        // BUILD NOW. In a disaggregated build the monolith arm drives WireColorBlit.inc and
-        // WireDepthMipmap.inc - the baked modules the wire arm already uses - so nothing below
-        // this line is compiled: no GLSL text, no hidden object ids, no ShaderObject,
-        // ProgramObject or SamplerObject construction on a DirectVulkan path. That is what
-        // takes those three classes out of the link-closure ratchet's `p7-magma` bucket (§4.2),
-        // and the reason it is an `#if` and not a runtime branch is exactly that: a runtime
-        // early return leaves the symbols referenced.
-        //
-        // The pull build keeps every statement below byte for byte, which is what G1 pins.
-        static constexpr Uint kHiddenBlitProgramId = 0xFFFFFFF0u;
-        static constexpr Uint kHiddenBlitVertexShaderId = 0xFFFFFFF1u;
-        static constexpr Uint kHiddenBlitFragmentShaderId = 0xFFFFFFF2u;
-        static constexpr Uint kHiddenBlitNearestSamplerId = 0xFFFFFFF3u;
-        static constexpr Uint kHiddenBlitLinearSamplerId = 0xFFFFFFF4u;
-        static constexpr Uint kHiddenDepthMipmapProgramId = 0xFFFFFFF5u;
-        static constexpr Uint kHiddenDepthMipmapVertexShaderId = 0xFFFFFFF6u;
-        static constexpr Uint kHiddenDepthMipmapFragmentShaderId = 0xFFFFFFF7u;
-        static constexpr const char* kFullscreenTriangleVertexShaderSource = R"(#version 460 core
-uniform vec4 uSrcRect;
-uniform vec4 uDstRect;
-uniform int uSurfaceTransform;
-layout(location = 0) out vec2 vTexCoord;
-
-vec2 ApplySurfaceTransform(vec2 position, int transform) {
-    vec2 p = position;
-    p.y = -p.y;
-    if (transform == 1) {
-        p = vec2(-p.y, p.x);
-    } else if (transform == 2) {
-        p = -p;
-    } else if (transform == 3) {
-        p = vec2(p.y, -p.x);
-    }
-    return p;
-}
-
-void main() {
-    const vec2 uvTri[3] = vec2[](
-        vec2(0.0, 0.0),
-        vec2(2.0, 0.0),
-        vec2(0.0, 2.0)
-    );
-    vec2 uv = uvTri[gl_VertexID];
-    vec2 dst = uDstRect.xy + uv * uDstRect.zw;
-    vec2 clip = dst * 2.0 - 1.0;
-    clip = ApplySurfaceTransform(clip, uSurfaceTransform);
-    gl_Position = vec4(clip, 0.0, 1.0);
-    vTexCoord = uSrcRect.xy + uv * uSrcRect.zw;
-}
-)";
-
-        static constexpr const char* kBlitFragmentShaderSource = R"(#version 460 core
-layout(binding = 0) uniform sampler2D uSource;
-layout(location = 0) in vec2 vTexCoord;
-layout(location = 0) out vec4 outColor;
-
-void main() {
-    // Explicit LOD, not texture(): a blit reads exactly the selected level, so
-    // derivative-based mip selection has no business here. It is also load-bearing:
-    // on Adreno 650 (driver 512.502) an implicit-LOD sample of this single-mip
-    // UBWC render target through the pre-rotation (ROTATE_90) mapping reads past
-    // the image's allocation - despite the sampler's maxLod=0 and a nominal 1:1
-    // texel mapping whose LOD is 0, so the driver's implicit-LOD path itself is at
-    // fault - and page-faults the GPU once the neighbouring memory is returned to
-    // the kernel (frame 2 of Minecraft 26.2's resource reload; the kernel then
-    // invalidates the context and the next submit dies with EDEADLK ->
-    // VK_ERROR_DEVICE_LOST at Present). Verified on device: texture() faults on
-    // the second frame every run, textureLod survives with identical state.
-    outColor = textureLod(uSource, vTexCoord, 0.0);
-}
-)";
-
-        static constexpr const char* kDepthMipmapFragmentShaderSource = R"(#version 460 core
-layout(binding = 0) uniform sampler2D uSource;
-layout(location = 0) in vec2 vTexCoord;
-uniform ivec2 uSrcTexelSize;
-
-void main() {
-    ivec2 srcBase = ivec2(vTexCoord * vec2(uSrcTexelSize));
-    ivec2 srcMax = uSrcTexelSize - ivec2(1);
-    float depth0 = texelFetch(uSource, clamp(srcBase, ivec2(0), srcMax), 0).r;
-    float depth1 = texelFetch(uSource, clamp(srcBase + ivec2(1, 0), ivec2(0), srcMax), 0).r;
-    float depth2 = texelFetch(uSource, clamp(srcBase + ivec2(0, 1), ivec2(0), srcMax), 0).r;
-    float depth3 = texelFetch(uSource, clamp(srcBase + ivec2(1, 1), ivec2(0), srcMax), 0).r;
-    gl_FragDepth = 0.25 * (depth0 + depth1 + depth2 + depth3);
-}
-)";
-#endif // !MOBILEGL_BUILD_RECORD_ARM
 
 
         static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
@@ -1687,7 +1595,6 @@ void main() {
             return true;
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (T5 / tx): the split arm of EnsureGenerateMipmapStorageAllocated. Under an active
         // transport the apply thread may not WRITE the client's level storage - AllocateStorage
         // and MarkStorageDirty on a frontend TextureObjectMipmap are §6 layer-1 surfaces
@@ -1737,7 +1644,6 @@ void main() {
             }
             return true;
         }
-#endif
 
         static VkImageLayout ResolveGenerateMipmapFinalLayout(VkImageAspectFlags aspectMask) {
             return (aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
@@ -3221,17 +3127,12 @@ void main() {
 
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
-#if MOBILEGL_BUILD_RECORD_ARM
         const Bool wire = MG_Config::DataArmIsRecord();
         const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         const Bool isDefault = wire ? (wireFbo && wireFbo->IsDefault) :
             (currentDrawFBO && currentDrawFBO->IsDefaultFramebuffer());
-#else
-        const auto& currentDrawFBO = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        const Bool isDefault = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
-#endif
         if (isDefault) {
             flags |= ProgramFactory::CompileOptionBit::PositionYFlip;
             // gl_FragCoord follows the same rule the default-framebuffer RECTANGLES follow
@@ -3272,9 +3173,7 @@ void main() {
         CreateAllocator();
 
         CreateCommandPool();
-#if MOBILEGL_BUILD_RECORD_ARM
         m_progressMarkers.Init(m_device, m_physicalDevice.queueFamilies.graphicsFamily);
-#endif
 
         // Frames-in-flight is a request, not a guarantee: it also seeds the swapchain image
         // count (SwapchainObject clamps the hint into [minImageCount, maxImageCount]). Not every
@@ -3447,9 +3346,7 @@ void main() {
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
-#if MOBILEGL_BUILD_RECORD_ARM
         m_uniformManager->SetWireInvalidStorageImageArm(m_wireNullDescriptor);
-#endif
         m_vertexInputStateFactory =
             MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle, m_pipeIdentity);
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
@@ -3500,13 +3397,10 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         m_progressMarkers.Shutdown();
-#endif
         // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
         for (auto& [_, target] : m_parkedTargets) DestroyParkedTarget(target);
         m_parkedTargets.clear();
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
         // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
         WireDeclineTally::Dump("shutdown");
@@ -3526,7 +3420,6 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         DestroySharedImagePresentTargets(false);
         DestroySharedImageSync();
-#endif
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -3622,9 +3515,7 @@ void main() {
             m_device = VK_NULL_HANDLE;
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
-#if MOBILEGL_BUILD_RECORD_ARM
         s_vkCmdWireDrawIndirectCount = nullptr;
-#endif
         s_vkCmdDrawMultiEXT = nullptr;
         s_vkCmdDrawMultiIndexedEXT = nullptr;
 
@@ -4601,7 +4492,6 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeBlitResources() {
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5f fv gave this an early return for every non-monolith transport, because the hidden
         // programs are frontend objects and creating them on the server would retain a client
         // compiler/allocator dependency. P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')) takes the last
@@ -4613,77 +4503,6 @@ void main() {
         // object file, so the link-closure ratchet counted them whether or not the branch ever
         // ran. Compiling the construction out is what makes them fall.
         return true;
-#else
-        ShutdownBlitResources();
-
-        auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex, kHiddenBlitVertexShaderId);
-        vertexShader->SetShaderSource(kFullscreenTriangleVertexShaderSource);
-        vertexShader->Compile();
-        if (!vertexShader->GetCompileStatus()) {
-            MGLOG_E("InitializeBlitResources failed: vertex shader compile error: %s", vertexShader->GetInfoLog().c_str());
-            return false;
-        }
-
-        auto fragmentShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Fragment, kHiddenBlitFragmentShaderId);
-        fragmentShader->SetShaderSource(kBlitFragmentShaderSource);
-        fragmentShader->Compile();
-        if (!fragmentShader->GetCompileStatus()) {
-            MGLOG_E("InitializeBlitResources failed: fragment shader compile error: %s", fragmentShader->GetInfoLog().c_str());
-            return false;
-        }
-
-        m_blitResources.program = MakeShared<MG_State::GLState::ProgramObject>(kHiddenBlitProgramId);
-        m_blitResources.program->AttachShader(vertexShader);
-        m_blitResources.program->AttachShader(fragmentShader);
-        m_blitResources.program->Link(false);
-        if (!m_blitResources.program->GetLinkStatus()) {
-            MGLOG_E("InitializeBlitResources failed: program link error: %s", m_blitResources.program->GetInfoLog().c_str());
-            return false;
-        }
-
-        m_blitResources.srcRectLocation = m_blitResources.program->GetUniformLocation("uSrcRect");
-        m_blitResources.dstRectLocation = m_blitResources.program->GetUniformLocation("uDstRect");
-        m_blitResources.surfaceTransformLocation = m_blitResources.program->GetUniformLocation("uSurfaceTransform");
-        MOBILEGL_ASSERT(m_blitResources.srcRectLocation >= 0, "InitializeBlitResources: missing uSrcRect");
-        MOBILEGL_ASSERT(m_blitResources.dstRectLocation >= 0, "InitializeBlitResources: missing uDstRect");
-        MOBILEGL_ASSERT(m_blitResources.surfaceTransformLocation >= 0,
-                        "InitializeBlitResources: missing uSurfaceTransform");
-        MOBILEGL_ASSERT(m_blitResources.program->GetUBOSize() > 0,
-                        "InitializeBlitResources: blit program global UBO is empty");
-        MOBILEGL_ASSERT(m_programFactory != nullptr, "InitializeBlitResources: program factory is null");
-
-        ProgramFactory::CompileOptionFlags blitTransformFlags = 0;
-        const auto& blitProgramObj = m_programFactory->GetOrCreateProgram(*m_blitResources.program, blitTransformFlags);
-        Bool foundBlitSamplerBinding = false;
-        for (Uint32 binding = 0; binding < blitProgramObj.samplerNameByBinding.size(); ++binding) {
-            if (blitProgramObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
-                continue;
-            }
-            if (blitProgramObj.samplerNameByBinding[binding] == "uSource") {
-                m_blitResources.samplerBinding = binding;
-                foundBlitSamplerBinding = true;
-                break;
-            }
-        }
-        MOBILEGL_ASSERT(foundBlitSamplerBinding,
-                        "InitializeBlitResources: failed to resolve reflected binding for uSource");
-
-        auto createSampler = [](Uint externalIndex, SamplerFilterMode filter) {
-            auto sampler = MakeShared<MG_State::GLState::SamplerObject>(externalIndex);
-            sampler->SetWrapS(SamplerWrapMode::ClampToEdge);
-            sampler->SetWrapT(SamplerWrapMode::ClampToEdge);
-            sampler->SetWrapR(SamplerWrapMode::ClampToEdge);
-            sampler->SetMinFilter(filter);
-            sampler->SetMagFilter(filter);
-            sampler->SetMipmapMode(SamplerMipmapMode::None);
-            sampler->SetLodRange(0.0f, 0.0f);
-            return sampler;
-        };
-
-        m_blitResources.nearestSampler = createSampler(kHiddenBlitNearestSamplerId, SamplerFilterMode::Nearest);
-        m_blitResources.linearSampler = createSampler(kHiddenBlitLinearSamplerId, SamplerFilterMode::Linear);
-        return true;
-#endif
     }
 
     void VulkanRenderer::ShutdownBlitResources() {
@@ -4713,81 +4532,11 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeDepthMipmapResources() {
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the depth-mip half of the same step. In a
         // disaggregated build the monolith arm generates its depth chain with
         // WireDepthMipmap.inc's baked pass, so there is no hidden GL program to build on any
         // transport. See InitializeBlitResources above for why this is an `#if`.
         return true;
-#else
-        ShutdownDepthMipmapResources();
-
-        auto vertexShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Vertex,
-                                                                         kHiddenDepthMipmapVertexShaderId);
-        vertexShader->SetShaderSource(kFullscreenTriangleVertexShaderSource);
-        vertexShader->Compile();
-        if (!vertexShader->GetCompileStatus()) {
-            MGLOG_E("InitializeDepthMipmapResources failed: vertex shader compile error: %s",
-                    vertexShader->GetInfoLog().c_str());
-            return false;
-        }
-
-        auto fragmentShader = MakeShared<MG_State::GLState::ShaderObject>(ShaderStage::Fragment,
-                                                                           kHiddenDepthMipmapFragmentShaderId);
-        fragmentShader->SetShaderSource(kDepthMipmapFragmentShaderSource);
-        fragmentShader->Compile();
-        if (!fragmentShader->GetCompileStatus()) {
-            MGLOG_E("InitializeDepthMipmapResources failed: fragment shader compile error: %s",
-                    fragmentShader->GetInfoLog().c_str());
-            return false;
-        }
-
-        m_depthMipmapResources.program = MakeShared<MG_State::GLState::ProgramObject>(kHiddenDepthMipmapProgramId);
-        m_depthMipmapResources.program->AttachShader(vertexShader);
-        m_depthMipmapResources.program->AttachShader(fragmentShader);
-        m_depthMipmapResources.program->Link(false);
-        if (!m_depthMipmapResources.program->GetLinkStatus()) {
-            MGLOG_E("InitializeDepthMipmapResources failed: program link error: %s",
-                    m_depthMipmapResources.program->GetInfoLog().c_str());
-            return false;
-        }
-
-        m_depthMipmapResources.srcRectLocation = m_depthMipmapResources.program->GetUniformLocation("uSrcRect");
-        m_depthMipmapResources.dstRectLocation = m_depthMipmapResources.program->GetUniformLocation("uDstRect");
-        m_depthMipmapResources.surfaceTransformLocation =
-            m_depthMipmapResources.program->GetUniformLocation("uSurfaceTransform");
-        m_depthMipmapResources.srcTexelSizeLocation =
-            m_depthMipmapResources.program->GetUniformLocation("uSrcTexelSize");
-        MOBILEGL_ASSERT(m_depthMipmapResources.srcRectLocation >= 0,
-                        "InitializeDepthMipmapResources: missing uSrcRect");
-        MOBILEGL_ASSERT(m_depthMipmapResources.dstRectLocation >= 0,
-                        "InitializeDepthMipmapResources: missing uDstRect");
-        MOBILEGL_ASSERT(m_depthMipmapResources.surfaceTransformLocation >= 0,
-                        "InitializeDepthMipmapResources: missing uSurfaceTransform");
-        MOBILEGL_ASSERT(m_depthMipmapResources.srcTexelSizeLocation >= 0,
-                        "InitializeDepthMipmapResources: missing uSrcTexelSize");
-        MOBILEGL_ASSERT(m_depthMipmapResources.program->GetUBOSize() > 0,
-                        "InitializeDepthMipmapResources: depth mipmap program global UBO is empty");
-        MOBILEGL_ASSERT(m_programFactory != nullptr, "InitializeDepthMipmapResources: program factory is null");
-
-        ProgramFactory::CompileOptionFlags transformFlags = 0;
-        const auto& programObj =
-            m_programFactory->GetOrCreateProgram(*m_depthMipmapResources.program, transformFlags);
-        Bool foundSamplerBinding = false;
-        for (Uint32 binding = 0; binding < programObj.samplerNameByBinding.size(); ++binding) {
-            if (programObj.bindingKinds[binding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
-                continue;
-            }
-            if (programObj.samplerNameByBinding[binding] == "uSource") {
-                m_depthMipmapResources.samplerBinding = binding;
-                foundSamplerBinding = true;
-                break;
-            }
-        }
-        MOBILEGL_ASSERT(foundSamplerBinding,
-                        "InitializeDepthMipmapResources: failed to resolve reflected binding for uSource");
-        return true;
-#endif
     }
 
     void VulkanRenderer::ShutdownDepthMipmapResources() {
@@ -4840,66 +4589,6 @@ void main() {
         m_deferredDepthMipmapCleanup.clear();
     }
 
-#if !MOBILEGL_BUILD_RECORD_ARM
-    // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the pull build's blit pipeline, built out of the
-    // hidden GL program through the program/pipeline factories. A disaggregated build has no
-    // such program on either arm - WireColorBlit.inc owns its pipeline - so this is compiled
-    // out with its only caller's body.
-    VkPipeline VulkanRenderer::GetOrCreateBlitPipeline(const RenderPassEntry& renderPassEntry) {
-        MOBILEGL_ASSERT(m_blitResources.program != nullptr, "GetOrCreateBlitPipeline: blit program is null");
-        MOBILEGL_ASSERT(m_programFactory != nullptr, "GetOrCreateBlitPipeline: program factory is null");
-        MOBILEGL_ASSERT(m_uniformManager != nullptr, "GetOrCreateBlitPipeline: descriptor binder is null");
-
-        static const VkPipelineVertexInputStateCreateInfo kEmptyVertexInputState {
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-        };
-        ProgramFactory::CompileOptionFlags transformFlags = 0;
-        const auto& programObj = m_programFactory->GetOrCreateProgram(*m_blitResources.program, transformFlags);
-        PipelineFactory::PipelineCreatePayload payload{
-            .programHash = programObj.hash,
-            .vertexInputHash = 0,
-            .pipelineLayout = programObj.pipelineLayout,
-            .renderPass = renderPassEntry.renderPass,
-            .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
-            .rasterizationSamples = renderPassEntry.sampleCount,
-            .subpass = 0,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            .cullMode = VK_CULL_MODE_NONE,
-            .frontFace = VK_FRONT_FACE_CLOCKWISE,
-            // Functionally irrelevant to the blit (no flat varying, no capture), but on a device with
-            // provokingVertexModePerPipeline == VK_FALSE a blit pipeline left on FIRST inside a render
-            // pass whose draw pipelines are LAST is an illegal mix. Note this does NOT cover
-            // GenerateDepthMipmapWithShader, which builds its pipeline directly and keeps Vulkan's
-            // FIRST - legal only because it creates and begins its own render pass. Anything that ever
-            // records that pipeline inside an outer render pass must route through this selector too.
-            .provokingVertexMode = SelectProvokingVertexMode(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false),
-            .depthTestEnable = false,
-            .depthWriteEnable = false,
-            .depthCompareOp = VK_COMPARE_OP_ALWAYS,
-            .stages = &programObj.stages,
-            .vertexInputState = &kEmptyVertexInputState,
-            .stageSpirvDigests = &programObj.stageSpirvDigests
-        };
-        static constexpr VkColorComponentFlags kColorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
-                        "GetOrCreateBlitPipeline: colorAttachmentCount=%u exceeds payload capacity",
-                        payload.colorAttachmentCount);
-        for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
-            payload.colorBlendAttachments[i] = MakeColorBlendAttachmentState(
-                false,
-                VK_BLEND_FACTOR_ONE,
-                VK_BLEND_FACTOR_ZERO,
-                VK_BLEND_OP_ADD,
-                VK_BLEND_FACTOR_ONE,
-                VK_BLEND_FACTOR_ZERO,
-                VK_BLEND_OP_ADD,
-                kColorWriteMask);
-        }
-        return m_pipelineFactory->GetOrCreatePipeline(payload);
-    }
-#endif // !MOBILEGL_BUILD_RECORD_ARM
 
     Bool VulkanRenderer::GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                                        MG_State::GLState::ITextureObject& texture,
@@ -4909,7 +4598,6 @@ void main() {
                                                        const IntVec3& storageBaseTexelSize,
                                                        VkImageLayout originalLayout,
                                                        VkImageLayout finalLayout) {
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED PASS. Every
         // level below is WireDepthMipmap.inc's GenerateWireDepthMipLevel - the same 2x2
         // texelFetch box, the same clamp, the same average, the same half-texel offset, since
@@ -4954,310 +4642,6 @@ void main() {
         whole.extent = resource.extent;
         TransitionWireImage(whole, finalLayout);
         return true;
-#else
-        MOBILEGL_ASSERT(m_depthMipmapResources.program != nullptr,
-                        "GenerateDepthMipmapWithShader: depth mipmap program is null");
-        MOBILEGL_ASSERT(m_blitResources.nearestSampler != nullptr,
-                        "GenerateDepthMipmapWithShader: helper sampler is null");
-        MOBILEGL_ASSERT(m_programFactory != nullptr, "GenerateDepthMipmapWithShader: program factory is null");
-        MOBILEGL_ASSERT(m_uniformManager != nullptr, "GenerateDepthMipmapWithShader: uniform manager is null");
-        MOBILEGL_ASSERT(texture.GetTarget() == TextureTarget::Texture2D,
-                        "GenerateDepthMipmapWithShader only supports GL_TEXTURE_2D depth textures");
-        MOBILEGL_ASSERT(resource.aspect == VK_IMAGE_ASPECT_DEPTH_BIT,
-                        "GenerateDepthMipmapWithShader requires a depth-only aspect");
-        MOBILEGL_ASSERT(resource.depth == 1 && resource.arrayLayers == 1,
-                        "GenerateDepthMipmapWithShader only supports single-layer depth textures");
-        MOBILEGL_ASSERT(m_frameContext.GetCurrentFrameIndex() < m_deferredDepthMipmapCleanup.size(),
-                        "GenerateDepthMipmapWithShader: frame index %u out of range (cleanup slots=%zu)",
-                        m_frameContext.GetCurrentFrameIndex(), m_deferredDepthMipmapCleanup.size());
-
-        auto& deferredCleanup = m_deferredDepthMipmapCleanup[m_frameContext.GetCurrentFrameIndex()];
-
-        ProgramFactory::CompileOptionFlags transformFlags = 0;
-        const auto& programObj =
-            m_programFactory->GetOrCreateProgram(*m_depthMipmapResources.program, transformFlags);
-
-        VkAttachmentDescription depthAttachment{};
-        depthAttachment.format = resource.format;
-        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-        VkAttachmentReference depthAttachmentRef{};
-        depthAttachmentRef.attachment = 0;
-        depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription subpassDesc{};
-        subpassDesc.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpassDesc.pDepthStencilAttachment = &depthAttachmentRef;
-
-        VkRenderPassCreateInfo renderPassCreateInfo{};
-        renderPassCreateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassCreateInfo.attachmentCount = 1;
-        renderPassCreateInfo.pAttachments = &depthAttachment;
-        renderPassCreateInfo.subpassCount = 1;
-        renderPassCreateInfo.pSubpasses = &subpassDesc;
-
-        VkRenderPass renderPass = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &renderPass),
-                  "GenerateDepthMipmapWithShader: vkCreateRenderPass");
-
-        static const VkPipelineVertexInputStateCreateInfo kEmptyVertexInputState {
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-        };
-
-        VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-        VkPipelineViewportStateCreateInfo viewportState{};
-        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-        viewportState.viewportCount = 1;
-        viewportState.scissorCount = 1;
-
-        VkPipelineRasterizationStateCreateInfo rasterizationState{};
-        rasterizationState.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rasterizationState.polygonMode = VK_POLYGON_MODE_FILL;
-        rasterizationState.cullMode = VK_CULL_MODE_NONE;
-        rasterizationState.frontFace = VK_FRONT_FACE_CLOCKWISE;
-        rasterizationState.lineWidth = 1.0f;
-
-        VkPipelineMultisampleStateCreateInfo multisampleState{};
-        multisampleState.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampleState.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-        VkPipelineDepthStencilStateCreateInfo depthStencilState{};
-        depthStencilState.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-        depthStencilState.depthTestEnable = VK_TRUE;
-        depthStencilState.depthWriteEnable = VK_TRUE;
-        depthStencilState.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-        depthStencilState.minDepthBounds = 0.0f;
-        depthStencilState.maxDepthBounds = 1.0f;
-
-        VkPipelineColorBlendStateCreateInfo colorBlendState{};
-        colorBlendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-
-        const VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dynamicState{};
-        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = static_cast<Uint32>(sizeof(dynamicStates) / sizeof(dynamicStates[0]));
-        dynamicState.pDynamicStates = dynamicStates;
-
-        VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
-        pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-        pipelineCreateInfo.stageCount = static_cast<Uint32>(programObj.stages.size());
-        pipelineCreateInfo.pStages = programObj.stages.data();
-        pipelineCreateInfo.pVertexInputState = &kEmptyVertexInputState;
-        pipelineCreateInfo.pInputAssemblyState = &inputAssembly;
-        pipelineCreateInfo.pViewportState = &viewportState;
-        pipelineCreateInfo.pRasterizationState = &rasterizationState;
-        pipelineCreateInfo.pMultisampleState = &multisampleState;
-        pipelineCreateInfo.pDepthStencilState = &depthStencilState;
-        pipelineCreateInfo.pColorBlendState = &colorBlendState;
-        pipelineCreateInfo.pDynamicState = &dynamicState;
-        pipelineCreateInfo.layout = programObj.pipelineLayout;
-        pipelineCreateInfo.renderPass = renderPass;
-        pipelineCreateInfo.subpass = 0;
-
-        VkPipeline pipeline = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline),
-                  "GenerateDepthMipmapWithShader: vkCreateGraphicsPipelines");
-        deferredCleanup.renderPasses.push_back(renderPass);
-        deferredCleanup.pipelines.push_back(pipeline);
-
-        auto createMipView = [&](Uint32 mipLevel, VkImageAspectFlags aspectMask) {
-            VkImageViewCreateInfo viewCreateInfo{};
-            viewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            viewCreateInfo.image = resource.image;
-            viewCreateInfo.viewType = resource.viewType;
-            viewCreateInfo.format = resource.format;
-            viewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-            viewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-            viewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-            viewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-            viewCreateInfo.subresourceRange.aspectMask = aspectMask;
-            viewCreateInfo.subresourceRange.baseMipLevel = mipLevel;
-            viewCreateInfo.subresourceRange.levelCount = 1;
-            viewCreateInfo.subresourceRange.baseArrayLayer = 0;
-            viewCreateInfo.subresourceRange.layerCount = 1;
-
-            VkImageView view = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateImageView(m_device, &viewCreateInfo, nullptr, &view),
-                      "GenerateDepthMipmapWithShader: vkCreateImageView");
-            return view;
-        };
-
-        VkPipelineStageFlags originalSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags originalSrcAccessMask = 0;
-        GetImageTransitionSourceState(originalLayout, originalSrcStageMask, originalSrcAccessMask);
-
-        VkPipelineStageFlags finalDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags finalDstAccessMask = 0;
-        GetImageTransitionDestinationState(finalLayout, finalDstStageMask, finalDstAccessMask);
-
-        VkPipelineStageFlags attachmentStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkAccessFlags attachmentAccessMask = 0;
-        GetImageTransitionDestinationState(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                           attachmentStageMask, attachmentAccessMask);
-
-        if (originalLayout != finalLayout) {
-            if (baseMipLevel > 0) {
-                VkImageLayout lowerMipLayout = originalLayout;
-                const Bool lowerReady = VkTextureManager::TransitionImageLayout(
-                    frame.commandBuffer, resource.image, lowerMipLayout, finalLayout,
-                    originalSrcStageMask, finalDstStageMask,
-                    originalSrcAccessMask, finalDstAccessMask,
-                    resource.aspect, 0, baseMipLevel);
-                MOBILEGL_ASSERT(lowerReady, "%s: failed to transition lower untouched mip levels", __func__);
-            }
-
-            if (generateMipLevelCount < resource.mipLevels) {
-                VkImageLayout upperMipLayout = originalLayout;
-                const Bool upperReady = VkTextureManager::TransitionImageLayout(
-                    frame.commandBuffer, resource.image, upperMipLayout, finalLayout,
-                    originalSrcStageMask, finalDstStageMask,
-                    originalSrcAccessMask, finalDstAccessMask,
-                    resource.aspect, generateMipLevelCount, resource.mipLevels - generateMipLevelCount);
-                MOBILEGL_ASSERT(upperReady, "%s: failed to transition upper untouched mip levels", __func__);
-            }
-
-            VkImageLayout baseMipLayout = originalLayout;
-            const Bool baseReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, resource.image, baseMipLayout, finalLayout,
-                originalSrcStageMask, finalDstStageMask,
-                originalSrcAccessMask, finalDstAccessMask,
-                resource.aspect, baseMipLevel, 1);
-            MOBILEGL_ASSERT(baseReady, "%s: failed to transition base mip level to sampled layout", __func__);
-        }
-
-        resource.layout = finalLayout;
-
-        auto* depthProgramData = static_cast<Uint8*>(m_depthMipmapResources.program->MapUBO());
-        MOBILEGL_ASSERT(depthProgramData != nullptr, "GenerateDepthMipmapWithShader: depth mipmap UBO is null");
-        auto writeUniform = [&](Int location, const void* data, SizeT size) {
-            MOBILEGL_ASSERT(location >= 0, "GenerateDepthMipmapWithShader: invalid uniform location");
-            const Uint offset = m_depthMipmapResources.program->GetUniformOffset(static_cast<Uint>(location));
-            // A RETURN, not only an assert: the assert compiles out in release, and a program
-            // whose SPIR-V job settled cancelled reports kInvalidUniformOffset (~0u) with a
-            // zero-sized shadow - which would make the memcpy below a wild write at
-            // depthProgramData + 4 GiB rather than a dropped uniform.
-            if (offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
-                offset + size > m_depthMipmapResources.program->GetUBOSize()) {
-                MOBILEGL_ASSERT(false, "GenerateDepthMipmapWithShader: uniform write out of bounds");
-                return;
-            }
-            memcpy(depthProgramData + offset, data, size);
-            m_depthMipmapResources.program->MarkUBOContentDirty();
-        };
-
-        for (Uint32 level = baseMipLevel + 1; level < generateMipLevelCount; ++level) {
-            VkImageLayout dstMipLayout = originalLayout;
-            const Bool dstReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, resource.image, dstMipLayout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                originalSrcStageMask, attachmentStageMask,
-                originalSrcAccessMask, attachmentAccessMask,
-                resource.aspect, level, 1);
-            MOBILEGL_ASSERT(dstReady, "%s: failed to transition mip level %u to depth attachment layout", __func__, level);
-
-            const IntVec3 srcTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level - 1);
-            const IntVec3 dstTexelSize = ComputeMipTexelSize(storageBaseTexelSize, level);
-            const Int srcTexelSizeUniform[2] = {srcTexelSize.x(), srcTexelSize.y()};
-
-            const VkImageView sourceImageView = createMipView(level - 1, VK_IMAGE_ASPECT_DEPTH_BIT);
-            const VkImageView depthAttachmentView = createMipView(level, resource.aspect);
-            deferredCleanup.imageViews.push_back(sourceImageView);
-            deferredCleanup.imageViews.push_back(depthAttachmentView);
-
-            VkFramebufferCreateInfo framebufferCreateInfo{};
-            framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            framebufferCreateInfo.renderPass = renderPass;
-            framebufferCreateInfo.attachmentCount = 1;
-            framebufferCreateInfo.pAttachments = &depthAttachmentView;
-            framebufferCreateInfo.width = static_cast<Uint32>(dstTexelSize.x());
-            framebufferCreateInfo.height = static_cast<Uint32>(dstTexelSize.y());
-            framebufferCreateInfo.layers = 1;
-
-            VkFramebuffer framebuffer = VK_NULL_HANDLE;
-            VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer),
-                      "GenerateDepthMipmapWithShader: vkCreateFramebuffer");
-            deferredCleanup.framebuffers.push_back(framebuffer);
-
-            VkRenderPassBeginInfo renderPassBeginInfo{};
-            renderPassBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-            renderPassBeginInfo.renderPass = renderPass;
-            renderPassBeginInfo.framebuffer = framebuffer;
-            renderPassBeginInfo.renderArea.offset = {0, 0};
-            renderPassBeginInfo.renderArea.extent = {
-                static_cast<Uint32>(dstTexelSize.x()), static_cast<Uint32>(dstTexelSize.y())
-            };
-
-            EndActiveRenderPassOn(frame.commandBuffer);
-            vkCmdBeginRenderPass(frame.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            VkViewport viewport{};
-            viewport.x = 0.0f;
-            viewport.y = 0.0f;
-            viewport.width = static_cast<float>(dstTexelSize.x());
-            viewport.height = static_cast<float>(dstTexelSize.y());
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
-
-            VkRect2D scissor{};
-            scissor.offset = {0, 0};
-            scissor.extent = {static_cast<Uint32>(dstTexelSize.x()), static_cast<Uint32>(dstTexelSize.y())};
-            vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-
-            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-            // The depth-mipmap pipeline's narrower dynamic set (viewport/scissor
-            // only) leaves the other dynamic states undefined; its raw scissor
-            // and viewport writes also bypass the shadow.
-            ResetDynamicStateShadow();
-
-            std::fill(depthProgramData,
-                      depthProgramData + m_depthMipmapResources.program->GetUBOSize(),
-                      Uint8{0});
-            BlitUniformData blitUniformData{};
-            writeUniform(m_depthMipmapResources.srcRectLocation,
-                         blitUniformData.srcRect,
-                         sizeof(blitUniformData.srcRect));
-            writeUniform(m_depthMipmapResources.dstRectLocation,
-                         blitUniformData.dstRect,
-                         sizeof(blitUniformData.dstRect));
-            writeUniform(m_depthMipmapResources.surfaceTransformLocation,
-                         &blitUniformData.surfaceTransform,
-                         sizeof(blitUniformData.surfaceTransform));
-            writeUniform(m_depthMipmapResources.srcTexelSizeLocation,
-                         srcTexelSizeUniform,
-                         sizeof(srcTexelSizeUniform));
-
-            const auto samplerBindingOverride = UniformManager::SamplerBindingOverride{
-                .binding = m_depthMipmapResources.samplerBinding,
-                .texture = &texture,
-                .sampler = m_blitResources.nearestSampler.get(),
-                .imageView = sourceImageView,
-            };
-            const Bool bound = m_uniformManager->BindProgramUniformBuffers(
-                frame.commandBuffer, *m_depthMipmapResources.program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS, &samplerBindingOverride);
-            MOBILEGL_ASSERT(bound, "GenerateDepthMipmapWithShader: BindProgramUniformBuffers failed");
-            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
-            vkCmdEndRenderPass(frame.commandBuffer);
-
-            VkImageLayout finishedMipLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-            const Bool finishedReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, resource.image, finishedMipLayout, finalLayout,
-                attachmentStageMask, finalDstStageMask,
-                attachmentAccessMask, finalDstAccessMask,
-                resource.aspect, level, 1);
-            MOBILEGL_ASSERT(finishedReady, "%s: failed to transition mip level %u to sampled layout", __func__, level);
-        }
-        return true;
-#endif
     }
 
     // Boost-style hash combine. The inputs are tiny enum ordinals and bit masks, so
@@ -5362,7 +4746,6 @@ void main() {
         return rsp.PrimitiveRestartIndex <= MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS - milliseconds to spend in a pipeline-creation MISS
     // on the wire arm. See the call site below for why it exists: the device's divergence needs a
     // COLD driver pipeline cache, and this host's is always warm, so the only way to reproduce
@@ -5376,7 +4759,6 @@ void main() {
         }();
         return milliseconds;
     }
-#endif
 
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
@@ -5386,7 +4768,6 @@ void main() {
             const MG_State::GLState::VertexArrayObject& vao,
             const RenderPassEntry& renderPassEntry,
             Bool primitiveRestartEnable) {
-#if MOBILEGL_BUILD_RECORD_ARM
         return GetOrCreatePipelineWithInput(mode, program, programObj, transformFlags,
             m_vertexInputStateFactory->GetOrCreateVertexInputState(vao), renderPassEntry, primitiveRestartEnable);
     }
@@ -5395,7 +4776,6 @@ void main() {
             const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
             const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
             Bool primitiveRestartEnable, Uint64 wireRenderPassCompatibilityId) {
-#endif
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
@@ -5413,14 +4793,9 @@ void main() {
         // payload key on the resolved LAYOUT hash instead, so draws over identical
         // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
-#if !MOBILEGL_BUILD_RECORD_ARM
-        auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
-#endif
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash =
-#if MOBILEGL_BUILD_RECORD_ARM
             wireRenderPassCompatibilityId != 0 ? 0 :
-#endif
             renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
         // and friends are dynamic state or not pipeline state at all, and keying the memo on the
@@ -5448,9 +4823,7 @@ void main() {
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
-#if MOBILEGL_BUILD_RECORD_ARM
                 entry.wireRenderPassCompatibilityId == wireRenderPassCompatibilityId &&
-#endif
                 entry.pipelineStateHash == pipelineStateHash &&
                 entry.renderStateCso == renderStateCso &&
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
@@ -5637,7 +5010,6 @@ void main() {
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
         {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                 if (fbo && !fbo->IsDefault) {
@@ -5645,7 +5017,6 @@ void main() {
                     if (fbo->Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) stencilTestEnabled = false;
                 }
             } else
-#endif
             {
             const auto& gatingFbo =
                 MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
@@ -5742,9 +5113,7 @@ void main() {
             .vertexInputHash = vertexLayoutHash,
             .pipelineLayout = programObj.pipelineLayout,
             .renderPass = renderPassEntry.renderPass,
-#if MOBILEGL_BUILD_RECORD_ARM
             .wireRenderPassCompatibilityId = wireRenderPassCompatibilityId,
-#endif
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
             .rasterizationSamples = renderPassEntry.sampleCount,
             // ARB_sample_shading. Dropped on a device without sampleRateShading rather than
@@ -5871,35 +5240,19 @@ void main() {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
-#if MOBILEGL_BUILD_RECORD_ARM
         const auto* wireFbo = MG_Config::DataArmIsRecord() ?
             MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-#else
-        const auto& drawFboBinding =
-            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-#endif
-#if MOBILEGL_BUILD_RECORD_ARM
         MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
-#else
-        MOBILEGL_ASSERT(drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
-#endif
-#if MOBILEGL_BUILD_RECORD_ARM
         const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
         Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
         if (wireFbo) for (SizeT i = 0; i < wireDrawBuffers.size(); ++i)
             wireDrawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
                 static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
         const auto& drawBuffers = wireFbo ? wireDrawBuffers : drawFboBinding->GetDrawBuffers();
-#else
-        const Bool isDefaultDrawFbo = drawFboBinding->IsDefaultFramebuffer();
-        const auto& drawBuffers = drawFboBinding->GetDrawBuffers();
-#endif
         auto resolveCompleteColorAttachmentTexture = [&](Uint32 drawBufferIndex) -> MG_State::GLState::ITextureObject* {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (wireFbo) return nullptr;
-#endif
             if (isDefaultDrawFbo || drawBufferIndex >= drawBuffers.size()) {
                 return nullptr;
             }
@@ -5950,7 +5303,6 @@ void main() {
                 attachmentColorWriteMask = 0;
                 effectiveBlendEnabled = false;
             }
-#if MOBILEGL_BUILD_RECORD_ARM
             if (wireFbo && !isDefaultDrawFbo) {
                 const Int32 slot = wireFbo->DrawBuffers[i];
                 if (slot < 0 || wireFbo->Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
@@ -5958,7 +5310,6 @@ void main() {
                     effectiveBlendEnabled = false;
                 }
             } else
-#endif
             if (!isDefaultDrawFbo && i < drawBuffers.size()) {
                 const auto drawBuffer = drawBuffers[i];
                 colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
@@ -6054,12 +5405,10 @@ void main() {
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
-#if MOBILEGL_BUILD_RECORD_ARM
                 if (wireFbo && !isDefaultDrawFbo) {
                     const Int32 slot = wireFbo->DrawBuffers[i];
                     colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
                 } else
-#endif
                 if (isDefaultDrawFbo) {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 } else if (colorAttachmentRenderbuffer != nullptr) {
@@ -6188,9 +5537,7 @@ void main() {
             entry.programHash = programObj.hash;
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
-#if MOBILEGL_BUILD_RECORD_ARM
             entry.wireRenderPassCompatibilityId = wireRenderPassCompatibilityId;
-#endif
             entry.pipelineStateHash = pipelineStateHash;
             entry.renderStateCso = renderStateCso;
             entry.primitiveRestartEnable = primitiveRestartEnable;
@@ -6556,12 +5903,10 @@ void main() {
         // the SAME draw-framebuffer binding the draw uses - see the assert below.
         MOBILEGL_ASSERT(
             [&] {
-#if MOBILEGL_BUILD_RECORD_ARM
                 if (MG_Config::DataArmIsRecord()) {
                     const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                     return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
                 }
-#endif
                 const auto& fbo =
                     MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
                 return isDefaultFbo == (fbo != nullptr && fbo->IsDefaultFramebuffer());
@@ -6902,9 +6247,7 @@ void main() {
                 if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                     entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
                     entry.renderPassHash == snap.renderPassHash &&
-#if MOBILEGL_BUILD_RECORD_ARM
                     entry.wireRenderPassCompatibilityId == 0 &&
-#endif
                     entry.pipelineStateHash == pipelineStateHash &&
                     entry.renderStateCso == renderStateCso &&
                     entry.primitiveRestartEnable == drawPrimitiveRestartEnable &&
@@ -6989,7 +6332,6 @@ void main() {
         // split server records every draw its client sends into the same frame command buffer, so
         // the same loading frame grows it the same way there.
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return false;
             // The wire route returns before the monolith branch's draw-gated
@@ -6998,7 +6340,6 @@ void main() {
             m_textureManager->CollectGarbage();
             return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
         }
-#endif
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
         // otherwise each re-run the full SyncTexture path on the same textures.
@@ -7624,14 +6965,12 @@ void main() {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         // Before the wire branch, for SetupDraw's reason.
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
             DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
             return;
         }
-#endif
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // The DISPATCH accessor: with a pipeline bound this is its compute stage program
@@ -7689,7 +7028,6 @@ void main() {
 
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_RECORD_ARM
         // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
@@ -7697,7 +7035,6 @@ void main() {
             DispatchWireComputeIndirect(indirect);
             return;
         }
-#endif
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // See DispatchCompute: the dispatch accessor, not the draw one.
@@ -7800,15 +7137,11 @@ void main() {
 
         MGLOG_D("DirectVulkan: glMemoryBarrier(0x%x)", static_cast<Uint32>(barriers));
         vkCmdPipelineBarrier(frame.commandBuffer,
-#if MOBILEGL_BUILD_RECORD_ARM
                              // ALL_COMMANDS does not include HOST. The barrier's
                              // HOST_WRITE access must have a matching source stage.
                              MG_Config::DataArmIsRecord()
                                  ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT
                                  : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-#else
-                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-#endif
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
                              1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
@@ -7968,7 +7301,6 @@ void main() {
     #include "WireYuvImage.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-framebuffer-record");
@@ -7980,7 +7312,6 @@ void main() {
             ClearWireFramebuffer(*fbo, payload);
             return;
         }
-#endif
         m_clearManager->CollectGarbage();
         if ((mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
             return;
@@ -8372,14 +7703,12 @@ void main() {
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
             ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
             return;
         }
-#endif
         auto* fbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         if (!fbo) {
             return;
@@ -9296,7 +8625,6 @@ void main() {
         MOBILEGL_ASSERT(clearReady,
                         "TryBlitToDefaultFramebufferWithShader: failed to materialize pending clear for textureId=%d",
                         sourceTexture->GetExternalIndex());
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED MODULE. Below
         // this line the pull build binds a hidden GL program, writes three default-block
         // uniforms into its global UBO and hands the sampler to the application's descriptor
@@ -9342,118 +8670,6 @@ void main() {
             return BlitWireColorToDefault(source, destination, srcX0, srcY0, srcX1, srcY1,
                                           dstX0, dstY0, dstX1, dstY1, filter);
         }
-#else
-        const Bool ready = m_textureManager->TransitionTextureForSampling(frame.commandBuffer, *sourceTexture);
-        if (!ready) {
-            MGLOG_E_ONCE("BlitFramebuffer skipped: failed to transition source textureId=%d for sampling",
-                    sourceTexture->GetExternalIndex());
-            return false;
-        }
-        if (m_textureManager->SyncTextureAndGetDescriptor(*sourceTexture) == nullptr) {
-            MGLOG_E_ONCE("BlitFramebuffer skipped: failed to resolve source textureId=%d after sampling transition",
-                    sourceTexture->GetExternalIndex());
-            return false;
-        }
-        const VkImageView sourceImageView =
-            m_textureManager->GetOrCreateSampledViewAtMipLevel(*sourceTexture, srcBinding.mipLevel);
-        MOBILEGL_ASSERT(sourceImageView != VK_NULL_HANDLE,
-                        "TryBlitToDefaultFramebufferWithShader: failed to create sampled view for textureId=%d mip=%u",
-                        sourceTexture->GetExternalIndex(), srcBinding.mipLevel);
-
-        // A color-only blit never touches depth/stencil: let the default-FBO pass
-        // it opens skip the depth attachment (depth-less flavor).
-        auto* renderPassEntryPtr =
-            m_renderPassManager->GetOrCreateRenderPass(drawFbo, drawDefaultImageIndex, /*drawUsesDepthStencil=*/false);
-        if (renderPassEntryPtr == nullptr) {
-            // Declined (the builder logged which attachment). The caller's contract for `false` is
-            // "this blit was not serviced here", which is the honest answer.
-            return false;
-        }
-        auto& renderPassEntry = *renderPassEntryPtr;
-        const Bool ok = VkRenderPassManager::BeginRenderPass(frame.commandBuffer, renderPassEntry);
-        MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
-
-        ApplyGLViewportState(frame.commandBuffer, renderPassEntry.extent,
-                             m_swapchainObject.GetPreTransform(), drawIsDefaultFbo);
-
-        VkRect2D scissor{};
-        scissor.offset = {0, 0};
-        scissor.extent = {static_cast<Uint32>(renderPassEntry.extent.x()), static_cast<Uint32>(renderPassEntry.extent.y())};
-        vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-
-        MOBILEGL_ASSERT(m_blitResources.program != nullptr, "TryBlitToDefaultFramebufferWithShader: blit program is null");
-        const VkPipeline pipeline = GetOrCreateBlitPipeline(renderPassEntry);
-        MOBILEGL_ASSERT(pipeline != VK_NULL_HANDLE, "TryBlitToDefaultFramebufferWithShader: blit pipeline is null");
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-        // The blit pipeline's narrower dynamic set (viewport/scissor only)
-        // leaves the other dynamic states undefined; its raw viewport/scissor
-        // writes also bypass the shadow.
-        ResetDynamicStateShadow();
-
-        auto* blitProgramData = static_cast<Uint8*>(m_blitResources.program->MapUBO());
-        MOBILEGL_ASSERT(blitProgramData != nullptr, "TryBlitToDefaultFramebufferWithShader: blit UBO is null");
-        std::fill(blitProgramData, blitProgramData + m_blitResources.program->GetUBOSize(), Uint8{0});
-
-        BlitUniformData blitUniformData{};
-        const float srcWidth = static_cast<float>(srcBinding.extent.x());
-        const float srcHeight = static_cast<float>(srcBinding.extent.y());
-        const float dstWidth = static_cast<float>(dstBinding.extent.x());
-        const float dstHeight = static_cast<float>(dstBinding.extent.y());
-        float dstNormWidth = dstWidth;
-        float dstNormHeight = dstHeight;
-        switch (m_swapchainObject.GetPreTransform()) {
-            case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-            case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-                dstNormWidth = dstHeight;
-                dstNormHeight = dstWidth;
-                break;
-            default:
-                break;
-        }
-        blitUniformData.srcRect[0] = static_cast<float>(srcX0) / srcWidth;
-        blitUniformData.srcRect[1] = static_cast<float>(srcY0) / srcHeight;
-        blitUniformData.srcRect[2] = static_cast<float>(srcX1 - srcX0) / srcWidth;
-        blitUniformData.srcRect[3] = static_cast<float>(srcY1 - srcY0) / srcHeight;
-        blitUniformData.dstRect[0] = static_cast<float>(dstX0) / dstNormWidth;
-        blitUniformData.dstRect[1] = static_cast<float>(dstY0) / dstNormHeight;
-        blitUniformData.dstRect[2] = static_cast<float>(dstX1 - dstX0) / dstNormWidth;
-        blitUniformData.dstRect[3] = static_cast<float>(dstY1 - dstY0) / dstNormHeight;
-        blitUniformData.surfaceTransform = static_cast<Int>(ToBlitSurfaceTransform(m_swapchainObject.GetPreTransform()));
-
-        auto writeUniform = [&](Int location, const void* data, SizeT size) {
-            MOBILEGL_ASSERT(location >= 0, "TryBlitToDefaultFramebufferWithShader: invalid uniform location");
-            const Uint offset = m_blitResources.program->GetUniformOffset(static_cast<Uint>(location));
-            // A RETURN, not only an assert - see GenerateDepthMipmapWithShader's copy of this
-            // guard: kInvalidUniformOffset must not reach the memcpy in a release build.
-            if (offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
-                offset + size > m_blitResources.program->GetUBOSize()) {
-                MOBILEGL_ASSERT(false, "TryBlitToDefaultFramebufferWithShader: uniform write out of bounds");
-                return;
-            }
-            memcpy(blitProgramData + offset, data, size);
-        };
-        writeUniform(m_blitResources.srcRectLocation, blitUniformData.srcRect, sizeof(blitUniformData.srcRect));
-        writeUniform(m_blitResources.dstRectLocation, blitUniformData.dstRect, sizeof(blitUniformData.dstRect));
-        writeUniform(m_blitResources.surfaceTransformLocation, &blitUniformData.surfaceTransform,
-                     sizeof(blitUniformData.surfaceTransform));
-        m_blitResources.program->MarkUBOContentDirty();
-
-        const auto samplerBindingOverride = UniformManager::SamplerBindingOverride{
-            .binding = m_blitResources.samplerBinding,
-            .texture = sourceTexture.get(),
-            .sampler = (filter == GL_LINEAR ? m_blitResources.linearSampler.get()
-                                            : m_blitResources.nearestSampler.get()),
-            .imageView = sourceImageView,
-        };
-        ProgramFactory::CompileOptionFlags blitTransformFlags = 0;
-        const auto& blitProgramObj = m_programFactory->GetOrCreateProgram(*m_blitResources.program, blitTransformFlags);
-        const Bool bound = m_uniformManager->BindProgramUniformBuffers(
-            frame.commandBuffer, *m_blitResources.program, blitProgramObj, m_frameContext.GetCurrentFrameIndex(),
-            VK_PIPELINE_BIND_POINT_GRAPHICS, &samplerBindingOverride);
-        MOBILEGL_ASSERT(bound, "TryBlitToDefaultFramebufferWithShader: BindProgramUniformBuffers failed");
-        vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
-        return true;
-#endif
     }
 
     // A single-aspect depth/stencil copy between two images of the same format. An image copy
@@ -9511,12 +8727,10 @@ void main() {
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
             return;
         }
-#endif
         auto readFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
         auto drawFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -10153,12 +9367,10 @@ void main() {
 
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
             return;
         }
-#endif
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -10472,10 +9684,8 @@ void main() {
         }
 
         Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord())
                 return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
-#endif
             if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetExternalIndex();
             return endpoint.Texture ? endpoint.Texture->GetExternalIndex() : 0u;
         }
@@ -10486,14 +9696,12 @@ void main() {
                                           const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-#if MOBILEGL_BUILD_RECORD_ARM
         const Bool wire = MG_Config::DataArmIsRecord();
         MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
         if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) {
             if (LatchWireDeviceLoss("copy-image-flush")) return;
             MagmaWireFatal("copy-image-flush");
         }
-#endif
         MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
                         "CopyImageSubData requires valid source and destination images.");
         // The frontend already declines a zero or negative extent, so anything else here is a
@@ -10521,9 +9729,7 @@ void main() {
         const auto* dstStorageTexture =
             dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
         if (
-#if MOBILEGL_BUILD_RECORD_ARM
             !wire &&
-#endif
             srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
             MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
                          CopyImageEndpointName(srcEndpoint));
@@ -10534,7 +9740,6 @@ void main() {
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const Bool renderbuffer = endpoint.IsRenderbuffer();
                 // The same handle-keyed allocation used by wire FBO clear/draw/read.
@@ -10553,7 +9758,6 @@ void main() {
                 out.format = resource->format;
                 return out.image != VK_NULL_HANDLE;
             }
-#endif
             if (endpoint.IsRenderbuffer()) {
                 auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(endpoint.Renderbuffer);
                 if (resource == nullptr) return false;
@@ -10588,7 +9792,6 @@ void main() {
         CopyImageVkImage dstImage{};
         const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
         const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B, CONTRACT-P7 §3.2: `copy-image-in-place@P7` RETIRES.
         //
         // What the Fatal here used to say was true of the code below it and of nothing else: the
@@ -10605,9 +9808,6 @@ void main() {
         const Bool inPlace = wire && srcImage.image != VK_NULL_HANDLE &&
                              srcImage.image == dstImage.image;
         if (wire) m_textureManager->FlushPendingUploads();
-#else
-        constexpr Bool inPlace = false;
-#endif
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
         // dereferenced right below (lavapipe) and a mip level the VkImage does not have handed
@@ -10632,7 +9832,6 @@ void main() {
         // dstLevel and the z origins below arrived relative to whichever name the application
         // passed - so a view's level 0 has to become the parent level it opened onto before it
         // can index a subresource, exactly as at every other attachment boundary.
-#if MOBILEGL_BUILD_RECORD_ARM
         if (wire) {
             const auto mapSubresource = [this](const CopyImageEndpoint& endpoint, GLint& mip, GLint& layer) {
                 if (endpoint.IsRenderbuffer()) {
@@ -10649,7 +9848,6 @@ void main() {
             (void)mapSubresource(srcEndpoint, srcLevel, srcZ);
             dstStorageHandle = mapSubresource(dstEndpoint, dstLevel, dstZ);
         }
-#endif
         srcLevel = static_cast<GLint>(ToStorageMipLevel(srcEndpoint.Texture.get(), srcLevel));
         dstLevel = static_cast<GLint>(ToStorageMipLevel(dstEndpoint.Texture.get(), dstLevel));
         srcZ = static_cast<GLint>(ToStorageArrayLayer(srcEndpoint.Texture.get(), srcZ));
@@ -10752,7 +9950,6 @@ void main() {
                          __func__, srcZ, srcSlices.availableSlices, dstZ, dstSlices.availableSlices, srcDepth);
             return;
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // THE ONE IN-PLACE SHAPE THAT STAYS A DECLINE (§3.2). GL 4.6 core 18.3.2: if the source
         // and destination name the same image AND the same level AND the same layers, the result
         // is UNDEFINED where the regions overlap. GENERAL makes the command legal to record, not
@@ -10779,7 +9976,6 @@ void main() {
                 return;
             }
         }
-#endif
 
         // Syncing either endpoint can flush and retire the current command buffer for
         // a texture upload. Prepare recording only after both images and uploads are ready.
@@ -10792,9 +9988,7 @@ void main() {
         }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
-#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) return true;
-#endif
             if (endpoint.IsRenderbuffer()) {
                 return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
             }
@@ -10925,12 +10119,10 @@ void main() {
                        srcImage.image, copySourceLayout,
                        dstImage.image, copyDestinationLayout,
                        1, &copyRegion);
-#if MOBILEGL_BUILD_RECORD_ARM
         // The copy coordinates above are already storage-relative. Name that
         // storage here too, so a texture view's offsets are not applied twice.
         if (wire && !dstImage.isRenderbuffer) m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle,
             dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
-#endif
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;
@@ -11027,7 +10219,6 @@ void main() {
         // UNDER #if, although this function serves both arms of the disaggregated build: the PULL
         // build has no wire arm, cannot flush before a readback, and is the image G1 pins to
         // 0xa52203. Its single-fence wait stays the statement it always was.
-#if MOBILEGL_BUILD_RECORD_ARM
         Vector<VkFence> readbackFences;
         readbackFences.reserve(m_inFlightSubmits.size() + 1);
         for (const auto& record : m_inFlightSubmits) {
@@ -11044,9 +10235,6 @@ void main() {
         // outstanding; the code this replaces waited on one.
         VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(readbackFences.size()),
                                           readbackFences.data(), VK_TRUE, UINT64_MAX);
-#else
-        VkResult result = vkWaitForFences(m_device, 1, &frame.imageInFlightFence, VK_TRUE, UINT64_MAX);
-#endif
         if (result != VK_SUCCESS) {
             NoteDeviceLoss(result, "readback vkWaitForFences");
             MGLOG_E_ONCE("DirectVulkan readback: vkWaitForFences returned %d", result);
@@ -11072,12 +10260,10 @@ void main() {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             ReadWirePixels(x,y,width,height,format,type,pixels);
             return;
         }
-#endif
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -11770,13 +10956,9 @@ void main() {
         const SizeT dstPixelBytes = packed.size() / pixelCount;
 
         // Store honoring the client pack state (single slice).
-#if MOBILEGL_BUILD_RECORD_ARM
         const SharedPtr<MG_State::GLState::BufferObject> wireReplyHasNoPackBuffer;
-#endif
         const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord() ? wireReplyHasNoPackBuffer :
-#endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
@@ -12052,12 +11234,10 @@ void main() {
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             GenerateWireMipmap();
             return;
         }
-#endif
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         // Whatever is left here is a coverage gap in this backend, not a broken invariant, so it
         // declines (leaving the mip chain unwritten) rather than asserting the process down. What
@@ -12157,7 +11337,6 @@ void main() {
                             "GenerateMipmap: depth-stencil mipmap generation is not supported yet.");
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (T5 / tx): under an active transport the generated chain is defined on the
         // server's staged shadow (keyed by the synced TextureResource above) and the client's
         // level storage is never written; in monolith the client-object path runs unchanged.
@@ -12165,10 +11344,6 @@ void main() {
             MG_Config::DataArmIsRecord()
                 ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, uploadTargets)
                 : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
-#else
-        const Bool allocatedMipmapStorage =
-            EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
-#endif
         MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
@@ -12457,10 +11632,8 @@ void main() {
                          "undefined behaviour rather than a capture");
             return false;
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord())
             return BeginWireXfbCaptureForDraw(frame);
-#endif
         const auto& program = MG_Pipe::gPipeInputs.GetTransformFeedbackProgram();
         if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
             return false;
@@ -13580,13 +12753,8 @@ void main() {
             return false;
         }
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) {
-#if MOBILEGL_BUILD_RECORD_ARM
             return IsFrameSerialComplete(serial);
-#else
-            return true;
-#endif
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // More than one submit can carry the same frame serial (mid-frame flush,
         // then Present). The completed floor is clamped below any serial still
         // held by an in-flight record; the first matching fence is not proof.
@@ -13604,22 +12772,6 @@ void main() {
             TryDrainFrameTransients();
             if (IsFrameSerialComplete(serial)) return true;
         }
-#else
-        // Pull build's historical one-fence wait stays byte-identical.
-        for (const auto& record : m_inFlightSubmits) {
-            if (record.frameSerial < serial || record.fence == VK_NULL_HANDLE) {
-                continue;
-            }
-            if (vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
-                break; // fall through to the drain below
-            }
-            OnSubmitsCompletedUpTo(record.submitIndex);
-            // Deliberately no NotifyDeviceIdle() here: that claims every submission has retired,
-            // which is only true after a real queue drain. Work past this record may still run.
-            TryDrainFrameTransients();
-            return true;
-        }
-#endif
 
         // No usable record - fall back to draining the graphics queue. This over-waits (bounded by
         // the in-flight frame count) but never deadlocks.
@@ -13634,11 +12786,7 @@ void main() {
         // The queue was just drained; take the free frame-boundary drain when
         // nothing is recorded (present-less timer-query loops). No-op otherwise.
         TryDrainFrameTransients();
-#if MOBILEGL_BUILD_RECORD_ARM
         return IsFrameSerialComplete(serial);
-#else
-        return true;
-#endif
     }
 
     Uint64 VulkanRenderer::GetSyncPointSubmitIndex() const {
@@ -13652,15 +12800,10 @@ void main() {
             return false;
         }
         const auto& frame = m_frameContext.GetCurrent();
-#if MOBILEGL_BUILD_RECORD_ARM
         return frame.isCommandRecording || frame.hasCommandBufferRecorded ||
                frame.isPreCommandRecording || frame.hasPreCommandBufferRecorded;
-#else
-        return frame.isCommandRecording || frame.hasCommandBufferRecorded;
-#endif
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::RewindWireDescriptorSetsIfDue() {
         if (!m_uniformManager || m_frameContext.GetFrameCount() == 0) return true;
         const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
@@ -13694,7 +12837,6 @@ void main() {
                 UniformManager::kWireDescriptorSetBudget, cachedSets);
         return true;
     }
-#endif
 
     Bool VulkanRenderer::IsSubmitIndexComplete(Uint64 submitIndex) {
         if (submitIndex <= m_completedSubmitCounter) {
@@ -13729,7 +12871,6 @@ void main() {
         }
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs) {
         if (submitIndex <= m_completedSubmitCounter) return true;
         if (submitIndex > m_submitCounter || m_device == VK_NULL_HANDLE) return false;
@@ -13747,11 +12888,9 @@ void main() {
             MGLOG_E_ONCE("WaitForSubmitsUpTo: vkWaitForFences returned %d", result);
         return false;
     }
-#endif
 
     void VulkanRenderer::OnSubmitsCompletedUpTo(Uint64 submitIndex) {
         m_completedSubmitCounter = std::max(m_completedSubmitCounter, submitIndex);
-#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P7 wave 2 package B3: THE COMPLETED-FRAME-SERIAL FLOOR MUST BE PROVABLE --------
         //
         // "Frame-serial completion piggybacks on submission completion" holds only while a
@@ -13778,19 +12917,11 @@ void main() {
         // unchanged, which is what keeps G1's .text byte-identical.
         Bool retiredAny = false;
         Uint64 advanceTo = 0;
-#endif
         while (!m_inFlightSubmits.empty() && m_inFlightSubmits.front().submitIndex <= submitIndex) {
             SubmitRecord record = m_inFlightSubmits.front();
             m_inFlightSubmits.erase(m_inFlightSubmits.begin());
-#if MOBILEGL_BUILD_RECORD_ARM
             retiredAny = true;
             advanceTo = std::max(advanceTo, record.frameSerial);
-#else
-            // Frame-serial completion piggybacks on submission completion.
-            // NotifyFrameSerialComplete refuses the current (still-recording)
-            // serial, so mid-frame flush records do not mark it early.
-            m_bufferManager.NotifyFrameSerialComplete(record.frameSerial);
-#endif
             if (!record.pooledFence || m_device == VK_NULL_HANDLE) {
                 continue; // frame-slot fences are reset/destroyed by FrameContext
             }
@@ -13800,7 +12931,6 @@ void main() {
                 vkDestroyFence(m_device, record.fence, nullptr);
             }
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         if (retiredAny) {
             // Clamp to one below the lowest serial still in flight.
             for (const auto& remaining : m_inFlightSubmits) {
@@ -13843,22 +12973,17 @@ void main() {
             }
             m_bufferManager.NotifyFrameSerialComplete(advanceTo);
         }
-#endif
         // Mid-frame-flushed command buffers whose submission just completed can
         // be freed now; present-less flush loops have no other reclaim point.
         m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);
-#if MOBILEGL_BUILD_RECORD_ARM
         CollectWireObjects(m_completedSubmitCounter);
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         RecycleSharedImageSemaphores(m_completedSubmitCounter);
 #endif
     }
 
     Bool VulkanRenderer::TryDrainFrameTransients() {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (m_wirePreparationDepth != 0) return false;
-#endif
         if (m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
             return false;
         }
@@ -13872,7 +12997,6 @@ void main() {
             return false;
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             // Texture uploads submit on this queue with their own fences. The
             // renderer watermark alone cannot prove images/views are idle.
@@ -13883,7 +13007,6 @@ void main() {
             CollectWireObjects(m_completedSubmitCounter, true);
             ClearAllWireDrawPassCaches();
         }
-#endif
 
         // Every submission is complete and nothing recorded references the
         // per-frame transients. Pure-reclaim work runs on every drain: it only
@@ -13916,7 +13039,6 @@ void main() {
         // loops still rewind the arena and age their caches every 8 iterations -
         // bounded by 8 iterations' transient usage.
         ++m_drainsSinceLastPresent;
-#if MOBILEGL_BUILD_RECORD_ARM
         // B3 probe: a drain that reaches here found the GPU caught up and nothing recording.
         // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. This probe is what REFUTED
         // that as the OpenRA mechanism (one successful drain, zero boundary works across the
@@ -13934,7 +13056,6 @@ void main() {
                         static_cast<unsigned long long>(m_completedSubmitCounter));
             }
         }
-#endif
         if ((m_drainsSinceLastPresent % 8) != 0) {
             return true;
         }
@@ -14005,9 +13126,7 @@ void main() {
     }
 
     Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
-#if MOBILEGL_BUILD_RECORD_ARM
         RetireWireDrawPass();
-#endif
         // Batched texture uploads must reach the queue before the frame's
         // commands: the recording being submitted may sample images whose
         // texels only exist in the texture manager's open upload batch.
@@ -14071,12 +13190,8 @@ void main() {
         // pooled fences and mid-frame command buffers.
         RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
-#if MOBILEGL_BUILD_RECORD_ARM
         if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded &&
             !frame.isPreCommandRecording && !frame.hasPreCommandBufferRecorded) {
-#else
-        if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded) {
-#endif
             // GL flush semantics still demand batched texture uploads start
             // executing in finite time even when no draw was recorded.
             if (m_textureManager) {
@@ -14119,15 +13234,9 @@ void main() {
         const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer(submittingPreCommandBuffer);
         if (retireResult != VK_SUCCESS) {
             MGLOG_E_ONCE("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
-#if MOBILEGL_BUILD_RECORD_ARM
             if (WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX)) {
                 // Every registered fence through this submission was waited.
             } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
-#else
-            if (vkWaitForFences(m_device, 1, &fence, VK_TRUE, UINT64_MAX) == VK_SUCCESS) {
-                OnSubmitsCompletedUpTo(m_submitCounter);
-            } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
-#endif
                 m_bufferManager.NotifyDeviceIdle();
                 OnSubmitsCompletedUpTo(m_submitCounter);
             } else {
@@ -14161,7 +13270,6 @@ void main() {
         return m_deviceLost;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::LatchWireDeviceLoss(const char* site) {
         if (!IsDeviceLost()) return false;
         if (!m_deviceLossLatched) {
@@ -14201,7 +13309,6 @@ void main() {
         }
         return true;
     }
-#endif
 
     Bool VulkanRenderer::FlushForSyncPoint(Uint64 submitIndex) {
         // A flush only helps a sync point whose commands are not submitted
@@ -14278,33 +13385,10 @@ void main() {
                 return false;
             }
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         if (!WaitForSubmitsUpTo(submitIndex, timeoutNs)) return false;
         // A blocking wait can drain a present-less loop's frame transients.
         TryDrainFrameTransients();
         return true;
-#else
-        for (const auto& record : m_inFlightSubmits) {
-            if (record.submitIndex >= submitIndex) {
-                const VkResult result = vkWaitForFences(m_device, 1, &record.fence, VK_TRUE, timeoutNs);
-                if (result == VK_SUCCESS) {
-                    OnSubmitsCompletedUpTo(record.submitIndex);
-                    // The wait already stalled the pipeline; if it happens to
-                    // have drained everything (present-less fence loops), take
-                    // the free frame-boundary drain. No-op otherwise.
-                    TryDrainFrameTransients();
-                    return true;
-                }
-                if (result != VK_TIMEOUT) {
-                    MGLOG_E_ONCE("WaitForSubmitIndex: vkWaitForFences returned %d", result);
-                }
-                return false;
-            }
-        }
-        // No in-flight record at or beyond the index: it was already observed
-        // complete via a fence wait on a later submission.
-        return true;
-#endif
     }
 
     void VulkanRenderer::OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) {
@@ -14461,7 +13545,6 @@ void main() {
                 return;
             }
             m_presentSuspended = false;
-#if MOBILEGL_BUILD_RECORD_ARM
             // A slot's Present fence alone does not prove its older pooled
             // flushes retired. Wait the full prefix before FrameContext may
             // free its retired command buffers and reset the slot fence.
@@ -14471,7 +13554,6 @@ void main() {
                 if (LatchWireDeviceLoss("deferred-acquire-submit-wait")) return;
                 MagmaWireFatal("deferred-acquire-submit-wait");
             }
-#endif
             const VkResult acquireResult =
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
             if (acquireResult == VK_SUBOPTIMAL_KHR) {
@@ -14560,9 +13642,7 @@ void main() {
         const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
 #endif
         NoteDeviceLoss(presentSubmit, "Present vkQueueSubmit");
-#if MOBILEGL_BUILD_RECORD_ARM
         if (presentSubmit != VK_SUCCESS && LatchWireDeviceLoss("present-submit")) return;
-#endif
         VK_VERIFY(presentSubmit);
         RegisterSubmit(frame.imageInFlightFence, /*pooledFence=*/false);
         frame.lastSubmitIndex = m_submitCounter;
@@ -14600,9 +13680,7 @@ void main() {
             result = VK_SUCCESS;
         }
         NoteDeviceLoss(result, "vkQueuePresentKHR");
-#if MOBILEGL_BUILD_RECORD_ARM
         if (result != VK_SUCCESS && LatchWireDeviceLoss("present-queue")) return;
-#endif
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
         // EGL swap semantics: the presented color buffer's content is undefined the
         // next time this image is acquired (EGL_BUFFER_DESTROYED, the default swap
@@ -14652,7 +13730,6 @@ void main() {
         // 3) Advance frame slot.
         m_frameContext.AdvanceToNext();
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // FrameContext waits then resets the slot fence and frees retired
         // command buffers. A later Present fence is not aggregate proof for
         // earlier pooled flushes, so wait every registered submission in this
@@ -14663,7 +13740,6 @@ void main() {
             if (LatchWireDeviceLoss("present-slot-submit-wait")) return;
             MagmaWireFatal("present-slot-submit-wait");
         }
-#endif
         // 4) Wait/reset/acquire for next frame.
         result = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         if (result == VK_SUBOPTIMAL_KHR) {
@@ -14688,20 +13764,16 @@ void main() {
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
         NoteDeviceLoss(result, "vkAcquireNextImageKHR");
-#if MOBILEGL_BUILD_RECORD_ARM
         if (result != VK_SUCCESS && LatchWireDeviceLoss("present-acquire")) return;
-#endif
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
         // Pull keeps its historical slot-fence inference. In a disaggregated
         // build the aggregate wait above already retired the registered prefix
         // before FrameContext reset the slot fence; this repeat is idempotent.
         OnSubmitsCompletedUpTo(m_frameContext.GetCurrent().lastSubmitIndex);
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
-#if MOBILEGL_BUILD_RECORD_ARM
         // Its previous recording has completed. Drop cached attachment views
         // before the texture manager can release their retired images.
         ClearWireDrawPassCache(m_frameContext.GetCurrentFrameIndex());
-#endif
         m_textureManager->BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_bufferManager.BeginFrame(m_frameContext.GetCurrentFrameIndex());
         m_convertedVertexStreams.clear();
@@ -15363,7 +14435,6 @@ void main() {
             getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                 vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // Linux/Android request Vulkan 1.1: a 1.2 physical device alone does
         // not expose the promoted renderpass2/depth-resolve API to this app.
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -15462,7 +14533,6 @@ void main() {
                     m_sharedImageSyncFd ? "wait and signal on the GPU (SYNC_FD semaphores)"
                                         : "are waited for on the CPU (no SYNC_FD semaphore import and export)");
         }
-#endif
 #endif
         if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
             getPhysicalDeviceProperties2 != nullptr) {
@@ -15887,7 +14957,6 @@ void main() {
             }
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // YUV shared images (WireYuvImage.inc) are sampled through a VkSamplerYcbcrConversion, a
         // feature of its own; asked only where AHardwareBuffers are imported at all.
         m_samplerYcbcrConversion = false;
@@ -15904,7 +14973,6 @@ void main() {
                 m_samplerYcbcrConversion = true;
             }
         }
-#endif
 
         // VK_EXT_multi_draw: tier 1 of the multi-draw dispatch - one vkCmdDrawMulti(Indexed)EXT
         // for a whole glMultiDraw* batch (VkMultiDrawIndexedInfoEXT carries per-draw
@@ -15956,7 +15024,6 @@ void main() {
             }
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // Codex closeout finding 2 (cf-magma): GL 4.6 core 8.26 makes an access through an
         // invalid image unit load zero and DISCARD stores and atomics. A null storage-image
         // descriptor is that rule exactly, so the wire arm binds one for such a unit
@@ -15989,7 +15056,6 @@ void main() {
             MGLOG_I("Magma wire: robustness2 nullDescriptor %s (%s)", m_wireNullDescriptor ? "enabled" : "unavailable",
                     robustness2Name != nullptr ? robustness2Name : "no robustness2 extension");
         }
-#endif
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
@@ -16036,12 +15102,10 @@ void main() {
             m_shaderDrawParametersFeatureEnabled ? "true" : "false");
         VK_VERIFY(vkCreateDevice(m_physicalDevice.handle, &deviceCreateInfo, nullptr, &m_device), "vkCreateDevice");
 
-#if MOBILEGL_BUILD_RECORD_ARM
         if (wireDepthResolveEnabled) {
             m_wireCreateRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(
                 vkGetDeviceProcAddr(m_device, wireDepthResolveCore ? "vkCreateRenderPass2" : "vkCreateRenderPass2KHR"));
         }
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (m_wireAhbImport) {
             m_wireGetAhbProperties =
@@ -16071,7 +15135,6 @@ void main() {
             MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // P8-D: the wire arm's glMultiDrawArraysIndirectCount. Null = that verb reads its count on
         // the CPU (WireDraw.inc's DrawWireIndirectNative answers false for it).
         s_vkCmdWireDrawIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
@@ -16080,7 +15143,6 @@ void main() {
             s_vkCmdWireDrawIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
                 vkGetDeviceProcAddr(m_device, "vkCmdDrawIndirectCount"));
         }
-#endif
 
         s_vkCmdDrawMultiEXT = nullptr;
         s_vkCmdDrawMultiIndexedEXT = nullptr;
@@ -16201,13 +15263,10 @@ void main() {
         // Last, because it records on m_graphicsQueue: decide the PRIMITIVES_GENERATED
         // reroute for XFB-inactive draws. Nothing else has touched the queue yet.
         ArmPrimGenReroute();
-#if MOBILEGL_BUILD_RECORD_ARM
         // Same terms: it records on m_graphicsQueue, which nothing but the probe above has used.
         ArmWireDepthResolveOrder();
-#endif
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
     // PROPERTY OF THIS DEVICE. WireDepthResolveArm.h says why (the Adreno 830's no-draw
     // VK_KHR_depth_stencil_resolve pass writes nothing), WireDepthResolveProbe.h what is run. The
@@ -16287,7 +15346,6 @@ void main() {
         });
         m_wirePreferShaderDepthResolve = resolved.preferShader;
     }
-#endif
 
     void VulkanRenderer::ArmPrimGenReroute() {
         using namespace MG_Util::SelfTest;
@@ -16832,13 +15890,11 @@ void main() {
 
         vkDeviceWaitIdle(m_device);
         OnSubmitsCompletedUpTo(m_submitCounter);
-#if MOBILEGL_BUILD_RECORD_ARM
         // The old swapchain will be destroyed below, including recordings that
         // are being abandoned instead of submitted. Release all their views now.
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
-#endif
 
         if (m_timerQueryManager) {
             // The in-progress command buffer is abandoned below (its recording
@@ -17104,11 +16160,9 @@ void main() {
         FlushPendingCommands();
         VK_VERIFY(vkDeviceWaitIdle(m_device));
         OnSubmitsCompletedUpTo(m_submitCounter);
-#if MOBILEGL_BUILD_RECORD_ARM
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
-#endif
         if (m_renderPassManager) m_renderPassManager->PurgeRenderPasses();
         InvalidatePipelineMemo();
         ResetDynamicStateShadow();
@@ -17157,7 +16211,6 @@ void main() {
         return m_instance;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::GetWireAhbImport(WireAhbImport& out) const {
         out = WireAhbImport{};
         if (!m_wireAhbImport || m_device == VK_NULL_HANDLE || m_wireGetAhbProperties == nullptr) return false;
@@ -17168,7 +16221,6 @@ void main() {
         out.getAhbProperties = m_wireGetAhbProperties;
         return true;
     }
-#endif
 
     Bool VulkanRenderer::IsDrawIndirectCountExtensionEnabled() const {
         return m_drawIndirectCountExtensionEnabled;

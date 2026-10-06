@@ -1,6 +1,5 @@
 // UniformManager-owned native descriptors for wire bindings with no image.
 // No GL object is constructed or inserted into the client's resource namespace.
-#if MOBILEGL_BUILD_RECORD_ARM
     void UniformManager::DestroyWirePlaceholderImage(WirePlaceholderImage& image) const {
         if (m_device != VK_NULL_HANDLE) {
             if (image.clearFramebuffer) vkDestroyFramebuffer(m_device, image.clearFramebuffer, nullptr);
@@ -245,4 +244,3 @@
         out = {image.sampler, image.view, VK_IMAGE_LAYOUT_GENERAL};
         return true;
     }
-#endif

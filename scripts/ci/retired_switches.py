@@ -23,6 +23,9 @@ RULES = (
      'MOBILEGL_PIPE_LEGACY_MEMOS)'),
     (re.compile(r'\bMGB_CTX(?:_LIVE|_IDENTITY)?\b'),
      'MGB_CTX is back; backends read MG_Pipe::gPipeInputs directly since P13 W3b'),
+    (re.compile(r'^\s*#\s*(?:if|ifdef|ifndef|elif)\b.*\bMOBILEGL_BUILD_RECORD_ARM\b'),
+     'a preprocessor conditional names MOBILEGL_BUILD_RECORD_ARM, folded away at P13 W5 S8 - the '
+     'record arm is in every library; a transport-only block takes MOBILEGL_BUILD_DISAGGREGATED'),
 )
 
 
@@ -49,12 +52,15 @@ def self_test():
     planted = [('planted.cpp', '#if MOBILEGL_PIPE_PUSH\nx();\n#endif\n'),
                ('planted.h', '  #  elif !MOBILEGL_PIPE_LEGACY_MEMOS && FOO\n'),
                ('planted.inc', 'auto v = MGB_CTX->GetX();\n'),
-               ('planted2.cpp', 'if (MGB_CTX_LIVE) {}\n')]
+               ('planted2.cpp', 'if (MGB_CTX_LIVE) {}\n'),
+               ('planted3.cpp', '#if MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_POISON\n'),
+               ('planted4.h', '#elif !MOBILEGL_BUILD_RECORD_ARM\n')]
     for item in planted:
         assert scan([item]), f'the gate missed a planted line: {item}'
     clean = [('clean.cpp', 'features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", 0x3fff);\n'),
              ('clean.h', '// MOBILEGL_PIPE_PUSH=0x7f was the P2 mask\n'),
-             ('clean.inc', 'MG_Pipe::gPipeInputs.GetX();\n')]
+             ('clean.inc', 'MG_Pipe::gPipeInputs.GetX();\n'),
+             ('clean2.cpp', '// MOBILEGL_BUILD_RECORD_ARM was W5\'s temporary guard\n')]
     for item in clean:
         assert not scan([item]), f'the gate fired on a legitimate line: {item}'
     print(f'retired switches self-test: {len(planted)} planted lines caught, {len(clean)} clean lines left alone')
@@ -68,7 +74,8 @@ def main():
         print(f'::error::{line}')
     if findings:
         return 1
-    print('retired switches: none of MOBILEGL_PIPE_PUSH / MOBILEGL_PIPE_LEGACY_MEMOS (as #if) or MGB_CTX in source')
+    print('retired switches: none of MOBILEGL_PIPE_PUSH / MOBILEGL_PIPE_LEGACY_MEMOS / MOBILEGL_BUILD_RECORD_ARM '
+          '(as #if) or MGB_CTX in source')
     return 0
 
 

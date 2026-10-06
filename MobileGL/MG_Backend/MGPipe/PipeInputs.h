@@ -13,14 +13,12 @@
 // the live context happens on the client side, in MG_Impl/Pipe/PipeFill.cpp.
 #include <MG_State/GLState/Core.h>
 
-#if MOBILEGL_BUILD_RECORD_ARM
 // P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answer lives in the
 // applier - MGPipeApplierTextureShutterSerial() / MGPipeApplierContextSerial(), declared here
 // so the accessors below can answer with them under a server-stamped verb. MG_Pipe is below
 // MG_Backend, so this direction is the layering's, and PipeApply.h forward-declares
 // PipeInputs rather than including this header, so there is no cycle.
 #include <MG_Pipe/PipeApply.h>
-#endif
 
 // MOBILEGL_PIPE_POISON: the per-verb generation stamps and the read-side
 // Fatal{UnmigratedPipeInput} check. Derived here, once. The repository's debug gate is
@@ -53,7 +51,6 @@ namespace MobileGL::MG_Pipe {
     Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
     Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // ---- P5: the split arm of the read check (R-7.2, R-7.3) ------------------------------
     //
     // A stale read stops being one answer and becomes FOUR, keyed on the field's table-2 class
@@ -87,13 +84,11 @@ namespace MobileGL::MG_Pipe {
     // from either counting the same read twice or - worse, because the field's own class would
     // not be BARRIER-PULLED - aborting a read the argument row had just declared legal.
     Bool MGPipeInputArgumentRead(MGPipeInputField field, Uint32 arg0, MGPipeVerb verb, Bool serverStamped);
-#endif
 
     // The read-side poison check, on every non-forwarded accessor. Under MOBILEGL_PIPE_POISON
     // a read of a field whose stamp is older than the current verb serial is
     // Fatal{UnmigratedPipeInput, "Field@Verb"}; otherwise the accessor is a plain load.
 #if MOBILEGL_PIPE_POISON
-#if MOBILEGL_BUILD_RECORD_ARM
 #define MGP_INPUT_CHECK(Field)                                                                                         \
     do {                                                                                                               \
         if ((m_serverStampedVerb && ::MobileGL::MG_Pipe::MGPipeFieldOwnershipOf(Field) ==                            \
@@ -109,15 +104,6 @@ namespace MobileGL::MG_Pipe {
             MGP_INPUT_CHECK(Field);                                                                                    \
         }                                                                                                              \
     } while (0)
-#else
-#define MGP_INPUT_CHECK(Field)                                                                                         \
-    do {                                                                                                               \
-        if (!::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
-            ::MobileGL::MG_Pipe::MGPipeInputPoisonFatalForVerb((Field), m_currentVerb);                                \
-        }                                                                                                              \
-    } while (0)
-#define MGP_INPUT_CHECK_ARG(Field, Arg0) MGP_INPUT_CHECK(Field)
-#endif
 #else
 #define MGP_INPUT_CHECK(Field) ((void)0)
 #define MGP_INPUT_CHECK_ARG(Field, Arg0) ((void)0)
@@ -266,7 +252,6 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
         const MGPipeFilledState& FilledState() const { return m_filled; }
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
         // TRUE between the server's verb-boundary stamp and whoever clears it. It is the
         // arming condition of the whole split read path: only inside a server-stamped verb is
         // a BARRIER-PULLED read counted rather than Fatal, and only there is a sticky forward
@@ -285,7 +270,6 @@ namespace MobileGL::MG_Pipe {
         // case the sticky exemption was written for, would be counted and, under strict, would
         // abort. So: PipeApplier clears on leaving the applier. Not optional.
         Bool ServerStampedVerb() const { return m_serverStampedVerb; }
-#endif
 
         // ---- V: values ----
         Int GetActiveTextureUnit() const {
@@ -491,9 +475,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetSamplingResolutionGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetSamplingResolutionGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetSamplingResolutionGeneration, 0, 0);
-#if MOBILEGL_BUILD_RECORD_ARM
             if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
-#endif
             return m_samplingResolutionGeneration;
         }
         const IntVec4& GetScissorBox() const {
@@ -509,21 +491,17 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetTextureBindGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureBindGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureBindGeneration, 0, 0);
-#if MOBILEGL_BUILD_RECORD_ARM
             // See GetSamplingResolutionGeneration: the server answers from its own Serial.
             if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
-#endif
             return m_textureBindGeneration;
         }
         Uint64 GetTextureContextId() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureContextId);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureContextId, 0, 0);
-#if MOBILEGL_BUILD_RECORD_ARM
             // A context IDENTITY rather than a generation: stable within the served context,
             // moved by every MGPipeApplierReset - which is all the backends' per-context memo
             // keys ask of it.
             if (m_serverStampedVerb) return MGPipeApplierContextSerial();
-#endif
             return m_textureContextId;
         }
         Uint64 GetTransformFeedbackCapturedVertices() const {
@@ -757,9 +735,7 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState m_filled{};
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
         Bool m_serverStampedVerb = false;
-#endif
 
         // ---- V ----
         Int m_activeTextureUnit = 0;
@@ -1019,7 +995,6 @@ namespace MobileGL::MG_Pipe {
     // The docs budget ~20 KB; the block is a few KB.
     static_assert(sizeof(PipeInputs) < 20 * 1024, "PipeInputs outgrew its budget");
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // ============================================================================
     // P5: the server-side verb stamp, and the counter that sizes what it leaves behind
     // ============================================================================
@@ -1094,7 +1069,6 @@ namespace MobileGL::MG_Pipe {
     // object or write into the frontend. This is what puts them in `rsp` and, under
     // MOBILEGL_IPC_STRICT_ERRORS=1, makes them Fatal like any other BARRIER-PULLED row.
     void MGPipeStickyForwardPull(MGPipeInputField field);
-#endif
 
 #if MOBILEGL_PIPE_VERIFY
     // PipeInputs.cpp. Per-field equality for the entry compare (P1 brief D8): V by value

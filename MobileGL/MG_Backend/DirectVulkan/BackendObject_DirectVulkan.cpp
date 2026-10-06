@@ -423,11 +423,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::LatchIfGpuFaulted() {
-#if MOBILEGL_BUILD_RECORD_ARM
         return pVulkanRenderer != nullptr && pVulkanRenderer->LatchIfGpuHung("apply");
-#else
-        return false;
-#endif
     }
 
     void BackendObject_DirectVulkan::Initialize() {

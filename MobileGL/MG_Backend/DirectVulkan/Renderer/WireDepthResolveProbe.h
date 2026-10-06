@@ -27,7 +27,6 @@
 //
 // Disaggregated builds only: the monolith never records either arm, and the pull build's image
 // must not change (P7 gate G1).
-#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Backend::DirectVulkan {
     // Every aspect a wire depth/stencil format has.
     VkImageAspectFlags WireDepthStencilFormatAspects(VkFormat format);
@@ -118,4 +117,3 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 graphicsQueueFamilyIndex, const Vector<VkExtensionProperties>& deviceExtensions,
         Bool& renderPassArmAvailable, Bool& shaderStencilExport);
 } // namespace MobileGL::MG_Backend::DirectVulkan
-#endif

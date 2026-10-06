@@ -40,7 +40,7 @@
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_VERIFY
+#if MOBILEGL_PIPE_VERIFY
 #include <MG_Impl/Pipe/Verb/VerbPort.h>
 #endif
 
@@ -96,7 +96,6 @@ namespace MobileGL::MG_Pipe {
             return inputs.m_currentVertexAttribute;
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (ra, CONTRACT-P5E §2.3). THE FOUR O-CLASS ROWS, AND ONLY THEY: these are the only
         // members of this block that own a frontend object rather than point into one, so they
         // are the only ones through which the apply thread can become a last owner. The raw
@@ -108,7 +107,6 @@ namespace MobileGL::MG_Pipe {
             inputs.m_programForDraw.reset();
             inputs.m_transformFeedbackProgram.reset();
         }
-#endif
 
         static void CopyField(PipeInputs& dst, GLContext& ctx, MGPipeInputField field) {
             using F = MGPipeInputField;
@@ -691,7 +689,6 @@ namespace MobileGL::MG_Pipe {
         if (&self != &gPipeInputs || !g_verify.Enabled) return;
         const auto index = static_cast<SizeT>(field);
         if (kMGPipeInputFieldSticky[index]) return;
-#if MOBILEGL_BUILD_RECORD_ARM
         // P13 W5: the monolith verb port applies records without a server stamp, and its readback
         // forces the neutral pack around the backend's read exactly as the server's does.
         if ((self.ServerStampedVerb() || MG_Record::MonolithPortApplyingForVerify()) &&
@@ -711,7 +708,6 @@ namespace MobileGL::MG_Pipe {
             }
             return;
         }
-#endif
         if (g_verify.InHook) return;
         auto* ctx = LiveContext();
         if (ctx == nullptr) return;
@@ -1106,7 +1102,6 @@ namespace MobileGL::MG_Pipe {
                 // one was emitted, so this cannot be false - but a zeroed record (null
                 // handle, size 0) is not the answer if that pre-pass is ever relaxed.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
-#if MOBILEGL_BUILD_RECORD_ARM
                 // P5 (b1): the live-host-writes bit rides the content record, because
                 // "someone may be writing these bytes without telling you" is a fact about the
                 // CONTENT and not about the storage. It is set from the object's PUBLISHED
@@ -1114,7 +1109,6 @@ namespace MobileGL::MG_Pipe {
                 // edge that announced it can never disagree. MGPipeBuildSubDataRecord does not
                 // take the object, which is why it is set here and not in the builder.
                 record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
-#endif
                 // `length` is this chunk's byte count, which the record also declares
                 // (MGPipeBuildSubDataRecord writes it into the destination range) - passed
                 // rather than re-read so the staged run and the record's own claim come from
@@ -1140,7 +1134,6 @@ namespace MobileGL::MG_Pipe {
                 // store, or the pattern FillSubData expanded locally, and neither is this
                 // client's untransformed shadow of the level.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/false)) return;
-#if MOBILEGL_BUILD_RECORD_ARM
                 // P5 (b1): THE SECOND CONTENT EMITTER, and it has to speak for the same reason
                 // the first does. ApplyBufferWrite ASSIGNS the bit - a content record emitted
                 // while nothing maps the buffer is how the state goes back to false - so a
@@ -1148,7 +1141,6 @@ namespace MobileGL::MG_Pipe {
                 // map. `glBufferSubData` against a persistently mapped arena is legal and is
                 // the ordinary Flywheel/Create shape, so that is not a corner.
                 record.HasLiveHostWrites = buffer.HasLiveHostWritesForWire() ? 1 : 0;
-#endif
                 // The application's STAGING store, valid for the duration of the call only.
                 MGPipeRouteBufferSubDataResident(record, base + (at - offset), length);
                 // P7 wave 2 package C, OQ-10: `rsd=`, counted HERE rather than at the call
@@ -2270,11 +2262,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
         }
-#endif
 
         MGP_STICKY_FORWARD_PULL(HasOpenTransformFeedbackSpan);
         const auto* ctx = LiveContext();
@@ -2369,9 +2359,7 @@ namespace MobileGL::MG_Pipe {
         // stamped, so every stamp this verb made falls behind the serial.
         ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
         MGPipeClientClearVerbBoundary();
-#endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
         // The pending base instance belongs to the verb that was about to run, so leaving
         // one drops it.
@@ -2917,9 +2905,7 @@ namespace MobileGL::MG_Pipe {
             Bool ApplierDerives = false;
             Bool ContextValuesWireLive = false;
             Bool P4aConsumer = false;
-#if MOBILEGL_BUILD_RECORD_ARM
             Uint64 CapsGeneration = 0;
-#endif
             // One bit per FIELD - not per verb class. The class mask is applied at the walk
             // exactly as it always was, so "does this verb read this field" stays the walk's
             // business and this stays a statement about EMISSION alone.
@@ -3125,9 +3111,7 @@ namespace MobileGL::MG_Pipe {
             // `g_attribDefaultLastHeader`, which is what it just published; there is nothing
             // the mirror could add that the wire does not already carry. A build that ever
             // needs the repair arm again has to earn it with a barriered row.
-#if MOBILEGL_BUILD_RECORD_ARM
             if (ClientRunsAhead()) return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
-#endif
             const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(MGPipeClientInputs());
             Bool reproduced = true;
             for (SizeT i = 0; i < kAttribs && reproduced; ++i) {
@@ -3144,7 +3128,6 @@ namespace MobileGL::MG_Pipe {
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record. One
         // POD carrying every value-class field no other set_* supplies - the two texture-unit
         // counters, the 15 per-target touched-buffer-binding counts and the five XFB values -
@@ -3201,7 +3184,6 @@ namespace MobileGL::MG_Pipe {
                    MGPipeFieldMaskHas(mask, MGPipeInputField::GetBoundTransformFeedbackLifetimeId) ||
                    MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackCapturedVertices);
         }
-#endif
 
 
 
@@ -3403,7 +3385,6 @@ namespace MobileGL::MG_Pipe {
         // is the CLIENT-role block and gPipeInputs is the server's alone; off, or under
         // monolith transport, it folds back onto gPipeInputs and nothing below changes.
         PipeInputs& inputs = MGPipeClientInputs();
-#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P5e (ra), CONTRACT-P5E §3: WHO OWNS gPipeInputs FOR THIS VERB ----------------
         //
         // Under run-ahead the block is SERVER-ROLE MEMORY for an unbarriered record: the
@@ -3418,7 +3399,6 @@ namespace MobileGL::MG_Pipe {
         // every verb) and the guard below then fires Fatal{RoleViolation, "gPipeInputs"} on
         // the first unbarriered verb, by name.
         const Bool runAhead = ClientRunsAhead();
-#endif
         ParsePoisonOmissionKnob();
 #if MOBILEGL_PIPE_VERIFY
         ArmVerify();
@@ -3479,7 +3459,6 @@ namespace MobileGL::MG_Pipe {
             // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
             ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
-#if MOBILEGL_BUILD_RECORD_ARM
             // The client is filling, so whatever the server stamped at its last verb boundary
             // is withdrawn: the stamps below are the CLIENT's again and a stale read is a
             // defect, not a residual pull. Disarming here rather than at the end of the
@@ -3499,7 +3478,6 @@ namespace MobileGL::MG_Pipe {
             // (PipeApplier::LeaveApplier) - which is CONTRACT-P5E §3.2's per-role stamp
             // ownership, landed as the dual block rather than as moved fields.
             MGPipeClientClearVerbBoundary();
-#endif
             MGPipeFillAccess::SetVerb(inputs, verb);
         }
 #if MOBILEGL_PIPE_POISON
@@ -3742,7 +3720,6 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, emitted when any covered
         // value moved. THE GATE IS THE SUBSYSTEM BIT PLUS THE WIRE BEING LIVE - the family has
         // no dirty bit (NoDirtyBitOwnsTheResidualSubsystem) and no P4a consumer predicate (it
@@ -3753,7 +3730,6 @@ namespace MobileGL::MG_Pipe {
             VerbMaskReadsContextValues(mask)) {
             payloadBytes += EmitContextValues(*ctx);
         }
-#endif
 
         // P3a's vertex segment, in the order the design fixes: vertex elements, then the
         // vertex buffers that fill them, then the index binding. All three are LIVE now (m1):

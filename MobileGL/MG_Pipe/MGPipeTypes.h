@@ -463,25 +463,17 @@ namespace MobileGL::MG_Pipe {
         desc.HasRespecifiedLevel = 1;
         desc.RespecifiedUploadTarget = uploadTarget;
         desc.RespecifiedLevel = level;
-#if MOBILEGL_BUILD_RECORD_ARM
         // Non-buffer texture targets leave this descriptor range unused. A named-level
         // respecify repurposes it as exact W/H/D; TexBuffer cannot legally name a mip level.
         desc.BufOffset = (static_cast<Uint64>(width) << 32) | static_cast<Uint64>(height);
         desc.BufSize = depth;
-#else
-        (void)width;
-        (void)height;
-        (void)depth;
-#endif
     }
     inline constexpr void MGPipeClearRespecifiedLevel(MGPResourceDesc& desc) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (desc.HasRespecifiedLevel != 0 &&
             desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
             desc.BufOffset = 0;
             desc.BufSize = 0;
         }
-#endif
         desc.HasRespecifiedLevel = 0;
         desc.RespecifiedUploadTarget = 0;
         desc.RespecifiedLevel = 0;

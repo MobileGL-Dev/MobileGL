@@ -90,7 +90,6 @@ namespace MobileGL::MG_State::GLState {
     using PipeInputReflection = ResourceReflection;
     using PipeOutputReflection = ResourceReflection;
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE SHADER STORAGE BLOCKS AS DIRECTVULKAN
     // INDEXES THEM, published once at link time instead of re-derived per draw.
     //
@@ -129,7 +128,6 @@ namespace MobileGL::MG_State::GLState {
         // it; the wire consumer does not read it today.
         Int32 dataSize = 0;
     };
-#endif
 
     // Transform feedback (GL 3.0 core: glTransformFeedbackVaryings applies on
     // the NEXT link; the linked snapshot below is what draws and queries see).
@@ -208,12 +206,10 @@ namespace MobileGL::MG_State::GLState {
         // The owned reflection snapshot. Indexed by TProgram index; see the structs above.
         Vector<UniformReflection> uniformReflection;
         Vector<BlockReflection> blockReflection;
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 OQ-8: DirectVulkan's storage-block index space, filled beside blockReflection in
         // SnapshotGlslangReflection. See StorageBlockReflection above for what the order is
         // and why it is not blockReflection's.
         Vector<StorageBlockReflection> storageBlocks;
-#endif
         Vector<PipeInputReflection> pipeInputReflection;
         Vector<PipeOutputReflection> pipeOutputReflection;
         // Program-level scalars glslang answers off the linked intermediates.
@@ -526,7 +522,6 @@ namespace MobileGL::MG_State::GLState {
         v("blockMemberElement", a.blockMemberElement);
     } // 11 fields
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 OQ-8. Three plain fields, so the generic codec arms carry it with no new arm of their
     // own - which is the whole reason it is a table rather than hand-written bytes.
     template <class Self, class V>
@@ -536,7 +531,6 @@ namespace MobileGL::MG_State::GLState {
         v("binding", a.binding);
         v("dataSize", a.dataSize);
     } // 3 fields
-#endif
 
     // Every member EXCEPT `program`: it is null for every archived instance by construction
     // (ProgramTranslationCache.h asserts that at insert) and must never be serialized - it is
@@ -547,11 +541,9 @@ namespace MobileGL::MG_State::GLState {
     void VisitFields(Self& a, V&& v) {
         v("uniformReflection", a.uniformReflection);
         v("blockReflection", a.blockReflection);
-#if MOBILEGL_BUILD_RECORD_ARM
         // Beside blockReflection because that is where it is FILLED, and a visitor that walks
         // the table in declaration order then reads the two together.
         v("storageBlocks", a.storageBlocks);
-#endif
         v("pipeInputReflection", a.pipeInputReflection);
         v("pipeOutputReflection", a.pipeOutputReflection);
         v("lastStageIsFragment", a.lastStageIsFragment);
@@ -634,13 +626,9 @@ namespace MobileGL::MG_State::GLState {
 #if defined(__GLIBCXX__) && !defined(_GLIBCXX_DEBUG) && (SIZE_MAX == UINT64_MAX)
 #define MGL_RESOURCEREFLECTION_SIZE 128
 #define MGL_XFBVARYING_SIZE 128
-#if MOBILEGL_BUILD_RECORD_ARM
 // P7 OQ-8 added storageBlocks, one more Vector, in the disaggregated build ONLY. The pull
 // number below is the one G1 measures and it has not moved.
 #define MGL_LINKARTIFACTS_SIZE 1080
-#else
-#define MGL_LINKARTIFACTS_SIZE 1056
-#endif
 #define MGL_SPIRVARTIFACTS_SIZE 88
 #elif defined(_LIBCPP_VERSION) && (SIZE_MAX == UINT64_MAX) && defined(MGL_ARTIFACT_SIZES_LIBCXX_PINNED)
     // The integrator pins these from the NDK build (brief C.4); until then this branch is inert.

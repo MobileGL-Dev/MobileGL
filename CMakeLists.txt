@@ -553,12 +553,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
 endif()
 
-# P13 W5 (notes/p13/W5-DESIGN.md): THE RECORD ARM'S OWN GUARD. A plain variable, not an option and
-# not a cache entry, so no build tree can keep a stale value (W3a's lesson). It equalled
-# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards were reclassified one by one; since S7
-# it is on for every build, so the library without MG_Remote (the FCL-embedded one) runs the record
-# arm too. S8 removes the variable and the guards it still names. Always defined, to 0 or 1.
-set(MOBILEGL_BUILD_RECORD_ARM ON)
+# P13 W5 (notes/p13/W5-DESIGN.md): the record arm is part of every library - the one without
+# MG_Remote (FCL's) runs it too. Its temporary guard, MOBILEGL_BUILD_RECORD_ARM, was folded away at
+# S8 (scripts/ci/retired_switches.py keeps it from coming back).
 
 message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
 list(APPEND SOURCE_FILES
@@ -684,23 +681,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     )
 endif()
 
-# P13 W5: the record arm's own sources, compiled wherever the record arm is (MG_Remote or not).
-if (MOBILEGL_BUILD_RECORD_ARM)
-    list(APPEND SOURCE_FILES
-        # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
-        # arms and the probe that measures the first against the second, shared by the
-        # renderer's bring-up and the Vulkan POST.
-        MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
-        # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
-        MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
-        # P13 W5: the verb emitters and the monolith verb port, and the client GPU-write set
-        # they mark before a draw or a dispatch (MG_Record; EmitTables.cpp resolves the session).
-        MobileGL/MG_Impl/Pipe/Verb/VerbPort.cpp
-        MobileGL/MG_Impl/Pipe/Verb/GpuWriteSet.cpp
-        # The record verbs' consumer (ServerVerbSink under a transport is this plus the session's).
-        MobileGL/MG_Backend/Record/RecordVerbSink.cpp
-    )
-endif()
+# P13 W5: the record arm's own sources, compiled into every library (MG_Remote or not).
+list(APPEND SOURCE_FILES
+    # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
+    # arms and the probe that measures the first against the second, shared by the
+    # renderer's bring-up and the Vulkan POST.
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
+    # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
+    MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
+    # P13 W5: the verb emitters and the monolith verb port, and the client GPU-write set
+    # they mark before a draw or a dispatch (MG_Record; EmitTables.cpp resolves the session).
+    MobileGL/MG_Impl/Pipe/Verb/VerbPort.cpp
+    MobileGL/MG_Impl/Pipe/Verb/GpuWriteSet.cpp
+    # The record verbs' consumer (ServerVerbSink under a transport is this plus the session's).
+    MobileGL/MG_Backend/Record/RecordVerbSink.cpp
+)
 
 if (APPLE AND NOT MOBILEGL_IOS)
     list(APPEND SOURCE_FILES
@@ -762,12 +757,6 @@ set(MOBILEGL_COMPILE_DEF
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
-endif()
-
-if (MOBILEGL_BUILD_RECORD_ARM)
-    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_RECORD_ARM=1)
-else()
-    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_RECORD_ARM=0)
 endif()
 
 if (MOBILEGL_PIPE_VERIFY)

@@ -16,10 +16,8 @@
 #include <cstdint>
 #include <cstring>
 
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <Config.h>
 #include <MG_Util/Metrics/PipeStats.h>
-#endif
 
 namespace MobileGL::MG_Pipe {
     const char* MGPipeVerbName(MGPipeVerb verb) {
@@ -49,7 +47,7 @@ namespace MobileGL::MG_Pipe {
 
 // The stamp is the poison's (m_filled, the generations): a build without MOBILEGL_PIPE_POISON
 // compiles no read check that could ask any of this. Every transport build has the poison.
-#if MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_POISON
+#if MOBILEGL_PIPE_POISON
     // ================================================================================
     // P5: the server's verb stamp, the residual-pull counter, and the four-way read verdict
     // ================================================================================

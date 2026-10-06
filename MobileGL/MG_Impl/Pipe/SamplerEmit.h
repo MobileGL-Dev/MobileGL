@@ -37,9 +37,7 @@
 // detection. Neither is reproduced here and neither may be.
 //
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Impl/EGLImpl/EGLImpl.h>
-#endif
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/Tracker.h>

@@ -58,13 +58,11 @@ namespace MobileGL::MG_Pipe {
         UnmigratedVerb,
         // A call that reached an arm this build did not compile, or ran on the wrong role.
         RoleViolation,
-#if MOBILEGL_BUILD_RECORD_ARM
         // A malformed peer record rejected by the server-side applier.
         ProtocolCorruption,
         // The GPU device a session's backend renders with is lost (a GPU fault or hang the driver
         // reset). Raised only through MGPipeSessionLatch below: it ends THAT session.
         DeviceLost,
-#endif
     };
 
     // What the layer above installs. `line` is the FULLY FORMATTED message, so the hook forwards
@@ -131,7 +129,6 @@ namespace MobileGL::MG_Pipe {
     [[noreturn]] void MGPipeProtocolFatal(const char* what, const char* detail);
     [[noreturn]] void MGPipeProtocolFatalAt(const char* what, ::std::uint64_t got, ::std::uint64_t expected);
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // ---- THE LATCH TWIN: A LOST GPU DEVICE ENDS ITS SESSION, NOT THE PROCESS ----------------
     //
     // MGPipeSessionFail is for a verb the backend cannot honour, and it does not return. A device
@@ -161,7 +158,6 @@ namespace MobileGL::MG_Pipe {
         __attribute__((format(printf, 2, 3)))
 #endif
         MGPipeSessionLatch(MGPipeFatalFamily family, const char* fmt, ...);
-#endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 

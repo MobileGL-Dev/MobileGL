@@ -1939,9 +1939,7 @@ endif()
 # not true. All this file has to decide now is whether that peek can be COMPILED, which is exactly
 # "did this build compile MG_Remote", which is exactly the build option.
 # P13 W5: the record arm's half of the peek (dataArmIsRecord) needs no transport.
-if (MOBILEGL_BUILD_RECORD_ARM)
-    target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_RECORD_ARM_PEEK=1)
-endif()
+target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_RECORD_ARM_PEEK=1)
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_SPLIT_RUNTIME_PEEK=1)
     message(STATUS "Integration tests: the DirectGLES.Split. lanes arm from the RUNNING PROCESS - "
@@ -1965,25 +1963,19 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND DEFINED MOBILEGL_LOG_ACTIVE_LEVEL
 endif()
 
 # Package b1's client-side persistent-map tracker, which is what Harness/PersistentMapPeek.cpp
-# asks the membership question of (b1-v1.md 4.1 item 2). TWO halves, and both are needed:
-# MOBILEGL_BUILD_RECORD_ARM because a build that never compiled the record arm cannot LINK the call
-# (P13 W5: the tracker is record core, MG_Record, and no longer needs MG_Remote), and the content
-# probe because b1 may not have landed it yet. __has_include in the peek would answer yes in a
-# build without it - the header is in the source tree of every build - and turn a healthy build
-# into a link error, which is why this decision is made here.
-if (MOBILEGL_BUILD_RECORD_ARM)
-    mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_State/GLState/BufferState" "IsLivePersistentMap")
-    if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
-        message(STATUS "Integration tests: package b1's persistent-map tracker is present "
-                       "(${MGL_ITEST_PERSISTENT_MAP_TRACKER}) - PersistentCoherentMapScenario's "
-                       "membership assertion is live")
-        target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_PERSISTENT_MAP_TRACKER=1)
-    else()
-        message(STATUS "Integration tests: no source under MobileGL/MG_State/GLState/BufferState names "
-                       "IsLivePersistentMap - package b1's tracker has not landed, so "
-                       "PersistentCoherentMapScenario's membership assertion SKIPS")
-    endif()
+# asks the membership question of (b1-v1.md 4.1 item 2). Every library builds it since P13 W5 (the
+# tracker is record core, MG_Record); the content probe stays so a tree without it skips by name.
+mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
+    "${MGL_ITEST_ROOT}/MobileGL/MG_State/GLState/BufferState" "IsLivePersistentMap")
+if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
+    message(STATUS "Integration tests: package b1's persistent-map tracker is present "
+                   "(${MGL_ITEST_PERSISTENT_MAP_TRACKER}) - PersistentCoherentMapScenario's "
+                   "membership assertion is live")
+    target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_PERSISTENT_MAP_TRACKER=1)
+else()
+    message(STATUS "Integration tests: no source under MobileGL/MG_State/GLState/BufferState names "
+                   "IsLivePersistentMap - package b1's tracker has not landed, so "
+                   "PersistentCoherentMapScenario's membership assertion SKIPS")
 endif()
 
 # ARCHITECTURE.md:543 - every new ctest ENVIRONMENT and add_trace_replay_test's SPLIT branch

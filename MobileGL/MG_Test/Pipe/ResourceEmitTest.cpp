@@ -1205,65 +1205,11 @@ namespace {
         // always true) and the production-path probe pair in MG_Test/SanityTest.cpp and
         // MG_Test/Buffer/SplitBufferTest.cpp, both of which go red when the producer is
         // deleted. This skip is what the build-verify-split lane exists to make visible.
-#elif MOBILEGL_BUILD_RECORD_ARM
+#else
         // P13 W5: the producer is the record arm's (BufferObject::NotePersistentMapStateChanged),
         // so the wire is retired wherever that arm is built (PipeApply.cpp's pin follows it).
         GTEST_SKIP() << "P5 gave HasLiveHostWrites a producer, so the always-false wire is retired "
                         "wherever the record arm is built; PinLiveHostWritesNamesABuffer replaces it";
-#elif !MGTEST_HAVE_FORK
-        GTEST_SKIP() << "no fork on this platform; the wire's verdict is std::abort()";
-#else
-        ApplierGuard guard;
-        const MGPipeHandle res{8, 4};
-        const Uint8 bytes[64] = {};
-        MGPipeApplyResourceCreate(BufferDesc(res, 0, 55));
-        MGPipeApplyResourceRespecify(BufferDesc(res, 256, 55), nullptr);
-
-        // The negative control: with the flag clear the same call is silent and answers
-        // normally, so what follows is the flag firing and not the call.
-        EXPECT_EQ(MGPipeApplyMapPersistent(BufferHandle(res), 256, bytes), nullptr);
-        EXPECT_EQ(ReadLog().find("PipeLiveHostWrites"), std::string::npos);
-
-        struct Drive {
-            MGPipeHandle Res;
-            const char* Call;
-        };
-        const Drive drives[] = {
-            {res, "map_persistent"}, {res, "resource_respecify"}, {res, "resource_subdata"},
-            {res, "resource_flush_range"}, {res, "resource_readback"},
-        };
-        for (const Drive& drive : drives) {
-            const ChildResult child = RunInChild([&drive, &bytes]() {
-                // Set in the CHILD: the parent's applier must stay honest for the next drive.
-                MGPipeApplier().Resources[drive.Res.Slot].HasLiveHostWrites = true;
-                const String call = drive.Call;
-                if (call == "map_persistent") {
-                    MGPipeApplyMapPersistent(MGPHandleOnly{drive.Res, static_cast<Uint32>(MGPipeKind::Buffer), 0},
-                                             256, bytes);
-                } else if (call == "resource_respecify") {
-                    MGPResourceDesc desc{};
-                    desc.Resource = drive.Res;
-                    desc.Width = 256;
-                    desc.GlNameForDiag = 55;
-                    MGPipeApplyResourceRespecify(desc, nullptr);
-                } else if (call == "resource_subdata") {
-                    MGPSubData record{};
-                    record.Res = drive.Res;
-                    MGPipeSetSubDataBufferRange(record, 0, 64);
-                    MGPipeApplyResourceSubData(record, bytes);
-                } else if (call == "resource_flush_range") {
-                    MGPipeApplyResourceFlushRange(MGPFlushRange{drive.Res, 0, 64, 0, 0}, bytes);
-                } else {
-                    MGPipeApplyResourceReadback(MGPReadback{drive.Res, 0, 256});
-                }
-            });
-            EXPECT_TRUE(DiedOfAbort(child))
-                << drive.Call << ": " << DescribeStatus(child) << "; log: " << child.Log;
-            const std::string wanted =
-                std::string("Fatal{PipeLiveHostWrites} ") + drive.Call + " {slot=8, gen=4}";
-            EXPECT_NE(child.Log.find(wanted), std::string::npos)
-                << "wanted \"" << wanted << "\"; log: " << child.Log;
-        }
 #endif
     }
 

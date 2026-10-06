@@ -310,7 +310,6 @@ namespace MobileGL::MG_Pipe {
             // the monolith twin reads GetLinkedShaderStages() off the frontend object it is
             // handed. Named and discarded rather than left out of the signature, so the two
             // arms stay one row.
-#if MOBILEGL_BUILD_RECORD_ARM
             // P13 W4c: MONOLITH'S RECORD ARM READS THE RECORD'S ARCHIVE (ProgramHandleArm), so it
             // gets one: the link's snapshot, taken here, once per link - the same thing the wire
             // decodes into the record, without the codec. A copy rather than a borrow, because the
@@ -324,7 +323,6 @@ namespace MobileGL::MG_Pipe {
                 MGPipeApplyCreateShaderState(*desc, link, spirv, std::move(archive));
                 return;
             }
-#endif
             (void)linkedStages;
             (void)linkedStageCount;
             // P5e (pg): NO ARCHIVE ON THIS ARM, and the null is the arm selection rather than a

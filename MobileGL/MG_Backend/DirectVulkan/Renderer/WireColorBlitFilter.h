@@ -35,7 +35,6 @@
 // GL's own (logical) rectangles for identity and all three rotations. BlitWireColorImage declines
 // any other transform before it chooses a sampler; for one, this answers with the filter's own
 // mapping, as before this package.
-#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Backend::DirectVulkan {
     // A glBlitFramebuffer rectangle as GL names it: two corners, either order.
     struct WireBlitRect {
@@ -63,4 +62,3 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return VK_FILTER_LINEAR;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
-#endif

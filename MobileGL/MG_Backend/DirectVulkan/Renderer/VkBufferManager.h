@@ -13,10 +13,8 @@
 #include "../VkIncludes.h"
 #include <Includes.h>
 #include <vk_mem_alloc.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include "MG_Pipe/MGPipeTypes.h"
 #include <unordered_map>
-#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     enum class BufferKind : Uint8 {
@@ -103,7 +101,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool Initialize(const VkBufferManagerInitInfo& initInfo);
         void Shutdown();
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // Registered before caps publication; the initialized renderer owns the storage.
         static void RegisterWireResourceOps();
         // Transport resources are owned by their complete wire handle, never by a
@@ -158,7 +155,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* DonateWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes);
         // The POST self-test of the sustained-lock pattern on this device (see the definition).
         static Bool SelfTestWireImport(char* why, Uint64 whyBytes);
-#endif
 
         // Recreate all per-frame transient arenas
         Bool RecreateTransientArenas(Uint32 frameCount);
@@ -232,13 +228,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // back, and none was persistently mapped, in between - so a memo of resolved
         // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
         Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
-#if MOBILEGL_BUILD_RECORD_ARM
         // Bumped every time this manager destroys a WIRE store's VkBuffer (see
         // m_wireStoreDestroyEpoch). Unchanged since a memo was taken means no VkBuffer handle
         // that memo names can have been freed and re-minted in between, which is the one
         // fact a handle-keyed memo of wire descriptors needs and cannot read off the handle.
         Uint64 GetWireStoreDestroyEpoch() const { return m_wireStoreDestroyEpoch; }
-#endif
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
@@ -254,7 +248,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DeferRelease(VkBufferObject&& buffer);
 
     private:
-#if MOBILEGL_BUILD_RECORD_ARM
         struct WireBufferResource {
             VkBufferObject buffer;
             Uint64 size = 0;
@@ -374,7 +367,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the stats channel is on; MagmaWireReclaimScenario reads them off the server's line.
         void NoteWireStorePeaks();
         void PublishWireReclaimGauges();
-#endif
         Bool InitializeTransientArenas();
         static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
         VkBufferResource* GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
@@ -387,9 +379,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // in-flight and already-recorded GPU work.
         Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
                              SizeT offset, SizeT size);
-#if MOBILEGL_BUILD_RECORD_ARM
         Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
-#endif
         void CollectDeferredReleases(Uint32 frameIndex);
         void DestroyAllDeferredReleases();
         void TrackLiveResource(const SharedPtr<VkBufferResource>& resource);
@@ -408,7 +398,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
         Vector<WeakPtr<VkBufferResource>> m_liveResources;
-#if MOBILEGL_BUILD_RECORD_ARM
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
         // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
         // the whole point is that these entries do not wait for a frame slot to come round.
@@ -427,7 +416,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // for m_sliceEpochCounter's reason: a memo taken before a re-initialize must not match
         // a handle minted after it.
         Uint64 m_wireStoreDestroyEpoch = 0;
-#endif
     // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
     SizeT m_liveResourcesLastPruned = 0;
         Uint32 m_currentFrameIndex = 0;

@@ -12,9 +12,7 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Impl/Pipe/Verb/GpuWriteSet.h>
-#endif
 // CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
 // client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
 // that decides which of its two spellings a site takes; in a pull build both expand to exactly
@@ -1332,7 +1330,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                             static_cast<Uint>(bufferIndex));
             const auto& buffer = bindingPoint.GetBoundObject();
             if (buffer == nullptr) continue;
-#if MOBILEGL_BUILD_RECORD_ARM
             // This fixup READS the captured bytes back through the shadow, so it is the one
             // consumer that cannot simply inherit the deferral EndTransformFeedback's dropped
             // fence introduces. Under split it pays the reconciliation itself, which is the
@@ -1345,7 +1342,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             // caller still runs, so the readback it emits is pure new work on the monolith
             // path and integration-gpu cannot see it.
             if (MG_Config::DataArmIsRecord()) buffer->SyncGpuWrites();
-#endif
             const Range1D range = bindingPoint.GetRange();
             const Uint8* mapped = buffer->MappedData();
             if (mapped == nullptr) continue;
@@ -1386,12 +1382,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGP_FILL(EndTransformFeedback);
             endXfb();
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // P5 (b1), the second producer the client-side GPU-write set ADDS, and it has to be
         // taken HERE - before GLContext::EndTransformFeedback clears the live bindings, since
         // a mark taken after it marks nothing.
         MG_Record::MarkEndTransformFeedbackCaptureTargets();
-#endif
         MG_State::pGLContext->EndTransformFeedback();
         // Captured results must be visible to MapBuffer/GetBufferSubData after
         // End; the capture targets are host-coherent GPU memory, so completing

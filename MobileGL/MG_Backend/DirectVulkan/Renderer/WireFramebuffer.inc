@@ -1,6 +1,5 @@
 // P5f fm: included by VulkanRenderer.cpp inside the backend namespace. All inputs here
 // belong to the applier; no frontend object, lifetime-id lookup or allocator is used.
-#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 0. THE MESSAGE IS UNCHANGED; where it goes is not. This funnel is how eleven of
     // the fifteen P7-marked refusals die (the other four are WireDescriptorFatal's), and until now
     // every one of them raised its own abort: no SessionFault frame for the peer, no
@@ -1730,4 +1729,3 @@
             }
         }
     }
-#endif

@@ -9,7 +9,6 @@
 #pragma once
 
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 
 #include <Includes.h>
 #include <MG_Util/Debug/Log.h>
@@ -169,4 +168,3 @@ private:
 
 } // namespace MobileGL::MG_Backend::DirectVulkan
 
-#endif // MOBILEGL_BUILD_RECORD_ARM

@@ -462,7 +462,6 @@ namespace MobileGL::MG_Config {
         NamedPipe = 4, // P6: Windows named pipe (Endpoint = <name>)
     };
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P13 W5: THE RECORD ARM'S OWN KNOBS. They kept their MOBILEGL_IPC_* names (logs, CI lanes and
     // notes spell them so), but they tune the record arm - the persistent-map push and Magma's wire
     // stores - which runs in a library without a transport too, so they are not IpcTable's.
@@ -498,7 +497,6 @@ namespace MobileGL::MG_Config {
         Uint32 PersistentMprotect = 1;
     };
     extern RecordArmTable RecordArm;
-#endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // Parsed once by MG_ConfigLoader::Init(). Defaults to Monolith even here: building the
@@ -759,7 +757,6 @@ namespace MobileGL::MG_Config {
     inline constexpr TransportMode Transport = TransportMode::Monolith;
 #endif
 
-#if MOBILEGL_BUILD_RECORD_ARM
     // P13 W4: THE DATA-ARM QUESTION - do the backends read RECORDS (the applier's twins, the staged
     // stores, the verb's own handles) rather than frontend objects? Under a wire the answer has
     // always been yes; P13 makes it yes for monolith too ("monolith is the push variant"), one
@@ -779,10 +776,4 @@ namespace MobileGL::MG_Config {
     inline Bool RecordArmAliasesFrontend() {
         return Transport == TransportMode::Monolith && MonolithTakesRecordArm;
     }
-#else
-    // A build without the record arm reads frontend objects everywhere (the negative control a
-    // library built with MOBILEGL_BUILD_RECORD_ARM=0 keeps until W6 deletes the frontend arms).
-    inline constexpr Bool DataArmIsRecord() { return false; }
-    inline constexpr Bool RecordArmAliasesFrontend() { return false; }
-#endif
 } // namespace MobileGL::MG_Config

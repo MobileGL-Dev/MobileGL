@@ -12,7 +12,6 @@
 #include "VulkanRenderer.h"
 
 #include "MG_Util/Metrics/PipeStats.h"
-#if MOBILEGL_BUILD_RECORD_ARM
 #include "MG_Pipe/MGPipeCallbacks.h"
 #include "MG_Pipe/PipeApply.h"
 #include <MG_Backend/Record/StagedShadow.h>
@@ -25,11 +24,9 @@
 #include <Config.h>
 #include <chrono>
 #include <cstdlib>
-#endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
-#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package B3, INVESTIGATION PROBE (split-only, read once, not in
         // ConfigLoader's accepted-env table - package B's MGITEST_MAGMA_FORCE_SHADER_MIPMAP
         // shape). MOBILEGL_MAGMA_WIREBUF_PROBE=1 prints one line per streamed-buffer event so
@@ -74,7 +71,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Counts only the writes the busy predicate wanted to ORDER, so the selector indexes
         // the streamed subdata -> draw pairs and nothing else.
         Uint64 g_orderedWireWriteCounter = 0;
-#endif
         constexpr VmaAllocationCreateFlags kResidentBufferAllocationFlags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         constexpr SizeT kLiveResourcePruneThreshold = 256;
@@ -181,7 +177,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .ReadbackFromGpu = Ops_ReadbackFromGpu,
         };
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // The session's manager, or null once its renderer is gone - a client's records can still
         // arrive after its eglTerminate released it (or, surfaceless, before its first surface built
         // one). Such a record is declined with one line rather than taking the whole server down.
@@ -237,10 +232,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             },
 #endif
         };
-#endif
     } // namespace
 
-#if MOBILEGL_BUILD_RECORD_ARM
     void VkBufferManager::RegisterWireResourceOps() {
         if (MG_Config::DataArmIsRecord()) {
             MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);
@@ -1208,7 +1201,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_deferredWireReleases.clear();
         m_deferredWireBytes = 0;
     }
-#endif
 
     Bool VkBufferManager::Initialize(const VkBufferManagerInitInfo& initInfo) {
         Shutdown();
@@ -1227,16 +1219,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         g_activeBufferManager.Get() = this;
         MG_State::GLState::SetBufferBackendOps(&g_vulkanBufferBackendOps);
-#if MOBILEGL_BUILD_RECORD_ARM
         RegisterWireResourceOps();
-#endif
         return true;
     }
 
     void VkBufferManager::Shutdown() {
         if (g_activeBufferManager.Get() == this) {
             g_activeBufferManager.Get() = nullptr;
-#if MOBILEGL_BUILD_RECORD_ARM
             // Under a transport the table is the PROCESS's and serves every session: it dispatches
             // to the calling session's own manager (WireManager), so one session's renderer going
             // away must not take it from the others - their buffer creates would be dropped from
@@ -1245,7 +1234,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MG_Pipe::MGPipeGetResourceOps() == &g_vulkanWireResourceOps) {
                 MG_Pipe::MGPipeSetResourceOps(nullptr);
             }
-#endif
             if (MG_State::GLState::GetBufferBackendOps() == &g_vulkanBufferBackendOps) {
                 MG_State::GLState::SetBufferBackendOps(nullptr);
             }
@@ -1255,7 +1243,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_unboundTexelBuffer.Destroy();
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
-#if MOBILEGL_BUILD_RECORD_ARM
         // DestroyAllDeferredReleases above emptied the parked list; this destroys the stores the
         // records still hold, so nothing this arm minted outlives the count.
         if (!m_wireBuffers.empty()) ++m_wireStoreDestroyEpoch;
@@ -1264,7 +1251,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireStoreCountPeak = 0;
         m_deferredWireBytesPeak = 0;
         m_wireDeferredSyncs = 0;
-#endif
         m_copyProvider = nullptr;
         m_initInfo = {};
         m_currentFrameIndex = 0;
@@ -1293,13 +1279,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::BeginFrame frame index out of range");
         m_currentFrameIndex = frameIndex;
         ++m_frameSerial;
-#if MOBILEGL_BUILD_RECORD_ARM
         if (WireBufProbeEnabled()) {
             MGLOG_I("WBUF BEGINFRAME idx=%u newSerial=%llu floor=%llu (arena slot rewound)", frameIndex,
                     static_cast<unsigned long long>(m_frameSerial),
                     static_cast<unsigned long long>(m_completedSerialFloor));
         }
-#endif
         CollectDeferredReleases(frameIndex);
         m_transientUploadArena.BeginFrame(frameIndex);
     }
@@ -1399,9 +1383,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .frameCount = m_initInfo.frameCount,
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-#if MOBILEGL_BUILD_RECORD_ARM
                      (MG_Config::DataArmIsRecord() ? VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT} : 0u) |
-#endif
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
             .allocationFlags = m_initInfo.transientAllocationFlags,
@@ -1557,7 +1539,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool VkBufferManager::StagedWireRangeCopy(WireBufferResource& resource, const void* data,
                                           SizeT offset, SizeT size) {
         if (!m_copyProvider) {
@@ -1610,7 +1591,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#endif
 
     void VkBufferManager::OnRespecify(MG_State::GLState::BufferObject& bufferObject) {
         auto* resource = ResourceOf(bufferObject);
@@ -1987,12 +1967,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::CollectDeferredReleases frame index out of range");
         m_deferredBufferReleases[frameIndex].clear();
         m_deferredResourceReleases[frameIndex].clear();
-#if MOBILEGL_BUILD_RECORD_ARM
         // The wire list is not per-slot and does not wait for a frame boundary; a boundary is
         // just one more point to sweep at (BeginFrame after its slot fence, and every slot of
         // the idle drain, where the renderer-idle rule empties the list).
         SweepDeferredWireReleases();
-#endif
     }
 
     BufferSlice VkBufferManager::AcquireUnboundStorageDescriptor() {
@@ -2088,10 +2066,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::DestroyAllDeferredReleases() {
-#if MOBILEGL_BUILD_RECORD_ARM
         // Both callers (Shutdown, RecreateTransientArenas) have proven the device idle.
         DestroyAllDeferredWireReleases();
-#endif
         for (auto& releases : m_deferredBufferReleases) {
             for (auto& buffer : releases) {
                 buffer.Destroy();

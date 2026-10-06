@@ -10,9 +10,7 @@
 #include <Includes.h>
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 #include <MG_Util/Damage/Damage.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/MGPipeHandles.h>
-#endif
 
 namespace MobileGL {
     namespace MG_State::GLState {
@@ -37,22 +35,16 @@ namespace MobileGL {
         struct CopyImageEndpoint {
             SharedPtr<MG_State::GLState::ITextureObject> Texture;
             SharedPtr<MG_State::GLState::RenderbufferObject> Renderbuffer;
-#if MOBILEGL_BUILD_RECORD_ARM
             MG_Pipe::MGPipeHandle TextureHandle = MG_Pipe::kMGPipeNullHandle;
             MG_Pipe::MGPipeHandle RenderbufferHandle = MG_Pipe::kMGPipeNullHandle;
-#endif
 
             Bool IsRenderbuffer() const {
-#if MOBILEGL_BUILD_RECORD_ARM
                 if (!MG_Pipe::MGPipeHandleIsNull(RenderbufferHandle)) return true;
-#endif
                 return Renderbuffer != nullptr;
             }
             Bool Exists() const {
-#if MOBILEGL_BUILD_RECORD_ARM
                 if (!MG_Pipe::MGPipeHandleIsNull(TextureHandle)) return true;
                 if (!MG_Pipe::MGPipeHandleIsNull(RenderbufferHandle)) return true;
-#endif
                 return Texture != nullptr || Renderbuffer != nullptr;
             }
         };

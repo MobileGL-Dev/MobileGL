@@ -187,7 +187,6 @@ namespace MobileGL {
             // from every path that reads the shadow on the app's behalf.
             void SyncGpuWrites();
 
-#if MOBILEGL_BUILD_RECORD_ARM
             // ---- P5 b1: the two things a split build has to do that a monolith does not ---
             //
             // Everything here is behind the build option AND behind
@@ -238,7 +237,6 @@ namespace MobileGL {
             // layer-1 read of client memory like MappedData (CONTRACT-P5C rule E) and carries
             // the same apply-thread refusal.
             SizeT ShadowAllocationBytes() const;
-#endif
 
             Bool IsMapped() const;
             Bool IsImmutableStorage() const;
@@ -321,12 +319,10 @@ namespace MobileGL {
             // and, in a split build, cleared by WritebackFromBackend instead, because there
             // the answer arrives later than the request. See SyncGpuWrites' definition.
             Bool m_gpuWritePending = false;
-#if MOBILEGL_BUILD_RECORD_ARM
             // The last value of MGPResourceDesc::HasLiveHostWrites this object published.
             // Behind the option so the pull build's layout - and therefore every inlined
             // constructor and accessor in it - does not move (G1).
             Bool m_publishedLiveHostWrites = false;
-#endif
             Range1D m_mappedRange;
             // The write-map staging store. MapAlignedData because the application is handed a
             // pointer into it, and biased by m_stagingBias because ARB_map_buffer_alignment

@@ -294,15 +294,10 @@ namespace MobileGL::MG_Pipe {
     // latch clear, so every later row for that object keeps taking the real answer. The cost of
     // that case is throughput, never silence.
     inline Bool MGPipeResourceRespecifyWantsItsReply(const MGPResourceDesc& desc) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MGPipeInstalledArm() != MGPipeRouteArm::kClientWire) return true;
         if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer)
             return false;
         return !MGPipeHandleIsPublished(MGPipeKind::Texture, desc.Resource);
-#else
-        (void)desc;
-        return true;
-#endif
     }
     inline Bool MGPipeRouteResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                              const MGPRespecifiedLevel* level = nullptr) {
@@ -372,12 +367,10 @@ namespace MobileGL::MG_Pipe {
     // invariant MGPipeTypes.h asserts beside the packer and which the applier's own
     // SubDataNamesABuffer already reads.
     inline Bool MGPipeSubDataWantsItsReply(const MGPSubData& record) {
-#if MOBILEGL_BUILD_RECORD_ARM
         // THE WIRE ARM ONLY. Everything above is an argument about a client talking to a server
         // over SEG_CMD/SEG_STAGE; a monolith run inside a split build (every unit and
         // integration-gpu lane is one) keeps the answer it always gave.
         if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return false;
-#endif
         // THE PULL BUILD PREPROCESSES TO EXACTLY THIS LINE AND NOTHING ELSE, which is what G1
         // compares: the arm test above sits inside the build switch, so the pull arm emits the
         // expression this function has always had.
@@ -396,10 +389,8 @@ namespace MobileGL::MG_Pipe {
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceSubData(&record, bytes, byteCount, regions, record.RegionCount, &reply);
         const Bool accepted = MGPipeTakeReplyBool(reply, "resource_subdata");
-#if MOBILEGL_BUILD_RECORD_ARM
         // A cancelled wire upload is declined even when no server reply was requested.
         if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return accepted;
-#endif
         return MGPipeSubDataWantsItsReply(record) ? accepted : true;
     }
     inline void MGPipeRouteBufferSubDataResident(const MGPSubData& record, const void* bytes,

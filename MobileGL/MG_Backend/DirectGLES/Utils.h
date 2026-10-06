@@ -13,7 +13,6 @@
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
-#if MOBILEGL_BUILD_RECORD_ARM
     // C6 / ID-52 / CONTRACT-P5 table 3's pActiveBackendObject row. The format-capability cache of
     // THIS ROLE's backend. Under an active transport the server's own private
     // BackendObject_DirectGLES owns the context on the apply thread, so a backend-internal format
@@ -24,7 +23,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (five in Utils.cpp, ClampSamplesToBackendSupport in BackendObject_DirectGLES.cpp) go through
     // this instead of dereferencing pActiveBackendObject directly.
     const FormatCapabilityCache* ActiveBackendFormatCaps();
-#endif
 
     namespace DebugImpl {
         class ErrorLopper {

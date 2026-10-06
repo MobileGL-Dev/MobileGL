@@ -28,13 +28,11 @@
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
 #include <Config.h>
-#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/PipeApply.h>
 // P7 wave 0: the seam WireDescriptorFatal dies through. See MG_Pipe/PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
 // P7 wave 2 package B3: rule I's tally for this file's silent wire-draw exits.
 #include "WireDeclineTally.h"
-#endif
 #include <vulkan/utility/vk_format_utils.h>
 #include <algorithm>
 #include <cstdio>
@@ -43,7 +41,6 @@
 #include <limits>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-#if MOBILEGL_BUILD_RECORD_ARM
     SizeT UniformManager::WireImageViewKeyHash::operator()(const WireImageViewKey& key) const {
         SizeT hash = std::hash<VkImage>{}(key.image);
         const auto mix = [&hash](Uint64 value) {
@@ -323,7 +320,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         return true;
     }
-#endif
     namespace {
         constexpr Uint kFallbackTexture2DExternalIndex = 0xFFFFFF00u;
         // One id for every storage-image placeholder. They are never reachable through GL - no
@@ -590,7 +586,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_bufferManager = bufferManager;
         m_programFactory = programFactory;
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
@@ -600,7 +595,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_wireMaxStorageRange = properties.limits.maxStorageBufferRange;
             m_wireMaxTexelElements = properties.limits.maxTexelBufferElements;
         }
-#endif
         m_frameCount = frameCount;
         m_maxBindings = maxBindings;
         m_samplerResolveMemo.assign(m_maxBindings, SamplerResolveMemo{});
@@ -656,11 +650,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_unboundStorageImageTextures.clear();
         for (auto& frame : m_frames) {
             if (m_device != VK_NULL_HANDLE) {
-#if MOBILEGL_BUILD_RECORD_ARM
                 frame.wireImageViewCache.clear();
                 for (const auto view : frame.wireImageViews) vkDestroyImageView(m_device, view, nullptr);
                 frame.wireImageViews.clear();
-#endif
                 for (auto& view : frame.texelBufferViews) {
                     if (view != VK_NULL_HANDLE) {
                         vkDestroyBufferView(m_device, view, nullptr);
@@ -683,12 +675,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.quietEpochs = 0;
         }
         m_frames.clear();
-#if MOBILEGL_BUILD_RECORD_ARM
         for (auto& entry : m_wirePlaceholderImages) DestroyWirePlaceholderImage(entry.second);
         m_wirePlaceholderImages.clear();
         m_wirePrivateStoragePlaceholders = 0;
         m_wireInvalidStorageImagesBindNull = false;
-#endif
         m_epochSlot = 0;
         m_epochOpen = false;
 
@@ -712,12 +702,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void UniformManager::BeginFrame(Uint32 frameIndex) {
         MOBILEGL_ASSERT(frameIndex < m_frames.size(), "UniformDescriptorBinder::BeginFrame invalid frame index");
         auto& frame = m_frames[frameIndex];
-#if MOBILEGL_BUILD_RECORD_ARM
         m_wireFrameIndex = frameIndex;
         frame.wireImageViewCache.clear();
         for (const auto view : frame.wireImageViews) vkDestroyImageView(m_device, view, nullptr);
         frame.wireImageViews.clear();
-#endif
         for (auto& view : frame.texelBufferViews) {
             if (view != VK_NULL_HANDLE) {
                 vkDestroyBufferView(m_device, view, nullptr);
@@ -766,7 +754,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::WireDescriptorSetBudgetReached(Uint32 frameIndex) const {
         MOBILEGL_ASSERT(frameIndex < m_frames.size(), "WireDescriptorSetBudgetReached invalid frame index");
         return m_frames[frameIndex].allocatedSetsThisFrame >= kWireDescriptorSetBudget;
@@ -799,7 +786,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         return cachedSets;
     }
-#endif
 
     void UniformManager::InvalidateDescriptorSetMemos() {
         // Every VkDescriptorSet handle held outside the per-layout caches - in this backend they all
@@ -907,9 +893,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                             Uint32 binding, Uint32 element,
                                                             VkDescriptorImageInfo& outImageInfo,
                                                             Bool trustUnchangedHint) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) return ResolveWireImageDescriptor(commandBuffer, program, programObj, binding, element, false, outImageInfo);
-#endif
         MOBILEGL_ASSERT(m_textureManager != nullptr, "ResolveSamplerDescriptor: texture manager is null");
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "ResolveSamplerDescriptor: sampler manager is null");
         // The whole-descriptor memo below is keyed by binding alone, so it describes a binding
@@ -1192,9 +1176,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool UniformManager::ProgramSamplesOnlySingleLevelTextures(
         const MagmaProgramSource& program, const ProgramFactory::VkProgramObject& programObj) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) return false; // Conservative optimization gate; no frontend probe.
-#endif
         // A declined program never draws (see VkProgramObject::declinedDescriptors), and its
         // declined binding has no resolvable uniform location - so there is nothing to prove
         // about the textures it would have sampled.
@@ -1305,7 +1287,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return texture;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 frameIndex,
             Bool storage, VkBufferView& out) {
@@ -1407,16 +1388,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_bufferManager->MarkWireBufferGpuWritten(buffer, start, size);
         return true;
     }
-#endif
 
     Bool UniformManager::ResolveTexelBufferDescriptor(const MagmaProgramSource& program,
                                                       const ProgramFactory::VkProgramObject& programObj,
                                                       Uint32 binding, Uint32 frameIndex,
                                                       VkBufferView& outBufferView) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire())
             return ResolveWireTexelBufferDescriptor(program, programObj, binding, frameIndex, false, outBufferView);
-#endif
         outBufferView = VK_NULL_HANDLE;
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveTexelBufferDescriptor: buffer manager is null");
         MOBILEGL_ASSERT(frameIndex < m_frames.size(), "ResolveTexelBufferDescriptor: frame index out of range");
@@ -1541,10 +1519,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              const ProgramFactory::VkProgramObject& programObj,
                                                              Uint32 binding, Uint32 frameIndex,
                                                              VkBufferView& outBufferView) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire())
             return ResolveWireTexelBufferDescriptor(program, programObj, binding, frameIndex, true, outBufferView);
-#endif
         outBufferView = VK_NULL_HANDLE;
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveStorageTexelBufferDescriptor: buffer manager is null");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "ResolveStorageTexelBufferDescriptor: GL context is null");
@@ -1712,18 +1688,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "ResolveStorageBufferDescriptor: GL context is null");
         MOBILEGL_ASSERT(binding < programObj.storageBlockIndexByBinding.size(),
                         "ResolveStorageBufferDescriptor: binding %u out of range", binding);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire() && (binding >= programObj.storageBlockIndexByBinding.size() ||
                                 binding >= programObj.storageBlockNameByBinding.size()))
             WireDescriptorFatal("storage-buffer-reflection-binding");
-#endif
 
         const Int blockIndex = programObj.storageBlockIndexByBinding[binding];
         MOBILEGL_ASSERT(blockIndex >= 0, "ResolveStorageBufferDescriptor: no SSBO block mapped to binding %u",
                         binding);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire() && blockIndex < 0) WireDescriptorFatal("storage-buffer-reflection-block");
-#endif
         // An atomic counter is not an SSBO the application ever declared: glslang lowers every
         // atomic_uint onto a synthesized gl_AtomicCounterBlock_<N> storage block, where N is the
         // GL ATOMIC-COUNTER binding. That block arrives here auto-mapped to an arbitrary
@@ -1753,13 +1725,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             isAtomicCounterBlock
                 ? static_cast<GLuint>(atomicCounterBinding)
                 :
-#if MOBILEGL_BUILD_RECORD_ARM
                   (program.IsWire() ? program.GetShaderStorageBlockBinding(static_cast<GLuint>(blockIndex)) :
                    GetShaderStorageBlockBinding(*program.Frontend(), static_cast<GLuint>(blockIndex))) + element;
-#else
-                  GetShaderStorageBlockBinding(program, static_cast<GLuint>(blockIndex)) + element;
-#endif
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) {
             const auto& state = MG_Pipe::MGPipeApplier();
             const Uint32 cls = isAtomicCounterBlock ? MG_Pipe::kMGPipeShaderBufferClassAtomicCounter
@@ -1835,7 +1802,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_bufferManager->MarkWireBufferGpuWritten(range.Res, start, size);
             return true;
         }
-#endif
         const Uint32 bindingPointCount =
             static_cast<Uint32>(MG_Pipe::gPipeInputs.GetBufferBindingPointCount(bufferTarget));
         MOBILEGL_ASSERT(frontendBinding < bindingPointCount,
@@ -1914,9 +1880,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                        const ProgramFactory::VkProgramObject& programObj,
                                                        Uint32 binding, Uint32 element,
                                                        VkDescriptorImageInfo& outImageInfo) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) return ResolveWireImageDescriptor(commandBuffer, program, programObj, binding, element, true, outImageInfo);
-#endif
         outImageInfo = {};
         MOBILEGL_ASSERT(m_textureManager != nullptr, "ResolveStorageImageDescriptor: texture manager is null");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "ResolveStorageImageDescriptor: GL context is null");
@@ -2369,9 +2333,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                           const ProgramFactory::VkProgramObject& programObj,
                                                           Vector<MG_State::GLState::ITextureObject*>& outTextures,
                                                           Vector<SampledBindingRecord>* outBindingRecords) {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) { outTextures.clear(); if (outBindingRecords) outBindingRecords->clear(); return true; }
-#endif
         outTextures.clear();
         if (outBindingRecords != nullptr) {
             outBindingRecords->clear();
@@ -2418,9 +2380,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::SampledBindingsUnchanged(const MagmaProgramSource& program,
                                                   const ProgramFactory::VkProgramObject& programObj,
                                                   const Vector<SampledBindingRecord>& previousRecords) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) return false;
-#endif
         // A declined program takes the full path every time and is refused there.
         if (programObj.declinedDescriptors) {
             return false;
@@ -2464,9 +2424,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj,
         Vector<MG_State::GLState::ITextureObject*>& outTextures) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) { outTextures.clear(); return true; }
-#endif
         outTextures.clear();
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(),
                         "CollectStorageImageTextures: GL context is null");
@@ -2549,9 +2507,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj,
         Vector<SamplerImageFeedbackBinding>& outBindings) const {
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire()) { outBindings.clear(); return true; }
-#endif
         outBindings.clear();
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(),
                         "CollectSamplerImageFeedback: GL context is null");
@@ -2627,7 +2583,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::ResolveWireUniformBufferPayload(const MagmaProgramSource& program,
             Uint32 blockIndex, Uint32 bindingPoint, UboBindResult& out) const {
         if (bindingPoint >= MG_Pipe::kMGPipeMaxBufferBindingPoints)
@@ -2722,7 +2677,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         out.dynamicOffset = padded.offset;
         return true;
     }
-#endif
 
     Bool UniformManager::ResolveUniformBufferPayload(const MagmaProgramSource& program,
                                                      const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
@@ -2752,10 +2706,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         MOBILEGL_ASSERT(binding < programObj.uniformBlockIndexByBinding.size(),
                         "ResolveUniformBufferPayload: UBO mapping binding %u out of range", binding);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire() && binding >= programObj.uniformBlockIndexByBinding.size())
             WireDescriptorFatal("uniform-buffer-reflection-binding");
-#endif
         Int blockIndex = programObj.uniformBlockIndexByBinding[binding];
         if (arrayElement > 0) {
             const auto arrayIt = programObj.arrayedUniformBlockIndicesByBinding.find(binding);
@@ -2776,16 +2728,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(static_cast<Uint32>(blockIndex) < activeUniformBlockCount,
                         "ResolveUniformBufferPayload: uniform block index %d out of range (count=%u)", blockIndex,
                         activeUniformBlockCount);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire() && (blockIndex < 0 || static_cast<Uint32>(blockIndex) >= activeUniformBlockCount))
             WireDescriptorFatal("uniform-buffer-reflection-block");
-#endif
 
         const Uint32 frontendBinding = program.GetUniformBlockBinding(static_cast<Uint32>(blockIndex));
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire())
             return ResolveWireUniformBufferPayload(program, static_cast<Uint32>(blockIndex), frontendBinding, out);
-#endif
         const Uint32 uniformBindingPointCount =
             static_cast<Uint32>(MG_Pipe::gPipeInputs.GetBufferBindingPointCount(BufferTarget::Uniform));
         MOBILEGL_ASSERT(frontendBinding < uniformBindingPointCount,
@@ -3059,9 +3007,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                      Uint32& outDynamicOffset) {
         UboBindResult ubo{};
         const Bool hasPayload = ResolveUniformBufferPayload(program, programObj, binding, arrayElement, ubo);
-#if MOBILEGL_BUILD_RECORD_ARM
         if (program.IsWire() && !hasPayload) return false;
-#endif
         MOBILEGL_ASSERT(hasPayload && (ubo.directBindable || (ubo.payload != nullptr && ubo.payloadSize > 0)),
                         "UniformDescriptorBinder::ResolveDynamicUboDescriptor failed: missing UBO payload on binding %u element %u",
                         binding, arrayElement);
@@ -3150,7 +3096,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::PrepareWireTextureResources(const MagmaProgramSource& program,
                                                       const ProgramFactory::VkProgramObject& programObj) {
         if (!program.IsWire()) return true;
@@ -3204,7 +3149,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_textureManager->FlushPendingUploads();
         return true;
     }
-#endif
 
     Bool UniformManager::BindProgramUniformBuffers(VkCommandBuffer commandBuffer,
                                                              const MagmaProgramSource& program,
@@ -3244,12 +3188,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                (samplerBindingOverrides == nullptr || samplerBindingOverrides->empty());
         if (cacheable && samplerDescriptorsUnchangedHint && m_fastRebindMemo.valid &&
             m_fastRebindMemo.frameIndex == frameIndex &&
-#if MOBILEGL_BUILD_RECORD_ARM
             // A wire store destroyed since the memo was taken may have handed its handle
             // value to a later mint (see FastRebindMemo): "same VkBuffer" then names a
             // different store, so the memo is refused and the full walk re-records it.
             m_fastRebindMemo.wireStoreDestroyEpoch == m_bufferManager->GetWireStoreDestroyEpoch() &&
-#endif
             m_fastRebindMemo.programLifetimeId == program.GetLifetimeId() &&
             m_fastRebindMemo.programHash == programObj.hash) {
             VkBuffer uboBuffer = VK_NULL_HANDLE;
@@ -3546,7 +3488,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             };
             mixWords(&programObj.descriptorSetLayout, sizeof(programObj.descriptorSetLayout));
-#if MOBILEGL_BUILD_RECORD_ARM
             // P7 M2 round 2 (ID-P7-43): the buffer infos below name WIRE stores by VkBuffer
             // handle, and a wire store can be destroyed mid-frame (VkBufferManager::
             // DeferredWireRelease) with its handle value re-minted before this frame's memo
@@ -3555,7 +3496,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // store. NOT the slice epoch: that moves on every glBufferSubData and would make
             // the memo miss on every draw.
             mix64(m_bufferManager->GetWireStoreDestroyEpoch());
-#endif
             for (const auto& write : writes) {
                 mix64((static_cast<Uint64>(write.dstBinding) << 40) ^
                       (static_cast<Uint64>(write.descriptorType) << 8) ^
@@ -3611,9 +3551,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 /*valid=*/true,          frameIndex,      program.GetLifetimeId(), programObj.hash,
                 fastRebindUboBinding,    bufferInfos[0].buffer,
                 bufferInfos[0].range,    descriptorSet,
-#if MOBILEGL_BUILD_RECORD_ARM
                 m_bufferManager->GetWireStoreDestroyEpoch(),
-#endif
             };
         } else {
             m_fastRebindMemo.valid = false;

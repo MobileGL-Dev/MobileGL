@@ -85,7 +85,6 @@ namespace MobileGL::MG_State::GLState {
             visit("floatValues", value.floatValues);
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         void SchemaWord(Uint64& hash, Uint64 word) {
             for (unsigned i = 0; i < 8; ++i) {
                 hash ^= (word >> (i * 8)) & 255u;
@@ -151,7 +150,6 @@ namespace MobileGL::MG_State::GLState {
                 SchemaName(hash, "end-record");
             }
         }
-#endif
 
         // ---- the writer ----
 
@@ -200,20 +198,9 @@ namespace MobileGL::MG_State::GLState {
             } else if constexpr (ArchiveVector<T>) {
                 WriteSequence(out, value);
             } else if constexpr (ArchiveUniformInitializer<T>) {
-#if MOBILEGL_BUILD_RECORD_ARM
                 VisitUniformInitializer(value, [&out](const char*, const auto& member) {
                     WriteValue(out, member);
                 });
-#else
-                WriteValue(out, value.name);
-                WriteValue(out, value.basicType);
-                WriteValue(out, value.vectorSize);
-                WriteValue(out, value.matrixCols);
-                WriteValue(out, value.matrixRows);
-                WriteValue(out, value.arraySize);
-                WriteValue(out, value.intValues);
-                WriteValue(out, value.floatValues);
-#endif
             } else {
                 // The archive's own structs: TypeFacts, ResourceReflection, XfbVarying. ONE
                 // table serves both directions, so a member added to any of them is carried by
@@ -366,20 +353,9 @@ namespace MobileGL::MG_State::GLState {
                     if (!in.Ok) return;
                 }
             } else if constexpr (ArchiveUniformInitializer<T>) {
-#if MOBILEGL_BUILD_RECORD_ARM
                 VisitUniformInitializer(value, [&in](const char*, auto& member) {
                     if (in.Ok) ReadValue(in, member);
                 });
-#else
-                ReadValue(in, value.name);
-                ReadValue(in, value.basicType);
-                ReadValue(in, value.vectorSize);
-                ReadValue(in, value.matrixCols);
-                ReadValue(in, value.matrixRows);
-                ReadValue(in, value.arraySize);
-                ReadValue(in, value.intValues);
-                ReadValue(in, value.floatValues);
-#endif
             } else {
                 VisitFields(value, [&in](const char*, auto& field) {
                     if (in.Ok) ReadValue(in, field);
@@ -389,16 +365,8 @@ namespace MobileGL::MG_State::GLState {
 
         // v1 is retained for local monolith verification. Its native size echo is not a
         // wire compatibility fact: libstdc++ writes 1056 while unpinned libc++ writes zero.
-#if !MOBILEGL_BUILD_RECORD_ARM
-#ifdef MGL_LINKARTIFACTS_SIZE
-        inline constexpr Uint64 kLinkArtifactsSizeEcho = MGL_LINKARTIFACTS_SIZE;
-#else
-        inline constexpr Uint64 kLinkArtifactsSizeEcho = 0;
-#endif
-#endif
     } // namespace
 
-#if MOBILEGL_BUILD_RECORD_ARM
     Uint64 ProgramArtifactsSchemaFingerprint() {
         static const Uint64 fingerprint = [] {
             Uint64 hash = 1469598103934665603ull;
@@ -412,16 +380,11 @@ namespace MobileGL::MG_State::GLState {
         }();
         return fingerprint;
     }
-#endif
 
     void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv,
                                 Vector<Uint8>& out) {
         PutRaw(out, kProgramArtifactsCodecVersion);
-#if MOBILEGL_BUILD_RECORD_ARM
         PutRaw(out, ProgramArtifactsSchemaFingerprint());
-#else
-        PutRaw(out, kLinkArtifactsSizeEcho);
-#endif
         // `link` is walked through its own VisitFields table, which omits the live
         // SharedPtr<glslang::TProgram>: 57 of the 58 members. There is no arm here for it and
         // there must not be one - it points into a glslang arena that no archived instance
@@ -446,11 +409,7 @@ namespace MobileGL::MG_State::GLState {
         // Refuse the declared wire shape before reading any field. In v2 the second word
         // follows serialization types/order; C++ container object sizes are irrelevant.
         if (version != kProgramArtifactsCodecVersion) return false;
-#if MOBILEGL_BUILD_RECORD_ARM
         if (schema != ProgramArtifactsSchemaFingerprint()) return false;
-#else
-        if (schema != kLinkArtifactsSizeEcho) return false;
-#endif
 
         ReadValue(in, link);
         ReadValue(in, spirv);

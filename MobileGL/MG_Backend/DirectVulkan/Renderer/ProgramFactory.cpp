@@ -3199,11 +3199,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 if (descriptorKind == DescriptorBindingKind::StorageBuffer) {
                     const GLuint blockIndex =
-#if MOBILEGL_BUILD_RECORD_ARM
                         program.GetShaderStorageBlockIndex(uniformName);
-#else
-                        GetShaderStorageBlockIndex(program, uniformName);
-#endif
                     if (blockIndex == GL_INVALID_INDEX) {
                         MGLOG_D("ProgramFactory::ReflectLayout: skipping inactive SSBO '%s' at binding %u",
                                 uniformName.c_str(), binding);
@@ -3495,13 +3491,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                 updateAfterBindSampledImages + updateAfterBindStorageImages;
         const auto& uab = m_updateAfterBindLimits;
         entry.usesUpdateAfterBind =
-#if MOBILEGL_BUILD_RECORD_ARM
             // Vulkan forbids ANY update-after-bind binding in a set layout that
             // contains a dynamic buffer descriptor (VUID 03001/03011). Wire draws
             // retain UniformManager's per-frame, content-versioned descriptor sets;
             // this selects the legal ordinary pool, not in-place mutation of a live set.
             (!program.IsWire() || entry.dynamicBindings.empty()) &&
-#endif
             uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
             updateAfterBindUniformBuffers <= uab.maxPerStageUniformBuffers &&
             updateAfterBindStorageBuffers <= uab.maxPerStageStorageBuffers &&

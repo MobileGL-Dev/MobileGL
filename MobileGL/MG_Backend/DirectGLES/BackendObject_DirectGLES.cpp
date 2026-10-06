@@ -32,7 +32,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // ID-54 / ID-67 (v1, under ID-52/ID-59's grant for this file). Which VIRTUAL (dpy, draw,
         // read, ctx) the process's one native ES context is currently bound FOR, on the apply
         // thread. DirectGLES has one native context and one native surface (g_Context, g_Surface)
@@ -78,7 +77,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return false;
         }
-#endif
 
         void ClearGLErrors(const MG_External::GLESFunctionsTable& gl) {
             if (!gl.glGetError) return;
@@ -860,7 +858,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Int maxSamples = 0;
         const SizeT formatIndex = static_cast<SizeT>(logicalFormat);
-#if MOBILEGL_BUILD_RECORD_ARM
         // C6 / ID-52: read the ROLE's own cache. Under split that is the server's private backend
         // (ActiveBackendFormatCaps), not pActiveBackendObject, which holds the client's mirror.
         const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
@@ -872,17 +869,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 maxSamples = probedCounts.front();
             }
         }
-#else
-        if (pActiveBackendObject && targetIndex < kFormatCapabilityTargetCount &&
-            formatIndex < kFormatCapabilityFormatCount) {
-            // Descending, so the head is the largest count this device actually allocated.
-            const Vector<Int>& probedCounts =
-                pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
-            if (!probedCounts.empty()) {
-                maxSamples = probedCounts.front();
-            }
-        }
-#endif
         if (maxSamples <= 0) {
             maxSamples = GetGLESFormatMaxSamples(g_GLESCapabilities, logicalFormat, imageFormat);
         }
@@ -1085,7 +1071,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResetEGLRuntimeState();
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // ID-54 / ID-67: as for the window surface - InitPbufferSurface bound natively. The pull
         // arm below is the original statement, byte for byte (G1).
         const Bool created = BackendObject::CreateEGLPbufferSurface(surface, width, height);
@@ -1098,9 +1083,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             NoteNativeContextGone();
         }
         return created;
-#else
-        return BackendObject::CreateEGLPbufferSurface(surface, width, height);
-#endif
     }
 
     Bool BackendObject_DirectGLES::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
@@ -1139,9 +1121,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!DirectGLES::ReleaseCurrent()) {
                 return false;
             }
-#if MOBILEGL_BUILD_RECORD_ARM
             NoteNativeContextGone();
-#endif
             return BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         }
 
@@ -1212,9 +1192,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         if (!BackendObject::MakeEGLCurrent(dpy, draw, read, ctx)) {
             (void)DirectGLES::ReleaseCurrent();
-#if MOBILEGL_BUILD_RECORD_ARM
             NoteNativeContextGone();
-#endif
             return false;
         }
         return true;
@@ -1267,9 +1245,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BackendObject_DirectGLES::ReleaseEGLResources() {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         DestroyEGLContext();
-#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
-#endif
         m_suspendedWindowSurfaces.clear();
         BackendObject::ReleaseEGLResources();
     }
@@ -1295,10 +1271,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             m_suspendedWindowSurfaces.push_back(client);
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         // The native binding moved onto the placeholder: the next make-current binds for real.
         NoteNativeContextGone();
-#endif
         MGLOG_I("DirectGLES: %zu window surface(s) on server window %p now draw into placeholder pbuffers; the "
                 "contexts and their objects stay",
                 onWindow.size(), window);
@@ -1327,9 +1301,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (surface == EGL_NO_SURFACE) return false;
             native->second = surface;
         }
-#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
-#endif
         MGLOG_I("DirectGLES: %zu suspended window surface(s) rebuilt on server window %p (%ux%u)", suspended.size(),
                 window, width, height);
         return true;
@@ -1366,9 +1338,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // every object the client had built - which a multi-window client hit on its first closed
         // popup.
         (void)surface;
-#if MOBILEGL_BUILD_RECORD_ARM
         NoteNativeContextGone();
-#endif
     }
 
     void BackendObject_DirectGLES::OnEGLSurfaceForgotten(EGLSurface surface) {

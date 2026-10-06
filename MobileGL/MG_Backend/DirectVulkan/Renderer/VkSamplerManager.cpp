@@ -15,7 +15,6 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
-#if MOBILEGL_BUILD_RECORD_ARM
         // An accessor view over the wire's POD values, not a GL object with constructor,
         // lifetime ID, allocator hooks or mutation callbacks. Both sources below use
         // one sampler policy, including format-sensitive border-color conversion.
@@ -43,9 +42,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         template <class SamplerSource>
         Bool UsesBorderColor(const SamplerSource& sampler) {
-#else
-        Bool UsesBorderColor(const MG_State::GLState::SamplerObject& sampler) {
-#endif
             return sampler.GetWrapS() == SamplerWrapMode::ClampToBorder ||
                    sampler.GetWrapT() == SamplerWrapMode::ClampToBorder ||
                    sampler.GetWrapR() == SamplerWrapMode::ClampToBorder;
@@ -221,24 +217,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return std::fabs(lhs - rhs) <= 1e-6f;
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveEffectiveMaxLod(const SamplerSource& sampler) {
-#else
-        Float ResolveEffectiveMaxLod(const MG_State::GLState::SamplerObject& sampler) {
-#endif
             if (sampler.GetMipmapMode() == SamplerMipmapMode::None) {
                 return 0.0f;
             }
             return sampler.GetMaxLod();
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveEffectiveMinLod(const SamplerSource& sampler, Float effectiveMaxLod) {
-#else
-        Float ResolveEffectiveMinLod(const MG_State::GLState::SamplerObject& sampler, Float effectiveMaxLod) {
-#endif
             return std::min(sampler.GetMinLod(), effectiveMaxLod);
         }
 
@@ -249,12 +237,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GL's non-mipmapped minification - large enough for lambda to stay positive, small enough
         // that a NEAREST mip mode still rounds down to level 0. Clamped rather than assigned, so a
         // texture whose GL_TEXTURE_MAX_LOD really is 0 keeps magnifying as GL says it must.
-#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveSingleLevelMaxLod(const SamplerSource& sampler, Bool singleLevelView) {
-#else
-        Float ResolveSingleLevelMaxLod(const MG_State::GLState::SamplerObject& sampler, Bool singleLevelView) {
-#endif
             const Float maxLod = ResolveEffectiveMaxLod(sampler);
             return singleLevelView ? std::min(maxLod, 0.25f) : maxLod;
         }
@@ -275,12 +259,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const SamplerSource& sampler,
-#else
-    Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const MG_State::GLState::SamplerObject& sampler,
-#endif
                                                            Bool forceNearestFiltering) const {
         if (!m_samplerAnisotropySupported) return 1.0f;
         if (forceNearestFiltering) return 1.0f;
@@ -339,12 +319,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     Uint64 VkSamplerManager::BuildSamplerKey(const SamplerSource& sampler,
-#else
-    Uint64 VkSamplerManager::BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
-#endif
                                              Bool forceNearestFiltering, Bool singleLevelView,
                                              const ResolvedBorderColor& borderColor) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
@@ -390,14 +366,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return XXH64_digest(m_hashState);
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     VkSampler VkSamplerManager::GetOrCreateSamplerImpl(const SamplerSource& sampler,
                                                        TextureInternalFormat format,
-#else
-    VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
-                                                   const MG_State::GLState::ITextureObject& texture,
-#endif
                                                    Bool forceNearestFiltering, Uint32 viewLevelCount) {
         // A view that exposes a single mip level has no second level to blend with, so GL's
         // *_MIPMAP_* minification filters degenerate to plain filtering on the base level -
@@ -409,11 +380,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the default-framebuffer blit shader had to work around with an explicit-LOD sample.
         const Bool singleLevelView = viewLevelCount == 1;
         // Resolved once and used for both the key and the create-info; see ResolvedBorderColor.
-#if MOBILEGL_BUILD_RECORD_ARM
         const ResolvedBorderColor borderColor = ResolveBorderColor(sampler, format);
-#else
-        const ResolvedBorderColor borderColor = ResolveBorderColor(sampler, texture);
-#endif
         const Uint64 key = BuildSamplerKey(sampler, forceNearestFiltering, singleLevelView, borderColor);
         auto it = m_samplers.find(key);
         if (it != m_samplers.end()) {
@@ -473,7 +440,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return vkSampler;
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
                                                    const MG_State::GLState::ITextureObject& texture,
                                                    Bool forceNearestFiltering, Uint32 viewLevelCount) {
@@ -485,7 +451,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return GetOrCreateSamplerImpl(SamplerParametersSource{parameters}, format,
                                        forceNearestFiltering, viewLevelCount);
     }
-#endif
 
     VkFilter VkSamplerManager::ToVkFilter(SamplerFilterMode mode) {
         return mode == SamplerFilterMode::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
@@ -542,14 +507,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(
         const SamplerSource& sampler, TextureInternalFormat format) const {
-#else
-    VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(
-        const MG_State::GLState::SamplerObject& sampler, const MG_State::GLState::ITextureObject& texture) const {
-#endif
         ResolvedBorderColor resolved{};
         if (!UsesBorderColor(sampler)) {
             return resolved; // FLOAT_TRANSPARENT_BLACK, never sampled
@@ -557,9 +517,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // Border colour is sampler state: a bound sampler object supplies its own, and a texture
         // with none reaches the very same value through the sampler object it owns.
-#if !MOBILEGL_BUILD_RECORD_ARM
-        const auto format = texture.GetFormat();
-#endif
         const auto domain = ResolveBorderColorDomain(format);
         const Bool canUseCustom = m_customBorderColorSupported && m_maxCustomBorderColorSamplers > 0 &&
                                   m_customBorderColorSamplerCount < m_maxCustomBorderColorSamplers;

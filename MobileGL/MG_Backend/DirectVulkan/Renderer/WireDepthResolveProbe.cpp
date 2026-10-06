@@ -21,7 +21,6 @@
 #include <cstring>
 #include <vulkan/vulkan_core.h>
 
-#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Backend::DirectVulkan {
 #include "WireMultisampleResolveSpirv.h"
 
@@ -993,4 +992,3 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return measurement;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
-#endif

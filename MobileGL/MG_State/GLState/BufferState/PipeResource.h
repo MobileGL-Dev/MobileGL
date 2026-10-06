@@ -53,11 +53,9 @@ namespace MobileGL::MG_State::GLState {
     // never exceed what was allocated. The pull build keeps the exact count and does not
     // see this function at all: it has no tracker to spend the rounding on, and G1 holds
     // its symbol set and .text byte-identical only if allocate()'s own text does not move.
-#if MOBILEGL_BUILD_RECORD_ARM
     inline constexpr SizeT ShadowAllocationBytesFor(SizeT count) {
         return (count + SHADOW_ALLOCATION_ALIGNMENT - 1) & ~(SHADOW_ALLOCATION_ALIGNMENT - 1);
     }
-#endif
 
     // Allocator that gives every allocation SHADOW_ALLOCATION_ALIGNMENT (and, in a split
     // build, a page-granular size - see ShadowAllocationBytesFor). Deliberately minimal: the
@@ -73,13 +71,8 @@ namespace MobileGL::MG_State::GLState {
 
         T* allocate(SizeT count) {
             if (count == 0) return nullptr;
-#if MOBILEGL_BUILD_RECORD_ARM
             return static_cast<T*>(::operator new(ShadowAllocationBytesFor(count * sizeof(T)),
                                                   std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT}));
-#else
-            return static_cast<T*>(
-                ::operator new(count * sizeof(T), std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT}));
-#endif
         }
         void deallocate(T* pointer, SizeT) noexcept {
             ::operator delete(pointer, std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT});
@@ -141,7 +134,6 @@ namespace MobileGL::MG_State::GLState {
             const SizeT reserved = std::bit_ceil(size == 0 ? SizeT{1} : size);
             m_shadow->reserve(reserved);
             m_shadow->resize(size);
-#if MOBILEGL_BUILD_RECORD_ARM
             // RECORDED HERE, NOT INFERRED FROM capacity(). `reserved` is the count this
             // call asked the allocator for, so ShadowAllocationBytesFor(reserved) is the
             // block the allocator handed back whenever this reserve reallocated - and when
@@ -155,14 +147,12 @@ namespace MobileGL::MG_State::GLState {
             // under-report costs nothing: the tracker still needs rangeEnd <= extent, and
             // size <= reserved always.
             m_shadowExtent = ShadowAllocationBytesFor(reserved);
-#endif
         }
         // Direct shadow access, used only by the backend's upload-from-shadow path,
         // which never runs for a GPU-resident (persistent) buffer.
         MapAlignedData& Shadow() { return *m_shadow; }
         const MapAlignedData& Shadow() const { return *m_shadow; }
 
-#if MOBILEGL_BUILD_RECORD_ARM
         // The extent of the shadow's heap allocation in bytes, as ResizeShadow asked for
         // it: every byte of [Bytes(), Bytes() + this) belongs to this shadow and to
         // nothing else, and the extent is a whole number of SHADOW_ALLOCATION_ALIGNMENT
@@ -172,7 +162,6 @@ namespace MobileGL::MG_State::GLState {
         // kill). Zero for an adopted (GPU-resident) store, whose shadow was released, and
         // for a shadow that was never sized; the tracker excludes both.
         SizeT ShadowAllocationBytes() const { return m_gpuMapped != nullptr ? 0 : m_shadowExtent; }
-#endif
 
         // Transition to persistent GPU residency: adopt the backend's coherent
         // mapped base as the source of truth and drop the CPU shadow. The caller
@@ -182,10 +171,8 @@ namespace MobileGL::MG_State::GLState {
             m_gpuMapped = mappedBase;
             m_shadow->clear();
             m_shadow->shrink_to_fit();
-#if MOBILEGL_BUILD_RECORD_ARM
             // The block is gone with the shrink; the next ResizeShadow records the next one.
             m_shadowExtent = 0;
-#endif
         }
 
         // Give the adoption back: the bytes resolve against the shadow again (which
@@ -209,9 +196,7 @@ namespace MobileGL::MG_State::GLState {
         SharedPtr<MapAlignedData> m_shadow = MakeShared<MapAlignedData>();
         void* m_gpuMapped = nullptr;
         SharedPtr<BackendBufferResource> m_backend;
-#if MOBILEGL_BUILD_RECORD_ARM
         // See ShadowAllocationBytes. Split-only so the pull build's layout does not move (G1).
         SizeT m_shadowExtent = 0;
-#endif
     };
 } // namespace MobileGL::MG_State::GLState
