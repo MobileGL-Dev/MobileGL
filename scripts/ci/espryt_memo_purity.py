@@ -2,20 +2,16 @@
 """P3b/P4b Espryt memo re-keying, with explicit compatibility limits.
 
 P4a/P5f re-keyed the resolved-binding, sampler-pass, image-sweep and twin-registry
-memos onto {slot, gen} handles and applier serials. The legacy pointer-keyed arms
-were not deleted: they are the PULL build's only arms and G1 pins that build's
-.text, so they retire with the pull path itself (Config.h:395-399).
+memos onto {slot, gen} handles and applier serials. The legacy pointer-keyed arms lived
+behind MOBILEGL_PIPE_LEGACY_MEMOS until P13 W3b retired that macro with the pull build;
+TwinLookupMemo went with them, so it is no longer a family here.
 
-WHAT THE TWO GUARDS MEAN HERE IS A POLICY EXEMPTION, NOT AN ABSENCE, and the first
-version of this docstring got that wrong. MOBILEGL_PIPE_LEGACY_MEMOS defaults ON
-(CMakeLists.txt:43) and nothing in test.yml clears it, so a CI split build DOES
-compile the #if MOBILEGL_PIPE_LEGACY_MEMOS arms - TwinLookupMemo (DirectGLES.cpp:114)
-sits inside one and is compiled into every lane this repo runs. The rule is therefore
-"the legacy arm is ALLOWED to keep pointer keys", not "the split build never sees
-them". !MOBILEGL_BUILD_DISAGGREGATED is the genuinely-absent one.
-
-This gate does not pretend the pointer types disappeared; it rejects a frontend-pointer
-KEY outside those two exempted arms, inside the named memo families, and nothing else.
+SINCE P13 W3b THERE IS NO EXEMPTED ARM. The gate used to skip the `#if
+MOBILEGL_PIPE_LEGACY_MEMOS` arms and the `!MOBILEGL_BUILD_DISAGGREGATED` arms as policy
+exemptions; the first is gone from the tree, and the second is compiled into the library FCL
+embeds (the push monolith without MG_Remote), so it is shipped code and gets the same rule.
+The rule is now "no frontend-pointer KEY in any named memo family, in any build", and nothing
+else; the one allow-list entry below is a named, dated carve-out.
 It does not evaluate the preprocessor - it recognises the conditional spellings the
 tree actually uses - and it does not look at DirectVulkan, whose own key inventory is
 P7 wave 2's.
@@ -67,7 +63,6 @@ LIFETIME_KEY = r"GetLifetimeId\s*\(\s*\)"
 FAMILIES = [
     ("ResolvedTextureBindingMemo", r"struct\s+ResolvedTextureBindingMemo\s*\{"),
     ("UnitSamplerLookupMemo", r"struct\s+UnitSamplerLookupMemo\s*\{"),
-    ("TwinLookupMemo", r"class\s+TwinLookupMemo\s*\{"),
     ("SamplerPassMemo", r"struct\s+SamplerPassMemo\s*\{"),
     ("StateBackendObjectRegistry", r"class\s+StateBackendObjectRegistry\s*\{"),
 ]
@@ -78,8 +73,8 @@ IMAGE_SWEEP = r"^\s*static\s+.*\bg_imageSweep\w*"
 # gate becomes a list of things that are allowed to be wrong.
 ALLOW = [
     ("MobileGL/MG_Backend/DirectGLES/Managers.h", "using BackendMap",
-     "the legacy arm's map IS the pull build's only arm; deleting it moves pull .text and "
-     "fails G1's 0/0/0/0, so it retires with the pull path (P13), not here"),
+     "StateBackendObjectRegistry's non-slot map: unreachable since P13 W3b made the slot arm "
+     "unconditional, deleted with the rest of the monolith glue in P13 W6"),
 ]
 # WHAT USED TO BE HERE, AND WHY IT IS NOT. Five more entries, and every one of them was a
 # carve-out for something no rule could have flagged in the first place:
@@ -100,7 +95,13 @@ def code_only(source: str) -> str:
 
 
 def legacy_lines(code: str) -> set[int]:
-    """Line numbers (1-based) sitting in an arm a split build does not compile.
+    """Line numbers (1-based) sitting in an exempted arm. Since P13 W3b: none (see the module
+    docstring); kept as a function so the self-test can say so."""
+    return set()
+
+
+def _retired_legacy_lines(code: str) -> set[int]:
+    """The pre-W3b exemption, kept only for the self-test's record of what changed.
 
     NOT a preprocessor. It recognises `#if MOBILEGL_PIPE_LEGACY_MEMOS`,
     `#if !MOBILEGL_BUILD_DISAGGREGATED`, and the `#else` of
@@ -213,8 +214,17 @@ def self_test() -> None:
                "    MG_State::GLState::ProgramObject* key = nullptr;\n};\n"),
         (gles, "struct UnitSamplerLookupMemo {\n"
                "    SamplerObject* frontend = nullptr;\n};\n"),
-        (gles, "class TwinLookupMemo {\n"
-               "    UnorderedMap<StateObject*, Slot> m_slots;\n};\n"),
+        # P13 W3b: the arms that used to be exempt are not any more.
+        (gles, "struct UnitSamplerLookupMemo {\n"
+               "#if MOBILEGL_PIPE_LEGACY_MEMOS\n"
+               "    SamplerObject* frontend = nullptr;\n"
+               "#endif\n};\n"),
+        (gles, "struct ResolvedTextureBindingMemo {\n"
+               "#if MOBILEGL_BUILD_DISAGGREGATED\n"
+               "    MG_Pipe::MGPipeHandle drawProgram{};\n"
+               "#else\n"
+               "    ProgramObject* program = nullptr;\n"
+               "#endif\n};\n"),
         (gles, "struct ResolvedTextureBindingMemo {\n"
                "    Uint64 id = program->GetLifetimeId();\n};\n"),
         (gles, "        static ITextureObject* g_imageSweepOwner = nullptr;\n"),
@@ -227,16 +237,10 @@ def self_test() -> None:
         assert violations(path, source), f"negative control did not turn red: {source!r}"
     # POSITIVE CONTROLS: each is a shape the tree deliberately keeps, and a gate that
     # reddened on them would be reverted within a day rather than fixed.
-    assert not violations(gles, "struct UnitSamplerLookupMemo {\n"
-                                "#if MOBILEGL_PIPE_LEGACY_MEMOS\n"
-                                "    SamplerObject* frontend = nullptr;\n"
-                                "#endif\n};\n"), "a LEGACY_MEMOS arm must stay green"
     assert not violations(gles, "struct ResolvedTextureBindingMemo {\n"
                                 "#if MOBILEGL_BUILD_DISAGGREGATED\n"
                                 "    MG_Pipe::MGPipeHandle drawProgram{};\n"
-                                "#else\n"
-                                "    ProgramObject* program = nullptr;\n"
-                                "#endif\n};\n"), "the #else of a DISAGGREGATED arm must stay green"
+                                "#endif\n};\n"), "a handle key must stay green in any arm"
     assert not violations(gles, "struct ResolvedTextureBindingMemo {\n"
                                 "    const void* program = nullptr;\n};\n"), \
         "the type-erased monolith key must stay green without needing an exemption"
@@ -298,8 +302,7 @@ def main() -> int:
         print("\n".join(failures))
         return 1
     print(f"espryt memo key purity gate: PASS ({len(FAMILIES)} families anchored, "
-          f"{len(ALLOW)} allow-list entr(y/ies), all consulted; the legacy pointer-keyed arm "
-          f"behind MOBILEGL_PIPE_LEGACY_MEMOS is a policy exemption, not an absence)")
+          f"{len(ALLOW)} allow-list entr(y/ies), all consulted; no exempted arm since P13 W3b)")
     return 0
 
 

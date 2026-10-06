@@ -3537,11 +3537,10 @@ jobs:
       # arms stayed because they are the PULL build's only arms and G1 pins that build's .text.
       # Nothing checked that a NEW frontend-pointer key could not appear outside them.
       #
-      # MOBILEGL_PIPE_LEGACY_MEMOS IS A POLICY EXEMPTION, NOT AN ABSENCE. It defaults ON
-      # (CMakeLists.txt:43) and no job here clears it, so the split builds in this workflow DO
-      # compile those arms - TwinLookupMemo among them. The gate's rule is "the legacy arm may
-      # keep pointer keys", which is a decision; only !MOBILEGL_BUILD_DISAGGREGATED is code a
-      # split build genuinely never sees.
+      # P13 W3b: NO EXEMPTED ARM ANY MORE. The legacy pointer-keyed arms (MOBILEGL_PIPE_LEGACY_MEMOS)
+      # retired with the pull build, and the !MOBILEGL_BUILD_DISAGGREGATED arms are compiled into
+      # the library FCL embeds, so they get the same rule: no frontend-pointer key in any memo
+      # family, in any build.
       #
       # --self-test runs the negative controls and then the real scan in one invocation, as its
       # sibling does; the scan also asserts that every memo family's anchor still matches and
