@@ -38,6 +38,7 @@ namespace MobileGL::MG_Config {
     String TransportEndpoint;
     Bool SplitTransportRequestedByConfig = false;
     IpcTable Ipc;
+    Bool MonolithTakesRecordArm = true;
 #endif
 } // namespace MobileGL::MG_Config
 
@@ -455,6 +456,33 @@ namespace MobileGL::MG_ConfigLoader {
     // rather than silent, because the failure this avoids is a P6 lane that set
     // MOBILEGL_TRANSPORT=spawn, fell back to monolith, and went green on the wrong arm.
     // The mode is left at Monolith so nothing half-initializes.
+    // P13 W4 (Config.h DataArmIsRecord). Read after InitTransport: `frontend` names monolith's
+    // arm only - a wire has no frontend objects on its server half to read, so there it is
+    // ignored by name rather than half-honoured.
+    inline void InitDataArm() {
+        String value;
+        QueryEnvVariable("MOBILEGL_PIPE_DATA_ARM", value, "record");
+        String lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        MG_Config::MonolithTakesRecordArm = true;
+        if (lowered.empty() || lowered == "record") return;
+        if (lowered == "frontend") {
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                MGLOG_W("Config: MOBILEGL_PIPE_DATA_ARM=frontend is ignored under a transport - the "
+                        "record arm is the only arm a wire has");
+                return;
+            }
+            MG_Config::MonolithTakesRecordArm = false;
+            MGLOG_I("Config: MOBILEGL_PIPE_DATA_ARM=frontend - monolith reads frontend objects in "
+                    "the record families switched so far");
+            return;
+        }
+        MGLOG_W("Config: Ignoring invalid env variable MOBILEGL_PIPE_DATA_ARM='%s'; expected "
+                "record|frontend, using record",
+                value.c_str());
+    }
+
     inline void InitTransport() {
         String value;
         QueryEnvVariable("MOBILEGL_TRANSPORT", value, "monolith");
@@ -702,6 +730,7 @@ namespace MobileGL::MG_ConfigLoader {
         // After InitFeatures, so the one line InitIpc logs is the last word on this run's
         // configuration, and before the accepted-env map is destroyed just below.
         InitTransport();
+        InitDataArm();
         InitIpc();
 #endif
 

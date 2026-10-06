@@ -128,6 +128,7 @@ namespace MGITest {
             default: state.transportName = "non-monolith"; break;
         }
         state.transportResolved = MobileGL::MG_Config::Transport != TransportMode::Monolith;
+        state.dataArmIsRecord = MobileGL::MG_Config::DataArmIsRecord();
 
         // Active() is c0's one deliberately non-aborting accessor: "does a session exist" has a
         // legitimate no. Everything below it is only reached through a live session, so nothing

@@ -63,6 +63,9 @@ namespace MGITest {
         bool transportResolved = false;
         // The resolved transport, for a message: "monolith", "inproc", "spawn", "unix", "pipe".
         std::string transportName = "monolith";
+        // P13 W4: MG_Config::DataArmIsRecord() - false in a build without the peek (and without
+        // MG_Remote), which stays on the frontend arm until W5.
+        bool dataArmIsRecord = false;
         // ClientSession::Active() != nullptr.
         bool sessionActive = false;
         // ImplementedVerbCount(), out of kRemoteEmitSlotCount (71).
