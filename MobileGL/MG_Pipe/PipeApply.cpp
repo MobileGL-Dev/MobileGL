@@ -32,10 +32,11 @@
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
 // P7 wave 0: the seam the Magma wire funnels in MG_Backend die through. Declared in MG_Pipe and
-// DEFINED below, so MG_Backend names no MG_Remote symbol of its own to reach Session::Fail.
+// DEFINED below, so MG_Backend names no MG_Remote symbol of its own to reach Session::Fail. P13 W5:
+// in every build, for the record arm's fail / latch half.
 #include <MG_Pipe/PipeSessionFail.h>
+#if MOBILEGL_BUILD_DISAGGREGATED
 // R-6's tier gate. One spelling, asked at the one place the decline is decided. Outside the
 // MOBILEGL_PIPE_VERIFY block above on purpose: the tier is a property of the BUILD, not of the
 // comparator, and a split build without the comparator still declines every acquisition.
