@@ -1069,7 +1069,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (vi), CONTRACT-P5E §5.1: THE SAME MEMO, THE SAME THREE-VALUE KEY, AND A WALK THAT
         // READS NO FRONTEND AT ALL. The arm above keeps the frontend attribute walk because the
         // push-monolith build has to keep its bytes (§5.8); this one is what a server with no
@@ -1218,7 +1218,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint64 bufferEpoch = CurrentBufferMutationEpoch();
             auto* memo = vaoTwin ? &vaoTwin->GetResolvedDrawBuffersMemo() : nullptr;
             const Uint32 configVersion = vaoConfigVersion;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (VertexInputReadsRecords()) {
                 SyncVaoAttributeBuffersByRecord(memo, bufferEpoch);
             } else
@@ -1290,7 +1290,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the config version). A stale identity hit is impossible in effect: the
             // clean probe re-validates the resource against the LIVE bound object.
             if (includeIBO) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5e (vi), CONTRACT-P5E §5.1: the index buffer is st.IndexBuffer.Res and the
                 // "has it moved" question is st.IndexBufferSerial. The identity compare stays -
                 // it always did, because the index slot is outside the configuration version
@@ -7613,7 +7613,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             handleArm ? PrgramImpl::ProgramBlockBindingFromRecord(*programRecord, i)
                                       :
                                       currentProgram->GetUniformBlockBinding(i);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                         // P5e (sb, §5.6): THE POINT HALF, by record. `binding` above is the
                         // PROGRAM's block binding and stays exactly where it is (it is package
                         // pg's row); what moves is the point it indexes. The index space is the
@@ -7790,7 +7790,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 samplerBinding.lastAssignedUnit = unit;
                             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                             // P5e (tx2), CONTRACT-P5E §5.3. THE SAMPLER PASS, FROM RECORDS.
                             //
                             // Four frontend reads used to live in this loop body and every one of

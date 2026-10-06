@@ -4041,7 +4041,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->persistentMapped = false;
                 resource->persistentPtr = nullptr;
                 resource->immutableStorage = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // m-5 / codex 5: OnBackendContextDestroyed ran MGL_SERVER_STAGED_DROP_ALL(), which
                 // frees every server shadow but does NOT null the hostBytes that name them - so a
                 // twin that SURVIVES a context loss still carries a base into the freed allocation.
@@ -6553,7 +6553,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_imageBindableStorageRequired) {
                 return;
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P13 W4b (defect h): monolith's record arm takes the body too; its old arm only
             // cleared m_isInitialized and replayed the frontend shadow at the next sync.
             if (MG_Config::DataArmIsRecord()) {

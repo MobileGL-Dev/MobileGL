@@ -1846,7 +1846,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             EraseTrackedTexture(identity);
         }
         prunedCount += orphanIdentities.size();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const auto pruneWire = [&](auto& resources, const auto& records) {
             for (auto it = resources.begin(); it != resources.end();) {
                 const Uint32 slot = static_cast<Uint32>(it->first >> 32) & 0x7fffffffu;
