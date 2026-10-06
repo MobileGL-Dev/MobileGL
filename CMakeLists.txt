@@ -31,11 +31,19 @@ option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process,
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
-# The PipeInputs strangler (ARCHITECTURE.md 9.2). ON since P13 W2: every build, the FCL-embedded
-# monolith included, pushes. OFF is the retired pull build, kept selectable only until P13 W3a
-# deletes the option (PLAN-P13 §6); nothing ships it and CI no longer builds it.
-option(MOBILEGL_PIPE_PUSH "Backends read frontend state through the MGPipe PipeInputs block instead of MG_State::pGLContext (ARCHITECTURE.md 9.2 phase A)" ON)
-option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; implies MOBILEGL_PIPE_PUSH; never shipped" OFF)
+# The PipeInputs strangler (ARCHITECTURE.md 9.2). NOT AN OPTION SINCE P13 W3a: every build pushes,
+# the pull build is retired (PLAN-P13 §6). The variable stays ON - and MOBILEGL_PIPE_PUSH=1 stays
+# defined for the sources - only until W3b removes the `#if MOBILEGL_PIPE_PUSH` guards themselves;
+# the order is what keeps a guard from going "green by skipping" (§4.2). A -DMOBILEGL_PIPE_PUSH=OFF
+# (or the OFF that every pre-P13 build tree holds in its cache, the old default) is named and
+# dropped rather than honoured: a warning, not an error, so an existing tree reconfigures.
+if (DEFINED CACHE{MOBILEGL_PIPE_PUSH} AND NOT "$CACHE{MOBILEGL_PIPE_PUSH}")
+    message(WARNING "MobileGL: MOBILEGL_PIPE_PUSH=OFF asks for the pull build, which P13 retired; "
+                    "ignored - every build pushes now")
+endif()
+unset(MOBILEGL_PIPE_PUSH CACHE)
+set(MOBILEGL_PIPE_PUSH ON)
+option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; never shipped" OFF)
 # Track H's old-versus-new arm (ARCHITECTURE.md 9.6). With a MOBILEGL_PIPE_PUSH bit clear
 # the backend would still run the RE-KEYED memo code, so the bitmask alone stops being a
 # valid A/B the moment a handle wave lands: this option compiles the pre-handle arm - the
@@ -543,37 +551,6 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     # And with it the shim option, or the `-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=1` below
     # would still be defined over a build with no MG_Remote in it at all.
     set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
-endif()
-
-# MOBILEGL_BUILD_DISAGGREGATED implies MOBILEGL_PIPE_PUSH (P5 c0). The split path IS the
-# pushed path: MG_Remote's server decodes records into the MGPipeApply* entry points, which
-# live in MG_Pipe/PipeApply.cpp, which the PIPE_PUSH block below is what compiles. Without
-# this, `-DMOBILEGL_BUILD_DISAGGREGATED=ON` alone configures and then fails to link the
-# applier - and the shape it fails in (MG_Remote compiled, no applier) is indistinguishable
-# at the CMake level from a legitimate transport-only build, which is why it is stated here
-# rather than left to whoever hits the link error. Same normal-variable form as the two
-# implications above.
-if (MOBILEGL_BUILD_DISAGGREGATED AND NOT MOBILEGL_PIPE_PUSH)
-    message(STATUS "MobileGL: MOBILEGL_BUILD_DISAGGREGATED=ON forces MOBILEGL_PIPE_PUSH ON for "
-                   "this configure: the split path decodes into the MGPipe applier, and the "
-                   "applier is what MOBILEGL_PIPE_PUSH compiles")
-    set(MOBILEGL_PIPE_PUSH ON)
-endif()
-
-# MOBILEGL_PIPE_VERIFY implies MOBILEGL_PIPE_PUSH: the comparator compares the pushed block
-# against a snapshot, so there has to be a pushed block. A normal variable, not a forced
-# cache write, for the same reason as the disaggregated fallback above.
-if (MOBILEGL_PIPE_VERIFY AND NOT MOBILEGL_PIPE_PUSH)
-    message(STATUS "MobileGL: MOBILEGL_PIPE_VERIFY=ON forces MOBILEGL_PIPE_PUSH ON for this configure")
-    set(MOBILEGL_PIPE_PUSH ON)
-endif()
-
-# In a pull build the legacy arm is the ONLY arm, so the option cannot be off there.
-# A normal variable, not a forced cache write, for the same reason as the two above.
-if (NOT MOBILEGL_PIPE_PUSH AND NOT MOBILEGL_PIPE_LEGACY_MEMOS)
-    message(STATUS "MobileGL: MOBILEGL_PIPE_PUSH=OFF forces MOBILEGL_PIPE_LEGACY_MEMOS ON for this "
-                   "configure: with nothing pushed it is the only arm there is")
-    set(MOBILEGL_PIPE_LEGACY_MEMOS ON)
 endif()
 
 if (MOBILEGL_PIPE_PUSH)

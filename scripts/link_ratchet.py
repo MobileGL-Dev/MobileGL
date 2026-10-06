@@ -41,8 +41,8 @@ symbols that disappeared, with an instruction to re-baseline in the same commit.
 never a red build; new reach always is.
 
 GUARD RAILS. The build must be a disaggregated one
-(-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON
--DMOBILEGL_PIPE_PUSH=ON): with the option OFF, MG_Remote is not compiled at all, the SERVER set
+(-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON; every build pushes
+since P13 W3a, so MOBILEGL_PIPE_PUSH is no longer an option to check): with the option OFF, MG_Remote is not compiled at all, the SERVER set
 is missing its transport half and the script would report a cheerfully small number that means
 nothing. The run reads CMakeCache.txt and refuses such a build by name unless it is given
 --no-require-flags. Two more refusals for the same reason - every way this gate can go green
@@ -184,7 +184,6 @@ BASELINE_ANNOTATION = " #"
 REQUIRED_FLAGS = (
     ("MOBILEGL_BUILD_DISAGGREGATED", "ON"),
     ("MOBILEGL_BUILD_DISAGGREGATED_INPROC", "ON"),
-    ("MOBILEGL_PIPE_PUSH", "ON"),
 )
 
 
