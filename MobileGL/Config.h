@@ -745,6 +745,14 @@ namespace MobileGL::MG_Config {
         return Transport == TransportMode::Spawn && Ipc.Surface == IpcSurface::Server;
     }
 
+#else
+    // The whole point: in a build without MG_Remote this folds at compile time, so
+    // `if (MG_Config::Transport != MG_Config::TransportMode::Monolith)` in Init.cpp is a
+    // discarded statement and the pull build gains no symbol, no branch and no byte.
+    inline constexpr TransportMode Transport = TransportMode::Monolith;
+#endif
+
+#if MOBILEGL_BUILD_RECORD_ARM
     // P13 W4: THE DATA-ARM QUESTION - do the backends read RECORDS (the applier's twins, the staged
     // stores, the verb's own handles) rather than frontend objects? Under a wire the answer has
     // always been yes; P13 makes it yes for monolith too ("monolith is the push variant"), one
@@ -765,12 +773,8 @@ namespace MobileGL::MG_Config {
         return Transport == TransportMode::Monolith && MonolithTakesRecordArm;
     }
 #else
-    // The whole point: in a build without MG_Remote this folds at compile time, so
-    // `if (MG_Config::Transport != MG_Config::TransportMode::Monolith)` in Init.cpp is a
-    // discarded statement and the pull build gains no symbol, no branch and no byte.
-    inline constexpr TransportMode Transport = TransportMode::Monolith;
-    // P13 W4: a build without MG_Remote stays on the frontend arm until W5 moves the record arm
-    // out of the disaggregated gating (ID-P13-1 / A2).
+    // A build without the record arm reads frontend objects everywhere (the negative control a
+    // library built with MOBILEGL_BUILD_RECORD_ARM=0 keeps until W6 deletes the frontend arms).
     inline constexpr Bool DataArmIsRecord() { return false; }
     inline constexpr Bool RecordArmAliasesFrontend() { return false; }
 #endif
