@@ -93,7 +93,7 @@ namespace MobileGL::MG_Pipe {
             return inputs.m_currentVertexAttribute;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (ra, CONTRACT-P5E §2.3). THE FOUR O-CLASS ROWS, AND ONLY THEY: these are the only
         // members of this block that own a frontend object rather than point into one, so they
         // are the only ones through which the apply thread can become a last owner. The raw
@@ -684,7 +684,7 @@ namespace MobileGL::MG_Pipe {
         if (&self != &gPipeInputs || !g_verify.Enabled) return;
         const auto index = static_cast<SizeT>(field);
         if (kMGPipeInputFieldSticky[index]) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (self.ServerStampedVerb() && field == MGPipeInputField::GetPixelStoreParameters) {
             // Compare the backend's pack field against the last payload applied to this
             // context, including the neutral-pack override during readback. Never obtain
@@ -1096,7 +1096,7 @@ namespace MobileGL::MG_Pipe {
                 // one was emitted, so this cannot be false - but a zeroed record (null
                 // handle, size 0) is not the answer if that pre-pass is ever relaxed.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5 (b1): the live-host-writes bit rides the content record, because
                 // "someone may be writing these bytes without telling you" is a fact about the
                 // CONTENT and not about the storage. It is set from the object's PUBLISHED
@@ -1130,7 +1130,7 @@ namespace MobileGL::MG_Pipe {
                 // store, or the pattern FillSubData expanded locally, and neither is this
                 // client's untransformed shadow of the level.
                 if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/false)) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5 (b1): THE SECOND CONTENT EMITTER, and it has to speak for the same reason
                 // the first does. ApplyBufferWrite ASSIGNS the bit - a content record emitted
                 // while nothing maps the buffer is how the state goes back to false - so a
@@ -2223,7 +2223,7 @@ namespace MobileGL::MG_Pipe {
     // a server-stamped verb, so InvalidateCompileEnv keeps being reachable from backend
     // initialisation - the case the exemption was written for - and every monolith lane, split
     // build included, behaves as it does today.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #define MGP_STICKY_FORWARD_PULL(Field) MGPipeStickyForwardPull(MGPipeInputField::Field)
 #else
 #define MGP_STICKY_FORWARD_PULL(Field) ((void)0)
@@ -2260,7 +2260,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
         }
@@ -2359,7 +2359,7 @@ namespace MobileGL::MG_Pipe {
         // stamped, so every stamp this verb made falls behind the serial.
         ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MGPipeClientClearVerbBoundary();
 #endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
@@ -2907,7 +2907,7 @@ namespace MobileGL::MG_Pipe {
             Bool ApplierDerives = false;
             Bool ContextValuesWireLive = false;
             Bool P4aConsumer = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             Uint64 CapsGeneration = 0;
 #endif
             // One bit per FIELD - not per verb class. The class mask is applied at the walk
@@ -3115,7 +3115,7 @@ namespace MobileGL::MG_Pipe {
             // `g_attribDefaultLastHeader`, which is what it just published; there is nothing
             // the mirror could add that the wire does not already carry. A build that ever
             // needs the repair arm again has to earn it with a barriered row.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (ClientRunsAhead()) return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
 #endif
             const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(MGPipeClientInputs());
@@ -3134,7 +3134,7 @@ namespace MobileGL::MG_Pipe {
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // set_context_values (P5c rv, CONTRACT-P5C.md §5.3): the residual-value record. One
         // POD carrying every value-class field no other set_* supplies - the two texture-unit
         // counters, the 15 per-target touched-buffer-binding counts and the five XFB values -
@@ -3393,7 +3393,7 @@ namespace MobileGL::MG_Pipe {
         // is the CLIENT-role block and gPipeInputs is the server's alone; off, or under
         // monolith transport, it folds back onto gPipeInputs and nothing below changes.
         PipeInputs& inputs = MGPipeClientInputs();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P5e (ra), CONTRACT-P5E §3: WHO OWNS gPipeInputs FOR THIS VERB ----------------
         //
         // Under run-ahead the block is SERVER-ROLE MEMORY for an unbarriered record: the
@@ -3469,7 +3469,7 @@ namespace MobileGL::MG_Pipe {
             // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
             ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // The client is filling, so whatever the server stamped at its last verb boundary
             // is withdrawn: the stamps below are the CLIENT's again and a stale read is a
             // defect, not a residual pull. Disarming here rather than at the end of the
@@ -3618,7 +3618,7 @@ namespace MobileGL::MG_Pipe {
             }
 #endif
             MGPipeCsoCacheInstance().Reset();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (!resetCrossed)
 #endif
                 MGPipeApplierReset();
@@ -3732,7 +3732,7 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c rv (CONTRACT-P5C.md §5.3): the residual-value record, emitted when any covered
         // value moved. THE GATE IS THE SUBSYSTEM BIT PLUS THE WIRE BEING LIVE - the family has
         // no dirty bit (NoDirtyBitOwnsTheResidualSubsystem) and no P4a consumer predicate (it

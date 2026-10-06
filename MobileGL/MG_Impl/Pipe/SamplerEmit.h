@@ -37,7 +37,7 @@
 // detection. Neither is reproduced here and neither may be.
 //
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 #endif
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
@@ -220,7 +220,7 @@ namespace MobileGL::MG_Pipe {
     // tokens are minted once and never reused (EGLState::CreateContext), which is what makes them
     // usable as an identity; 0 is "no EGL context", the server's "no context" applier.
     inline Uint64 MGPipeCurrentShareGroupToken() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Uint64 bound = 0;
         if (MG_Impl::EGLImpl::StreamBoundShareGroupToken(&bound)) return bound;
 #endif

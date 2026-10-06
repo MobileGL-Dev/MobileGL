@@ -1332,7 +1332,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                             static_cast<Uint>(bufferIndex));
             const auto& buffer = bindingPoint.GetBoundObject();
             if (buffer == nullptr) continue;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // This fixup READS the captured bytes back through the shadow, so it is the one
             // consumer that cannot simply inherit the deferral EndTransformFeedback's dropped
             // fence introduces. Under split it pays the reconciliation itself, which is the

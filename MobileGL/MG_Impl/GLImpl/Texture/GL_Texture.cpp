@@ -49,7 +49,7 @@
 // SyncGpuWrites, exactly as glMapBufferRange and glGetBufferSubData already do. Monolith keeps its
 // read as it was: its ReadPixels maps the driver PBO back into the shadow inside the call, and the
 // pull build compiles this to nothing (G1).
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                             do {                                                                                                     if (MG_Config::DataArmIsRecord()) (buffer)->SyncGpuWrites();       } while (0)
 #else
 #define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer) ((void)0)
@@ -6121,7 +6121,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         viewObject->SetInternalFormat(viewInternalFormat);
         viewObject->SetSamples(storageOwner->GetSamples());
         viewObject->SetFixedSampleLocations(storageOwner->HasFixedSampleLocations());
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord())
             MG_Pipe::MGPipeEmitSamplerViewCreate(*viewObject);
 #endif
@@ -6586,7 +6586,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     static void GetTextureImageForUploadTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                                TextureUploadTarget uploadTarget, GLint level, GLenum format,
                                                GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             MGP_FILL(GetTextureImage);
             MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
@@ -6614,7 +6614,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         auto uploadTarget = GetPrimaryUploadTarget(textureObject);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Unlike glGetTexImage's face target, this DSA call reads all six faces.
         if (MG_Config::DataArmIsRecord() &&
             textureObject->GetTarget() == TextureTarget::TextureCubeMap)
@@ -6880,7 +6880,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
         if (!GetTexImage_State(target, level, format, type, pixels)) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             GetTexImage_Backend(target, level, format, type, pixels);
             return;
