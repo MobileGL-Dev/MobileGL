@@ -79,8 +79,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // there is a correct answer (the state hash) where for bits 5/6 there is none - but it no
     // longer does it SILENTLY: the combination is named once, at startup, right here.
     inline void MagmaPipeValidateSubsystemConfiguration() {
-        if (!MG_Config::Features.PipeLegacyMemos &&
-            !MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
+        if (!MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
             MGLOG_W("MGPipe: MOBILEGL_PIPE_LEGACY_MEMOS=0 with kMGPipeSubsystemRenderState (bit 0 "
                     "of MOBILEGL_PIPE_PUSH) clear - Magma's pipeline memo has no CSO handle to key "
                     "on, so every draw whose pipeline-state version moved runs the pre-handle STATE "

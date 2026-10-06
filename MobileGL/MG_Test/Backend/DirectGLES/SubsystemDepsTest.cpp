@@ -184,19 +184,9 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
     using namespace MobileGL::MG_Backend::DirectGLES;
-    // THE RESOLVERS SURVIVE A SWEEP ONLY BECAUSE LEGACY MEMOS ARE ON. Each of them ends in
-    // ClassifyPipeSubsystemArm, and a verdict of NoArm calls StopOnArmlessPipeSubsystem
-    // (Managers.cpp:2928-2938), which aborts the process - that is the intended behaviour for a
-    // configuration with neither the handle arm nor the legacy arm, and it would turn this
-    // mask sweep into a crash rather than a failure. MOBILEGL_PIPE_LEGACY_MEMOS defaults ON
-    // (Config.h:399) and nothing in the unit lane clears it, so the legacy arm always survives
-    // and every resolver returns rather than stopping. Asserted rather than assumed, because the
-    // day that default flips this file would abort with no explanation.
-    ASSERT_TRUE(MG_Config::Features.PipeLegacyMemos)
-        << "MOBILEGL_PIPE_LEGACY_MEMOS is clear, so a resolver whose handle arm this sweep "
-           "deliberately refuses has NO arm left and StopOnArmlessPipeSubsystem will abort the "
-           "process instead of returning false. Run this case with the legacy memos on, or teach "
-           "it to skip the masks that leave a family armless.";
+    // THE RESOLVERS SURVIVE A SWEEP because a refused family takes the (unreachable since P13 W3b)
+    // legacy verdict and returns false instead of stopping; ConfigLoader refuses any such mask at
+    // startup, so this sweep exercises the resolvers' own logic, not a reachable configuration.
     struct Resolver {
         const char* Name;
         Uint64 Family;
@@ -234,8 +224,6 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskStillArms) {
     using namespace MobileGL::MG_Backend::DirectGLES;
-    ASSERT_TRUE(MG_Config::Features.PipeLegacyMemos)
-        << "see the sweep above: a refused family with the legacy arm also off aborts the process";
     {
         PushMaskScope scope(kMGPipeSubsystemsMigratedAtP5e);
         EXPECT_TRUE(ResolveTextureResourceSubsystemArm())

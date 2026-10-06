@@ -83,7 +83,8 @@
     X(ClientTablesUninstalled,       ProtocolCorruption, "the applier ran before the client installed its tables") \
     X(NoClientSession,               ProtocolCorruption, "a path that needs the client session ran without one") \
     X(UnnamedIdentity,               ProtocolCorruption, "a per-context memo was consulted with a null context identity") \
-    X(PipeLegacyMemosDisabled,       ProtocolCorruption, "a subsystem bit is clear and this build compiles no legacy arm to fall back to") \
+    X(PipeLegacyMemosDisabled,       ProtocolCorruption, "a subsystem bit is clear and this build compiles no legacy arm to fall back to (unreachable since P13 W3b fixed bits 0-13 on)") \
+    X(PipeSubsystemsFixedOn,         ProtocolCorruption, "MOBILEGL_PIPE_PUSH cleared one of subsystem bits 0-13, which P13 fixed on") \
     X(PipeVerifyBadKnob,             ProtocolCorruption, "a MOBILEGL_PIPE_VERIFY/POISON knob named a verb or field that does not exist") \
     X(PipeVerifyDiffer,              ProtocolCorruption, "the verify comparator found a pushed field differing from the live one") \
     X(UnexpectedMapAccept,           ProtocolCorruption, "a persistent-map accept arrived where the protocol permits none") \

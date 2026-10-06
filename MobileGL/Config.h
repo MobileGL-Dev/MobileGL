@@ -370,6 +370,10 @@ namespace MobileGL::MG_Config {
         //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
         //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
         //         never probed. The negative control the CSO design is measured against.
+        //   P13 W3b (ID-P13-3): bits 0-13 are FIXED ON. Their pre-handle arms are gone, so a mask
+        //   that clears one is refused by name at startup (Fatal{PipeSubsystemsFixedOn},
+        //   ConfigLoader.cpp); bit 63 is the one switch left. Everything above about "refused,
+        //   runs its legacy arm" describes code that is unreachable since then and goes in W6.
         Uint64 PipePush = 0;
         // MOBILEGL_PIPE_VERIFY: per-draw, per-FIELD shadow comparison of the pushed state
         // against a snapshot taken from GLContext the old way, printing the first field
@@ -410,15 +414,6 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
         // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
         Bool PipeStats = false;
-        // MOBILEGL_PIPE_LEGACY_MEMOS: keep the pre-handle registries and TwinLookupMemos
-        // alive so the first handle waves have a real old-versus-new arm to be compared
-        // against. ON by default for the whole migration window, deleted with the pull
-        // path itself.
-        Bool PipeLegacyMemos = true;
-        // MOBILEGL_PIPE_TEXEL_RETAIN_MB: LRU budget for texels retained against a
-        // server-initiated texture re-send. Default 0, i.e. OFF: MipmapStorage already
-        // holds a complete CPU shadow, so this cache buys latency, never correctness.
-        Uint32 PipeTexelRetainMb = 0;
         // MOBILEGL_PIPE_INDEX_MIRROR_MB: budget for the server-side index host mirror,
         // which is what lets primitive-restart rewriting and multi-draw flattening stay on
         // the server without shipping index bytes per draw. Over budget it degrades to

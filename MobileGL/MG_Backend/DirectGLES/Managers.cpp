@@ -476,7 +476,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict() {
         return ClassifyEsprytSlotArm(
             (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0,
-            MG_Config::Features.PipeLegacyMemos);
+            /*legacyMemosEnabled=*/true);
     }
 
     void DiagnoseEsprytSlotArm() {
@@ -3317,7 +3317,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // and NoArm is unreachable for it. Said out loud rather than assumed, because the
             // knob is still answered below.
             const PipeSubsystemArmVerdict verdict =
-                ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
+                ClassifyPipeSubsystemArm(bitSet, /*legacyMemosEnabled=*/true,
                                          /*legacyArmSurvivesLegacyMemos=*/true);
             // Unreachable for this family by the argument above, and stated as a stop anyway:
             // the two P3a families answer an armless verdict the same way, and an unreachable
@@ -3325,11 +3325,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (verdict == PipeSubsystemArmVerdict::NoArm) {
                 StopOnArmlessPipeSubsystem("MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources "
                                            "(bit 7) clear and the pre-handle buffer arm is gone");
-            }
-            if (verdict == PipeSubsystemArmVerdict::Legacy && !MG_Config::Features.PipeLegacyMemos) {
-                MGLOG_W("MGPipe: MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources (bit 7) clear while "
-                        "MOBILEGL_PIPE_LEGACY_MEMOS=0 asks for the pre-handle arms to be gone; the buffer "
-                        "ops table is compiled unconditionally, so the LEGACY arm is what this process runs");
             }
             const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
             MGLOG_D("MGPipe: Espryt resource family runs the %s arm", enabled ? "handle" : "legacy");
@@ -3363,7 +3358,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Unlike the buffer family, this one's legacy arm IS conditional: the pre-handle
             // SyncToBackend body and the twin memos it reads are inside MOBILEGL_PIPE_LEGACY_MEMOS.
             const PipeSubsystemArmVerdict verdict =
-                ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
+                ClassifyPipeSubsystemArm(bitSet, /*legacyMemosEnabled=*/true,
                                          /*legacyArmSurvivesLegacyMemos=*/false);
             if (verdict != PipeSubsystemArmVerdict::Handles &&
                 (verdict == PipeSubsystemArmVerdict::NoArm || !kLegacyVaoArmCompiled)) {
@@ -4942,7 +4937,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            bitSet && !refused, /*legacyMemosEnabled=*/true,
             /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
@@ -4986,7 +4981,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                      "kMGPipeSubsystemTextureResources (bit 10)");
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            bitSet && !refused, /*legacyMemosEnabled=*/true,
             /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
@@ -5022,7 +5017,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                      "kMGPipeSubsystemSamplers (bit 11)");
         }
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            bitSet && !refused, /*legacyMemosEnabled=*/true,
             /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
@@ -5053,7 +5048,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // specialises on (D-H5) are read from state this backend already holds.
         const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
         const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet, MG_Config::Features.PipeLegacyMemos, /*legacyArmSurvivesLegacyMemos=*/false);
+            bitSet, /*legacyMemosEnabled=*/true, /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemPrograms (bit 12) clear and "

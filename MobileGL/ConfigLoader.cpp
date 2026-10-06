@@ -390,6 +390,21 @@ namespace MobileGL::MG_ConfigLoader {
         // kMGPipeSubsystemsMigratedAtP3a (0x1ff) is the phase-by-phase control - P4a's four
         // subsystems off, everything P3a landed still on.
         features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP5e);
+        // P13 W3b (ID-P13-3): bits 0-13 are fixed on. The arms a cleared bit used to select
+        // (the pre-handle memos, the pull build's frontend reads) are gone, so a cleared bit has
+        // nothing to run; it is refused here, by name, before any backend is brought up, rather
+        // than discovered as an armless subsystem at its first draw. Bit 63 (CSO content
+        // addressing off) stays a switch.
+        if ((features.PipePush & MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) !=
+            MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) {
+            MGLOG_F("MGPipe: Fatal{PipeSubsystemsFixedOn, \"MOBILEGL_PIPE_PUSH=0x%llx clears subsystem "
+                    "bit(s) 0x%llx; bits 0-13 are fixed on since P13 - only bit 63 may be set or "
+                    "cleared\"}",
+                    static_cast<unsigned long long>(features.PipePush),
+                    static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP5e &
+                                                    ~features.PipePush));
+            std::abort();
+        }
         features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
         // Defaults ON: read as a tri-state so only an explicitly falsy value turns it off.
         features.PipeVerifyFatal =
@@ -398,12 +413,6 @@ namespace MobileGL::MG_ConfigLoader {
         QueryEnvVariable("MOBILEGL_PIPE_POISON_OMIT", features.PipePoisonOmit, "");
         features.PipeHandleAbaControl = QueryEnvFlag("MOBILEGL_PIPE_HANDLE_ABA_CONTROL");
         features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
-        // Defaults ON, so the flag has to be read as a tri-state rather than as a plain
-        // truthy check: unset must keep the memos, and only an explicitly falsy value may
-        // drop them.
-        features.PipeLegacyMemos =
-            QueryEnvQuirkOverride("MOBILEGL_PIPE_LEGACY_MEMOS") != MG_Config::QuirkOverride::ForceOff;
-        features.PipeTexelRetainMb = QueryEnvUint32("MOBILEGL_PIPE_TEXEL_RETAIN_MB", 0, 0, 4096);
         features.PipeIndexMirrorMb = QueryEnvUint32("MOBILEGL_PIPE_INDEX_MIRROR_MB", 64, 0, 4096);
         features.PipeStatsPeriod = QueryEnvUint32("MOBILEGL_PIPE_STATS_PERIOD", 120, 1, 1000000);
         QueryEnvVariable("MOBILEGL_PIPE_STATS_FILE", features.PipeStatsFile, "");

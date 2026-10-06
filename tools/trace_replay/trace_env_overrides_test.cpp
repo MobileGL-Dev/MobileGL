@@ -80,8 +80,8 @@ int main() {
     ExpectSplit(";;A=1;;B=2;;", {"A=1", "B=2"});
     ExpectSplit(";", {});
     // The values the plan's knobs actually carry: a path, a size, a comma list.
-    ExpectSplit("MOBILEGL_PIPE_TEXEL_RETAIN_MB=64;MOBILEGL_LOG_FILE_PATH=/sdcard/MG/a.log",
-                {"MOBILEGL_PIPE_TEXEL_RETAIN_MB=64", "MOBILEGL_LOG_FILE_PATH=/sdcard/MG/a.log"});
+    ExpectSplit("MOBILEGL_PIPE_INDEX_MIRROR_MB=64;MOBILEGL_LOG_FILE_PATH=/sdcard/MG/a.log",
+                {"MOBILEGL_PIPE_INDEX_MIRROR_MB=64", "MOBILEGL_LOG_FILE_PATH=/sdcard/MG/a.log"});
 
     // Classification.
     ExpectParse("MOBILEGL_PIPE_PUSH=1", EnvOverrideAction::Set, "MOBILEGL_PIPE_PUSH", "1");
