@@ -197,4 +197,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar* const* varyings, GLenum bufferMode);
     void GetTransformFeedbackVarying(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLsizei* size,
                                      GLenum* type, GLchar* name);
+
+    // GL_ARB_shader_objects (GL_ShaderObjectsARB.cpp): the entry points that ask which kind of object
+    // a handle names. The rest of the extension is the core calls under ARB names (Definitions.cpp).
+    void DeleteObjectARB(GLuint obj);
+    GLuint GetHandleARB(GLenum pname);
+    void GetObjectParameterivARB(GLuint obj, GLenum pname, GLint* params);
+    void GetObjectParameterfvARB(GLuint obj, GLenum pname, GLfloat* params);
+    void GetInfoLogARB(GLuint obj, GLsizei maxLength, GLsizei* length, GLchar* infoLog);
 } // namespace MobileGL::MG_Impl::GLImpl

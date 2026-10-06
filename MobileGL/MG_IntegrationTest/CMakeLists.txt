@@ -71,6 +71,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/SyncWireScenario.cpp
     Scenarios/DrawParametersScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
+    Scenarios/ArbShaderObjectsScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/UnwrittenPositionOutputScenario.cpp
     Scenarios/SampleMaskScopeScenario.cpp
@@ -2466,6 +2467,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endmacro()
 
     mgl_itest_register_split_arms("ClearThenReadPixelsScenario.*" "")
+    # GL_ARB_shader_objects (P13): ARB-created shader / program objects travel the record arm like
+    # core-created ones, so the scenario runs on every split arm as well as both monoliths.
+    mgl_itest_register_split_arms("ArbShaderObjectsScenario.*" "")
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
     # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case

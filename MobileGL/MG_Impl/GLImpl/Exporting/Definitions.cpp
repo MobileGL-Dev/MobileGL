@@ -1307,17 +1307,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, GetnMinmaxARB, GLenum target, GLboolean rese
 DECLARE_GL_FUNCTION_STUB_HEAD(void, FramebufferSampleLocationsfvARB, GLenum target, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, FramebufferSampleLocationsfvARB, target, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedFramebufferSampleLocationsfvARB, GLuint framebuffer, GLuint start, GLsizei count, const GLfloat* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedFramebufferSampleLocationsfvARB, framebuffer, start, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, EvaluateDepthValuesARB, void) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, EvaluateDepthValuesARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteObjectARB, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteObjectARB, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, GetHandleARB, GLenum pname) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, GetHandleARB, pname)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, DetachObjectARB, GLhandleARB containerObj, GLhandleARB attachedObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DetachObjectARB, containerObj, attachedObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateShaderObjectARB, GLenum shaderType) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateShaderObjectARB, shaderType)
-DECLARE_GL_FUNCTION_STUB_HEAD(GLhandleARB, CreateProgramObjectARB, void) DECLARE_GL_FUNCTION_STUB_END(GLhandleARB, CreateProgramObjectARB, )
-DECLARE_GL_FUNCTION_STUB_HEAD(void, AttachObjectARB, GLhandleARB containerObj, GLhandleARB obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, AttachObjectARB, containerObj, obj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, UseProgramObjectARB, GLhandleARB programObj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, UseProgramObjectARB, programObj)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterfvARB, GLhandleARB obj, GLenum pname, GLfloat* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterfvARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetObjectParameterivARB, GLhandleARB obj, GLenum pname, GLint* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetObjectParameterivARB, obj, pname, params)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetInfoLogARB, GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetInfoLogARB, obj, maxLength, length, infoLog)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetAttachedObjectsARB, GLhandleARB containerObj, GLsizei maxCount, GLsizei* count, GLhandleARB* obj) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetAttachedObjectsARB, containerObj, maxCount, count, obj)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, NamedStringARB, GLenum type, GLint namelen, const GLchar* name, GLint strinen, const GLchar* string) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, NamedStringARB, type, namelen, name, strinen, string)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DeleteNamedStringARB, GLint namelen, const GLchar* name) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DeleteNamedStringARB, namelen, name)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, CompileShaderIncludeARB, GLuint shader, GLsizei count, const GLchar* const* path, const GLint* length) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, CompileShaderIncludeARB, shader, count, path, length)
@@ -2994,6 +2983,165 @@ MOBILEGL_GL_API void glGetnUniformuivARB(GLuint program, GLint location, GLsizei
 
 MOBILEGL_GL_API void glGetnUniformdvARB(GLuint program, GLint location, GLsizei bufSize, GLdouble* params) {
     glGetnUniformdv(program, location, bufSize, params);
+}
+
+// ---- GL_ARB_shader_objects --------------------------------------------------------------------
+// A handle is a name of the core's one shared shader/program name space: CreateShaderObjectARB and
+// CreateProgramObjectARB hand out exactly what glCreateShader / glCreateProgram would, so an ARB
+// handle works with every core call and a core name with every ARB call. The calls whose meaning
+// is the core one under another name forward to the core entry point; the ones that ask which
+// kind of object a handle names (DeleteObjectARB, GetHandleARB, GetObjectParameter*ARB,
+// GetInfoLogARB) are GLImpl's (Program/GL_ShaderObjectsARB.cpp). GLhandleARB is GLuint everywhere
+// but Apple, where the header makes it a pointer - hence the two conversions.
+namespace {
+    inline GLuint ArbName(GLhandleARB handle) {
+#if defined(__APPLE__)
+        return static_cast<GLuint>(reinterpret_cast<uintptr_t>(handle));
+#else
+        return handle;
+#endif
+    }
+    inline GLhandleARB ArbHandle(GLuint name) {
+#if defined(__APPLE__)
+        return reinterpret_cast<GLhandleARB>(static_cast<uintptr_t>(name));
+#else
+        return name;
+#endif
+    }
+} // namespace
+
+MOBILEGL_GL_API GLhandleARB glCreateShaderObjectARB(GLenum shaderType) { return ArbHandle(glCreateShader(shaderType)); }
+
+MOBILEGL_GL_API GLhandleARB glCreateProgramObjectARB(void) { return ArbHandle(glCreateProgram()); }
+
+MOBILEGL_GL_API void glDeleteObjectARB(GLhandleARB obj) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::DeleteObjectARB(ArbName(obj));
+}
+
+MOBILEGL_GL_API GLhandleARB glGetHandleARB(GLenum pname) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    return ArbHandle(MobileGL::MG_Impl::GLImpl::GetHandleARB(pname));
+}
+
+MOBILEGL_GL_API void glDetachObjectARB(GLhandleARB containerObj, GLhandleARB attachedObj) {
+    glDetachShader(ArbName(containerObj), ArbName(attachedObj));
+}
+
+MOBILEGL_GL_API void glAttachObjectARB(GLhandleARB containerObj, GLhandleARB obj) {
+    glAttachShader(ArbName(containerObj), ArbName(obj));
+}
+
+MOBILEGL_GL_API void glShaderSourceARB(GLhandleARB shaderObj, GLsizei count, const GLcharARB** string,
+                                       const GLint* length) {
+    glShaderSource(ArbName(shaderObj), count, string, length);
+}
+
+MOBILEGL_GL_API void glCompileShaderARB(GLhandleARB shaderObj) { glCompileShader(ArbName(shaderObj)); }
+
+MOBILEGL_GL_API void glLinkProgramARB(GLhandleARB programObj) { glLinkProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glUseProgramObjectARB(GLhandleARB programObj) { glUseProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glValidateProgramARB(GLhandleARB programObj) { glValidateProgram(ArbName(programObj)); }
+
+MOBILEGL_GL_API void glGetObjectParameterfvARB(GLhandleARB obj, GLenum pname, GLfloat* params) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetObjectParameterfvARB(ArbName(obj), pname, params);
+}
+
+MOBILEGL_GL_API void glGetObjectParameterivARB(GLhandleARB obj, GLenum pname, GLint* params) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetObjectParameterivARB(ArbName(obj), pname, params);
+}
+
+MOBILEGL_GL_API void glGetInfoLogARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* infoLog) {
+    const MobileGL::MG_Impl::EGLImpl::GLStreamScope mglStreamScope;
+    MobileGL::MG_Impl::GLImpl::GetInfoLogARB(ArbName(obj), maxLength, length, infoLog);
+}
+
+MOBILEGL_GL_API void glGetAttachedObjectsARB(GLhandleARB containerObj, GLsizei maxCount, GLsizei* count,
+                                             GLhandleARB* obj) {
+#if defined(__APPLE__)
+    Vector<GLuint> names(maxCount > 0 ? static_cast<SizeT>(maxCount) : 0);
+    GLsizei written = 0;
+    glGetAttachedShaders(ArbName(containerObj), maxCount, &written, names.empty() ? nullptr : names.data());
+    if (obj != nullptr) {
+        for (GLsizei i = 0; i < written; ++i) obj[i] = ArbHandle(names[static_cast<SizeT>(i)]);
+    }
+    if (count != nullptr) *count = written;
+#else
+    glGetAttachedShaders(ArbName(containerObj), maxCount, count, obj);
+#endif
+}
+
+MOBILEGL_GL_API GLint glGetUniformLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetUniformLocation(ArbName(programObj), name);
+}
+
+MOBILEGL_GL_API void glGetActiveUniformARB(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei* length,
+                                           GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveUniform(ArbName(programObj), index, maxLength, length, size, type, name);
+}
+
+MOBILEGL_GL_API void glGetUniformfvARB(GLhandleARB programObj, GLint location, GLfloat* params) {
+    glGetUniformfv(ArbName(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetUniformivARB(GLhandleARB programObj, GLint location, GLint* params) {
+    glGetUniformiv(ArbName(programObj), location, params);
+}
+
+MOBILEGL_GL_API void glGetShaderSourceARB(GLhandleARB obj, GLsizei maxLength, GLsizei* length, GLcharARB* source) {
+    glGetShaderSource(ArbName(obj), maxLength, length, source);
+}
+
+MOBILEGL_GL_API void glUniform1fARB(GLint location, GLfloat v0) { glUniform1f(location, v0); }
+MOBILEGL_GL_API void glUniform2fARB(GLint location, GLfloat v0, GLfloat v1) { glUniform2f(location, v0, v1); }
+MOBILEGL_GL_API void glUniform3fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) {
+    glUniform3f(location, v0, v1, v2);
+}
+MOBILEGL_GL_API void glUniform4fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+    glUniform4f(location, v0, v1, v2, v3);
+}
+MOBILEGL_GL_API void glUniform1iARB(GLint location, GLint v0) { glUniform1i(location, v0); }
+MOBILEGL_GL_API void glUniform2iARB(GLint location, GLint v0, GLint v1) { glUniform2i(location, v0, v1); }
+MOBILEGL_GL_API void glUniform3iARB(GLint location, GLint v0, GLint v1, GLint v2) { glUniform3i(location, v0, v1, v2); }
+MOBILEGL_GL_API void glUniform4iARB(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) {
+    glUniform4i(location, v0, v1, v2, v3);
+}
+MOBILEGL_GL_API void glUniform1fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform1fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform2fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform2fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform3fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform3fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform4fvARB(GLint location, GLsizei count, const GLfloat* value) {
+    glUniform4fv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform1ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform1iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform2ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform2iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform3ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform3iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniform4ivARB(GLint location, GLsizei count, const GLint* value) {
+    glUniform4iv(location, count, value);
+}
+MOBILEGL_GL_API void glUniformMatrix2fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix2fv(location, count, transpose, value);
+}
+MOBILEGL_GL_API void glUniformMatrix3fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix3fv(location, count, transpose, value);
+}
+MOBILEGL_GL_API void glUniformMatrix4fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
+    glUniformMatrix4fv(location, count, transpose, value);
 }
 
 // KHR_robustness and EXT_robustness name the same entry points with their own suffixes (an ES
