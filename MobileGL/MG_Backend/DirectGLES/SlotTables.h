@@ -17,9 +17,7 @@
 // translation units that include it without copying Managers.h's include order.
 #include "DirectGLES.h"
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/PipeSessionFail.h>
 #endif
@@ -104,7 +102,6 @@
 // The registry guard is independent of Magma's legacy allocator debt scope.
 namespace MobileGL::MG_Backend::DirectGLES {
 
-#if MOBILEGL_PIPE_PUSH
 
     // Declared in Managers.h as well; repeated here because this header is included from it
     // before that declaration, and the table below is the arming site on this arm (D13: "the
@@ -1070,5 +1067,4 @@ namespace MobileGL::MG_Backend::DirectGLES {
         mutable MG_Pipe::MGPipeHandle m_memoHandle = MG_Pipe::kMGPipeNullHandle;
     };
 
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectGLES

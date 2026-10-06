@@ -45,7 +45,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Uint64 GetRendererGeneration();
     void BumpRendererGeneration();
 
-#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#if MOBILEGL_BUILD_DISAGGREGATED
     // P7 wave 2 package C (CONTRACT-P7 §5.5). Magma's StateObjectDeathOps table, installed
     // from BackendObject_DirectVulkan::Initialize() so that GetStateObjectDeathOps() is
     // non-null on every Magma role that owns a backend. See the definition for what the one

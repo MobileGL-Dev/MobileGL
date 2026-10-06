@@ -13,10 +13,8 @@
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
 
-#if MOBILEGL_PIPE_PUSH
 // P5c ev: the surface-changed event's producer callback, installed by the server session.
 #include <MG_Pipe/MGPipeCallbacks.h>
-#endif
 
 #if defined(__has_include)
 #if __has_include(<vulkan/vk_enum_string_helper.h>)
@@ -349,7 +347,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 break;
         }
 
-#if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
             // P5c ev (CONTRACT-P5C §4.2): with an active transport the default FBO's
             // attachments are CLIENT memory and this thread may not write them - the backend
@@ -367,7 +364,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             info.IsDefault = 1;
             MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
         } else
-#endif
         {
             auto* colorTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
             colorTex->AllocateStorage(

@@ -21,13 +21,11 @@
 #include <Config.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Pipe/PipeApply.h>
-#if MOBILEGL_PIPE_PUSH
 // P7 wave 2 package C (CONTRACT-P7 §5.5): Magma's own death-notice table. Both headers are
 // push-only and reached here for the same reason DirectGLES/Managers.cpp reaches them - the
 // notice is declared by the frontend and answered by whichever backend is running.
 #include <MG_Remote/Client/WireTables.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
-#endif
 #endif
 #include <atomic>
 #include <bit>
@@ -70,7 +68,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         SessionLocal<RendererGeneration> g_rendererGeneration;
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#if MOBILEGL_BUILD_DISAGGREGATED
     namespace {
         // P7 wave 2 package C, CONTRACT-P7 §5.5: MAGMA'S MIRROR OF g_glesStateObjectDeathOps
         // (DirectGLES/Managers.cpp:335), and the one arm of that table Magma has any work in.

@@ -19,10 +19,8 @@
 
 #include "MG_State/GLState/Core.h"
 #include <MG_Pipe/PipeInputsSwitch.h>
-#if MOBILEGL_PIPE_PUSH
 // P5c ev: the GPU-write announcement routes through the reverse channel (R2).
 #include <MG_Impl/Pipe/ResourceTracker.h>
-#endif
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/SamplerState/SamplerObject.h"
@@ -441,7 +439,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Per Magma session (MagmaSession.h): it shadows the session's own command buffer.
     static SessionLocal<DynamicStateShadow> g_dynamicStateShadow;
 
-#if MOBILEGL_PIPE_PUSH
     // ---- D12.3: DynamicTailKey's inputs against the P2 chunk table ----
     //
     // DynamicTailKey's inventory (declared above, one line per reader) is an exact,
@@ -534,7 +531,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                       "ScissorTestEnabledMask is written by SetCapability(ScissorTest), which calls "
                       "BumpVersions(), so the chunk table must keep it in the pipeline half");
     } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
     static void ResetDynamicStateShadow() {
         *g_dynamicStateShadow = {};
@@ -3262,13 +3258,11 @@ void main() {
     }
 
     void VulkanRenderer::Initialize() {
-#if MOBILEGL_PIPE_PUSH
         // P2 D14, and it belongs HERE rather than on a draw: "a Track-H subsystem whose bit is
         // clear is a STARTUP Fatal{PipeLegacyMemosDisabled}". Checks Magma's own bit only, and
         // only once this backend is the one being brought up, so an Espryt-side bitmask cannot
         // kill a Magma run and vice versa.
         MagmaPipeValidateSubsystemConfiguration();
-#endif
         CreateInstance();
         if (!CreateSurface()) throw RuntimeError("DirectVulkan: the initial surface could not be created");
         PickPhysicalDevice();
@@ -3454,12 +3448,8 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
         m_uniformManager->SetWireInvalidStorageImageArm(m_wireNullDescriptor);
 #endif
-#if MOBILEGL_PIPE_PUSH
         m_vertexInputStateFactory =
             MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle, m_pipeIdentity);
-#else
-        m_vertexInputStateFactory = MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle);
-#endif
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
@@ -3838,7 +3828,6 @@ void main() {
         if (m_vaoDrawMemoTable.empty()) {
             m_vaoDrawMemoTable.resize(kVaoDrawMemoSlotCount);
         }
-#if MOBILEGL_PIPE_PUSH
         if (MagmaPipeAbaControlDefeatsIdentity()) {
             // Negative control C (P2 brief D18), ahead of BOTH arms because it defeats the
             // identity half of both keys at once: the legacy arm's (address, lifetime id) pair
@@ -3907,7 +3896,6 @@ void main() {
             victim->bindings.indexBuffer = nullptr;
             return victim;
         }
-#endif
         // Multiplicative mix of the (16-byte-aligned) address; take high bits, they
         // carry the most entropy of a multiply.
         const Uint64 mixed = static_cast<Uint64>(reinterpret_cast<SizeT>(vao) >> 4) * 0x9E3779B97F4A7C15ull;
@@ -5314,100 +5302,7 @@ void main() {
         return MGB_CTX->GetRenderStateParameters().SampleMaskValue;
     }
 
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-    Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount,
-                                                    VkSampleCountFlagBits rasterizationSamples) const {
-        // One bulk fetch instead of ~17 per-field accessor calls into MG_State: every
-        // input below is a plain field of RenderStateParameters, and each accessor this
-        // replaces (IsCapabilityEnabled / Get*) is a verified pure read of that same
-        // field (RenderState.cpp), so the hashed values are bit-identical. This runs on
-        // every draw whose pipeline-state version moved (a per-draw GL_BLEND toggle),
-        // where the accessor-call overhead dominated the hash itself.
-        const RenderStateParameters& p = MGB_CTX->GetRenderStateParameters();
-        Uint64 capabilityBits = 0;
-        capabilityBits |= p.CullFaceEnabled ? 1ull << 0 : 0;
-        capabilityBits |= p.DepthTestEnabled ? 1ull << 1 : 0;
-        capabilityBits |= p.PolygonOffsetFillEnabled ? 1ull << 2 : 0;
-        capabilityBits |= p.RasterizerDiscardEnabled ? 1ull << 3 : 0;
-        capabilityBits |= p.ColorLogicOpEnabled ? 1ull << 4 : 0;
-        capabilityBits |= p.StencilTestEnabled ? 1ull << 5 : 0;
-        capabilityBits |= p.PrimitiveRestartEnabled ? 1ull << 6 : 0;
-        capabilityBits |= p.PrimitiveRestartFixedIndexEnabled ? 1ull << 7 : 0;
-        capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
-        capabilityBits |= p.SampleShadingEnabled ? 1ull << 9 : 0;
-        // The EFFECTIVE mask enable, not the raw GL bit: at one sample GL says the whole
-        // multisample fragment-operations step makes no change, so the pipeline is built with
-        // full coverage and the memo word has to say so too. Keying on the raw bit here while
-        // the payload gates on the sample count would let one FBO's cached pipeline answer for
-        // another whose sample count reads the mask differently.
-        const Bool sampleMaskEffective = ResolveEffectiveSampleMask(rasterizationSamples) != 0xffffffffu;
-        capabilityBits |= sampleMaskEffective ? 1ull << 10 : 0;
-        Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
-        // glMinSampleShading. Hashed by BITS, not by value: this memo compares hashes rather than
-        // versions, so an unhashed float would let a pipeline built at one rate be handed back
-        // after glMinSampleShading moved it - the memo would see identical state.
-        {
-            Uint32 minSampleShadingBits = 0;
-            std::memcpy(&minSampleShadingBits, &p.MinSampleShadingValue, sizeof(minSampleShadingBits));
-            hash = CombinePipelineStateWord(hash, static_cast<Uint64>(minSampleShadingBits));
-        }
-        // glSampleMaski's word, for the same reason glMinSampleShading's bits are hashed above:
-        // this memo compares hashes, not versions, so a mask that moved between two otherwise
-        // identical draws has to key a different pipeline. Hashed unconditionally rather than only
-        // while GL_SAMPLE_MASK is enabled - the enable bit is already in capabilityBits, and
-        // folding one more word costs nothing on a path that only recomputes when the
-        // pipeline-state version moved.
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ResolveEffectiveSampleMask(rasterizationSamples)));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
-        // The default tessellation levels belong here for the same reason PatchVertices does:
-        // when a program has an evaluation stage and no control stage, both are compiled into the
-        // synthesized pass-through control stage, so two draws that differ only in a level need
-        // different pipelines. Hashed over the RAW BITS so a NaN level - which glPatchParameterfv
-        // accepts - keys to itself. Six extra words on a path that only recomputes when the
-        // pipeline-state version moved.
-        for (Uint32 i = 0; i < 4; ++i) {
-            hash = CombinePipelineStateWord(hash,
-                                            static_cast<Uint64>(std::bit_cast<Uint32>(p.PatchDefaultOuterLevel[i])));
-        }
-        for (Uint32 i = 0; i < 2; ++i) {
-            hash = CombinePipelineStateWord(hash,
-                                            static_cast<Uint64>(std::bit_cast<Uint32>(p.PatchDefaultInnerLevel[i])));
-        }
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PolygonModeFront));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.CullFaceModeSetting));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.DepthFunc));
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.LogicOp));
-        // StencilStates[0] is Front, [1] is Back (RenderState::GetStencilFaceIndex) -
-        // the same order the two GetStencilState(face) calls used to hash in.
-        for (const StencilFaceState& stencil : p.StencilStates) {
-            hash = CombinePipelineStateWord(hash,
-                static_cast<Uint64>(stencil.FailOp) |
-                (static_cast<Uint64>(stencil.PassDepthPassOp) << 16) |
-                (static_cast<Uint64>(stencil.PassDepthFailOp) << 32) |
-                (static_cast<Uint64>(stencil.Func) << 48));
-        }
-        MOBILEGL_ASSERT(colorAttachmentCount <= p.BlendStates.size(),
-                        "ComputePipelineStateHash: colorAttachmentCount %u exceeds MAX_DRAW_BUFFERS",
-                        colorAttachmentCount);
-        for (Uint32 i = 0; i < colorAttachmentCount; ++i) {
-            const PerBufferBlendState& blend = p.BlendStates[i];
-            const BoolVec4 mask = p.ColorMasks[m_independentBlendFeatureEnabled ? i : 0];
-            Uint64 attachmentWord = blend.Enabled ? 1ull : 0;
-            attachmentWord |= (mask.r() ? 1ull << 1 : 0) | (mask.g() ? 1ull << 2 : 0) |
-                              (mask.b() ? 1ull << 3 : 0) | (mask.a() ? 1ull << 4 : 0);
-            attachmentWord |= static_cast<Uint64>(blend.SrcFactorRGB) << 8;
-            attachmentWord |= static_cast<Uint64>(blend.DstFactorRGB) << 16;
-            attachmentWord |= static_cast<Uint64>(blend.SrcFactorAlpha) << 24;
-            attachmentWord |= static_cast<Uint64>(blend.DstFactorAlpha) << 32;
-            attachmentWord |= static_cast<Uint64>(blend.ColorEquation) << 40;
-            attachmentWord |= static_cast<Uint64>(blend.AlphaEquation) << 48;
-            hash = CombinePipelineStateWord(hash, attachmentWord);
-        }
-        return hash;
-    }
-#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
-#if MOBILEGL_PIPE_PUSH && !MOBILEGL_PIPE_LEGACY_MEMOS
     Uint64 VulkanRenderer::ComputePipelineSubsetStateHashFallback() const {
         // The client's own hash, over the client's own definition of the pipeline subset - the
         // seven pipeline chunks of the P2 chunk table, which is a strict SUPERSET of what
@@ -5421,7 +5316,6 @@ void main() {
         // arm to fall back to instead.
         return MG_Pipe::MGPipeComputePipelineSubsetHash(MGB_CTX->GetRenderStateParameters());
     }
-#endif
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
@@ -5529,7 +5423,6 @@ void main() {
         // per-draw state flips (GL_BLEND toggles) would otherwise miss entries the memo holds.
         // The version only guards recomputing the hash - unchanged version, unchanged bytes.
         const Uint renderStateVersion = MGB_CTX->GetPipelineStateVersion();
-#if MOBILEGL_PIPE_PUSH
         // P2 D12.1. Non-null means the client's render-state CSO handle is this draw's state
         // key and the hash below is not computed at all; null means the pre-handle arm. The
         // two arms' entries can never match each other: the handle arm stores hash 0 and a
@@ -5544,22 +5437,6 @@ void main() {
                 : ResolveFallbackPipelineStateHash(renderStateVersion,
                                                    renderPassEntry.colorAttachmentCount,
                                                    renderPassEntry.sampleCount);
-#else
-        // THE PULL BUILD'S TEXT, statement for statement what the base ref has: G1 admits no
-        // resize of this function, and a helper the compiler merely inlines is not the same
-        // instruction schedule.
-        if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
-            m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
-            m_pipelineStateHash =
-                ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
-            m_pipelineStateHashVersion = renderStateVersion;
-            m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
-            m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
-            m_pipelineStateHashValid = true;
-        }
-        const Uint64 pipelineStateHash = m_pipelineStateHash;
-#endif
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
@@ -5569,9 +5446,7 @@ void main() {
                 entry.wireRenderPassCompatibilityId == wireRenderPassCompatibilityId &&
 #endif
                 entry.pipelineStateHash == pipelineStateHash &&
-#if MOBILEGL_PIPE_PUSH
                 entry.renderStateCso == renderStateCso &&
-#endif
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
                 entry.transformFlags == transformFlags) {
                 if (MG_Util::PipeStats::Enabled()) {
@@ -6311,9 +6186,7 @@ void main() {
             entry.wireRenderPassCompatibilityId = wireRenderPassCompatibilityId;
 #endif
             entry.pipelineStateHash = pipelineStateHash;
-#if MOBILEGL_PIPE_PUSH
             entry.renderStateCso = renderStateCso;
-#endif
             entry.primitiveRestartEnable = primitiveRestartEnable;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
@@ -6771,7 +6644,6 @@ void main() {
         // draw of a VAO-cycling stream (Minecraft chunk rendering) through the full
         // path, re-resolving descriptors and texture layouts nothing invalidated.
         const auto& vao = *MGB_CTX->GetBoundVertexArray();
-#if MOBILEGL_PIPE_PUSH
         // P2 D12.4: the handle replaces the (address, lifetime id) pair here too - one
         // compare instead of two, and the same identity the VAO draw memo is keyed on, so
         // the two cannot disagree about whether "the VAO moved". The config version stays:
@@ -6783,11 +6655,6 @@ void main() {
                 : (static_cast<const void*>(&vao) != snap.vao ||
                    vao.GetLifetimeId() != snap.vaoLifetimeId ||
                    vao.GetConfigVersion() != snap.vaoConfigVersion);
-#else
-        const Bool vaoMoved =
-            static_cast<const void*>(&vao) != snap.vao || vao.GetLifetimeId() != snap.vaoLifetimeId ||
-            vao.GetConfigVersion() != snap.vaoConfigVersion;
-#endif
         const auto& drawFbo =
             MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
@@ -7013,7 +6880,6 @@ void main() {
             // what lets a per-draw GL_BLEND toggle alternate between two memo entries
             // instead of missing forever on a monotonic version. A miss falls through
             // to the full lookup.
-#if MOBILEGL_PIPE_PUSH
             // Same arm selector as GetOrCreatePipeline's probe (P2 D12.1); this site is the
             // fast path's copy of it, and the two must key identically or the fast path would
             // hand back a pipeline the full path would not have matched.
@@ -7023,20 +6889,6 @@ void main() {
                     ? 0
                     : ResolveFallbackPipelineStateHash(renderStateVersion, snap.renderPassColorCount,
                                                        snap.renderPassSampleCount);
-#else
-            // The pull build's text, statement for statement (see GetOrCreatePipeline).
-            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-                m_pipelineStateHashColorCount != snap.renderPassColorCount ||
-                m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
-                m_pipelineStateHash =
-                    ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
-                m_pipelineStateHashVersion = renderStateVersion;
-                m_pipelineStateHashColorCount = snap.renderPassColorCount;
-                m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
-                m_pipelineStateHashValid = true;
-            }
-            const Uint64 pipelineStateHash = m_pipelineStateHash;
-#endif
             const auto memoTransformFlags =
                 ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
             for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
@@ -7048,9 +6900,7 @@ void main() {
                     entry.wireRenderPassCompatibilityId == 0 &&
 #endif
                     entry.pipelineStateHash == pipelineStateHash &&
-#if MOBILEGL_PIPE_PUSH
                     entry.renderStateCso == renderStateCso &&
-#endif
                     entry.primitiveRestartEnable == drawPrimitiveRestartEnable &&
                     entry.transformFlags == memoTransformFlags) {
                     pipeline = entry.pipeline;
@@ -7084,7 +6934,6 @@ void main() {
         snap.bindGeneration = bindGeneration;
         snap.vao = static_cast<const void*>(&vao);
         snap.vaoLifetimeId = vao.GetLifetimeId();
-#if MOBILEGL_PIPE_PUSH
         // Guarded by the SUBSYSTEM, not only by the build switch: with bit 6 clear the field
         // is dead (vaoMoved takes the address/lifetime-id branch), and minting a handle for it
         // would put this package's cost inside MOBILEGL_PIPE_PUSH=0 - the all-pull control arm
@@ -7092,7 +6941,6 @@ void main() {
         if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             snap.vaoHandle = ResolveVaoHandle(vao);
         }
-#endif
         snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.vaoLayoutHash = vaoLayoutHash;
         snap.pipeline = pipeline;
@@ -7697,13 +7545,11 @@ void main() {
                 snap.programVersion = program.GetBackendStateVersion();
                 snap.vao = &vao;
                 snap.vaoLifetimeId = vao.GetLifetimeId();
-#if MOBILEGL_PIPE_PUSH
                 // Subsystem-guarded for the same reason as the other stamping site: the field
                 // is dead with bit 6 clear, and MOBILEGL_PIPE_PUSH=0 has to be P1 exactly.
                 if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
                     snap.vaoHandle = ResolveVaoHandle(vao);
                 }
-#endif
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();
                 snap.drawFboLifetimeId = drawFbo->GetLifetimeId();
@@ -12634,13 +12480,9 @@ void main() {
             // have happened, so the buffer is also flagged for the wait that a later CPU
             // read has to perform - the capture is a GPU write like any shader's.
             bufferObject->EnsureGpuResidentStorage();
-#if MOBILEGL_PIPE_PUSH
             // P5c ev (R2, CONTRACT-P5C §4.2): through the reverse channel, not a direct poke
             // of the client object from the apply thread.
             MG_Pipe::MGPipeAnnounceBufferGpuWritten(bufferObject);
-#else
-            bufferObject->MarkGpuWritten();
-#endif
             BufferSlice slice{};
             if (!m_bufferManager.AcquireResidentSlice(BufferKind::Vertex, bufferObject, slice)) {
                 MGLOG_E_ONCE("BeginXfbCaptureForDraw: failed to acquire capture buffer %zu", i);
@@ -14109,14 +13951,12 @@ void main() {
         if (m_vertexInputStateFactory) {
             m_vertexInputStateFactory->OnFrameBoundary();
         }
-#if MOBILEGL_PIPE_PUSH
         // Reclaim {slot, gen} for objects that have not been drawn for a long time, on the same
         // cadence and the same retirement age as the entries those slots key. This is the
         // stand-in for the frontend death notification P2 has no hook for, and it is what keeps
         // the mint's footprint the LIVE working set rather than every object ever created
         // (review v2 MAJOR 1 / MAJOR 3).
         m_pipeIdentity.OnFrameBoundary();
-#endif
         if (m_samplerManager) {
             m_samplerManager->OnFrameBoundary();
         }
@@ -14655,9 +14495,7 @@ void main() {
             InvalidateSetupDrawSnapshots();
         }
         m_vertexInputStateFactory->OnFrameBoundary();
-#if MOBILEGL_PIPE_PUSH
         m_pipeIdentity.OnFrameBoundary();
-#endif
         m_samplerManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();

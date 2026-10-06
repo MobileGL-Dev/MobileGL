@@ -10,13 +10,11 @@
 #include <Includes.h>
 
 #include <Config.h>
-#if MOBILEGL_PIPE_PUSH
 // kMGPipeSubsystem* - the runtime bitmask's named bits - and MGPipeHandle itself. Both are
 // header-only constant/POD declarations, and both are push-only, so the pull build's include
 // graph is unchanged (G1).
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHandles.h>
-#endif
 
 #include <cstdlib>
 
@@ -44,7 +42,6 @@
 // below is behind it, and the pull build's translation units are byte-identical (G1).
 namespace MobileGL::MG_Backend::DirectVulkan {
 
-#if MOBILEGL_PIPE_PUSH
     // Is `subsystemBit` (MG_Pipe/MGPipe.h's kMGPipeSubsystem*) migrated in this run?
     inline Bool MagmaPipeSubsystemOn(Uint64 subsystemBit) {
         return (MG_Config::Features.PipePush & subsystemBit) != 0;
@@ -93,18 +90,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<unsigned long long>(MG_Config::Features.PipePush |
                                                     MG_Pipe::kMGPipeSubsystemRenderState));
         }
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        // The pre-handle arm is compiled AND the operator has not forbidden entering it, so a
-        // clear bit is an ordinary, valid A/B: the site takes the legacy arm.
-        if (MG_Config::Features.PipeLegacyMemos) return;
-#endif
         if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) return;
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        const char* const why = "this run has MOBILEGL_PIPE_LEGACY_MEMOS=0";
-#else
         const char* const why =
             "this build has cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF, which compiles no such arm";
-#endif
         MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled} Magma's Track-H subsystem "
                 "(kMGPipeSubsystemMagmaVertexInput, bit 6 of MOBILEGL_PIPE_PUSH) is clear, so the "
                 "vertex-input cache and the VAO draw memo want the pre-handle arm - but %s. Set "
@@ -119,15 +107,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // "Does this Track-H site run the handle arm?" - the ONE question every re-keyed Track-H
     // site asks, so that they cannot disagree with each other or with the startup gate.
     inline Bool MagmaPipeTrackHArmIsHandles(Uint64 trackHBit) {
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        return MagmaPipeSubsystemOn(trackHBit);
-#else
         // No pre-handle arm exists in this build, and MagmaPipeValidateSubsystemConfiguration
         // has already made a clear bit a startup Fatal, so the handle arm is the only arm a
         // running process can be on.
         (void)trackHBit;
         return true;
-#endif
     }
 
     // ---------------------------------------------------------------------------------
@@ -607,5 +591,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         return memos;
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectVulkan

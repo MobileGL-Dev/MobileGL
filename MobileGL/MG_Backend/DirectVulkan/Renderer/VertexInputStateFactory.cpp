@@ -58,7 +58,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // changes is that the key is now the identity the SERVER will be handed once
             // buffers travel as handles, instead of a number only the client can mint.
             Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
-#if MOBILEGL_PIPE_PUSH
             if (attr.Buffer) {
                 // The SAME arm question the other four re-keyed sites ask, through the same
                 // helper: a site that decided for itself could silently key on the pre-handle
@@ -86,14 +85,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     bufferKey = 0;
                 }
             }
-#endif
             XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
         }
 
         return XXH64_digest(m_hashState);
     }
 
-#if MOBILEGL_PIPE_PUSH
     VertexInputStateFactory::VaoBackendMemos& VertexInputStateFactory::MemosFor(
         const MG_State::GLState::VertexArrayObject& vao) const {
         const MG_Pipe::MGPipeHandle handle =
@@ -113,9 +110,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // suite's business, for the reason MagmaPipeAbaControlDefeatsIdentity spells out.
         return MagmaPipeClaimSlotMemos(m_vaoMemos, handle);
     }
-#endif
 
-#if MOBILEGL_PIPE_PUSH
     Bool VertexInputStateFactory::TryGetMemoizedHash(const MG_State::GLState::VertexArrayObject& vao,
                                                      Uint64& outHash) const {
         if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
@@ -124,18 +119,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outHash = memos.Hash;
             return true;
         }
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        return vao.GetBackendHashMemo(outHash);
-#else
         return false;
-#endif
     }
-#endif
 
     VertexInputStateFactory::HashType VertexInputStateFactory::GetOrComputeHash(
         const MG_State::GLState::VertexArrayObject& vao) const {
         HashType hash = 0;
-#if MOBILEGL_PIPE_PUSH
         // P2 D12.5: the same memo, on the backend's side of the boundary.
         if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             VaoBackendMemos& memos = MemosFor(vao);
@@ -147,19 +136,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             memos.HashConfigVersion = vao.GetConfigVersion();
             return hash;
         }
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        if (!vao.GetBackendHashMemo(hash)) {
-            hash = ComputeHash(vao);
-            vao.SetBackendHashMemo(hash);
-        }
-#endif
         return hash;
     }
 
     const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
         const MG_State::GLState::VertexArrayObject& vao) {
-#if MOBILEGL_PIPE_PUSH
         // P2 D12.5: the same per-draw fast path, but the resolved-entry pointer lives in this
         // factory's slot-indexed table instead of on the frontend VAO. The eviction epoch
         // survives the move and is still what stops a stale pointer being dereferenced: the
@@ -186,33 +167,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // live reader anywhere, so the handle arm retires it rather than moving it.
             return resolved;
         }
-#endif
-#if !MOBILEGL_PIPE_LEGACY_MEMOS
         // Unreachable: with no legacy arm compiled MagmaPipeTrackHArmIsHandles is a compile-
         // time true, so the handle arm above always returns. Written out rather than left to
         // fall off the end so the function still has a return on every path a compiler sees.
         return GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
-#else
-        // Per-draw fast path: the VAO carries a pointer to its resolved entry,
-        // valid while its config version and the cache's eviction epoch both
-        // match - no re-hash, no map lookup.
-        const void* memoState = nullptr;
-        Uint64 memoEpoch = 0;
-        if (vao.GetBackendStateMemo(memoState, memoEpoch) && memoEpoch == m_evictionEpoch) {
-            const auto* entry = static_cast<const BackendVertexInputState*>(memoState);
-            entry->lastUsedFrameBoundary = m_frameBoundaryCounter;
-            return *entry;
-        }
-        const BackendVertexInputState& entry = GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
-        vao.SetBackendStateMemo(&entry, m_evictionEpoch);
-        // Also mirror the layout identity and the two per-draw masks into the VAO's aux
-        // memo (pure VALUES derived from the VAO configuration, so config-version
-        // guarding alone is sound). The draw fast path reads them from the VAO object it
-        // already touched instead of chasing into this entry - see PackVertexInputAuxMemo.
-        vao.SetBackendAuxMemo(entry.layoutHash,
-                              PackVertexInputAuxMasks(entry.unsupportedAttribMask, entry.attributeLocationMask));
-        return entry;
-#endif // MOBILEGL_PIPE_LEGACY_MEMOS
     }
 
     const VertexInputStateFactory::BackendVertexInputState& VertexInputStateFactory::GetOrCreateVertexInputState(
@@ -599,11 +557,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // instances (see the member comment). With no legacy arm the memos
                 // live in this factory and die with it, so a per-instance bump is
                 // enough - P2 D12.5.
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-                m_evictionEpoch = ++s_evictionEpochSource;
-#else
                 ++m_evictionEpoch;
-#endif
             } else {
                 ++it;
             }

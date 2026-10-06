@@ -32,11 +32,9 @@
 #include <MG_Backend/BackendObject.h>
 #include <MG_Pipe/MGPipeHandles.h>
 #include <MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h>
-#if MOBILEGL_PIPE_PUSH
 // The applier's CSO store: MGPipeApplier().BoundRenderStateCso is what the pipeline memo
 // keys on after P2 (D12.1). Push-only, so the pull build's include graph is unchanged.
 #include <MG_Pipe/PipeApply.h>
-#endif
 #include <vk_mem_alloc.h>
 
 #include "../VkIncludes.h"
@@ -1382,7 +1380,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // never repeats, so a per-draw GL_BLEND toggle would miss all entries forever even
             // though the state alternates between two values the memo already holds.
             Uint64 pipelineStateHash = 0;
-#if MOBILEGL_PIPE_PUSH
             // The HANDLE arm's key component, and the whole of D12.1: the CLIENT already
             // hashed the pipeline subset of RenderStateParameters and minted a content-
             // addressed CSO for it (MG_Pipe/MGPipeRenderStateSpans.h, MG_Impl/Pipe/CsoCache),
@@ -1400,7 +1397,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Null in an entry minted by the legacy arm, so entries of the two arms can never
             // match each other: the compare below tests BOTH components.
             MG_Pipe::MGPipeHandle renderStateCso = MG_Pipe::kMGPipeNullHandle;
-#endif
             ProgramFactory::CompileOptionFlags transformFlags = {};
             // Baked into the pipeline (PipelineFactory::ComputeHash mixes it), and NOT derivable
             // from anything else in this key: it depends on whether the draw is indexed and on the
@@ -1415,7 +1411,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_pipelineMemoCount = 0;
         Uint32 m_pipelineMemoNext = 0;
 
-#if MOBILEGL_PIPE_PUSH
         // P2 D12.1's arm selector, and the whole of the pipeline memo's re-key. Returns the
         // render-state CSO this draw is keyed on, or the null handle when the pre-handle arm
         // is the one that runs.
@@ -1500,12 +1495,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
                 m_pipelineStateHashColorCount != colorAttachmentCount ||
                 m_pipelineStateHashSampleCount != rasterizationSamples) {
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-                m_pipelineStateHash =
-                    ComputePipelineStateHash(colorAttachmentCount, rasterizationSamples);
-#else
                 m_pipelineStateHash = ComputePipelineSubsetStateHashFallback();
-#endif
                 m_pipelineStateHashVersion = renderStateVersion;
                 m_pipelineStateHashColorCount = colorAttachmentCount;
                 m_pipelineStateHashSampleCount = rasterizationSamples;
@@ -1513,8 +1503,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return m_pipelineStateHash;
         }
-#endif // MOBILEGL_PIPE_PUSH
-#if MOBILEGL_PIPE_PUSH && !MOBILEGL_PIPE_LEGACY_MEMOS
         // The same answer as ComputePipelineStateHash, computed from the P2 chunk table
         // instead of from a hand-written field list, for the build that compiles no
         // pre-handle arm (cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF). It is the CLIENT's own
@@ -1524,22 +1512,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // way. This is what makes the no-legacy build RUNNABLE rather than a configuration
         // that aborts on the first draw that arrives without a CSO.
         Uint64 ComputePipelineSubsetStateHashFallback() const;
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        // THE PRE-HANDLE ARM (P2 brief D12.1 / D14). Hash of every fixed-function GL state the
-        // pipeline payload reads that the memo key's other fields (mode / program / vertex
-        // input / render pass / transform flags) do not already pin down. Equal hash under an
-        // equal rest of key => byte-identical PipelineCreatePayload. Cached per pipeline-state
-        // version: the version is monotonic and bumps on every pipeline-state
-        // change, so an unchanged (version, colorAttachmentCount) proves the state
-        // bytes are unchanged and the hash can be reused without re-reading them.
-        //
-        // The handle arm computes none of this: the client hashed the same bytes when it
-        // minted the CSO, so all five cached-hash members below exist only to avoid a
-        // re-hash the handle arm never performs.
-        Uint64 ComputePipelineStateHash(Uint32 colorAttachmentCount,
-                                        VkSampleCountFlagBits rasterizationSamples) const;
-#endif
         // The effective GL_SAMPLE_MASK word for a draw at this rasterization sample count; see
         // the definition for the GL-vs-Vulkan rule it reconciles. Shared by the pipeline payload
         // and the pipeline-state memo word so the two cannot disagree. NOT part of the legacy
@@ -1667,13 +1639,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // common shape), and "the VAO did not move" would then skip the layout
             // re-resolve for a different VAO.
             Uint64 vaoLifetimeId = 0;
-#if MOBILEGL_PIPE_PUSH
             // P2 D12.4: the handle arm's answer to the same question, and one compare rather
             // than the pair above. Kept BESIDE them rather than replacing them because the
             // pre-handle arm is still compiled (MOBILEGL_PIPE_LEGACY_MEMOS) and this snapshot
             // is a value struct, not a wire type.
             MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
-#endif
             Uint32 vaoConfigVersion = 0;
             const void* drawFbo = nullptr;
             // Never-reused lifetime id beside the raw pointer + Uint16 version: a
@@ -1948,13 +1918,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //  - bindings revalidates per draw exactly as before (frame serial, content
         //    hash, per-binding live buffer pointers and slice epochs).
         struct alignas(64) VaoDrawMemo {
-#if MOBILEGL_PIPE_PUSH
             // P2 D12.4: the handle arm's key, and the ONLY key it needs. {slot, gen} is an
             // identity, so the pointer-plus-lifetime-id pair below stops being a key here;
             // the slot also picks the table entry, so the address hash and the two-way probe
             // go with it. Null in an entry that has never been claimed.
             MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
-#endif
             const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
             // The VAO's never-reused lifetime id, checked alongside vaoKey. The pointer
             // ALONE is not an identity: a deleted VAO's heap address is handed straight
@@ -1998,7 +1966,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //     (VertexInputStateFactory::m_vaoMemos) had NO capacity, so they keep having none.
         static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
         Vector<VaoDrawMemo> m_vaoDrawMemoTable;
-#if MOBILEGL_PIPE_PUSH
         // The renderer's {slot, gen} mint, shared with its VertexInputStateFactory so both
         // derive the same handle for the same VAO. Per renderer, never a process-global: a
         // global would share one table and one reclamation clock across two live contexts and
@@ -2010,18 +1977,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return m_pipeIdentity.HandleOf(MG_Pipe::MGPipeKind::VertexElementsCso,
                                            vao.GetLifetimeId());
         }
-#endif
         // "Is this VAO's content hash already memoized?", asked of whichever side owns the
         // memo (P2 D12.5). Force-inlined and defined in the class body so that the PULL
         // build's three readers keep compiling to the very same two loads they always did -
         // G1 admits no resize, and an out-of-line call here would be one.
         [[gnu::always_inline]] inline Bool VaoContentHashIfKnown(
             const MG_State::GLState::VertexArrayObject& vao, Uint64& outHash) const {
-#if MOBILEGL_PIPE_PUSH
             return m_vertexInputStateFactory->TryGetMemoizedHash(vao, outHash);
-#else
-            return vao.GetBackendHashMemo(outHash);
-#endif
         }
         // Finds the slot holding `vao`, or recycles the older of its two candidate
         // slots into an empty memo keyed on `vao`. Never returns null.

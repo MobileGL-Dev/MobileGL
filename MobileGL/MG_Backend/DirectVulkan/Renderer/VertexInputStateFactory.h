@@ -78,7 +78,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
         };
 
-#if MOBILEGL_PIPE_PUSH
         // The mint is the RENDERER's (MagmaPipeIdentityTables), not a process-global and not
         // this factory's: VulkanRenderer::LookupVaoDrawMemo has to derive the same {slot, gen}
         // for the same VAO, and a table that outlived the context it was minted for would share
@@ -86,10 +85,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice,
                                 MagmaPipeIdentityTables& identity):
             m_config(config), m_physicalDevice(physicalDevice), m_identity(&identity) {}
-#else
-        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
-            m_config(config), m_physicalDevice(physicalDevice) {}
-#endif
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
@@ -104,13 +99,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Memoized ComputeHash: reuses the VAO's cached hash while its config version
         // is unchanged. Use this on per-draw paths.
         HashType GetOrComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
-#if MOBILEGL_PIPE_PUSH
         // The VAO's content hash IF it has already been memoized, without computing one.
         // P2 D12.5: the three draw-path readers that used to ask the VAO object this
         // question ask the factory instead, because that is where the memo lives once the
         // frontend object stops carrying the backend's state.
         Bool TryGetMemoizedHash(const MG_State::GLState::VertexArrayObject& vao, Uint64& outHash) const;
-#endif
         const BackendVertexInputState& GetOrCreateVertexInputState(
             const MG_State::GLState::VertexArrayObject& vao, HashType hash);
         const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);
@@ -144,7 +137,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkFormat ToFloat32VertexFormat(Int componentCount);
         Bool SupportsVertexBufferFormat(VkFormat format) const;
 
-#if MOBILEGL_PIPE_PUSH
         // ---- P2 D12.5: the backend's memos, off the frontend VAO and into the backend ----
         //
         // The two facts that used to live as `mutable` fields on VertexArrayObject
@@ -180,7 +172,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The entry belonging to `vao`, claimed (and cleared) if the slot currently holds
         // someone else's.
         VaoBackendMemos& MemosFor(const MG_State::GLState::VertexArrayObject& vao) const;
-#endif
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -217,12 +208,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // memos live on the frontend VAOs and therefore outlive the factory. The handle arm's
         // memo table is owned by this factory and dies with it, so a per-instance counter is
         // enough there and the epoch shrinks back to what it looks like it should be.
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        static inline std::atomic<Uint64> s_evictionEpochSource{0};
-        Uint64 m_evictionEpoch = ++s_evictionEpochSource;
-#else
         Uint64 m_evictionEpoch = 1;
-#endif
         static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

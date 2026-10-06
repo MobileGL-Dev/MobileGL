@@ -284,7 +284,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     using NativeContextKeyResolver = Bool (*)(Uint64* outSessionKey, Uint64* outContextToken);
     void SetNativeContextKeyResolver(NativeContextKeyResolver resolver);
 
-#if MOBILEGL_PIPE_PUSH
     // ---------------------------------------------------------------------------------
     // P14 S6 (docs/Disaggregated/design/11-state-ownership.md): THE TWIN TABLES' KEY, AND ITS
     // SHAPE IS S4's, ONE LEVEL DOWN. A twin is a DRIVER object, so it lives in one native
@@ -323,7 +322,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The calling thread's key. Answers false for {0, 0} - the process-wide group - which is
     // also the answer when no probe has ever been installed.
     Bool CurrentTwinKey(TwinKey* outKey);
-#endif
 
     // Builds the native context for `contextToken` under the calling thread's session. A
     // `shareGroupToken` whose group already has a live native context in this session hands that
