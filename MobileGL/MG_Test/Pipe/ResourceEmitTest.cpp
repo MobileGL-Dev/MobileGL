@@ -1205,9 +1205,11 @@ namespace {
         // always true) and the production-path probe pair in MG_Test/SanityTest.cpp and
         // MG_Test/Buffer/SplitBufferTest.cpp, both of which go red when the producer is
         // deleted. This skip is what the build-verify-split lane exists to make visible.
-#elif MOBILEGL_BUILD_DISAGGREGATED
+#elif MOBILEGL_BUILD_RECORD_ARM
+        // P13 W5: the producer is the record arm's (BufferObject::NotePersistentMapStateChanged),
+        // so the wire is retired wherever that arm is built (PipeApply.cpp's pin follows it).
         GTEST_SKIP() << "P5 gave HasLiveHostWrites a producer, so the always-false wire is retired "
-                        "in a split build; PinLiveHostWritesNamesABuffer replaces it";
+                        "wherever the record arm is built; PinLiveHostWritesNamesABuffer replaces it";
 #elif !MGTEST_HAVE_FORK
         GTEST_SKIP() << "no fork on this platform; the wire's verdict is std::abort()";
 #else
