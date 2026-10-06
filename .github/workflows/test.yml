@@ -22,8 +22,9 @@ env:
 # sat queued for 10+ hours behind their own successors. A manual dispatch gets a group of its own,
 # so a push never cancels a manually started run; dev queues rather
 # than cancels. No paths-ignore here, unlike apk.yml: this workflow hosts the doc citation lint.
+# The "hosted" key leaves behind runs queued for the retired self-hosted runner, which cannot drain.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  group: ${{ github.workflow }}-hosted-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' && github.ref != 'refs/heads/dev' }}
 
 defaults:
