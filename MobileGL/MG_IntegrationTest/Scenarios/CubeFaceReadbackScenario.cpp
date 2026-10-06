@@ -22,6 +22,7 @@
 // which one answered instead of merely failing.
 
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
@@ -73,6 +74,16 @@ namespace MGITest {
                 return buffer;
             }
 
+            static bool HasExtension(const char* name) {
+                GLint count = 0;
+                glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+                for (GLint i = 0; i < count; ++i) {
+                    const auto* ext = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+                    if (ext != nullptr && std::strcmp(ext, name) == 0) return true;
+                }
+                return false;
+            }
+
             static void DrainErrors() {
                 for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
                 }
@@ -122,6 +133,12 @@ namespace MGITest {
             constexpr GLint kLayers = 8;
             constexpr GLint kViewMinLayer = 2;
 
+            // Espryt mints views through the ES driver's texture-view extension and, without it,
+            // refuses glTextureView with INVALID_OPERATION and withholds GL_ARB_texture_view rather
+            // than emulate by copying (TextureViewScenario's header) - no view to read through.
+            if (!HasExtension("GL_ARB_texture_view")) {
+                GTEST_SKIP() << "GL_ARB_texture_view is not advertised on backend " << Gl().BackendName();
+            }
             const GLuint storage = NewTexture();
             glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
             glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, kLayers);
