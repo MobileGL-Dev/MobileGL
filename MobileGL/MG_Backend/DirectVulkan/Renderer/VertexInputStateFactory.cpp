@@ -6,8 +6,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-#include <MG_Backend/Record/ApplyRoleBackend.h>
 #include "VertexInputStateFactory.h"
+#include <MG_Backend/Record/ApplyRoleBackend.h>
 #include "MagmaPipeArms.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
 #include <MG_Backend/BackendObjects.h>
