@@ -1083,8 +1083,12 @@ namespace {
             EXPECT_EQ(Field(summary, "abandoned"), 0ull) << summary;
             EXPECT_EQ(Field(summary, "transport-failed"), 0ull) << summary;
             // One notice per gap, not one per ERROR line that got through the gap (the first cut of
-            // the channel wrote 373 here, one between every pair of the flood's ERROR lines).
-            EXPECT_LE(Field(summary, "notices"), 8ull) << summary;
+            // the channel wrote 373 here, one between every pair of the flood's ERROR lines). How
+            // many gaps a flood makes is the kernel's business - each time the socket takes another
+            // burst while the flood is still running, the lossy class recovers and its gap closes
+            // (a loaded CI runner measured 14) - so the bound is an order of magnitude under one per
+            // ERROR line, not a guess at the socket's buffer growth.
+            EXPECT_LE(Field(summary, "notices"), static_cast<unsigned long long>(kFloodRecords / 10)) << summary;
             EXPECT_LT(Field(summary, "max-offer-us"), kMaxOfferUs)
                 << "one forward held its logging thread for longer than " << kMaxOfferUs << " us\n" << summary;
             EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos);
