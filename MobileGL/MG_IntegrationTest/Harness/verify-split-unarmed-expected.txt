@@ -31,7 +31,8 @@
 # and put the names it prints here, under the class they belong to.
 #
 # MEASURED ON THE HOST (WSL Arch + lavapipe, build-split, 1064 entries with a private log):
-# 909 armed, 99 unarmed and skipped, 56 unarmed and named below.
+# 909 armed, 99 unarmed and skipped, 56 unarmed and named below (P13 added the ten
+# GL_ARB_shader_objects rows below: 66).
 
 # --------------------------------------------------------------------------------------------
 # CAPS, LIMITS AND EXTENSION ADVERTISEMENT - answered from the client's CapsMirror, no verb (22)
@@ -67,11 +68,17 @@ DirectVulkan.VerifySplit.DoublePrecisionScenario.TheFp64ExtensionIsNotAdvertised
 DirectVulkan.VerifySplit.SpirvShaderBinaryScenario.ShaderBinaryFormatIsAdvertisedExactlyOnce
 
 # --------------------------------------------------------------------------------------------
-# SHADER AND PROGRAM OBJECT SURFACES - compile, link, specialize, query, glGetError (16)
+# SHADER AND PROGRAM OBJECT SURFACES - compile, link, specialize, query, glGetError (26)
 # glShaderBinary / glSpecializeShader / glCompileShader / glGetUniformdv / the compiler
-# thread pool's settle-and-join, and the reserved-name pipeline case. Every one of them asserts on
-# an error code or a program query; none issues a draw, a dispatch, a clear or a readback.
+# thread pool's settle-and-join, the reserved-name pipeline case, and GL_ARB_shader_objects' name,
+# query, deletion and error cases (P13; its drawing cases arm). Every one of them asserts on an
+# error code, a name or a program query; none issues a draw, a dispatch, a clear or a readback.
 # --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.ArbShaderObjectsScenario.ArbAndCoreHandlesShareOneNameSpace
+DirectGLES.VerifySplit.ArbShaderObjectsScenario.DeleteObjectArbDefersLikeTheCore
+DirectGLES.VerifySplit.ArbShaderObjectsScenario.EveryEntryPointResolvesThroughGetProcAddress
+DirectGLES.VerifySplit.ArbShaderObjectsScenario.FreedNamesAreReusedWithoutCollision
+DirectGLES.VerifySplit.ArbShaderObjectsScenario.TheExtensionsErrorsAreTheSpecs
 DirectGLES.VerifySplit.AsyncCompileScenario.CompletionStatusPollingThenForcedJoin
 DirectGLES.VerifySplit.AsyncCompileScenario.ZeroCompilerThreadsSettlesEverythingImmediately
 DirectGLES.VerifySplit.DoublePrecisionScenario.GetUniformdvReadsBackWhatWasStored
@@ -80,6 +87,11 @@ DirectGLES.VerifySplit.ProgramPipelineScenario.AReservedNameTakesStateBeforeItIs
 DirectGLES.VerifySplit.SpirvShaderBinaryScenario.AnUnsupportedBinaryFormatIsRejectedInsteadOfSilentlyAccepted
 DirectGLES.VerifySplit.SpirvShaderBinaryScenario.CompileShaderOnASpirvShaderIsInvalidOperationAndShaderSourceTakesItBack
 DirectGLES.VerifySplit.SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension
+DirectVulkan.VerifySplit.ArbShaderObjectsScenario.ArbAndCoreHandlesShareOneNameSpace
+DirectVulkan.VerifySplit.ArbShaderObjectsScenario.DeleteObjectArbDefersLikeTheCore
+DirectVulkan.VerifySplit.ArbShaderObjectsScenario.EveryEntryPointResolvesThroughGetProcAddress
+DirectVulkan.VerifySplit.ArbShaderObjectsScenario.FreedNamesAreReusedWithoutCollision
+DirectVulkan.VerifySplit.ArbShaderObjectsScenario.TheExtensionsErrorsAreTheSpecs
 DirectVulkan.VerifySplit.AsyncCompileScenario.CompletionStatusPollingThenForcedJoin
 DirectVulkan.VerifySplit.AsyncCompileScenario.ZeroCompilerThreadsSettlesEverythingImmediately
 DirectVulkan.VerifySplit.DoublePrecisionScenario.GetUniformdvReadsBackWhatWasStored
