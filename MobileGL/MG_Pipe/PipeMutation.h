@@ -281,6 +281,10 @@ namespace MobileGL::MG_Pipe {
     // the new session serves its first record. Objects of the ended session that are still
     // alive find themselves unpublished, so their deaths put nothing on the new wire.
     void MGPipeForgetEndedSession();
+#else
+    // P13 W5: without a transport nothing applies off the GL thread, so no destroy is ever
+    // deferred to the next verb hook (the record arm's BeforeReadOnlyVerb still calls this).
+    inline void MGPipeDrainDeferredDestroys() {}
 #endif
 
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);

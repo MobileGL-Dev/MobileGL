@@ -62,7 +62,11 @@
         //     the reply form's UploadSubData is what creates it.
         MG_Pipe::MGPipeHandle PackBufferReadbackTarget(const SharedPtr<MG_State::GLState::BufferObject>& pbo,
                                                        Uint64 end) {
-            if (!pbo || MG_Config::Ipc.PboReadbackSync != 0) return MG_Pipe::kMGPipeNullHandle;
+            if (!pbo) return MG_Pipe::kMGPipeNullHandle;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The transport's own fallback knob (MOBILEGL_IPC_PBO_READBACK_SYNC): the reply form.
+            if (MG_Config::Ipc.PboReadbackSync != 0) return MG_Pipe::kMGPipeNullHandle;
+#endif
             if (!BufferWritebackIsReachable(*pbo) || pbo->IsMapped()) return MG_Pipe::kMGPipeNullHandle;
             if (end > 0x7FFFFFFFull) return MG_Pipe::kMGPipeNullHandle;
             return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer, pbo->GetLifetimeId());
