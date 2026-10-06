@@ -8,7 +8,11 @@
 |---|---|---|---|
 | CI 基线 | 完成 | `cde6512b` `0cbb1a84` `c9085533` | 托管 Test `37414803850`、APK `37405703442` 的红全部归类修复：1.17 名字表（apitrace 分支 `45843686`）、CTest include 的 `IN_LIST`、环回 TCP 端口、spawn Welcome 冷启动预算 |
 | W1 | 完成 | `5ff33cbb` | `runtime_mode_proof` 的 monolith = 无 MG_Remote；push 无 MG_Remote 控制库 + 零 MG_Remote 符号检查；retrace-split 不再因控制库失败整体跳过；skip 普查 |
-| W2 | 本地 | `3c42fef8` `d0019120` | CMake 默认 push；Gradle 删 `pipePush`（FCL 内嵌 push monolith、无 MG_Remote）；撤 pull 控制库 |
+| W2 | 完成 | `c6cb5dea` `68b56165` `9f05e665` `3e11c848` | CMake 默认 push；Gradle 删 `pipePush`（FCL 内嵌 push monolith、无 MG_Remote）；撤 pull 控制库。Test `37433779649` 三红均为非产品问题，已修（ci-cleanup-log 的基础设施表） |
+| W3a | 完成 | `55de98a0` | `MOBILEGL_PIPE_PUSH` 不再是选项（旧缓存 OFF 警告并忽略） |
+| W3b | 完成 | `9e14c16d`…`a4d10dd9`、`daf2b44c`…`883b8614`、`c0404018` | 删 `MOBILEGL_PIPE_LEGACY_MEMOS`、`MOBILEGL_PIPE_PUSH` 宏与 `MGB_CTX`；位图 bits 0-13 固定开，清位具名拒绝（`SubsystemMaskRefusal.*` 对照）；删 HandleRecycle Legacy / AbaControl 车道；每条移除记在 ci-cleanup-log |
+| W3c | 完成 | `e2c90986` `be86ca17` | 删 `ResidualValueBlock`；op 46 退役为拒绝行；verify 的 A2 负对照接管能力比对 |
+| W4a | 进行中 | 14a `3e2aff1d` `cef29781`；谓词 `8b907220`；Espryt 换臂（本地） | Espryt monolith 走记录臂：缓冲、indirect、client 数组、绑定点、GPU 写标记、fp64、重启索引、multi-draw；进程内 verb 端口；§1.4 别名刷新。XFB 依赖 program 档案，随 W4c；Magma 一次性换臂（入口按 verb 选臂，不能按族），在 Espryt 全部换完后 |
 
 ### G1 退役读数（ID-P13-4，2026-10-06）
 
