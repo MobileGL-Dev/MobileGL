@@ -211,21 +211,39 @@ def family_of(obj_path, table=FAMILIES):
     return best[1]
 
 
+# Object key (path relative to its target's object directory, e.g. MobileGL/MG_Backend/X.cpp.o)
+# -> the path nm is run on, relative to <build-dir>/CMakeFiles. Since P13 W7 (D12) the library is
+# linked from module OBJECT libraries, so its objects live under CMakeFiles/mg_<module>.dir as well
+# as CMakeFiles/MobileGL.dir (the few sources added to the library target itself); the key keeps the
+# source-relative spelling every PARTITION row is written against.
+OBJECT_PATHS = {}
+
+
 def find_objects(build_dir, target):
-    """Every .o under <build-dir>/CMakeFiles/<target>.dir, keyed by path relative to that dir."""
-    root = os.path.join(build_dir, "CMakeFiles", target + ".dir")
-    if not os.path.isdir(root):
+    """Every .o of <target> (and, for the library, of its mg_* module objects), keyed by path
+    relative to its object directory. Returns (<build-dir>/CMakeFiles, sorted keys)."""
+    cmake_files = os.path.join(build_dir, "CMakeFiles")
+    dirs = [target + ".dir"]
+    if target in ("MobileGL", "MobileGL_s") and os.path.isdir(cmake_files):
+        dirs += sorted(d for d in os.listdir(cmake_files) if d.startswith("mg_") and d.endswith(".dir"))
+    if not os.path.isdir(os.path.join(cmake_files, dirs[0])) and len(dirs) == 1:
         raise SystemExit(PREFIX + "no such object directory: {} (is --build-dir a configured "
                                   "CMake build, and is --target right? the disaggregated build "
                                   "has MobileGL.dir, MobileGL_s.dir and MobileGLServer.dir)"
-                         .format(root))
+                         .format(os.path.join(cmake_files, dirs[0])))
     objects = []
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in filenames:
-            if name.endswith(".o"):
-                full = os.path.join(dirpath, name)
-                objects.append(os.path.relpath(full, root).replace(os.sep, "/"))
-    return root, sorted(objects)
+    for sub in dirs:
+        root = os.path.join(cmake_files, sub)
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                if name.endswith(".o"):
+                    full = os.path.join(dirpath, name)
+                    key = os.path.relpath(full, root).replace(os.sep, "/")
+                    OBJECT_PATHS[key] = os.path.relpath(full, cmake_files).replace(os.sep, "/")
+                    objects.append(key)
+    return cmake_files, sorted(objects)
 
 
 def check_flags(build_dir):
@@ -255,8 +273,9 @@ def check_flags(build_dir):
 def run_nm(nm_tool, mode, paths, cwd, chunk=150):
     """`nm -C -o --<mode>-only` over paths, returned as raw text. Chunked for argv limits."""
     out = []
+    back = {OBJECT_PATHS.get(p, p): p for p in paths}
     for i in range(0, len(paths), chunk):
-        batch = paths[i:i + chunk]
+        batch = [OBJECT_PATHS.get(p, p) for p in paths[i:i + chunk]]
         completed = subprocess.run([nm_tool, "-C", "-o", "--" + mode + "-only"] + batch,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, cwd=cwd)
@@ -265,7 +284,14 @@ def run_nm(nm_tool, mode, paths, cwd, chunk=150):
         # silently shrunk SERVER set.
         if completed.returncode != 0 and completed.stderr.strip():
             raise SystemExit(PREFIX + "nm failed: " + completed.stderr.strip())
-        out.append(completed.stdout)
+        text = completed.stdout
+        if any(k != v for k, v in back.items()):
+            lines = []
+            for line in text.splitlines(True):
+                head, sep, rest = line.partition(":")
+                lines.append(back.get(head, head) + sep + rest)
+            text = "".join(lines)
+        out.append(text)
     return "".join(out)
 
 

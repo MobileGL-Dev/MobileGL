@@ -794,8 +794,80 @@ endif()
 # find <glvnd/libeglabi.h>; a Linux host only built because its system has the header).
 list(APPEND MOBILEGL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/3rdparty/glvnd/include)
 
+# ---- P13 W7 (D12): MODULE TARGETS ------------------------------------------------------------
+#
+# One flat SOURCE_FILES list used to feed MobileGL and MobileGL_s separately (every file compiled
+# twice). It is split here into OBJECT libraries along the link ratchet's partition
+# (scripts/link_ratchet.py PARTITION, which is the written form of these boundaries):
+#
+#   mg_util            MG_Util, Init / GlobalObjects / ConfigLoader, MG_Remote/FatalFunnel   SHARED
+#   mg_pipe            MG_Pipe                                                             SERVER
+#   mg_backend         MG_Backend (both backends, the record arm's staged stores)          SERVER
+#   mg_frontend        MG_Impl + MG_State                                                  FRONTEND
+#   mg_remote_transport MG_Remote/{Transport,Protocol,Wire}, CapsCodec                      SERVER
+#   mg_remote_client   MG_Remote/Client                                                    FRONTEND
+#   mg_remote_server   MG_Remote/Server                                                    SERVER
+#
+# Both MobileGL and MobileGL_s link the same objects. mgl_build_iface carries every compile-side
+# usage requirement (include directories, definitions, the link libraries whose headers the
+# sources include), so a property set on it reaches every module and both libraries; a property
+# that only matters at link time may still be set on the libraries themselves.
+add_library(mgl_build_iface INTERFACE)
+target_include_directories(mgl_build_iface INTERFACE ${MOBILEGL_INCLUDE_DIR})
+target_link_libraries(mgl_build_iface INTERFACE ${MOBILEGL_LINK_LIBRARIES})
+target_compile_definitions(mgl_build_iface INTERFACE
+        ${MOBILEGL_COMPILE_DEF}
+        MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
+        $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
+)
+
+set(MGL_MODULES util pipe backend frontend remote_transport remote_client remote_server)
+foreach(MGL_MODULE IN LISTS MGL_MODULES)
+    set(MGL_MODULE_SOURCES_${MGL_MODULE})
+endforeach()
+foreach(MGL_SOURCE IN LISTS SOURCE_FILES)
+    if (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/Client/")
+        list(APPEND MGL_MODULE_SOURCES_remote_client ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/Server/")
+        list(APPEND MGL_MODULE_SOURCES_remote_server ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Remote/(Transport|Protocol|Wire)/" OR
+            MGL_SOURCE STREQUAL "MobileGL/MG_Remote/CapsCodec.cpp")
+        list(APPEND MGL_MODULE_SOURCES_remote_transport ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_(Impl|State)/")
+        list(APPEND MGL_MODULE_SOURCES_frontend ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Backend/")
+        list(APPEND MGL_MODULE_SOURCES_backend ${MGL_SOURCE})
+    elseif (MGL_SOURCE MATCHES "^MobileGL/MG_Pipe/")
+        list(APPEND MGL_MODULE_SOURCES_pipe ${MGL_SOURCE})
+    else()
+        list(APPEND MGL_MODULE_SOURCES_util ${MGL_SOURCE})
+    endif()
+endforeach()
+
+set(MGL_MODULE_OBJECTS)
+set(MGL_SERVER_MODULE_OBJECTS)
+foreach(MGL_MODULE IN LISTS MGL_MODULES)
+    if (NOT MGL_MODULE_SOURCES_${MGL_MODULE})
+        continue()  # MG_Remote's modules are empty without MOBILEGL_BUILD_DISAGGREGATED
+    endif()
+    add_library(mg_${MGL_MODULE} OBJECT ${MGL_MODULE_SOURCES_${MGL_MODULE}})
+    target_link_libraries(mg_${MGL_MODULE} PUBLIC mgl_build_iface)
+    set_target_properties(mg_${MGL_MODULE} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set_target_properties(mg_${MGL_MODULE} PROPERTIES
+            C_VISIBILITY_PRESET default CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)
+    else()
+        set_target_properties(mg_${MGL_MODULE} PROPERTIES
+            C_VISIBILITY_PRESET hidden CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+    endif()
+    list(APPEND MGL_MODULE_OBJECTS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+    if (NOT MGL_MODULE STREQUAL "frontend" AND NOT MGL_MODULE STREQUAL "remote_client")
+        list(APPEND MGL_SERVER_MODULE_OBJECTS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+    endif()
+endforeach()
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
-    ${SOURCE_FILES}
+    ${MGL_MODULE_OBJECTS}
 )
 
 if (WIN32)
@@ -820,21 +892,7 @@ else()
     )
 endif()
 
-target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC
-    ${MOBILEGL_INCLUDE_DIR}
-)
-
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    PUBLIC
-    ${MOBILEGL_LINK_LIBRARIES}
-)
-
-target_compile_definitions(${CMAKE_PROJECT_NAME}
-        PUBLIC
-        ${MOBILEGL_COMPILE_DEF}
-        MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
-        $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
-)
+target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC mgl_build_iface)
 
 if(UNIX AND NOT APPLE AND NOT ANDROID)
     foreach(MOBILEGL_LOADER_ALIAS
@@ -861,8 +919,8 @@ if(WIN32)
 endif()
 
 if(NOT ANDROID)
-    add_library(${CMAKE_PROJECT_NAME}_s STATIC 
-        ${SOURCE_FILES}
+    add_library(${CMAKE_PROJECT_NAME}_s STATIC
+        ${MGL_MODULE_OBJECTS}
     )
 
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -879,27 +937,12 @@ if(NOT ANDROID)
         )
     endif()
 
-    target_include_directories(${CMAKE_PROJECT_NAME}_s PUBLIC
-        ${MOBILEGL_INCLUDE_DIR}
-    )
-
-    target_link_libraries(${CMAKE_PROJECT_NAME}_s
-        PUBLIC
-        ${MOBILEGL_LINK_LIBRARIES}
-    )
-
-    target_compile_definitions(${CMAKE_PROJECT_NAME}_s
-            PUBLIC
-            ${MOBILEGL_COMPILE_DEF}
-            MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
-    )
+    target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC mgl_build_iface)
 endif()
 
 if (TRACY_ENABLE)
-    target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Tracy::TracyClient)
-    target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC Tracy::TracyClient)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC -DTRACY_ENABLE)
-    target_compile_definitions(${CMAKE_PROJECT_NAME}_s PUBLIC -DTRACY_ENABLE)
+    target_link_libraries(mgl_build_iface INTERFACE Tracy::TracyClient)
+    target_compile_definitions(mgl_build_iface INTERFACE -DTRACY_ENABLE)
 endif ()
 
 # GLVND, AND WHY THIS IS A LINKER FLAG RATHER THAN A VISIBILITY ONE.
@@ -922,6 +965,49 @@ endif()
 if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE MobileGL/MG_Impl/SharedImageApi.cpp)
     add_subdirectory(MobileGL/MG_Gbm)
+endif()
+
+# ---- P13 W7 (D12): THE SERVER-ONLY LINK CHECK ---------------------------------------------------
+# The server and shared modules linked WITHOUT mg_frontend / mg_remote_client, with --no-undefined:
+# the server half has to link from its own half of the tree. The frontend references it still makes
+# are the link ratchet's baseline, each a named exemption that resolves to an aborting stub through
+# a generated linker response file (scripts/ci/server_link_check.py refuses, before the link, any
+# server reference the baseline does not name). Built with the split shape on Linux hosts; never
+# installed or loaded.
+if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if (Python3_Interpreter_FOUND)
+        set(MGL_SERVER_LINK_RSP "${CMAKE_BINARY_DIR}/mgl_server_link_exemptions.rsp")
+        set(MGL_ALL_MODULE_OBJECT_DEPS)
+        foreach(MGL_MODULE IN LISTS MGL_MODULES)
+            if (TARGET mg_${MGL_MODULE})
+                list(APPEND MGL_ALL_MODULE_OBJECT_DEPS $<TARGET_OBJECTS:mg_${MGL_MODULE}>)
+            endif()
+        endforeach()
+        add_custom_command(
+            OUTPUT "${MGL_SERVER_LINK_RSP}"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/ci/server_link_check.py"
+                    --build-dir "${CMAKE_BINARY_DIR}"
+                    --baseline "${CMAKE_SOURCE_DIR}/scripts/data/link_ratchet_baseline.txt"
+                    --out "${MGL_SERVER_LINK_RSP}"
+            DEPENDS ${MGL_ALL_MODULE_OBJECT_DEPS}
+                    "${CMAKE_SOURCE_DIR}/scripts/ci/server_link_check.py"
+                    "${CMAKE_SOURCE_DIR}/scripts/link_ratchet.py"
+                    "${CMAKE_SOURCE_DIR}/scripts/data/link_ratchet_baseline.txt"
+            COMMENT "Server-only link check: naming the frontend references the baseline exempts"
+            VERBATIM)
+        add_custom_target(mgl_server_link_exemptions DEPENDS "${MGL_SERVER_LINK_RSP}")
+        add_library(MobileGL_server_linkcheck SHARED
+            ${MGL_SERVER_MODULE_OBJECTS}
+            tools/server_link_check/Exempt.cpp)
+        target_link_libraries(MobileGL_server_linkcheck PRIVATE mgl_build_iface)
+        target_link_options(MobileGL_server_linkcheck PRIVATE
+            "LINKER:--no-undefined" "@${MGL_SERVER_LINK_RSP}")
+        set_property(TARGET MobileGL_server_linkcheck APPEND PROPERTY LINK_DEPENDS "${MGL_SERVER_LINK_RSP}")
+        add_dependencies(MobileGL_server_linkcheck mgl_server_link_exemptions)
+    else()
+        message(STATUS "MobileGL: no Python3 interpreter - the server-only link check target is not configured")
+    endif()
 endif()
 
 if (ANDROID)
@@ -964,7 +1050,7 @@ if (APPLE AND NOT MOBILEGL_IOS)
 endif()
 
 if (APPLE AND MOBILEGL_IOS)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
+    target_compile_definitions(mgl_build_iface INTERFACE MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
     target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC
         "-framework CoreGraphics"
         "-framework Foundation"
@@ -975,7 +1061,6 @@ if (APPLE AND MOBILEGL_IOS)
     endif()
 
     if(TARGET ${CMAKE_PROJECT_NAME}_s)
-        target_compile_definitions(${CMAKE_PROJECT_NAME}_s PUBLIC MOBILEGL_IOS=1 _LIBCPP_DISABLE_AVAILABILITY)
         target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC
             "-framework CoreGraphics"
             "-framework Foundation"
@@ -990,10 +1075,8 @@ endif()
 if (NOT ANDROID AND NOT MOBILEGL_IOS)
     find_package(Vulkan)
     if (Vulkan_FOUND)
-        target_link_libraries(${CMAKE_PROJECT_NAME} PUBLIC Vulkan::Vulkan Vulkan::Headers)
-        target_link_libraries(${CMAKE_PROJECT_NAME}_s PUBLIC Vulkan::Vulkan Vulkan::Headers)
-        target_include_directories(${CMAKE_PROJECT_NAME} PUBLIC ${Vulkan_INCLUDE_DIR})
-        target_include_directories(${CMAKE_PROJECT_NAME}_s PUBLIC ${Vulkan_INCLUDE_DIR})
+        target_link_libraries(mgl_build_iface INTERFACE Vulkan::Vulkan Vulkan::Headers)
+        target_include_directories(mgl_build_iface INTERFACE ${Vulkan_INCLUDE_DIR})
     endif ()
 endif ()
 
