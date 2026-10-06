@@ -228,9 +228,11 @@ namespace MobileGL::MG_Pipe {
             // D10: rides MGPipeBlocksAreDistinct() - under spawn the two blocks are distinct
             // whatever the rehearsal knob says, and a barrier pull across a real process
             // boundary is exactly the thing this Fatal exists to name.
+#if MOBILEGL_BUILD_DISAGGREGATED
             if (MGPipeBlocksAreDistinct()) {
                 StrictBarrierPullFatal(field, verb, "MOBILEGL_IPC_ROLE_SPLIT_STATE=1");
             }
+#endif
             if (!MGPipeApplierCurrentRecordIsBarriered()) {
                 StrictBarrierPullFatal(field, verb, "UNBARRIERED, the client did not fill it");
             }
@@ -238,6 +240,9 @@ namespace MobileGL::MG_Pipe {
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidualPulls, 1);
             }
+#if MOBILEGL_BUILD_DISAGGREGATED
+            // The strict knob is the transport's (MOBILEGL_IPC_STRICT_ERRORS); without one an
+            // admitted pull is counted and the unbarriered one above is still Fatal.
             if (MG_Config::Ipc.StrictErrors) {
                 // THE THIRD DISJUNCT (P5e gl, ID-128), and it has to be asked at RUNTIME because
                 // it is a fact about this record's payload rather than about its opcode. The
@@ -255,6 +260,7 @@ namespace MobileGL::MG_Pipe {
                 }
                 AdmittedBarrierPullOnce(field, verb, !statically);
             }
+#endif
         }
 
         // The verb's OWN may-read table (FillPoints.def, kMGPipeClassFieldMask). The stamp
