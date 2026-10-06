@@ -18,16 +18,18 @@
 #include "MG_Util/Metrics/PipeStats.h"
 
 #include <Config.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P5f (fm): the handle-keyed texture arm's two sources - the applier's resource records
 // (shape) and the server's staged-texture store (texels).
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Backend/Record/StagedTextureStore.h>
-// Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
-#include <MG_Remote/Server/SharedImageRegistry.h>
 #include "../DirectVulkan.h"
 // P7 wave 2 package B3: rule I's tally for the silent exits on this file's wire arm.
 #include "WireDeclineTally.h"
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+// Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
+#include <MG_Remote/Server/SharedImageRegistry.h>
 #if defined(__ANDROID__)
 #include <android/hardware_buffer.h>
 #endif

@@ -12,7 +12,7 @@
 #include "VulkanRenderer.h"
 
 #include "MG_Util/Metrics/PipeStats.h"
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include "MG_Pipe/MGPipeCallbacks.h"
 #include "MG_Pipe/PipeApply.h"
 #include <MG_Backend/Record/StagedShadow.h>

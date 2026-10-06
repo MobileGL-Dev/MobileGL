@@ -18,11 +18,13 @@
 // needs only the name - the deleter is captured where the archive is constructed - but the
 // program build reads through it, so the one translation unit that does needs the whole type.
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // R-11's server-owned staging copy. Header-only and package v1's; see its own header block for
 // why GLESBufferResource does not simply gain a member.
 #include <MG_Backend/Record/StagedShadow.h>
 #include <MG_Backend/Record/StagedTextureStore.h>
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/ServerLoop.h>
 // P5c (ct): object_death's producer (CONTRACT-P5C.md §5.2) - the death notice's split arm
 // emits the record through the client's emit helper instead of hopping a stack struct to the

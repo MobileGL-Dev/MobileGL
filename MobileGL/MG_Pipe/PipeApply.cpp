@@ -49,8 +49,10 @@
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
-#include <MG_Backend/Record/StagedTextureStore.h>
 #include <MG_Remote/CapsCodec.h>
+#endif
+#if MOBILEGL_BUILD_RECORD_ARM
+#include <MG_Backend/Record/StagedTextureStore.h>
 #endif
 
 #include <algorithm>

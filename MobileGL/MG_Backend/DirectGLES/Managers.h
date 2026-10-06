@@ -30,6 +30,8 @@
 // so a forward declaration would not do. Push-only, like everything else P4a adds to this
 // header, so the pull build's include graph is unchanged (D-P).
 #include <MG_Pipe/PipeApply.h>
+// P13 W5: the record arm's deaths (the slot tables' handle refusals below), in every build.
+#include <MG_Pipe/PipeSessionFail.h>
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -477,8 +479,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
             if (handle.Slot >= SlotTable::kMaxHandleSlot) {
 #if MOBILEGL_BUILD_RECORD_ARM
-                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
-                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
                     "GetOrCreateByHandle named slot %u, past this table's %u bound",
                     handle.Slot, SlotTable::kMaxHandleSlot);
@@ -489,8 +491,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint32 liveGen = m_slotTables.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
 #if MOBILEGL_BUILD_RECORD_ARM
-                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
-                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
                     "GetOrCreateByHandle named generation %u at slot %u, behind live generation %u",
                     handle.Gen, handle.Slot, liveGen);

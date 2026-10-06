@@ -28,9 +28,13 @@
 // The draw path's attribute-values sync reads Archive->Link, so this TU needs it complete -
 // Managers.cpp already includes it for ProgramArchiveSource, which is the same reason.
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P5c (tx): §1's server-side per-level extent derivation, for GenerateMipmap's shape reads.
 #include <MG_Backend/Record/StagedTextureStore.h>
+// The record arm's deaths and latches (MGPipeRecordFail / MGPipeRecordLatch), in every build.
+#include <MG_Pipe/PipeSessionFail.h>
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
 // Shared images: the registry the EGLImages are built from (SharedImageImpl below).
 #include <MG_Remote/Server/SharedImageRegistry.h>
 // Device loss ends the session through MG_Pipe's latch seam (LatchIfDeviceLost).

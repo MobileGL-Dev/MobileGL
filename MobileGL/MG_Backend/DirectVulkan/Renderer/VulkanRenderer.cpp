@@ -42,15 +42,12 @@
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P7 wave 0: the seam WireFramebuffer.inc's MagmaWireFatal and WireDraw.inc's
 // WireBufferLegacyFatal die through. Declared by MG_Pipe on purpose - see PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
 #include <MG_Backend/Record/StagedTextureStore.h>
-#include <MG_Remote/Server/ServerLoop.h>
-// Shared images: the present side resolves the image it imports (WireSharedImage.inc).
-#include <MG_Remote/Server/SharedImageRegistry.h>
 // P5c (G6): the named-blit arm's endpoint resolution runs inside the frontend-keyed scope.
 #include <MG_Impl/Pipe/SlotAllocator.h>
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
@@ -58,6 +55,11 @@
 #include "WireColorBlitFilter.h"
 #include "WireDepthResolveArm.h"
 #include "WireDepthResolveProbe.h"
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
+#include <MG_Remote/Server/ServerLoop.h>
+// Shared images: the present side resolves the image it imports (WireSharedImage.inc).
+#include <MG_Remote/Server/SharedImageRegistry.h>
 #endif
 #include <algorithm>
 #include <bit>
