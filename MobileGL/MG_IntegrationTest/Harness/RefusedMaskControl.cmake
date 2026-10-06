@@ -13,9 +13,11 @@ if (NOT "$ENV{MOBILEGL_PIPE_PUSH}" STREQUAL "${MASK}")
                         "'$ENV{MOBILEGL_PIPE_PUSH}', not the control's ${MASK}; it would prove nothing")
 endif()
 # A split build writes the client role's log as <stem>.client.log (MG_Util/Debug/Log.cpp's
-# RoleLogPath), so both spellings are matched by the stem.
+# RoleLogPath), so both spellings are matched by "<stem>." - and ONLY by that: a bare "<stem>*"
+# also matched a sibling control whose name extends this one's (ObjectSubsystemControlRefused vs
+# ...RefusedTexture), and under ctest -j this control deleted the other's log while it ran.
 string(REGEX REPLACE "[.]log$" "" stem "${LOG}")
-file(GLOB stale "${stem}*")
+file(GLOB stale "${stem}.*")
 if (stale)
     file(REMOVE ${stale})
 endif()
@@ -25,7 +27,7 @@ if (rc EQUAL 0)
     message(FATAL_ERROR "RefusedMaskControl: MOBILEGL_PIPE_PUSH=${MASK} ran GREEN (${FILTER}); a mask "
                         "that clears a fixed-on subsystem bit must be refused at startup.\n${out}")
 endif()
-file(GLOB logs "${stem}*")
+file(GLOB logs "${stem}.*")
 set(found FALSE)
 foreach(log IN LISTS logs)
     file(READ "${log}" text)
@@ -36,7 +38,7 @@ foreach(log IN LISTS logs)
 endforeach()
 if (NOT found)
     message(FATAL_ERROR "RefusedMaskControl: MOBILEGL_PIPE_PUSH=${MASK} went red (rc=${rc}) but no log "
-                        "under ${stem}* names Fatal{PipeSubsystemsFixedOn} for that mask - a red for "
+                        "under ${stem}.* names Fatal{PipeSubsystemsFixedOn} for that mask - a red for "
                         "another reason is not this control's red.\n${out}\n${err}")
 endif()
 message(STATUS "MOBILEGL_PIPE_PUSH=${MASK} was refused by name at startup (rc=${rc})")
