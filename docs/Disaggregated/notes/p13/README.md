@@ -10,9 +10,11 @@
 | W1 | 完成 | `5ff33cbb` | `runtime_mode_proof` 的 monolith = 无 MG_Remote；push 无 MG_Remote 控制库 + 零 MG_Remote 符号检查；retrace-split 不再因控制库失败整体跳过；skip 普查 |
 | W2 | 完成 | `c6cb5dea` `68b56165` `9f05e665` `3e11c848` | CMake 默认 push；Gradle 删 `pipePush`（FCL 内嵌 push monolith、无 MG_Remote）；撤 pull 控制库。Test `37433779649` 三红均为非产品问题，已修（ci-cleanup-log 的基础设施表） |
 | W3a | 完成 | `55de98a0` | `MOBILEGL_PIPE_PUSH` 不再是选项（旧缓存 OFF 警告并忽略） |
-| W3b | 完成 | `9e14c16d`…`a4d10dd9`、`daf2b44c`…`883b8614`、`c0404018` | 删 `MOBILEGL_PIPE_LEGACY_MEMOS`、`MOBILEGL_PIPE_PUSH` 宏与 `MGB_CTX`；位图 bits 0-13 固定开，清位具名拒绝（`SubsystemMaskRefusal.*` 对照）；删 HandleRecycle Legacy / AbaControl 车道；每条移除记在 ci-cleanup-log |
+| W3b | 完成 | `9e14c16d`…`a4d10dd9`、`daf2b44c`…`883b8614`、`c0404018`、`a32ca001` | 删 `MOBILEGL_PIPE_LEGACY_MEMOS`、`MOBILEGL_PIPE_PUSH` 宏与 `MGB_CTX`；位图 bits 0-13 固定开，清位具名拒绝（`SubsystemMaskRefusal.*` 对照）；删 HandleRecycle Legacy / AbaControl 车道；每条移除记在 ci-cleanup-log |
 | W3c | 完成 | `e2c90986` `be86ca17` | 删 `ResidualValueBlock`；op 46 退役为拒绝行；verify 的 A2 负对照接管能力比对 |
-| W4a | 进行中 | 14a `3e2aff1d` `cef29781`；谓词 `8b907220`；Espryt 换臂（本地） | Espryt monolith 走记录臂：缓冲、indirect、client 数组、绑定点、GPU 写标记、fp64、重启索引、multi-draw；进程内 verb 端口；§1.4 别名刷新。XFB 依赖 program 档案，随 W4c；Magma 一次性换臂（入口按 verb 选臂，不能按族），在 Espryt 全部换完后 |
+| W4a–c（Espryt） | 本地完成 | 14a `3e2aff1d` `cef29781`；谓词、W4a、W4b/W4c（本地） | Espryt monolith 全部族走记录臂：缓冲、indirect、client 数组、绑定点、GPU 写标记、fp64、重启索引、multi-draw、纹理（别名式 staged 纹理 store）、读回（含 pack buffer）、帧缓冲、单元 / sampler / image、program（monolith CSO 记录带档案副本）、XFB；进程内 verb 端口；§1.4 别名刷新。本地 unit 2905/2905、integration-gpu 3650/3650、DirectGLES retrace 29/29（另 11 条缺 LFS fixture 或主机 llvmpipe 的 iterationrp） |
+| W4（Magma） | 未开始 | | 入口按 verb 选臂，不能按族：先把前置（monolith 注册 wire 资源表、进程内持久映射捐赠、别名纹理 store 读、设备可选扩展）惰性落地，再一次性换臂 |
+| W4d | 未开始 | | residual 填充与 `PipeInputs` 前端字段 |
 
 ### G1 退役读数（ID-P13-4，2026-10-06）
 
