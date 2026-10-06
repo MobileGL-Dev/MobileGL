@@ -25,6 +25,12 @@
 | W5 S5 | 本地完成 | `b13af729` `b1978890` | 记录臂三旋钮进 `RecordArmTable`；`DataArmIsRecord` / `RecordArmAliasesFrontend`、`MonolithTakesRecordArm`、`MOBILEGL_PIPE_DATA_ARM` 跟 `RECORD_ARM`（不再跟传输） |
 | W5 S6 | 本地完成 | `dd7fbbd7` | 集成 peek 在无传输构建里也答 `dataArmIsRecord`；跟踪器探针跟 `RECORD_ARM` |
 | W5 S7 | 本地完成（CI 待跑） | `19610290` `23593c9f`…`e9a353c3` | **翻转**：`MOBILEGL_BUILD_RECORD_ARM` 恒 ON，无 MG_Remote 的库（FCL 形态）也跑记录臂。`MOBILEGL_PIPE_PERSISTENT_MPROTECT=0` 关掉跟踪器的 SIGSEGV 处理器（FCL 是 JVM；启动打日志；单元 `TheMprotectSwitchSendsEveryNewMapToTheHashScan`），mprotect 臂只在 Linux / Android 编。`runtime_mode_proof` 加正半：两形态都要 `MG_Record` 符号（push 294、split 300），自测含两条无 `MG_Record` 的红例。翻转后 push 单元暴露的残留误分类（记录动词的 verb 状态盖章、按记录读的顶点 / IBO / 绑定点 / 采样器路径、XFB 捕获回落、视图窗口 mip、镜像可绑定重铸、暂存库跟随、跟踪器成员资格、测试的前端臂钉）全部改跟 `RECORD_ARM`；push 单元 2028/2028 |
+| W5 S8 | 已推（CI 37515697754：382 绿、2 红均已归类并修） | `7fb18840` `c1e985c8` | `MOBILEGL_BUILD_RECORD_ARM` 被 unifdef 掉，`retired_switches` 禁止它回到 `#if`。verify 车道的阴性对照 B 改省略 `ReadPixels:GetPixelStoreParameters`（monolith 记录臂不再读 GenerateMipmap 的活动单元）；monolith 启动时记一行数据臂 |
+| W6a | 已推（`887547c7`，CI 37534648608 / 37534648624） | `d61a4240` `740dd301` | 记录臂是唯一数据臂：`DataArmIsRecord()` 恒 true（constexpr），`MOBILEGL_PIPE_DATA_ARM` / `InitDataArm` / `ScopedMonolithFrontendArm` 删；`HandleRecycle.AbaControlHandles` 车道退役；立方面读回两条规则移到 `CubeFaceReadbackScenario` |
+| W6b | 已推（同上） | `742d43ae` `e0113503` `3aed7ae0` `e822c933` | 数据臂谓词从两后端所有分支折掉，记录臂 return 之后的前端臂代码删；XFB 角色状态只留一份；10 个前端臂单元用例删（逐条记入 `docs/ci/ci-cleanup-log.md`），两条 GL 采样规则移到 `TextureUnitSamplingScenario` |
+| W6c | 本地完成 | `dc1e95b4` | Magma 前端臂：前端 `MagmaProgramSource` 构造与 `IsWire()` 折掉，前端采样集遍历、占位纹理、VAO draw memo、`MagmaPipeIdentityTables` 与 ABA 旋钮、`TrySetupDrawFastPath` 与快照、前端 fallback 纹理删（约 7100 行） |
+| W6d | 本地完成 | `8abae647` `8bc39c79` | Espryt 各族臂谓词（framebuffer / texture / sampler / program / buffer / vertex input 及其别名）折为记录臂，`g_fboTextureSyncList` 等前端遍历删；启动时只查色彩附件上限（`ResolveRecordArmFamilies`）；未迁移仿真名单清空（审计保留，守 0） |
+| W6e | 本地完成 | `dab827d5` `737ef5e9` | 后端表里 verb port 在各模式都覆盖的前端对象入口（`ClearNamedFramebuffer*`、`BlitNamedFramebuffer`、`GetTex(ture)Image`、`MultiDrawElements`）及其实现删；Magma 前端 render pass、pending clear、renderbuffer 半边删。link ratchet 171 → 58，`# P13` 95 → 11（余下 11 条：Espryt 以前端对象铸句柄的 slot 表入口与 apply 线程拒绝函数 7 条、`PipeInputs` 访问器 3 条、FBO 附件 `IsComplete` 1 条） |
 
 ### G1 退役读数（ID-P13-4，2026-10-06）
 

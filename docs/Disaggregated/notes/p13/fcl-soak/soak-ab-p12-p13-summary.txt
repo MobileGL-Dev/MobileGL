@@ -1,0 +1,22 @@
+# run backend result mgl arm inworld deathTime exit sig34CaughtAtLaunch sig34CaughtInGame firstUncaught firstMGL ftraceFatal34 tomb+ kgsl
+1 p12 ok mgl=3 arm=? inworld=0 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:52:04.390 firstMGL=06:53:18.552 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+2 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:53:36.454 firstMGL=06:53:25.896 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+3 p12 ok mgl=284 arm=? inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:55:08.172 firstMGL=06:54:58.992 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+4 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:56:47.522 firstMGL=06:56:37.813 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+5 p12 ok mgl=284 arm=? inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:58:11.427 firstMGL=06:58:01.955 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+6 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=06:59:44.626 firstMGL=07:00:03.119 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+7 p12 ok mgl=284 arm=? inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:01:18.188 firstMGL=07:01:08.751 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+8 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:02:50.811 firstMGL=07:03:27.619 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+9 p12 ok mgl=284 arm=? inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:04:24.047 firstMGL=07:04:14.084 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+10 p13 DIED mgl=310 arm=record inworld=0 death=07:07:09.837 exit=[reason=2 (SIGNALED) reason=0 (UNKNOWN) status=34 ] launch34=yes game34=no firstUncaught=07:05:56.650 firstMGL=07:06:50.825 sig34gen/deliv=1/0 tomb+=0 kgsl=0
+11 p12 DIED mgl=284 arm=? inworld=0 death=07:07:37.670 exit=[reason=2 (SIGNALED) reason=0 (UNKNOWN) status=34 ] launch34=yes game34=yes firstUncaught=07:07:28.471 firstMGL=07:07:18.998 sig34gen/deliv=3/2 tomb+=0 kgsl=0
+12 p13 ok mgl=3 arm=? inworld=0 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:09:01.657 firstMGL=07:10:14.637 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+13 p12 DIED mgl=4 arm=? inworld=0 death=07:10:33.932 exit=[reason=2 (SIGNALED) reason=0 (UNKNOWN) status=34 ] launch34=yes game34=yes firstUncaught=07:10:33.186 firstMGL=07:10:23.982 sig34gen/deliv=2/1 tomb+=0 kgsl=0
+14 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:12:05.450 firstMGL=07:11:56.252 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+15 p12 ok mgl=284 arm=? inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:13:49.067 firstMGL=07:13:38.913 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+16 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:15:09.245 firstMGL=07:14:59.248 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+17 p12 DIED mgl=4 arm=? inworld=0 death=07:17:11.665 exit=[reason=2 (SIGNALED) reason=0 (UNKNOWN) status=34 ] launch34=yes game34=yes firstUncaught=07:16:39.632 firstMGL=07:17:00.892 sig34gen/deliv=3/2 tomb+=0 kgsl=0
+18 p13 DIED mgl=310 arm=record inworld=9 death=07:18:27.221 exit=[reason=2 (SIGNALED) reason=0 (UNKNOWN) status=34 ] launch34=yes game34=yes firstUncaught=07:18:10.349 firstMGL=07:18:01.124 sig34gen/deliv=3/2 tomb+=0 kgsl=0
+19 p12 DIED mgl=288 arm=? inworld=9 death=07:19:57.934 exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=yes firstUncaught=07:19:41.110 firstMGL=07:19:31.642 sig34gen/deliv=1/0 tomb+=0 kgsl=0
+20 p13 ok mgl=310 arm=record inworld=9 death=- exit=[reason=10 (USER REQUESTED) reason=21 (FORCE STOP) status=0 ] launch34=yes game34=no firstUncaught=07:21:11.922 firstMGL=07:21:02.057 sig34gen/deliv=0/0 tomb+=0 kgsl=0
+soak done
