@@ -126,5 +126,3 @@
             const MG_Pipe::MGPTimestampRequest request{};
             return ReadQueryReply<Int64>(session, MG_Pipe::MGPWireOp::QueryTimestamp, &request, sizeof(request));
         }
-
-        }

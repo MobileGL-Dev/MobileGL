@@ -1636,6 +1636,7 @@ namespace MobileGL::MG_Record {
                 session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &fallback, sizeof(fallback),
                                     nullptr, 0, nullptr, 0, nullptr);
             }
+        }
 
     } // namespace
 
