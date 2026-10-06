@@ -705,6 +705,36 @@ TEST_F(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmen
     store[extent - 1] = 1;
 }
 
+// P13 W5: THE MPROTECT ARM'S KILL SWITCH REACHES THE TRACKER. MOBILEGL_PIPE_PERSISTENT_MPROTECT=0
+// (Config.h RecordArmTable::PersistentMprotect) is for hosts whose own SIGSEGV use the chained
+// handler has not met - FCL is a JVM. Off, a new map is refused by the arm (the hash scan serves
+// it) even after the handler went in; back on, the same registration is tracked again.
+TEST_F(SplitBufferSet, TheMprotectSwitchSendsEveryNewMapToTheHashScan) {
+    if (!PersistentMapTracker::MprotectArmAvailableForTest()) {
+        GTEST_SKIP() << "no mprotect arm on this host (handler not installable, or the kernel "
+                        "page is not the tracker's 4 KB); the hash arm serves every map here";
+    }
+    MG_State::GLState::MapAlignedData store(2u * 4096u);
+    const SizeT extent = MG_State::GLState::ShadowAllocationBytesFor(store.capacity());
+    constexpr Uint64 kId = ~0ull - 11u;
+
+    const Uint32 saved = MG_Config::RecordArm.PersistentMprotect;
+    MG_Config::RecordArm.PersistentMprotect = 0;
+    EXPECT_FALSE(PersistentMapTracker::MprotectArmAvailableForTest());
+    EXPECT_EQ(PersistentMapTracker::TrackForTest(kId, store.data(), 0, 2u * 4096u, extent), nullptr)
+        << "the switch is off and the arm still took a new map";
+    MG_Config::RecordArm.PersistentMprotect = saved;
+
+    // The positive control: the same registration, switch back on, is the arm's.
+    ASSERT_TRUE(PersistentMapTracker::MprotectArmAvailableForTest());
+    const auto* slot = PersistentMapTracker::TrackForTest(kId, store.data(), 0, 2u * 4096u, extent);
+    ASSERT_NE(slot, nullptr);
+    EXPECT_EQ(slot->pageCount, 2u);
+    PersistentMapTracker::UntrackForTest(kId);
+    store[0] = 1;
+    store[extent - 1] = 1;
+}
+
 // THE DRAIN THE EPOCH SKIP RESTS ON. A fault marks a page and moves the epoch; the next
 // draw's walk consumes the epoch. If that walk pushed only the buffers the draw bound, a
 // faulted map the draw did NOT bind would be left marked, writable and unable to move the

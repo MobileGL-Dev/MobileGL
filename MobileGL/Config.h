@@ -489,6 +489,13 @@ namespace MobileGL::MG_Config {
         // blocks whose xxHash64 changed since the last push, instead of the whole mapped
         // range every verb. 0 restores the whole-range push (A/B control).
         Uint32 PersistentHashSuppress = 1;
+        // MOBILEGL_PIPE_PERSISTENT_MPROTECT (P13 W5): 1 (default) = the persistent-map push finds
+        // written pages through mprotect and a chained SIGSEGV handler where the platform has
+        // one (Linux, Android); 0 = no handler is ever installed and every persistent write map
+        // takes the hash scan. The switch exists for the hosts whose own SIGSEGV use the
+        // chained handler has not met yet - FCL is a JVM, whose implicit null checks fault on
+        // purpose - so a bring-up can rule the handler out without a rebuild.
+        Uint32 PersistentMprotect = 1;
     };
     extern RecordArmTable RecordArm;
 #endif

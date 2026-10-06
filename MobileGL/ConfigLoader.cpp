@@ -722,6 +722,11 @@ namespace MobileGL::MG_ConfigLoader {
         // Whole-range push is the 0 arm; with it on (default) only blocks whose
         // xxHash64 changed since the last push are shipped.
         ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
+        ipc.PersistentMprotect = QueryEnvUint32("MOBILEGL_PIPE_PERSISTENT_MPROTECT", 1, 0, 1);
+        if (ipc.PersistentMprotect == 0) {
+            MGLOG_W("Config: MOBILEGL_PIPE_PERSISTENT_MPROTECT=0 - no SIGSEGV handler is installed "
+                    "for persistent write maps; every one takes the hash scan");
+        }
         if (ipc.WireDeferredMb == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_WIRE_DEFERRED_MB=0 is the M2 NEGATIVE CONTROL: the "
                     "server never forces a sync for orphaned wire buffer stores, so a long frame "

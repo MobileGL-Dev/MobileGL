@@ -20,14 +20,26 @@
 
 #include <xxhash.h>
 
+#include <Config.h>
+
 #include <atomic>
-#include <csignal>
 #include <cstdlib>
 #include <cstring>
+
+// P13 W5: THE MPROTECT ARM IS LINUX AND ANDROID ONLY. It reads the faulting PC out of a Linux
+// ucontext and the fault kind out of si_code; elsewhere (Windows, Apple - a protection fault
+// arrives as SIGBUS there) no handler is installed and every persistent write map takes the
+// hash scan, which is always correct, only slower.
+#if defined(__linux__) || defined(__ANDROID__)
+#define MGL_TRACKER_MPROTECT_ARM 1
+#include <csignal>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <ucontext.h>
 #include <unistd.h>
+#else
+#define MGL_TRACKER_MPROTECT_ARM 0
+#endif
 
 namespace MobileGL::MG_Record {
 
@@ -85,7 +97,14 @@ namespace MobileGL::MG_Record {
         constexpr uintptr_t kSlotSettingUp = 1;
 
         TrackedWriteMap g_trackedMaps[kMaxTrackedMaps];
+#if MGL_TRACKER_MPROTECT_ARM
         struct sigaction g_prevSegvAction {};
+#else
+        // Never called: without the arm nothing is ever protected (g_segvInstalled stays false).
+        constexpr int PROT_READ = 1;
+        constexpr int PROT_WRITE = 2;
+        inline int mprotect(void*, SizeT, int) { return -1; }
+#endif
         std::atomic<Bool> g_segvInstalled{false};
         // Bumped by the handler for every write fault it answers, and by TrackWriteMap
         // for every registration (a fresh slot has EVERY page marked, which is a fault of
@@ -186,6 +205,7 @@ namespace MobileGL::MG_Record {
         std::atomic<uintptr_t> g_declinedFaultNearestEnd{0};
         std::atomic<Bool> g_declinedFaultAnnounced{false};
 
+#if MGL_TRACKER_MPROTECT_ARM
         // Async-signal-safe hex, because snprintf is not on the safe list and this runs in a
         // handler that is about to hand the process to debuggerd.
         SizeT AppendHex(char* out, SizeT at, uintptr_t value) {
@@ -418,6 +438,9 @@ namespace MobileGL::MG_Record {
         }
 
         void InstallWriteFaultHandler() {
+            // The operator's switch first (Config.h RecordArmTable::PersistentMprotect): off, the
+            // handler is never installed, so nothing of this process's SIGSEGV is ever touched.
+            if (MG_Config::RecordArm.PersistentMprotect == 0) return;
             if (!KernelPageIsTheTrackerPage()) return;
             Bool expected = false;
             if (!g_segvInstalled.compare_exchange_strong(expected, true)) return;
@@ -432,6 +455,15 @@ namespace MobileGL::MG_Record {
                 g_segvInstalled.store(false);
             }
         }
+#else
+        void InstallWriteFaultHandler() {}
+#endif
+
+        // The arm takes a NEW map only while the handler is in and the switch allows it; a map it
+        // already holds keeps its slot until it is untracked.
+        Bool MprotectArmLive() {
+            return MG_Config::RecordArm.PersistentMprotect != 0 && g_segvInstalled.load();
+        }
 
         void UntrackWriteMap(Uint64 lifetimeId);
 
@@ -442,7 +474,7 @@ namespace MobileGL::MG_Record {
                            SizeT rangeBegin, SizeT rangeEnd, SizeT shadowExtent) {
             if (shadow == nullptr || rangeEnd <= rangeBegin) return false;
             InstallWriteFaultHandler();
-            if (!g_segvInstalled.load()) return false;
+            if (!MprotectArmLive()) return false;
             // WHICH WAY TO ALIGN IS A QUESTION OF OWNERSHIP, and the reason is a
             // process-killer: a protected page that holds FOREIGN bytes can be written by
             // a thread that does not run our handler - driver and runtime worker threads
@@ -840,7 +872,7 @@ namespace MobileGL::MG_Record {
 
     Bool PersistentMapTracker::MprotectArmAvailableForTest() {
         InstallWriteFaultHandler();
-        return g_segvInstalled.load();
+        return MprotectArmLive();
     }
 
     const TrackedWriteMap* PersistentMapTracker::TrackedSlotForTest(const BufferObject& buffer) {
