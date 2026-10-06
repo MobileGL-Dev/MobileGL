@@ -172,6 +172,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CsoContentAddressingScenario.cpp
     Scenarios/ResourceSubsystemControlScenario.cpp
     Scenarios/TextureParamsWithoutASamplerViewScenario.cpp
+    # P13 W3b: the GL-level successor of the borrowed-slot unit-memo probe.
+    Scenarios/DsaUpdateKeepsTheBoundUnitScenario.cpp
     Scenarios/TextureUploadShapeScenario.cpp
     Scenarios/ObjectSubsystemControlScenario.cpp
     Scenarios/P4aSeamAuditScenario.cpp
@@ -1461,7 +1463,7 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT}"
 )
-mgl_itest_add_refused_mask_control("DirectGLES.ResourceSubsystemControl.Off.RefusedAtStartup" "0x7f" "ResourceSubsystemControlScenario.*"
+mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ResourceSubsystemControlOff" "0x7f" "ResourceSubsystemControlScenario.*"
     "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT}")
 
 # G10's two counting entries, one per scenario that has a claim about the counter:
@@ -1536,7 +1538,7 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT}"
 )
-mgl_itest_add_refused_mask_control("DirectGLES.ResourceSubsystemOff.RefusedAtStartup" "0x7f" "LargeArenaAdoptionScenario.*"
+mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ResourceSubsystemOff" "0x7f" "LargeArenaAdoptionScenario.*"
     "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}")
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectVulkan.ArenaArm."
@@ -1646,11 +1648,11 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT}"
 )
-mgl_itest_add_refused_mask_control("DirectGLES.ObjectSubsystemControl.Off.RefusedAtStartup" "0x1ff" "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
+mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlOff" "0x1ff" "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_OFF_ENVIRONMENT}")
-mgl_itest_add_refused_mask_control("DirectGLES.ObjectSubsystemControl.Refused.RefusedAtStartup" "0x9ff" "ObjectSubsystemControlScenario.ASamplerBitWithoutTheTextureBitIsRefusedAndNamed"
+mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlRefused" "0x9ff" "ObjectSubsystemControlScenario.ASamplerBitWithoutTheTextureBitIsRefusedAndNamed"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT}")
-mgl_itest_add_refused_mask_control("DirectGLES.ObjectSubsystemControl.RefusedTexture.RefusedAtStartup" "0x5ff" "ObjectSubsystemControlScenario.ATextureBitWithoutTheSamplerBitIsRefusedAndNamed"
+mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlRefusedTexture" "0x5ff" "ObjectSubsystemControlScenario.ATextureBitWithoutTheSamplerBitIsRefusedAndNamed"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIRONMENT}")
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.ObjectSubsystemControl.Consumer."

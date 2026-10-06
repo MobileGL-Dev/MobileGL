@@ -42,6 +42,7 @@ set(MGL_P8A_AMBIENT_CASES
     DepthStencilReadbackAttachmentShapeScenario.PackedArrayLayerAttachmentReadsBackBothAspects
     DepthStencilReadbackScenario.*
     DoublePrecisionScenario.*
+    DsaUpdateKeepsTheBoundUnitScenario.*
     DualSourceBlendScenario.*
     EmptyScissorScenario.*
     F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades

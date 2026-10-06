@@ -21,6 +21,7 @@ HandleRecycleScenario.* mechanism pointer-key ABA / slot recycling inside one pr
 CsoContentAddressingScenario.* mechanism toggles the process-local CSO content-addressing switch
 ResourceSubsystemControlScenario.* mechanism toggles the process-local P3a push mask
 ObjectSubsystemControlScenario.* mechanism toggles the process-local P4a push mask
+DirectGLES:SubsystemMaskRefusal.* mechanism P13 W3b named-refusal controls: a startup refusal of a cleared subsystem bit (ConfigLoader), pinned to the monolith lane environment
 PipeVerifyArmingScenario.* mechanism same-address-space verify comparator; its split arm is build-verify's integration-verify-split
 PoisonOmissionScenario.* mechanism withheld-stamp oracle; its split arm is build-verify's VerifySplitPoisonOmitted entries
 StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw mechanism counts synchronous stats-slot roundtrips of direct persistent adoption
