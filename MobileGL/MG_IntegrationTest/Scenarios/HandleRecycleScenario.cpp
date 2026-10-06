@@ -191,9 +191,14 @@ namespace MGITest {
         // ambient ones) is not a lane and answers false - the build default may well be non-zero
         // there, but an ambient entry configured no arm, no allocator expectation and no private
         // log, which is the reason the whole file declines them.
+        //
+        // P13 W3b: SUBSYSTEM BITS 0-13 ARE FIXED ON, so an entry that pins no mask runs the full
+        // one and HAS the allocator - the Handles lanes stopped pinning 0x3fff when the pin became
+        // the only value there is (a mask that clears a bit is refused at startup by name). Only an
+        // explicit zero would still mean "no allocator", and nothing pins that any more.
         bool LanePinnedALiveAllocator() {
             const char* mask = std::getenv("MOBILEGL_PIPE_PUSH");
-            if (mask == nullptr || mask[0] == '\0') return false;
+            if (mask == nullptr || mask[0] == '\0') return RunningInAHandleRecycleLane();
             // strtoull handles the 0x form every lane spells it in, and a value this module
             // cannot parse is treated as "no pin" rather than as a non-zero mask.
             char* end = nullptr;
