@@ -28,7 +28,7 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateName(Uint index) const;
         Bool ValidateFramebufferObject(Uint index) const;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (G6, CONTRACT-P5C §3.3/§5.4): the reverse of HandleFor() for a server that holds
         // only the handle - the named-blit consumer on a backend with no FBO twin registry
         // (Magma) resolves the verb's ReadFbo/DrawFbo to the frontend object by the lifetime

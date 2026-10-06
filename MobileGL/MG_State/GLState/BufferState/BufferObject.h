@@ -187,7 +187,7 @@ namespace MobileGL {
             // from every path that reads the shadow on the app's behalf.
             void SyncGpuWrites();
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // ---- P5 b1: the two things a split build has to do that a monolith does not ---
             //
             // Everything here is behind the build option AND behind
@@ -321,7 +321,7 @@ namespace MobileGL {
             // and, in a split build, cleared by WritebackFromBackend instead, because there
             // the answer arrives later than the request. See SyncGpuWrites' definition.
             Bool m_gpuWritePending = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // The last value of MGPResourceDesc::HasLiveHostWrites this object published.
             // Behind the option so the pull build's layout - and therefore every inlined
             // constructor and accessor in it - does not move (G1).

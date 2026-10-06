@@ -207,7 +207,7 @@ namespace MobileGL::MG_State::GLState {
         // one and overwritten the qualifier. See the definition for why the invented binding is
         // deliberately left in place for the backends' own use.
         void SeedDefaultStorageBlockBindings();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package C, OQ-8: builds LinkArtifacts::storageBlocks - DirectVulkan's own
         // storage-block index space - out of the reflection snapshot the call above produced,
         // so the backends stop re-deriving it with SPIRV-Reflect on every draw. Runs after

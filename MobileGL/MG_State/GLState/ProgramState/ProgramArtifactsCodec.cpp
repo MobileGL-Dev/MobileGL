@@ -85,7 +85,7 @@ namespace MobileGL::MG_State::GLState {
             visit("floatValues", value.floatValues);
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         void SchemaWord(Uint64& hash, Uint64 word) {
             for (unsigned i = 0; i < 8; ++i) {
                 hash ^= (word >> (i * 8)) & 255u;
@@ -200,7 +200,7 @@ namespace MobileGL::MG_State::GLState {
             } else if constexpr (ArchiveVector<T>) {
                 WriteSequence(out, value);
             } else if constexpr (ArchiveUniformInitializer<T>) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 VisitUniformInitializer(value, [&out](const char*, const auto& member) {
                     WriteValue(out, member);
                 });
@@ -366,7 +366,7 @@ namespace MobileGL::MG_State::GLState {
                     if (!in.Ok) return;
                 }
             } else if constexpr (ArchiveUniformInitializer<T>) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 VisitUniformInitializer(value, [&in](const char*, auto& member) {
                     if (in.Ok) ReadValue(in, member);
                 });
@@ -389,7 +389,7 @@ namespace MobileGL::MG_State::GLState {
 
         // v1 is retained for local monolith verification. Its native size echo is not a
         // wire compatibility fact: libstdc++ writes 1056 while unpinned libc++ writes zero.
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
 #ifdef MGL_LINKARTIFACTS_SIZE
         inline constexpr Uint64 kLinkArtifactsSizeEcho = MGL_LINKARTIFACTS_SIZE;
 #else
@@ -398,7 +398,7 @@ namespace MobileGL::MG_State::GLState {
 #endif
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Uint64 ProgramArtifactsSchemaFingerprint() {
         static const Uint64 fingerprint = [] {
             Uint64 hash = 1469598103934665603ull;
@@ -417,7 +417,7 @@ namespace MobileGL::MG_State::GLState {
     void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv,
                                 Vector<Uint8>& out) {
         PutRaw(out, kProgramArtifactsCodecVersion);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         PutRaw(out, ProgramArtifactsSchemaFingerprint());
 #else
         PutRaw(out, kLinkArtifactsSizeEcho);
@@ -446,7 +446,7 @@ namespace MobileGL::MG_State::GLState {
         // Refuse the declared wire shape before reading any field. In v2 the second word
         // follows serialization types/order; C++ container object sizes are irrelevant.
         if (version != kProgramArtifactsCodecVersion) return false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (schema != ProgramArtifactsSchemaFingerprint()) return false;
 #else
         if (schema != kLinkArtifactsSizeEcho) return false;

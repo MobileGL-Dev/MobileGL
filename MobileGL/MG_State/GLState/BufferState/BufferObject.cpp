@@ -210,7 +210,7 @@ namespace MobileGL::MG_State::GLState {
         }
         m_size = size;
         m_resource.ResizeShadow(size);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The store this buffer's membership was about no longer exists, and ResizeShadow is
         // reserve+resize - a grow past the reserve reallocates - so a pushed block's source
         // base has moved too. Both are the same event to the tracker: re-read the predicate.
@@ -359,7 +359,7 @@ namespace MobileGL::MG_State::GLState {
         m_mappedRange = {0, 0};
         m_stagingBias = 0;
         m_ownsStagingData = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // AFTER the reset, so the predicate reads the post-unmap state, and after the landing
         // above, so the last bytes of a write map are already on the wire when the record
         // that says "no live writer" goes out behind them.
@@ -536,7 +536,7 @@ namespace MobileGL::MG_State::GLState {
         Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         ++m_changeSerial;
         MGP_NOTE_AGGREGATE(BufferChange);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // THE THIRD STATE'S ONLY EXIT. In a split build SyncGpuWrites does NOT clear the
         // flag before emitting, because between the emission and the answer the shadow is
         // stale and the object has no way to say so; the answer landing here is what makes it
@@ -819,7 +819,7 @@ namespace MobileGL::MG_State::GLState {
             m_mappingAccess = (read ? BufferMappingAccessBit::Read : BufferMappingAccessBit::Null) |
                               (write ? BufferMappingAccessBit::Write : BufferMappingAccessBit::Null);
             m_mappedRange = {0, m_size};
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // glMapBuffer never takes the Persistent bit, so this buffer can never join the
             // push set - but a WRITE map still mutates the shadow with no call, which is the
             // half of the live-host-writes bit that is not about the push at all.
@@ -904,7 +904,7 @@ namespace MobileGL::MG_State::GLState {
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // BEFORE the adoption attempt below, deliberately. Under R-6 the acquisition always
         // declines, so the predicate this publishes is already final; if a later phase ever
         // mints one, the adoption path notes the change itself (it does now - the call is
@@ -933,7 +933,7 @@ namespace MobileGL::MG_State::GLState {
                     MG_Remote::Client::PersistentMapTracker::Instance().Forget(*this);
 #endif
                     m_resource.AdoptPersistentMap(pushedBase);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     // An adoption takes the buffer OUT of the push set and out of the
                     // live-host-writes state: the application now writes coherent GPU memory
                     // and there is nothing to ship. Under R-6 this is unreachable; it is here

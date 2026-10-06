@@ -60,7 +60,7 @@ namespace MobileGL::MG_State::GLState {
 
     // Bumped whenever the byte format changes in a way a previous reader would misread. A
     // reader that sees a different word REFUSES; it never tries to guess a layout.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // 3 since P7 wave 2 package C (OQ-8): LinkArtifacts gained `storageBlocks`, so a v2 reader
     // would run out of bytes in the middle of the stream rather than notice. The schema
     // fingerprint beside the version would catch it on its own - it is derived from the

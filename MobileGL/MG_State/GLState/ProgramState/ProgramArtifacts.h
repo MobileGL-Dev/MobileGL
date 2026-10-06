@@ -90,7 +90,7 @@ namespace MobileGL::MG_State::GLState {
     using PipeInputReflection = ResourceReflection;
     using PipeOutputReflection = ResourceReflection;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE SHADER STORAGE BLOCKS AS DIRECTVULKAN
     // INDEXES THEM, published once at link time instead of re-derived per draw.
     //
@@ -208,7 +208,7 @@ namespace MobileGL::MG_State::GLState {
         // The owned reflection snapshot. Indexed by TProgram index; see the structs above.
         Vector<UniformReflection> uniformReflection;
         Vector<BlockReflection> blockReflection;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 OQ-8: DirectVulkan's storage-block index space, filled beside blockReflection in
         // SnapshotGlslangReflection. See StorageBlockReflection above for what the order is
         // and why it is not blockReflection's.
@@ -526,7 +526,7 @@ namespace MobileGL::MG_State::GLState {
         v("blockMemberElement", a.blockMemberElement);
     } // 11 fields
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 OQ-8. Three plain fields, so the generic codec arms carry it with no new arm of their
     // own - which is the whole reason it is a table rather than hand-written bytes.
     template <class Self, class V>
@@ -547,7 +547,7 @@ namespace MobileGL::MG_State::GLState {
     void VisitFields(Self& a, V&& v) {
         v("uniformReflection", a.uniformReflection);
         v("blockReflection", a.blockReflection);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Beside blockReflection because that is where it is FILLED, and a visitor that walks
         // the table in declaration order then reads the two together.
         v("storageBlocks", a.storageBlocks);
@@ -634,7 +634,7 @@ namespace MobileGL::MG_State::GLState {
 #if defined(__GLIBCXX__) && !defined(_GLIBCXX_DEBUG) && (SIZE_MAX == UINT64_MAX)
 #define MGL_RESOURCEREFLECTION_SIZE 128
 #define MGL_XFBVARYING_SIZE 128
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P7 OQ-8 added storageBlocks, one more Vector, in the disaggregated build ONLY. The pull
 // number below is the one G1 measures and it has not moved.
 #define MGL_LINKARTIFACTS_SIZE 1080

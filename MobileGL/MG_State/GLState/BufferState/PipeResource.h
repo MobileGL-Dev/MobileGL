@@ -53,7 +53,7 @@ namespace MobileGL::MG_State::GLState {
     // never exceed what was allocated. The pull build keeps the exact count and does not
     // see this function at all: it has no tracker to spend the rounding on, and G1 holds
     // its symbol set and .text byte-identical only if allocate()'s own text does not move.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     inline constexpr SizeT ShadowAllocationBytesFor(SizeT count) {
         return (count + SHADOW_ALLOCATION_ALIGNMENT - 1) & ~(SHADOW_ALLOCATION_ALIGNMENT - 1);
     }
@@ -73,7 +73,7 @@ namespace MobileGL::MG_State::GLState {
 
         T* allocate(SizeT count) {
             if (count == 0) return nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             return static_cast<T*>(::operator new(ShadowAllocationBytesFor(count * sizeof(T)),
                                                   std::align_val_t{SHADOW_ALLOCATION_ALIGNMENT}));
 #else
@@ -141,7 +141,7 @@ namespace MobileGL::MG_State::GLState {
             const SizeT reserved = std::bit_ceil(size == 0 ? SizeT{1} : size);
             m_shadow->reserve(reserved);
             m_shadow->resize(size);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // RECORDED HERE, NOT INFERRED FROM capacity(). `reserved` is the count this
             // call asked the allocator for, so ShadowAllocationBytesFor(reserved) is the
             // block the allocator handed back whenever this reserve reallocated - and when
@@ -162,7 +162,7 @@ namespace MobileGL::MG_State::GLState {
         MapAlignedData& Shadow() { return *m_shadow; }
         const MapAlignedData& Shadow() const { return *m_shadow; }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The extent of the shadow's heap allocation in bytes, as ResizeShadow asked for
         // it: every byte of [Bytes(), Bytes() + this) belongs to this shadow and to
         // nothing else, and the extent is a whole number of SHADOW_ALLOCATION_ALIGNMENT
@@ -182,7 +182,7 @@ namespace MobileGL::MG_State::GLState {
             m_gpuMapped = mappedBase;
             m_shadow->clear();
             m_shadow->shrink_to_fit();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // The block is gone with the shrink; the next ResizeShadow records the next one.
             m_shadowExtent = 0;
 #endif
@@ -209,7 +209,7 @@ namespace MobileGL::MG_State::GLState {
         SharedPtr<MapAlignedData> m_shadow = MakeShared<MapAlignedData>();
         void* m_gpuMapped = nullptr;
         SharedPtr<BackendBufferResource> m_backend;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // See ShadowAllocationBytes. Split-only so the pull build's layout does not move (G1).
         SizeT m_shadowExtent = 0;
 #endif

@@ -106,7 +106,7 @@ namespace {
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 OQ-8. ShaderStage -> EShLanguage, so a reflection record's `stages` mask (which is an
     // EShLanguageMask) can be tested against the stage of a snapshotted shader. Written here
     // rather than lifted into a shared header because this is the only caller and
@@ -1758,7 +1758,7 @@ namespace MobileGL::MG_State::GLState {
         }
 
         SnapshotGlslangReflection();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 OQ-8. Guarded at the CALL as well as at the definition, which is not belt and
         // braces: LinkArtifacts::storageBlocks does not exist in a pull build, so neither can
         // the function that fills it, and G1 requires this translation unit to be statement
@@ -1768,7 +1768,7 @@ namespace MobileGL::MG_State::GLState {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): DIRECTVULKAN'S STORAGE-BLOCK INDEX SPACE,
     // BUILT ONCE HERE INSTEAD OF PER DRAW.
     //

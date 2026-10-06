@@ -48,7 +48,7 @@ namespace MobileGL::MG_State::GLState {
         using BlockReflection      = ResourceReflection;
         using PipeInputReflection  = ResourceReflection;
         using PipeOutputReflection = ResourceReflection;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 OQ-8: DirectVulkan's storage-block index space, carried in LinkArtifacts.
         using StorageBlockReflection = MobileGL::MG_State::GLState::StorageBlockReflection;
 #endif
