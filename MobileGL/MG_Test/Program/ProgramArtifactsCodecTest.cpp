@@ -529,10 +529,9 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 // TProgram, which is null for every archived instance by construction and points into an arena
 // no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
 TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
-    // storageBlocks, which exists only in this build (ProgramArtifacts.h guards it so the pull
-    // build's LinkArtifacts keeps its size, its destructor and its .text).
+    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h).
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 58u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
 #else

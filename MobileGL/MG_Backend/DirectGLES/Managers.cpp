@@ -2235,7 +2235,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 #endif
                 if (!resource) return;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P11 B2: A T0 STORE TAKES A SERVER-ORIGINATED WRITE GPU-ORDERED. Its pages are the
                 // client's AHardwareBuffer, so there is no staged copy to refresh and the adopted
                 // early return below ("the coherent map already has the bytes") is false for bytes
@@ -8280,7 +8280,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                        \
                               : (obj)->GetStorageType())
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). The client defined
         // level 0 as WxH RGBA8 with no data and then attached the image; the record's descriptor
         // still says so, but the texels are the image's, so nothing below may allocate or upload.
@@ -8480,7 +8480,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // SHARED IMAGES: ahead of the view test and of the staged-store and serial gates below,
             // none of which knows the texels belong to an image - the staged store holds none of
             // them, and the storage path would allocate fresh, empty storage over the image.
@@ -8636,7 +8636,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // left the backend name with no levels whatsoever, so the level that WAS defined could
             // never be sampled or read back. Sync whenever some level holds an image; the per-level
             // loops below skip the degenerate ones individually.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (gt, CONTRACT-P5C §6 layer 1): on the staged arm the same question is answered
             // out of the SERVER's staged-texture store, never out of the frontend object - the
             // store's Defined-ness (fed by the respecify hook and the sub-data adoption) IS "some
@@ -9261,7 +9261,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     : nullptr;
                             const auto dirtyRegion = [&]() -> MG_State::GLState::MipmapDirtyRegion {
                                 if (pendingUpload == nullptr) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                                     // P5c (tx): a level this arm owes with NO pending upload behind it
                                     // was dirtied by the GPU (T5), and the dirty answer is the
                                     // server's own mark on the staged shadow - the whole level,

@@ -535,7 +535,7 @@ namespace MobileGL::MG_Record {
     // with a span (our client stages client indices into an owned element buffer and never sets
     // kDrawHasUserIndices) and a multi-draw that claims instancing (no GL entry point produces
     // one; the client never sends it). Only a foreign peer reaches either.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     namespace {
         // P5e (tx2), CONTRACT-P5E §5.3 / ruling 19 (ID-95, A8 closed). THE TWO UNIT WINDOWS MUST
         // COVER [0, MaxTouchedTextureUnit], AND THIS IS WHERE THAT PROMISE IS CHECKED.

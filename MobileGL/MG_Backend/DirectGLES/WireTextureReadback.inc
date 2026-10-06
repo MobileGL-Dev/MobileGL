@@ -281,7 +281,7 @@
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P9 W2-a. The store's Defined-ness follows the client's respecifies; the driver's follows the
     // twin's last sync. A re-mint asks this before reading a level back, because a level defined
     // after that sync (null data, or null data plus a partial upload) is not on the driver yet and

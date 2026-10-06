@@ -1691,7 +1691,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (!MG_Config::DataArmIsRecord())
 #endif
                         if (!target.buffer) continue;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                         // P5c: under an active transport the frontend object is client
                         // memory (rule E), so the persistence question is the server
                         // resource's and the captured bytes go back as a writeback EVENT -
@@ -11422,7 +11422,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P5e (tx2): the inverse of MG_Pipe::MGPipeResourceTargetForTextureTarget, for the two
     // descriptor reads this file makes (Managers.cpp has the same inverse beside the storage
     // sync; it is file-local there, and a header for eleven cases would be the wrong trade).
@@ -12074,7 +12074,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindTexture(dstTarget, cachedBound ? cachedBound->GetBackendTextureId() : 0);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // WHICH LAYERS A VIEW'S MIP CHAIN MAY WRITE. A generation through a view has two coordinate
     // systems in it - the view's own level/layer window (the sampler view CSO) and its storage
     // owner's - and the native arm below carries only part of the first one: BASE_LEVEL and
@@ -12632,7 +12632,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P8-B2: RGB16F / RGB32F MIP GENERATION ON THE SERVER, FROM THE SERVER'S OWN LEVEL.
     //
     // ES generates a chain only for a colour-renderable, filterable format, and whether the
@@ -12907,7 +12907,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (tx2), CONTRACT-P5E §5.2 / ruling 14 (ID-92's neighbour): GENERATE_MIPMAP RESOLVES
         // ITS TEXTURE FROM VerbMipRes, NEVER FROM THE ACTIVE UNIT.
         //

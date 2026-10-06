@@ -32,7 +32,7 @@ namespace MobileGL::MG_State::GLState {
         // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
         std::atomic<Uint64> g_nextBufferLifetimeId{1};
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd, CONTRACT-P5C §3.8 / §6 layer 1): the frontend BufferObject's legacy
         // accessors are a layer-1 surface. With an active transport, the pre-handle buffer
         // arm that reads them (Managers.cpp's RespecifyStorageNow / UploadRangeNow /
@@ -67,7 +67,7 @@ namespace MobileGL::MG_State::GLState {
             FatalLegacyBufferArmFromApplyThread(accessor);
         }
 #else
-        // P13 W5: no transport, no apply thread to refuse.
+        // No record arm, no apply thread to refuse.
         inline void RefuseLegacyBufferArmFromApplyThread(const char*) {}
 #endif
     }
@@ -97,7 +97,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     BufferObject::~BufferObject() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Unconditional, not behind PushIsArmed(): the transport mode cannot change, but the
         // tracker is a leaked singleton whose entries are raw pointers, and an entry that
         // outlives its object is the one failure this set must not have. Forget is a no-op
@@ -406,7 +406,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::SyncPersistentMappedRange() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (hd): the named refusal comes FIRST - a silent return here used to let a
         // server-side caller slip through with one MGLOG_D's worth of evidence (B3).
         //
@@ -931,7 +931,7 @@ namespace MobileGL::MG_State::GLState {
                 !(access & BufferMappingAccessBit::FlushExplicit) &&
                 MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
                     // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and
                     // an untrack after that would mprotect pages the buffer no longer owns.

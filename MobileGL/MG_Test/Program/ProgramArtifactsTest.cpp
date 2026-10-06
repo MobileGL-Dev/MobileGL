@@ -81,10 +81,9 @@ namespace {
         EXPECT_EQ(CountFields<TypeFacts>(), 20u);
         EXPECT_EQ(CountFields<ResourceReflection>(), 14u);
         EXPECT_EQ(CountFields<XfbVarying>(), 11u);
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // P7 OQ-8 added LinkArtifacts::storageBlocks and its own three-field table, in the
-        // disaggregated build only. The pull/monolith number below is the one G1 measures and
-        // it has not moved - which is the whole reason the member is guarded.
+#if MOBILEGL_BUILD_RECORD_ARM
+        // P7 OQ-8 added LinkArtifacts::storageBlocks and its own three-field table; since P13 W5
+        // the member follows the record arm (ProgramArtifacts.h), which every library builds.
         EXPECT_EQ(CountFields<StorageBlockReflection>(), 3u);
         EXPECT_EQ(CountFields<LinkArtifacts>(), 58u);
 #else

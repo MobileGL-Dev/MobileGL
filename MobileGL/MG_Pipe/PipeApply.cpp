@@ -2010,7 +2010,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplierReleaseObjectRecords() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord() &&
             (g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
             MG_Record::ServerStagedTexture().DropAll();
@@ -2780,7 +2780,7 @@ namespace MobileGL::MG_Pipe {
         // AND ONLY A BUFFER IS HANDED ON, for resource_create's reason: the op table is the
         // buffer family's, its Destroy takes a handle whose kind that backend registered for,
         // and a texture's death is read out of the record at the sync that would have used it.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (tx): with ONE exception - the staged-texture store is keyed by the handle, so
         // the death must reach it or a recycled slot's stale levels would answer for the
         // successor. This does not hand the texture to the buffer family's Destroy.
