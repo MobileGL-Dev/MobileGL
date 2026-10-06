@@ -47,7 +47,7 @@ namespace MobileGL::MG_Pipe {
         return std::nullopt;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ================================================================================
     // P5: the server's verb stamp, the residual-pull counter, and the four-way read verdict
     // ================================================================================
@@ -594,7 +594,7 @@ namespace MobileGL::MG_Pipe {
         if (ownership == MGPipeFieldOwnership::kBarrierPulled)
             CountBarrierPull(field, gPipeInputs.CurrentVerb());
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
 #if MOBILEGL_PIPE_VERIFY
     namespace {

@@ -68,7 +68,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         SessionLocal<RendererGeneration> g_rendererGeneration;
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     namespace {
         // P7 wave 2 package C, CONTRACT-P7 §5.5: MAGMA'S MIRROR OF g_glesStateObjectDeathOps
         // (DirectGLES/Managers.cpp:335), and the one arm of that table Magma has any work in.
@@ -126,7 +126,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool StateObjectDeathOpsInstalled() {
         return MG_State::GLState::GetStateObjectDeathOps() == &g_magmaStateObjectDeathOps;
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#endif // MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_PUSH
 
     Uint64 GetRendererGeneration() {
         return g_rendererGeneration->value.load(std::memory_order_acquire);

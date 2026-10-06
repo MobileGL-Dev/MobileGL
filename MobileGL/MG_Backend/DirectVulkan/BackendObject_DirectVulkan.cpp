@@ -602,7 +602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool BackendObject_DirectVulkan::ExportNativeFence(int* fence) {
         *fence = -1;
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         return pVulkanRenderer ? pVulkanRenderer->ExportNativeFence(fence) : true;
 #else

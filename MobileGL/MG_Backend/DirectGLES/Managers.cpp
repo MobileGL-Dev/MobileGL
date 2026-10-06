@@ -3512,7 +3512,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return twin ? twin->get() : nullptr;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
                                    SizeT end, const char* site) {
             ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);

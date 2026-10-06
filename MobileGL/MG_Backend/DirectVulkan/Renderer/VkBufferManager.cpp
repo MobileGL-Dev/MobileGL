@@ -240,7 +240,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     void VkBufferManager::RegisterWireResourceOps() {
         if (MG_Config::DataArmIsRecord()) {
             MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);

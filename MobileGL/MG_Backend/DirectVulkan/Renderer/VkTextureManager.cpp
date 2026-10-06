@@ -1868,7 +1868,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return prunedCount;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ---------------------------------------------------------------------------------
     // P5f (fm): THE HANDLE-KEYED TEXTURE ARM
     // ---------------------------------------------------------------------------------
@@ -3265,7 +3265,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         std::construct_at(&resource, Move(grown));
         return true;
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {

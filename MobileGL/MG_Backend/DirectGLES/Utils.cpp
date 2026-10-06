@@ -46,7 +46,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 #endif
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     const FormatCapabilityCache* ActiveBackendFormatCaps() {
         // Under a live split session the SERVER's private backend is what owns the context on the
         // apply thread (and these reads all run there), so its cache is the authoritative one.

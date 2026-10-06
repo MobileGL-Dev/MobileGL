@@ -2627,7 +2627,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::ResolveWireUniformBufferPayload(const MagmaProgramSource& program,
             Uint32 blockIndex, Uint32 bindingPoint, UboBindResult& out) const {
         if (bindingPoint >= MG_Pipe::kMGPipeMaxBufferBindingPoints)

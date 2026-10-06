@@ -553,6 +553,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
 endif()
 
+# P13 W5 (notes/p13/W5-DESIGN.md): THE RECORD ARM'S OWN GUARD. A plain variable, not an option and
+# not a cache entry, so no build tree can keep a stale value (W3a's lesson): it equals
+# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards are reclassified one by one - every
+# such commit leaves both library shapes byte-identical - and one later commit sets it on for every
+# build (the library without MG_Remote then runs the record arm). Always defined, to 0 or 1.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    set(MOBILEGL_BUILD_RECORD_ARM ON)
+else()
+    set(MOBILEGL_BUILD_RECORD_ARM OFF)
+endif()
+
 message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
 list(APPEND SOURCE_FILES
     MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
@@ -673,10 +684,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Server/ServerDisplay.cpp
         # Package-neutral C ABI for an APK that owns the server and its ANativeWindow.
         MobileGL/MG_Remote/Server/EmbeddedServer.cpp
+    )
+endif()
+
+# P13 W5: the record arm's own sources, compiled wherever the record arm is (MG_Remote or not).
+if (MOBILEGL_BUILD_RECORD_ARM)
+    list(APPEND SOURCE_FILES
         # P7 gate 5 (g5-msprobe): the Magma wire arm's two multisample depth/stencil resolve
         # arms and the probe that measures the first against the second, shared by the
-        # renderer's bring-up and the Vulkan POST. Wire-only - the monolith records neither arm -
-        # so it stays out of the pull build (gate G1).
+        # renderer's bring-up and the Vulkan POST.
         MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
     )
 endif()
@@ -743,16 +759,6 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
 endif()
 
-# P13 W5 (notes/p13/W5-DESIGN.md): THE RECORD ARM'S OWN GUARD. A plain variable, not an option and
-# not a cache entry, so no build tree can keep a stale value (W3a's lesson): it equals
-# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards are reclassified one by one - every
-# such commit leaves both library shapes byte-identical - and one later commit sets it on for every
-# build (the library without MG_Remote then runs the record arm). Always defined, to 0 or 1.
-if (MOBILEGL_BUILD_DISAGGREGATED)
-    set(MOBILEGL_BUILD_RECORD_ARM ON)
-else()
-    set(MOBILEGL_BUILD_RECORD_ARM OFF)
-endif()
 if (MOBILEGL_BUILD_RECORD_ARM)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_RECORD_ARM=1)
 else()

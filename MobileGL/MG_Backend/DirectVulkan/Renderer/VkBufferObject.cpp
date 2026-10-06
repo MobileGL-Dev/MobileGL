@@ -13,7 +13,7 @@
 #endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     void VkBufferObject::MoveExternalFrom(VkBufferObject& other) {
         m_device = other.m_device;
         m_externalMemory = other.m_externalMemory;

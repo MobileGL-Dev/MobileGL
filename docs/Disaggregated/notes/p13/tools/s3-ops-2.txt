@@ -1,0 +1,21 @@
+# P13 W5 S3, round 2: the definitions the record arm links against (from the trial flip's undefined symbols).
+open | MobileGL/MG_Backend/DirectGLES/Managers.cpp | Bool ResourceContentIsDeclared(
+open | MobileGL/MG_Backend/DirectGLES/Utils.cpp | ActiveBackendFormatCaps()
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferObject.cpp | ::MoveExternalFrom(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp | ::LatchIfGpuHung(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp | ::LatchWireDeviceLoss(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp | ::AcquireWireSlice(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp | ::RegisterWireResourceOps(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp | ::MarkWireBufferGpuWritten(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp | ::SweepDeferredWireReleases(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp | ::DestroyAllDeferredWireReleases(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp | ::ReadUnbackedWireLevel(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp | ::GrowWireTextureMipChain(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp | ::MarkWireTextureGpuWritten(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp | ::ResolveWireTextureStorage(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.cpp | ::SyncTextureResourceByHandle(
+open | MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp | void InstallStateObjectDeathOps()
+open | MobileGL/MG_Backend/MGPipe/PipeInputs.cpp | MGPipeStickyForwardPull(
+open | MobileGL/MG_State/GLState/BufferState/BufferObject.cpp | ::NotePersistentMapStateChanged(
+open | MobileGL/MG_State/GLState/BufferState/BufferObject.cpp | ::HasLiveHostWritesForWire(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/UniformManager.cpp | ::ResolveWireUniformBufferPayload(

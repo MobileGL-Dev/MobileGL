@@ -81,12 +81,24 @@ def main():
     ops = [l for l in pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines()
            if l.strip() and not l.lstrip().startswith('#')]
     files = {}
+    failed = 0
     for op in ops:
         parts = [p.strip() for p in op.split(' | ')]
         kind, path = parts[0], parts[1]
         if path not in files:
             files[path] = load(path)
         crlf, lines = files[path]
+        try:
+            apply_one(kind, lines, parts)
+        except SystemExit as failure:
+            print('FAILED:', op, '->', failure)
+            failed += 1
+    for path, (crlf, lines) in files.items():
+        save(path, crlf, lines)
+    print('applied', len(ops) - failed, 'of', len(ops), 'op(s) to', len(files), 'file(s)')
+
+
+def apply_one(kind, lines, parts):
         if kind == 'open':
             op_open(lines, parts[2])
         elif kind == 'nest':
@@ -99,9 +111,6 @@ def main():
             lines[a] = parts[3]
         else:
             raise SystemExit('unknown op ' + kind)
-    for path, (crlf, lines) in files.items():
-        save(path, crlf, lines)
-    print('applied', len(ops), 'op(s) to', len(files), 'file(s)')
 
 
 if __name__ == '__main__':

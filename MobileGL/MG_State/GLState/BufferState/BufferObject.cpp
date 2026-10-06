@@ -440,7 +440,7 @@ namespace MobileGL::MG_State::GLState {
         NotifySubData(m_mappedRange.start, m_mappedRange.end - m_mappedRange.start);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     void BufferObject::PushMappedSpanBlock(SizeT offset, SizeT size) {
         // NotifySubData and not MGPipeEmitResourceSubData directly: the serial bump, the
         // defined-content promotion and the legacy-ops fallback are what the monolith span

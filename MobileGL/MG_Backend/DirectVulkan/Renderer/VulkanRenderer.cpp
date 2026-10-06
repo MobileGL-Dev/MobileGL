@@ -14155,7 +14155,7 @@ void main() {
         return m_deviceLost;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::LatchWireDeviceLoss(const char* site) {
         if (!IsDeviceLost()) return false;
         if (!m_deviceLossLatched) {
