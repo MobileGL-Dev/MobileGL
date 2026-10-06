@@ -58,6 +58,14 @@ namespace MobileGL::MG_Record {
     // The E2 control's per-frame evidence line, emitted only while a control is armed.
     void LogE2ControlLine(Uint64 frameOrdinal);
 
+#if MOBILEGL_PIPE_VERIFY
+    // True while the monolith verb port applies a record on this thread. The verify read hook
+    // answers a pack-state read inside that window from the applied pack payload, as it does for a
+    // server-stamped verb: the record verb sink forces the neutral pack around its readback, so
+    // the live context is not the oracle there (PipeFill.cpp MGPipeVerifyReadHook).
+    Bool MonolithPortApplyingForVerify();
+#endif
+
     // Called by the Fatal slots. Named separately so a death test can filter on it and so
     // that the message wording lives in exactly one place.
     [[noreturn]] void UnmigratedVerbFatal(const char* slot);

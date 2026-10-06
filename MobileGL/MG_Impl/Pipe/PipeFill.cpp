@@ -40,6 +40,9 @@
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
+#if MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_VERIFY
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
+#endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 // R-8 (c1): the client's liveness gates read the caps mirror, never MGPipeGetResourceOps().
@@ -689,7 +692,10 @@ namespace MobileGL::MG_Pipe {
         const auto index = static_cast<SizeT>(field);
         if (kMGPipeInputFieldSticky[index]) return;
 #if MOBILEGL_BUILD_RECORD_ARM
-        if (self.ServerStampedVerb() && field == MGPipeInputField::GetPixelStoreParameters) {
+        // P13 W5: the monolith verb port applies records without a server stamp, and its readback
+        // forces the neutral pack around the backend's read exactly as the server's does.
+        if ((self.ServerStampedVerb() || MG_Record::MonolithPortApplyingForVerify()) &&
+            field == MGPipeInputField::GetPixelStoreParameters) {
             // Compare the backend's pack field against the last payload applied to this
             // context, including the neutral-pack override during readback. Never obtain
             // the reference by reading the field being checked, or consult the client's

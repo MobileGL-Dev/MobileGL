@@ -230,8 +230,19 @@ namespace MobileGL::MG_Record {
         // still cuts a row wider than this, as it would for a slot).
         constexpr Uint32 kMonolithMaxReplyBytes = 0x7fffffffu;
 
+#if MOBILEGL_PIPE_VERIFY
+        thread_local Bool t_portApplying = false;
+        struct PortApplyingScope {
+            PortApplyingScope() { t_portApplying = true; }
+            ~PortApplyingScope() { t_portApplying = false; }
+        };
+#endif
+
         Bool ApplyOnMonolithPort(MG_Pipe::MGPWireOp op, const void* payload, const MG_Pipe::MGPipeVerbTail* tails,
                                  Uint32 tailCount, MG_Pipe::MGPipeReplySink* replies) {
+#if MOBILEGL_PIPE_VERIFY
+            const PortApplyingScope applying;
+#endif
             RecordVerbSink& sink = MonolithVerbSink();
             MG_Backend::BackendObject* backend = MG_Backend::pActiveBackendObject.get();
             if (sink.Backend() != backend) {
@@ -1659,6 +1670,10 @@ namespace MobileGL::MG_Record {
 
 
     void ArmVerbControlKnobs() { ArmControlKnobs(); }
+
+#if MOBILEGL_PIPE_VERIFY
+    Bool MonolithPortApplyingForVerify() { return t_portApplying; }
+#endif
 
     void SetVerbSessionResolver(VerbSessionResolver resolver) { g_verbSessionResolver = resolver; }
 
