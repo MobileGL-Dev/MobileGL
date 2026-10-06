@@ -412,6 +412,11 @@ namespace {
         LogForwardLimits limits;
         limits.lossyQueueBytes = 16 * 1024;
         LogForwardChannel channel(transport, &GatedTransport::CutThunk, &transport, limits);
+        // The sender is parked inside its held write BEFORE the flood. Otherwise a sender that
+        // starts late dequeues its first line after the queue already filled, the lossy class
+        // recovers mid-flood, and that gap closes with a notice of its own - two gaps, not one.
+        channel.Offer(MOBILEGL_LOG_LEVEL_WARN, "primer\n");
+        ASSERT_TRUE(transport.WaitForAttempt(std::chrono::milliseconds(2000)));
         constexpr int kLines = 2000;
         std::atomic<bool> done{false};
         long long offeringMs = -1;
@@ -434,7 +439,7 @@ namespace {
         EXPECT_LT(counters.maxOfferNs, 50ull * 1000 * 1000) << "one Offer took " << counters.maxOfferNs << " ns";
         // The peer reads again; once what was queued is out, the next line goes out behind a notice
         // naming the gap. (Waited for first: offered into a queue still full, it would be dropped.)
-        ASSERT_TRUE(transport.WaitForWritten(kLines - counters.lossyDropped, std::chrono::milliseconds(5000)));
+        ASSERT_TRUE(transport.WaitForWritten(1 + kLines - counters.lossyDropped, std::chrono::milliseconds(5000)));
         channel.Offer(MOBILEGL_LOG_LEVEL_WARN, "after the gap\n");
         counters = channel.Close();
         const auto written = transport.Frames();
@@ -448,7 +453,7 @@ namespace {
         EXPECT_EQ(counters.notices, 1u);
         // Every line is accounted for: written, or counted as dropped.
         EXPECT_EQ(SeriesIndices(written, "stall warn").size() + counters.lossyDropped, static_cast<std::size_t>(kLines));
-        EXPECT_EQ(counters.forwarded, SeriesIndices(written, "stall warn").size() + 1);
+        EXPECT_EQ(counters.forwarded, SeriesIndices(written, "stall warn").size() + 2); // + primer, + after
     }
 
     TEST(LogForwardChannel, ErrorLinesAreNeverDroppedWhileWarnLinesAre) {
