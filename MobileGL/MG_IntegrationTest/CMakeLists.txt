@@ -1793,16 +1793,20 @@ if (MOBILEGL_PIPE_VERIFY)
     # Negative control B (G5). The omission skips the STAMP of one field for one verb while still
     # copying its value, which is indistinguishable from a fill row nobody wrote; the scenario
     # forks, so the resulting std::abort() is a datum in waitpid() rather than a dead lane.
+    # P13 W5: the pair is the pack state at ReadPixels, which monolith's record arm still reads from
+    # the fill (around its neutral-pack readback). GetActiveTextureUnit at GenerateMipmap was the
+    # frontend arm's read; the record arm resolves the texture from the verb's own handle and never
+    # reads it, so that pair could no longer go red for its own reason.
     mgl_itest_join_environment(MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT
         "MOBILEGL_TRANSPORT=monolith"
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit"
+        "MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectGLES.log"
         ${MGL_ITEST_COMMON_ENV})
     mgl_itest_join_environment(MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT
         "MOBILEGL_TRANSPORT=monolith"
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
-        "MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit"
+        "MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters"
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectVulkan.log"
         ${MGL_ITEST_VULKAN_ENV})
 
