@@ -291,9 +291,9 @@ namespace MobileGL::MG_Remote::Client {
         // set_residual_value_state: RETIRED (P13 W3c). Nothing calls it; the row stays installed so
         // the table is total, and reaching it is a named death rather than a record on the wire.
         void Wire_SetResidualValueState(const MG_Pipe::MGPResidualValueState*, const void*, Uint64) {
-            MGLOG_F("MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the wire table, "
-                    "but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
-            std::abort();
+            SessionFail(MGFatalFamily::ResidualBlockSize,
+                        "MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the wire table, "
+                        "but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
         }
 
         // resource_readback. kReplySlot, and the answer is COMPLETION only: the bytes travel

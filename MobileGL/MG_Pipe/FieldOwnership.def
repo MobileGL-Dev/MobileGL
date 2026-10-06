@@ -80,7 +80,7 @@
 // way it is a named abort on the first read.
 #define MGP_FIELD_OWNERSHIP_ARG_LIST(X)                                                              \
     X(GetPixelStoreParameters, 1, FATAL,                                                             \
-      "the unpack half has no carrier AND no backend reader; all six (&MG_Pipe::gPipeInputs) sites pass false")
+      "the unpack half has no carrier AND no backend reader; all six gPipeInputs sites pass false")
 
 // X(WireOp, Verb) - WHERE THE SERVER STAMPS.
 //
