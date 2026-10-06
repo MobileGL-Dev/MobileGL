@@ -8481,6 +8481,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 #if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
             // SHARED IMAGES: ahead of the view test and of the staged-store and serial gates below,
             // none of which knows the texels belong to an image - the staged store holds none of
             // them, and the storage path would allocate fresh, empty storage over the image.
@@ -8497,6 +8498,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                            pushedStorage->Desc.Width, pushedStorage->Desc.Height);
                 return;
             }
+#endif
             // P5e (tx2), CONTRACT-P5E §5.2 (scout G-S2-2): THE VIEW TEST MOVES BEHIND THE
             // RECORD. `IsTextureView()` was the one frontend read this function made BEFORE it
             // had resolved anything at all, and Desc.ViewOf is the carrier - it names the storage
