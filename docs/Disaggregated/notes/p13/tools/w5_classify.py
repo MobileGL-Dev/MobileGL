@@ -34,7 +34,10 @@ TRANSPORT = [r'ClientSession', r'ServerSession', r'ServerLoop', r'Transport::', 
              r'SessionLatch', r'ServerRole', r'SplitRoles', r'TransportMode::Spawn', r'TransportMode::InProcess',
              r'ServerOwnedWindow', r'ServerSetContextLive', r'DeviceLost', r'RoleSplit', r'ApplyThread',
              r'MGPipeServerArm', r'MGPipeSessionLive', r'ClientBlock', r'EndedServerSession', r'OnApplyThread',
-             r'Transport\s*!=', r'Transport\s*==']
+             r'Transport\s*!=', r'Transport\s*==',
+             # Second pass (S2): transport-shaped words that name no MG_Remote symbol.
+             r'Window', r'SwapInterval', r'ContextLive', r'Ahb', r'AHardwareBuffer', r'HardwareBuffer', r'[Dd]ma[Bb]uf',
+             r'Gbm', r'SyncFile', r'sync_file', r'Session', r'Peer', r'Spawn', r'Tcp', r'Socket']
 RECORD = [r'DataArmIsRecord', r'RecordArm', r'Staged', r'\bWire', r'MGPipe', r'Handle', r'Record\b', r'Twin',
           r'Respecif', r'Readback', r'Verb', r'PersistentMap', r'GpuWrite', r'Emit', r'Applier', r'Slot',
           r'Residual', r'ContextValues', r'Cso\b', r'CSO', r'Placeholder', r'Mipmap', r'Shadow']

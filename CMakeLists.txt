@@ -743,6 +743,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
 endif()
 
+# P13 W5 (notes/p13/W5-DESIGN.md): THE RECORD ARM'S OWN GUARD. A plain variable, not an option and
+# not a cache entry, so no build tree can keep a stale value (W3a's lesson): it equals
+# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards are reclassified one by one - every
+# such commit leaves both library shapes byte-identical - and one later commit sets it on for every
+# build (the library without MG_Remote then runs the record arm). Always defined, to 0 or 1.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    set(MOBILEGL_BUILD_RECORD_ARM ON)
+else()
+    set(MOBILEGL_BUILD_RECORD_ARM OFF)
+endif()
+if (MOBILEGL_BUILD_RECORD_ARM)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_RECORD_ARM=1)
+else()
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_RECORD_ARM=0)
+endif()
+
 if (MOBILEGL_PIPE_VERIFY)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
 endif()
