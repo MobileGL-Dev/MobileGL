@@ -604,7 +604,7 @@ public:
 
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P5f (fm): THE HANDLE-KEYED ARM of SyncTextureAndGetDescriptor. Under an active transport
     // the apply thread may not name the client's ITextureObject (rule E), so the clear / blit /
     // readback / mipmap verbs resolve their attachment textures from the wire handle the
@@ -856,7 +856,7 @@ private:
     void EraseTrackedTexture(const TextureIdentity& identity);
     void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
     SizeT PruneDeadTextures();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // The two halves of SyncTextureResourceByHandle: shape from the resource record's
     // descriptor (create / recreate / compatibility), then the pending-upload walk against the
     // server's staged store. UploadPendingWireLevels mutates the applier's record (consumed

@@ -1254,7 +1254,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return StorageMatchesSize(resource, bufferObject.GetSize());
             }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // -------------------------------------------------------------------------------
             // R-11 - THE SERVER'S OWN COPY OF THE STAGED BYTES. Package v1.
             //
@@ -1302,7 +1302,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
                 }
             }
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
+#if MOBILEGL_BUILD_DISAGGREGATED
             // -------------------------------------------------------------------------------
             // P11 B2 (T0) - WHEN AN IMPORTED STORE'S AHardwareBuffer MAY BE LET GO.
             //
@@ -1373,6 +1375,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_t0Retired.push_back(retired);
                 SweepT0Retired(false);
             }
+#else
+            // No transport, no imported store: nothing ever needs retiring (P13 W5).
+            inline void RetireT0Import(GLESBufferResource&) {}
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 
 // The four hostBytes sites read the same in both builds. The non-split expansion is the
@@ -3809,7 +3814,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // generation, and a shadow that outlived its twin would be looked up by a RECYCLED
             // address on the next allocation - which is the quietest possible wrong answer.
             MGL_SERVER_STAGED_DROP_ALL();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // tx's texture shadows die for the same reason, keyed by handle rather than address
             // but with the same recycled-identity failure mode: a new context's allocator may
             // hand out a {slot, gen} the old one's store still answers for.
@@ -3817,8 +3822,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P11 B2: every retired T0 import's fence named work on the context that just ended,
             // so all of them let go now. LIVE imports keep their reference: the next ensure
             // imports them again on the new context (EnsureBufferResourceForHandle).
+#if MOBILEGL_BUILD_DISAGGREGATED
             ProcessDeferredT0Retires();
             SweepT0Retired(/*contextGone=*/true);
+#endif
 #endif
         }
 
@@ -3854,7 +3861,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         // P11 B2: the T0 half of the deferred-release drain, run right after it at both sync
         // points (ProcessDeferredBufferReleases itself moves verbatim, G5). Retired imports whose
         // fence signalled let go of their AHardwareBuffer; a deferred T0 destroy is retired once

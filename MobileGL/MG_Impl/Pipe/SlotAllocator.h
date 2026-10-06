@@ -211,5 +211,19 @@ namespace MobileGL::MG_Pipe {
         MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
     };
 
+#else
+    // P13 W5: no transport, no apply thread - the role guards have nothing to refuse, and the two
+    // scopes nothing to mark (the record arm calls all of them in every build).
+    inline void MGPipeRefuseAllocatorFromApplyThread(const char*) {}
+    inline Bool MGPipeApplierIsUnbarrieredApply() { return false; }
+    inline void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char*) {}
+    class MagmaP7AllocatorDebtScope {
+    public:
+        MagmaP7AllocatorDebtScope() = default;
+    };
+    class MGPipeFrontendKeyedRegistryScope {
+    public:
+        MGPipeFrontendKeyedRegistryScope() = default;
+    };
 #endif
 } // namespace MobileGL::MG_Pipe

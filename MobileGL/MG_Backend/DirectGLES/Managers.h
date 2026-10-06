@@ -476,7 +476,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!EsprytSlotTablesEnabled()) return nullptr;
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
             if (handle.Slot >= SlotTable::kMaxHandleSlot) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
@@ -488,7 +488,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const Uint32 liveGen = m_slotTables.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
                     MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
@@ -938,7 +938,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // AcquirePersistentMap or (FLUSH_EXPLICIT) publish only via FlushMappedRange.
         Uint64 CurrentBufferMutationEpoch();
         void BumpBufferMutationEpoch();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5e (vi), CONTRACT-P5E §5.1's first pin: how many bumps came from a thread other than
         // the apply thread WHILE an apply thread was running, under a live transport. The
         // record arm's clean gate stamps this counter and skips its probes while the stamp
@@ -1071,7 +1071,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the legacy arm did; this member exists for the drains that have no object, which
             // in P3a is the readback flush and the fp64 narrowing.
             const Uint8* hostBytes = nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P11 B2 (T0): the client's AHardwareBuffer this store IS - imported with
             // glBufferStorageExternalEXT, so `id` is immutable, persistentMapped and
             // persistentPtr is this server's own coherent map of the client's pages. The
@@ -1366,7 +1366,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         // P11 B2: the T0 half of that drain - run right after it (retired AHardwareBuffers).
         void ProcessDeferredT0Retires();
 #endif
@@ -3670,7 +3670,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P5c (ct), CONTRACT-P5C.md §5.2: object_death's per-kind release, one entry point for all
     // seven kinds for the same reason the notice switch is one - the answer is the same for
     // all of them: every holder of the kind's twin table lets go of the twin at this handle.

@@ -90,7 +90,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaAllocation m_allocation = nullptr;
         void* m_mappedData = nullptr;
         VkDeviceSize m_size = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         VkDevice m_device = VK_NULL_HANDLE;
         VkDeviceMemory m_externalMemory = VK_NULL_HANDLE;
         void* m_externalAhb = nullptr;

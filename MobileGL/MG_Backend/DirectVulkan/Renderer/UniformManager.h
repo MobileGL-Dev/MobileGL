@@ -215,7 +215,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 cursor = 0;
         };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ResolveWireImageDescriptor emits no pNext chain. Key every view-create
         // value explicitly: hash collisions must never alias different windows,
         // formats or swizzles. The root handle and allocation epoch also prevent
@@ -563,7 +563,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkBuffer uboBuffer = VK_NULL_HANDLE;
             VkDeviceSize uboRange = 0;
             VkDescriptorSet set = VK_NULL_HANDLE;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             Uint64 wireStoreDestroyEpoch = 0;
 #endif
         };

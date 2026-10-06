@@ -1,0 +1,20 @@
+# P13 W5 S3, round 1: the record arm's declarations (headers).
+# Magma renderer: progress markers and the wire render-pass table are the record arm's; the shared-image
+# registry is the transport's.
+nest | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h | #include <MG_Remote/Server/SharedImageRegistry.h> | #include <MG_Remote/Server/SharedImageRegistry.h>
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h | #include "GpuProgressMarkers.h"
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h | VkBufferManager& GetWireBufferManager()
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h | GpuProgressMarkers m_progressMarkers;
+nest | MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h | MG_Remote::Server::SharedImages::ReadTracker m_sharedImageReads; | MG_Remote::Server::SharedImages::ReadTracker m_sharedImageReads;
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.h | Bool ReadUnbackedWireLevel(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkTextureManager.h | Bool SyncWireTextureShape(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferObject.h | VkDeviceMemory m_externalMemory
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/UniformManager.h | struct WireImageViewKey {
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/UniformManager.h | Uint64 wireStoreDestroyEpoch = 0;
+# Espryt managers: the record-keyed twin tables, the draw-input requests, the buffer twin's record fields,
+# and the per-object death release (the monolith port drops its twins through it too).
+open | MobileGL/MG_Backend/DirectGLES/Managers.h | "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+open | MobileGL/MG_Backend/DirectGLES/Managers.h | "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+open | MobileGL/MG_Backend/DirectGLES/Managers.h | Uint64 BufferMutationEpochBumpsOffTheApplyThread();
+open | MobileGL/MG_Backend/DirectGLES/Managers.h | Bool serverGpuWritten = false;
+open | MobileGL/MG_Backend/DirectGLES/Managers.h | Bool ReleaseTwinsForWireObjectDeath(

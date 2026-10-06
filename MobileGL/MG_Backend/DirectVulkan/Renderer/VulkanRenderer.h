@@ -22,10 +22,12 @@
 #include "VkSamplerManager.h"
 #include "VkTextureManager.h"
 #include "VkTimerQueryManager.h"
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include "GpuProgressMarkers.h"
 #include "WireRenderPassCompatibility.h"
+#if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/SharedImageRegistry.h>
+#endif
 #endif
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
@@ -148,7 +150,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // of the swapchain image acquired for it (SwapchainObject::BufferAgeOf). Asking makes the
         // target keep its presented images' content from then on.
         Int32 CurrentDrawBufferAge();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         VkBufferManager& GetWireBufferManager() { return m_bufferManager; }
         Bool FlushWirePendingCommandsForTextureUpdate() {
             // A new texture upload must not race graphics work that samples
@@ -629,7 +631,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See NoteDeviceLoss. Set once, never cleared: a lost VkDevice stays lost.
         Bool m_deviceLost = false;
         Bool m_deviceLossLatched = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Brackets this device's frame submissions for the GPU hang watch (LatchIfGpuHung).
         GpuProgressMarkers m_progressMarkers;
         struct WireImage {
@@ -777,7 +779,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 acquireSubmit = 0;
         };
         Vector<SharedImageHold> m_sharedImagesHeld;
+#if MOBILEGL_BUILD_DISAGGREGATED
         MG_Remote::Server::SharedImages::ReadTracker m_sharedImageReads;
+#endif
         Vector<Uint64> m_sharedImageUseScratch;
         // What one vkQueueSubmit carries beyond its own semaphores (AttachSharedImageSync).
         struct SharedImageSubmitSync {
