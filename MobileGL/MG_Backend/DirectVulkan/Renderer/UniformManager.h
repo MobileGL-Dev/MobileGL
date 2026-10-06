@@ -100,25 +100,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 textureLifetimeId = 0;
             Uint64 samplerLifetimeId = 0;
         };
-        Bool CollectSampledTextures(const MagmaProgramSource& program,
-                                    const ProgramFactory::VkProgramObject& programObj,
-                                    Vector<MG_State::GLState::ITextureObject*>& outTextures,
-                                    Vector<SampledBindingRecord>* outBindingRecords = nullptr);
-        // Shadow-compare for the SetupDraw fast path: re-runs the CollectSampledTextures
-        // walk and reports whether every visited binding still resolves to the recorded
-        // (texture, effective sampler) pair. A texture bind generation bump alone (e.g. a
-        // redundant glBindSampler, which always bumps it) does not prove the sampled set
-        // moved; this walk does, without rebuilding the set or falling off the fast path.
-        Bool SampledBindingsUnchanged(const MagmaProgramSource& program,
-                                      const ProgramFactory::VkProgramObject& programObj,
-                                      const Vector<SampledBindingRecord>& previousRecords) const;
-        Bool CollectStorageImageTextures(const MagmaProgramSource& program,
-                                         const ProgramFactory::VkProgramObject& programObj,
-                                         Vector<MG_State::GLState::ITextureObject*>& outTextures) const;
-        Bool CollectSamplerImageFeedback(
-            const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj,
-            Vector<SamplerImageFeedbackBinding>& outBindings) const;
         static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
                                                              GLint imageLevel, GLenum imageAccess);
         // Resolve lazy texture uploads/promotions before the caller captures the
@@ -146,16 +127,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // format and never silently fall back to the backing image format.
         static VkFormat ResolveStorageImageViewFormat(VkFormat reflectedFormat, GLenum bindingFormat,
                                                       VkFormat resourceFormat, Bool useBindingFormat);
-
-        // True when the program reads at least one sampler and every one of them is bound to a
-        // texture whose GL level range is a single level. Such a sampler resolves to
-        // minLod = maxLod = 0 (see VkSamplerManager::GetOrCreateSampler), so an implicit-LOD sample
-        // and an explicit LOD 0 sample must read the same texel - which is what makes the
-        // ExplicitLod0Sampling SPIR-V rewrite safe to request. Deliberately conservative: it reads
-        // only GL state, so a texture that ends up single-level for another reason (one uploaded
-        // level under a wide level range) merely misses the rewrite.
-        static Bool ProgramSamplesOnlySingleLevelTextures(const MagmaProgramSource& program,
-                                                          const ProgramFactory::VkProgramObject& programObj);
 
         // ---- per-frame descriptor pools ----------------------------------------------------
         // Each frame slot owns a list of pools. The first is the base pool (non-update-after-bind,
@@ -290,36 +261,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 quietEpochs = 0;
         };
 
-        static Bool ResolveSamplerTexture(const MagmaProgramSource& program,
-                                   const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                   SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-        // Shared per-binding resolution for CollectSampledTextures and
-        // SampledBindingsUnchanged, so membership and comparison can never diverge:
-        // texture after the fallback substitution (may still be null when no fallback
-        // exists), effective sampler = unit override else the texture's own sampler.
-        // False = the binding is skipped (unbound with a non-2D fallback target).
-        // `element` indexes a sampler array inside the binding; see ResolveSamplerDescriptor.
-        Bool ResolveSampledBinding(const MagmaProgramSource& program,
-                                   const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 element,
-                                   MG_State::GLState::ITextureObject*& outTexture,
-                                   const MG_State::GLState::SamplerObject*& outSampler) const;
-        // Raw-pointer variant for the per-draw sampled-texture walk (CollectSampledTextures):
-        // the bound texture stays alive through the draw via GL binding state, so callers that
-        // only need the pointer skip the SharedPtr copy's atomic refcount churn.
-        static MG_State::GLState::ITextureObject* ResolveSamplerTextureRaw(
-            const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 element);
-        // `numericDomain` is the sampler's class, and it matters only for the multisample arm -
-        // see GetFallbackMultisampleTexture for why the single-sampled fallback can ignore it.
-        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(
-            TextureTarget target, SamplerNumericDomain numericDomain) const;
-        // The multisample arm of GetFallbackTexture. One object per (target, numeric domain) and
-        // no upload path: a multisample image cannot be written by a transfer, so its texels stay
-        // undefined - which is what GL promises for a texelFetch on an incomplete multisample
-        // texture - and it cannot carry MUTABLE_FORMAT, so its format has to match the sampler's
-        // class outright rather than being reinterpreted at view time.
-        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackMultisampleTexture(
-            TextureTarget target, SamplerNumericDomain numericDomain) const;
         // ---- placeholders for UNBOUND image-backed descriptors -------------------------
         // GL lets a program declare `samplerBuffer`, `imageBuffer` or `image2D` and bind nothing
         // to the unit it names: the fetch is then undefined (GL 4.6 core 8.9 for an incomplete
@@ -336,16 +277,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // class when the device cannot use the declared one as a texel buffer.
         VkBufferView AcquireUnboundTexelBufferView(VkFormat declaredFormat, SamplerNumericDomain numericDomain,
                                                    Bool storage);
-        // A 1x1 (x1 layer, or 6 faces for a cube) texture of `format`, shaped for `target` so the
-        // view the descriptor gets has the view type the shader's image declaration demands.
-        // Null for a target with no single-sampled placeholder shape - multisample images, whose
-        // descriptor needs a multisample view that this cannot stand in for.
-        SharedPtr<MG_State::GLState::ITextureObject> GetUnboundStorageImageTexture(TextureTarget target,
-                                                                                    VkFormat format) const;
-        // The (target, format) pair a storage-image binding's placeholder is keyed by, resolved
-        // from reflection alone. False when the binding has no placeholder shape.
-        Bool ResolveUnboundStorageImagePlaceholder(const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                                   TextureTarget& outTarget, VkFormat& outFormat) const;
         // `element` indexes a sampler ARRAY inside one binding; each element carries its own
         // independently assigned GL texture unit, so it selects the texture, the sampler
         // override and the fallback separately from its neighbours.
@@ -475,19 +406,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_descriptorSlotTrims = 0;
         VkTextureManager* m_textureManager = nullptr;
         VkSamplerManager* m_samplerManager = nullptr;
-        mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2D;
-        // Keyed by (arrayed, numeric domain); see GetFallbackMultisampleTexture. Lazily populated,
-        // never evicted - at most six tiny 1x1 images - and torn down with the manager.
-        mutable UnorderedMap<Uint32, SharedPtr<MG_State::GLState::ITextureObject>> m_fallbackMultisampleTextures;
-        // See AcquireUnboundTexelBufferView / GetUnboundStorageImageTexture. Both are lazily
-        // populated, never evicted (a program's declared formats are a fixed, tiny set) and torn
-        // down with the manager. The texel views are keyed by format AND by storage-vs-sampled
+        // See AcquireUnboundTexelBufferView. Lazily populated, never evicted (a program's declared
+        // formats are a fixed, tiny set) and torn down with the manager. The texel views are keyed
+        // by format AND by storage-vs-sampled
         // because the two descriptor kinds demand different format FEATURES of the device, so one
         // format can be usable for one and not the other. Deliberately NOT the per-frame
         // texelBufferViews list: those are destroyed at every frame boundary, and these must
         // outlive it or the placeholder would be rebuilt for every unbound binding every frame.
         UnorderedMap<Uint64, VkBufferView> m_unboundTexelBufferViews;
-        mutable UnorderedMap<Uint64, SharedPtr<MG_State::GLState::ITextureObject>> m_unboundStorageImageTextures;
 
         // Per-draw scratch buffers for BindProgramUniformBuffers: reused (clear keeps
         // capacity) so the descriptor-write path stops allocating on every draw.

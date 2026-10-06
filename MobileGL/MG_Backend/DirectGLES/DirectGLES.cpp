@@ -2236,50 +2236,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const SharedPtr<MG_State::GLState::BufferObject>* ElementBuffer = nullptr;
         };
 
-        static Bool ReadClientSnapshotBytes(void* user, MG_Pipe::MGPipeClientBufferKind kind, Uint64 offset, SizeT size,
-                                            void* destination) {
-            if (kind != MG_Pipe::MGPipeClientBufferKind::Element) return false;
-            const auto& buffer = *static_cast<const ClientSnapshotSources*>(user)->ElementBuffer;
-            if (!buffer || offset > buffer->GetSize() || size > buffer->GetSize() - offset) return false;
-            // A shader-written index stream is exactly the case this snapshot exists for, so the
-            // object's shadow is reconciled before it is read (SyncGpuWrites is a no-op otherwise).
-            buffer->SyncGpuWrites();
-            buffer->DownloadSubData(destination, static_cast<SizeT>(offset), size);
-            return true;
-        }
-
-        // The draw's own fetch, spelled as the range record spells it: `indexSize` 0 is arrays,
-        // `elementStart` is the first element (an element offset into the bound element buffer, or
-        // 0 for the application's own index array), and `clientIndices` names that array when
-        // there is one. FALSE means the caller must SKIP the draw: the elements it would fetch are
-        // not in the store the driver is about to read, and issuing it anyway is a wrong picture
-        // rather than an error.
-        // Does the VAO feed any enabled attribute from client memory? `vertexRate`, when given,
-        // is set when one of those attributes advances per vertex rather than per instance.
-        static Bool VaoHasEnabledClientArray(const MG_State::GLState::VertexArrayObject& vao,
-                                             Bool* vertexRate = nullptr) {
-            Bool any = false;
-            const auto& attributes = vao.GetAllAttributes();
-            for (SizeT i = 0; i < attributes.size(); ++i) {
-                if (!attributes[i].Enabled || attributes[i].Buffer) continue;
-                any = true;
-                if (vertexRate != nullptr) *vertexRate |= attributes[i].Divisor == 0;
-            }
-            return any;
-        }
-
-        static Bool SyncClientSideVertexArraysForFetch(Uint8 indexSize, Uint32 elementStart, GLsizei count,
-                                                       GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
-                                                       const void* clientIndices, Uint64 clientIndexBytes) {
-            if (count <= 0 || instanceCount <= 0) return true;
-            // MONOLITH ONLY, and the gate is what keeps a live transport's apply thread out of
-            // the frontend VAO: with a transport the CLIENT owns those bytes and snapshots them
-            // from the GL thread (MG_Impl/Pipe/OwnedDrawInputs.h), so there is nothing for the
-            // server to stage - and reading gPipeInputs there is the role violation this family's
-            // other monolith glue is guarded against.
-            return true;
-        }
-
         // The indirect executors' form: the command's own words ARE the draw's fetch, and a
         // command block a shader wrote this frame is exactly what these shapes exist for - so the
         // command buffer's shadow is reconciled before it is read, and `commandBytes` (the
@@ -10623,66 +10579,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
-    static Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize) {
-        Int maxDimension = std::max<Int>(
-            baseTexelSize.x(),
-            std::max<Int>(baseTexelSize.y(), std::max<Int>(baseTexelSize.z(), 1)));
-        Uint mipLevelCount = 1;
-        while (maxDimension > 1) {
-            maxDimension = std::max<Int>(maxDimension / 2, 1);
-            ++mipLevelCount;
-        }
-        return mipLevelCount;
-    }
-
-    static IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel) {
-        return {
-            std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
-            std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
-            std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1),
-        };
-    }
-
-    static Bool EnsureGenerateMipmapStorageAllocated(MG_State::GLState::TextureObjectMipmap& texture,
-                                                    TextureUploadTarget uploadTarget, Bool& allocatedStorage) {
-        const Uint existingLevelCount = texture.GetMipmapLevelCount();
-        if (existingLevelCount == 0) {
-            return false;
-        }
-        // P4a (D-M). glGenerateMipmap's storage grow reaches into the frontend texture's own
-        // level shadows to decide - and then to define - the levels the driver is about to
-        // fill. In monolith that is exactly what it does today and nothing here changes; under
-        // a split there is no client address space to reach into, so P8 gives this name teeth.
-        // Named and greppable rather than silent, so the site cannot quietly disappear before
-        // then.
-        MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
-
-        const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, 0);
-        const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, 0);
-        const SizeT baseTexelCount = static_cast<SizeT>(baseTexelSize.x()) *
-                                     static_cast<SizeT>(baseTexelSize.y()) *
-                                     static_cast<SizeT>(baseTexelSize.z());
-        if (baseTexelSize.x() <= 0 || baseTexelSize.y() <= 0 || baseTexelSize.z() <= 0 ||
-            baseByteSize == 0 || baseTexelCount == 0 || (baseByteSize % baseTexelCount) != 0) {
-            return false;
-        }
-
-        const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-        const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize);
-        if (existingLevelCount < requiredLevelCount) {
-            allocatedStorage = true;
-        }
-        for (Uint level = existingLevelCount; level < requiredLevelCount; ++level) {
-            const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level);
-            const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
-                                        static_cast<SizeT>(levelTexelSize.y()) *
-                                        static_cast<SizeT>(levelTexelSize.z());
-            texture.AllocateStorage(uploadTarget, level, {levelTexelSize, levelByteSize});
-            texture.MarkStorageDirty(uploadTarget, level, false);
-        }
-        return true;
-    }
-
     // P5e (tx2): the inverse of MG_Pipe::MGPipeResourceTargetForTextureTarget, for the two
     // descriptor reads this file makes (Managers.cpp has the same inverse beside the storage
     // sync; it is file-local there, and a header for eleven cases would be the wrong trade).
@@ -10738,21 +10634,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         window.End = std::max(window.Base, std::min(end, window.Base + chain));
         return window;
-    }
-
-    static Bool EnsureGenerateMipmapStorageAllocated(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
-        // P8-B1: the transport arm that stood here (a descriptor check under the same
-        // `generate-mipmap-storage` name) was unreachable - GenerateMipmap returns through
-        // GenerateMipmapByRecord before this call on every split arm - and the record arm's
-        // window above replaces the check it made.
-        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
-        MOBILEGL_ASSERT(mipmapTexture != nullptr, "GenerateMipmap requires mipmap texture storage.");
-        Bool allocatedStorage = false;
-        for (const TextureUploadTarget uploadTarget : texture->GetUploadTargets()) {
-            const Bool allocated = EnsureGenerateMipmapStorageAllocated(*mipmapTexture, uploadTarget, allocatedStorage);
-            MOBILEGL_ASSERT(allocated, "GenerateMipmap could not allocate generated mipmap storage.");
-        }
-        return allocatedStorage;
     }
 
     static void AssertNoGLError(const char* operation) {
@@ -11444,137 +11325,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
-    static void GenerateDepthTexture2DMipmap(
-        const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
-        MOBILEGL_ASSERT(texture != nullptr && backendTexture != nullptr, "GenerateDepthTexture2DMipmap needs texture.");
-        MOBILEGL_ASSERT(texture->GetTarget() == TextureTarget::Texture2D,
-                        "DirectGLES depth mipmap generation only supports GL_TEXTURE_2D.");
-        MOBILEGL_ASSERT(IsDepthOnlyFormat(texture->GetFormat()),
-                        "DirectGLES depth mipmap generation requires a depth-only texture.");
-
-        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
-        MOBILEGL_ASSERT(mipmapTexture != nullptr, "Depth mipmap generation requires mipmap storage.");
-
-        // P5e (tx2): the transport arm that stood here - a scoped `HandleOf(texture.get())`
-        // probe to re-derive a handle the generate_mipmap record already carried (CONTRACT-P5E
-        // §4.4's site 9161) - is GenerateDepthTexture2DMipmapByRecord above, reached from
-        // GenerateMipmapByRecord with the handle passed in. This overload is the monolith body.
-
-        const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
-        MOBILEGL_ASSERT(mipLevelCount > 0, "Depth mipmap generation requires allocated storage.");
-
-        const GLuint textureId = backendTexture->GetBackendTextureId();
-        for (Uint level = 1; level < mipLevelCount; ++level) {
-            const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level - 1);
-            const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level);
-            BlitDepthTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
-                               static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
-                               textureId, static_cast<GLint>(level), 0, 0,
-                               static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()));
-        }
-    }
-
-    static void GenerateColorTexture2DMipmap(
-        const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-        const SharedPtr<TextureImpl::BackendTextureObject>& backendTexture) {
-        MOBILEGL_ASSERT(texture != nullptr && backendTexture != nullptr, "GenerateColorTexture2DMipmap needs texture.");
-        MOBILEGL_ASSERT(texture->GetTarget() == TextureTarget::Texture2D,
-                        "DirectGLES color mipmap generation only supports GL_TEXTURE_2D.");
-        MOBILEGL_ASSERT(IsColorOnlyFormat(texture->GetFormat()),
-                        "DirectGLES color mipmap generation requires a color-only texture.");
-
-        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
-        MOBILEGL_ASSERT(mipmapTexture != nullptr, "Color mipmap generation requires mipmap storage.");
-
-        // P5e (tx2): the transport arm that stood here is GenerateColorTexture2DMipmapByRecord
-        // above (CONTRACT-P5E §4.4's site 9216); this overload is the monolith body.
-
-        const Uint mipLevelCount = mipmapTexture->GetMipmapLevelCount();
-        MOBILEGL_ASSERT(mipLevelCount > 0, "Color mipmap generation requires allocated storage.");
-
-        const GLenum filter = IsIntegerColorFormat(texture->GetFormat()) ? GL_NEAREST : GL_LINEAR;
-        const GLuint textureId = backendTexture->GetBackendTextureId();
-        for (Uint level = 1; level < mipLevelCount; ++level) {
-            const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level - 1);
-            const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(TextureUploadTarget::Texture2D, level);
-            BlitColorTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
-                               static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()),
-                               textureId, static_cast<GLint>(level), 0, 0,
-                               static_cast<GLsizei>(dstSize.x()), static_cast<GLsizei>(dstSize.y()), filter);
-        }
-    }
-
-    // Where a target keeps its LAYER count, the state-side twin of the wire descriptor's
-    // ArrayLayers: a 1D array's layers live in the state-side height, every other layered target
-    // keeps them in z, a cube map has six faces, and everything else has one.
-    static Uint TextureLayerCount(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
-        const IntVec3 base = texture->GetBaseSize();
-        switch (texture->GetTarget()) {
-        case TextureTarget::Texture1DArray:
-            return static_cast<Uint>(std::max<Int>(base.y(), 1));
-        case TextureTarget::Texture2DArray:
-        case TextureTarget::TextureCubeMapArray:
-        case TextureTarget::Texture2DMultisampleArray:
-            return static_cast<Uint>(std::max<Int>(base.z(), 1));
-        case TextureTarget::TextureCubeMap:
-            return 6;
-        default:
-            return 1;
-        }
-    }
-
-    // The monolith twin of the record arm's view-window rule. Same window, read off the frontend
-    // objects this arm still has: the storage owner is what the view's texels belong to, and the
-    // view's own level range and layer window are stated relative to it.
-    static Bool GenerateMipmapThroughViewWindowForTexture(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
-        MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmapThroughViewWindowForTexture needs a texture.");
-        if (!texture->IsTextureView()) return false;
-        const auto& owner = texture->GetViewStorageOwner();
-        if (owner == nullptr) return false;
-        if (texture->GetSamples() != 0) return false;
-        const Bool depth = IsDepthOnlyFormat(texture->GetFormat());
-        if (!depth && !IsColorOnlyFormat(texture->GetFormat())) return false;
-        auto* mipmapTexture = dynamic_cast<MG_State::GLState::TextureObjectMipmap*>(texture.get());
-        if (mipmapTexture == nullptr || texture->GetUploadTargets().empty()) return false;
-
-        const Uint minLayer = texture->GetViewMinLayer();
-        const Uint numLayers = texture->GetViewNumLayers();
-        if (numLayers == 0) return false;
-        // A window that covers the whole storage is what the native call already does.
-        if (minLayer == 0 && numLayers >= TextureLayerCount(owner)) return false;
-
-        MipmapViewWindow window;
-        window.MinLevel = texture->GetViewMinLevel();
-        window.MinLayer = minLayer;
-        window.NumLayers = numLayers;
-        const auto levelRange = texture->GetLevelRange();
-        // The view's chain ends at the first of: its MAX_LEVEL, its window's level count, and
-        // the levels its storage actually has.
-        window.LogicalBase = levelRange.x();
-        window.LogicalEnd = std::min({static_cast<Uint32>(levelRange.y()) + 1,
-                                      static_cast<Uint32>(texture->GetViewNumLevels()),
-                                      static_cast<Uint32>(mipmapTexture->GetMipmapLevelCount())});
-        window.Depth = depth;
-        window.Filter = IsIntegerColorFormat(texture->GetFormat()) ? GL_NEAREST : GL_LINEAR;
-        if (window.LogicalEnd <= window.LogicalBase + 1) return true;
-
-        // The STORAGE's ES name is what the blits write: the view's own name aliases the same
-        // texels, but only the owner's name carries every level and layer this window reaches.
-        auto& storage = TextureImpl::SyncTextureObjectToBackend(owner);
-        if (!storage || storage->GetBackendTextureId() == 0) {
-            MGLOG_E_ONCE("DirectGLES: generate_mipmap through texture view %u has no storage texture to write; "
-                         "the call is dropped", texture->GetExternalIndex());
-            return true;
-        }
-        window.StorageTextureId = storage->GetBackendTextureId();
-        const TextureUploadTarget uploadTarget = texture->GetUploadTargets()[0];
-        GenerateMipmapThroughViewWindow(window, [mipmapTexture, uploadTarget](Uint32 level) {
-            return mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
-        });
-        return true;
-    }
-
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
@@ -11768,84 +11518,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
         }
-    }
-
-    // ES has no colour-renderable three-channel float format, and its glGenerateMipmap
-    // requires one, so it rejects GL_RGB16F and GL_RGB32F outright where every desktop
-    // driver accepts them. Both store a plain array of floats, and a format the driver
-    // cannot render into is a format nothing can have rendered into - so the frontend's own
-    // copy of the texels is the authority, and the chain can be filtered there and carried
-    // down by the ordinary upload path. Returns false for anything else, leaving the
-    // driver's answer (including its error) in place.
-    static Bool GenerateThreeChannelFloatMipmapOnCpu(
-        const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
-        if (!texture) return false;
-        const TextureInternalFormat format = texture->GetFormat();
-        const Bool isHalf = format == TextureInternalFormat::RGB16F;
-        if (!isHalf && format != TextureInternalFormat::RGB32F) return false;
-
-        auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(texture.get());
-        if (mipmapTexture == nullptr) return false;
-        // P4a (D-M). The three-channel float mipmap fallback filters the CHAIN ON THE CPU out
-        // of the frontend's level shadows and uploads the result. Monolith keeps doing exactly
-        // that; a split server has no shadow to filter, and P8 is what retires it. The texels
-        // themselves are the other half of ARCHITECTURE.md's generate_mipmap item, which is
-        // P8's too.
-        MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-cpu-fallback");
-        const Uint levelCount = mipmapTexture->GetMipmapLevelCount();
-        constexpr Int kChannels = 3;
-
-        for (const auto uploadTarget : texture->GetUploadTargets()) {
-            for (Uint level = 1; level < levelCount; ++level) {
-                const IntVec3 srcSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, level - 1);
-                const IntVec3 dstSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
-                if (srcSize.x() <= 0 || srcSize.y() <= 0 || dstSize.x() <= 0 || dstSize.y() <= 0) return false;
-                auto* src = static_cast<Uint8*>(mipmapTexture->MapMipmapData(uploadTarget, level - 1));
-                auto* dst = static_cast<Uint8*>(mipmapTexture->MapMipmapData(uploadTarget, level));
-                if (src == nullptr || dst == nullptr) return false;
-
-                const SizeT componentBytes = isHalf ? sizeof(Uint16) : sizeof(Float);
-                const SizeT texelBytes = componentBytes * kChannels;
-                const auto load = [&](const Uint8* base, Int x, Int y, Int channel) {
-                    const Uint8* texel = base + (static_cast<SizeT>(y) * srcSize.x() + x) * texelBytes +
-                                         channel * componentBytes;
-                    if (isHalf) {
-                        Uint16 bits = 0;
-                        Memcpy(&bits, texel, sizeof(bits));
-                        return MG_Util::DecodeHalfBitsToFloat(bits);
-                    }
-                    Float value = 0.0f;
-                    Memcpy(&value, texel, sizeof(value));
-                    return value;
-                };
-
-                // Box filter over the 2x2 source footprint, clamped where a dimension is
-                // already 1 (GL 4.6 core 8.14.4 leaves the exact filter to the implementation
-                // and this is the one it describes for power-of-two levels).
-                for (Int y = 0; y < dstSize.y(); ++y) {
-                    for (Int x = 0; x < dstSize.x(); ++x) {
-                        const Int x0 = std::min(x * 2, srcSize.x() - 1);
-                        const Int x1 = std::min(x * 2 + 1, srcSize.x() - 1);
-                        const Int y0 = std::min(y * 2, srcSize.y() - 1);
-                        const Int y1 = std::min(y * 2 + 1, srcSize.y() - 1);
-                        for (Int channel = 0; channel < kChannels; ++channel) {
-                            const Float average = 0.25f * (load(src, x0, y0, channel) + load(src, x1, y0, channel) +
-                                                           load(src, x0, y1, channel) + load(src, x1, y1, channel));
-                            Uint8* texel = dst + (static_cast<SizeT>(y) * dstSize.x() + x) * texelBytes +
-                                           channel * componentBytes;
-                            if (isHalf) {
-                                const Uint16 bits = MG_Util::EncodeFloatToHalfBits(average);
-                                Memcpy(texel, &bits, sizeof(bits));
-                            } else {
-                                Memcpy(texel, &average, sizeof(average));
-                            }
-                        }
-                    }
-                }
-                mipmapTexture->MarkStorageDirty(uploadTarget, level, true);
-            }
-        }
-        return true;
     }
 
     // P8-B2: RGB16F / RGB32F MIP GENERATION ON THE SERVER, FROM THE SERVER'S OWN LEVEL.
@@ -12232,30 +11904,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return texture ? texture->GetBackendTextureId() : 0u;
         }
     };
-
-    // The renderbuffer twin of TextureImpl::SyncTextureObjectToBackend: the same
-    // find-or-create-then-sync the framebuffer attachment walk does (see SyncAttachmentObject),
-    // reachable from a path that has a renderbuffer but no framebuffer. The MONOLITH arm's only:
-    // under a transport MakeGLESCopyImageEndpoint resolves a renderbuffer endpoint by handle and
-    // never calls this. (P8-E removed the `CopyImageSubData+RENDERBUFFER` latch that stood here -
-    // its transport condition could not hold at the only call site - and
-    // CopyImageStoreReadbackScenario's renderbuffer case runs the handle arm on every transport.)
-    static SharedPtr<RenderbufferImpl::BackendRenderbufferObject> SyncRenderbufferObjectToBackend(
-        const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbufferObject) {
-        if (!renderbufferObject) return nullptr;
-        SharedPtr<RenderbufferImpl::BackendRenderbufferObject> backendRenderbufferObject;
-        if (auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.Find(renderbufferObject.get())) {
-            backendRenderbufferObject = *slot;
-        } else {
-            auto& newSlot = RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbufferObject);
-            if (!newSlot) {
-                newSlot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
-            }
-            backendRenderbufferObject = newSlot;
-        }
-        backendRenderbufferObject->SyncToBackend(renderbufferObject);
-        return backendRenderbufferObject;
-    }
 
     static Bool MakeGLESCopyImageEndpoint(const CopyImageEndpoint& endpoint, GLenum appTarget, GLint x, GLint y,
                                           GLint z, GLESCopyImageEndpoint& out) {

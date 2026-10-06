@@ -32,11 +32,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return MG_Config::Features.MagmaR11G11B10FFallback;
         }
 
-        Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            (void)dpy;
-            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
-        }
-
         Bool IsFormatIndexValid(TextureInternalFormat format) {
             return format != TextureInternalFormat::Unknown && static_cast<Int>(format) >= 0 &&
                    static_cast<SizeT>(format) < kFormatCapabilityFormatCount;

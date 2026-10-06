@@ -19,36 +19,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     class MagmaProgramSource {
     public:
         using Program = MG_State::GLState::ProgramObject;
-        MagmaProgramSource(const Program& program) : m_frontend(&program) {}
         MagmaProgramSource(MG_Pipe::MGPipeHandle handle, const MG_Pipe::MGPipeShaderCsoRecord& record)
             : m_handle(handle), m_record(&record) {
             MOBILEGL_ASSERT(record.Archive != nullptr, "Magma program record has no archive");
         }
 
-        Bool IsWire() const { return m_record != nullptr; }
         MG_Pipe::MGPipeHandle Handle() const { return m_handle; }
-        const Program* Frontend() const { return m_frontend; }
-        Uint GetExternalIndex() const { return IsWire() ? m_handle.Slot : m_frontend->GetExternalIndex(); }
+        Uint GetExternalIndex() const { return m_handle.Slot; }
         Uint64 GetLifetimeId() const {
-            return IsWire() ? (Uint64(m_handle.Gen) << 32) | m_handle.Slot : m_frontend->GetLifetimeId();
+            return (Uint64(m_handle.Gen) << 32) | m_handle.Slot;
         }
-        Bool GetLinkStatus() const { return IsWire() ? m_record->Desc.LinkStatus != 0 : m_frontend->GetLinkStatus(); }
-        Bool GetSpirvStatus() const { return IsWire() ? m_record->Desc.SpirvStatus != 0 : m_frontend->GetSpirvStatus(); }
-        Bool PointSizeDemoted() const { return IsWire() ? m_record->Desc.PointSizeDemoted != 0 : m_frontend->PointSizeDemoted(); }
+        Bool GetLinkStatus() const { return m_record->Desc.LinkStatus != 0; }
+        Bool GetSpirvStatus() const { return m_record->Desc.SpirvStatus != 0; }
+        Bool PointSizeDemoted() const { return m_record->Desc.PointSizeDemoted != 0; }
         Bool GetSpirvValidationEnabled() const {
-            return IsWire() ? m_record->Desc.EnableSpirvValidation != 0 : m_frontend->GetSpirvValidationEnabled();
+            return m_record->Desc.EnableSpirvValidation != 0;
         }
         const Vector<Vector<Uint>>& GetGeneratedSpirv() const {
-            return IsWire() ? m_record->Archive->Spirv.generatedSpirv : m_frontend->GetGeneratedSpirv();
+            return m_record->Archive->Spirv.generatedSpirv;
         }
         Vector<ShaderStage> GetLinkedShaderStages() const {
-            if (!IsWire()) return m_frontend->GetLinkedShaderStages();
             Vector<ShaderStage> result;
             for (const auto stage : m_record->Archive->LinkedStages) result.push_back(static_cast<ShaderStage>(stage));
             return result;
         }
         Bool HasLinkedShaderStage(ShaderStage stage) const {
-            if (!IsWire()) return m_frontend->HasLinkedShaderStage(stage);
             const auto& stages = m_record->Archive->LinkedStages;
             return std::find(stages.begin(), stages.end(), static_cast<Uint32>(stage)) != stages.end();
         }
@@ -56,65 +51,58 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // A view has no lifetime in which a memo can safely persist. The server
             // factory's content cache still owns compiled programs; hash from current
             // archive + binding tails rather than borrowing the client's mutable memo.
-            return !IsWire() && m_frontend->GetBackendHashMemo(flags, hash);
+            (void)flags;
+            (void)hash;
+            return false;
         }
         void SetBackendHashMemo(Uint flags, Uint64 hash) const {
-            if (!IsWire()) m_frontend->SetBackendHashMemo(flags, hash);
         }
-        Uint64 GetBackendStateVersion() const { return IsWire() ? m_record->Serial : m_frontend->GetBackendStateVersion(); }
-        Uint64 GetBlockBindingVersion() const { return IsWire() ? m_record->BindingsSerial : m_frontend->GetBlockBindingVersion(); }
-        Uint64 GetImageUnitVersion() const { return IsWire() ? m_record->BindingsSerial : m_frontend->GetImageUnitVersion(); }
-        Uint64 GetLinkVersion() const { return IsWire() ? m_record->Serial : m_frontend->GetLinkVersion(); }
+        Uint64 GetBackendStateVersion() const { return m_record->Serial; }
+        Uint64 GetBlockBindingVersion() const { return m_record->BindingsSerial; }
+        Uint64 GetImageUnitVersion() const { return m_record->BindingsSerial; }
+        Uint64 GetLinkVersion() const { return m_record->Serial; }
 
-        const void* GetUBOData() const { return IsWire() ? m_record->GlobalConstants.data() : m_frontend->GetUBOData(); }
-        Uint GetUBOSize() const { return IsWire() ? static_cast<Uint>(m_record->GlobalConstants.size()) : m_frontend->GetUBOSize(); }
-        Uint32 GetUBOContentVersion() const { return IsWire() ? m_record->GlobalConstantsVersion : m_frontend->GetUBOContentVersion(); }
+        const void* GetUBOData() const { return m_record->GlobalConstants.data(); }
+        Uint GetUBOSize() const { return static_cast<Uint>(m_record->GlobalConstants.size()); }
+        Uint32 GetUBOContentVersion() const { return m_record->GlobalConstantsVersion; }
         Int GetActiveUniformBlocksCount() const {
-            return IsWire() ? static_cast<Int>(Link().glBlockIndexToTProgram.size()) : m_frontend->GetActiveUniformBlocksCount();
+            return static_cast<Int>(Link().glBlockIndexToTProgram.size());
         }
         Uint GetUniformBlockIndex(const char* name) const {
-            if (!IsWire()) return m_frontend->GetUniformBlockIndex(name);
             auto found = Link().uniformBlockIndexByName.find(name);
             if (found == Link().uniformBlockIndexByName.end()) found = Link().uniformBlockIndexByName.find(String(name) + "[0]");
             return found == Link().uniformBlockIndexByName.end() ? GL_INVALID_INDEX : found->second;
         }
         Uint GetUniformBlockBinding(Uint index) const {
-            if (!IsWire()) return m_frontend->GetUniformBlockBinding(index);
             return index < m_record->BlockBindings.size() ? static_cast<Uint>(m_record->BlockBindings[index]) : 0;
         }
         const String& GetUniformBlockName(Uint index) const {
-            if (!IsWire()) return m_frontend->GetUniformBlockName(index);
             const auto* block = Block(index);
             static const String empty;
             return block ? block->name : empty;
         }
         Uint GetUBOSizeAt(Uint index) const {
-            if (!IsWire()) return m_frontend->GetUBOSizeAt(index);
             const auto* block = Block(index);
             return block ? (static_cast<Uint>(block->size) + 15u) & ~15u : 0;
         }
         Bool IsValidUniformLocation(Int location) const {
-            return IsWire() ? Program::IsValidUniformLocation(Link(), location) : m_frontend->IsValidUniformLocation(location);
+            return Program::IsValidUniformLocation(Link(), location);
         }
         Bool UniformLocationsAliasSameUniform(Int a, Int b) const {
-            if (!IsWire()) return m_frontend->UniformLocationsAliasSameUniform(a, b);
             return IsValidUniformLocation(a) && IsValidUniformLocation(b) &&
                 Link().uniformIndexInTProgram[a] == Link().uniformIndexInTProgram[b];
         }
         GLenum GetUniformType(Uint location) const {
-            if (!IsWire()) return m_frontend->GetUniformType(location);
             return IsValidUniformLocation(static_cast<Int>(location))
                 ? Program::UniformAtIn(Link(), Link().uniformIndexInTProgram[location]).glDefineType : 0;
         }
         Int GetUniformSamplerOrImageUnitIndex(Uint location) const {
-            if (!IsWire()) return m_frontend->GetUniformSamplerOrImageUnitIndex(location);
             const auto& units = m_record->SamplerUnits;
             const auto found = std::lower_bound(units.begin(), units.end(), location,
                 [](const MG_Pipe::MGPProgramSamplerUnit& unit, Uint value) { return unit.Location < value; });
             return found != units.end() && found->Location == location ? found->Unit : -1;
         }
         Int GetUniformLocation(const String& name) const {
-            if (!IsWire()) return m_frontend->GetUniformLocation(name);
             const auto& locations = Link().uniformLocations;
             auto found = locations.find(name);
             if (found != locations.end()) return static_cast<Int>(found->second);
@@ -142,17 +130,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return UniformLocationsAliasSameUniform(base, location) ? location : -1;
         }
 
-        SizeT GetTransformFeedbackVaryingCount() const { return IsWire() ? Link().xfbVaryings.size() : m_frontend->GetTransformFeedbackVaryingCount(); }
+        SizeT GetTransformFeedbackVaryingCount() const { return Link().xfbVaryings.size(); }
         const Vector<MG_State::GLState::XfbVarying>& GetTransformFeedbackVaryings() const {
-            return IsWire() ? Link().xfbVaryings : m_frontend->GetTransformFeedbackVaryings();
+            return Link().xfbVaryings;
         }
-        SizeT GetTransformFeedbackBufferCount() const { return IsWire() ? Link().xfbStrides.size() : m_frontend->GetTransformFeedbackBufferCount(); }
+        SizeT GetTransformFeedbackBufferCount() const { return Link().xfbStrides.size(); }
         Uint32 GetTransformFeedbackStride(Uint index) const {
-            if (!IsWire()) return m_frontend->GetTransformFeedbackStride(index);
             return index < Link().xfbStrides.size() ? Link().xfbStrides[index] : 0;
         }
         GLenum GetTransformFeedbackBufferMode() const {
-            return IsWire() ? Link().xfbBufferMode : m_frontend->GetTransformFeedbackBufferMode();
+            return Link().xfbBufferMode;
         }
         // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): READ OUT OF THE ARCHIVE.
         //
@@ -164,7 +151,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the archive (LinkArtifacts::storageBlocks), which takes the SPIR-V reflector off the
         // wire draw path entirely - this header no longer includes spirv_reflect.h at all.
         Uint GetShaderStorageBlockIndex(const String& name) const {
-            if (!IsWire()) return DirectVulkan::GetShaderStorageBlockIndex(*m_frontend, name);
             const auto& blocks = Link().storageBlocks;
             // The archive carries NORMALISED names (the array subscript stripped), because
             // that is the spelling SPIRV-Reflect's type_name gives and the spelling
@@ -185,7 +171,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                          : static_cast<Uint>(found - blocks.begin());
         }
         Uint GetShaderStorageBlockBinding(Uint index) const {
-            if (!IsWire()) return DirectVulkan::GetShaderStorageBlockBinding(*m_frontend, index);
             const auto& blocks = Link().storageBlocks;
             if (index >= blocks.size()) return 0;
             const auto& block = blocks[index];
@@ -207,7 +192,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return tIndex >= 0 && static_cast<SizeT>(tIndex) < Link().blockReflection.size()
                 ? &Link().blockReflection[tIndex] : nullptr;
         }
-        const Program* m_frontend = nullptr;
         MG_Pipe::MGPipeHandle m_handle = MG_Pipe::kMGPipeNullHandle;
         const MG_Pipe::MGPipeShaderCsoRecord* m_record = nullptr;
         // P7 OQ-8: the two mutables that memoised the per-draw reflect are gone with it. They

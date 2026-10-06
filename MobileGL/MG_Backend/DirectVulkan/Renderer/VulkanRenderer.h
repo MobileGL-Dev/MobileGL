@@ -243,14 +243,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
                        const IndexBufferView* pIndexBufferView = nullptr);
-        // ANGLE-style consecutive-draw fast path: SetupDraw snapshots the fully
-        // resolved draw configuration; the next draw whose cheap version/identity
-        // checks all match skips the resolution half (LOD probe, sampled-set
-        // walk, render-pass and pipeline resolution) and jumps straight to the
-        // per-draw tail. Returns false (leaving no side effects that the full
-        // path cannot redo idempotently) whenever anything might have changed.
-        Bool TrySetupDrawFastPath(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                                  const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView);
         void ClearAttachmentsOnActiveRenderPass(VkCommandBuffer commandBuffer,
                                                 const RenderPassEntry& compatibleRenderPassEntry);
 
@@ -295,11 +287,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Server resource handle in, tightly packed owned bytes out. No frontend
         // texture, pixel-pack state or PBO is consulted by this readback.
         Bool ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info, Vector<Uint8>& ownedBytes);
-        // GL_DEPTH_COMPONENT / GL_DEPTH_STENCIL / GL_STENCIL_INDEX readback from the
-        // read framebuffer's depth/stencil attachment (per-aspect buffer copies with
-        // CPU repacking into the requested client layout).
-        void ReadDepthStencilPixels(MG_State::GLState::FramebufferObject& readFbo, GLint x, GLint y, GLsizei width,
-                                    GLsizei height, GLenum format, GLenum type, void* pixels);
         // Copy-and-repack core shared by depth-stencil ReadPixels and GetTexImage;
         // expects command recording to be active and any render pass already ended.
         //
@@ -363,11 +350,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DrawElements(const DrawIndexedCmd& payload);
         void MultiDrawArrays(const MultiDrawCmd& payload);
         void MultiDrawElements(const MultiDrawIndexedCmd& payloads);
-        void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
-                                       GLsizei stride);
-        void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride);
-        void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
-                                            GLsizei maxdrawcount, GLsizei stride);
         void Present();
 
         const PhysicalDevice& GetPhysicalDevice() const;
@@ -1544,432 +1526,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DepthMipmapResources m_depthMipmapResources;
         Vector<DeferredDepthMipmapCleanup> m_deferredDepthMipmapCleanup;
 
-        // Skip the per-draw CollectSampledTextures walk (~5% of the render thread) when the sampled
-        // texture SET is provably unchanged from the previous draw: same program (lifetime id +
-        // backend-state version, which covers sampler-uniform reassignment / relink) and transform
-        // flags, no texture bind/unbind/delete since (GetTextureBindGeneration), and nothing that
-        // moves a texture's shape or a sampler's parameters since (GetSamplingResolutionGeneration
-        // - membership depends on mipmap-completeness, which both of those decide). On a hit,
-        // m_sampledTexturesScratch still holds the previous draw's list and steps 2-4 (feedback /
-        // layout probe / transition) re-run on it, so layout correctness is unaffected - only the GL
-        // walk is skipped. The program lifetime id (never reused, unlike the GL name) and the
-        // monotonic bind generation make the key ABA-proof; the per-command-buffer reset is a cheap
-        // belt-and-suspenders.
-        Bool m_lastSampledSetValid = false;
-        Uint64 m_lastSampledSetProgramLifetimeId = 0;
-        Uint32 m_lastSampledSetProgramVersion = 0;
-        ProgramFactory::CompileOptionFlags m_lastSampledSetTransformFlags = {};
-        Uint64 m_lastSampledSetBindGeneration = 0;
-        Uint64 m_lastSampledSetSamplingGeneration = 0;
         // Set from the draw's resolved VkProgramObject on both the full and the fast setup paths;
         // read by BeginXfbCaptureForDraw, which has only GL state otherwise. See
         // VkProgramObject::xfbCaptureDeclined.
         Bool m_currentDrawXfbCaptureDeclined = false;
 
-        // Memo for the per-draw explicit-LOD-0 eligibility probe
-        // (ProgramSamplesOnlySingleLevelTextures): same key family as the
-        // sampled-set memo, plus the sampled textures' params-version sum so a
-        // level-range or filter change re-probes. On a hit the resolved
-        // transform flags are reused, which also collapses the two
-        // GetOrCreateProgram lookups into one.
-        Bool m_lastLodDecisionValid = false;
-        Uint64 m_lastLodProgramLifetimeId = 0;
-        Uint32 m_lastLodProgramVersion = 0;
-        Uint64 m_lastLodBindGeneration = 0;
-        Uint64 m_lastLodParamsSum = 0;
-        // Sampling-resolution generation at probe time. The probe reads the effective
-        // sampler's filters/aniso/LOD range, whose setters bump only this counter -
-        // the params-version sum above never moves for them.
-        Uint64 m_lastLodSamplingGeneration = 0;
-        ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
-        ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
-
-        // Does the current program's vertex stage declare the BaseVertex builtin? A property
-        // of the program's SPIR-V, so (lifetime id, backend-state version) is the whole key.
-        //
-        // Memoized rather than re-asked because asking means resolving the UN-zeroed program
-        // variant, and a program that only ever draws non-indexed would then compile a variant
-        // no draw uses AND re-stamp its use every draw, so the idle sweep could never retire
-        // it. With the memo the answer is known before the first lookup and only the variant
-        // the draw actually needs is resolved.
-        Bool m_lastBaseVertexQueryValid = false;
-        Uint64 m_lastBaseVertexProgramLifetimeId = 0;
-        Uint32 m_lastBaseVertexProgramVersion = 0;
-        Bool m_lastBaseVertexReads = false;
-
-        // Snapshot behind TrySetupDrawFastPath. Values only: the program and
-        // render-pass caches are open-addressing maps whose entries move on
-        // insert, so no pointers into them are cached; the pipeline handle is
-        // protected by the command-buffer-boundary reset plus the mid-frame
-        // pipeline-destruction resets, and monotonic epochs guard everything
-        // that can be destroyed or recreated between draws.
-        struct SetupDrawSnapshot {
-            Bool valid = false;
-            Uint8 aspects = 0;
-            GLenum mode = 0;
-            Uint64 programLifetimeId = 0;
-            Uint32 programVersion = 0;
-            const void* vao = nullptr;
-            // Same rule as VaoDrawMemo::vaoLifetimeId: (address, config version) is not an
-            // identity, because a recycled address can arrive carrying a config version
-            // the dead VAO also had (two mutations to configure one attribute is the
-            // common shape), and "the VAO did not move" would then skip the layout
-            // re-resolve for a different VAO.
-            Uint64 vaoLifetimeId = 0;
-            // P2 D12.4: the handle arm's answer to the same question, and one compare rather
-            // than the pair above. Kept BESIDE them rather than replacing them because the
-            // pre-handle arm is still compiled (MOBILEGL_PIPE_LEGACY_MEMOS) and this snapshot
-            // is a value struct, not a wire type.
-            MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
-            Uint32 vaoConfigVersion = 0;
-            const void* drawFbo = nullptr;
-            // Never-reused lifetime id beside the raw pointer + Uint16 version: a
-            // deleted FBO recycled at the same address with the same fresh version
-            // count would otherwise compare equal (same ABA as the render-pass
-            // manager's fast-path memo).
-            Uint64 drawFboLifetimeId = 0;
-            Uint16 fboVersion = 0;
-            Bool drawFboIsDefault = false;
-            Uint renderStateVersion = 0;
-            Uint64 bindGeneration = 0;
-            Uint32 baseTransformFlags = 0;
-            Uint32 resolvedTransformFlags = 0;
-            // What ResolvePrimitiveRestartEnable answered for the draw this snapshot was taken
-            // from, i.e. what its pipeline's primitiveRestartEnable was built with. `aspects`
-            // already separates indexed from non-indexed draws, but not one index TYPE from
-            // another, and a restart index that fits GL_UNSIGNED_INT but not GL_UNSIGNED_SHORT
-            // makes those two draws want different pipelines.
-            Bool primitiveRestartEnable = false;
-            Uint64 renderPassHash = 0;
-            Uint32 imageIndex = 0;
-            Uint64 textureEraseEpoch = 0;
-            Uint64 textureImageEpoch = 0;
-            Uint64 renderbufferImageEpoch = 0;
-            Uint64 sampledContentSum = 0;
-            Uint64 sampledParamsSum = 0;
-            // Guards the sampler-descriptor reuse hint: bumped by any sampler-object
-            // parameter or texture shape change (see GetSamplingResolutionGeneration),
-            // none of which the sums above cover.
-            Uint64 samplingResolutionGeneration = 0;
-            // Render-pass flavor input (DepthTest || StencilTest at snapshot time).
-            // A pipeline-state change that leaves this equal cannot change which
-            // render pass GetOrCreateRenderPass would pick, so the fast path may
-            // re-resolve just the pipeline against the active pass; a change that
-            // flips it must fall back to the full path's pass selection.
-            Bool drawUsesDepthStencil = false;
-            // The snapshotting draw's pipeline viewportCount. A pure function of the PROGRAM
-            // (writesViewportIndexBuiltin) and of a device feature fixed at renderer init, both
-            // of which the programLifetimeId/programVersion guards above already pin - carried
-            // here so the fast path does not re-fetch the program object to re-derive it.
-            Uint32 viewportCount = 1;
-            IntVec2 renderPassExtent = {0, 0};
-            // colorAttachmentCount of the snapshotting draw's render pass: the
-            // pipeline-state hash input, so the fast path can refresh that hash and
-            // probe the pipeline memo after a state change without re-fetching the
-            // render-pass entry (the pass itself is pinned by renderPassHash above).
-            Uint32 renderPassColorCount = 0;
-            // Pinned with the colour count and for the same reason: the fast path recomputes the
-            // pipeline-state value hash from the snapshot, and that hash reads the sample count.
-            VkSampleCountFlagBits renderPassSampleCount = VK_SAMPLE_COUNT_1_BIT;
-            VkPipeline pipeline = VK_NULL_HANDLE;
-            // layoutHash of the snapshotting draw's vertex-input state. The pipeline and
-            // the vertex-input pre-flight depend on the VAO only through this (plus the
-            // program, pinned separately), so a changed VAO whose aux memo carries the
-            // same layoutHash re-uses the snapshot's pipeline and pre-flight verdict
-            // outright - the VAO-cycling case Minecraft chunk rendering hits every draw.
-            Uint64 vaoLayoutHash = 0;
-            // Memoised ProgramFactory entry of the snapshotting draw, valid while
-            // (programLifetimeId, programVersion, resolvedTransformFlags) match - all
-            // checked above - AND the factory's cache structure epoch is unchanged (the
-            // cache is open-addressing and holds entries by value, so any insert/erase
-            // moves them). The fast path must re-stamp use through StampProgramUse when
-            // it bypasses GetOrCreateProgram, or the idle sweep could evict a live entry.
-            const ProgramFactory::VkProgramObject* programObj = nullptr;
-            Uint64 programFactoryEpoch = 0;
-            // Per-entry copies of the snapshotting draw's sampled set (the scratch
-            // vectors below hold only the LAST full-path draw's set, which with more
-            // than one snapshot entry is not necessarily this entry's program).
-            // sampledTextures/sampledResources carry the same epoch-guarded pointer
-            // lifetime rules as the scratch originals: textureEraseEpoch (checked
-            // every probe) declines the entry before any erased resource pointer
-            // could be dereferenced. sampledLayouts is the layout VALUE each
-            // resource held when this entry's descriptors were built (the
-            // descriptor-reuse hint needs the SAME layout, not just a sampleable
-            // one), and sampledBindingRecords feeds SampledBindingsUnchanged when
-            // the bind generation moved.
-            Vector<MG_State::GLState::ITextureObject*> sampledTextures;
-            Vector<VkTextureManager::TextureResource*> sampledResources;
-            Vector<VkImageLayout> sampledLayouts;
-            Vector<UniformManager::SampledBindingRecord> sampledBindingRecords;
-        };
-        // Program-keyed snapshot entries: program ping-pong (Sodium switches programs
-        // mid-frame every few draws) would otherwise evict the single snapshot on
-        // every switch and send every draw through the full path. Entries are found
-        // by programLifetimeId (MRU-first probe); every other guard stays per-probe,
-        // so a stale entry declines itself exactly like the old single snapshot did.
-        static constexpr Uint32 kSetupDrawSnapshotCount = 4;
-        SetupDrawSnapshot m_setupDrawSnapshots[kSetupDrawSnapshotCount];
-        Uint32 m_setupDrawSnapshotMru = 0;    // last entry that hit or was filled
-        Uint32 m_setupDrawSnapshotVictim = 0; // round-robin fill cursor when all entries are live
-        void InvalidateSetupDrawSnapshots() {
-            for (auto& snapshot : m_setupDrawSnapshots) {
-                snapshot.valid = false;
-            }
-        }
-
-        // Per-draw scratch buffers (clear keeps capacity) — these paths run for every
-        // draw call and must not allocate.
-        Vector<MG_State::GLState::ITextureObject*> m_sampledTexturesScratch;
-        // Per-binding (texture, effective sampler) lifetime-id records from the same
-        // CollectSampledTextures walk that filled m_sampledTexturesScratch. The fast
-        // path shadow-compares against them (SampledBindingsUnchanged) when the
-        // texture bind generation moved, so a redundant glBindSampler/glBindTexture
-        // storm that resolves to the same bindings keeps the fast path.
-        Vector<UniformManager::SampledBindingRecord> m_sampledBindingRecordsScratch;
-        // Parallel to m_sampledTexturesScratch, refilled by every SetupDraw's
-        // first sampled-texture loop: the resolved backend resources, so the
-        // post-transition loop can skip re-resolving textures whose layout is
-        // already sampleable.
-        Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
-        Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
-        Vector<UniformManager::SamplerImageFeedbackBinding> m_samplerImageFeedbackScratch;
-        Vector<UniformManager::SamplerBindingOverride> m_samplerImageBindingOverridesScratch;
-        Vector<VkBuffer> m_vertexBuffersScratch;
-        Vector<VkDeviceSize> m_vertexOffsetsScratch;
+        // Per-draw scratch buffer (clear keeps capacity) - this path runs for every draw call and
+        // must not allocate.
         Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
-        Vector<Float> m_vertexConversionScratch;
-        Vector<Uint8> m_vertexRepackScratch;
 
-        struct ConvertedVertexStreamKey {
-            const MG_State::GLState::BufferObject* buffer = nullptr;
-            Uint64 changeSerial = 0;
-            SizeT baseOffset = 0;
-            Uint32 sourceStride = 0;
-            DataType type = DataType::Float32;
-            Int size = 0;
-            Bool normalized = false;
-            Bool isInteger = false;
-            VertexInputStateFactory::VertexStreamConversion conversion =
-                VertexInputStateFactory::VertexStreamConversion::None;
-
-            Bool operator==(const ConvertedVertexStreamKey& other) const {
-                return buffer == other.buffer && changeSerial == other.changeSerial &&
-                       baseOffset == other.baseOffset && sourceStride == other.sourceStride &&
-                       type == other.type && size == other.size && normalized == other.normalized &&
-                       isInteger == other.isInteger && conversion == other.conversion;
-            }
-        };
-
-        struct ConvertedVertexStreamKeyHash {
-            SizeT operator()(const ConvertedVertexStreamKey& key) const {
-                SizeT hash = std::hash<const void*>{}(key.buffer);
-                auto combine = [&hash](SizeT value) {
-                    hash ^= value + static_cast<SizeT>(0x9e3779b97f4a7c15ull) + (hash << 6) + (hash >> 2);
-                };
-                combine(std::hash<Uint64>{}(key.changeSerial));
-                combine(std::hash<SizeT>{}(key.baseOffset));
-                combine(std::hash<Uint32>{}(key.sourceStride));
-                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.type)));
-                combine(std::hash<Int>{}(key.size));
-                combine(std::hash<Bool>{}(key.normalized));
-                combine(std::hash<Bool>{}(key.isInteger));
-                combine(std::hash<Uint32>{}(static_cast<Uint32>(key.conversion)));
-                return hash;
-            }
-        };
-
-        struct ConvertedVertexStream {
-            BufferSlice slice;
-            // Number of source elements the cached slice covers. A draw needing a prefix of
-            // this range reuses the slice (converted streams are tightly packed); a draw
-            // needing more reconverts and replaces the entry, so per (buffer, layout) a
-            // frame converts at most the largest range any draw asked for.
-            SizeT elementCount = 0;
-            // Pins the source buffer for the frame so its heap address cannot be reused by
-            // a new BufferObject while this pointer-keyed entry is alive.
-            SharedPtr<const MG_State::GLState::BufferObject> sourcePin;
-        };
-        UnorderedMap<ConvertedVertexStreamKey, ConvertedVertexStream, ConvertedVertexStreamKeyHash>
-            m_convertedVertexStreams;
-
-        // One VAO's resolved vkCmdBindVertexBuffers arguments, reusable by a later draw
-        // that would resolve them to the same thing. Consecutive draws in a chunk-renderer
-        // frame keep the program and the vertex layout and only swap the VAO, so a
-        // per-VAO memo turns the second and later draws through each VAO into a validate
-        // plus (usually skipped) rebind.
-        //
-        // Only whole-buffer bindings are memoised. Client-memory and format-converted
-        // streams re-upload from a range that depends on the draw's own vertex/index
-        // range, and synthetic bindings carry glVertexAttrib* values that are not part
-        // of any key here; a layout using any of them is never stored.
-        // Field order is hit-path cache locality, hot to cold: the per-draw validate
-        // reads the scalars and the EBO memo head, then only the first bindingCount
-        // elements of vkBuffers/vkOffsets; the per-binding revalidation arrays at the
-        // tail are touched once per frame at most.
-        struct ResolvedVertexBindings {
-            // Must equal DynamicStateShadow::kMaxShadowedVertexBindings (static_assert in
-            // the .cpp): past that width the bind shadow cannot skip a redundant bind
-            // either, so a wider layout resolves per draw. Minecraft-shaped layouts use four.
-            static constexpr Uint32 kMaxBindings = 8;
-
-            // Frame serial of the last completed resolve OR cross-frame revalidation.
-            // Zero until a resolve completes, and reset to zero before one starts, so a
-            // resolve that bails out midway cannot leave a half-filled entry matchable.
-            // Unlike the original frame-scoped memo, an entry whose buffers are all
-            // resident and unmapped is revalidated across frames (per-binding slice
-            // epoch compares) instead of re-resolved - see TryBindResolvedVertexBindings.
-            Uint64 frameSerial = 0;
-            // Identity of the resolved Vulkan layout: the VAO's content hash
-            // (VertexInputStateFactory::GetOrComputeHash - the same value the factory
-            // keys its entries on) fixes bindings.size(), each binding's base offset,
-            // which bindings are client/converted, and (through the mixed-in buffer
-            // addresses) which buffer each binding reads. Compared against the VAO's
-            // own hash memo on the hit path, so a hit never touches the factory entry.
-            VertexInputStateFactory::HashType vertexInputHash = 0;
-            // The program's vertex input layout: decides the synthetic-binding set and
-            // hence the total binding count.
-            Uint32 activeAttribMask = 0;
-            Uint32 bindingCount = 0;
-            // VkBufferManager::GetSliceEpochCounter() at resolve time. Still equal means
-            // no buffer anywhere changed its slice or was persistently mapped since, which
-            // settles every per-binding question below in one compare.
-            Uint64 sliceEpochCounter = 0;
-            // Any bound buffer already carrying a host map when the slice was resolved.
-            // Such a buffer can mutate its shadow with no API call, so it has to be
-            // re-pushed per draw and the one-compare path above cannot apply.
-            Bool anyBufferMapped = true;
-
-            // Resident element-buffer slice memo (skips the per-draw AcquireResidentSlice
-            // for the VAO's EBO, which cold-chases 500+ distinct resources in a
-            // chunk-cycling frame). Self-validating exactly like the bindings above: a hit
-            // requires the LIVE bound EBO pointer to equal indexBuffer AND either an
-            // unmoved manager-wide slice-epoch counter (nothing anywhere changed slices
-            // or gained a host map, the same one-compare rescue the vertex half uses) or
-            // that buffer's resource still carrying indexSliceEpoch (epochs are minted
-            // from a process-lifetime counter, so a recycled address can never
-            // revalidate). Restart-substituted and streamed EBOs are never stored.
-            // indexFrameSerial tracks the last frame the resource's GPU-use serial was
-            // stamped through this memo; 0 means no index memo. Independent of the
-            // vertex half: both are (pointer, epoch)-validated, so neither can serve
-            // stale state for the other.
-            const MG_State::GLState::BufferObject* indexBuffer = nullptr;
-            Uint64 indexSliceEpoch = 0;
-            // GetSliceEpochCounter() when the resource's epoch was last verified; only
-            // meaningful while indexFrameSerial matches the current frame serial.
-            Uint64 indexSliceEpochCounter = 0;
-            VkBuffer indexVkBuffer = VK_NULL_HANDLE;
-            VkDeviceSize indexSliceOffset = 0;
-            Uint64 indexFrameSerial = 0;
-            // The EBO carried a host map when the slice was recorded - the mirror of
-            // anyBufferMapped on the vertex half. A shadow-backed (non-adopted)
-            // persistent map mutates its shadow with no API call and no epoch bump, so
-            // the one-compare rescue must decline and re-run the acquire, whose
-            // SyncPersistentMappedRange is the push-down. A map taken AFTER the record
-            // is already covered: AcquirePersistentMap bumps the slice epoch for the
-            // request itself, adopted or declined.
-            Bool indexBufferMapped = false;
-
-            // Bound per draw (first bindingCount elements).
-            VkBuffer vkBuffers[kMaxBindings] = {};
-            VkDeviceSize vkOffsets[kMaxBindings] = {};
-            // Per binding: the VAO attribute location its buffer comes from, that buffer,
-            // and the buffer's VkBufferManager slice epoch when the slice was resolved.
-            // Only read by the per-frame revalidation and the something-moved fallback.
-            Uint8 attributeLocations[kMaxBindings] = {};
-            const MG_State::GLState::BufferObject* buffers[kMaxBindings] = {};
-            Uint64 sliceEpochs[kMaxBindings] = {};
-        };
-        // One direct-mapped slot of the per-VAO draw-memo table below. A slot belongs to
-        // the object whose (vaoKey, vaoLifetimeId) pair it carries: the address alone
-        // only picks the slot, and the never-reused lifetime id is what proves the slot
-        // is THIS VAO's, so the successor allocated onto a destroyed VAO's address
-        // always misses. That identity check is load-bearing and the content-hash
-        // validations below do NOT stand in for it - a recycled address under a
-        // byte-identical configuration reproduces the content hash exactly, which is
-        // how a destroyed VAO's resolved bindings were once handed to its successor's
-        // draw. The slot is still never dereferenced through vaoKey, and every fact it
-        // carries is still validated against live state before use:
-        //  - layoutHash/layoutAuxMasks are valid only while contentHash equals the LIVE
-        //    VAO's own hash memo (which the VAO's config version guards), so a config
-        //    change or a buffer rebind misses even for the same object.
-        //  - bindings revalidates per draw exactly as before (frame serial, content
-        //    hash, per-binding live buffer pointers and slice epochs).
-        struct alignas(64) VaoDrawMemo {
-            // P2 D12.4: the handle arm's key, and the ONLY key it needs. {slot, gen} is an
-            // identity, so the pointer-plus-lifetime-id pair below stops being a key here;
-            // the slot also picks the table entry, so the address hash and the two-way probe
-            // go with it. Null in an entry that has never been claimed.
-            MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
-            const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
-            // The VAO's never-reused lifetime id, checked alongside vaoKey. The pointer
-            // ALONE is not an identity: a deleted VAO's heap address is handed straight
-            // back by the next glGenVertexArrays-shaped allocation, and the successor then
-            // matched this slot and inherited the dead object's memos. Both stated
-            // defences failed with it, because both reduce to the content hash and the
-            // content hash's buffer-identity component was itself a recycled heap address.
-            Uint64 vaoLifetimeId = 0;
-            // The VAO content hash (VertexInputStateFactory::GetOrComputeHash) the two
-            // layout facts below were derived from; 0 while nothing valid is stored.
-            Uint64 contentHash = 0;
-            Bool layoutFactsValid = false;
-            // The resolved layout identity + packed (unsupported, location) masks -
-            // the exact values GetBackendAuxMemo used to serve, moved here so the
-            // per-draw probe stays inside this table's one hot line instead of
-            // touching a second cold line of every cycled VAO object.
-            Uint64 layoutHash = 0;
-            Uint64 layoutAuxMasks = 0;
-            ResolvedVertexBindings bindings;
-        };
-        // Fixed-size, allocated on first use, never rehashed or swept: entries are
-        // recycled in place on slot collisions (two-slot probe, older frame serial
-        // evicted), and stale entries self-invalidate through the compares above. A
-        // fixed table also makes every VaoDrawMemo/ResolvedVertexBindings pointer
-        // stable for the duration of a draw, which the EBO memo handoff
-        // (m_currentDrawResolvedEntry) relies on.
-        //
-        // [deviation from D12.4, deliberate and narrow] The brief asks for a grow-on-demand
-        // Vector. This one stays FIXED at exactly the capacity and exactly the 2-way victim
-        // rule it has on the base ref, and only its KEY changes (a {slot, gen} handle instead
-        // of a hashed heap address plus a lifetime id). Two reasons, and the second is the
-        // whole of review v2's MAJOR 1:
-        //   * a VaoDrawMemo is ~450 B (ResolvedVertexBindings dominates), so growing this
-        //     table with the live VAO set is megabytes on a platform with an LMK, where the
-        //     other two memos are 48 B and can afford it;
-        //   * this is the ONLY one of the three memos that had a capacity before this package.
-        //     Losing an entry here costs a vertex-binding re-resolve, exactly what losing it
-        //     cost on the base ref, so at any working-set size this table is no worse than what
-        //     it replaces - and strictly better below capacity, where the handle is a bijection
-        //     with the slot and the two-way probe never collides at all. The other two memos
-        //     (VertexInputStateFactory::m_vaoMemos) had NO capacity, so they keep having none.
-        static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
-        Vector<VaoDrawMemo> m_vaoDrawMemoTable;
-        // The renderer's {slot, gen} mint, shared with its VertexInputStateFactory so both
-        // derive the same handle for the same VAO. Per renderer, never a process-global: a
-        // global would share one table and one reclamation clock across two live contexts and
-        // outlive every one of them (review v2 minor 4).
-        MagmaPipeIdentityTables m_pipeIdentity;
-        // The VAO's {slot, gen}. A one-entry memo hit for every acquisition after a draw's
-        // first, so there is no second memo in front of it here.
-        MG_Pipe::MGPipeHandle ResolveVaoHandle(const MG_State::GLState::VertexArrayObject& vao) {
-            return m_pipeIdentity.HandleOf(MG_Pipe::MGPipeKind::VertexElementsCso,
-                                           vao.GetLifetimeId());
-        }
-        // "Is this VAO's content hash already memoized?", asked of whichever side owns the
-        // memo (P2 D12.5). Force-inlined and defined in the class body so that the PULL
-        // build's three readers keep compiling to the very same two loads they always did -
-        // G1 admits no resize, and an out-of-line call here would be one.
-        [[gnu::always_inline]] inline Bool VaoContentHashIfKnown(
-            const MG_State::GLState::VertexArrayObject& vao, Uint64& outHash) const {
-            return m_vertexInputStateFactory->TryGetMemoizedHash(vao, outHash);
-        }
-        // Finds the slot holding `vao`, or recycles the older of its two candidate
-        // slots into an empty memo keyed on `vao`. Never returns null.
-        VaoDrawMemo* LookupVaoDrawMemo(const MG_State::GLState::VertexArrayObject* vao);
-        // The current draw's memo entry, set by UploadAndBindVertexBuffers and consumed
-        // by the same draw's UploadAndBindIndexBuffer (the EBO memo lives in the same
-        // entry). Valid ONLY within that window: the next draw's lookup can recycle the
-        // slot. Null when the draw's layout is not memoisable.
-        ResolvedVertexBindings* m_currentDrawResolvedEntry = nullptr;
 
         void CreateInstance();
         VkResult SetupDebugMessenger();
@@ -1995,31 +1560,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool ResolvePrimitiveRestartEnable(Flags<DrawSetupAspect> aspects,
                                            const IndexBufferView* pIndexBufferView) const;
 
-        VkPipeline GetOrCreatePipeline(
-            GLenum mode,
-            const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj,
-            ProgramFactory::CompileOptionFlags transformFlags,
-            const MG_State::GLState::VertexArrayObject& vao,
-            const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable);
         VkPipeline GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj);
         void DestroyComputePipelines();
-        // Takes the frame rather than a command buffer: a first-time storage-usage upgrade has to
-        // flush the pending recording (see the body), which retires the current command buffer.
-        Bool PrepareStorageImageTextures(
-            FrameContext::FrameData& frame,
-            const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj);
-        // Vulkan forbids a sampled descriptor and writable storage descriptor from naming the
-        // same image subresource in one shader operation. Snapshot only the sampler side; the
-        // storage descriptor continues to name the application texture.
-        Bool PrepareSamplerImageFeedbackSnapshots(
-            FrameContext::FrameData& frame,
-            const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj,
-            VkPipelineStageFlags consumerShaderStageMask);
-
         // The per-draw dynamic-state tail (viewport, scissor, blend constants, depth
         // bias, line width, stencil), gated behind one render-state-parameters-version
         // compare per command buffer - see the gate fields in DynamicStateShadow.
@@ -2040,23 +1582,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return programWritesViewportIndex && m_multiViewportFeatureEnabled ? m_maxRasterizableViewports : 1u;
         }
 
-        Bool UploadAndBindVertexBuffers(VkCommandBuffer commandBuffer, const MG_State::GLState::VertexArrayObject& vao,
-                                        const ProgramFactory::VkProgramObject& programObj,
-                                        const DrawCmdParam& drawParams,
-                                        const IndexBufferView* pIndexBufferView);
-        // Binds `entry`'s memoised buffers when every input it was resolved from is
-        // still live and unchanged, else returns false and leaves nothing bound.
-        // vaoContentHash is the VAO's memoised content hash (GetBackendHashMemo), which
-        // pins the layout AND the bound buffers without resolving the factory entry.
-        // Non-const entry: a cross-frame revalidation refreshes its serial/epoch stamps.
-        Bool TryBindResolvedVertexBindings(VkCommandBuffer commandBuffer,
-                                           const MG_State::GLState::VertexArrayObject& vao,
-                                           ResolvedVertexBindings& entry,
-                                           Uint64 vaoContentHash,
-                                           Uint32 activeAttribMask, Uint64 frameSerial);
-        Bool UploadAndBindIndexBuffer(FrameContext::FrameData& frame,
-                                     const MG_State::GLState::VertexArrayObject& vao,
-                                      const IndexBufferView* pIndexBufferView = nullptr);
         Bool InitializeBlitResources();
         Bool InitializeDepthMipmapResources();
         void ShutdownBlitResources();
@@ -2123,14 +1648,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
             VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
             const ClearAttachmentPayload& payload);
-        Bool GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
-                                           MG_State::GLState::ITextureObject& texture,
-                                           VkTextureManager::TextureResource& resource,
-                                           Uint32 baseMipLevel,
-                                           Uint32 generateMipLevelCount,
-                                           const IntVec3& storageBaseTexelSize,
-                                           VkImageLayout originalLayout,
-                                           VkImageLayout finalLayout);
         Bool SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame);
 
     public:

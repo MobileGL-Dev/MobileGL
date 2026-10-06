@@ -2235,28 +2235,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
-        TextureTarget ReflectImageTraitsToTextureTarget(const SpvReflectImageTraits& imageTraits) {
-            switch (imageTraits.dim) {
-            case SpvDim1D:
-                return imageTraits.arrayed != 0 ? TextureTarget::Texture1DArray : TextureTarget::Texture1D;
-            case SpvDim2D:
-                if (imageTraits.ms != 0) {
-                    return imageTraits.arrayed != 0 ? TextureTarget::Texture2DMultisampleArray
-                                                    : TextureTarget::Texture2DMultisample;
-                }
-                return imageTraits.arrayed != 0 ? TextureTarget::Texture2DArray : TextureTarget::Texture2D;
-            case SpvDim3D:
-                return TextureTarget::Texture3D;
-            case SpvDimCube:
-                return imageTraits.arrayed != 0 ? TextureTarget::TextureCubeMapArray : TextureTarget::TextureCubeMap;
-            case SpvDimBuffer:
-                return TextureTarget::TextureBuffer;
-            default:
-                MOBILEGL_ASSERT(false, "ProgramFactory: unsupported sampler image dim %d", imageTraits.dim);
-                return TextureTarget::Unknown;
-            }
-        }
-
         Bool IsFloatStorageImageUniformType(GLenum uniformType) {
             switch (uniformType) {
             case GL_IMAGE_1D:
@@ -3495,7 +3473,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // contains a dynamic buffer descriptor (VUID 03001/03011). Wire draws
             // retain UniformManager's per-frame, content-versioned descriptor sets;
             // this selects the legal ordinary pool, not in-place mutation of a live set.
-            (!program.IsWire() || entry.dynamicBindings.empty()) &&
+            entry.dynamicBindings.empty() &&
             uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
             updateAfterBindUniformBuffers <= uab.maxPerStageUniformBuffers &&
             updateAfterBindStorageBuffers <= uab.maxPerStageStorageBuffers &&

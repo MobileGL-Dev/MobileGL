@@ -10860,21 +10860,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        // The colour attachment glReadPixels/glGetTexImage would read from, or nullptr when the
-        // read buffer names no colour attachment at all.
-        static const MG_State::GLState::FramebufferAttachmentObject* GetReadColorAttachment() {
-            const auto& readFBO =
-                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
-            if (!readFBO) {
-                return nullptr;
-            }
-            const auto readBuffer = readFBO->GetReadBuffer();
-            if (readBuffer < FramebufferAttachmentType::Color0 || readBuffer > FramebufferAttachmentType::Color31) {
-                return nullptr;
-            }
-            return &readFBO->GetAttachment(readBuffer);
-        }
-
         Bool IsAlphaWidenedColorAttachment(
             const MG_State::GLState::FramebufferAttachmentObject& attachmentObject) {
             if (attachmentObject.IsTexture()) {
@@ -15798,14 +15783,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // A package REPLACES the body in place and deletes the matching comment; it does not add a
     // second definition elsewhere, or the linker's answer depends on link order.
     namespace {
-        [[noreturn]] void MGPipeP5eSeamNotLanded(const char* name, const char* owner,
-                                                 MG_Pipe::MGPipeHandle handle) {
-            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"%s\"} - the P5e by-handle seam is declared by "
-                    "package c0e and bodied by package %s; it was called for handle {%u, %u} "
-                    "before that package landed",
-                    name, owner, handle.Slot, handle.Gen);
-            std::abort();
-        }
     } // namespace
 
     namespace TextureImpl {

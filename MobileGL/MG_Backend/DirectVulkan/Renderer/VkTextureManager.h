@@ -668,25 +668,11 @@ public:
     VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
                                                     Uint32 baseArrayLayer, Uint32 layerCount,
                                                     VkImageViewType viewType);
-    VkImageView GetOrCreateSampledViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
     VkImageView GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture, VkFormat format);
-    VkImageView GetOrCreateStorageImageView(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                            VkFormat format, Bool layered, Int32 layer);
-    void UpdateTrackedImageLayout(MG_State::GLState::ITextureObject* texture, VkImageLayout newLayout);
     void UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
                                                       MG_State::GLState::ITextureObject* texture,
                                                       Uint32 writtenMipLevel,
                                                       VkImageLayout newLayout);
-    Bool TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
-    Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
-    // Copies the complete sampler-visible mip range into a transient sampled image. The source is
-    // restored to its prior layout, so image-store descriptors continue to name the original image.
-    // The transient ownership is tied to the current frame slot and is safe through its submission.
-    Bool SnapshotTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture,
-                                    SamplerNumericDomain numericDomain,
-                                    VkPipelineStageFlags consumerShaderStageMask,
-                                    SampledTextureSnapshot& outSnapshot);
-
     // Recording-generation bookkeeping for the pre-pass command stream. The
     // generation advances every time the frame command buffer (re)begins
     // recording; a resource whose stamp does not match was not referenced by
@@ -721,27 +707,6 @@ public:
     Bool WasTextureWrittenThisRecording(MG_State::GLState::ITextureObject& textureOrView) const;
     // The live resource, or null.
     TextureResource* FindTextureResource(MG_State::GLState::ITextureObject& textureOrView);
-    // Records that this texture is bound to a GL image unit, so its image must carry
-    // VK_IMAGE_USAGE_STORAGE_BIT. Must be called before NeedsStorageImagePreparation, and
-    // therefore before the render pass is committed: an image that has to be upgraded is
-    // recreated, which is illegal inside a render pass. Sticky for the texture's lifetime -
-    // GL lets an image binding come and go, and re-creating the image every time it does
-    // would cost far more than the compression it wins back.
-    void MarkStorageImageTexture(MG_State::GLState::ITextureObject& texture);
-    // True when this texture is marked but its live image predates the mark, i.e. the next sync
-    // will recreate it with STORAGE usage and copy the old contents forward. Callers use this to
-    // submit their pending recording first, so that copy cannot read pre-flush content.
-    Bool NeedsStorageUsageUpgrade(MG_State::GLState::ITextureObject& texture) const;
-    // The same ordering question for the other recreate-and-preserve trigger: true when this
-    // texture's live image carries a shorter mip chain than a full one, so defining the missing
-    // levels recreates it and copies the old contents forward.
-    Bool NeedsMipChainGrowth(MG_State::GLState::ITextureObject& texture) const;
-    // Non-mutating probe for the per-draw storage-image fast path: true when preparing this
-    // texture as a storage image may need work that is illegal inside a render pass (resource
-    // creation, dirty-content upload, or a layout transition to GENERAL). Unknown state reports
-    // true - a false positive merely ends the render pass, a false negative would skip a barrier.
-    Bool NeedsStorageImagePreparation(MG_State::GLState::ITextureObject& texture) const;
-
     // `depthStencilTextureMode` is the texture's GL_DEPTH_STENCIL_TEXTURE_MODE; it only decides
     // anything for an image that carries both aspects. Defaulted so the call sites that have no
     // texture in hand keep the depth-aspect answer they have always given.
@@ -749,8 +714,6 @@ public:
                                                                 GLenum depthStencilTextureMode = GL_DEPTH_COMPONENT);
     static VkFormat ResolveSampledImageViewFormat(VkFormat imageFormat, SamplerNumericDomain numericDomain);
     static Bool AreSampledImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
-    static Bool AreStorageImageViewFormatsCompatible(VkFormat imageFormat, VkFormat viewFormat);
-
     // Moves `image` to `newLayout` and writes the new layout back through `trackedLayout`.
     //
     // The barrier covers EVERY array layer of the image, and there is deliberately no layer
@@ -771,29 +734,6 @@ public:
                                Uint32 baseMipLevel = 0, Uint32 levelCount = 1);
 
     SizeT CollectGarbage();
-
-    // Per-draw sync memo. Within a single SetupDraw the same sampled texture is
-    // resolved ~3x (SetupDraw's layout-probe loop, its post-transition loop, and
-    // again inside ResolveSamplerDescriptor). No GL texture mutation can happen
-    // mid-SetupDraw, and layout is tracked on the TextureResource independently of
-    // SyncTexture, so after the first successful sync of a texture in a draw the
-    // heavy SyncTexture work (mip-completeness/resource/view resync + dirty scan)
-    // is pure redundancy. BeginDrawSyncScope opens a window in which repeat
-    // SyncTextureAndGetDescriptor calls short-circuit to the already-synced
-    // resource; EndDrawSyncScope closes it. Use the RAII DrawSyncScope guard.
-    void BeginDrawSyncScope();
-    void EndDrawSyncScope();
-
-    // RAII guard that opens/closes a per-draw sync memo window (see above).
-    class DrawSyncScope {
-    public:
-        explicit DrawSyncScope(VkTextureManager& manager) : m_manager(manager) { m_manager.BeginDrawSyncScope(); }
-        ~DrawSyncScope() { m_manager.EndDrawSyncScope(); }
-        DrawSyncScope(const DrawSyncScope&) = delete;
-        DrawSyncScope& operator=(const DrawSyncScope&) = delete;
-    private:
-        VkTextureManager& m_manager;
-    };
 
 private:
     // Bumped in SyncTextureResource right after vmaCreateImage(texture). See GetTextureImageEpoch().
@@ -878,20 +818,8 @@ private:
     // Frame-boundary GC gate: counts BeginFrame calls, not draws, so texture churn
     // through non-draw paths (FBO clears, readbacks) still reaches the prune.
     Uint32 m_gcFrameCounter = 0;
-    // Active only between BeginDrawSyncScope/EndDrawSyncScope; identities of
-    // textures already fully synced in the current draw (small N -> flat scan).
-    Bool m_drawSyncScopeActive = false;
     // SyncWireTextureShape defining the RGBA8 storage a YUV shared image is converted into.
     Bool m_syncingYuvTextureStorage = false;
-    // Per-draw sync memo: the identity plus the resolved resource pointer. The pointer is stable
-    // across rehash in the node-based m_textureResources and stays valid for the draw (a texture
-    // synced this draw is alive and is not erased mid-draw), so a repeat sync of the same texture
-    // returns the resource without re-hashing the identity into m_textureResources.
-    struct DrawSyncedTexture {
-        TextureIdentity identity;
-        TextureResource* resource = nullptr;
-    };
-    Vector<DrawSyncedTexture> m_drawSyncedThisDraw;
     // Cross-draw sampled-texture memo: the same few textures (atlas, lightmap)
     // are resolved on every draw, so cache their resource pointers and skip the
     // alive/resource map lookups. Node-based std::unordered_map keeps the

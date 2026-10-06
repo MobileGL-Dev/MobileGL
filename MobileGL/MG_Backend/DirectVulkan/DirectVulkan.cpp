@@ -38,10 +38,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     RendererSlot pVulkanRenderer;
 
     namespace {
-        void RejectWireLegacyBuffer() {
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
-            std::abort();
-        }
         // Generation of the live VulkanRenderer instance, mirroring
         // DirectGLES's g_syncContextGeneration. BackendObject_DirectVulkan
         // bumps it (BumpRendererGeneration) wherever pVulkanRenderer is reset
@@ -149,19 +145,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
 
-        void ClearReadPixelsOutput(GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
-            if (!pixels || width <= 0 || height <= 0) {
-                return;
-            }
-            const auto inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
-            const auto inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
-            const SizeT size = MG_Util::CalculateInputTextureImageSize(inputFormat, inputType,
-                                                                       IntVec3(width, height, 1));
-            if (size > 0) {
-                std::memset(pixels, 0, size);
-            }
-        }
-
 
         // The verb's handles identify server stores; never inspect a client binding.
         //
@@ -241,41 +224,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 payload.pParams = params.data();
                 pVulkanRenderer->MultiDrawArrays(payload);
             }
-        }
-
-        MG_State::GLState::ProgramObject* TryGetDirectVulkanProgram(GLuint program) {
-            if (!MG_Pipe::gPipeInputs.ValidateProgramName(program)) {
-                return nullptr;
-            }
-            auto& programObject = MG_Pipe::gPipeInputs.GetProgramObject(program);
-            return programObject.get();
-        }
-
-        const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
-            auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-            if (drawBuffer) {
-                drawBuffer->SyncPersistentMappedRange();
-                // A command block a compute shader wrote is the case this whole shape exists
-                // for, and every caller here reads the words on the CPU - the per-command
-                // expansion, the baseInstance the shader emulation is fed, and the fetch
-                // range a client-memory vertex array's upload is bounded by. Reconciling the
-                // shadow first is what keeps those readings the real ones (a no-op unless a
-                // GPU write is pending).
-                drawBuffer->SyncGpuWrites();
-                const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
-                if (drawBuffer->MappedData() == nullptr || commandOffset + requiredBytes > drawBuffer->GetSize()) {
-                    MGLOG_E_ONCE("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
-                    return nullptr;
-                }
-                return drawBuffer->MappedData() + commandOffset;
-            }
-
-            if (!indirect) {
-                MGLOG_E_ONCE("%s skipped: indirect pointer is null", label);
-                return nullptr;
-            }
-
-            return reinterpret_cast<const Uint8*>(indirect);
         }
 
     } // namespace

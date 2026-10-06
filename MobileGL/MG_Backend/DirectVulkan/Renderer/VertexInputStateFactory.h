@@ -76,45 +76,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
         };
 
-        // The mint is the RENDERER's (MagmaPipeIdentityTables), not a process-global and not
-        // this factory's: VulkanRenderer::LookupVaoDrawMemo has to derive the same {slot, gen}
-        // for the same VAO, and a table that outlived the context it was minted for would share
-        // one reclamation clock across two live contexts (review v2 minor 4).
-        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice,
-                                MagmaPipeIdentityTables& identity):
-            m_config(config), m_physicalDevice(physicalDevice), m_identity(&identity) {}
+        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
+            m_config(config), m_physicalDevice(physicalDevice) {}
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
-        // The VAO aux-memo payload GetOrCreateVertexInputState(vao) stamps: aux0 is the
-        // entry's layoutHash, aux1 packs (unsupportedAttribMask << 32) | attributeLocationMask.
-        // Readers that find the aux memo valid can use these without resolving the entry.
-        static Uint64 PackVertexInputAuxMasks(Uint32 unsupportedAttribMask, Uint32 attributeLocationMask) {
-            return (static_cast<Uint64>(unsupportedAttribMask) << 32) | attributeLocationMask;
-        }
-
-        HashType ComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
-        // Memoized ComputeHash: reuses the VAO's cached hash while its config version
-        // is unchanged. Use this on per-draw paths.
-        HashType GetOrComputeHash(const MG_State::GLState::VertexArrayObject& vao) const;
-        // The VAO's content hash IF it has already been memoized, without computing one.
-        // P2 D12.5: the three draw-path readers that used to ask the VAO object this
-        // question ask the factory instead, because that is where the memo lives once the
-        // frontend object stops carrying the backend's state.
-        Bool TryGetMemoizedHash(const MG_State::GLState::VertexArrayObject& vao, Uint64& outHash) const;
-        const BackendVertexInputState& GetOrCreateVertexInputState(
-            const MG_State::GLState::VertexArrayObject& vao, HashType hash);
-        const BackendVertexInputState& GetOrCreateVertexInputState(const MG_State::GLState::VertexArrayObject& vao);
-        // Frame boundary hook: ages the cache and evicts entries not hit for many
-        // frames. The key mixes each bound buffer's never-reused lifetime id, so
-        // buffer/VAO churn keeps minting fresh keys - and does so by construction,
-        // not by luck: a recreated buffer can no longer land back on its dead
-        // predecessor's key. Without eviction the map grows for the whole session.
-        // Entries hold no Vulkan handles (pipeline creation copies the descriptions)
-        // and the draw path's entry reference never spans a frame boundary, so
-        // eviction here needs no GPU-idle proof. Self-gated: one counter bump and
-        // compare except on sweep boundaries.
-        void OnFrameBoundary();
         static SizeT GetComponentSize(DataType type);
         // Tightly-packed byte size of one vertex element for this attribute: componentSize * size for
         // normal types, and 4 (one packed word) for the 2_10_10_10 types and GL_BGRA. Returns 0 for
@@ -133,76 +99,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkFormat ToFloat32VertexFormat(Int componentCount);
         Bool SupportsVertexBufferFormat(VkFormat format) const;
 
-        // ---- P2 D12.5: the backend's memos, off the frontend VAO and into the backend ----
-        //
-        // The two facts that used to live as `mutable` fields on VertexArrayObject
-        // (Get/SetBackendHashMemo and Get/SetBackendStateMemo), kept here instead, keyed on
-        // the VAO's {slot, gen} and guarded by exactly the same config version. A frontend
-        // state object holding the backend's raw pointer is what P2 retires: under split the
-        // backend is in another process and its cache entry has no address a client could
-        // store, so the memo has to live on the side that owns the pointee.
-        //
-        // The AUX memo is not carried over: its two words moved into VaoDrawMemo::layoutHash
-        // and layoutAuxMasks long ago and its getter has no live reader anywhere in the tree,
-        // so the handle arm simply stops writing it (D12.5 says delete rather than move).
-        struct VaoBackendMemos {
-            // Whose memos these are. The identity table can recycle a slot for a different
-            // VAO under LRU pressure, and the handle compare - Gen included - is what says
-            // the contents are this object's and not its predecessor's.
-            MG_Pipe::MGPipeHandle Owner = MG_Pipe::kMGPipeNullHandle;
-            Uint64 Hash = 0;
-            Uint32 HashConfigVersion = ~0u;
-            const void* State = nullptr;
-            Uint64 StateEpoch = 0;
-            Uint32 StateConfigVersion = ~0u;
-        };
-        // Grow-on-demand (D12.4), one entry per slot the renderer's mint has ever handed
-        // out, and NO CAPACITY: these two memos had none before this package either - they
-        // were unbounded mutable fields on the VertexArrayObject itself - and re-introducing
-        // eviction here is what review v2 rejected. MagmaPipeSlotTable grows in chunks so an
-        // entry reference stays valid across the nested GetOrCreateVertexInputState call.
-        // 48 B per live VAO, reclaimed with the slot when the object goes idle.
-        mutable MagmaPipeSlotTable<VaoBackendMemos> m_vaoMemos;
-        // The renderer's {slot, gen} mint (see the constructor). Never null under push.
-        MagmaPipeIdentityTables* m_identity = nullptr;
-        // The entry belonging to `vao`, claimed (and cleared) if the slot currently holds
-        // someone else's.
-        VaoBackendMemos& MemosFor(const MG_State::GLState::VertexArrayObject& vao) const;
-
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
         // Physical-device format capabilities never change during this factory's
         // lifetime. The wire path rebuilds layouts without the legacy VAO memo.
         mutable UnorderedMap<VkFormat, Bool> m_wireVertexFormatSupport;
-        // Values are heap-allocated: UnorderedMap is open-addressing, so INSERT
-        // invalidates references to stored values - and so does ERASE, which shifts
-        // the rest of the probe cluster into the hole and therefore moves entries
-        // other than the erased one. The draw path (and the VAOs' state-pointer
-        // memos) hold entry pointers across both; only the unique_ptr cell moves,
-        // never the pointee.
-        UnorderedMap<HashType, UniquePtr<BackendVertexInputState>> m_cache;
-        // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
-        Uint64 m_frameBoundaryCounter = 0;
-        // Bumped whenever any cache entry is erased. VAOs memo a raw pointer to
-        // their heap-allocated entry (stable across map insert/rehash by
-        // construction); a memo is honored only while its recorded epoch
-        // matches, so an evicted entry can never be dereferenced through a
-        // stale memo.
-        //
-        // Drawn from a process-wide source, never a per-instance counter: the VAO
-        // memos outlive this factory (they live on the frontend context's VAOs, the renderer
-        // is destroyed and recreated on EGL surface release/re-create), so a fresh
-        // factory restarting at a dead factory's epoch value would honor its
-        // dangling entry pointers. The constructor takes a value strictly greater
-        // than anything a predecessor ever stamped, so a dead factory's memo can
-        // never compare equal here - the same never-reused idiom as the lifetime ids.
-        // Single-threaded like the rest of the factory (renderer-thread only).
-        //
-        // P2 D12.5: the process-wide source is the LEGACY arm's need. It exists because the
-        // memos live on the frontend VAOs and therefore outlive the factory. The handle arm's
-        // memo table is owned by this factory and dies with it, so a per-instance counter is
-        // enough there and the epoch shrinks back to what it looks like it should be.
-        Uint64 m_evictionEpoch = 1;
         static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
