@@ -198,7 +198,7 @@ jobs:
   # The pull-library negative control must not consume the primary artifact:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
-    name: build explicit pull runtime control
+    name: build monolith controls (pull; push without MG_Remote)
     runs-on: ubuntu-latest
     env:
       BUILD_DIR: build-monolith-control
@@ -262,10 +262,40 @@ jobs:
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
-      - name: Package pull control
+      # P13 W1: THE PUSH MONOLITH WITHOUT MG_Remote - the shape FCL embeds once the pull build is
+      # gone (PLAN-P13 §4.1, §4.3; ID-P13-1). Two jobs in one: it is the transport-negative control
+      # that replaces the pull library in retrace-split (run side by side with it until W2 drops the
+      # pull build), and its runtime_mode_proof is the zero-MG_Remote-symbol check, one of G1's
+      # successors (ID-P13-4): a push library that links any MG_Remote symbol is red here.
+      - name: Configure push control without MG_Remote
+        run: |
+          cmake -S . -B build-push-control -G Ninja \
+            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_BUILD_DISAGGREGATED=OFF -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=OFF \
+            -DMOBILEGL_PIPE_PUSH=ON -DMOBILEGL_PIPE_VERIFY=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      - name: Build push control and prove it has zero MG_Remote symbols
+        run: |
+          cmake --build build-push-control --target MobileGL --parallel "$(nproc)"
+          python3 scripts/ci/runtime_mode_proof.py build --build-dir build-push-control \
+            --mode monolith --output build-push-control/runtime-mode.json
+          python3 - build-push-control/runtime-mode.json <<'PY'
+          import json, sys
+          rows = json.load(open(sys.argv[1]))['production_compilation']
+          if not rows or any(row['definitions'].get('MOBILEGL_PIPE_PUSH') != '1' for row in rows):
+              sys.exit('::error::the push control was not compiled with MOBILEGL_PIPE_PUSH=1 everywhere')
+          print(f'push control: {len(rows)} production sources compiled with MOBILEGL_PIPE_PUSH=1, zero MG_Remote symbols')
+          PY
+
+      - name: Package monolith controls
         run: |
           tar -czf mobilegl-linux-monolith-control.tgz \
-            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json"
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json" \
+            build-push-control/libMobileGL.so build-push-control/runtime-mode.json
       - name: Upload pull control
         uses: actions/upload-artifact@v7
         with:
@@ -316,10 +346,19 @@ jobs:
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L unit --no-tests=error
+            ctest -V -L unit --no-tests=error --output-junit "${RUNNER_TEMP}/unit.xml"
           else
-            ctest --output-on-failure -L unit --no-tests=error
+            ctest --output-on-failure -L unit --no-tests=error --output-junit "${RUNNER_TEMP}/unit.xml"
           fi
+
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-test
+          path: ${{ runner.temp }}/*.xml
+          if-no-files-found: warn
 
       - name: Upload core dumps
         if: failure()
@@ -449,6 +488,15 @@ jobs:
             ${{ runner.temp }}/primary-inproc*
             build-linux/runtime-mode.json
             build-linux/MobileGL/MG_IntegrationTest/p5f-rsp-*.log
+          if-no-files-found: warn
+
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration-${{ matrix.lane }}-${{ matrix.transport }}
+          path: ${{ runner.temp }}/*.xml
           if-no-files-found: warn
 
       - name: Upload core dumps
@@ -708,9 +756,9 @@ jobs:
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-verify --no-tests=error
+            ctest -V -L integration-verify --no-tests=error --output-junit "${RUNNER_TEMP}/verify.xml"
           else
-            ctest --output-on-failure -L integration-verify --no-tests=error
+            ctest --output-on-failure -L integration-verify --no-tests=error --output-junit "${RUNNER_TEMP}/verify.xml"
           fi
 
       # The push-only unit tests, on the verify runtime.
@@ -731,7 +779,7 @@ jobs:
       # unit binaries would otherwise report a green run of nothing.
       - name: Unit tests on the verify runtime (G6, G10)
         working-directory: build-verify
-        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-verify.xml"
 
       # The always-on P2 and P3a negative controls (G8, G10, G12), which are labelled
       # integration-gpu and not integration-verify - they are about the handle key, the subsystem
@@ -891,6 +939,15 @@ jobs:
         with:
           name: integration-verify-logs
           path: build-verify/MobileGL/MG_IntegrationTest/pipe-*.log*
+          if-no-files-found: warn
+
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration-verify
+          path: ${{ runner.temp }}/*.xml
           if-no-files-found: warn
 
       - name: Upload core dumps
@@ -1136,6 +1193,15 @@ jobs:
             build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs-lane/**
             build-verify-split/MobileGL/MG_IntegrationTest/verify-split-logs/**
             build-verify-split/MobileGL/MG_IntegrationTest/pipe-*split*.log*
+          if-no-files-found: warn
+
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration-verify-split
+          path: ${{ runner.temp }}/*.xml
           if-no-files-found: warn
 
       - name: Upload core dumps
@@ -1625,6 +1691,15 @@ jobs:
             ${{ runner.temp }}/arm-monolith.xml
           if-no-files-found: warn
 
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration-split
+          path: ${{ runner.temp }}/*.xml
+          if-no-files-found: warn
+
       - name: Upload core dumps
         if: failure()
         uses: actions/upload-artifact@v7
@@ -1742,7 +1817,8 @@ jobs:
           PY
 
           rc=0
-          ctest -L integration-split --no-tests=error -j 4 > "${RUNNER_TEMP}/strict-split.txt" 2>&1 || rc=$?
+          ctest -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/strict-split.xml" \
+            > "${RUNNER_TEMP}/strict-split.txt" 2>&1 || rc=$?
           tail -5 "${RUNNER_TEMP}/strict-split.txt"
           echo "strict run: rc=${rc}"
 
@@ -2215,6 +2291,15 @@ jobs:
       - name: Annotate failed entries
         if: failure()
         run: python3 scripts/ci/junit_annotate.py "${RUNNER_TEMP}"
+
+      # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
+      - name: Upload JUnit for the skip census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: junit-integration-split-strict
+          path: ${{ runner.temp }}/*.xml
+          if-no-files-found: warn
 
       - name: Upload strict lane logs
         if: ${{ always() }}
@@ -3060,9 +3145,12 @@ jobs:
       - build-retrace
       - trace-cases
       - trace-fixtures
-    # The separate OFF/pull artifact is for the negative control ONLY: its library is what the control
-    # swaps in to prove the transport-resolution assertion is load-bearing.
-    if: ${{ always() && needs.build-linux-monolith-control.result == 'success' && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    # The monolith-control artifact is for the negative controls ONLY: its libraries are what the
+    # controls swap in to prove the transport-resolution assertion is load-bearing. P13 W1: the
+    # legs no longer require that build to have SUCCEEDED - gating on it skipped the whole split
+    # matrix (grey, not red) whenever the control build failed (PLAN-P13 §0-7). The control steps
+    # below download its artifact, and a missing one is a red step on every leg instead.
+    if: ${{ always() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -3130,6 +3218,7 @@ jobs:
         run: |
           tar -xzf pull-runtime/mobilegl-linux-monolith-control.tgz -C pull-runtime
           test -f pull-runtime/build-monolith-control/libMobileGL.so
+          test -f pull-runtime/build-push-control/libMobileGL.so
 
       - name: Prepare downloaded test metadata
         run: |
@@ -3270,6 +3359,22 @@ jobs:
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
           # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
           # proving something about the other arm while spawn ran unguarded.
+          SPLIT_TRANSPORT: ${{ matrix.transport }}
+          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
+        run: >-
+          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
+          '${{ matrix.case }}' '${{ matrix.backend }}'
+
+      # P13 W1: THE SAME CONTROL WITH THE PUSH MONOLITH WITHOUT MG_Remote - the library FCL embeds
+      # after W2, and the successor of the pull library above once W2 drops the pull build. Same
+      # script and the same evidence sentence: what makes either library red here is that it has no
+      # transport, not that it pulls.
+      - name: Negative control (push library without MG_Remote)
+        working-directory: build-retrace/tools/trace_replay
+        env:
+          CONTROL_TMPDIR: ${{ runner.temp }}
+          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-push-control/libMobileGL.so
+          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
           SPLIT_TRANSPORT: ${{ matrix.transport }}
           MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
         run: >-
@@ -3729,3 +3834,42 @@ jobs:
           name: mobilegl-linux-runtime-verify-split
           path: ci-artifacts/mobilegl-linux-runtime-verify-split.tgz
           if-no-files-found: error
+
+  # P13 W1 (PLAN-P13 §4.2): THE SKIP CENSUS. Deleting a compile-time macro before the GTEST_SKIP
+  # or pull stub that guards on it turns tests "green by skipping"; a per-lane pass/fail count
+  # cannot see that. Every gtest lane uploads its JUnit as junit-*; this job keys each case by
+  # lane and name and holds the run against scripts/data/skip_census_baseline.json: a new skip
+  # (pass -> skip included) or a vanished name is red, a skip that turned into a pass is a note.
+  # A deliberate retirement edits the baseline in the same commit and names the cases.
+  skip-census:
+    name: skip census
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - integration
+      - integration-verify
+      - integration-verify-split
+      - integration-split
+      - integration-split-strict
+    if: ${{ always() }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+      - name: Skip census self-test
+        run: python3 scripts/ci/skip_census.py --self-test
+      - name: Download lane JUnit
+        uses: actions/download-artifact@v8
+        with:
+          pattern: junit-*
+          path: junit
+      - name: Skip census
+        run: |
+          python3 scripts/ci/skip_census.py check junit \
+            --baseline scripts/data/skip_census_baseline.json --report skip-census.json
+      - name: Upload census
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: skip-census
+          path: skip-census.json
+          if-no-files-found: warn

@@ -29,9 +29,10 @@ def build_proof(build, mode):
         argv = row.get('arguments') or shlex.split(row['command'])
         flags = {arg[2:].split('=', 1)[0]: arg[2:].split('=', 1)[1] if '=' in arg else '1'
                  for arg in argv if arg.startswith('-D')}
+        # P13: "monolith" means the transport is absent (no MG_Remote), not that the pipe is
+        # pulled - the monolith build pushes too, so MGPipeApply symbols are expected in both.
         expected = mode == 'disaggregated'
-        if any((flags.get(name) == '1') != expected
-               for name in ('MOBILEGL_BUILD_DISAGGREGATED', 'MOBILEGL_PIPE_PUSH')):
+        if (flags.get('MOBILEGL_BUILD_DISAGGREGATED') == '1') != expected:
             raise RuntimeError(f'production macros disagree with {mode}: {flags}')
         definitions.append({'source': row['file'], 'definitions': flags})
     symbols = subprocess.check_output(['nm', '--defined-only', str(library)], text=True)
@@ -39,7 +40,7 @@ def build_proof(build, mode):
         raise RuntimeError('library appears stripped; symbol absence would prove nothing')
     remote = sum('MG_Remote' in line for line in symbols.splitlines())
     applier = sum('MGPipeApply' in line for line in symbols.splitlines())
-    if (mode == 'disaggregated' and (not remote or not applier)) or (mode == 'monolith' and (remote or applier)):
+    if (mode == 'disaggregated' and (not remote or not applier)) or (mode == 'monolith' and remote):
         raise RuntimeError(f'{mode} symbol mismatch: MG_Remote={remote}, MGPipeApply={applier}')
     return {'mode': mode, 'source_sha': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
             'library': str(library), 'sha256': hashlib.sha256(library.read_bytes()).hexdigest(),
@@ -122,13 +123,18 @@ def self_test():
             raise AssertionError('missing server log passed the runtime log proof')
         (build / 'libMobileGL.so').write_bytes(b'checker fixture, not a real runtime')
         normal = ''.join(f'00000000 T fixture{i}\n' for i in range(1000))
-        remote = normal + '00000000 T MG_Remote_fixture\n00000000 T MGPipeApply_fixture\n'
+        pushed = normal + '00000000 T MGPipeApply_fixture\n'
+        remote = pushed + '00000000 T MG_Remote_fixture\n'
         for mode, flags, symbols, succeeds in (
             ('monolith', '', normal, True),
+            ('monolith', '-DMOBILEGL_PIPE_PUSH=1', pushed, True),
             ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1 -DMOBILEGL_PIPE_PUSH=1', remote, True),
-            ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1', remote, False),
+            ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1', remote, True),
+            ('disaggregated', '-DMOBILEGL_PIPE_PUSH=1', remote, False),
             ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1 -DMOBILEGL_PIPE_PUSH=1', normal, False),
+            ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1', normal + '00000000 T MG_Remote_fixture\n', False),
             ('monolith', '', remote, False),
+            ('monolith', '-DMOBILEGL_BUILD_DISAGGREGATED=1', pushed, False),
             ('monolith', '', '00000000 T stripped\n', False),
         ):
             (build / 'compile_commands.json').write_text(json.dumps([
