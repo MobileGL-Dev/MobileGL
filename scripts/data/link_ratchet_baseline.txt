@@ -2,20 +2,18 @@
 # Regenerate: python3 scripts/link_ratchet.py --build-dir <dir> \
 #               --baseline scripts/data/link_ratchet_baseline.txt \
 #               --write-baseline scripts/data/link_ratchet_baseline.txt
-# base commit : daf2b44c71da79d261e74f15cee56079bc31bafc
+# base commit : <unknown>
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DCMAKE_BUILD_TYPE=Release
-# build dir   : build-split
-# count       : 171
+# build dir   : /home/swung/mgl-p13-split
+# count       : 58
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores; `# P13` marks a symbol that cannot fall before P13 establishes module
 # target boundaries. The LIST is the baseline, not the count: a ratchet that
 # stored only a number would go green on the day one symbol is cleared and another
 # added (ID-P7-7).
-MobileGL::MG_Impl::GLImpl::CopyTextureImageToClientOrPBO_State(std::shared_ptr<MobileGL::MG_State::GLState::ITextureObject> const&, MobileGL::TextureUploadTarget, int, unsigned int, unsigned int, int, void*, char const*) # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo
 MobileGL::MG_Pipe::MGPipeApplierIsUnbarrieredApply() # P13
-MobileGL::MG_Pipe::MGPipeNoteAggregate(MobileGL::MG_Pipe::MGPipeAggregate) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::MGPipeRefuseAllocatorFromApplyThread(char const*) # P13
 MobileGL::MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread(char const*) # P13
 MobileGL::MG_Pipe::MGPipeSlotAllocator::Acquire(MobileGL::MG_Pipe::MGPipeKind, unsigned long) # P13
@@ -23,13 +21,11 @@ MobileGL::MG_Pipe::MGPipeSlotAllocator::FindByLifetimeId(MobileGL::MG_Pipe::MGPi
 MobileGL::MG_Pipe::MGPipeSlotAllocator::Free(MobileGL::MG_Pipe::MGPipeKind, MobileGL::MG_Pipe::MGPipeHandle) # P13
 MobileGL::MG_Pipe::MGPipeSlots() # P13
 MobileGL::MG_Pipe::PipeInputs::GetBufferBindingPointCount(MobileGL::BufferTarget) const
-MobileGL::MG_Pipe::PipeInputs::GetProgramObject(unsigned int)
 MobileGL::MG_Pipe::PipeInputs::GetTextureObject(unsigned int) # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::HasOpenTransformFeedbackSpan(unsigned long) const # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::InvalidateCompileEnv() # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::IsLive() const
 MobileGL::MG_Pipe::PipeInputs::RecordError(MobileGL::ErrorCode, std::unique_ptr<MobileGL::ErrorInfo, std::default_delete<MobileGL::ErrorInfo> >)
-MobileGL::MG_Pipe::PipeInputs::ValidateProgramName(unsigned int) const
 MobileGL::MG_Remote::Client::AdoptTierIsEmulate()
 MobileGL::MG_Remote::Client::BackendObject_Remote::BackendObject_Remote()
 MobileGL::MG_Remote::Client::ClientSession::Active()
@@ -40,146 +36,37 @@ MobileGL::MG_Remote::Client::ClientSession::StartSpawned()
 MobileGL::MG_Remote::Client::ClientSession::Stop()
 MobileGL::MG_Remote::Client::ClientSessionInstance()
 MobileGL::MG_Remote::Client::EmitObjectDeathRecord(MobileGL::MG_Pipe::MGPipeKind, unsigned long)
-MobileGL::MG_State::GLState::BufferObject::DownloadSubData(void*, unsigned long, unsigned long) const
-MobileGL::MG_State::GLState::BufferObject::EnsureGpuResidentStorage() # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::BufferObject::GetBackendResource() const
 MobileGL::MG_State::GLState::BufferObject::GetChangeSerial() const
 MobileGL::MG_State::GLState::BufferObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::BufferObject::GetSize() const
 MobileGL::MG_State::GLState::BufferObject::GetUsage() const
 MobileGL::MG_State::GLState::BufferObject::HasDefinedContent() const
-MobileGL::MG_State::GLState::BufferObject::IsBackendPersistentMapped() const
-MobileGL::MG_State::GLState::BufferObject::IsMapped() const
 MobileGL::MG_State::GLState::BufferObject::MappedData() const
-MobileGL::MG_State::GLState::BufferObject::MarkGpuWritten()
 MobileGL::MG_State::GLState::BufferObject::SetBackendResource(std::shared_ptr<MobileGL::MG_State::GLState::BackendBufferResource>)
-MobileGL::MG_State::GLState::BufferObject::SyncGpuWrites()
 MobileGL::MG_State::GLState::BufferObject::SyncPersistentMappedRange()
 MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long)
 MobileGL::MG_State::GLState::ClassifyVertexAttribType(unsigned int)
 MobileGL::MG_State::GLState::DecodeProgramArchive(unsigned char const*, unsigned long, MobileGL::MG_State::GLState::ProgramArchive&)
 MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetRenderbuffer() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetSize() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetTexture() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetTextureLayer() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetTextureLevel() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetTextureUploadTarget() const
 MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsComplete() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsEmpty() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsLayered() const
 MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsRenderbuffer() const
 MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsTexture() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsValid() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::FramebufferObject::GetAllAttachmentObjects() const
 MobileGL::MG_State::GLState::FramebufferObject::GetAttachment(MobileGL::FramebufferAttachmentType) const
 MobileGL::MG_State::GLState::FramebufferObject::GetDrawBuffers() const
-MobileGL::MG_State::GLState::FramebufferObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::GetBufferBackendOps()
 MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
 MobileGL::MG_State::GLState::ProgramObject::JoinPendingLink() const
-MobileGL::MG_State::GLState::ProgramObject::JoinPendingSpirv() const
 MobileGL::MG_State::GLState::RenderbufferObject::GetExternalIndex() const
-MobileGL::MG_State::GLState::RenderbufferObject::GetHeight() const
 MobileGL::MG_State::GLState::RenderbufferObject::GetInternalFormat() const
-MobileGL::MG_State::GLState::RenderbufferObject::GetSamples() const
-MobileGL::MG_State::GLState::RenderbufferObject::GetWidth() const
-MobileGL::MG_State::GLState::RenderbufferObject::IsAllocated() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::SamplerObject::GetAllSamplerParameters() const
-MobileGL::MG_State::GLState::SamplerObject::GetBorderColor() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetBorderColorI() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetBorderColorUI() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetCompareMode() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::SamplerObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::SamplerObject::GetLifetimeId() const
-MobileGL::MG_State::GLState::SamplerObject::GetLodBias() const
-MobileGL::MG_State::GLState::SamplerObject::GetMagFilter() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetMaxAnisotropy() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetMaxLod() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetMinFilter() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetMinLod() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetMipmapMode() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetSamplerCompareFunc() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::SamplerObject::GetVersion() const
-MobileGL::MG_State::GLState::SamplerObject::GetWrapR() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetWrapS() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::GetWrapT() const # P13 monolith arm: sampler cache reads the app SamplerObject (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::SamplerObject::SamplerObject(unsigned int)
-MobileGL::MG_State::GLState::SamplerObject::SetCompareMode(MobileGL::SamplerCompareMode)
-MobileGL::MG_State::GLState::SamplerObject::SetMagFilter(MobileGL::SamplerFilterMode)
-MobileGL::MG_State::GLState::SamplerObject::SetMinFilter(MobileGL::SamplerFilterMode)
-MobileGL::MG_State::GLState::SamplerObject::SetMipmapMode(MobileGL::SamplerMipmapMode)
-MobileGL::MG_State::GLState::SamplerObject::SetSamplerCompareFunc(MobileGL::SamplerCompareFunc)
-MobileGL::MG_State::GLState::SamplerObject::~SamplerObject()
-MobileGL::MG_State::GLState::SamplesAsIncompleteTexture(MobileGL::MG_State::GLState::ITextureObject const*, MobileGL::MG_State::GLState::SamplerObject const*)
 MobileGL::MG_State::GLState::SetBufferBackendOps(MobileGL::MG_State::GLState::BufferBackendOps const*)
-MobileGL::MG_State::GLState::TextureObject1D::TextureObject1D(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObject2D::TextureObject2D(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObject2DCube::TextureObject2DCube(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObject3D::TextureObject3D(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetAllSwizzleParams() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetBorderColor() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetBorderColorForm() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetBorderColorI() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetBorderColorUI() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetContentVersion() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetExternalIndex() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetFormat() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetImmutableLevels() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetLevelRange() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetLifetimeId() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetSamplerObject() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetSamples() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetShapeVersion() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetSwizzleParam(MobileGL::TextureSwizzleParam) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetTarget() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetTextureParamsVersion() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::GetViewStorageOwner() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::HasFixedSampleLocations() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::IsImmutable() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::IsMipmapCompleteForFilterCached(bool) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::PipePublishParams() # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetBaseLevel(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetBorderColor(MobileGL::Vec4<float> const&) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetBorderColorI(MobileGL::Vec4<int> const&) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetBorderColorUI(MobileGL::Vec4<unsigned int> const&) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetFixedSampleLocations(bool) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetImmutableLevels(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetInternalFormat(MobileGL::TextureInternalFormat) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetMaxLevel(unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetSamples(int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetSwizzleParam(MobileGL::TextureSwizzleParam, MobileGL::TextureSwizzleParam) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::SetSwizzleParamRGBA(MobileGL::Vec4<MobileGL::TextureSwizzleParam> const&) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::TextureObjectBase(MobileGL::TextureTarget, unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectBase::~TextureObjectBase() # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureObjectBuffer::GetBufferBindingSlot(MobileGL::TextureUploadTarget)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::AllocateStorage(MobileGL::TextureUploadTarget, unsigned int, MobileGL::MG_State::GLState::MipmapInput) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetBaseSize() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapByteSize(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapCompressedByteSize(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapCompressedFormat(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapLevelCount() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapRequestedCompressedFormat(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetMipmapTexelSize(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyFootprint(MobileGL::TextureUploadTarget, unsigned int, std::vector<MobileGL::MG_State::GLState::MipmapDirtyRegion, std::allocator<MobileGL::MG_State::GLState::MipmapDirtyRegion> >&) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12); P11 M2: dev 9524c688's new virtual on the same vtable
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyRects(MobileGL::TextureUploadTarget, unsigned int, MobileGL::MG_State::GLState::MipmapDirtyRegion*, unsigned long) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::GetStorageDirtyRegion(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::IsComplete() const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::IsStorageDirty(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::MapMipmapCompressedImage(MobileGL::TextureUploadTarget, unsigned int) const # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::MapMipmapData(MobileGL::TextureUploadTarget, unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::MarkStorageDirty(MobileGL::TextureUploadTarget, unsigned int, bool) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::MarkStorageDirtyRegion(MobileGL::TextureUploadTarget, unsigned int, MobileGL::Vec3<int>, MobileGL::Vec3<int>) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::SetMipmapCompressedImage(MobileGL::TextureUploadTarget, unsigned int, unsigned int, void const*, unsigned long) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::SetMipmapRequestedCompressedFormat(MobileGL::TextureUploadTarget, unsigned int, unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::TruncateMipmapLevels(MobileGL::TextureUploadTarget, unsigned int) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::UpdateMipmapSubData(MobileGL::TextureUploadTarget, unsigned int, MobileGL::DataPtr) # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
 MobileGL::MG_State::GLState::TextureUnit::GetAllBindingSlots()
-MobileGL::MG_State::GLState::TextureUnit::GetBindingSlot(MobileGL::TextureTarget)
 MobileGL::MG_State::GLState::TextureUnit::GetSamplerObject() const
 MobileGL::MG_State::GLState::VertexArrayObject::GetAllAttributes() const
 MobileGL::MG_State::GLState::VertexArrayObject::GetAttribute(unsigned int) const
-MobileGL::MG_State::GLState::VertexArrayObject::GetIndexBufferBindingSlot()
-MobileGL::MG_State::GLState::VertexArrayObject::GetIndexBufferBindingSlot() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
-typeinfo for MobileGL::MG_State::GLState::TextureObjectBase
-typeinfo for MobileGL::MG_State::GLState::TextureObjectWithOneMipmap # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
-vtable for MobileGL::MG_State::GLState::TextureObjectWithOneMipmap # P13 monolith arm: UniformManager builds frontend TextureObject placeholders (CONTRACT-P7 §12)
