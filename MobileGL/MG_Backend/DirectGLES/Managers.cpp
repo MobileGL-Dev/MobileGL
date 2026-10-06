@@ -10685,7 +10685,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 storage = record->Desc.ViewOf;
             }
             if (auto* twin = ResolveTextureTwin(storage)) twin->NoteDriverSideWrite();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P8-E: the staged store stops standing for this texture's content (a no-op on a
             // monolith arm, where the store does not copy).
             if (!storeFollowsTheWrite && !MG_Pipe::MGPipeHandleIsNull(storage)) {
@@ -10696,7 +10696,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             (void)storeFollowsTheWrite;
 #endif
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
                                           MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
                                           const IntVec3& destinationOrigin, const IntVec3& size) {
