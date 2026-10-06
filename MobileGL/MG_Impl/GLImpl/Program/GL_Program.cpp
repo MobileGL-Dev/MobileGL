@@ -833,7 +833,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
-        const auto& s = programObject->GetAttachedShaders();
+        // GL-visible: a shader detached since the last link is no longer attached (GL 4.6 §7.3).
+        const auto s = programObject->GetGLVisibleAttachedShaders();
         GLsizei c = std::min((GLsizei)s.size(), maxCount);
         if (count) *count = c;
         for (GLsizei i = 0; i < c; ++i) {
@@ -873,7 +874,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         }
         case GL_ATTACHED_SHADERS: {
-            const auto& attachedShaders = programObject->GetAttachedShaders();
+            const auto attachedShaders = programObject->GetGLVisibleAttachedShaders();
             *params = (GLint)attachedShaders.size();
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;

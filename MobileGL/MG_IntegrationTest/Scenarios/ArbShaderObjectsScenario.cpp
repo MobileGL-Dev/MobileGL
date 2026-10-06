@@ -225,6 +225,53 @@ void main() { oColor = uColor; }
             EXPECT_EQ(FirstGLError(), 0u);
         }
 
+        // A detach takes effect for every query at once (GL 4.6 ¡ì7.3), even though the program keeps
+        // the shader for its current executable until the next link: a second detach is
+        // INVALID_OPERATION, and attaching it again before that link is legal and lists it once.
+        TEST_F(ArbShaderObjectsScenario, ADetachIsVisibleAtOnceAndAReattachWithdrawsIt) {
+            if (!Ready()) return;
+            const GLuint vs = ArbShader(GL_VERTEX_SHADER, kVertexSource);
+            const GLuint fs = ArbShader(GL_FRAGMENT_SHADER, kFragmentSource);
+            const GLuint program = glCreateProgramObjectARB();
+            glAttachObjectARB(program, vs);
+            glAttachObjectARB(program, fs);
+            glLinkProgramARB(program);
+            GLint value = 0;
+            glDetachObjectARB(program, fs);
+            glGetProgramiv(program, GL_ATTACHED_SHADERS, &value);
+            EXPECT_EQ(value, 1) << "a detached shader is still counted";
+            GLuint attached[4] = {};
+            GLsizei count = 0;
+            glGetAttachedShaders(program, 4, &count, attached);
+            ASSERT_EQ(count, 1);
+            EXPECT_EQ(attached[0], vs);
+            glGetProgramiv(program, GL_LINK_STATUS, &value);
+            EXPECT_EQ(value, GL_TRUE) << "a detach must not touch the current link";
+            EXPECT_EQ(FirstGLError(), 0u);
+            glDetachShader(program, fs);
+            EXPECT_EQ(FirstGLError(), static_cast<unsigned>(GL_INVALID_OPERATION)) << "detaching a detached shader";
+            glAttachShader(program, fs);
+            EXPECT_EQ(FirstGLError(), 0u) << "re-attaching a shader detached since the last link";
+            glGetAttachedObjectsARB(program, 4, &count, attached);
+            EXPECT_EQ(count, 2) << "the re-attached shader is listed exactly once";
+            glAttachShader(program, fs);
+            EXPECT_EQ(FirstGLError(), static_cast<unsigned>(GL_INVALID_OPERATION)) << "attaching an attached shader";
+            // The relink sees both shaders again and draws.
+            glLinkProgram(program);
+            glGetProgramiv(program, GL_LINK_STATUS, &value);
+            ASSERT_EQ(value, GL_TRUE);
+            glUseProgram(program);
+            glUniform4f(glGetUniformLocation(program, "uColor"), 1.0f, 0.0f, 0.0f, 1.0f);
+            DrawInto();
+            const Image red = ReadPixels(kEdge, kEdge);
+            EXPECT_TRUE(RegionIsMostly(red, 0, kEdge - 1, 0, kEdge - 1, "red", 0.0, "relinked after detach + reattach"));
+            glUseProgram(0);
+            glDeleteObjectARB(program);
+            glDeleteObjectARB(vs);
+            glDeleteObjectARB(fs);
+            EXPECT_EQ(FirstGLError(), 0u);
+        }
+
         // A program built through the extension, mixed with core calls on the same objects, draws.
         TEST_F(ArbShaderObjectsScenario, AnArbProgramMixedWithCoreCallsDraws) {
             if (!Ready()) return;

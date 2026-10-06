@@ -73,6 +73,10 @@ namespace MobileGL::MG_State::GLState {
             if (std::none_of(m_shaders.begin(), m_shaders.end(), matches)) return false;
             return std::none_of(m_detachedShaders.begin(), m_detachedShaders.end(), matches);
         }
+        // The attach list as GL sees it: the attach list minus the shaders pending detach. What
+        // glGetAttachedShaders and GL_ATTACHED_SHADERS answer from - the raw list keeps a detached
+        // shader until the next link consumes the detach.
+        Vector<SharedPtr<ShaderObject>> GetGLVisibleAttachedShaders() const;
         bool AttachShader(const SharedPtr<ShaderObject>& shader);
         SizeT DetachShader(const SharedPtr<ShaderObject>& shader);
         SizeT RemoveShader(const SharedPtr<ShaderObject>& shader);

@@ -436,9 +436,17 @@ namespace MobileGL::MG_State::GLState {
     // is specified as link-then-detach and would discard its own link before anyone read it.
     bool ProgramObject::AttachShader(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("ProgramObject %u: AttachShader called for shader %p", m_externalIndex, shader.get());
-        if (ShaderIsAttached(shader)) {
+        if (ShaderIsAttachedGLVisible(shader)) {
             MGLOG_D("ProgramObject %u: AttachShader - shader already attached, skipping", m_externalIndex);
             return false;
+        }
+        if (ShaderIsAttached(shader)) {
+            // Detached since the last link, and attached again before the next one: GL sees it
+            // attached from here on, so the pending detach is withdrawn rather than the shader
+            // listed twice.
+            std::erase_if(m_detachedShaders,
+                          [&shader](const SharedPtr<ShaderObject>& s) { return s.get() == shader.get(); });
+            return true;
         }
         m_shaders.emplace_back(shader);
         MGLOG_D("ProgramObject %u: AttachShader - attached successfully, total shaders now %zu", m_externalIndex,
@@ -456,7 +464,9 @@ namespace MobileGL::MG_State::GLState {
 
     SizeT ProgramObject::DetachShader(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("DetachShader called for shader %p from ProgramObject %u", shader.get(), m_externalIndex);
-        if (!ShaderIsAttached(shader)) {
+        // GL-visible: a shader already detached (pending the next link) is not attached, and a
+        // second glDetachShader of it is INVALID_OPERATION like any other unattached shader.
+        if (!ShaderIsAttachedGLVisible(shader)) {
             MGLOG_D("Shader %p is not attached to ProgramObject %u, cannot detach.", shader.get(), m_externalIndex);
             return 0;
         }
@@ -663,6 +673,15 @@ namespace MobileGL::MG_State::GLState {
                 m_deleteStatus ? "deleted" : "not deleted");
         m_deleteStatus = true;
         MGLOG_D("ProgramObject %u: MarkAsDeleted - now marked deleted", m_externalIndex);
+    }
+
+    Vector<SharedPtr<ShaderObject>> ProgramObject::GetGLVisibleAttachedShaders() const {
+        Vector<SharedPtr<ShaderObject>> visible;
+        visible.reserve(m_shaders.size());
+        for (const auto& shader : m_shaders) {
+            if (ShaderIsAttachedGLVisible(shader)) visible.push_back(shader);
+        }
+        return visible;
     }
 
     Vector<SharedPtr<ShaderObject>>& ProgramObject::GetAttachedShaders() {
