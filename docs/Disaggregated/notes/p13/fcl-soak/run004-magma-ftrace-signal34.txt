@@ -1,0 +1,5 @@
+   Okio Watchdog-28064   [002] dN.1. 283577.703953: signal_generate: sig=34 errno=0 code=-6 comm=onPool-worker-2 pid=27854 grp=0 res=0
+   Okio Watchdog-28615   [007] d..1. 283595.889904: signal_generate: sig=34 errno=0 code=-6 comm=onPool-worker-4 pid=28598 grp=0 res=0
+ onPool-worker-4-28598   [002] d..1. 283595.890140: signal_deliver: sig=34 errno=0 code=-6 sa_handler=79a72f3fa0 sa_flags=0
+   Okio Watchdog-28615   [003] d..1. 283595.891463: signal_generate: sig=34 errno=0 code=-6 comm=onPool-worker-5 pid=28599 grp=0 res=0
+ onPool-worker-5-28599   [004] d..1. 283595.891590: signal_deliver: sig=34 errno=0 code=-6 sa_handler=79a72f3fa0 sa_flags=0

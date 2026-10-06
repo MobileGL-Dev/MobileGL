@@ -1,0 +1,7 @@
+10-07 05:16:16.527 27780 28482 D FCL Debug: Renderer: MobileGLDevMagma
+10-07 05:16:17.879  2564  2870 I ActivityManager: Process com.tungsten.fcl.mgdebug.debug (pid 27780) has died: fg  TOP 
+10-07 05:16:17.887  1375  1375 I Zygote  : Process 27780 exited due to signal 34 (Unknown signal 34)
+10-07 05:16:36.030 28561 28598 W FCL     : 	at com.android.okhttp.okio.Okio$3.newTimeoutException(Okio.java:214)
+10-07 05:16:36.030 28561 28598 W FCL     : 	at com.android.okhttp.okio.Okio$2.read(Okio.java:138)
+10-07 05:16:36.030 28561 28599 W FCL     : 	at com.android.okhttp.okio.Okio$3.newTimeoutException(Okio.java:214)
+10-07 05:16:36.030 28561 28599 W FCL     : 	at com.android.okhttp.okio.Okio$2.read(Okio.java:138)
