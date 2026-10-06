@@ -16,7 +16,7 @@
 
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // MGPipeUnmigratedEmulation's split arm reads MG_Config::Transport, which is what tells an
 // emulation site whether it is running inside a server or in the monolith it was written for.
 #include <Config.h>
@@ -1305,7 +1305,7 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
-#if MOBILEGL_PIPE_VERIFY && !MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_PIPE_VERIFY && !MOBILEGL_BUILD_RECORD_ARM
         // D-A4's pin, AND P5 (b1) IS THE PHASE IT WAS WAITING FOR. It said "HasLiveHostWrites
         // is always false in this phase and is written by nobody: it exists so the phase that
         // pushes persistent-mapped host writes can set it with no new record kind", and a
@@ -1454,7 +1454,7 @@ namespace MobileGL::MG_Pipe {
                 return false;
             }
             PinNoLiveHostWrites(*stored, record.Res, call);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5 (b1): THE PRODUCER. The record's own statement about the resource, applied
             // before the serial moves so that a probe re-entered from inside the backend hook
             // below already sees it. It is an assignment and not an OR: the bit is a STATE,
@@ -1608,7 +1608,7 @@ namespace MobileGL::MG_Pipe {
             // record was accumulated, so the texels are the server's now, and that is the true
             // this returns.
             ++stored->Serial;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P5c (tx): THE STAGED BYTES ARE ADOPTED HERE, at the last instant `bytes` is known
             // alive (rule C: SEG_STAGE retires when this record does, and PendingUpload
             // deliberately holds no byte pointer). The hook copies the run into the server's
@@ -1947,7 +1947,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplier().DrawProgram = kMGPipeNullHandle;
         MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
         MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MGPipeApplier().BoundStreamOutputLifetimeId = 0;
         // Begin is emitted once per span, not on make-current. Its immutable object
         // snapshot survives with the resource/program records until End or release;
@@ -2011,7 +2011,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplier().DrawProgram = kMGPipeNullHandle;
         MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
         MGPipeApplier().BoundShaderCso = kMGPipeNullHandle;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MGPipeApplier().BoundStreamOutputLifetimeId = 0;
         MGPipeApplier().StreamOutputSpans.clear();
 #endif
@@ -2177,7 +2177,7 @@ namespace MobileGL::MG_Pipe {
         // memory the rule exists to stop it reading. One store, inert until the caps bit is
         // published, and it is what makes the two roles' third clause the same clause.
         MGPipeApplier().IsTransformFeedbackActive = values.IsTransformFeedbackActive != 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MGPipeApplier().BoundStreamOutputLifetimeId = values.BoundTransformFeedbackLifetimeId;
 #endif
     }
@@ -2314,7 +2314,7 @@ namespace MobileGL::MG_Pipe {
     // ================================================================================
 
     Bool MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (!MGPipeRespecifyIsWholeResource(desc)) {
             MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceCreate.RespecifyScope\"} - "
                                  "resource_create cannot carry a per-level respecify extent");
@@ -2415,7 +2415,7 @@ namespace MobileGL::MG_Pipe {
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
         PinRespecifyScopeCoversItsDeclaration(desc, level, desc.Resource, "resource_respecify");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (level != nullptr &&
             (desc.Target == kMGPipeResourceTargetBuffer ||
              desc.Target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
@@ -2455,7 +2455,7 @@ namespace MobileGL::MG_Pipe {
                     level != nullptr ? "one level" : "whole resource");
             record->SharedImageId = 0;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (level != nullptr && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
             // Scope and BufOffset/BufSize are transient respecify carriers, not resource state.
             MGPipeClearRespecifiedLevel(record->Desc);
@@ -2523,7 +2523,7 @@ namespace MobileGL::MG_Pipe {
             record->PendingUploads.clear();
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (tx): the staged-texture store's defined-ness and drop bookkeeping rides THE SAME
         // scope rules as the pending-set drops above - a named level redefines that one
         // (uploadTarget, level), a whole-resource respecify drops every level, and a metadata

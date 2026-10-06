@@ -76,7 +76,7 @@ namespace MobileGL::MG_Pipe {
     // Null-initialized: a backend that installs nothing sends nothing.
     inline MGPipeCallbacks gMGPipeCallbacks{};
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // HOW MUCH OF ITSELF ONE REVERSE-CHANNEL RECORD MAY BE, and it is not a tuning knob: a
     // producer that ignores it kills the server process.
     //

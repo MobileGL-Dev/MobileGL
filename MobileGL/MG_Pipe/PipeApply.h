@@ -108,7 +108,7 @@ namespace MobileGL::MG_Pipe {
         void (*Destroy)(MGPipeHandle res);
         void* (*MapPersistent)(MGPipeHandle res, Uint64 size, const void* seedBytes);
         void (*UnmapPersistent)(MGPipeHandle res);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (tx): the TEXTURE half of the resource family, appended so every positional
         // initialiser of the nine P3a members keeps its meaning. TextureSubData is called
         // from ApplyTextureUpload AFTER the gate, the accumulation and the serial, while
@@ -873,7 +873,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 TextureShutterSerial = 0;
         Uint64 ContextSerial = 0;
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P5c (hd, CONTRACT-P5C §3.2): THE CURRENT VERB'S OWN HANDLES. ----------------
         //
         // Server state, written by ServerVerbSink at the top of a verb's dispatch and read by
@@ -1309,7 +1309,7 @@ namespace MobileGL::MG_Pipe {
     struct MGPRespecifiedLevel {
         Uint16 UploadTarget = 0;
         Uint16 Level = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 PH-4: mutable mip dimensions do not follow from the base descriptor. These fields
         // are carried by the split resource_respecify record; the pull helper remains 4 bytes.
         Uint32 Width = 0;
@@ -1324,7 +1324,7 @@ namespace MobileGL::MG_Pipe {
         MGPRespecifiedLevel value{};
         value.UploadTarget = uploadTarget;
         value.Level = level;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         value.Width = width;
         value.Height = height;
         value.Depth = depth;
@@ -1483,7 +1483,7 @@ namespace MobileGL::MG_Pipe {
     // unmap_persistent: the donation ends. Never emitted by P3a's own paths; the call exists
     // so the pair is complete and the transport has both halves.
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P11 B2 (T0): the split server's map_persistent for a session that runs T0. The client's
     // AHardwareBuffer `ahb` (`size` bytes) becomes buffer `handle`'s resident store through the
     // backend's ImportExternal. A handle that is not a live buffer of that width, or a backend

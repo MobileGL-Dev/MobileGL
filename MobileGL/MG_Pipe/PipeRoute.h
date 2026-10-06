@@ -294,7 +294,7 @@ namespace MobileGL::MG_Pipe {
     // latch clear, so every later row for that object keeps taking the real answer. The cost of
     // that case is throughput, never silence.
     inline Bool MGPipeResourceRespecifyWantsItsReply(const MGPResourceDesc& desc) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MGPipeInstalledArm() != MGPipeRouteArm::kClientWire) return true;
         if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer)
             return false;
@@ -372,7 +372,7 @@ namespace MobileGL::MG_Pipe {
     // invariant MGPipeTypes.h asserts beside the packer and which the applier's own
     // SubDataNamesABuffer already reads.
     inline Bool MGPipeSubDataWantsItsReply(const MGPSubData& record) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // THE WIRE ARM ONLY. Everything above is an argument about a client talking to a server
         // over SEG_CMD/SEG_STAGE; a monolith run inside a split build (every unit and
         // integration-gpu lane is one) keeps the answer it always gave.
@@ -396,7 +396,7 @@ namespace MobileGL::MG_Pipe {
         MGPReplySlot reply = MGPipeMintReplySlot();
         MGP_ResourceSubData(&record, bytes, byteCount, regions, record.RegionCount, &reply);
         const Bool accepted = MGPipeTakeReplyBool(reply, "resource_subdata");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // A cancelled wire upload is declined even when no server reply was requested.
         if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return accepted;
 #endif
