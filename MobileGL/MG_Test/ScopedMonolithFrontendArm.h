@@ -24,7 +24,7 @@ namespace MobileGL::MG_Test {
     class ScopedMonolithFrontendArm {
     public:
         ScopedMonolithFrontendArm() : m_savedTable(MG_Backend::gBackendFunctionsTable) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             m_saved = MG_Config::MonolithTakesRecordArm;
             MG_Config::MonolithTakesRecordArm = false;
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith && MG_Backend::pActiveBackendObject) {
@@ -33,7 +33,7 @@ namespace MobileGL::MG_Test {
 #endif
         }
         ~ScopedMonolithFrontendArm() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::MonolithTakesRecordArm = m_saved;
 #endif
             MG_Backend::gBackendFunctionsTable = m_savedTable;
