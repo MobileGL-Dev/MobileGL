@@ -128,6 +128,15 @@ namespace MobileGL::MG_Remote::Client {
         // The same bounded handshake deadline the server uses. Bounded, not kWaitForever: a
         // bring-up that never answers has to be a red lane rather than a wedged CI job.
         constexpr Uint32 kHandshakeTimeoutMs = 5000;
+        // A freshly spawned server sends Welcome only after its native backend is up, so that one
+        // wait gets the cold-start budget, for the reason the surface-control replies do
+        // (ControlReplyBudgetMs below): on a hosted CI runner the spawned server's eglInitialize
+        // on llvmpipe took 7 s, and the leg died on "no Welcome from the spawned server within
+        // 5000 ms" with the server about to answer. The first CapsSnapshot follows Welcome
+        // promptly, so that wait keeps the steady bound.
+        Uint32 ColdHandshakeBudgetMs() {
+            return std::max(kHandshakeTimeoutMs, MG_Config::Ipc.ColdStartMs);
+        }
         // cp (CONTRACT-P6 D5b): bounded, and its expiry is NOT fatal. A peer that
         // is gone is a different fact from a peer that is slow, and only the
         // doorbell death latch may say which. The surface-control reply wait itself reads
@@ -1203,10 +1212,10 @@ namespace MobileGL::MG_Remote::Client {
         {
             std::vector<Uint8> frame;
             const MobileGLResult received =
-                ReceiveEnvelope(*m_transport, frame, kHandshakeTimeoutMs);
+                ReceiveEnvelope(*m_transport, frame, ColdHandshakeBudgetMs());
             if (received != MOBILEGL_OK) {
                 MGLOG_E("MG_Remote client: no Welcome from the spawned server within %u ms (rc=%d)",
-                        kHandshakeTimeoutMs, static_cast<int>(received));
+                        ColdHandshakeBudgetMs(), static_cast<int>(received));
                 Stop();
                 return received;
             }
