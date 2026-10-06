@@ -1497,7 +1497,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, pointIndex);
-#if MOBILEGL_PIPE_PUSH
         // P5e (sb, CONTRACT-P5E.md §5.6). THE BIND-POINT GENERATION, and it is bumped HERE -
         // before the writes below and after every refusal above - rather than inside
         // BindingSlotRange1D, for two reasons. The slot has no back-pointer to the state
@@ -1510,7 +1509,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         // The dirty bits this feeds are 15/16/17 (Tracker.h); before P5e they shuttered on the
         // buffer CONTENT aggregate, which no bind has ever moved.
         MG_State::pGLContext->NoteBufferBindPointChanged(bufferTarget);
-#endif
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, pointIndex);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;
@@ -1634,13 +1632,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         MG_State::pGLContext->TouchBufferBindingPoint(bufferTarget, index);
-#if MOBILEGL_PIPE_PUSH
         // P5e (sb): the other half of BindBufferBase_State's bump - same generation, same
         // placement, same reason. A glBindBufferRange moves the point's EXTENT as well as what
         // is bound to it, and the record carries the resolved Offset/Size, so a range change
         // with no object change still has to reach the emitter.
         MG_State::pGLContext->NoteBufferBindPointChanged(bufferTarget);
-#endif
 
         auto& point = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, index);
         SharedPtr<MG_State::GLState::BufferObject> bufferObject;

@@ -9,7 +9,7 @@
 // Client memory becomes ordinary owned buffer resources before a draw.
 #pragma once
 
-#if MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Impl/Pipe/ClientFetchPlan.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>

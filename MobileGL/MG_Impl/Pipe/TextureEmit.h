@@ -52,7 +52,6 @@
 // and the PUBLICATION LATCH is A's too: MGPipeNoteHandlePublished is called where a create
 // actually goes out and MGPipeHandleIsPublished is what the death helpers read, so this file
 // keeps no Published flag of its own.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
@@ -1743,4 +1742,3 @@ namespace MobileGL::MG_Pipe {
     // The self-healing create in EmitResourceRespecify stays this file's: c0b provides no such
     // path and it is what repairs a texture born while the subsystem bit was clear.
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

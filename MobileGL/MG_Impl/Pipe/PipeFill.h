@@ -13,7 +13,6 @@
 // frontend fills the PipeInputs block for exactly the verbs that reach a backend. In the
 // pull build the macro is ((void)0) and the pull build is byte-identical to a tree without
 // it.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
     struct PipeInputs;
@@ -176,7 +175,3 @@ namespace MobileGL::MG_Pipe {
 // neither declared nor defined.
 #define MGP_SET_BASE_INSTANCE(BaseInstance)                                                        \
     ::MobileGL::MG_Pipe::MGPipeSetPendingBaseInstance(static_cast<::MobileGL::Uint32>(BaseInstance))
-#else
-#define MGP_FILL(Verb) ((void)0)
-#define MGP_SET_BASE_INSTANCE(BaseInstance) ((void)0)
-#endif

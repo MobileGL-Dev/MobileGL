@@ -36,7 +36,6 @@
 // straight to the applier, so "what was emitted" costs no copy at all.
 //
 // HEADER-ONLY, for the ownership reason Tracker.h states in full.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -455,4 +454,3 @@ namespace MobileGL::MG_Pipe {
         return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

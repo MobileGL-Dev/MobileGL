@@ -1376,7 +1376,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
-#if MOBILEGL_PIPE_PUSH
         // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
         // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
         // publish through TextureObjectBase::PipePublishParams; the tenth is
@@ -1399,7 +1398,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
         // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
         MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
-#endif
     }
 
     void TextureParameterObjectf_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
@@ -1478,7 +1476,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
-#if MOBILEGL_PIPE_PUSH
         // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
         // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
         // publish through TextureObjectBase::PipePublishParams; the tenth is
@@ -1501,7 +1498,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
         // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
         MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
-#endif
     }
 
     void GetTextureParameterObjectiv_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -2197,7 +2193,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
-#if MOBILEGL_PIPE_PUSH
         // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
         // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
         // publish through TextureObjectBase::PipePublishParams; the tenth is
@@ -2220,7 +2215,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
         // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
         MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
-#endif
     }
 
     void TexParameteri_State(GLenum target, GLenum pname, GLint param) {
@@ -6815,7 +6809,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit))
             .Bind(textureObject, level, layered, layer, access, format);
         MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit));
-#if MOBILEGL_PIPE_PUSH
         // AND THE IMAGE-UNIT MARK BESIDE IT. The line above moves the TEXTURE-unit high-water
         // mark, which is a different array: a reader that needs "the highest image unit ever
         // bound" cannot take it from there without either over-walking (a texture bind at unit
@@ -6824,7 +6817,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         // (MG_Remote/Client/GpuWritePending.cpp). Push builds only, so the pull build's bytes do
         // not move (G1).
         MG_State::pGLContext->NoteImageUnitTouched(static_cast<Int>(unit));
-#endif
         MGP_FILL(BindImageTexture);
         bindImageTexture(unit, texture, level, layered, layer, access, format);
     }

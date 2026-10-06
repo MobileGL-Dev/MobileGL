@@ -38,7 +38,6 @@
 //
 // Header-only for the same ownership reason as Tracker.h: the root CMakeLists.txt that
 // would name a new .cpp is package A's and is frozen behind the p2/contract tag.
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
@@ -203,4 +202,3 @@ namespace MobileGL::MG_Pipe {
         return *cache;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

@@ -38,7 +38,6 @@
 // upload; resource_subdata, the hot one, is observed through the pure builders below
 // instead (MGPipeBuildSubDataRecord / MGPipeForEachSubDataRecordRange), which is also what
 // lets a test drive the splitter at both of its bounds without a 4 GiB buffer.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
@@ -732,4 +731,3 @@ namespace MobileGL::MG_Pipe {
         gMGPipeCallbacks.OnGpuWritten(res, 1, &whole);
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

@@ -81,7 +81,6 @@
 // one and this one depends on nothing of the family's. The reverse arrangement would make the
 // resolver reachable only from a translation unit that had already decided to use it, i.e.
 // dead in the build that matters and live only in the tests.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeMutation.h>
@@ -267,4 +266,3 @@ namespace MobileGL::MG_Pipe {
         return *resolver;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

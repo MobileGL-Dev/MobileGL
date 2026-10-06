@@ -57,7 +57,6 @@
 // belongs to package A and is frozen behind the p2/contract tag. Everything here is
 // included by exactly one translation unit in the library (MG_Impl/Pipe/PipeFill.cpp) plus
 // the unit tests, so inline costs nothing. Splitting it back out is one list(APPEND) line.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeValueTypes.h>
 #include <MG_State/GLState/Core.h>
@@ -972,4 +971,3 @@ namespace MobileGL::MG_Pipe {
         return *tracker;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

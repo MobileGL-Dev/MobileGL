@@ -35,7 +35,6 @@
 //
 // THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
 // FramebufferEmit.h for why, in full.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/CompositeResolver.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
@@ -726,4 +725,3 @@ namespace MobileGL::MG_Pipe {
         return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

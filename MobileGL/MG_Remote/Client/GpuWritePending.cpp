@@ -181,11 +181,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BufferWritebackIsReachable(const BufferObject& buffer) {
         if (buffer.GetSize() == 0) return false;
-#if MOBILEGL_PIPE_PUSH
         return MG_Pipe::MGPipeResourceSubsystemEnabled();
-#else
-        return false;
-#endif
     }
 
     SizeT BufferWritebackSliceBytes() {

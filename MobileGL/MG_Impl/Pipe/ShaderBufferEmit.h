@@ -48,7 +48,6 @@
 // HEADER-ONLY, and the wired constant below is what switches the family on, for the ownership
 // reason PipeFill.cpp states in full: that file belongs to the contract package for the whole
 // phase, so the bit that turns an emitter on is a constant in the emitter's OWN header.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -274,4 +273,3 @@ namespace MobileGL::MG_Pipe {
         return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

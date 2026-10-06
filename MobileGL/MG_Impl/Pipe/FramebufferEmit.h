@@ -25,7 +25,6 @@
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state: the root
 // CMakeLists.txt that would name a new .cpp is the contract package's and is frozen behind the
 // tag. MG_Impl/Pipe/PipeFill.cpp is the one translation unit that includes it in the library.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
@@ -663,4 +662,3 @@ namespace MobileGL::MG_Pipe {
         return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

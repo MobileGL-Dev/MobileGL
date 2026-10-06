@@ -84,7 +84,6 @@
 #pragma once
 #include <Includes.h>
 
-#if MOBILEGL_PIPE_PUSH
 
 #include "MGPipe.h"
 #include "PipeApply.h"
@@ -560,4 +559,3 @@ namespace MobileGL::MG_Pipe {
 
 } // namespace MobileGL::MG_Pipe
 
-#endif // MOBILEGL_PIPE_PUSH

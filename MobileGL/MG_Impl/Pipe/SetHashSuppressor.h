@@ -37,7 +37,6 @@
 // Header-only for the same ownership reason as Tracker.h and CsoCache.h: the root
 // CMakeLists.txt that would name a new .cpp belongs to package A and is frozen behind the
 // p2/contract tag.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 
 namespace MobileGL::MG_Pipe {
@@ -131,4 +130,3 @@ namespace MobileGL::MG_Pipe {
         return *suppressor;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

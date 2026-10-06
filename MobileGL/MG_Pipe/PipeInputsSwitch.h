@@ -14,15 +14,8 @@
 // token for token. Push arm: the PipeInputs block the frontend fills at every verb boundary.
 // The pull arm is the ONLY place under MobileGL/ outside MG_State and MG_Impl that may spell
 // pGLContext; purity gate C greps MG_Backend/ for that token.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #define MGB_CTX (&::MobileGL::MG_Pipe::gPipeInputs)
 #define MGB_CTX_LIVE (::MobileGL::MG_Pipe::gPipeInputs.IsLive())
 #define MGB_CTX_IDENTITY (::MobileGL::MG_Pipe::gPipeInputs.ContextIdentity())
-#else
-#include <MG_State/GLState/Core.h>
-#define MGB_CTX (::MobileGL::MG_State::pGLContext)
-#define MGB_CTX_LIVE (::MobileGL::MG_State::pGLContext != nullptr)
-#define MGB_CTX_IDENTITY (static_cast<const void*>(::MobileGL::MG_State::pGLContext.get()))
-#endif
 #endif

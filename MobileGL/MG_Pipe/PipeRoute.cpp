@@ -30,7 +30,6 @@
 
 #include "PipeRoute.h"
 
-#if MOBILEGL_PIPE_PUSH
 
 #include <MG_Util/Debug/Log.h>
 
@@ -401,4 +400,3 @@ namespace MobileGL::MG_Pipe {
 
 } // namespace MobileGL::MG_Pipe
 
-#endif // MOBILEGL_PIPE_PUSH

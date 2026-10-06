@@ -37,7 +37,6 @@
 // detection. Neither is reproduced here and neither may be.
 //
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
-#if MOBILEGL_PIPE_PUSH
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 #endif
@@ -1178,4 +1177,3 @@ namespace MobileGL::MG_Pipe {
         return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
-#endif // MOBILEGL_PIPE_PUSH

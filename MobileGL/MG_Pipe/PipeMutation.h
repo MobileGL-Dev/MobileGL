@@ -26,7 +26,6 @@
 //
 // In the pull build the macro is ((void)0) and this header includes nothing, so the pull
 // build is byte-identical to a tree without it.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
     // MG_Impl/Pipe/PipeFill.cpp (the client side, the only place that may spell pGLContext).
@@ -497,8 +496,4 @@ namespace MobileGL::MG_Pipe {
     ::MobileGL::MG_Pipe::MGPipeNoteFrontendMutation(::MobileGL::MG_Pipe::MGPipeInputField::Field)
 #define MGP_NOTE_AGGREGATE(Aggregate)                                                                                  \
     ::MobileGL::MG_Pipe::MGPipeNoteAggregate(::MobileGL::MG_Pipe::MGPipeAggregate::Aggregate)
-#else
-#define MGP_NOTE_MUTATION(Field) ((void)0)
-#define MGP_NOTE_AGGREGATE(Aggregate) ((void)0)
-#endif
 #endif
