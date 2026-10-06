@@ -2263,10 +2263,6 @@ namespace MobileGL::MG_Pipe {
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
         return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
-
-        MGP_STICKY_FORWARD_PULL(HasOpenTransformFeedbackSpan);
-        const auto* ctx = LiveContext();
-        return ctx != nullptr && ctx->HasOpenTransformFeedbackSpan(lifetimeId);
     }
 
     void PipeInputs::InvalidateCompileEnv() {

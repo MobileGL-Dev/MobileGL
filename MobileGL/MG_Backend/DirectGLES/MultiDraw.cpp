@@ -296,12 +296,6 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 RefuseMissingIndirectBufferRecord("BoundDrawIndirectBufferId", res);
             }
             return resource->id;
-            // MONOLITH GLUE from here down, token for token what this function did before.
-            const auto& indirect =
-                MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-            if (!indirect) return 0;
-            const auto* resource = BufferImpl::EnsureBufferResource(indirect);
-            return resource ? resource->id : 0;
         }
 
         // ---------------------------------------------------------------------------

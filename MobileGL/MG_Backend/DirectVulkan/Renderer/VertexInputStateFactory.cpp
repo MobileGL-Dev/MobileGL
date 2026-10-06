@@ -807,8 +807,5 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool supported = (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
         m_wireVertexFormatSupport.emplace(format, supported);
         return supported;
-        VkFormatProperties properties{};
-        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &properties);
-        return (properties.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -3956,8 +3956,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // 0xDD audit could not reach a draw. R-2 / table 3: honest inproc is inproc that
                 // does not read the client object's memory. Under monolith nothing changes.
                 return resource->hostBytes;
-                if (bufferObject) return bufferObject->MappedData();
-                return resource->hostBytes;
             };
 
             if (resource->contextGeneration != g_bufferContextGeneration) {
@@ -11216,11 +11214,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsAlphaWidenedFallbackReadAttachment() {
             const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
             return record && IsAlphaWidenedColorSurface(record->ReadSurface);
-            const auto* attachmentObject = GetReadColorAttachment();
-            if (attachmentObject == nullptr) {
-                return false;
-            }
-            return IsAlphaWidenedColorAttachment(*attachmentObject);
         }
 
         Bool IsFixedPointFallbackReadAttachment() {
@@ -12871,7 +12864,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 if (static_cast<SizeT>(unit) >= st.BoundShaderImages.size()) return 0;
                 return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);
-                return static_cast<Uint>(MG_Pipe::gPipeInputs.GetImageTextureBinding(unit).Format);
             }
 
             // Combines one (unit, format) pair into a running digest. Commutative, so the order

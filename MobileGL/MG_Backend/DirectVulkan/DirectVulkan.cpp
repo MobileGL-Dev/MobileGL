@@ -395,105 +395,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
         DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirect called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElementsIndirect called with null GL context");
-        pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
         DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirect called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawArraysIndirect called with null GL context");
-
-        if (drawcount <= 0) {
-            return;
-        }
-
-        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
-        // (e.g. by a compute shader), so consume them natively on the GPU.
-        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-        if (drawBuffer) {
-            pVulkanRenderer->MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
-            return;
-        }
-
-        if (stride == 0) {
-            stride = sizeof(DrawArraysIndirectCommand);
-        }
-        if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawArraysIndirectCommand));
-            return;
-        }
-
-        // No indirect buffer bound: the pointer refers to client memory.
-        const auto* commandBytes = ResolveIndirectCommandBytes(
-            indirect,
-            static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + sizeof(DrawArraysIndirectCommand),
-            "MultiDrawArraysIndirect");
-        if (!commandBytes) {
-            return;
-        }
-
-        for (GLsizei i = 0; i < drawcount; ++i) {
-            DrawArraysIndirectCommand cmd{};
-            std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
-            if (cmd.count == 0 || cmd.instanceCount == 0) {
-                continue;
-            }
-
-            DrawCmd payload{};
-            payload.mode = mode;
-            payload.params.vertexCount = cmd.count;
-            payload.params.instanceCount = cmd.instanceCount;
-            payload.params.firstVertex = cmd.first;
-            payload.params.firstInstance = cmd.baseInstance;
-            pVulkanRenderer->DrawArrays(payload);
-        }
     }
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
         DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirectCount called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElementsIndirectCount called with null GL context");
-        pVulkanRenderer->MultiDrawElementsIndirectCount(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
         DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirectCount called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawArraysIndirectCount called with null GL context");
-
-        if (maxdrawcount <= 0) {
-            return;
-        }
-        if (stride == 0) {
-            stride = sizeof(DrawArraysIndirectCommand);
-        }
-        if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawArraysIndirectCommand));
-            return;
-        }
-
-        auto parameterBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
-        if (!parameterBuffer || drawcount < 0 || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
-            return;
-        }
-
-        parameterBuffer->SyncPersistentMappedRange();
-        if (parameterBuffer->MappedData() == nullptr) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read parameter buffer");
-            return;
-        }
-
-        Uint32 actualDrawCount = 0;
-        std::memcpy(&actualDrawCount, parameterBuffer->MappedData() + drawcount, sizeof(actualDrawCount));
-        actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
-        MultiDrawArraysIndirect(mode, indirect, static_cast<GLsizei>(actualDrawCount), stride);
     }
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                      const void* indices, GLint basevertex) {
@@ -537,47 +452,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
         DrawWireIndirect(mode, type, indirect, 1, 0, true);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsIndirect called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElementsIndirect called with null GL context");
-
-        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
-        if (indexSize == 0) {
-            MGLOG_E_ONCE("DrawElementsIndirect skipped: unsupported index type 0x%x", type);
-            return;
-        }
-
-        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
-        // (e.g. by a compute shader), so consume them natively on the GPU.
-        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-        if (drawBuffer) {
-            pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, 1, 0);
-            return;
-        }
-
-        // No indirect buffer bound: the pointer refers to client memory.
-        const auto* commandBytes =
-            ResolveIndirectCommandBytes(indirect, sizeof(DrawElementsIndirectCommand), "DrawElementsIndirect");
-        if (!commandBytes) {
-            return;
-        }
-
-        DrawElementsIndirectCommand cmd{};
-        std::memcpy(&cmd, commandBytes, sizeof(cmd));
-        if (cmd.count == 0 || cmd.instanceCount == 0) {
-            return;
-        }
-
-        DrawIndexedCmd payload{};
-        payload.mode = mode;
-        payload.indexBufferView.indexType = type;
-        payload.indexBufferView.indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
-        payload.indexBufferView.indexByteSize = static_cast<SizeT>(cmd.count) * indexSize;
-        payload.params.indexCount = cmd.count;
-        payload.params.instanceCount = cmd.instanceCount;
-        payload.params.firstIndex = 0;
-        payload.params.vertexOffset = cmd.baseVertex;
-        payload.params.firstInstance = static_cast<Int32>(cmd.baseInstance);
-        pVulkanRenderer->DrawElements(payload);
     }
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
@@ -598,37 +472,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
         DrawWireIndirect(mode, 0, indirect, 1, 0, false);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysIndirect called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawArraysIndirect called with null GL context");
-
-        // With a bound GL_DRAW_INDIRECT_BUFFER the command parameters may be GPU-written
-        // (e.g. by a compute shader), so consume them natively on the GPU.
-        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-        if (drawBuffer) {
-            pVulkanRenderer->MultiDrawArraysIndirect(mode, indirect, 1, 0);
-            return;
-        }
-
-        // No indirect buffer bound: the pointer refers to client memory.
-        const auto* commandBytes =
-            ResolveIndirectCommandBytes(indirect, sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
-        if (!commandBytes) {
-            return;
-        }
-
-        DrawArraysIndirectCommand cmd{};
-        std::memcpy(&cmd, commandBytes, sizeof(cmd));
-        if (cmd.count == 0 || cmd.instanceCount == 0) {
-            return;
-        }
-
-        DrawCmd payload{};
-        payload.mode = mode;
-        payload.params.vertexCount = cmd.count;
-        payload.params.instanceCount = cmd.instanceCount;
-        payload.params.firstVertex = cmd.first;
-        payload.params.firstInstance = cmd.baseInstance;
-        pVulkanRenderer->DrawArrays(payload);
     }
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border) {
@@ -672,9 +515,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // that was here (ReadWireBuffer, a whole-GPU wait once a shader had written the store) is gone.
         pVulkanRenderer->DispatchComputeIndirect(indirect);
         return;
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchComputeIndirect called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DispatchComputeIndirect called with null GL context");
-        pVulkanRenderer->DispatchComputeIndirect(indirect);
     }
 
     void MemoryBarrier(GLbitfield barriers) {
@@ -748,31 +588,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         else found->Binding = static_cast<Int32>(storageBlockBinding);
         ++record.BindingsSerial;
         return;
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject || storageBlockName == nullptr) return;
-        const Int maxBindings =
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (hd, CONTRACT-P5C §3.7): with an active transport the dynamic parameters are
-            // the SERVER's own backend's - the client caps mirror (pActiveBackendObject) is
-            // client memory the apply thread may not name (rule E). Monolith reads the mirror
-            // as it always did.
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
-                ? (MG_Remote::Server::ServerLoopInstance().Backend() != nullptr
-                       ? static_cast<Int>(MG_Remote::Server::ServerLoopInstance().Backend()
-                                              ->GetDynamicParameters()
-                                              .MaxShaderStorageBufferBindings)
-                       : 0)
-                :
-#endif
-            pActiveBackendObject
-                ? pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings
-                : 0;
-        if (storageBlockBinding >= static_cast<GLuint>(maxBindings)) {
-            MG_Pipe::gPipeInputs.RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage binding is out of range."));
-            return;
-        }
         // P7 wave 2 package C, OQ-8: NOTHING LEFT TO PATCH, and the hazard goes with it.
         //
         // The frontend has already recorded the new binding on the program, and that record is
@@ -851,38 +666,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (GLsizei i = 0; i < count; ++i) {
             outIndices[i] = 0;
             Memcpy(&outIndices[i], bytes + static_cast<SizeT>(i) * width, width);
-        }
-        outIndices[count] = outIndices[0];
-        return true;
-        const SizeT indexSize = MG_Util::GetGLTypeSize(type);
-        if (indexSize == 0 || count < 2) {
-            return false;
-        }
-        const Uint8* indexBytes = nullptr;
-        const auto& vao = *MG_Pipe::gPipeInputs.GetBoundVertexArray();
-        const auto& indexBufferShared = vao.GetIndexBufferBindingSlot().GetBoundObject();
-        if (indexBufferShared != nullptr) {
-            const SizeT offset = reinterpret_cast<SizeT>(indices);
-            const SizeT bufferSize = indexBufferShared->GetSize();
-            if (indexBufferShared->MappedData() == nullptr || offset > bufferSize ||
-                static_cast<SizeT>(count) * indexSize > bufferSize - offset) {
-                return false;
-            }
-            indexBufferShared->SyncPersistentMappedRange();
-            indexBytes = indexBufferShared->MappedData() + offset;
-        } else {
-            indexBytes = static_cast<const Uint8*>(indices);
-            if (indexBytes == nullptr) {
-                return false;
-            }
-        }
-        outIndices.resize(static_cast<SizeT>(count) + 1);
-        for (GLsizei i = 0; i < count; ++i) {
-            switch (indexSize) {
-            case 1: outIndices[i] = indexBytes[i]; break;
-            case 2: outIndices[i] = reinterpret_cast<const Uint16*>(indexBytes)[i]; break;
-            default: outIndices[i] = reinterpret_cast<const Uint32*>(indexBytes)[i]; break;
-            }
         }
         outIndices[count] = outIndices[0];
         return true;

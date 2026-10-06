@@ -6583,15 +6583,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
                                                               bufSize, pixels);
         return;
-        if (MG_Backend::pActiveBackendObject != nullptr &&
-            MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
-            MGL_BACKEND_SLOT_LOCAL(GetTextureImage)) {
-            MGP_FILL(GetTextureImage);
-            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
-                                                                  bufSize, pixels);
-            return;
-        }
-        CopyTextureImageToClientOrPBO_State(textureObject, uploadTarget, level, format, type, bufSize, pixels, caller);
     }
 
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
@@ -6868,16 +6859,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!GetTexImage_State(target, level, format, type, pixels)) return;
         GetTexImage_Backend(target, level, format, type, pixels);
         return;
-        if (MGL_BACKEND_SLOT_LOCAL(GetTexImage)) {
-            GetTexImage_Backend(target, level, format, type, pixels);
-            return;
-        }
-        TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
-        TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
-        const auto& textureObject = activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
-        CopyTextureImageToClientOrPBO_State(textureObject, textureUploadTarget, level, format, type, -1, pixels,
-                                            __func__);
     }
 
     void GetInternalformativ(GLenum target, GLenum internalformat, GLenum pname, GLsizei bufSize, GLint* params) {
