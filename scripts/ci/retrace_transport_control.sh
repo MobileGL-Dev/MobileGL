@@ -1,7 +1,12 @@
 #!/bin/bash
-# THE RETRACE-SPLIT LANE'S NEGATIVE CONTROL: a PULL library must red this split retrace.
+# THE RETRACE-SPLIT LANE'S NEGATIVE CONTROL: a library WITHOUT A TRANSPORT must red this split retrace.
 #
-# This file is the body of .github/workflows/test.yml's "Negative control (pull library)" step in
+# P13 W2: the library is the push monolith without MG_Remote (the shape FCL embeds). Until W2 it was
+# the pull build, and this file was retrace_pull_library_control.sh; both libraries were run side by
+# side for one wave and both went red here for the same sentence. "pull" below is history: what the
+# control needs is a library with no MG_Remote, and the push monolith is one.
+#
+# This file is the body of .github/workflows/test.yml's "Negative control (library without a transport)" step in
 # the retrace-split job, extracted for the reason given at the top of
 # scripts/ci/split_negative_controls.sh: a `run:` block is unreviewable and untestable off a
 # runner, and scripts/ci/control_smoke_test.sh now runs THIS file rather than a hand-made copy.
@@ -33,19 +38,19 @@
 # Both are closed below: the selection is counted before the run, and the red must carry
 # run_trace_case.cmake's own words.
 #
-# Usage:  retrace_pull_library_control.sh <case> <backend>
+# Usage:  retrace_transport_control.sh <case> <backend>
 #   CTEST           ctest binary                      (default: ctest)
 #   CONTROL_TMPDIR  scratch dir                       (default: ${RUNNER_TEMP:-/tmp})
-#   PULL_LIBRARY    the pull libMobileGL.so to swap in
-#   FROZEN_LIBRARY  the path every case has baked in, which PULL_LIBRARY is copied over
+#   CONTROL_LIBRARY the libMobileGL.so without MG_Remote to swap in
+#   FROZEN_LIBRARY  the path every case has baked in, which CONTROL_LIBRARY is copied over
 set -u
 
-CASE="${1:?usage: retrace_pull_library_control.sh <case> <backend>}"
-BACKEND="${2:?usage: retrace_pull_library_control.sh <case> <backend>}"
+CASE="${1:?usage: retrace_transport_control.sh <case> <backend>}"
+BACKEND="${2:?usage: retrace_transport_control.sh <case> <backend>}"
 
 CTEST="${CTEST:-ctest}"
 CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
-PULL_LIBRARY="${PULL_LIBRARY:?PULL_LIBRARY must name the pull build libMobileGL.so}"
+CONTROL_LIBRARY="${CONTROL_LIBRARY:?CONTROL_LIBRARY must name a libMobileGL.so built without MG_Remote}"
 FROZEN_LIBRARY="${FROZEN_LIBRARY:?FROZEN_LIBRARY must name the path the cases have baked in}"
 mkdir -p "${CONTROL_TMPDIR}"
 
@@ -112,7 +117,7 @@ trap 'exit 130' INT TERM
 matched=$("${CTEST}" -N -R "${selector}" | grep -cE '^ *Test *#[0-9]+:')
 if [ "${matched}" -lt 1 ]; then
   restore_good_output
-  echo "::error::the control selected ${matched} tests with -R '${selector}', so there is nothing for the pull library to red. --no-tests=error would have exited non-zero on the empty selection and this control used to read that as success (ID-46 finding 8b, measured: ctest exit 8, step green)."
+  echo "::error::the control selected ${matched} tests with -R '${selector}', so there is nothing for the transport-less library to red. --no-tests=error would have exited non-zero on the empty selection and this control used to read that as success (ID-46 finding 8b, measured: ctest exit 8, step green)."
   exit 1
 fi
 
@@ -120,13 +125,13 @@ fi
 # in. It defines no MG_Remote symbol, so ConfigLoader has no transport parser and
 # MOBILEGL_TRANSPORT=inproc is accepted and ignored - the exact shape of "the split lane ran
 # monolith".
-cp "${PULL_LIBRARY}" "${FROZEN_LIBRARY}" || exit 1
+cp "${CONTROL_LIBRARY}" "${FROZEN_LIBRARY}" || exit 1
 symbols=$(nm --defined-only "${FROZEN_LIBRARY}") || exit 1
 remote_count=$(printf '%s\n' "${symbols}" | grep -ic MG_Remote || true)
-echo "pull control library: ${FROZEN_LIBRARY}: MG_Remote=${remote_count}"
+echo "transport control library: ${FROZEN_LIBRARY}: MG_Remote=${remote_count}"
 if [ "${remote_count}" -ne 0 ]; then
   restore_good_output
-  echo "::error::the control's own library defines MG_Remote symbols, so it is not a pull build and this control would prove nothing"
+  echo "::error::the control's own library defines MG_Remote symbols, so it has a transport and this control would prove nothing"
   exit 1
 fi
 
@@ -144,7 +149,7 @@ cat "${out}"
 restore_good_output
 
 if [ "${control_rc}" -eq 0 ]; then
-  echo "::error::a PULL library passed the split retrace. OpenRA scores ssim 1.000000 under a monolith library too (measured), so the picture is not and cannot be this lane's gate - run_trace_case.cmake's transport-resolution assertion is, and it has stopped working. Every green in this job is then a monolith run under a name that says split."
+  echo "::error::a library WITHOUT A TRANSPORT passed the split retrace. OpenRA scores ssim 1.000000 under a monolith library too (measured), so the picture is not and cannot be this lane's gate - run_trace_case.cmake's transport-resolution assertion is, and it has stopped working. Every green in this job is then a monolith run under a name that says split."
   exit 1
 fi
 
@@ -159,8 +164,8 @@ fi
 # so without stripping it first the folded text reads "never 1: reported resolving it" and the
 # control reds on the very sentence it is looking for (the *-prefixed stub modes).
 if ! sed -E 's/^[0-9]+: //' "${out}" | tr -s '[:space:]' ' ' | grep -qF "${EVIDENCE}"; then
-  echo "::error::the split retrace went red (ctest exit ${control_rc}) with the pull library in place, but the failure never says the library did not resolve the transport - neither of run_trace_case.cmake's sentences (\"${EVIDENCE//$'\n'/\" / \"}\") is in the output. A loader failure, a missing fixture, a timeout or an SSIM drop all land here, and none of them establishes that the transport-identity assertion is what caught the pull library. Only 'non-zero ctest' used to be checked (ID-46 finding 8b)."
+  echo "::error::the split retrace went red (ctest exit ${control_rc}) with the transport-less library in place, but the failure never says the library did not resolve the transport - neither of run_trace_case.cmake's sentences (\"${EVIDENCE//$'\n'/\" / \"}\") is in the output. A loader failure, a missing fixture, a timeout or an SSIM drop all land here, and none of them establishes that the transport-identity assertion is what caught the pull library. Only 'non-zero ctest' used to be checked (ID-46 finding 8b)."
   exit 1
 fi
 
-echo "the pull library turned the split retrace red for its own reason (ctest exit ${control_rc}): ${matched} selected case(s) named the transport, not the picture"
+echo "the transport-less library turned the split retrace red for its own reason (ctest exit ${control_rc}): ${matched} selected case(s) named the transport, not the picture"

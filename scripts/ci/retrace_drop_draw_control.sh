@@ -4,7 +4,7 @@
 #
 # WHY THERE IS A SECOND CONTROL ON THIS LANE, and why it is the draws and not the clears.
 #
-# The retrace-split job already carries scripts/ci/retrace_pull_library_control.sh, which swaps a
+# The retrace-split job already carries scripts/ci/retrace_transport_control.sh, which swaps a
 # PULL library in and requires run_trace_case.cmake's transport-resolution assertion to catch it.
 # That control proves the lane is running a SPLIT library. It does not prove that the PICTURE came
 # through the wire, and it cannot: OpenRA scores ssim 1.000000 against a monolith library too, so

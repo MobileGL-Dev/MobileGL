@@ -122,7 +122,6 @@ jobs:
             -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
             -DMOBILEGL_BUILD_DISAGGREGATED="${MOBILEGL_CI_DISAGGREGATED}" \
             -DMOBILEGL_BUILD_DISAGGREGATED_INPROC="${MOBILEGL_CI_DISAGGREGATED}" \
-            -DMOBILEGL_PIPE_PUSH="${MOBILEGL_CI_DISAGGREGATED}" \
             -DMOBILEGL_PIPE_VERIFY=OFF \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON \
@@ -198,10 +197,10 @@ jobs:
   # The pull-library negative control must not consume the primary artifact:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
-    name: build monolith controls (pull; push without MG_Remote)
+    name: build push monolith control (no MG_Remote)
     runs-on: ubuntu-latest
     env:
-      BUILD_DIR: build-monolith-control
+      BUILD_DIR: build-push-control
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPRESS: "true"
@@ -223,7 +222,7 @@ jobs:
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
-      - name: Restore pull compiler cache
+      - name: Restore compiler cache
         uses: actions/cache/restore@v5
         with:
           path: .ccache
@@ -243,33 +242,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
-      - name: Configure explicit pull control
-        run: |
-          cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_BUILD_DISAGGREGATED=OFF -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=OFF \
-            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-      - name: Build and identify pull control
-        run: |
-          cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
-          python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
-            --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
-      - name: Prepare packaged test metadata
-        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
-
-      # P13 W1: THE PUSH MONOLITH WITHOUT MG_Remote - the shape FCL embeds once the pull build is
-      # gone (PLAN-P13 §4.1, §4.3; ID-P13-1). Two jobs in one: it is the transport-negative control
-      # that replaces the pull library in retrace-split (run side by side with it until W2 drops the
-      # pull build), and its runtime_mode_proof is the zero-MG_Remote-symbol check, one of G1's
-      # successors (ID-P13-4): a push library that links any MG_Remote symbol is red here.
+      # THE PUSH MONOLITH WITHOUT MG_Remote - the shape FCL embeds (PLAN-P13 §4.1, §4.3; ID-P13-1).
+      # Two jobs in one: it is the transport-negative control retrace-split swaps in (P13 W2 retired
+      # the pull library that used to play that part), and its runtime_mode_proof is the
+      # zero-MG_Remote-symbol check, one of G1's successors (ID-P13-4): a push library that links
+      # any MG_Remote symbol is red here.
       - name: Configure push control without MG_Remote
         run: |
-          cmake -S . -B build-push-control -G Ninja \
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_BUILD_TYPE=Release -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
@@ -280,23 +260,24 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       - name: Build push control and prove it has zero MG_Remote symbols
         run: |
-          cmake --build build-push-control --target MobileGL --parallel "$(nproc)"
-          python3 scripts/ci/runtime_mode_proof.py build --build-dir build-push-control \
-            --mode monolith --output build-push-control/runtime-mode.json
-          python3 - build-push-control/runtime-mode.json <<'PY'
+          cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
+          python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
+            --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
+          python3 - "${BUILD_DIR}/runtime-mode.json" <<'PY'
           import json, sys
           rows = json.load(open(sys.argv[1]))['production_compilation']
           if not rows or any(row['definitions'].get('MOBILEGL_PIPE_PUSH') != '1' for row in rows):
               sys.exit('::error::the push control was not compiled with MOBILEGL_PIPE_PUSH=1 everywhere')
           print(f'push control: {len(rows)} production sources compiled with MOBILEGL_PIPE_PUSH=1, zero MG_Remote symbols')
           PY
+      - name: Prepare packaged test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
-      - name: Package monolith controls
+      - name: Package push control
         run: |
           tar -czf mobilegl-linux-monolith-control.tgz \
-            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json" \
-            build-push-control/libMobileGL.so build-push-control/runtime-mode.json
-      - name: Upload pull control
+            "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so" "${BUILD_DIR}/runtime-mode.json"
+      - name: Upload push control
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-monolith-control
@@ -336,7 +317,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -417,7 +398,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -729,7 +710,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1004,7 +985,7 @@ jobs:
       # otherwise also match this label and the monolith one would match both.
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1479,7 +1460,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1751,7 +1732,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2437,7 +2418,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2538,7 +2519,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2813,7 +2794,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3032,7 +3013,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3207,22 +3188,22 @@ jobs:
           name: mobilegl-trace-replay
           path: .
 
-      # The PULL runtime, for the negative control at the end of this job and for nothing else.
-      - name: Download pull runtime (negative control)
+      # The push monolith without MG_Remote, for the negative control at the end of this job and for
+      # nothing else.
+      - name: Download control runtime (negative control)
         uses: actions/download-artifact@v8
         with:
           name: mobilegl-linux-monolith-control
-          path: pull-runtime
+          path: control-runtime
 
-      - name: Unpack the pull runtime (negative control)
+      - name: Unpack the control runtime (negative control)
         run: |
-          tar -xzf pull-runtime/mobilegl-linux-monolith-control.tgz -C pull-runtime
-          test -f pull-runtime/build-monolith-control/libMobileGL.so
-          test -f pull-runtime/build-push-control/libMobileGL.so
+          tar -xzf control-runtime/mobilegl-linux-monolith-control.tgz -C control-runtime
+          test -f control-runtime/build-push-control/libMobileGL.so
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3251,7 +3232,7 @@ jobs:
       # a NAMED failure here rather than a LaunchServer refusal 78 jobs deep.
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace pull-runtime/build-monolith-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3341,7 +3322,7 @@ jobs:
       # The rerun replays into the same case directory, so the good run's images are put aside and
       # restored whichever way the control goes; "Upload actual image" below runs `if: always()`
       # and would otherwise ship the deliberately-wrong run's output under the good run's name.
-      # THE BODY OF THIS STEP IS scripts/ci/retrace_pull_library_control.sh, for the reason the
+      # THE BODY OF THIS STEP IS scripts/ci/retrace_transport_control.sh, for the reason the
       # split lane's control gives: a `run:` block cannot be executed off a runner, so these lines
       # could not be tested until they ran in CI. scripts/ci/control_smoke_test.sh drives that file.
       #
@@ -3351,34 +3332,21 @@ jobs:
       # `--no-tests=error` and was read as "the pull library turned it red"; and only "non-zero
       # ctest" was checked after the nm identity check, so a loader failure, a missing fixture or a
       # timeout passed it. The red must now carry run_trace_case.cmake's own sentence.
-      - name: Negative control (pull library)
+      # P13 W2: THE LIBRARY IS THE PUSH MONOLITH WITHOUT MG_Remote (the shape FCL embeds); until W2 it
+      # was the pull build, run side by side with this one for a wave (W1) to show both red here for
+      # the same sentence. What makes the library red is that it has no transport, not that it pulls.
+      - name: Negative control (library without a transport)
         working-directory: build-retrace/tools/trace_replay
         env:
           CONTROL_TMPDIR: ${{ runner.temp }}
-          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-monolith-control/libMobileGL.so
+          CONTROL_LIBRARY: ${{ github.workspace }}/control-runtime/build-push-control/libMobileGL.so
           FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
           # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
           # proving something about the other arm while spawn ran unguarded.
           SPLIT_TRANSPORT: ${{ matrix.transport }}
           MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
         run: >-
-          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
-          '${{ matrix.case }}' '${{ matrix.backend }}'
-
-      # P13 W1: THE SAME CONTROL WITH THE PUSH MONOLITH WITHOUT MG_Remote - the library FCL embeds
-      # after W2, and the successor of the pull library above once W2 drops the pull build. Same
-      # script and the same evidence sentence: what makes either library red here is that it has no
-      # transport, not that it pulls.
-      - name: Negative control (push library without MG_Remote)
-        working-directory: build-retrace/tools/trace_replay
-        env:
-          CONTROL_TMPDIR: ${{ runner.temp }}
-          PULL_LIBRARY: ${{ github.workspace }}/pull-runtime/build-push-control/libMobileGL.so
-          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
-          SPLIT_TRANSPORT: ${{ matrix.transport }}
-          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
-        run: >-
-          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_pull_library_control.sh"
+          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_transport_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'
 
       # EXIT GATE E2's OTHER HALF, and the one BRIEF-P5 §7 E2 actually names: "drop an emission

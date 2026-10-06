@@ -11,7 +11,8 @@ them wrong.
 
 | Date | Check | Workflow / job | Reason | Successor |
 |---|---|---|---|---|
-| — | (none yet) | | | |
+| 2026-10-06 | `build explicit pull runtime control` (the pull `libMobileGL.so`, `-DMOBILEGL_PIPE_PUSH=OFF`) | Test / `build-linux-monolith-control` | P13 W2 retires the pull build: CMake defaults to push and nothing ships pull (ID-P13-1) | the same job builds the push monolith without MG_Remote (the FCL shape); its `runtime_mode_proof --mode monolith` is the zero-MG_Remote-symbol check |
+| 2026-10-06 | `Negative control (pull library)` | Test / `retrace-split` (every leg) | its library was the pull build above | `Negative control (library without a transport)`: same script (renamed `retrace_transport_control.sh`) and evidence sentence, with the push library without MG_Remote; W1 ran both side by side on every leg |
 
 ## Kept after investigation
 

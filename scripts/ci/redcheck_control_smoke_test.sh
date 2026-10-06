@@ -14,10 +14,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)" || exit 1
 HELPER="${HERE}/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
 WAIT_HELPER="${HERE}/wait_boundary_negative_control.py"
-trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"; cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"; cp "${WORK}/helper.orig" "${HELPER}"; cp "${WORK}/wait.orig" "${WAIT_HELPER}"; rm -rf "${WORK}"' EXIT
+trap 'cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"; cp "${WORK}/retrace.orig" "${HERE}/retrace_transport_control.sh"; cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"; cp "${WORK}/helper.orig" "${HELPER}"; cp "${WORK}/wait.orig" "${WAIT_HELPER}"; rm -rf "${WORK}"' EXIT
 
 cp "${HERE}/split_negative_controls.sh" "${WORK}/split.orig"
-cp "${HERE}/retrace_pull_library_control.sh" "${WORK}/retrace.orig"
+cp "${HERE}/retrace_transport_control.sh" "${WORK}/retrace.orig"
 cp "${HERE}/retrace_drop_draw_control.sh" "${WORK}/dropdraw.orig"
 cp "${HELPER}" "${WORK}/helper.orig"
 cp "${WAIT_HELPER}" "${WORK}/wait.orig"
@@ -32,7 +32,7 @@ tail -1 "${WORK}/before.log"
 
 echo
 echo "=== perturbation: remove the evidence check from both controls"
-python3 - "${HERE}/split_negative_controls.sh" "${HERE}/retrace_pull_library_control.sh" \
+python3 - "${HERE}/split_negative_controls.sh" "${HERE}/retrace_transport_control.sh" \
         "${HERE}/retrace_drop_draw_control.sh" "${WAIT_HELPER}" <<'PY' || exit 1
 import sys
 split, retrace, dropdraw, wait = sys.argv[1:]
@@ -135,7 +135,7 @@ fi
 
 echo
 cp "${WORK}/split.orig" "${HERE}/split_negative_controls.sh"
-cp "${WORK}/retrace.orig" "${HERE}/retrace_pull_library_control.sh"
+cp "${WORK}/retrace.orig" "${HERE}/retrace_transport_control.sh"
 cp "${WORK}/dropdraw.orig" "${HERE}/retrace_drop_draw_control.sh"
 cp "${WORK}/wait.orig" "${WAIT_HELPER}"
 echo "=== ID-62 perturbation: remove only the skip check"

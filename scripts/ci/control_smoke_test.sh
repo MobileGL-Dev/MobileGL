@@ -59,8 +59,8 @@ run_retrace() { # $1 = STUB_MODE
   local rc=0
   env -i PATH="${STUB_DIR}:/usr/bin:/bin" STUB_MODE="$1" \
       CTEST=ctest CONTROL_TMPDIR="${WORK}/tmp-$1" \
-      PULL_LIBRARY="${WORK}/pull.so" FROZEN_LIBRARY="${WORK}/frozen.so" \
-      bash "${HERE}/retrace_pull_library_control.sh" OpenRA DirectGLES || rc=$?
+      CONTROL_LIBRARY="${WORK}/pull.so" FROZEN_LIBRARY="${WORK}/frozen.so" \
+      bash "${HERE}/retrace_transport_control.sh" OpenRA DirectGLES || rc=$?
   cmp -s "${WORK}/frozen.so" "${WORK}/split.so" || {
     echo 'F6 FAILED: pull control did not restore the split library'; return 1;
   }
@@ -95,7 +95,7 @@ expect FAILED "E1 observed no real emission"                 -- run_split e1-no-
 expect FAILED "E1 incorrectly waits every record"            -- run_split e1-waitall
 
 echo
-echo "=== the retrace lane's pull-library control (scripts/ci/retrace_pull_library_control.sh)"
+echo "=== the retrace lane's pull-library control (scripts/ci/retrace_transport_control.sh)"
 # A pull-shaped library the nm identity check accepts: a real ELF .so defining no MG_Remote symbol.
 if command -v cc > /dev/null 2>&1; then
   printf '%s\n' 'int mobilegl_pull_only(void) { return 1; }' > "${WORK}/pull.c"
