@@ -23,6 +23,7 @@ and P7 have to be able to sever. So the arbiter here is the preprocessor's own
                                                                    Config.h, MG_Backend/, BufferState/,
                                                                    ProgramState/Shader*  (+ <= 2 `glslang::`)
     wire-header      MG_Remote/Transport/ITransport.h              MobileGL/Includes.h
+    record-core      MG_Impl/Pipe/Verb/VerbPort.h (+ the record core) MG_Remote/ 3rdparty/flatbuffers/
 
 The forbidden sets deliberately say nothing about glslang, spirv-cross or vulkan:
 MobileGL/Includes.h pulls all three unconditionally (:53,:56,:59,:80-84,:130) and both
@@ -53,7 +54,7 @@ four probes from none. The campaign gate spells `--compiler clang++`: there is n
 
     python3 scripts/check_include_closure.py --mode text --self-test
     python3 scripts/check_include_closure.py --mode both --compiler clang++ --self-test
-    python3 scripts/check_include_closure.py --mode both --self-test --require-all --expect-probes 4
+    python3 scripts/check_include_closure.py --mode both --self-test --require-all --expect-probes 5
 """
 
 import argparse
@@ -141,6 +142,32 @@ PROBES = [
         "TextLimits": {},
         "Why": "WireLog.h:9-24 states the rule: nothing about a byte pipe needs the GL "
                "frontend's umbrella header. Green today - it is the gate's own canary.",
+    },
+    {
+        "Name": "record-core",
+        "Header": "MobileGL/MG_Impl/Pipe/Verb/VerbPort.h",
+        "Tu": "#include <MG_Impl/Pipe/Verb/VerbPort.h>\n"
+              "#include <MG_Impl/Pipe/Verb/GpuWriteSet.h>\n"
+              "#include <MG_Backend/Record/RecordVerbSink.h>\n"
+              "#include <MG_Backend/Record/StagedTextureStore.h>\n"
+              "#include <MG_Backend/Record/ApplyRoleBackend.h>\n"
+              "#include <MG_State/GLState/BufferState/PersistentMapTracker.h>\n"
+              "#include <MG_Pipe/PipeVerbSink.h>\n"
+              "#include <MG_Pipe/PipeSessionFail.h>\n"
+              "#include <MG_Pipe/PipeClientSeam.h>\n"
+              "#include <MG_Pipe/PipeFatalFamily.h>\n",
+        "Forbidden": [
+            "MobileGL/MG_Remote/",
+            "3rdparty/flatbuffers/",
+        ],
+        "Allow": [],
+        "TextLimits": {},
+        "Why": "P13 W5: the record arm runs in a library without a transport (the FCL-embedded "
+               "build), so the record core - the verb port, the record verb sink, the staged "
+               "stores, the persistent-map tracker and the MG_Pipe seams they die and latch "
+               "through - may not reach MG_Remote or the wire's serializer even under an #if; "
+               "the seams (PipeSessionFail.h, PipeClientSeam.h, ApplyRoleBackend.h) are the "
+               "only way across.",
     },
 ]
 
