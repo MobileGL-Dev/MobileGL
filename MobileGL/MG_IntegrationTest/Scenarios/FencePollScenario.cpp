@@ -130,10 +130,14 @@ namespace MGITest {
             if (!Ready()) return;
             const std::string why = SplitRuntimeSkipReason();
             if (!why.empty()) GTEST_SKIP() << why;
+            // The counters are read BEFORE the fence exists: the server may report it while
+            // glFenceSync's own record is still being applied, and a client call drains the event
+            // ring, so a snapshot taken after glFenceSync could already include the report and the
+            // delta below would read 0 for a fence that WAS reported (seen on the verify-split lane).
+            const SplitRuntimeState before = PeekSplitRuntime();
             QueueWork();
             GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             ASSERT_NE(sync, nullptr);
-            const SplitRuntimeState before = PeekSplitRuntime();
             const auto start = Clock::now();
             GLenum status = GL_TIMEOUT_EXPIRED;
             while ((status = glClientWaitSync(sync, 0, 0)) == GL_TIMEOUT_EXPIRED &&
