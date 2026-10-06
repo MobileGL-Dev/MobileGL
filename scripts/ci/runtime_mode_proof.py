@@ -40,11 +40,17 @@ def build_proof(build, mode):
         raise RuntimeError('library appears stripped; symbol absence would prove nothing')
     remote = sum('MG_Remote' in line for line in symbols.splitlines())
     applier = sum('MGPipeApply' in line for line in symbols.splitlines())
-    if (mode == 'disaggregated' and (not remote or not applier)) or (mode == 'monolith' and remote):
-        raise RuntimeError(f'{mode} symbol mismatch: MG_Remote={remote}, MGPipeApply={applier}')
+    # P13 W5 (D6): THE POSITIVE HALF. Both shapes run the record arm, so both must carry its code
+    # (namespace MG_Record: the verb port, the record verb sink, the staged stores). Without this
+    # a monolith library that silently stopped compiling the record arm would still pass on
+    # "no MG_Remote" alone.
+    record = sum('MG_Record' in line for line in symbols.splitlines())
+    if (mode == 'disaggregated' and (not remote or not applier)) or (mode == 'monolith' and remote) or not record:
+        raise RuntimeError(f'{mode} symbol mismatch: MG_Remote={remote}, MGPipeApply={applier}, MG_Record={record}')
     return {'mode': mode, 'source_sha': subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip(),
             'library': str(library), 'sha256': hashlib.sha256(library.read_bytes()).hexdigest(),
             'defined_symbols': len(symbols.splitlines()), 'remote_symbols': remote, 'applier_symbols': applier,
+            'record_symbols': record,
             'production_compilation': definitions}
 
 
@@ -122,9 +128,11 @@ def self_test():
         else:
             raise AssertionError('missing server log passed the runtime log proof')
         (build / 'libMobileGL.so').write_bytes(b'checker fixture, not a real runtime')
-        normal = ''.join(f'00000000 T fixture{i}\n' for i in range(1000))
+        bare = ''.join(f'00000000 T fixture{i}\n' for i in range(1000))
+        normal = bare + '00000000 T MG_Record_fixture\n'
         pushed = normal + '00000000 T MGPipeApply_fixture\n'
         remote = pushed + '00000000 T MG_Remote_fixture\n'
+        unrecorded = bare + '00000000 T MGPipeApply_fixture\n00000000 T MG_Remote_fixture\n'
         for mode, flags, symbols, succeeds in (
             ('monolith', '', normal, True),
             ('monolith', '-DMOBILEGL_PIPE_PUSH=1', pushed, True),
@@ -136,6 +144,9 @@ def self_test():
             ('monolith', '', remote, False),
             ('monolith', '-DMOBILEGL_BUILD_DISAGGREGATED=1', pushed, False),
             ('monolith', '', '00000000 T stripped\n', False),
+            # P13 W5 (D6): a library without the record arm is red in either shape.
+            ('monolith', '', bare + '00000000 T MGPipeApply_fixture\n', False),
+            ('disaggregated', '-DMOBILEGL_BUILD_DISAGGREGATED=1', unrecorded, False),
         ):
             (build / 'compile_commands.json').write_text(json.dumps([
                 {'file': '/fixture/MobileGL/ConfigLoader.cpp', 'command': f'clang++ {flags} -c ConfigLoader.cpp'}]))

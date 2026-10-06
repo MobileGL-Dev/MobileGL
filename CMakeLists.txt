@@ -554,15 +554,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
 endif()
 
 # P13 W5 (notes/p13/W5-DESIGN.md): THE RECORD ARM'S OWN GUARD. A plain variable, not an option and
-# not a cache entry, so no build tree can keep a stale value (W3a's lesson): it equals
-# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards are reclassified one by one - every
-# such commit leaves both library shapes byte-identical - and one later commit sets it on for every
-# build (the library without MG_Remote then runs the record arm). Always defined, to 0 or 1.
-if (MOBILEGL_BUILD_DISAGGREGATED)
-    set(MOBILEGL_BUILD_RECORD_ARM ON)
-else()
-    set(MOBILEGL_BUILD_RECORD_ARM OFF)
-endif()
+# not a cache entry, so no build tree can keep a stale value (W3a's lesson). It equalled
+# MOBILEGL_BUILD_DISAGGREGATED while the record arm's guards were reclassified one by one; since S7
+# it is on for every build, so the library without MG_Remote (the FCL-embedded one) runs the record
+# arm too. S8 removes the variable and the guards it still names. Always defined, to 0 or 1.
+set(MOBILEGL_BUILD_RECORD_ARM ON)
 
 message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
 list(APPEND SOURCE_FILES
