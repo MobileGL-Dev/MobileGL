@@ -27,11 +27,9 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_Test/ScopedPipeVerb.h>
-#if MOBILEGL_PIPE_PUSH
 // P5 b1: MGPipeResourceTrackerInstance(), so the split probe case can ask the PRODUCTION
 // tracker for a buffer's handle instead of minting one by hand.
 #include <MG_Impl/Pipe/ResourceTracker.h>
-#endif
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
@@ -72,7 +70,6 @@
 #include <unistd.h>
 #endif
 
-#if MOBILEGL_PIPE_PUSH
 // PipeApply.h does not guard itself (its push-only property comes from the root
 // CMakeLists), so it is included from inside this arm and nowhere else.
 #include <MG_Pipe/PipeApply.h>
@@ -118,7 +115,6 @@ namespace {
     const ::testing::Environment* g_esprytSlotArmEnvironment =
         ::testing::AddGlobalTestEnvironment(new EsprytSlotArmEnvironment());
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -3174,7 +3170,6 @@ TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
 }
 
-#if MOBILEGL_PIPE_PUSH
 // P5e (tx2), CONTRACT-P5E §4.3: THE HANDLE ARM'S SIBLING OF THE CASE ABOVE, WITH ABA AS THE
 // HAZARD INSTEAD OF A SILENT SLOT SWAP.
 //
@@ -3256,12 +3251,6 @@ TEST(DirectGLESTextureSync, ARecycledTextureSlotReMintsTheTwinOnTheHandleArm) {
 
     MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Texture, second);
 }
-#else
-// G2/G14: the same ctest entry exists in the pull build and skips visibly.
-TEST(DirectGLESTextureSync, ARecycledTextureSlotReMintsTheTwinOnTheHandleArm) {
-    GTEST_SKIP() << "the by-handle texture twin is compiled only under MOBILEGL_PIPE_PUSH";
-}
-#endif
 
 namespace {
     // What glTexParameteri actually reached the driver, and which backend texture was bound
@@ -3357,7 +3346,6 @@ TEST(DirectGLESTextureSync, AnAttachmentOnlyTexturesParametersReachTheDriverWith
     }
     ASSERT_NE(twin, nullptr);
 
-#if MOBILEGL_PIPE_PUSH
     const MG_Pipe::MGPipeHandle res = registry.HandleOf(texture.get());
     MG_Pipe::MGPipeHandle builtinSampler = MG_Pipe::kMGPipeNullHandle;
     if (MG_Backend::DirectGLES::TextureResourceSubsystemEnabled()) {
@@ -3408,7 +3396,6 @@ TEST(DirectGLESTextureSync, AnAttachmentOnlyTexturesParametersReachTheDriverWith
                   nullptr)
             << "a sampler view was minted for a texture nothing sampled";
     }
-#endif
 
     const SizeT before = params.size();
     twin->SyncTextureParamsToBackend(texture);
@@ -3426,12 +3413,10 @@ TEST(DirectGLESTextureSync, AnAttachmentOnlyTexturesParametersReachTheDriverWith
            "parameter push is gated on something being bound, which is the deferral G9's public "
            "scenario cannot observe";
 
-#if MOBILEGL_PIPE_PUSH
     if (!MG_Pipe::MGPipeHandleIsNull(builtinSampler)) {
         MG_Pipe::MGPipeApplyDeleteSamplerState(MG_Pipe::MGPHandleOnly{builtinSampler});
         MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerCso, builtinSampler);
     }
-#endif
 }
 
 TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMip) {
@@ -3597,7 +3582,6 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
 }
 
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     // A stand-in frontend object for the twin table. It carries the one thing the table asks of a
     // state object - GetLifetimeId() - so these cases can pin the identity contract without a
@@ -4671,55 +4655,8 @@ TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) 
 // checks the message and not only the signal, because an operator who is handed a bare
 // "Subprocess aborted" has been told nothing about which two knobs they set.
 TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane) {
-#if !MOBILEGL_PIPE_LEGACY_MEMOS
     GTEST_SKIP() << "this build compiles no legacy twin registry, so no knob combination can "
                     "leave the process without an arm";
-#else
-    using namespace MobileGL;
-    namespace fs = std::filesystem;
-    using MG_Backend::DirectGLES::EsprytSlotArmVerdict;
-
-    // The pure half: all four knob combinations, no process required.
-    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(true, true), EsprytSlotArmVerdict::Handles);
-    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(true, false), EsprytSlotArmVerdict::Handles);
-    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, true), EsprytSlotArmVerdict::Legacy);
-    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, false), EsprytSlotArmVerdict::NoArm);
-
-    // Both guards restore on every exit path - a failed ASSERT included - so no later case in
-    // this binary runs on a mutated config or without the operator's file log, and the log
-    // path is unique per process and per case (the round-4 review's minor 5).
-    const ScopedArmlessKnobPair knobs;
-    ASSERT_EQ(MG_Backend::DirectGLES::CurrentEsprytSlotArmVerdict(), EsprytSlotArmVerdict::NoArm);
-    const ScopedLogFileRedirect log(UniqueScratchLogPath("mobilegl-espryt-armless-knobs"));
-
-    // Bring-up's half of the split. It must NAME the knobs and it must RETURN: this call is the
-    // one InitDisplayAndContext() makes, and it runs inside the harness's forked pre-flight
-    // child. If it ever stops again, this line takes the whole binary down and the case is red.
-    // (That the call SITE still makes this call and not the stopping one is
-    // EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping below.)
-    MG_Backend::DirectGLES::DiagnoseEsprytSlotArm();
-
-#if !defined(_WIN32)
-    // First-use's half: the stop, raised in a forked child so it is a datum rather than the end
-    // of this process. In production the caller is a twin lookup inside a scenario body, where
-    // ctest reports the crash as a FAILING test rather than as a missing GPU.
-    EXPECT_EXIT((void)MG_Backend::DirectGLES::ResolveEsprytSlotTablesArm(),
-                ::testing::KilledBySignal(SIGABRT), "");
-#endif
-
-    const std::string contents = log.Contents();
-    ASSERT_FALSE(contents.empty()) << "neither the diagnosis nor the fatal wrote a line an "
-                                      "operator could read";
-
-    EXPECT_NE(contents.find("PipeLegacyMemosDisabled"), std::string::npos) << contents;
-    EXPECT_NE(contents.find("MOBILEGL_PIPE_PUSH"), std::string::npos) << contents;
-    EXPECT_NE(contents.find("MOBILEGL_PIPE_LEGACY_MEMOS=0"), std::string::npos) << contents;
-    EXPECT_NE(contents.find("kMGPipeSubsystemEsprytSlots"), std::string::npos) << contents;
-#if !defined(_WIN32)
-    EXPECT_NE(contents.find("Fatal{"), std::string::npos)
-        << "the diagnosis was logged but the first-use stop was not: " << contents;
-#endif
-#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 }
 
 // The two guards the armless cases stand on, pinned on their own: whatever an operator had in
@@ -4742,12 +4679,6 @@ TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundT
     {
         const ScopedArmlessKnobPair knobs;
         const ScopedLogFileRedirect redirect(UniqueScratchLogPath("mobilegl-espryt-guard"));
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-        // Only a build with the legacy arm can be left armless; without it the verdict is
-        // Handles whatever the knobs say, and what is pinned here is the restore, not the arm.
-        EXPECT_EQ(MG_Backend::DirectGLES::CurrentEsprytSlotArmVerdict(),
-                  MG_Backend::DirectGLES::EsprytSlotArmVerdict::NoArm);
-#endif
         EXPECT_EQ(MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots, 0ull);
         EXPECT_FALSE(MG_Config::Features.PipeLegacyMemos);
         EXPECT_STRNE(std::getenv("MOBILEGL_LOG_FILE_PATH"), operatorPath.string().c_str());
@@ -4817,17 +4748,6 @@ TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopp
            "on the armless knob pair again instead of diagnosing it, and the integration "
            "harness's forked pre-flight turns that stop into a lane that skips every scenario";
 
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-    // And it diagnosed, by name, on the way through - the operator is told which two knobs
-    // they set before the first draw - without a Fatal{} anywhere in bring-up.
-    const std::string contents = log.Contents();
-    EXPECT_NE(contents.find("PipeLegacyMemosDisabled"), std::string::npos)
-        << "bring-up returned but did not diagnose the armless pair: " << contents;
-    EXPECT_NE(contents.find("MOBILEGL_PIPE_PUSH"), std::string::npos) << contents;
-    EXPECT_NE(contents.find("MOBILEGL_PIPE_LEGACY_MEMOS=0"), std::string::npos) << contents;
-    EXPECT_EQ(contents.find("Fatal{"), std::string::npos)
-        << "bring-up wrote a Fatal{} - the stop is back inside EGL bring-up: " << contents;
-#endif
 #endif
 }
 
@@ -5446,113 +5366,6 @@ TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheReco
 #endif
 }
 
-#else
-// G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
-// exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
-// skips visibly - a vanishing test is exactly what that gate is there to stop.
-TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothing) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, ANegativeLookupIsNotCachedAcrossAnotherHoldersAcquire) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundThem) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, ACompositeHandleDoesNotGrowTheOrdinaryTable) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
-    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTwoDraws) {
-    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQuestion) {
-    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-
-TEST(DirectGLESBufferDrawProbe, ACapsMaskWithoutTheResourceFamilyEmitsNothingAndCountsTheRefusal) {
-    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
-}
-// P5e (vi): G2/G14's skip twins for the two record-arm cases above.
-TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotTheFrontendVao) {
-    GTEST_SKIP() << "the record arm of the attribute walk is compiled only under MOBILEGL_PIPE_PUSH";
-}
-TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheRecord) {
-    GTEST_SKIP() << "the record arm of the index-buffer sync is compiled only under MOBILEGL_PIPE_PUSH";
-}
-#endif // MOBILEGL_PIPE_PUSH
 
 // P12 (on-screen server window): A SERVER SESSION ENDS IN A PROCESS THAT OUTLIVES IT.
 //

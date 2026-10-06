@@ -57,7 +57,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
 // invisible in a push build (where it really is 0) and in a verify build (where
@@ -82,7 +81,6 @@
 // ResourceEmitTest does for the buffer half's walk.
 #include <MG_Remote/Client/GpuWritePending.h>
 #endif
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -98,7 +96,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     std::string ReadLog() {
         // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
         // role's thread said it is not what these cases are about, and refusals raised on the
@@ -182,20 +179,15 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder: a
 // static holding client state whose destructor an exit handler can run is the exit-order
 // use-after-free this design closed once already.
 TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
-#if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeTextureEmitterInstance(), &MGPipeTextureEmitterInstance());
     EXPECT_TRUE(kMGPipeWiredTextureSubsystem == 0 ||
                 kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
-#endif
 }
 
 // ============================================================================
@@ -204,52 +196,6 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // TEST bodies in one file, and a collision between them is resolved by UNION, never by
 // choosing a side.
 // ============================================================================
-#if !MOBILEGL_PIPE_PUSH
-#define MGL_TEXTURE_EMIT_CLIENT_TEST_LIST(X)                                                       \
-    X(TextureEmit, EveryTextureTargetMapsToItsOwnResourceTarget)                                   \
-    X(TextureEmit, EveryBindKindSetsItsBindMaskBit)                                                \
-    X(TextureEmit, ABindMaskBitIsStickyAcrossARespecify)                                           \
-    X(TextureEmit, AnImageBoundTextureCarriesTheImageBindableHintForever)                          \
-    X(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels)                               \
-    X(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero)                        \
-    X(TextureEmit, AWholeLevelUploadCarriesZeroStrides)                                            \
-    X(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint)                         \
-    X(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero)                     \
-    X(TextureEmit, ASinglePartialWriteCarriesItsBoxAsOneRegion)                                    \
-    X(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs)                                   \
-    X(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner)                                      \
-    X(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso)                                    \
-    X(TextureEmit, TwoTexturesWithIdenticalSamplingShareOneBuiltinCso)                             \
-    X(TextureEmit, ADestroyedTextureReleasesItsResourceViewAndBuiltinSamplerSlots)                 \
-    X(TextureEmit, ARenderbufferRespecifyPublishesItsExtentWithoutAVersionCounter)                 \
-    X(TextureEmit, ABailedLevelStaysDirtyAndStaysOnTheDrainList)                                   \
-    X(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne)                   \
-    X(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList)                             \
-    X(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation)        \
-    X(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams)                               \
-    X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)          \
-    X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                      \
-    X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)                                     \
-    X(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier)           \
-    X(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)   \
-    X(TextureEmit,                                                                                 \
-      WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNothingReachesTheApplier)         \
-    X(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive)              \
-    X(TextureEmit, ALevelDefinedAfterAnEmittedButUnconsumedUploadKeepsThatUpload)                  \
-    X(TextureEmit, AChainTruncationKeepsTheSurvivingLevelsPendingUploads)                          \
-    X(TextureEmit, ARedefinitionOfANonBaseLevelAtANewSizeDropsOnlyThatLevelsPendingUpload)         \
-    X(TextureEmit, ADeadTexturesHandleResolvesToNothingAndLeavesTheDrainList)                      \
-    X(TextureEmit, ATextureRecycledOntoADeadSlotDoesNotInheritTheDrainEntry)                       \
-    X(TextureEmit, ADeadRenderbuffersEntryIsRetiredWithItsSlot)                                    \
-    X(TextureEmit, ARefusedParamsRecordDoesNotAdvanceTheLatch)                                     \
-    X(TextureEmit, ADeadTexturesSamplerViewLatchIsRetiredAtItsDeath)                              \
-    X(TextureEmit, ATextureBornBeforeTheConsumerRegisteredGetsItsRecordFromItsFirstParamsPublication)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_TEXTURE_EMIT_CLIENT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 namespace {
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::MipmapDirtyRegion;
@@ -686,9 +632,7 @@ TEST(TextureEmit, ASinglePartialWriteCarriesItsBoxAsOneRegion) {
 //   * EACH PIECE CARRIES AT LEAST ONE REGION, with the LEVEL's pitches - RegionCount == 0 is the
 //     whole-level spelling, so a piece with an empty tail would be read as one.
 TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no emitter in this build";
-#elif !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_DISAGGREGATED
     GTEST_SKIP() << "there is no stage segment to size a content chunk against without the "
                     "transport built in";
 #else
@@ -1982,7 +1926,6 @@ TEST(TextureEmit, ATextureInASecondShareGroupNamesABuiltinSamplerItsOwnGroupHold
     first.reset();
 }
 
-#endif // MOBILEGL_PIPE_PUSH
 
 // =========================================================================================
 // The APPLIER's half of the texture family (the wire commits'): set_texture_params on the
@@ -1992,7 +1935,6 @@ TEST(TextureEmit, ATextureInASecondShareGroupNamesABuiltinSamplerItsOwnGroupHold
 // is the client package's and lands beside these.
 // =========================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     constexpr Uint16 kTex2D = static_cast<Uint16>(MGPipeResourceTarget::Tex2D);
 
@@ -2057,16 +1999,12 @@ namespace {
         return MGPipeApplier().TextureResources[slot];
     }
 } // namespace
-#endif
 
 // set_texture_params IS ADDRESSED BY RESOURCE AND BY NOTHING ELSE, which is the whole reason
 // the call exists: a texture that is only an FBO attachment, only an image-unit binding or
 // only a glCopyImageSubData endpoint has no sampler view to hang its parameters on. Deleting
 // the store or the ParamsSerial bump leaves this red.
 TEST(TextureEmit, ATexturesParametersLandOnItsOwnRecordAndMoveOnlyTheirOwnSerial) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{7, 3};
     const MGPipeHandle sampler{2, 1};
@@ -2106,7 +2044,6 @@ TEST(TextureEmit, ATexturesParametersLandOnItsOwnRecordAndMoveOnlyTheirOwnSerial
     // is a refusal rather than a parameter push onto somebody else's record.
     MGPipeApplySetTextureParams(TextureParams(MGPipeHandle{9, 1}, sampler, 1));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, refusedBefore + 2);
-#endif
 }
 
 // EVERY ITextureObject OWNS A SamplerObject, so a null built-in sampler CSO is not "no
@@ -2114,9 +2051,6 @@ TEST(TextureEmit, ATexturesParametersLandOnItsOwnRecordAndMoveOnlyTheirOwnSerial
 // state the unit last left behind. It is the corrupt-record verdict rather than the dropped-
 // call one, so it must NOT be counted as a refusal.
 TEST(TextureEmit, ARecordWithNoBuiltinSamplerCsoIsRefusedNamingTheTexture) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{6, 2};
     MGPipeApplyResourceCreate(TextureDesc(texture, 0, 77));
@@ -2132,7 +2066,6 @@ TEST(TextureEmit, ARecordWithNoBuiltinSamplerCsoIsRefusedNamingTheTexture) {
     EXPECT_EQ(TextureRecordOf(6).ParamsSerial, 1u);
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, refusedBefore)
         << "a corrupt record is not a dropped call and must not be counted as one";
-#endif
 }
 
 // D-D5's safety net. The client clears its own dirty flags AT EMISSION and the backend's
@@ -2141,9 +2074,6 @@ TEST(TextureEmit, ARecordWithNoBuiltinSamplerCsoIsRefusedNamingTheTexture) {
 // side says "box only" the entry becomes box only - which is the frontend's own model, where
 // zero rects means "upload the union box instead" and covers every reason at once.
 TEST(TextureEmit, AnAccumulatedUploadUnionsItsBoxesAndCollapsesToTheBoxWhenARectListCannotDescribeIt) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{4, 1};
     const Uint8 texels[4096] = {};
@@ -2186,16 +2116,12 @@ TEST(TextureEmit, AnAccumulatedUploadUnionsItsBoxesAndCollapsesToTheBoxWhenARect
     ASSERT_EQ(TextureRecordOf(4).PendingUploads.size(), 2u);
     EXPECT_EQ(TextureRecordOf(4).PendingUploads[1].Level, 3u);
     EXPECT_EQ(TextureRecordOf(4).PendingUploads[0].UnionBox.W, 64u) << "level 3 rewrote level 0's box";
-#endif
 }
 
 // The texture half of the sub-data validator. Each of its four statements is about a record
 // that would make the server upload texels it was never told about, or read a tail it was not
 // given; removing any one of them leaves this red.
 TEST(TextureEmit, TheSubDataValidatorRefusesALevelABoxAndARegionTheRecordCannotDescribe) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{5, 2};
     const Uint8 texels[4096] = {};
@@ -2242,7 +2168,6 @@ TEST(TextureEmit, TheSubDataValidatorRefusesALevelABoxAndARegionTheRecordCannotD
     EXPECT_EQ(TextureRecordOf(5).PendingUploads.size(), 1u)
         << "a refused record was accumulated anyway";
     EXPECT_EQ(TextureRecordOf(5).Serial, serialBefore) << "not one refusal may move the serial";
-#endif
 }
 
 // A WHOLE-RESOURCE respecify - a null MGPRespecifiedLevel*, which is every glBufferData,
@@ -2252,9 +2177,6 @@ TEST(TextureEmit, TheSubDataValidatorRefusesALevelABoxAndARegionTheRecordCannotD
 // whole-resource arm ONLY, and its per-level twin below proves that the other arm may not do
 // this.
 TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{3, 1};
     const Uint8 texels[4096] = {};
@@ -2268,7 +2190,6 @@ TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
     EXPECT_TRUE(TextureRecordOf(3).PendingUploads.empty())
         << "a 64-wide box survived onto an 8-wide store";
     EXPECT_EQ(TextureRecordOf(3).Desc.Width, 8u);
-#endif
 }
 
 // C1, AND IT IS THE CANONICAL MIP-BUILDING SEQUENCE. A mutable texture defines its levels one
@@ -2280,9 +2201,6 @@ TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
 // build, with no counter and no log line: this case goes red the moment the level scoping is
 // dropped and green with it.
 TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{10, 1};
     const Uint8 texels[4096] = {};
@@ -2348,7 +2266,6 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
         EXPECT_FALSE(entry.UploadTarget == kTex2D && entry.Level == 1u)
             << "the redefined (upload target, level) survived";
     }
-#endif
 }
 
 // THE OTHER HALF OF THE LEVEL-SCOPED ERASE KEY (wire review v2 MINOR-1, integrator grant).
@@ -2372,9 +2289,6 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
 // above, so this is a real storage redefinition and not ID-18 M4's metadata update - which
 // drops nothing at all and would make the case vacuous in the other direction.
 TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{11, 1};
     const Uint8 texels[4096] = {};
@@ -2452,7 +2366,6 @@ TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel)
     EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].Level, 0u);
     EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].UnionBox.W, 64u)
         << "the untouched face's box was rewritten by the other face's redefinition";
-#endif
 }
 
 // D-D5 step 1 says the client clears its dirty flag "only for levels whose record the applier
@@ -2461,9 +2374,6 @@ TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel)
 // shipped push build a refused upload and an accumulated one are otherwise identical from the
 // call site. An emitter that clears on the strength of having emitted loses those texels.
 TEST(TextureEmit, TheSubDataCallAnswersWhetherTheRecordWasAcceptedSoTheClientCanClearItsFlag) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{8, 1};
     const Uint8 texels[4096] = {};
@@ -2500,7 +2410,6 @@ TEST(TextureEmit, TheSubDataCallAnswersWhetherTheRecordWasAcceptedSoTheClientCan
     EXPECT_TRUE(MGPipeApplyResourceSubData(write, texels));
     write.Res = MGPipeHandle{8, 9};
     EXPECT_FALSE(MGPipeApplyResourceSubData(write, texels));
-#endif
 }
 
 // m3. MGPSubData::Target is PACKED - low byte = MGPipeResourceTarget, high byte = the cube-face
@@ -2510,9 +2419,6 @@ TEST(TextureEmit, TheSubDataCallAnswersWhetherTheRecordWasAcceptedSoTheClientCan
 // ResourceTableForTarget makes for returning null on an unknown enumerator, and the same
 // verdict: acting outside the storage the record names is corruption, not a dropped call.
 TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRatherThanRouted) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{9, 1};
     const Uint8 texels[4096] = {};
@@ -2550,16 +2456,12 @@ TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRather
     EXPECT_EQ(TextureRecordOf(9).Serial, serialBefore) << "not one refusal may move the serial";
     EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusedBefore)
         << "a corrupt record is not a dropped call and must not be counted as one";
-#endif
 }
 
 // D-J4, for the kind that made the rule matter: a TEXTURE lives in a share group exactly as a
 // buffer does, so its record - and the parameters and the pending uploads that ride on it -
 // outlives a make-current, and only the applier's own teardown takes it.
 TEST(TextureEmit, TheTextureRecordAndItsParamsAndPendingUploadsSurviveAMakeCurrent) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{2, 5};
     const Uint8 texels[4096] = {};
@@ -2585,7 +2487,6 @@ TEST(TextureEmit, TheTextureRecordAndItsParamsAndPendingUploadsSurviveAMakeCurre
     // And the teardown scope - the only other thing that clears a record - does take it.
     MGPipeApplierReleaseObjectRecords();
     EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
-#endif
 }
 
 // ID-18 M4, AND IT IS THE ONE ARM AN IMMUTABLE TEXTURE HAS. A sticky BindMask /
@@ -2598,9 +2499,6 @@ TEST(TextureEmit, TheTextureRecordAndItsParamsAndPendingUploadsSurviveAMakeCurre
 // system moved. A mask change landing between a glTexSubImage2D and the sync that consumes it
 // must not eat those texels, which is C1's bug with a different trigger and just as silent.
 TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsThePendingUploads) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{11, 1};
     const Uint8 texels[4096] = {};
@@ -2670,7 +2568,6 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
     EXPECT_TRUE(TextureRecordOf(11).PendingUploads.empty())
         << "a 64-wide box survived a redefinition onto a 32-wide level";
     EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
-#endif
 }
 
 // D-D5 step 1 again, for the two calls that DEFINE the storage an upload lands in (ID-18 M3).
@@ -2680,9 +2577,6 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
 // clear a level's dirty flags, or to advance its own descriptor dedupe, on the strength of
 // having emitted has lost those texels for good.
 TEST(TextureEmit, TheCreateAndRespecifyCallsAnswerWhetherTheRecordWasAccepted) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{12, 1};
     EXPECT_TRUE(MGPipeApplyResourceCreate(TextureDesc(texture, 0, 161)));
@@ -2717,7 +2611,6 @@ TEST(TextureEmit, TheCreateAndRespecifyCallsAnswerWhetherTheRecordWasAccepted) {
     MGPResourceDesc deadBuffer = buffer;
     deadBuffer.Resource.Gen = 7;
     EXPECT_FALSE(MGPipeApplyResourceRespecify(deadBuffer, nullptr));
-#endif
 }
 
 int main(int argc, char** argv) {
@@ -2732,7 +2625,6 @@ int main(int argc, char** argv) {
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
 #endif
-#if MOBILEGL_PIPE_PUSH
     // ID-39: A BACKEND IS PRESENT, for the whole binary. Since ID-39 every P4a-family entry
     // point in MG_Pipe/PipeApply.cpp declines a record - and the client's own gate in
     // MG_Impl/Pipe/PipeFill.cpp emits none at all - when no backend has registered
@@ -2745,7 +2637,6 @@ int main(int argc, char** argv) {
     // WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier takes it away again.
     static const MGPipeResourceOps kConsumerPresent{};
     MGPipeSetResourceOps(&kConsumerPresent);
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

@@ -53,7 +53,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <cstring>
 
 #include "Init.h"
@@ -72,7 +71,6 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -88,7 +86,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     // `from` is a byte offset, and it exists because of the fork below: the library's log file
     // is already open by the time a case runs, so the child's lines are APPENDED to it rather
     // than written to a fresh file, and only what the child appended is this drive's evidence.
@@ -189,21 +186,16 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder.
 TEST(SamplerEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
-#if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeSamplerEmitterInstance(), &MGPipeSamplerEmitterInstance());
     // One bit for the whole sampler family - the CSO, the view and all three unit sets,
     // including set_shader_images, whose emitter lives in ImageEmit.h. An operator switching
     // samplers off has to get the whole family's legacy arm, not two thirds of it.
     EXPECT_TRUE(kMGPipeWiredSamplerSubsystem == 0 ||
                 kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
-#endif
 }
 
 // =========================================================================================
@@ -214,7 +206,6 @@ TEST(SamplerEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // is the client package's and lands beside these.
 // =========================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     // Every field carries a value of its own, INCLUDING borderColorForm and all three border
     // representations: they are always numerically populated, so the value alone cannot say
@@ -272,16 +263,12 @@ namespace {
         return desc;
     }
 } // namespace
-#endif
 
 // A create starts the record over and leaves Serial at 0 - so a fresh backend twin that starts
 // its own synced serial at 0 agrees without either side publishing anything - while a re-issue
 // on a LIVE identity counts up, which is how a value change travels on a handle whose
 // generation moves only on slot reuse.
 TEST(SamplerEmit, ACreateStoresTheParametersByValueAndAReissueOnALiveIdentityCountsUp) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle cso{6, 2};
     const SamplerParameters first = SamplerValues(0.5f, BorderColorForm::Int);
@@ -315,16 +302,12 @@ TEST(SamplerEmit, ACreateStoresTheParametersByValueAndAReissueOnALiveIdentityCou
     EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Gen, 3u);
     EXPECT_EQ(MGPipeApplier().SamplerCsos[6].Serial, 0u) << "a recycled slot kept its predecessor's serial";
     EXPECT_FLOAT_EQ(MGPipeApplier().SamplerCsos[6].Params.lodBias, 2.5f);
-#endif
 }
 
 // The one Blob rule, on this family's own blob: a non-zero declared length must be exactly one
 // SamplerParameters, a zero means "this record does not declare its blob" - which is what a
 // monolith emission is - and either way the bytes read are bounded by the TYPE.
 TEST(SamplerEmit, ARecordThatDoesNotDescribeItsOwnParametersIsRefusedNamingTheLength) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const SamplerParameters values = SamplerValues(0.0f, BorderColorForm::Float);
 
@@ -346,16 +329,12 @@ TEST(SamplerEmit, ARecordThatDoesNotDescribeItsOwnParametersIsRefusedNamingTheLe
                         "bound",
                         [&pastTheBound, &values]() { MGPipeApplyCreateSamplerState(pastTheBound, &values); });
     EXPECT_TRUE(MGPipeApplier().SamplerCsos.empty()) << "the table was grown by a corrupt slot";
-#endif
 }
 
 // A death notice on a record the applier does not have is the ONE refusal a legal sequence
 // produces - the teardown order - so it stays a defined no-op, and it is COUNTED because
 // MOBILEGL_ASSERT compiles out at INFO and every build that matters is one.
 TEST(SamplerEmit, ADeleteDropsTheRecordAndAStaleNoticeIsCountedRatherThanSilentlyDropped) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle cso{3, 7};
     const SamplerParameters values = SamplerValues(0.0f, BorderColorForm::Float);
@@ -374,7 +353,6 @@ TEST(SamplerEmit, ADeleteDropsTheRecordAndAStaleNoticeIsCountedRatherThanSilentl
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
     MGPipeApplyDeleteSamplerState(SamplerHandle(MGPipeHandle{3, 8}));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 2u);
-#endif
 }
 
 // A sampler view is IDENTITY-addressed one per texture object, minted off that object's
@@ -383,9 +361,6 @@ TEST(SamplerEmit, ADeleteDropsTheRecordAndAStaleNoticeIsCountedRatherThanSilentl
 // lookups: the texture bit and the sampler bit are independent, so a view arriving without its
 // texture is an ordering fact and not a refusal.
 TEST(SamplerEmit, AViewIsReissuedOnTheSameHandleAndKeepsItsTexturesBackPointerInStep) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPipeHandle texture{5, 1};
     const MGPipeHandle view{9, 2};
@@ -418,7 +393,6 @@ TEST(SamplerEmit, AViewIsReissuedOnTheSameHandleAndKeepsItsTexturesBackPointerIn
         << "the texture kept a back-pointer to a view that is gone";
     MGPipeApplyDeleteSamplerView(ViewHandle(view));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
-#endif
 }
 
 // THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED: a set that names four units
@@ -426,9 +400,6 @@ TEST(SamplerEmit, AViewIsReissuedOnTheSameHandleAndKeepsItsTexturesBackPointerIn
 // never mentioned. Deleting the entry loop, the window gate or either serial bump leaves this
 // red.
 TEST(SamplerEmit, TheTwoUnitSetsLandInTheirWindowAndLeaveEverythingOutsideItAlone) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
 
     MGPBoundView views[2] = {};
@@ -476,16 +447,12 @@ TEST(SamplerEmit, TheTwoUnitSetsLandInTheirWindowAndLeaveEverythingOutsideItAlon
     EXPECT_EQ(MGPipeApplier().SamplerViewCount, 1u);
     EXPECT_EQ(MGPipeApplier().BoundSamplerViews[5].Texture, (MGPipeHandle{3, 1}))
         << "the entry outside the new window was cleared";
-#endif
 }
 
 // The window gate itself, at the bound and one past it, plus the null-tail arm. A header that
 // describes more than its destination can hold is the same class of fault as a blob outside
 // its segment, and the destination here is the merged 192-unit space.
 TEST(SamplerEmit, AUnitWindowPastTheMergedUnitSpaceIsRefusedRatherThanTruncated) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     MGPBoundView entry{};
     entry.Texture = MGPipeHandle{2, 1};
@@ -524,16 +491,12 @@ TEST(SamplerEmit, AUnitWindowPastTheMergedUnitSpaceIsRefusedRatherThanTruncated)
 
     EXPECT_EQ(MGPipeApplier().SamplerViewsSerial, serialBefore) << "a refused set moved the serial";
     EXPECT_EQ(MGPipeApplier().SamplerViewStart, kMGPipeMaxTextureUnits - 1);
-#endif
 }
 
 // D-J4 for this family: the CSO and the view are OBJECT records and survive a make-current;
 // the two unit sets are WORKING state and do not, and their serials advance rather than
 // restarting.
 TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStanding) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const SamplerParameters values = SamplerValues(3.0f, BorderColorForm::Float);
     MGPipeApplyCreateSamplerState(SamplerDesc(MGPipeHandle{2, 1}, 0), &values);
@@ -555,34 +518,8 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
     EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundSamplerViews[0].Texture));
     EXPECT_GT(MGPipeApplier().SamplerViewsSerial, viewsSerial);
     EXPECT_GT(MGPipeApplier().SamplerStatesSerial, statesSerial);
-#endif
 }
 
-#if !MOBILEGL_PIPE_PUSH
-// G2 requires the pull and push ctest name sets to be identical, name for name, so every
-// push-only case is present here and SKIPS rather than being absent.
-#define MGL_SAMPLER_EMIT_TEST_LIST(X)                                                              \
-    X(SamplerEmit, EverySamplerParameterFieldSurvivesTheBlobConversion)                             \
-    X(SamplerEmit, PaddingCannotChangeTheHash)                                                      \
-    X(SamplerEmit, TwoIdenticalSamplersShareOneCso)                                                 \
-    X(SamplerEmit, ABorderColorFormChangeAloneMintsANewCso)                                         \
-    X(SamplerEmit, AHashCollisionDoesNotAliasTwoSamplerStates)                                      \
-    X(SamplerEmit, AViewIsReIssuedOnTheSameHandleWhenItsRestrictionsMove)                           \
-    X(SamplerEmit, AnUnchangedTextureReIssuesNothing)                                               \
-    X(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted)                                           \
-    X(SamplerEmit, AnUnchangedSetEmitsNothing)                                                      \
-    X(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing)                                    \
-    X(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves)                                  \
-    X(SamplerEmit, AReferencedCsoIsNeverTheLruVictim)                                               \
-    X(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt)                              \
-    X(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed)                    \
-    X(SamplerEmit, AResolvedSamplerViewMarksItsTextureAsSamplerBound)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_SAMPLER_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 
 namespace {
     using GLContext = MG_State::GLState::GLContext;
@@ -1284,7 +1221,6 @@ namespace {
         GL::UseProgram(0);
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
@@ -1305,11 +1241,9 @@ int main(int argc, char** argv) {
     // the library's own, not a copy.
     g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
                                                       MobileGL::MG_Util::Debug::LogRole::Client);
-#if MOBILEGL_PIPE_PUSH
     // ONE process-wide context for the whole suite, because half these cases need a really
     // linked program and glslang lives behind this call. Each case uses GL names of its own.
     MobileGL::Initialize();
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

@@ -17,7 +17,6 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 // P5e (sb): the binding-point shutter cases drive the REAL glBindBufferBase entry point,
 // because the claim they make is about what a frontend mutator publishes.
@@ -36,7 +35,6 @@
 #include <cstring>
 #include <limits>
 #include <string>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -47,69 +45,6 @@ namespace {
         EXPECT_EQ(kMGPipeSubsystemsMigratedAtP2 & kMGPipeBehaviourNoCsoContentAddressing, 0ull);
     }
 
-#if !MOBILEGL_PIPE_PUSH
-    // G2 REQUIRES THE PULL AND PUSH CTEST NAME SETS TO BE IDENTICAL, name for name. A
-    // push-only case therefore cannot be ABSENT from a pull build; it has to be there and
-    // SKIP, which is the shape PipeInputsTest.cpp established for the same reason. This list
-    // declares exactly the suite.name pairs the push build gets from the real cases below, so
-    // a case added on one side and forgotten on the other shows up as a ctest-name diff
-    // rather than as a test that silently is not there.
-#define MGL_TRACKER_TEST_LIST(X) \
-    X(TrackerAggregates, EveryAggregateStartsAtZero) \
-    X(TrackerAggregates, AVertexArrayAttributeMovesOnlyTheVaoAggregate) \
-    X(TrackerAggregates, AFramebufferObjectWriteMovesOnlyTheFramebufferAggregate) \
-    X(TrackerAggregates, AFramebufferDefaultSetterMovesOnlyTheFramebufferAggregate) \
-    X(TrackerAggregates, ATextureContentWriteMovesOnlyTheContentAggregate) \
-    X(TrackerAggregates, ATextureParameterMovesOnlyTheParamsAggregate) \
-    X(TrackerAggregates, ASamplerParameterMovesOnlyTheParamsAggregate) \
-    X(TrackerAggregates, ABufferRespecifyMovesOnlyTheBufferAggregate) \
-    X(TrackerAggregates, AVertexAttribDefaultMovesOnlyItsOwnAggregate) \
-    X(TrackerAggregates, ANoteWithoutALiveContextIsANoOp) \
-    X(TrackerWalk, EveryBitHasAName) \
-    X(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) \
-    X(TrackerWalk, TheFirstWalkOnAFreshContextPublishesEverything) \
-    X(TrackerWalk, SteadyStateEmitsNothing) \
-    X(TrackerWalk, BlendToggleReusesTwoCsos) \
-    X(TrackerWalk, ViewportDoesNotMintACso) \
-    X(TrackerWalk, WrapAroundRePushesButNeverMisses) \
-    X(TrackerWalk, AggregateGenerationCatchesABoundTextureMoving) \
-    X(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) \
-    X(TrackerWalk, ThePixelPackShutterIsAByteCompareOfThePackHalfOnly) \
-    X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn) \
-    X(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) \
-    X(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) \
-    X(TrackerWalk, ABaseInstanceSurvivesTheFirstWalkOnAFreshContext) \
-    X(TrackerWalk, ASamplerBindAloneFiresTheSamplerStateBit) \
-    X(TrackerWalk, ARedundantDefaultBindStillPublishesAGrowingSamplerWindow) \
-    X(TrackerWalk, ARestagedProgramPipelineFiresTheProgramBits) \
-    X(TrackerWalk, ARelinkOfAStageProgramFiresTheProgramBits) \
-    X(TrackerWalk, UseProgramZeroLeavesTheBoundPipelineDrivingTheProgramBits) \
-    X(TrackerAggregates, ATextureStorageDefinitionMovesTheFramebufferAggregateToo) \
-    X(TrackerAggregates, ARenderbufferStorageDefinitionMovesTheFramebufferAggregate) \
-    X(TrackerWalk, AProgramSwitchAloneFiresTheSamplerViewBit) \
-    X(TrackerWalk, ATextureParameterAloneFiresTheSamplerViewBit) \
-    X(TrackerWalk, AProgramSwitchBetweenEqualImageUnitCountersFiresTheShaderImageBit) \
-    X(TrackerWalk, ARebindOfOneUniformPointToADifferentBufferFiresTheConstBufferBit) \
-    X(TrackerWalk, TheBindingPointBitsDoNotFireOnAnUnrelatedBufferWrite) \
-    X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
-    X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
-    X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
-    X(TrackerAttribPayload, TheSameNumbersWrittenThroughADifferentClassAreADifferentValue) \
-    X(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) \
-    X(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) \
-    X(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) \
-    X(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) \
-    X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) \
-    X(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) \
-    X(TrackerShippedEmitter, AFreshContextRepublishesEveryVertexAttributeDefault) \
-    X(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff) \
-    X(TrackerShippedEmitter, ABaseInstancedDrawAfterAMakeCurrentPublishesItsOwnBaseInstance)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_TRACKER_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
     using GLContext = MG_State::GLState::GLContext;
     
     using MG_State::GLState::TextureObjectBase;
@@ -1369,5 +1304,4 @@ namespace {
         MG_State::pGLContext = Move(parked);
     }
 
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace

@@ -15,9 +15,7 @@
 #include "Init.h"
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/PipeApply.h>
-#endif
 
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GetProcAddress.h>
@@ -1658,20 +1656,14 @@ namespace {
     struct ScopedBackendOps {
         explicit ScopedBackendOps(const MG_State::GLState::BufferBackendOps* ops) {
             MG_State::GLState::SetBufferBackendOps(ops);
-#if MOBILEGL_PIPE_PUSH
             m_savedResourceOps = MG_Pipe::MGPipeGetResourceOps();
             MG_Pipe::MGPipeSetResourceOps(nullptr);
-#endif
         }
         ~ScopedBackendOps() {
-#if MOBILEGL_PIPE_PUSH
             MG_Pipe::MGPipeSetResourceOps(m_savedResourceOps);
-#endif
             MG_State::GLState::SetBufferBackendOps(nullptr);
         }
-#if MOBILEGL_PIPE_PUSH
         const MG_Pipe::MGPipeResourceOps* m_savedResourceOps = nullptr;
-#endif
     };
 } // namespace
 

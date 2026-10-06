@@ -10,7 +10,6 @@
 
 #if !defined(__ANDROID__)
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_State/GLState/Core.h>
@@ -24,7 +23,6 @@
 #include <MG_Remote/Server/ServerLoop.h>
 #endif
 #define MGITEST_PIPE_APPLY_PEEK_LIVE 1
-#endif
 #endif
 
 namespace MGITest {

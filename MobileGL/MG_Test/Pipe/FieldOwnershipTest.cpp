@@ -40,14 +40,12 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Metrics/PipeStats.h>
-#endif
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -80,7 +78,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     using GLContext = MG_State::GLState::GLContext;
 
     // A live frontend context, restored on the way out so the cases stay independent - the
@@ -150,37 +147,8 @@ namespace {
         return "status " + std::to_string(r.Status);
     }
 #endif // MGTEST_HAVE_FORK
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
-#if !MOBILEGL_PIPE_PUSH
-
-TEST(FieldOwnershipTest, EveryFieldAndForwardIsInExactlyOneClass) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, TheClassSizesPartitionTheFieldSet) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-
-#else // MOBILEGL_PIPE_PUSH
 
 // ---------------------------------------------------------------------------------------
 // The arithmetic: the table partitions the field set. Runs in push, verify and split.
@@ -1094,7 +1062,6 @@ TEST_F(FieldOwnershipTest, DualBlockDoesNotArmUnderMonolithTransport) {
 
 #endif // MGTEST_HAVE_FORK
 #endif // MOBILEGL_BUILD_DISAGGREGATED
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

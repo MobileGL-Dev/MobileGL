@@ -8,9 +8,7 @@
 
 #pragma once
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/PipeFill.h>
-#endif
 
 namespace MobileGL::MG_Test {
     // "This test is standing inside verb X."
@@ -43,14 +41,9 @@ namespace MobileGL::MG_Test {
     class ScopedPipeVerb {
     public:
         explicit ScopedPipeVerb([[maybe_unused]] MG_Pipe::MGPipeVerb verb)
-#if MOBILEGL_PIPE_PUSH
             : m_verb(verb) {
             MG_Pipe::MGPipeValidateForVerb(m_verb);
         }
-#else
-        {
-        }
-#endif
 
         ScopedPipeVerb(const ScopedPipeVerb&) = delete;
         ScopedPipeVerb& operator=(const ScopedPipeVerb&) = delete;
@@ -59,12 +52,9 @@ namespace MobileGL::MG_Test {
         // again after the test moved frontend state sees the new values, the way the next GL
         // entry point's MGP_FILL would.
         void Renew() {
-#if MOBILEGL_PIPE_PUSH
             MG_Pipe::MGPipeValidateForVerb(m_verb);
-#endif
         }
 
-#if MOBILEGL_PIPE_PUSH
         // Leaving bumps the serial and puts the current verb back to "none": every field
         // this scope stamped goes stale, and a later test that forgets its own declaration
         // aborts with "<Field>@<none>" rather than with the name of a verb it never issued.
@@ -74,6 +64,5 @@ namespace MobileGL::MG_Test {
 
     private:
         MG_Pipe::MGPipeVerb m_verb;
-#endif
     };
 } // namespace MobileGL::MG_Test

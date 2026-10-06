@@ -49,7 +49,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include "Init.h"
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
@@ -71,7 +70,6 @@
 // crosses under split, and the record holds one; the round-trip case below drives it directly.
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_State/GLState/Core.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -87,7 +85,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     // `from` is a byte offset, and it exists because of the fork below: the library's log file
     // is already open by the time a case runs, so the child's lines are APPENDED to it rather
     // than written to a fresh file, and only what the child appended is this drive's evidence.
@@ -188,18 +185,13 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder.
 TEST(ProgramEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
-#if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeProgramEmitterInstance(), &MGPipeProgramEmitterInstance());
     EXPECT_TRUE(kMGPipeWiredProgramSubsystem == 0 ||
                 kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
-#endif
 }
 
 // =========================================================================================
@@ -209,7 +201,6 @@ TEST(ProgramEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // the client package's and lands beside these.
 // =========================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     using MG_State::GLState::LinkArtifacts;
     using MG_State::GLState::SpirvArtifacts;
@@ -246,16 +237,12 @@ namespace {
         return MGPipeApplier().ShaderCsos[slot];
     }
 } // namespace
-#endif
 
 // A create starts the record over and leaves Serial at 0; a RE-ISSUE on the same handle is how
 // a relink travels, and it takes the default uniform block with it - a block sized to a layout
 // that no longer exists is worse than no block, and the sentinel is the value that says
 // "nothing has been uploaded for this program".
 TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKeyedToTheOldLayout) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -293,15 +280,11 @@ TEST(ProgramEmit, ACreateStoresTheDescriptorAndARelinkCountsUpAndDropsTheBlockKe
     EXPECT_EQ(ProgramRecordOf(5).Gen, 3u);
     EXPECT_EQ(ProgramRecordOf(5).Serial, 0u) << "a recycled slot kept its predecessor's serial";
     EXPECT_EQ(ProgramRecordOf(5).Desc.StageMask, 0x1u);
-#endif
 }
 
 // The three refusals a create can produce: no artefacts at all behind seven undeclared blobs, a
 // default uniform block no program can have, and a slot outside the record table's bound.
 TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedNamingTheProgram) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -329,16 +312,12 @@ TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedN
                         });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos.empty());
-#endif
 }
 
 // Three bindings, one serial, and each of them follows its OWN handle: set_draw_program and
 // set_dispatch_program are two calls because the frontend has two joins. A null handle is legal
 // and means "nothing bound"; a dead one leaves the previous binding standing and is counted.
 TEST(ProgramEmit, TheThreeBindingsFollowTheirOwnHandleAndADeadOneLeavesThePreviousBindingStanding) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -373,16 +352,12 @@ TEST(ProgramEmit, TheThreeBindingsFollowTheirOwnHandleAndADeadOneLeavesThePrevio
     EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().DrawProgram));
     EXPECT_EQ(MGPipeApplier().ProgramBindingSerial, serialBefore + 4);
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, refusedBefore + 3) << "a null bind was counted as a refusal";
-#endif
 }
 
 // A delete drops the record whole, keeps the generation, and clears EVERY binding that named
 // it - unlike the unit sets, which are "the last set as received". A binding left pointing at a
 // dropped record would make the next verb refuse a state the applier itself created.
 TEST(ProgramEmit, ADeleteDropsTheRecordAndClearsEveryBindingThatNamedIt) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -410,16 +385,12 @@ TEST(ProgramEmit, ADeleteDropsTheRecordAndClearsEveryBindingThatNamedIt) {
     MGPipeApplyDeleteShaderState(ProgramHandle(cso));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
     EXPECT_EQ(MGPipeApplier().ProgramBindingSerial, serialAfter);
-#endif
 }
 
 // The default uniform block lands on the PROGRAM's record - it is (ShaderCso, Version) keyed
 // and belongs to the program, not to the context that uploaded it - and the length it is held
 // to is the program's own GlobalUboSize, which the create already bounded.
 TEST(ProgramEmit, TheDefaultUniformBlockLandsOnTheProgramsRecordAndTheSentinelIsRefused) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -462,16 +433,12 @@ TEST(ProgramEmit, TheDefaultUniformBlockLandsOnTheProgramsRecordAndTheSentinelIs
     // And a block for a program this applier does not have is the ordinary counted refusal.
     MGPipeApplySetGlobalConstants(GlobalConstants(MGPipeHandle{7, 2}, 15), block);
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u);
-#endif
 }
 
 // D-J4 for this family: the program record is share-group state and survives a make-current -
 // re-emitting create_shader_state for a record the applier still holds would move its serial
 // for nothing - while the three bindings are working state and do not.
 TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -500,30 +467,8 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
 
     MGPipeApplierReleaseObjectRecords();
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
-#endif
 }
 
-#if !MOBILEGL_PIPE_PUSH
-// G2 requires the pull and push ctest name sets to be identical, name for name.
-#define MGL_PROGRAM_EMIT_TEST_LIST(X)                                                              \
-    X(ProgramEmit, TheStageMaskComesFromTheLinkedSnapshotAndNotTheAttachList)                       \
-    X(ProgramEmit, TheNeverUploadedSentinelIsNeverEmitted)                                          \
-    X(ProgramEmit, TheEmitterJoinsAndTheTrackerDoesNot)                                             \
-    X(ProgramEmit, AReLinkReIssuesOnTheSameHandle)                                                  \
-    X(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots)                                \
-    X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)                                             \
-    X(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock)                                    \
-    X(ProgramEmit, ADeadProgramsRecordLatchIsRetiredAtItsDeath)                                     \
-    X(ProgramEmit, AUniformBlockBindingAfterTheLinkTravelsOnItsOwnRecord)                           \
-    X(ProgramEmit, TheThreeBindingTailsAreWholeSetsAndAReIssuedCreateDropsThem)                     \
-    X(ProgramEmit, AFailedRelinkReIssuesWithLinkStatusZeroAndNeverAnObjectDeath)                    \
-    X(ProgramEmit, TheFramedArchiveRoundTripsWithTheStageOfEveryModule)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_PROGRAM_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
@@ -1004,7 +949,6 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         EXPECT_TRUE(refused.Spirv.generatedSpirv.empty());
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
@@ -1025,9 +969,7 @@ int main(int argc, char** argv) {
     // the library's own, not a copy.
     g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
                                                       MobileGL::MG_Util::Debug::LogRole::Client);
-#if MOBILEGL_PIPE_PUSH
     MobileGL::Initialize();
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

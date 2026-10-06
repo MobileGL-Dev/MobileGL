@@ -30,12 +30,10 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_State/GLState/Core.h>
-#endif
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -68,7 +66,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     using GLContext = MG_State::GLState::GLContext;
 
     // A live frontend context for the filler to read (SanityTest's idiom), restored on the
@@ -130,58 +127,8 @@ namespace {
         return "status " + std::to_string(r.Status);
     }
 #endif // MGTEST_HAVE_FORK
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
-#if !MOBILEGL_PIPE_PUSH
-
-TEST(PipeInputsTest,OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,ReadingAnOmittedFieldAbortsNamingTheVerb) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,ReadingAFilledFieldCompletes) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,ReadingBeforeAnyFillAbortsNamingNoVerb) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,CorruptedSnapshotFieldIsNamedWithItsSerial) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,EveryVerbFillsItsClassAndNothingElse) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,MutatedFieldIsNamedAtRead) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,PoisonOmitKnobArmsTheOmission) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,BadPoisonOmitKnobIsFatalNamingTheKnob) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,VerifyCorruptKnobNamesTheFieldAtEntry) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,BadVerifyCorruptKnobIsFatalNamingTheKnob) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,VerifyFatalOffLogsTheDivergenceAndContinues) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,AFrontendMutationInsideAVerbRefreshesThePushedField) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,TheMutationNoticeRefreshesTheValueButNotTheStamp) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-TEST(PipeInputsTest,AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
-    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-}
-
-#else // MOBILEGL_PIPE_PUSH
 
 // Negative control B, layer 1 (P1 brief D6 / G5): the omitted (verb, field) pair is the
 // ONLY thing that goes stale - every other bit of the verb class's mask is fresh, every
@@ -621,7 +568,6 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
 #endif
 }
 
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

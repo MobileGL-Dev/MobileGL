@@ -57,7 +57,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
 // invisible in a push build (where it really is 0) and in a verify build (where
@@ -75,7 +74,6 @@
 #include <MG_State/GLState/TextureState/TextureObject2DCube.h>
 
 #include <algorithm>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -91,7 +89,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     std::string ReadLog() {
         // BOTH ROLES' LOGS (P6). A death test asserts that the CHILD said something; which
         // role's thread said it is not what these cases are about, and refusals raised on the
@@ -196,7 +193,6 @@ namespace {
         state.Color[0].Kind = 1;
         return state;
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // The one case the contract commit lands, and it is not a placeholder: it pins the SHAPE every
@@ -206,16 +202,12 @@ namespace {
 // frontend's own teardown into a pipe whose allocator has already been destroyed. One
 // allocation for the life of the process, no destructor to lose.
 TEST(FramebufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
-#if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeFramebufferEmitterInstance(), &MGPipeFramebufferEmitterInstance());
     // And the family's wired-subsystem constant is either 0 or its own bit and nothing else.
     // It is 0 until this family's emitter has a body; the OR in PipeFill.cpp is what turns it
     // into the switch, so a header that set the wrong bit would switch the wrong family on.
     EXPECT_TRUE(kMGPipeWiredFramebufferSubsystem == 0 ||
                 kMGPipeWiredFramebufferSubsystem == kMGPipeSubsystemFramebuffer);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
-#endif
 }
 
 // ============================================================================
@@ -228,30 +220,6 @@ TEST(FramebufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // conversion copying exactly one member (MGPSurface::Layered) and expects this suite to go red
 // NAMING that field, and a case that reported only "the records differ" could not answer it.
 // ============================================================================
-#if !MOBILEGL_PIPE_PUSH
-#define MGL_FRAMEBUFFER_EMIT_CLIENT_TEST_LIST(X)                                                   \
-    X(FramebufferEmit, EveryRecordsReadSurfaceComesFromItsOwnFramebuffersReadBuffer)               \
-    X(FramebufferEmit, OneObjectBoundToBothTargetsEmitsOneRecordWithTargetBoth)                    \
-    X(FramebufferEmit, ADrawBufferChangeAloneStillMovesTheContentHash)                             \
-    X(FramebufferEmit, ARecycledFramebufferHandleIsNeverSuppressedAgainstItsPredecessor)           \
-    X(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion)                           \
-    X(FramebufferEmit, AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated)                    \
-    X(FramebufferEmit, ARestoragedAttachedRenderbufferPublishesItsNewExtent)                       \
-    X(FramebufferEmit, AnUnchangedBindingPairEmitsNothing)                                         \
-    X(FramebufferEmit, AFramebufferHandedOverByNameGetsANamedRecordWithoutMovingABinding)          \
-    X(FramebufferEmit, ANamedRecordIsSuppressedPerObjectAndNeverAgainstABoundRecord)               \
-    X(FramebufferEmit, ADrawBufferTokenAboveTheWireWidthIsRefusedNotTruncated)                     \
-    X(FramebufferEmit, ALayeredCubeAttachmentDoesNotAssertAFaceItCannotKnow)                       \
-    X(FramebufferEmit, EveryNonTexturePointCarriesTheUnknownSentinelsRatherThanZero)              \
-    X(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired)                                 \
-    X(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)                \
-    X(FramebufferEmit, ADefaultFramebufferResizeReEmitsTheRecordWithItsNewExtent)                    X(FramebufferEmit, TheDefaultFramebuffersRecordNamesNoSurfaceAShareGroupWouldHaveToHold)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_FRAMEBUFFER_EMIT_CLIENT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 namespace {
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::FramebufferObject;
@@ -968,7 +936,6 @@ TEST(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired) {
     EXPECT_FALSE(Framebuffers().NamedRecordIsLatched(handle))
         << "the dead framebuffer's Named latch survived its death";
 }
-#endif // MOBILEGL_PIPE_PUSH
 
 // =========================================================================================
 // The APPLIER's half of set_framebuffer_state (the wire commits'). The emitter's half - the
@@ -982,9 +949,6 @@ TEST(FramebufferEmit, ADeadFramebuffersNamedRecordLatchIsRetired) {
 // Both is one object bound to both and writes both. Deleting either store, or the serial bump,
 // leaves this red.
 TEST(FramebufferEmit, ADrawRecordAndAReadRecordAreKeptApartAndBothWritesBoth) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const Uint64 serialAtStart = MGPipeApplier().FramebufferSerial;
 
@@ -1029,16 +993,12 @@ TEST(FramebufferEmit, ADrawRecordAndAReadRecordAreKeptApartAndBothWritesBoth) {
     // A framebuffer has a handle but NO wire lifetime, so there is no record to refuse against
     // and this entry point never counts an object refusal.
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
-#endif
 }
 
 // A target outside the FOUR is not a target this server has, and guessing one would put a
 // draw's attachments into the read binding or the other way round. Named (3) is legal since
 // ID-19(b) and has its own case below; the first refused value is the one above it.
 TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     MGPFramebufferState bad = FramebufferRecord(MGPipeHandle{7, 4}, MGPipeFramebufferTarget::Draw, 100);
     bad.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Count);
@@ -1053,16 +1013,12 @@ TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
         << "a refused record was written into the per-object table anyway";
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore)
         << "a refused record must not move the serial";
-#endif
 }
 
 // The draw-buffer array is an INDEX into this record's own Color[], and -1 is NONE. An entry
 // outside that range would have the server read a colour attachment the record does not carry,
 // which is the truncation the wire width's cap refusal exists to prevent upstream.
 TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherThanRead) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
 
     // The positive control first: -1 everywhere and the last legal index are both fine, so
@@ -1089,7 +1045,6 @@ TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherTh
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u) << "a refused record was stored anyway";
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore);
-#endif
 }
 
 // D-J4, as ID-19(b) leaves it. The two framebuffer BINDINGS are per-context working state and a
@@ -1100,9 +1055,6 @@ TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherTh
 // already stamped into a twin that outlived the switch is not a generation at all. Restoring
 // `= 0` anywhere in the reset, or clearing the table there, leaves this red.
 TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherThanZeroingIt) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Both, 100));
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
@@ -1126,7 +1078,6 @@ TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherTha
     const Uint64 afterReset = MGPipeApplier().FramebufferSerial;
     MGPipeApplierReleaseObjectRecords();
     EXPECT_GT(MGPipeApplier().FramebufferSerial, afterReset);
-#endif
 }
 
 // THE TEARDOWN SCOPE DROPS THE OBJECT RECORDS, SO IT MUST DROP EVERY WORKING HANDLE THAT NAMES
@@ -1137,9 +1088,6 @@ TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherTha
 // re-mints - resolves onto somebody else's record. Deleting any one of the eleven clears in
 // MGPipeApplierReleaseObjectRecords leaves this red.
 TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatCouldNameThem) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Both, 100));
 
@@ -1186,7 +1134,6 @@ TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatC
     EXPECT_EQ(MGPipeApplier().ShaderImageStart, 0u);
     EXPECT_EQ(MGPipeApplier().ShaderImageCount, 0u);
     EXPECT_EQ(MGPipeApplier().BoundShaderImages[2].Res, kMGPipeNullHandle);
-#endif
 }
 
 // ID-19's CORRECTION, AND THE CASE THAT SAYS WHAT THE FOURTH TARGET IS FOR. Every DSA entry
@@ -1197,9 +1144,6 @@ TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatC
 // about the bindings: the record is written and addressable by handle, and BoundFramebuffer
 // does not move. Making the Named arm touch either binding leaves this red.
 TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEitherBinding) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     // TWO DIFFERENT FRAMEBUFFERS ON THE TWO BINDINGS FIRST, so "the bindings did not move" is an
     // assertion about values rather than about null.
@@ -1243,7 +1187,6 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 400u);
     EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Fbo, (MGPipeHandle{5, 2}));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
-#endif
 }
 
 // STALE-GENERATION REFUSAL, ON THE ONE TABLE WHOSE OBJECT HAS NO WIRE LIFETIME. A framebuffer is
@@ -1254,9 +1197,6 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
 // reach it is an emitter defect, and it is counted APART from RefusedObjectCalls because this is
 // a read by the server's own sync path and not a call the applier refused.
 TEST(FramebufferEmit, AFramebufferHandleWhoseGenerationHasMovedOnIsRefusedRatherThanAnswered) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{12, 1}, MGPipeFramebufferTarget::Draw, 100));
     ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 1}), nullptr);
@@ -1284,7 +1224,6 @@ TEST(FramebufferEmit, AFramebufferHandleWhoseGenerationHasMovedOnIsRefusedRather
         << "an unbound binding or an undescribed slot was counted as a stale generation";
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u)
         << "the framebuffer family may never move the object-refusal counter";
-#endif
 }
 
 // THE TWO REFUSALS THE PER-OBJECT TABLE ADDED. The null handle is what "nothing is bound" reads
@@ -1294,9 +1233,6 @@ TEST(FramebufferEmit, AFramebufferHandleWhoseGenerationHasMovedOnIsRefusedRather
 // describes - kMGPipeDefaultFramebuffer {0,1} for the default one - so neither value is
 // producible by a correct client, which is why both are Fatal rather than counted refusals.
 TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherThanStored) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     // The positive control first: the DEFAULT framebuffer is slot 0 at generation 1 and is
     // perfectly legal, so what follows refuses the null handle and not slot 0.
@@ -1326,7 +1262,6 @@ TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherTh
     EXPECT_LT(MGPipeApplier().FramebufferRecords.size(),
               static_cast<SizeT>(kMGPipeMaxFramebufferSlots))
         << "an out-of-range slot resized the table instead of being refused";
-#endif
 }
 
 int main(int argc, char** argv) {
@@ -1344,7 +1279,6 @@ int main(int argc, char** argv) {
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
 #endif
-#if MOBILEGL_PIPE_PUSH
     // ID-39: A BACKEND IS PRESENT, for the whole binary. Since ID-39 every P4a-family entry
     // point in MG_Pipe/PipeApply.cpp declines a record - and the client's gate in
     // MG_Impl/Pipe/PipeFill.cpp emits none at all - when no backend has registered
@@ -1357,7 +1291,6 @@ int main(int argc, char** argv) {
     // itself are pinned in ResourceEmitTest and TextureEmitTest.
     static const MGPipeResourceOps kConsumerPresent{};
     MGPipeSetResourceOps(&kConsumerPresent);
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

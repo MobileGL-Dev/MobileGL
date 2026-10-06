@@ -40,10 +40,8 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHandles.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h>
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Backend/DirectVulkan/Renderer/MagmaProgramSource.h>
 #endif
@@ -51,22 +49,6 @@
 using namespace MobileGL;
 
 namespace {
-#if !MOBILEGL_PIPE_PUSH
-    // The push build's case list, declared once so a case added on one side and forgotten on
-    // the other shows up as a ctest-name diff rather than as a test that silently is not there
-    // (the shape CsoCacheTest.cpp established).
-#define MGL_MAGMA_PIPE_IDENTITY_TEST_LIST(X)                             \
-    X(MagmaPipeIdentityTest, AnIdleSlotIsRetiredAndReusedWithANewGeneration)  \
-    X(MagmaPipeIdentityTest, AReusedSlotDoesNotServeItsPredecessorsMemo)      \
-    X(MagmaPipeIdentityTest, TheAbaControlKnobServesTheStaleMemoAcrossAReusedSlot) \
-    X(MagmaPipeIdentityTest, ALiveObjectKeepsItsSlotItsGenerationAndItsMemo)             \
-    X(MagmaPipeIdentityTest, AMagmaServerNeverPublishesTheRunAheadCapBit)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_MAGMA_PIPE_IDENTITY_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
     using namespace MobileGL::MG_Backend::DirectVulkan;
     using MG_Pipe::MGPipeHandle;
 
@@ -244,7 +226,6 @@ namespace {
         static_assert(static_cast<Uint64>(MG_Pipe::kCapRunAheadApply) == (1ull << 10),
                       "kCapRunAheadApply moved bit; CONTRACT-P5E table 0 names bit 10");
     }
-#endif // MOBILEGL_PIPE_PUSH
 
     TEST(MagmaProgramSourceTest, ServerBindingTailsReplaceLinkTimeDefaults) {
 #if MOBILEGL_BUILD_DISAGGREGATED

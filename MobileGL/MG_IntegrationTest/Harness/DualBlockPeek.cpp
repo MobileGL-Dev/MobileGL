@@ -10,7 +10,6 @@
 
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK) && !defined(__ANDROID__)
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 // The serials live behind FilledState(), which exists only where the poison build flag is on -
@@ -18,7 +17,6 @@
 // disaggregated build always has it (MOBILEGL_BUILD_DISAGGREGATED is one of its three arms).
 #if MOBILEGL_PIPE_POISON
 #define MGITEST_DUAL_BLOCK_PEEK_LIVE 1
-#endif
 #endif
 #endif
 

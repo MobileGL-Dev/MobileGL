@@ -26,14 +26,12 @@
 // P4a: MGPipeUnmigratedEmulation's declaration, and the applier's records the catalogue's size
 // pins now reach. Push-only, like the translation unit that defines them - in a pull build the
 // symbol does not exist and the one case that calls it is compiled out.
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
 // P5 R-17: the routing that INSTALLS the two tables. Included here so that the installation
 // case below states the partition deterministically rather than depending on whether some
 // other object in this particular test binary happened to drag the installer in.
 #include <MG_Pipe/PipeRoute.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -186,7 +184,6 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
 TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     const void* const* screen = reinterpret_cast<const void* const*>(&gMGPipeScreen);
     const void* const* context = reinterpret_cast<const void* const*>(&gMGPipeContext);
-#if MOBILEGL_PIPE_PUSH
     MGPipeInstallMonolithTables();
     // The 41 rows with no MGPipeApply* body are still null, and null still means "this
     // subsystem has not been migrated, keep pulling". Named rather than counted, because the
@@ -213,12 +210,6 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
     // tails are validated, but there is no MGPipeApplySetProgramBindings and no route - package
     // pg installs both. A null here is the contract, not an omission.
     EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
-#else
-    // A pull build compiles no applier and no routing, so the pre-migration statement is the
-    // whole truth there and this case is the one that says so.
-    for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) EXPECT_EQ(screen[i], nullptr) << i;
-    for (SizeT i = 0; i < kMGPipeContextCallCount; ++i) EXPECT_EQ(context[i], nullptr) << i;
-#endif
     (void)screen;
     (void)context;
 }
@@ -229,14 +220,12 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     SizeT installed = 0;
     SizeT nulls = 0;
 
-#if MOBILEGL_PIPE_PUSH
     // IDEMPOTENT, and called here on purpose: what this case observes is WHICH rows the
     // installer fills, not whether an installer ran somewhere in this binary. Leaving that to
     // ambient linkage is what made the same assertion pass in one build directory and fail in
     // another - the object file carrying a static initialiser was dropped by the linker in the
     // binaries that did not name a symbol in it.
     MGPipeInstallMonolithTables();
-#endif
 
     for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) {
         if (screen[i] != nullptr) ++installed; else ++nulls;
@@ -246,7 +235,6 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     }
     EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
 
-#if MOBILEGL_PIPE_PUSH
     // 35 + 5 = 40, and the split is the honest shape of R-17 rather than an implementation
     // detail: 40 is the number of MGPipeApply* entry points PipeApply.h declares WITH A BODY
     // (37 at P5, P5c rv's set_context_values was the 38th, P5e sb's set_shader_buffers is the
@@ -304,12 +292,6 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     // P5e's set_program_bindings (CONTRACT-P5E.md §1): catalogued with a null route until pg
     // installs the applier entry point and the adapter beside it.
     EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
-#else
-    // A pull build compiles no applier and no routing, so the pre-migration statement is still
-    // the whole truth there.
-    EXPECT_EQ(installed, 0u);
-    EXPECT_EQ(nulls, static_cast<SizeT>(kMGPipeCallCount));
-#endif
 }
 
 // The retirement ratchet of the migration carrier (section 6.3): the constant and the
@@ -1498,11 +1480,9 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
             EXPECT_STRNE(kNames[i], kNames[j]);
         }
     }
-#if MOBILEGL_PIPE_PUSH
     // In monolith it really is a no-op: calling it changes nothing and returns nothing. The
     // teeth are a split server's, and the call site is what P8 gives them to.
     for (const char* name : kNames) MGPipeUnmigratedEmulation(name);
-#endif
 }
 
 // THE ShaderCso COMPOSITE BAND IS A SECOND SPACE, AND THE ALLOCATOR REPORTS IT SEPARATELY.
@@ -1521,7 +1501,6 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
 // This case pins both halves: a leaked COMPOSITE moves the band's marks and not the ordinary
 // one, and an ordinary leak still moves the ordinary mark with a composite outstanding.
 TEST(PipeCatalogue, TheCompositeShaderBandIsCountedApartFromTheOrdinarySpace) {
-#if MOBILEGL_PIPE_PUSH
     MGPipeSlotAllocator slots;
 
     const Uint32 ordinaryBefore = slots.HighWater(MGPipeKind::ShaderCso);
@@ -1561,7 +1540,4 @@ TEST(PipeCatalogue, TheCompositeShaderBandIsCountedApartFromTheOrdinarySpace) {
     EXPECT_EQ(slots.CompositeHighWater(), kMGPipeShaderCsoCompositeSlotBase + 1u);
     EXPECT_EQ(slots.HighWater(MGPipeKind::ShaderCso), ordinaryHighWater);
     EXPECT_EQ(slots.LiveCount(MGPipeKind::ShaderCso), 1u);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client slot allocator in a pull build";
-#endif
 }

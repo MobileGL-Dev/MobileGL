@@ -747,7 +747,6 @@ namespace {
         return clear;
     }
 
-#if MOBILEGL_PIPE_PUSH
     // PH-5's RAW-PEER CONTROL, MADE TO DISCRIMINATE. What PH-5 changed (ProgramArtifactsCodec.cpp
     // TakeCount, 1ae7474d) is the CHARGE for a vector count: it used to be one byte per element
     // (`count <= Remaining()`), and PH-5 charges each element its minimum encoded size before the
@@ -804,7 +803,6 @@ namespace {
             return Note(r, "prlimit(RLIMIT_AS) write failed"), false;
         return true;
     }
-#endif
 
     constexpr Uint8 kCreateWindowSurface = static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface);
 
@@ -1364,7 +1362,6 @@ namespace {
              r.applied = Emit(c, P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)) ? 1 : 0;
              return true;
          }},
-#if MOBILEGL_PIPE_PUSH
         // PH-5. Its file is the codec's, not PipeWireCodec.cpp's: the line it ends on is the
         // decoder's CreateShaderState.Reflection latch, but what it CONTROLS is TakeCount's
         // element charge (see ArchiveWhoseCountOnlyTheByteBoundAdmits), so the site map does
@@ -1383,7 +1380,6 @@ namespace {
              d.Reflection = c.Encoder().StageBytes(archive.data(), archive.size());
              return Forge(c, r, P::MGPWireOp::CreateShaderState, Bytes(d));
          }},
-#endif
         {"D11StagedRunPastTheLevelBound", "StagedTextureStore.h", "StagedTextureStore.CopyRunInto",
          Outcome::Fatal, "Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {

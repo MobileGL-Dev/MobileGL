@@ -10,10 +10,8 @@
 
 #if !defined(__ANDROID__)
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Util/Metrics/PipeStats.h>
 #define MGITEST_WIRE_INDIRECT_PEEK_LIVE 1
-#endif
 #endif
 
 namespace MGITest {

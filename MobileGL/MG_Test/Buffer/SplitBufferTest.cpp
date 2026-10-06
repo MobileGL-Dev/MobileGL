@@ -23,9 +23,7 @@
 #include <MG_State/GLState/TextureState/TextureState.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Backend/DirectGLES/Managers.h>
-#endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Client/GpuWritePending.h>
@@ -811,7 +809,6 @@ TEST(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDoes
 // (a SEG_STAGE snapshot that no longer matches the queued range).
 // =====================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     using MobileGL::MG_Backend::DirectGLES::BufferImpl::InvalidateFlushAccessFor;
     using MobileGL::MG_Backend::DirectGLES::BufferImpl::kEsprytInvalidateRangeMinBytes;
@@ -871,17 +868,3 @@ TEST(EsprytFlushLadder, APartialRangeDoesNotOvertakeAQueuedRingCopy) {
               static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
         << "the whole-buffer orphan-map rewrites every byte from the shadow the copies were taken from";
 }
-#else
-// The same six names in a pull build, for the G2/G14 reason above: the ladder's push arm
-// (FlushPendingRangesFrom) is the only one that carries this decision as a function - the pull
-// arm's FlushPendingRangesNow is byte-frozen against 5cb826b0 (ID-15) and may not grow one.
-#define MGL_PUSH_ONLY_OR_SKIP()                                                                    \
-    GTEST_SKIP() << "the three-tier ladder's push arm (FlushPendingRangesFrom) is what carries "    \
-                    "InvalidateFlushAccessFor; a pull build compiles the frozen arm instead"
-TEST(EsprytFlushLadder, AWholeBufferRangeOrphansTheStore) { MGL_PUSH_ONLY_OR_SKIP(); }
-TEST(EsprytFlushLadder, ALargePartialRangeInvalidatesExactlyThatRange) { MGL_PUSH_ONLY_OR_SKIP(); }
-TEST(EsprytFlushLadder, ASmallPartialRangeFallsThroughToTheStagingRing) { MGL_PUSH_ONLY_OR_SKIP(); }
-TEST(EsprytFlushLadder, AMapWiderThanTheQueuedRangeRefusesTierOne) { MGL_PUSH_ONLY_OR_SKIP(); }
-TEST(EsprytFlushLadder, AnEmptyRangeIsNeverTierOne) { MGL_PUSH_ONLY_OR_SKIP(); }
-TEST(EsprytFlushLadder, APartialRangeDoesNotOvertakeAQueuedRingCopy) { MGL_PUSH_ONLY_OR_SKIP(); }
-#endif // MOBILEGL_PIPE_PUSH

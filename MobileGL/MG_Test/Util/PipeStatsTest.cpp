@@ -134,19 +134,15 @@ namespace {
         PS::Init();
 
         for (Uint32 i = 0; i < 5; ++i) {
-#if MOBILEGL_PIPE_PUSH
             PS::PublishGauge(PS::Gauge::ServerWaits, static_cast<Uint64>(100 * (i + 1)));
-#endif
             PS::OnPresent();
         }
         EXPECT_EQ(PS::FrameCount(), 5u);
-#if MOBILEGL_PIPE_PUSH
         // The gauge is a RUN TOTAL: publishing five increasing values leaves the last one,
         // never their sum. This is the mistake the report's first aggregation script made.
         // Gauges are push-only (gate G1, see PipeStats.h); the pull flavour keeps the case
         // registered for name parity and asserts only the window arithmetic above.
         EXPECT_EQ(PS::GaugeValue(PS::Gauge::ServerWaits), 500u);
-#endif
 
         MobileGL::MG_Config::Features.PipeStatsPeriod = saved;
         PS::Init();
@@ -268,7 +264,6 @@ namespace {
         }
         EXPECT_NE(line.find("gates["), String::npos) << line;
         EXPECT_NE(line.find("tex[emit="), String::npos) << line;
-#if MOBILEGL_PIPE_PUSH
         // P2's two render-state CSO counters ride the same line, short-named. Push-only:
         // the pull build has no CSO to mint and must stay symbol-identical.
         EXPECT_NE(line.find("cso[csom="), String::npos) << line;
@@ -311,7 +306,6 @@ namespace {
         EXPECT_NE(line.find(" wlivepk="), String::npos) << line;
         EXPECT_NE(line.find(" wdefpk="), String::npos) << line;
         EXPECT_NE(line.find(" wdefsync="), String::npos) << line;
-#endif
     }
 
     // Per-frame fields carry two decimals for the same reason acc/draw does: they are small
@@ -329,7 +323,6 @@ namespace {
         EXPECT_NE(line.find("buf=97.14"), String::npos) << line;
     }
 
-#if MOBILEGL_PIPE_PUSH
     // P6 GATE 8's TWO NUMBERS (CONTRACT-P6.md §9 item 8), and each half is pinned because each
     // half is a way the deliverable can be wrong without looking wrong.
     //
@@ -435,7 +428,6 @@ namespace {
                   json.find("\"staged-blob-bytes-histogram\""))
             << json;
     }
-#endif
 
     // Successive summaries report WINDOWS, not run totals: a run total over a workload that
     // changes shape (load, then steady state) averages away the very number section 2.3.1
@@ -536,7 +528,6 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageIndirectCmd), "stage-indirect-cmd");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::PersistentMapPush), "persistent-map-push");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::ResidualValueBlock), "residual-value-block");
-#if MOBILEGL_PIPE_PUSH
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoMints), "render-state-cso-mints");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoBinds), "render-state-cso-binds");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::MapPersistentRoundtrips), "map-persistent-roundtrips");
@@ -556,7 +547,6 @@ namespace {
         // MEASUREMENTS.md entry will quote.
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageSegmentBytes), "stage-segment-bytes");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireRecords), "wire-records");
-#endif
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytUnitBindingsEpoch), "espryt-unit-bindings-epoch");
@@ -575,7 +565,6 @@ namespace {
         EXPECT_EQ(PS::FrameCount(), PS::SummaryFramePeriod());
     }
 
-#if MOBILEGL_PIPE_PUSH
     // P8-D: the Magma wire arm's indirect-draw bracket. Its short names are what the create
     // fixtures' measurement (notes/p8/D.md) reads off the server's line, and its long names are
     // what Harness/WireIndirectPeek.cpp's readers expect in the JSON dump.
@@ -594,5 +583,4 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireHostWaitsIndirect), "wire-host-waits-indirect");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireHostWaitMicros), "wire-host-wait-us");
     }
-#endif
 } // namespace

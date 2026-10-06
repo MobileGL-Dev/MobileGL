@@ -60,14 +60,12 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/RenderState/RenderState.h>
 #include <MG_Test/ScopedPipeVerb.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -94,7 +92,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     using MG_State::GLState::RenderState;
     using GLContext = MG_State::GLState::GLContext;
 
@@ -223,15 +220,11 @@ namespace {
             << "the assembled working block is not byte-identical to the live one - a chunk of "
                "RenderStateParameters is not being carried, and Espryt reads those bytes raw";
     }
-#endif // MOBILEGL_PIPE_PUSH
 
     // -------------------------------------------------------------------------------------
     // 1. The table itself.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, ChunkTablePartitionsTheBlock) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         // Sorted, non-overlapping and complete. That is already a static_assert in
         // MGPipeRenderStateSpans.h - a gap there is a build break, not a red test - and the
         // point of re-asserting it at run time is that a reader of the suite sees the
@@ -316,16 +309,12 @@ namespace {
                                          sizeof(StencilFaceState) - offsetof(StencilFaceState, FailOp)))
                 << "stencil face " << face << ": the three ops must be pipeline";
         }
-#endif
     }
 
     // -------------------------------------------------------------------------------------
     // 2. G7 itself: the setter walk.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, SetterConsistency) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         RenderState rs;
 
         // Drives one setter and asserts the G7 invariant on it. The m_version expectation is
@@ -555,16 +544,12 @@ namespace {
             EXPECT_EQ(pipelineBefore, rs.GetPipelineStateVersion());
             EXPECT_EQ(hashBefore, MGPipeComputePipelineSubsetHash(rs.GetAllParameters()));
         }
-#endif
     }
 
     // -------------------------------------------------------------------------------------
     // 3. D5's derivations against the getters they were transcribed from.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, DerivationMatchesTheFrontendGetters) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         // A live frontend context for the setters to write and the getters to answer from,
         // restored on the way out so the case stays independent (SanityTest's idiom).
         struct ContextGuard {
@@ -714,16 +699,12 @@ namespace {
             EXPECT_EQ(gPipeInputs.GetClampReadColor(), ctx.GetClampReadColor());
             EXPECT_EQ(gPipeInputs.GetClampReadColor(), static_cast<GLenum>(GL_FALSE));
         }
-#endif
     }
 
     // -------------------------------------------------------------------------------------
     // 4. Magma's DynamicTailKey against the dynamic half.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, DynamicChunksCoverMagmasDynamicTailKey) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         // The complete GL-state input inventory of ApplyDynamicDrawStateTail, transcribed
         // from the comment above `struct DynamicTailKey`
         // (MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp). extentX/extentY/
@@ -769,7 +750,6 @@ namespace {
                "scissorEnabled input and this expectation both need re-reading";
         EXPECT_TRUE(IsWhollyPipeline(offsetof(RenderStateParameters, ScissorTestEnabledMask),
                                      sizeof(RenderStateParameters::ScissorTestEnabledMask)));
-#endif
     }
 
     // -------------------------------------------------------------------------------------
@@ -782,9 +762,6 @@ namespace {
     //    so cannot tell a correctly scoped guard from one that is too narrow.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, IncrementalChunksKeepEveryDerivedFieldInStep) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         struct ContextGuard {
             SharedPtr<GLContext> Previous;
             ContextGuard() : Previous(Move(MG_State::pGLContext)) {
@@ -928,7 +905,6 @@ namespace {
             ctx.SetCapability(cap, !ctx.IsCapabilityEnabled(cap));
             push(("step 9: capability " + std::to_string(i)).c_str());
         }
-#endif
     }
 
     // =====================================================================================
@@ -944,7 +920,6 @@ namespace {
     //    Neither is skipped anywhere, so `ctest -R Residual` reaches the wire and not only
     //    the static_asserts.
     // =====================================================================================
-#if MOBILEGL_PIPE_PUSH
     constexpr SizeT kCapCount = static_cast<SizeT>(CapabilityInput::CapabilityInputCount);
 
     // A live frontend context and a clean applier, restored on the way out (SanityTest's
@@ -1062,7 +1037,6 @@ namespace {
         return "status " + std::to_string(r.Status);
     }
 #endif // MGTEST_HAVE_FORK
-#endif // MOBILEGL_PIPE_PUSH
 
     // -------------------------------------------------------------------------------------
     // 6a. The residual trip wire is SILENT until the applier owns the bytes it would compare.
@@ -1073,9 +1047,6 @@ namespace {
     //     with it means nothing. An earlier form of this wire aborted here.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, ResidualTripWireIsSilentUntilTheApplierOwnsTheBytes) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
         Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
@@ -1116,7 +1087,6 @@ namespace {
         MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
         EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
         EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-#endif
     }
 
     // -------------------------------------------------------------------------------------
@@ -1130,9 +1100,6 @@ namespace {
     //     current. This is the case that pins the class contract shut.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, ResidualTripWireHoldsAcrossAVerbClassThatDoesNotPublishTheBlock) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
         Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
@@ -1151,16 +1118,12 @@ namespace {
         }
         EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
         EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-#endif
     }
 
     // -------------------------------------------------------------------------------------
     // 6c. The armed wire FIRES, naming the capability. The red half of 6a/6b.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, ResidualTripWireFiresNamingTheCapability) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
         Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
@@ -1187,7 +1150,6 @@ namespace {
         EXPECT_NE(ReadLog().substr(before.size()).find("PipeResidualDiverged, \"Dither\""), std::string::npos)
             << "the wire counted a divergence without logging which capability";
 #endif
-#endif
     }
 
     // -------------------------------------------------------------------------------------
@@ -1196,9 +1158,6 @@ namespace {
     //     which a `==` comparison would call a divergence.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, PatchCarrierTripWireFiresOnlyWhenTheApplierOwnsChunkP0) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
         Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
@@ -1239,7 +1198,6 @@ namespace {
         EXPECT_EQ(MGPipeApplier().PatchCarrierDivergences, 1u);
         EXPECT_NE(ReadLog().substr(before.size()).find("PipePatchCarriersDiffer"), std::string::npos);
 #endif
-#endif
     }
 
     // -------------------------------------------------------------------------------------
@@ -1248,9 +1206,6 @@ namespace {
     //     calls it, and this is what says it still answers what the scoped form answers.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, WholeBlockDerivationAgreesWithTheChunkScopedOne) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
         MG_Test::ScopedPipeVerb verb(MGPipeVerb::DrawArrays);
@@ -1268,7 +1223,6 @@ namespace {
 
         MGPipeDeriveRenderStateFields(gPipeInputs);
         ExpectDerivedDrawFieldsMatch(ctx, "the whole-block derivation");
-#endif
     }
 
     // -------------------------------------------------------------------------------------
@@ -1277,9 +1231,6 @@ namespace {
     //     fill table is still the only thing that says what a verb may read.
     // -------------------------------------------------------------------------------------
     TEST(RenderStateSpans, TheRemainingApplyEntryPointsReachPipeInputs) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         ApplierContextGuard guard;
         GLContext& ctx = *MG_State::pGLContext;
 
@@ -1356,7 +1307,6 @@ namespace {
             EXPECT_EQ(MGPipeApplier().RenderStateCsos[slot].Gen, 0u);
             EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundRenderStateCso));
         }
-#endif
     }
 } // namespace
 

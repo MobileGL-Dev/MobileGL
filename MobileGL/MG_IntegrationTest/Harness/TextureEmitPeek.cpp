@@ -10,10 +10,8 @@
 
 #if !defined(__ANDROID__)
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/TextureEmit.h>
 #define MGITEST_TEXTURE_EMIT_PEEK_LIVE 1
-#endif
 #endif
 
 namespace MGITest {

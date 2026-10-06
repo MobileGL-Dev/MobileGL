@@ -49,7 +49,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include "Init.h"
 #include <Config.h>
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere else,
@@ -66,7 +65,6 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_State/GLState/Core.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -83,25 +81,6 @@ namespace {
     }
 } // namespace
 
-#if !MOBILEGL_PIPE_PUSH
-namespace {
-    // G2/G14: the pull build gets the same ctest names, skipping.
-#define MGL_SHADER_BUFFER_EMIT_TEST_LIST(X)                                                        \
-    X(ShaderBufferEmit, TheEmitterIsOneNeverDestroyedProcessSingleton)                              \
-    X(ShaderBufferEmit, AnUntouchedClassEmitsNothingWithoutHashing)                                 \
-    X(ShaderBufferEmit, ABaseBindingTravelsAsWholeBufferAndARangeBindingTravelsResolved)            \
-    X(ShaderBufferEmit, OnlyTheWritableClassesSetAMaskAndItReachesTheLastPoint)                     \
-    X(ShaderBufferEmit, EachClassLatchesItsOwnSuppressorSlot)                                       \
-    X(ShaderBufferEmit, TheAppliedWindowIsPerClassAndTheSerialMovesOnEveryRecord)                   \
-    X(ShaderBufferEmit, AWindowPastTheCapacityOrAnUnknownClassIsRefusedRatherThanStored)            \
-    X(ShaderBufferEmit, AResetApplierCarriesNoBindingPointStateOverAndTheSerialAdvances)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_SHADER_BUFFER_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-} // namespace
-#else
 
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
@@ -485,7 +464,6 @@ namespace {
             << "ADVANCED, never zeroed: no value this counter has handed a twin may come back";
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
@@ -506,9 +484,7 @@ int main(int argc, char** argv) {
     // the library's own, not a copy.
     g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
                                                       MobileGL::MG_Util::Debug::LogRole::Client);
-#if MOBILEGL_PIPE_PUSH
     MobileGL::Initialize();
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

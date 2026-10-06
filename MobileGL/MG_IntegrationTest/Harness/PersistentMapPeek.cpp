@@ -30,7 +30,7 @@
 namespace MGITest {
 
     bool PeekSeparateClientMapStats(unsigned long long* acquisitions, unsigned long long* pushedBytes) {
-#if defined(MGITEST_PERSISTENT_MAP_PEEK_LIVE) && MOBILEGL_BUILD_DISAGGREGATED && MOBILEGL_PIPE_PUSH
+#if defined(MGITEST_PERSISTENT_MAP_PEEK_LIVE) && MOBILEGL_BUILD_DISAGGREGATED
         if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn) return false;
         namespace Stats = MobileGL::MG_Util::PipeStats;
         *acquisitions = Stats::TotalCalls(Stats::CallClass::MapPersistentRoundtrips);

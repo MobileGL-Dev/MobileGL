@@ -43,12 +43,9 @@
 #endif
 
 #include "Includes.h"
-#if MOBILEGL_PIPE_PUSH
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
-#endif
 
 using namespace MobileGL;
-#if MOBILEGL_PIPE_PUSH
 using namespace MobileGL::MG_State::GLState;
 
 namespace {
@@ -236,14 +233,12 @@ namespace {
         return spirv;
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 // The round trip, field by field. A re-encode equality alone would prove the codec is
 // self-consistent and nothing else - a field it skips in BOTH directions round-trips
 // perfectly - so the members are read back explicitly first, and the byte comparison is the
 // catch-all underneath them.
 TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
-#if MOBILEGL_PIPE_PUSH
     const LinkArtifacts link = MakeLinkArtifacts();
     const SpirvArtifacts spirv = MakeSpirvArtifacts();
 
@@ -324,9 +319,6 @@ TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
     Vector<Uint8> reencoded;
     EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
     EXPECT_EQ(reencoded, bytes);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // A COMPACT archive - one whose wire form is SMALLER than its in-memory form - is still an archive
@@ -339,7 +331,6 @@ TEST(ProgramArtifactsCodec, RoundTripsAFullyPopulatedArchive) {
 // charge put back to sizeof(Element): the decode answers false. Each case's ASSERT_LT is the
 // fixture's own proof that it can go red that way.
 TEST(ProgramArtifactsCodec, ACompactArchiveOfTenShortXfbNamesRoundTrips) {
-#if MOBILEGL_PIPE_PUSH
     {
         LinkArtifacts link{};
         link.xfbInterfaceNames = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"};
@@ -364,15 +355,11 @@ TEST(ProgramArtifactsCodec, ACompactArchiveOfTenShortXfbNamesRoundTrips) {
         EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
         EXPECT_EQ(reencoded, bytes);
     }
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // The same compact shape one level down: a Vector<Vector<unsigned>> element (one SPIR-V module) is
 // its u64 count on the wire when empty and a 24-byte object in memory.
 TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
-#if MOBILEGL_PIPE_PUSH
     {
         SpirvArtifacts spirv{};
         spirv.generatedSpirv.resize(10);
@@ -393,16 +380,12 @@ TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
         EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
         EXPECT_EQ(reencoded, bytes);
     }
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // Negative control 1. Every prefix length is checked against the bytes that REMAIN, so a
 // stream cut anywhere has to come back false with both outputs defaulted - never a partially
 // filled archive, and never a resize driven by a count the stream cannot back.
 TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
-#if MOBILEGL_PIPE_PUSH
     Vector<Uint8> bytes;
     EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
     ASSERT_GT(bytes.size(), 64u);
@@ -428,9 +411,6 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
     LinkArtifacts link;
     SpirvArtifacts spirv;
     EXPECT_FALSE(DecodeProgramArtifacts(withTail.data(), withTail.size(), link, spirv));
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // A count is not permission to reserve a container larger than the bytes left in the
@@ -441,7 +421,6 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
 // out of bytes, so the decode is false either way. ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize
 // is the case that goes red.)
 TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveBytes) {
-#if MOBILEGL_PIPE_PUSH
     Vector<Uint8> bytes;
     EncodeProgramArtifacts(LinkArtifacts{}, SpirvArtifacts{}, bytes);
     constexpr SizeT countOffset = sizeof(Uint32) + sizeof(Uint64);
@@ -462,9 +441,6 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
     EXPECT_FALSE(DecodeProgramArtifacts(bytes.data(), bytes.size(), link, spirv));
     EXPECT_TRUE(link.uniformReflection.empty());
     EXPECT_TRUE(spirv.generatedSpirv.empty());
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // PH-5's DISCRIMINATING control (P7 F2 latch). The case above cannot fail on PH-5's account: its
@@ -479,7 +455,7 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
 // resizes to Remaining() elements of sizeof(UniformReflection) each, far past the headroom, and
 // the child dies of std::bad_alloc. The same shape crosses the wire in PeerLatchTest's
 // D11ArchiveVectorCount row.
-#if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
+#if !defined(_WIN32)
 namespace {
     [[noreturn]] void DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit() {
         Vector<Uint8> bytes;
@@ -512,7 +488,7 @@ namespace {
 #endif
 
 TEST(ProgramArtifactsCodec, ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize) {
-#if MOBILEGL_PIPE_PUSH && !defined(_WIN32)
+#if !defined(_WIN32)
     EXPECT_EXIT(DecodeACountOnlyTheByteBoundAdmitsUnderACapAndExit(), ::testing::ExitedWithCode(0), ".*")
         << "std::bad_alloc escaping the child is the resize PH-5 exists to refuse: the vector count was "
            "charged one byte per element instead of its minimum encoded size; exit 3 is a decode that "
@@ -525,7 +501,6 @@ TEST(ProgramArtifactsCodec, ACountOnlyTheByteBoundAdmitsIsRefusedBeforeItsResize
 // Negative control 2: both the version and schema word must refuse mismatches.
 // Monolith v1 retains the old native-size echo in that second word.
 TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
-#if MOBILEGL_PIPE_PUSH
     Vector<Uint8> bytes;
     EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
     ASSERT_GT(bytes.size(), 12u);
@@ -547,9 +522,6 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 
     // A null pointer is refused rather than dereferenced.
     EXPECT_FALSE(DecodeProgramArtifacts(nullptr, 0, link, spirv));
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 // The codec walks the VisitFields tables and nothing else, so what those tables visit IS the
@@ -557,7 +529,6 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 // TProgram, which is null for every archived instance by construction and points into an arena
 // no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
 TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
-#if MOBILEGL_PIPE_PUSH
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
     // storageBlocks, which exists only in this build (ProgramArtifacts.h guards it so the pull
@@ -571,13 +542,10 @@ TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<XfbVarying>(), 11u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<TypeFacts>(), 20u);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: the archive codec is push-only";
-#endif
 }
 
 TEST(ProgramArtifactsCodec, PortableHeaderUsesWireSchemaRatherThanNativeContainerSize) {
-#if MOBILEGL_PIPE_PUSH && MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_DISAGGREGATED
     Vector<Uint8> bytes;
     EncodeProgramArtifacts(MakeLinkArtifacts(), MakeSpirvArtifacts(), bytes);
     ASSERT_GT(bytes.size(), 12u);

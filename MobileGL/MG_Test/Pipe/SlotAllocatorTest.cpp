@@ -36,10 +36,8 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -55,9 +53,6 @@ namespace {
     }
 
     TEST(SlotAllocator, GenMovesOnlyOnSlotReuse) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         MGPipeSlotAllocator allocator;
 
         const MGPipeHandle first = allocator.Allocate(MGPipeKind::Buffer);
@@ -100,13 +95,9 @@ namespace {
         EXPECT_EQ(texture.Gen, 0u);
         EXPECT_TRUE(allocator.IsLive(MGPipeKind::Texture, texture));
         EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, reused));
-#endif
     }
 
     TEST(SlotAllocator, FreedSlotComesBackBeforeHighWaterGrows) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         MGPipeSlotAllocator allocator;
 
         MGPipeHandle handles[8];
@@ -139,13 +130,9 @@ namespace {
         EXPECT_EQ(allocator.HighWater(MGPipeKind::Framebuffer), 0u);
         EXPECT_EQ(allocator.LiveCount(MGPipeKind::Framebuffer), 0u);
         EXPECT_EQ(allocator.FreeCount(MGPipeKind::Framebuffer), 0u);
-#endif
     }
 
     TEST(SlotAllocator, SlotZeroIsNeverHandedOut) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         MGPipeSlotAllocator allocator;
         for (SizeT kindIndex = 1; kindIndex < MGPipeSlotAllocator::kKindCount; ++kindIndex) {
             const MGPipeKind kind = static_cast<MGPipeKind>(kindIndex);
@@ -162,13 +149,9 @@ namespace {
         // Freeing a slot never puts 0 on the free list, so a churned kind still starts at 1.
         const MGPipeHandle again = allocator.Allocate(MGPipeKind::Buffer);
         EXPECT_EQ(again.Slot, kMGPipeFirstAllocatableSlot);
-#endif
     }
 
     TEST(SlotAllocator, LifetimeIdSurvivesARecycledAddress) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         using MG_State::GLState::VertexArrayObject;
 
         // The allocation must actually happen: C++ permits eliding a new/delete pair, and an
@@ -242,13 +225,9 @@ namespace {
         // merely unlikely.
         EXPECT_FALSE(sharp.IsLive(MGPipeKind::VertexElementsCso, first));
         EXPECT_TRUE(sharp.IsLive(MGPipeKind::VertexElementsCso, second));
-#endif
     }
 
     TEST(SlotAllocator, CompositeShaderBandIsNeverHandedOut) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#else
         MGPipeSlotAllocator allocator;
         // Ordinary programs walk the low slots and never enter the band.
         for (int i = 0; i < 8; ++i) {
@@ -287,6 +266,5 @@ namespace {
         EXPECT_TRUE(MGPipeHandleIsNull(allocator.Allocate(MGPipeKind::ShaderCso)))
             << "the allocator handed out a composite-band slot instead of refusing";
 #endif // the DEBUG guard on the exhaustion arm
-#endif // MOBILEGL_PIPE_PUSH
     }
 } // namespace

@@ -55,7 +55,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
@@ -79,7 +78,6 @@
 #endif
 
 #include <vector>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -112,9 +110,6 @@ namespace {
     // It is also the negative control for the registration itself. A Set that did not stick
     // would leave the family permanently dark, and nothing else in the tree would say so.
     TEST(ResourceEmit, TheResourceOpTableIsUnregisteredUntilABackendInstallsOne) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ASSERT_EQ(MGPipeGetResourceOps(), nullptr)
             << "something registered a resource op table in a unit-test process";
 
@@ -129,7 +124,6 @@ namespace {
 
         MGPipeSetResourceOps(nullptr);
         EXPECT_EQ(MGPipeGetResourceOps(), nullptr);
-#endif
     }
 
     // =====================================================================================
@@ -149,7 +143,6 @@ namespace {
     // the split is contiguous, non-overlapping and reassembles has a pinned bound to split at.
     // =====================================================================================
 
-#if MOBILEGL_PIPE_PUSH
     // A fresh applier per case, and no table left installed behind one. Every case is its own
     // process under ctest, so this is belt and braces - but running the binary by hand must
     // give the same answers as running it under ctest, or a failure cannot be reproduced.
@@ -319,15 +312,11 @@ namespace {
         return "status " + std::to_string(r.Status);
     }
 #endif // MGTEST_HAVE_FORK
-#endif // MOBILEGL_PIPE_PUSH
 
     // A create is emitted from the buffer object's CONSTRUCTOR, so it defines no storage and
     // is not a mutation: it says a resource of this identity exists. Slot 0 is the reserved
     // null handle and never becomes live, whatever a record says.
     TEST(ResourceEmit, ACreateMarksTheSlotLiveAndCarriesItsDescriptor) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{7, 3};
         MGPipeApplyResourceCreate(BufferDesc(res, 0, 41));
@@ -349,16 +338,12 @@ namespace {
         // And the reserved handle is refused rather than made live.
         MGPipeApplyResourceCreate(BufferDesc(kMGPipeNullHandle, 4096, 0));
         EXPECT_FALSE(MGPipeApplier().Resources[0].Live);
-#endif
     }
 
     // The serial is the server-owned MGGen the backend twin compares against instead of
     // mirroring a frontend change serial. Exactly the four mutations move it; a readback and a
     // persistent-map acquisition do not, because neither changes what is in the store.
     TEST(ResourceEmit, ARespecifyReplacesTheDescriptorAndOnlyAMutationMovesTheSerial) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{7, 3};
         const Uint8 bytes[64] = {};
@@ -398,7 +383,6 @@ namespace {
         EXPECT_EQ(RecordOf(res.Slot).Serial, 5u);
         MGPipeApplyMapPersistent(BufferHandle(res), 512, bytes);
         EXPECT_EQ(RecordOf(res.Slot).Serial, 5u);
-#endif
     }
 
     // A destroy drops the record and keeps the generation, because the CLIENT allocator owns
@@ -406,9 +390,6 @@ namespace {
     // afterwards is nothing at all - including after the slot has been handed out again, which
     // is the ABA shape a raw address cannot express.
     TEST(ResourceEmit, ADestroyDropsTheRecordAndAStaleGenerationResolvesToNothing) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle first{7, 3};
         MGPipeApplyResourceCreate(BufferDesc(first, 0, 41));
@@ -445,7 +426,6 @@ namespace {
         EXPECT_EQ(RecordOf(second.Slot).Desc.Width, 0u);
         EXPECT_EQ(RecordOf(second.Slot).Desc.GlNameForDiag, 99u);
         EXPECT_EQ(RecordOf(second.Slot).Serial, 0u);
-#endif
     }
 
     // HasLiveHostWrites is ALWAYS false in this phase and is written by nobody: it exists so
@@ -453,9 +433,6 @@ namespace {
     // and a verify build refuses to let a producer land under it unannounced. This case walks
     // every path this phase has and pins that none of them is one.
     TEST(ResourceEmit, NoResourcePathInThisPhaseLeavesHostWritesLive) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{2, 1};
         const Uint8 bytes[64] = {};
@@ -485,7 +462,6 @@ namespace {
         // TheObjectRecordsSurviveAMakeCurrentAndOnlyTheWorkingStateIsReset.)
         MGPipeApplierReleaseObjectRecords();
         EXPECT_TRUE(MGPipeApplier().Resources.empty());
-#endif
     }
 
     // The buffer half of MGPSubData is a convention over a texture record's box, and
@@ -531,9 +507,6 @@ namespace {
     // lets the client half land without changing a single observable - and every one of them
     // hands the backend a HANDLE and a payload, never a frontend object.
     TEST(ResourceEmit, EveryResourceCallDispatchesByHandleThroughTheInstalledTableOnly) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{4, 9};
         const Uint8 bytes[64] = {};
@@ -586,7 +559,6 @@ namespace {
         MGPipeApplyResourceSubData(BufferWrite(res, 0, 64), bytes);
         EXPECT_EQ(g_spy.SubDatas, 1u);
         EXPECT_EQ(RecordOf(res.Slot).Serial, 5u);
-#endif
     }
 
     // map-persistent-roundtrips counts every ACQUISITION ATTEMPT, mint or decline, because
@@ -595,9 +567,6 @@ namespace {
     // defined this way the number is the same in both modes, is one per storage definition,
     // and is assertable today.
     TEST(ResourceEmit, MapPersistentCountsEveryAttemptWhetherItMintsOrDeclines) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{3, 2};
         const Uint8 bytes[64] = {};
@@ -629,7 +598,6 @@ namespace {
         // Per context, like every other member of the applier's state.
         MGPipeApplierReset();
         EXPECT_EQ(MGPipeApplier().MapPersistentRoundtrips, 0u);
-#endif
     }
 
     // THE BOUNDS GATE, AND THE REASON IT IS A TRIP WIRE RATHER THAN A DROPPED CALL: a record
@@ -643,9 +611,6 @@ namespace {
     // on from a defined state, so that build asserts the same line plus the fact that the
     // refused write moved nothing.
     TEST(ResourceEmit, AWriteOutsideTheDeclaredStorageIsRefusedNamingTheResource) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{7, 3};
         const Uint8 bytes[256] = {};
@@ -683,7 +648,6 @@ namespace {
                   std::string::npos)
             << "the gate refused the write without saying which record it was";
 #endif
-#endif
     }
 
     // =====================================================================================
@@ -702,7 +666,6 @@ namespace {
     // arm all have a case here that fails by field or by name when they are removed.
     // =====================================================================================
 
-#if MOBILEGL_PIPE_PUSH
     MGPHandleOnly ElementsHandle(MGPipeHandle cso) {
         return MGPHandleOnly{cso, static_cast<Uint32>(MGPipeKind::VertexElementsCso), 0};
     }
@@ -821,7 +784,6 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 
     // C1. A make-current is NOT a teardown. MGPipeApplierReset runs at every change of the
     // current context - including a make-current back to a context that is still alive - and a
@@ -830,9 +792,6 @@ namespace {
     // storage after it, and the write that follows must land rather than resolve to nothing.
     // Only the applier's own teardown takes the records.
     TEST(ResourceEmit, TheObjectRecordsSurviveAMakeCurrentAndOnlyTheWorkingStateIsReset) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{7, 3};
         const MGPipeHandle cso{2, 1};
@@ -891,7 +850,6 @@ namespace {
         EXPECT_TRUE(MGPipeApplier().Resources.empty());
         EXPECT_TRUE(MGPipeApplier().VertexElementsCsos.empty());
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
-#endif
     }
 
     // C1's observable. A call that names a record this applier does not have is a DEFINED
@@ -901,9 +859,6 @@ namespace {
     // what all three gate builds and every shipped build are, so a no-op alone would make a
     // dropped glBufferSubData invisible everywhere it matters. It is counted instead.
     TEST(ResourceEmit, ACallOnARecordTheApplierDoesNotHaveIsCountedRatherThanSilentlyDropped) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{7, 3};
         const MGPipeHandle cso{2, 1};
@@ -965,16 +920,12 @@ namespace {
         MGPipeApplierReset();
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
         EXPECT_EQ(MGPipeApplier().RefusedVertexInputCalls, 0u);
-#endif
     }
 
     // The blob unpack, over ALL 32 attribute and 32 binding-point slots, and the shrink that
     // has to leave nothing of the configuration before it. Deleting either memcpy, or the two
     // zeroing lines that precede them, fails this case by field name.
     TEST(ResourceEmit, AVertexElementsBlobRoundTripsAndAShrinkLeavesNothingOfTheOneBeforeIt) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle cso{3, 1};
         const ElementsBlob full = MakeElements(cso, kMGPipeMaxVertexAttribs, kMGPipeMaxVertexAttribs, true);
@@ -1019,16 +970,12 @@ namespace {
         EXPECT_EQ(ElementsOf(recycled.Slot).Gen, recycled.Gen);
         EXPECT_EQ(ElementsOf(recycled.Slot).ContentSerial, 1u) << "a recycled slot starts over";
         EXPECT_EQ(ElementsOf(recycled.Slot).AttributeCount, 1u);
-#endif
     }
 
     // The counts/blob gate, in both build arms, plus the half of the Blob rule that says a
     // record which declares NO length is not a fault: 0 means "this record does not declare
     // its blob", which is what a monolith emission is, and the counts are what bound the read.
     TEST(ResourceEmit, AVertexElementsRecordThatDoesNotDescribeItsOwnBlobIsRefusedNamingIt) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle cso{5, 2};
 
@@ -1068,16 +1015,12 @@ namespace {
                             });
         EXPECT_EQ(ElementsOf(cso.Slot).ContentSerial, 2u);
         EXPECT_EQ(ElementsOf(cso.Slot).AttributeCount, 3u);
-#endif
     }
 
     // set_vertex_buffers: the window is the bound, the entries land inside it and nowhere
     // else, and the base instance is stored RAW. Deleting the copy loop, or the window gate,
     // fails this case.
     TEST(ResourceEmit, TheVertexBufferWindowIsBoundedAndItsEntriesLandWhereItSays) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         Array<MGPVertexBuffer, kMGPipeMaxVertexAttribs> wide{};
         for (Uint32 i = 0; i < kMGPipeMaxVertexAttribs; ++i) {
@@ -1146,16 +1089,12 @@ namespace {
                             "entries",
                             [&noEntries]() { MGPipeApplySetVertexBuffers(noEntries, nullptr); });
         EXPECT_EQ(MGPipeApplier().VertexBuffersSerial, serialBefore + 2);
-#endif
     }
 
     // set_index_buffer is an INDEPENDENT call and not a subset of the vertex-elements
     // configuration (D5), which is exactly what the backend's two separate compares need; and
     // the binding follows the handle, including the null one.
     TEST(ResourceEmit, SetIndexBufferMovesOnlyItsOwnSerialAndTheBindingFollowsTheHandle) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle cso{4, 1};
         const ElementsBlob elements = MakeElements(cso, 2, 1, true);
@@ -1200,7 +1139,6 @@ namespace {
         EXPECT_EQ(ElementsOf(cso.Slot).ContentSerial, 0u) << "0 means never created";
         EXPECT_EQ(ElementsOf(cso.Slot).AttributeCount, 0u);
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
-#endif
     }
 
     // The three refusals the sub-data case above does not reach, each on the call that owns
@@ -1208,9 +1146,6 @@ namespace {
     // and a buffer write whose declared blob length is not its own byte size. Removing any one
     // of those four gates leaves this case red.
     TEST(ResourceEmit, EveryContentCallsOwnBoundsGateRefusesAndNamesTheResource) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{6, 2};
         const Uint8 bytes[256] = {};
@@ -1250,7 +1185,6 @@ namespace {
                             "the record's own byte size",
                             [&lyingBlob, &bytes]() { MGPipeApplyResourceSubData(lyingBlob, bytes); });
         EXPECT_EQ(RecordOf(res.Slot).Serial, 3u) << "not one of the four refusals may move the serial";
-#endif
     }
 
     // D-A4's pin, with the producer this phase does not have. NoResourcePathInThisPhaseLeaves
@@ -1260,14 +1194,7 @@ namespace {
     // flag is set here by hand, which is exactly what the phase that pushes persistent-mapped
     // host writes will do, and map_persistent is the call it will do it on.
     TEST(ResourceEmit, TheLiveHostWritesWireFiresOnTheCallAPersistentMapProducerWouldSetItOn) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-        // MOBILEGL_PIPE_VERIFY alone, NOT `POISON || VERIFY`. PinNoLiveHostWrites is compiled
-        // under `#if MOBILEGL_PIPE_VERIFY` only (PipeApply.cpp:838-853), so in a split build -
-        // where POISON is armed by MOBILEGL_BUILD_DISAGGREGATED but VERIFY is off - the wire
-        // genuinely is compiled out and this case must skip. The wrong disjunction was masked
-        // until now by POISON being invisible in this TU at all (see the include at the top).
-#elif !MOBILEGL_PIPE_VERIFY
+#if !MOBILEGL_PIPE_VERIFY
         GTEST_SKIP() << "Fatal{PipeLiveHostWrites} is a MOBILEGL_PIPE_VERIFY wire and is compiled out here";
         // P5 b1: AND IT IS RETIRED IN A SPLIT BUILD, because this is the phase the wire was
         // waiting for. "HasLiveHostWrites is always false and is written by nobody" cannot
@@ -1355,7 +1282,6 @@ namespace {
     // The helpers are MOBILEGL_PIPE_PUSH-only, like the applier they read: a pull build compiles
     // these two cases as skips (gate G2 keeps the names in every build), and MGPipeApplier() is
     // not declared there.
-#if MOBILEGL_PIPE_PUSH
     MGPResourceDesc Tex2DDesc(MGPipeHandle res, Uint32 extent, Uint32 levels, Uint32 glName) {
         MGPResourceDesc desc{};
         desc.Resource = res;
@@ -1396,15 +1322,11 @@ namespace {
         }
         return false;
     }
-#endif // MOBILEGL_PIPE_PUSH
 
     // THE POSITIVE. A per-level producer that covers its declared range is accepted, and the
     // accumulated texels of every OTHER level survive it - which is the thing the pin was
     // standing in front of, checked rather than asserted.
     TEST(ResourceEmit, APerLevelRespecifyCoveringItsDeclaredRangeKeepsTheOtherLevelsTexels) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         ScopedResourceOps consumer;
 
@@ -1433,7 +1355,6 @@ namespace {
             << "the level the call DID redefine has a new coordinate system, so its box goes";
         EXPECT_EQ(ReadLog().find("PipeRespecifyScope"), std::string::npos)
             << "the relaxed pin must be silent on a producer that covers its declaration";
-#endif
     }
 
     // THE NEGATIVE, and it is the whole reason the pin is relaxed rather than deleted. A
@@ -1442,9 +1363,7 @@ namespace {
     // naming a different pair erases the wrong key and keeps the one the client stopped owing.
     // Neither is visible as anything but missing pixels one frame later.
     TEST(ResourceEmit, APerLevelRespecifyThatDoesNotCoverItsDeclaredRangeIsRefusedByName) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#elif !MOBILEGL_PIPE_VERIFY
+#if !MOBILEGL_PIPE_VERIFY
         // MOBILEGL_PIPE_VERIFY alone, NOT `POISON || VERIFY`, for PinNoLiveHostWrites' reason
         // above: PinRespecifyScopeCoversItsDeclaration is compiled under `#if
         // MOBILEGL_PIPE_VERIFY` only, so in a plain split build the wire genuinely is compiled
@@ -1500,9 +1419,6 @@ namespace {
     // policed like every other: a slot outside the table's bound is Fatal{ProtocolCorruption}
     // and never a resize. Removing the bound turns this case into a multi-gigabyte allocation.
     TEST(ResourceEmit, ASlotOutsideTheRecordTablesBoundIsRefusedRatherThanAllocated) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         // An ordinary slot is ordinary, and the table grows to it and no further.
         const MGPipeHandle ordinary{9, 1};
@@ -1532,7 +1448,6 @@ namespace {
                             "table's bound",
                             [&desc, blobBytes]() { MGPipeApplyCreateVertexElements(desc, blobBytes); });
         EXPECT_TRUE(MGPipeApplier().VertexElementsCsos.empty());
-#endif
     }
 
     // =====================================================================================
@@ -1547,7 +1462,6 @@ namespace {
     // TextureEmitTest beside the emitter cases it belongs with.
     // =====================================================================================
 
-#if MOBILEGL_PIPE_PUSH
     MGPResourceDesc TargetedDesc(MGPipeHandle res, MGPipeResourceTarget target, Uint32 width, Uint32 glName) {
         MGPResourceDesc desc = BufferDesc(res, width, glName);
         desc.Target = static_cast<Uint8>(target);
@@ -1557,15 +1471,11 @@ namespace {
     MGPHandleOnly KindHandle(MGPipeHandle res, MGPipeKind kind) {
         return MGPHandleOnly{res, static_cast<Uint32>(kind), 0};
     }
-#endif
 
     // ONE SLOT NUMBER, THREE LIVE OBJECTS, THREE RECORDS. This is the case that fails the
     // instant the applier goes back to one table: every assertion below is about slot 7 being
     // three different things at once, which is exactly what the client allocator hands out.
     TEST(ResourceEmit, TheThreeResourceKindsKeepTheirOwnSlotSpaceAndDoNotSeeEachOther) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         // The texture and renderbuffer rows below are P4a's, and P4a's belt declines those on a
         // backend that consumes none of them (ID-39) - so this case says which arm it is about.
@@ -1605,7 +1515,6 @@ namespace {
         EXPECT_TRUE(MGPipeApplier().Resources[7].Live) << "a texture destroy dropped the buffer's record";
         EXPECT_TRUE(MGPipeApplier().RenderbufferResources[7].Live);
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
-#endif
     }
 
     // ID-39: THE APPLIER'S HALF OF THE "NO CONSUMER" RULE, over every P4a-family entry point.
@@ -1629,9 +1538,6 @@ namespace {
     // THE DEATH PATHS ARE DELIBERATELY NOT IN THE LIST and the second half of the case says so:
     // a destroy is idempotent cleanup that must keep working whatever the registration did.
     TEST(ResourceEmit, EveryP4aFamilyEntryPointDeclinesWhenNoBackendRegisteredTheConsumer) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard; // leaves the table UNREGISTERED, which is this half's whole point
         ASSERT_EQ(MGPipeGetResourceOps(), nullptr);
 
@@ -1794,16 +1700,12 @@ namespace {
             EXPECT_FALSE(MGPipeApplier().ShaderCsos[9].Live);
             EXPECT_FALSE(MGPipeApplier().TextureResources[7].Live);
         }
-#endif
     }
 
     // Neither branch may fall through to a table it was not named. A target or a kind outside
     // the catalogue would otherwise land in whichever table the code happened to reach first,
     // and destroy a live object of a kind the call was never about.
     TEST(ResourceEmit, AResourceTargetOrKindTheCatalogueDoesNotNameIsRefusedRatherThanRouted) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         const MGPipeHandle res{5, 1};
 
@@ -1840,7 +1742,6 @@ namespace {
 
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u)
             << "a corrupt record is not a dropped call and must not be counted as one";
-#endif
     }
 
     // A texture's resource calls reach NO backend function pointer, and that is the structural
@@ -1848,9 +1749,6 @@ namespace {
     // dispatches at GL-call time today, so the record IS the publication. A spy table that saw
     // one of them would mean P4a had grown an op-table path nobody designed.
     TEST(ResourceEmit, NoTextureOrRenderbufferResourceCallReachesTheBackendOpTable) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         ApplierGuard guard;
         g_spy = SpyState{};
         MGPipeSetResourceOps(&kSpyOps);
@@ -1887,29 +1785,8 @@ namespace {
         EXPECT_EQ(g_spy.Respecifies, 1u);
         EXPECT_EQ(g_spy.SubDatas, 1u);
         EXPECT_EQ(g_spy.Destroys, 1u);
-#endif
     }
 
-#if !MOBILEGL_PIPE_PUSH
-    // G2 REQUIRES THE PULL AND PUSH ctest NAME SETS TO BE IDENTICAL, name for name, so a
-    // push-only case cannot be ABSENT from a pull build - it has to be there and SKIP. This
-    // list declares exactly the suite.name pairs the push build gets from the real cases
-    // below, the shape PipeInputsTest and TrackerTest established for the same reason.
-#define MGL_RESOURCE_EMIT_TEST_LIST(X)                                                             \
-    X(ResourceEmit, EveryBufferTargetSetsItsBindMaskBit)                                            \
-    X(ResourceEmit, ABindMaskBitIsStickyAcrossARespecifyThatDoesNotRebind)                          \
-    X(ResourceEmit, ADestroyedBufferReleasesItsSlotAndAStaleHandleResolvesToNothing)                \
-    X(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords)         \
-    X(ResourceEmit, ABufferCreatedBeforeAMakeCurrentStillLandsItsSubDataAfterOne)                \
-    X(ResourceEmit, ADrawTimeIndexBindingPublishesElementArrayEvenWhenTheRespecifyCannotSeeIt)   \
-    X(ResourceEmit, ADestroyFollowsTheCreateEvenIfTheOpTableWasUnregisteredMeanwhile)            \
-    X(ResourceEmit, ARespecifyPublishesTheCreateAHandleNeverGot)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_RESOURCE_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::BufferObject;
 
@@ -2252,9 +2129,7 @@ namespace {
     // away. What makes the split reachable in a real lane is the clamp, and the clamp is a pure
     // function of the segment's size, which is what the walk below is driven at.
     TEST(ResourceEmit, AWideBufferSubDataSplitsAtTheStageChunkBytes) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#elif !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_DISAGGREGATED
         GTEST_SKIP() << "there is no stage segment to size a content chunk against without the "
                         "transport built in";
 #else
@@ -2351,9 +2226,7 @@ namespace {
     // aborts its own binary reports nothing. The child's three observations come back through a
     // probe file rather than through gtest, whose state a forked child must not be trusted with.
     TEST(ResourceEmit, AZeroByteRespecifyDefinesTheStoreAndCarriesNoContent) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#elif !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_DISAGGREGATED
         GTEST_SKIP() << "the arm that reads MappedData() as 'bytes to carry' is the split one; "
                         "without the transport the respecify has no follow-up to get wrong";
 #elif !MGTEST_HAVE_FORK
@@ -2592,7 +2465,6 @@ namespace {
         EXPECT_EQ(RecordOf(handle.Slot).Desc.Width, 512u);
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusalsBefore);
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 int main(int argc, char** argv) {

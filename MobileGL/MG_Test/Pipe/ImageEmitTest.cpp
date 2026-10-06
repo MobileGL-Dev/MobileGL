@@ -44,7 +44,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include "Init.h"
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
@@ -61,7 +60,6 @@
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -77,7 +75,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     // `from` is a byte offset, and it exists because of the fork below: the library's log file
     // is already open by the time a case runs, so the child's lines are APPENDED to it rather
     // than written to a fresh file, and only what the child appended is this drive's evidence.
@@ -178,20 +175,15 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder.
 TEST(ImageEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
-#if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeImageEmitterInstance(), &MGPipeImageEmitterInstance());
     // The image set has no bit of its own: set_shader_images rides the SAMPLER subsystem,
     // because the three unit sets are one family and an operator switching them off has to get
     // the whole family's legacy arm.
     EXPECT_EQ(kMGPipeMaxImageUnits, kMGPipeMaxTextureUnits);
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
-#endif
 }
 
 // =========================================================================================
@@ -200,7 +192,6 @@ TEST(ImageEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 // keyed on the FRONTEND sampling-resolution generation - is the client package's.
 // =========================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     // Every field carries a value of its own, and two of them are the point: InternalFormat and
     // Access are live glBindImageTexture state that the format-less image bake keys on, so a
@@ -218,15 +209,11 @@ namespace {
         return view;
     }
 } // namespace
-#endif
 
 // The window rule, one field at a time: the entries land where the header says and nowhere
 // else, and every field of an entry survives. Deleting the copy loop, the two window
 // assignments or the serial bump leaves this red.
 TEST(ImageEmit, TheImageSetLandsInItsWindowWithEveryFieldTheShaderWasBuiltAgainst) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     // Access is a Uint8 on the wire - the client's own read/write/read-write encoding, not a
     // GL enum - and InternalFormat is the application's, which the server recasts.
@@ -267,15 +254,11 @@ TEST(ImageEmit, TheImageSetLandsInItsWindowWithEveryFieldTheShaderWasBuiltAgains
         << "the entry outside the new window was cleared";
     EXPECT_EQ(MGPipeApplier().SamplerViewsSerial, samplerViewsSerial)
         << "the image set moved another set's serial; the three are independent";
-#endif
 }
 
 // The window gate, at the bound and one past it, and the null-tail arm. The image-unit space
 // is the same merged 192 the sampler units are.
 TEST(ImageEmit, AnImageWindowPastTheImageUnitSpaceIsRefusedRatherThanTruncated) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPImageView entry = ImageAt(0, 0x8058u, 2);
 
@@ -302,15 +285,11 @@ TEST(ImageEmit, AnImageWindowPastTheImageUnitSpaceIsRefusedRatherThanTruncated) 
 
     EXPECT_EQ(MGPipeApplier().ShaderImagesSerial, serialBefore) << "a refused set moved the serial";
     EXPECT_EQ(MGPipeApplier().ShaderImageStart, kMGPipeMaxImageUnits - 1);
-#endif
 }
 
 // An EMPTY set is not a refusal: it is what a program with no image uniforms publishes, and it
 // still moves the serial, because "no images" is a state the twin has to hear about.
 TEST(ImageEmit, AnEmptySetIsAppliedRatherThanRefusedAndStillMovesTheSerial) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPImageView entry = ImageAt(0, 0x8058u, 1);
     MGPShaderImages filled{};
@@ -324,15 +303,11 @@ TEST(ImageEmit, AnEmptySetIsAppliedRatherThanRefusedAndStillMovesTheSerial) {
     EXPECT_GT(MGPipeApplier().ShaderImagesSerial, serialBefore);
     EXPECT_EQ(MGPipeApplier().BoundShaderImages[0].InternalFormat, 0x8058u)
         << "an empty window cleared entries it never named";
-#endif
 }
 
 // D-J4: the image set is per-context WORKING state, so a make-current takes it and ADVANCES
 // its serial rather than restarting it.
 TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const MGPImageView entry = ImageAt(1, 0x8058u, 1);
     MGPShaderImages header{};
@@ -347,25 +322,8 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
     EXPECT_EQ(MGPipeApplier().ShaderImageStart, 0u);
     EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundShaderImages[1].Res));
     EXPECT_GT(MGPipeApplier().ShaderImagesSerial, serialBefore);
-#endif
 }
 
-#if !MOBILEGL_PIPE_PUSH
-// G2 requires the pull and push ctest name sets to be identical, name for name.
-#define MGL_IMAGE_EMIT_TEST_LIST(X)                                                                \
-    X(ImageEmit, AZeroHighWaterMarkEmitsNothingWithoutHashing)                                      \
-    X(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet)                                           \
-    X(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet)                                       \
-    X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)                                    \
-    X(ImageEmit, AnImageBoundTextureIsMarkedShaderImageBoundAtTheBind)                            \
-    X(ImageEmit, TheBindFeedsTheImageUnitHighWaterMark)                                          \
-    X(ImageEmit, TheThreeAccessConstantsArePinnedOnBothSidesOfTheWire)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_IMAGE_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
@@ -685,7 +643,6 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
                "over-approximation";
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
@@ -706,9 +663,7 @@ int main(int argc, char** argv) {
     // the library's own, not a copy.
     g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
                                                       MobileGL::MG_Util::Debug::LogRole::Client);
-#if MOBILEGL_PIPE_PUSH
     MobileGL::Initialize();
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

@@ -47,7 +47,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include <algorithm>
 
 #include <Config.h>
@@ -58,7 +57,6 @@
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -92,9 +90,6 @@ namespace {
     // TheObjectRecordsSurviveAMakeCurrentAndOnlyTheWorkingStateIsReset is where that is driven
     // with live records in the table.
     TEST(VertexInputEmit, AResetApplierCarriesNoVertexInputStateOver) {
-#if !MOBILEGL_PIPE_PUSH
-        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
         MGPipeApplierState& applier = MGPipeApplier();
         applier.BoundVertexElements = MGPipeHandle{7, 3};
         applier.VertexBufferStart = 1;
@@ -118,29 +113,8 @@ namespace {
         EXPECT_EQ(MGPipeApplier().IndexBufferSerial, 44u);
         EXPECT_GT(MGPipeApplier().VertexBuffersSerial, 42u);
         EXPECT_GT(MGPipeApplier().IndexBufferSerial, 43u);
-#endif
     }
 
-#if !MOBILEGL_PIPE_PUSH
-    // G2 requires the pull and push ctest name sets to be identical, name for name, so a
-    // push-only case is present and SKIPS rather than being absent.
-#define MGL_VERTEX_INPUT_EMIT_TEST_LIST(X)                                                         \
-    X(VertexInputEmit, EveryAttributeFieldSurvivesTheWireConversion)                                \
-    X(VertexInputEmit, ABindingModelStrideOfZeroSurvivesAsZero)                                     \
-    X(VertexInputEmit, IsLongAndFloat64TravelSeparately)                                            \
-    X(VertexInputEmit, ABaseInstanceChangeAloneStillEmitsTheVertexBufferSet)                        \
-    X(VertexInputEmit, AnUnchangedSetWithAnUnchangedBaseInstanceEmitsNothing)                       \
-    X(VertexInputEmit, TheVertexBufferWindowCoversEveryAttributeTheCsoDeclaresEnabled)              \
-    X(VertexInputEmit, RebindingTheSameVaoEmitsABindAndNoCreate)                                    \
-    X(VertexInputEmit, PingPongingBetweenTwoVaosNeverRecreatesEither)                               \
-    X(VertexInputEmit, DestroyedVertexArraysReturnTheirCsoSlotsAndRecords)                          \
-    X(VertexInputEmit, ADoubleReleaseOfAVertexElementsSlotIsHarmless)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_VERTEX_INPUT_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::BufferObject;
     using MG_State::GLState::VertexArrayObject;
@@ -684,7 +658,6 @@ namespace {
         EXPECT_NE(successor.Gen, handle.Gen);
         slots.Free(MGPipeKind::VertexElementsCso, successor);
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 int main(int argc, char** argv) {

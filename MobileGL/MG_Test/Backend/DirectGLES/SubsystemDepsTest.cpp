@@ -43,9 +43,7 @@
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Impl/Pipe/PipeFill.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -150,7 +148,6 @@ TEST(SubsystemDepsTest, TheFourthRowIsPresentAndTheWithdrawnMirrorPairIsNotFine)
 // disagreement means records crossing to a server whose matching handle arm did not come up.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
-#if MOBILEGL_PIPE_PUSH
     const Uint64 families[] = {kMGPipeSubsystemFramebuffer, kMGPipeSubsystemTextureResources,
                                kMGPipeSubsystemSamplers, kMGPipeSubsystemPrograms};
     int emitted = 0;
@@ -174,9 +171,6 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
     // asserted, because asserting it would make this case depend on whether the binary happens
     // to have pulled in a consumer registration.
     RecordProperty("client_emitting_combinations", emitted);
-#else
-    GTEST_SKIP() << "the client dependency check is compiled only under MOBILEGL_PIPE_PUSH";
-#endif
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -189,7 +183,6 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
 // disagreement is a half-run subsystem rather than an extra refusal.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
-#if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
     // THE RESOLVERS SURVIVE A SWEEP ONLY BECAUSE LEGACY MEMOS ARE ON. Each of them ends in
     // ClassifyPipeSubsystemArm, and a verdict of NoArm calls StopOnArmlessPipeSubsystem
@@ -233,11 +226,6 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
                 << resolver.Name << " armed with its own bit clear at " << Describe(mask);
         }
     }
-#else
-    GTEST_SKIP() << "the four Resolve<Family>SubsystemArm() resolvers are declared and defined "
-                    "only under MOBILEGL_PIPE_PUSH (Managers.h's P4a D-K3 block), so the pull "
-                    "build has no server consumer gate to compare against";
-#endif
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -245,7 +233,6 @@ TEST(SubsystemDepsTest, TheServerConsumerGateNeverArmsAFamilyTheTableRefuses) {
 //    vacuously green because every resolver said NO for an unrelated reason.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskStillArms) {
-#if MOBILEGL_PIPE_PUSH
     using namespace MobileGL::MG_Backend::DirectGLES;
     ASSERT_TRUE(MG_Config::Features.PipeLegacyMemos)
         << "see the sweep above: a refused family with the legacy arm also off aborts the process";
@@ -281,8 +268,4 @@ TEST(SubsystemDepsTest, TheTwoDocumentedRefusalLanesStillRefuseAndTheFullMaskSti
         EXPECT_FALSE(ResolveTextureResourceSubsystemArm())
             << "0x5ff leaves bit 11 clear too, so the fourth row refuses it for the same reason";
     }
-#else
-    GTEST_SKIP() << "the four Resolve<Family>SubsystemArm() resolvers exist only under "
-                    "MOBILEGL_PIPE_PUSH";
-#endif
 }

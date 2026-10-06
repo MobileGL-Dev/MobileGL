@@ -50,7 +50,6 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-#if MOBILEGL_PIPE_PUSH
 #include "Init.h"
 // MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
@@ -69,7 +68,6 @@
 // create_shader_state takes the two artefact structs by pointer beside the record, so a case
 // that mints a composite record needs their definitions.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -85,7 +83,6 @@ namespace {
 #endif
     }
 
-#if MOBILEGL_PIPE_PUSH
     // `from` is a byte offset, and it exists because of the fork below: the library's log file
     // is already open by the time a case runs, so the child's lines are APPENDED to it rather
     // than written to a fresh file, and only what the child appended is this drive's evidence.
@@ -186,7 +183,6 @@ namespace {
             << "the gate refused without saying what it refused; wanted \"" << tagged << "\"";
 #endif
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 // The contract commit's one case, and it pins the property everything else in this suite is
@@ -196,7 +192,6 @@ namespace {
 // flag on the handle buys, and what keeps the resolver's lifetime bookkeeping out of the
 // ordinary program allocator.
 TEST(CompositeResolver, TheCompositeBandHasExactlyOneDoor) {
-#if MOBILEGL_PIPE_PUSH
     MGPipeSlotAllocator slots;
 
     // The ordinary door never opens onto the band, however many times it is used.
@@ -232,9 +227,6 @@ TEST(CompositeResolver, TheCompositeBandHasExactlyOneDoor) {
     EXPECT_EQ(recycled.Slot, composite.Slot);
     EXPECT_NE(recycled.Gen, composite.Gen);
     EXPECT_FALSE(MGPipeIsCompositeShaderSlot(slots.Allocate(MGPipeKind::ShaderCso).Slot));
-#else
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client slot allocator in a pull build";
-#endif
 }
 
 // =========================================================================================
@@ -249,7 +241,6 @@ TEST(CompositeResolver, TheCompositeBandHasExactlyOneDoor) {
 // spike on the first pipeline draw. Both spaces stay dense against their own high-water mark.
 // =========================================================================================
 
-#if MOBILEGL_PIPE_PUSH
 namespace {
     using MG_State::GLState::LinkArtifacts;
     using MG_State::GLState::SpirvArtifacts;
@@ -265,15 +256,11 @@ namespace {
         return MGPHandleOnly{cso, static_cast<Uint32>(MGPipeKind::ShaderCso), 0};
     }
 } // namespace
-#endif
 
 // The band's record lands in the band's own table and the ordinary one is not grown by it -
 // which is the whole 236 MB of it - and every entry point still names it as an ordinary
 // program.
 TEST(CompositeResolver, ACompositeRecordLandsInTheBandsOwnTableAndNeverGrowsTheOrdinaryOne) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -304,7 +291,6 @@ TEST(CompositeResolver, ACompositeRecordLandsInTheBandsOwnTableAndNeverGrowsTheO
     EXPECT_EQ(MGPipeApplier().ShaderCsos[2].Desc.StageMask, 0x7u);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[2].Desc.StageMask, 0x3u)
         << "an ordinary program at slot 2 wrote the composite at band index 2";
-#endif
 }
 
 // The composite's slot has TWO independent release paths - the pipeline cache's eviction and
@@ -312,9 +298,6 @@ TEST(CompositeResolver, ACompositeRecordLandsInTheBandsOwnTableAndNeverGrowsTheO
 // arrival here is a refused no-op, which is what makes the double free proven rather than
 // assumed, and it clears the bindings exactly once.
 TEST(CompositeResolver, ASecondDeleteOfACompositeIsARefusedNoOpRatherThanASecondRelease) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -342,16 +325,12 @@ TEST(CompositeResolver, ASecondDeleteOfACompositeIsARefusedNoOpRatherThanASecond
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos[0].Live);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[0].Gen, 4u);
     EXPECT_EQ(MGPipeApplier().CompositeShaderCsos[0].Serial, 0u);
-#endif
 }
 
 // The band is INSIDE the ShaderCso slot limit, so the bound the applier refuses at is the limit
 // itself and not the band's base - a bound below it would refuse the very slots the allocator's
 // one composite door is allowed to hand out.
 TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsNot) {
-#if !MOBILEGL_PIPE_PUSH
-    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
-#else
     ApplierGuard guard;
     const LinkArtifacts link;
     const SpirvArtifacts spirv;
@@ -375,26 +354,8 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
     MGPipeApplySetDrawProgram(ProgramHandle(MGPipeHandle{kMGPipeShaderCsoCompositeSlotBase - 1, 1}));
     EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 1u)
         << "an ordinary slot below the band resolved against a record nobody created";
-#endif
 }
 
-#if !MOBILEGL_PIPE_PUSH
-// G2 requires the pull and push ctest name sets to be identical, name for name.
-#define MGL_COMPOSITE_RESOLVER_TEST_LIST(X)                                                        \
-    X(CompositeResolver, ACompositeIsMintedFromTheReservedBand)                                     \
-    X(CompositeResolver, ASignatureThatHasNotMovedReusesOneComposite)                               \
-    X(CompositeResolver, TwoPipelinesWithTheSameSignatureKeepTheirOwnComposite)                     \
-    X(CompositeResolver, EvictionThenDestructionFreesTheSlotExactlyOnce)                            \
-    X(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce)                            \
-    X(CompositeResolver, ASignatureMoveAfterAMakeCurrentStillReleasesThroughTheResolver)         \
-    X(CompositeResolver, TwoContextsHoldingOnePipelineNameKeepTheirOwnComposites)                \
-    X(CompositeResolver, ADestroyedContextsEntryIsDroppedRatherThanReleasedASecondTime)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-MGL_COMPOSITE_RESOLVER_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
 
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
@@ -763,7 +724,6 @@ void main() { o_color = vec4(0.5); }
             << "the vector is bounded by the pairs whose composite slot is actually live";
     }
 } // namespace
-#endif // MOBILEGL_PIPE_PUSH
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
@@ -784,9 +744,7 @@ int main(int argc, char** argv) {
     // the library's own, not a copy.
     g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
                                                       MobileGL::MG_Util::Debug::LogRole::Client);
-#if MOBILEGL_PIPE_PUSH
     MobileGL::Initialize();
-#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

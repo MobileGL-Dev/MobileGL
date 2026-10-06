@@ -16,41 +16,16 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
-#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
 
 namespace {
-#if !MOBILEGL_PIPE_PUSH
-    // G2 REQUIRES THE PULL AND PUSH CTEST NAME SETS TO BE IDENTICAL, name for name. A
-    // push-only case therefore cannot be ABSENT from a pull build; it has to be there and
-    // SKIP, which is the shape PipeInputsTest.cpp established for the same reason. This list
-    // declares exactly the suite.name pairs the push build gets from the real cases below, so
-    // a case added on one side and forgotten on the other shows up as a ctest-name diff
-    // rather than as a test that silently is not there.
-#define MGL_CSO_CACHE_TEST_LIST(X) \
-    X(CsoCacheTest, TheSameStateIsMintedOnceAndReusedForever) \
-    X(CsoCacheTest, LruEvictsTheOldestAndEmitsDelete) \
-    X(CsoCacheTest, HashCollisionDoesNotAliasTwoStates) \
-    X(CsoCacheTest, ContentAddressingOffMintsEveryTime) \
-    X(CsoCacheTest, EveryAcquireCountsItsPayloadBytes) \
-    X(SetHashSuppressorTest, TheFirstEmissionAlwaysGoesOutOnEverySlot) \
-    X(SetHashSuppressorTest, AComputedZeroIsRemappedSoItIsNeverConfusedWithNeverEmitted) \
-    X(SetHashSuppressorTest, SlotsAreIndependent) \
-    X(SetHashSuppressorTest, InvalidateMakesTheNextSetGoOutWhateverItHashesTo)
-
-#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
-    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
-    MGL_CSO_CACHE_TEST_LIST(MGL_DECLARE_PULL_SKIP)
-#undef MGL_DECLARE_PULL_SKIP
-#else
     class CsoCacheTest : public ::testing::Test {
     protected:
         void SetUp() override {
@@ -196,5 +171,4 @@ namespace {
         suppressor.InvalidateAll();
         EXPECT_TRUE(suppressor.ShouldEmit(slot, 99));
     }
-#endif // MOBILEGL_PIPE_PUSH
 } // namespace
