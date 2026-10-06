@@ -25,12 +25,10 @@ namespace MobileGL {
                 static constexpr int MAX_VERTEX_ATTRIB_BINDINGS = 32;
 
                 VertexArrayObject(Uint externIndex);
-#if MOBILEGL_PIPE_PUSH
                 // P2 step e2. Out of line, and declared only where there is a notice to raise:
                 // in a pull build this class keeps its implicit destructor, which is what keeps
                 // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
                 ~VertexArrayObject();
-#endif
 
                 void EnableAttribute(Uint index);
                 void DisableAttribute(Uint index);
@@ -106,71 +104,6 @@ namespace MobileGL {
                 // "any vertex-input state changed" with one compare.
                 Uint32 GetConfigVersion() const { return m_configVersion; }
 
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-                // ---- THE BACKEND'S THREE MEMOS ON THE FRONTEND OBJECT ----
-                //
-                // P2 D12.5 (ARCHITECTURE.md 9.5) retires all three: a frontend state object
-                // must not hold the backend's raw pointers, and under split it cannot - the
-                // backend is in another process and its cache entry has no address the client
-                // could store. Magma's handle arm keeps the same three facts in a slot-indexed
-                // table it owns itself (VertexInputStateFactory::VaoBackendMemos), keyed on the
-                // VAO's {slot, gen} and validated by the same config version, so nothing is
-                // recomputed more often than it was.
-                //
-                // They stay compiled under MOBILEGL_PIPE_LEGACY_MEMOS - which a PULL build
-                // forces ON - because that is the arm the pre-handle A/B runs, and because G1
-                // admits no change to the pull build. They are deleted outright with the pull
-                // path at P13.
-                //
-                // Backend-owned content-hash memo, valid while the config version matches
-                // (same idea as ProgramObject's hash memo — avoids re-hashing all
-                // attributes on every draw).
-                Bool GetBackendHashMemo(Uint64& outHash) const {
-                    if (m_backendHashMemoVersion != m_configVersion) return false;
-                    outHash = m_backendHashMemo;
-                    return true;
-                }
-                void SetBackendHashMemo(Uint64 hash) const {
-                    m_backendHashMemo = hash;
-                    m_backendHashMemoVersion = m_configVersion;
-                }
-
-                // Backend-owned resolved-state memo: an opaque pointer into the
-                // backend's vertex-input-state cache plus the cache's eviction
-                // epoch, valid while the config version matches. Lets the
-                // per-draw path skip the content hash AND the cache lookup; the
-                // epoch guards against the cache evicting the pointee.
-                Bool GetBackendStateMemo(const void*& outState, Uint64& outEpoch) const {
-                    if (m_backendStateMemoVersion != m_configVersion) return false;
-                    outState = m_backendStateMemo;
-                    outEpoch = m_backendStateMemoEpoch;
-                    return true;
-                }
-                void SetBackendStateMemo(const void* state, Uint64 epoch) const {
-                    m_backendStateMemo = state;
-                    m_backendStateMemoEpoch = epoch;
-                    m_backendStateMemoVersion = m_configVersion;
-                }
-
-                // Backend-owned aux memo: two opaque VALUE words (no pointee, so unlike the
-                // state memo above they need no eviction-epoch guard), valid while the config
-                // version matches. They live next to m_configVersion, which every per-draw
-                // path already loads, so a backend can re-read small derived facts about this
-                // VAO's configuration (e.g. a layout hash and attribute masks) without
-                // chasing into its own cache's heap entry - that chase is a guaranteed cache
-                // miss when an app cycles hundreds of VAOs per frame.
-                Bool GetBackendAuxMemo(Uint64& outAux0, Uint64& outAux1) const {
-                    if (m_backendAuxMemoVersion != m_configVersion) return false;
-                    outAux0 = m_backendAuxMemo0;
-                    outAux1 = m_backendAuxMemo1;
-                    return true;
-                }
-                void SetBackendAuxMemo(Uint64 aux0, Uint64 aux1) const {
-                    m_backendAuxMemo0 = aux0;
-                    m_backendAuxMemo1 = aux1;
-                    m_backendAuxMemoVersion = m_configVersion;
-                }
-#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
             private:
                 void BumpAttributeFormatVersion(Uint index);
@@ -210,19 +143,6 @@ namespace MobileGL {
                 Array<Bool, MAX_VERTEX_ATTRIBS> m_attributeUsesBindingModel = {};
 
                 Uint32 m_configVersion = 0;
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-                // The storage behind the three accessors above; retired with them (D12.5).
-                // A pull build forces MOBILEGL_PIPE_LEGACY_MEMOS ON, so sizeof(this) does not
-                // move there and G1 sees no change.
-                mutable Uint64 m_backendHashMemo = 0;
-                mutable Uint32 m_backendHashMemoVersion = ~0u;
-                mutable const void* m_backendStateMemo = nullptr;
-                mutable Uint64 m_backendStateMemoEpoch = 0;
-                mutable Uint32 m_backendStateMemoVersion = ~0u;
-                mutable Uint64 m_backendAuxMemo0 = 0;
-                mutable Uint64 m_backendAuxMemo1 = 0;
-                mutable Uint32 m_backendAuxMemoVersion = ~0u;
-#endif // MOBILEGL_PIPE_LEGACY_MEMOS
             };
         } // namespace GLState
     } // namespace MG_State

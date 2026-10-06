@@ -25,12 +25,10 @@ namespace MobileGL {
                 using TargetEnum = RenderbufferTarget;
 
                 RenderbufferObject(Uint externalIndex);
-#if MOBILEGL_PIPE_PUSH
                 // P2 step e2. Out of line, and declared only where there is a notice to raise:
                 // in a pull build this class stays trivially destructible, which is what keeps
                 // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
                 ~RenderbufferObject();
-#endif
 
                 Uint GetExternalIndex() const;
                 void SetInternalFormat(TextureInternalFormat format);
@@ -59,13 +57,11 @@ namespace MobileGL {
 
             private:
                 static Uint64 AllocateLifetimeId();
-#if MOBILEGL_PIPE_PUSH
                 // P4a D-D2: resource_respecify, from every storage-defining setter. Non-virtual
                 // and push-only, so the pull build's object layout is untouched (P4a's
                 // admitted-resize set is EMPTY); defined in RenderbufferObject.cpp, which is the
                 // one translation unit that includes the client emitter.
                 void PipePublishDescriptor();
-#endif
 
                 Uint m_externalIndex = 0;
                 const Uint64 m_lifetimeId = AllocateLifetimeId();

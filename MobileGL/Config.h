@@ -377,7 +377,6 @@ namespace MobileGL::MG_Config {
         // the semantic gate that replaces byte identity, and it catches the dangerous
         // direction - a dirty bit that fires too RARELY - which no purity gate can see.
         Bool PipeVerify = false;
-#if MOBILEGL_PIPE_PUSH
         // The three knobs of the MOBILEGL_PIPE_VERIFY build (P1 brief D2). Compiled only
         // under MOBILEGL_PIPE_PUSH so the pull build's FeaturesTable does not change size.
         // MOBILEGL_PIPE_VERIFY_FATAL: the first divergence aborts (default). 0 logs and
@@ -408,7 +407,6 @@ namespace MobileGL::MG_Config {
         // measurement and for what the control still leaves standing. Under
         // MOBILEGL_PIPE_PUSH only, so it cannot exist in a shipping pull build.
         Bool PipeHandleAbaControl = false;
-#endif
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
         // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
         Bool PipeStats = false;

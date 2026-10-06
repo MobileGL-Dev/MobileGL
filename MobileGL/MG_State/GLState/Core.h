@@ -41,7 +41,6 @@ namespace MobileGL {
 #endif
 
         namespace GLState {
-#if MOBILEGL_PIPE_PUSH
             // MGPAttribValue::ValueClass' encoding (MG_Pipe/MGPipeTypes.h documents the order
             // "Float | Int | Uint | Double"). It lives here rather than in MG_Pipe because the
             // FRONTEND is the only thing that knows which of the three views below a value was
@@ -50,7 +49,6 @@ namespace MobileGL {
             inline constexpr Uint32 kVertexAttribValueClassFloat = 0;
             inline constexpr Uint32 kVertexAttribValueClassInt = 1;
             inline constexpr Uint32 kVertexAttribValueClassUint = 2;
-#endif
 
             struct CurrentVertexAttributeValue {
                 Array<Float, 4> floatValue{0.f, 0.f, 0.f, 1.f};
@@ -186,14 +184,12 @@ namespace MobileGL {
                     m_textureState.NoteUnitTouched(unit, bindingChanged);
                 }
                 Int GetMaxTouchedTextureUnit() const { return m_textureState.GetMaxTouchedUnit(); }
-#if MOBILEGL_PIPE_PUSH
                 // The IMAGE-unit high-water mark, which is a different namespace from the
                 // texture-unit one above - see TextureState::NoteImageUnitTouched for why it is a
                 // second mark and why it only grows. Push builds only, so the pull build's
                 // GLContext is untouched (G1).
                 void NoteImageUnitTouched(Int unit) { m_textureState.NoteImageUnitTouched(unit); }
                 Int GetMaxTouchedImageUnit() const { return m_textureState.GetMaxTouchedImageUnit(); }
-#endif
                 // Monotonic counter bumped whenever a texture bind/unbind/delete changes which
                 // texture is bound at a unit; lets a backend skip re-resolving an unchanged
                 // per-draw sampled-texture set.
@@ -268,7 +264,6 @@ namespace MobileGL {
                 Uint GetBoundProgramPipelineName() const { return m_boundProgramPipeline; }
                 const SharedPtr<ProgramPipelineObject>& GetBoundProgramPipeline() const;
 
-#if MOBILEGL_PIPE_PUSH
                 // ---- the aggregate generations (P2 brief D4) ----
                 //
                 // The bump points sit on OBJECTS - a VertexArrayObject, a TextureObject, a
@@ -334,7 +329,6 @@ namespace MobileGL {
                                ? m_currentVertexAttributeClasses[index]
                                : kVertexAttribValueClassFloat;
                 }
-#endif
 
                 // RenderState
                 Uint GetRenderStateParametersVersion() const;
@@ -665,11 +659,9 @@ namespace MobileGL {
                 Bool m_transformFeedbackPaused = false;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
-#if MOBILEGL_PIPE_PUSH
                 Uint64 m_anyVertexAttribDefaultGeneration = 0;
                 // Parallel to m_currentVertexAttributes; see GetCurrentVertexAttributeClass.
                 Array<Uint32, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributeClasses{};
-#endif
                 Uint64 m_transformFeedbackGeneration = 0;
                 // Source of the per-span ids above; never rolls back with an object switch.
                 Uint64 m_transformFeedbackNextGeneration = 0;

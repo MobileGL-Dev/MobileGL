@@ -26,7 +26,6 @@ namespace MobileGL {
             SamplerObject::SamplerObject(Uint externalIndex)
                 : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
 
-#if MOBILEGL_PIPE_PUSH
             SamplerObject::~SamplerObject() {
                 // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
                 // garbage sweep. This is the last SharedPtr to this object dropping - not the
@@ -53,7 +52,6 @@ namespace MobileGL {
                 // and exactly as before, is the notice.
                 MG_Pipe::MGPipeEmitSamplerCsoDestroyAndFree(m_lifetimeId);
             }
-#endif
 
             void SamplerObject::BumpVersion() {
                 ++m_version;

@@ -117,15 +117,11 @@ namespace MobileGL::MG_State::GLState {
     class TextureObjectBase : public ITextureObject {
     public:
         TextureObjectBase(TextureTarget target, Uint externalIndex);
-#if MOBILEGL_PIPE_PUSH
         // P2 step e2. Out of line, and declared only where there is a notice to raise: in a
         // pull build this stays the implicit `= default` the pre-P2 tree had, which is what
         // keeps the pull build's symbol set byte-for-byte the pre-P2 one (G1). Declared on the
         // BASE, so every concrete texture class - 2D, 3D, cube, buffer, view - announces once.
         virtual ~TextureObjectBase();
-#else
-        virtual ~TextureObjectBase() = default;
-#endif
 
         TextureInternalFormat GetFormat() const override;
         TextureTarget GetTarget() const override;
@@ -190,12 +186,10 @@ namespace MobileGL::MG_State::GLState {
             m_depthStencilTextureMode = mode;
             ++m_textureParamsVersion;
             MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
             // D-E3's whole point, at the one site that proves it: the depth-stencil mode of a
             // texture that is ONLY the READ framebuffer's attachment reaches the driver, because
             // set_texture_params is addressed by resource and is independent of every binding.
             PipePublishParams();
-#endif
         }
 
     protected:
@@ -207,7 +201,6 @@ namespace MobileGL::MG_State::GLState {
         // otherwise invisible to such a memo (no bind moved).
         void BumpShapeVersion();
 
-#if MOBILEGL_PIPE_PUSH
         // ---- P4a's client emission points (brief D-D1, D-D3, D-E1, D-I1) ----
         //
         // NON-VIRTUAL AND PUSH-ONLY, both deliberately: a virtual would grow the vtable and a
@@ -245,7 +238,6 @@ namespace MobileGL::MG_State::GLState {
         // level that goes clean is collected at the next drain, where !IsStorageDirty is the
         // first test EmitOneLevel makes.
         void PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel);
-#endif
 
         const Uint m_externalIndex;
         const Uint64 m_lifetimeId;

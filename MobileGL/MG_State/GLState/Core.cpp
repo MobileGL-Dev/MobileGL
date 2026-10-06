@@ -277,11 +277,9 @@ namespace MobileGL::MG_State {
                 current.intValue[component] = static_cast<Int32>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
-#if MOBILEGL_PIPE_PUSH
             // The two views above are CONVERSIONS, not bit copies, so which one was written
             // is part of the value; set_vertex_attrib_defaults carries it.
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassFloat;
-#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
@@ -297,9 +295,7 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
-#if MOBILEGL_PIPE_PUSH
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassInt;
-#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
@@ -315,9 +311,7 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.intValue[component] = static_cast<Int32>(value[component]);
             }
-#if MOBILEGL_PIPE_PUSH
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassUint;
-#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
@@ -1427,13 +1421,11 @@ namespace MobileGL::MG_State {
         }
 
         void GLContext::RestoreBoundTransformFeedbackState() {
-#if MOBILEGL_PIPE_PUSH
             // The FOURTH writer of the transform-feedback binding points (a bind or a delete of
             // the bound transform-feedback object swaps the whole set in): it moves the generation
             // like the other three, so bit 17 cannot miss a swap whose two objects happen to carry
             // the same capture-span generation.
             NoteBufferBindPointChanged(BufferTarget::TransformFeedback);
-#endif
             const auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
             for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
                 auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, i);
@@ -1638,7 +1630,6 @@ namespace MobileGL::MG_State {
                                                          Bool hasExplicitRange) {
             if (bufferIndex >= MAX_TRANSFORM_FEEDBACK_BUFFERS) return;
             if (index == m_boundTransformFeedback) {
-#if MOBILEGL_PIPE_PUSH
                 // P5e (sb): the THIRD writer of a transform-feedback binding point, and the one
                 // a reader of GL_Buffer.cpp alone would miss - glTransformFeedbackBufferBase /
                 // ...Range on the CURRENTLY BOUND object land here rather than in
@@ -1648,7 +1639,6 @@ namespace MobileGL::MG_State {
                 // POINT at all (it writes the named object's own table) and deliberately bumps
                 // nothing.
                 NoteBufferBindPointChanged(BufferTarget::TransformFeedback);
-#endif
                 auto& point = m_bufferState.GetBindingPoint(BufferTarget::TransformFeedback, bufferIndex);
                 point.Bind(buffer);
                 if (buffer && hasExplicitRange) {

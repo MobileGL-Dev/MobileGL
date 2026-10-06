@@ -34,7 +34,6 @@ namespace MobileGL {
                 return s_nextTextureLifetimeId.fetch_add(1, std::memory_order_relaxed);
             }
 
-#if MOBILEGL_PIPE_PUSH
             TextureObjectBase::~TextureObjectBase() {
                 // P4a D-I1: BACKEND-NEUTRAL FROM DAY ONE, and the three-step order is fixed.
                 //
@@ -110,7 +109,6 @@ namespace MobileGL {
                 MG_Pipe::MGPipeNoteTextureLevelDirty(*this, static_cast<Uint32>(uploadTarget),
                                                      static_cast<Uint32>(mipmapLevel));
             }
-#endif
 
             void TextureObjectBase::BumpShapeVersion() {
                 ++m_shapeVersion;
@@ -142,7 +140,6 @@ namespace MobileGL {
                     m_sampler->SetWrapT(SamplerWrapMode::ClampToEdge);
                     m_sampler->SetWrapR(SamplerWrapMode::ClampToEdge);
                 }
-#if MOBILEGL_PIPE_PUSH
                 // P4a D-D1: A RESOURCE EXISTS BEFORE ANYTHING CAN NAME IT, so resource_create is
                 // emitted from the constructor and carries no storage - the store is defined
                 // lazily by the first respecify and every backend already tolerates a resource
@@ -169,7 +166,6 @@ namespace MobileGL {
                 (void)externalIndex;
                 MG_Pipe::MGPipeMintTextureHandle(*this);
                 MG_Pipe::MGPipeEmitTextureResourceCreate(*this);
-#endif
             }
 
             TextureInternalFormat TextureObjectBase::GetFormat() const {
@@ -217,14 +213,12 @@ namespace MobileGL {
                 BumpShapeVersion();
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 // The format is BOTH halves: a descriptor field the backend allocates from and a
                 // parameter the swizzle / depth-stencil push reads, so both records move. It is
                 // also the last statement of both glTexBuffer entry points, which is what
                 // publishes a buffer texture's window without a call site in MG_Impl/GLImpl.
                 PipePublishDescriptor();
                 PipePublishParams();
-#endif
             }
 
             Uint TextureObjectBase::GetExternalIndex() const {
@@ -251,9 +245,7 @@ namespace MobileGL {
                 m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             const IntVec4& TextureObjectBase::GetBorderColorI() const {
@@ -269,9 +261,7 @@ namespace MobileGL {
                 m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             const UintVec4& TextureObjectBase::GetBorderColorUI() const {
@@ -287,9 +277,7 @@ namespace MobileGL {
                 m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             BorderColorForm TextureObjectBase::GetBorderColorForm() const {
@@ -340,9 +328,7 @@ namespace MobileGL {
                 }
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             void TextureObjectBase::SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) {
@@ -351,9 +337,7 @@ namespace MobileGL {
                 m_swizzleParams = values;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             const UintVec2& TextureObjectBase::GetLevelRange() const {
@@ -373,12 +357,10 @@ namespace MobileGL {
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
-#if MOBILEGL_PIPE_PUSH
                 // The level range is PARAMS, not a descriptor field: the record carries
                 // BaseLevel / MaxLevel and the storage is untouched. The descriptor is deduped on
                 // its own bytes, so the shape bump above costs nothing here.
                 PipePublishParams();
-#endif
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
@@ -391,9 +373,7 @@ namespace MobileGL {
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
-#if MOBILEGL_PIPE_PUSH
                 PipePublishParams();
-#endif
             }
 
             Bool TextureObjectBase::IsImmutable() const {
@@ -414,14 +394,12 @@ namespace MobileGL {
                 }
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 // Immutable is a descriptor fact the backend reads - and NOT a request for an
                 // acknowledgement: MGPipeResourceRespecifyNeedsAck names the buffer target
                 // explicitly, because texture allocation is lazy in monolith and stays lazy in
                 // split. The level clamp above is params.
                 PipePublishDescriptor();
                 PipePublishParams();
-#endif
             }
 
             Uint16 TextureObjectBase::GetTextureParamsVersion() const {
@@ -460,9 +438,7 @@ namespace MobileGL {
                 m_samples = samples;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishDescriptor();
-#endif
             }
 
             Bool TextureObjectBase::HasFixedSampleLocations() const {
@@ -473,9 +449,7 @@ namespace MobileGL {
                 m_fixedSampleLocations = fixedSampleLocations;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishDescriptor();
-#endif
             }
 
             Uint64 TextureObjectBase::GetLifetimeId() const {
@@ -507,7 +481,6 @@ namespace MobileGL {
                                                              MipmapInput input) {
                 BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
-#if MOBILEGL_PIPE_PUSH
                 // AFTER the allocation, never before: BumpShapeVersion runs first and a descriptor
                 // built there would describe the level set this call is about to change. Every
                 // storage-defining GL entry point - glTexImage*, glCompressedTexImage*,
@@ -517,17 +490,14 @@ namespace MobileGL {
                 // C-1): this call replaced ONE level's storage, and only that level's pending
                 // upload may go with it.
                 PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
-#endif
             }
 
             void TextureObjectWithOneMipmap::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
-#if MOBILEGL_PIPE_PUSH
                 // The levels at and above the cut are gone; the ones below keep their pending
                 // uploads (final review C-1).
                 PipePublishTruncatedDescriptor(uploadTarget, levelCount);
-#endif
             }
 
             void TextureObjectWithOneMipmap::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel,
@@ -546,11 +516,9 @@ namespace MobileGL {
                     MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
-#if MOBILEGL_PIPE_PUSH
                 // THE DRAIN LIST HAS NO CLEAN ARM (see TextureEmit.h): a level that goes clean
                 // is collected at the next drain, whose first test is IsStorageDirty.
                 if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
-#endif
             }
 
             Bool TextureObjectWithOneMipmap::IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
@@ -563,13 +531,11 @@ namespace MobileGL {
                 MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
-#if MOBILEGL_PIPE_PUSH
                 // THE DRAIN LIST IS KEYED ON THE STORAGE OWNER FOR FREE: TextureObjectView
                 // forwards this call to the OWNER's method after remapping the level and the
                 // region, so an upload through a view and an upload through the owner arrive here
                 // on the same object with the same owner-side coordinates.
                 PipeNoteLevelDirty(uploadTarget, mipmapLevel);
-#endif
             }
 
             MipmapDirtyRegion TextureObjectWithOneMipmap::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,

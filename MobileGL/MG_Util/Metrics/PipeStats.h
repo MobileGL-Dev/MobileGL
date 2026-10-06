@@ -73,7 +73,6 @@ namespace MobileGL::MG_Util::PipeStats {
         // PLACEHOLDER (plan section 6.3): the residual value block does not exist yet. The
         // class is minted now so the counter names never churn; it stays at 0 until P2.
         ResidualValueBlock,
-#if MOBILEGL_PIPE_PUSH
         // P4a's, and THE PUSH GUARD IS NEW ON THIS ENUM: CallClass has had one since P2 and
         // ByteClass has never had one, so the block is opened here rather than the member
         // simply appended. Without it the pull build's two counter arrays, the name table, the
@@ -113,7 +112,6 @@ namespace MobileGL::MG_Util::PipeStats {
         // is what MOBILEGL_IPC_STAGE_MB has to hold for one record. The per-blob distribution
         // this average hides is the staged-blob histogram below.
         StageSegmentBytes,
-#endif
         Count
     };
 
@@ -139,7 +137,6 @@ namespace MobileGL::MG_Util::PipeStats {
         // Driver upload jobs issued by those emissions: 1 per box emission, N per rect-list
         // emission.
         TextureUploadJobs,
-#if MOBILEGL_PIPE_PUSH
         // P2's two, and they are PUSH-ONLY on purpose: a render-state CSO exists only in a
         // push build, and the pull build has to stay symbol-identical (G1) - growing this
         // enum there would resize the counter arrays, the name table and FormatWindowLine
@@ -287,11 +284,9 @@ namespace MobileGL::MG_Util::PipeStats {
         // wire store (VulkanRenderer::DispatchWireComputeIndirect). Their barriers count in `wibar`
         // with the draws': one barrier per shader write, whichever indirect read consumes it.
         WireIndirectNativeDispatches,
-#endif
         Count
     };
 
-#if MOBILEGL_PIPE_PUSH
     // P5's GAUGES, and they are a THIRD KIND of counter rather than three more CallClass rows.
     //
     // A ByteClass and a CallClass are SUMS this module owns and a call site increments. These
@@ -385,7 +380,6 @@ namespace MobileGL::MG_Util::PipeStats {
     // the call sites are per-frame, not per-record.
     void PublishGauge(Gauge gauge, Uint64 value);
     Uint64 GaugeValue(Gauge gauge);
-#endif
 
     // Memo gates. Each is a place where a backend decides "nothing moved, skip the work".
     // Hit == the gate short-circuited; Miss == it fell through and did the work. The six
@@ -414,7 +408,6 @@ namespace MobileGL::MG_Util::PipeStats {
     // emit records only has to add the one call.
     inline constexpr Uint32 kPayloadHistogramBuckets = 24;
 
-#if MOBILEGL_PIPE_PUSH
     // Per-STAGED-BLOB size histogram, and it is a SECOND histogram rather than a wider
     // kPayloadHistogramBuckets because the two answer different questions about different
     // populations: the one above is the command payload of a draw (plan section 4.5.7, sizing
@@ -436,7 +429,6 @@ namespace MobileGL::MG_Util::PipeStats {
     // Sample one staged blob. Called by the wire encoder where a blob is staged, behind the
     // usual Enabled() predicate.
     void RecordStagedBlobBytes(Uint64 bytes);
-#endif
 
     // Frames between two summary lines when MOBILEGL_PIPE_STATS=1.
     inline constexpr Uint64 kDefaultSummaryFramePeriod = 120;

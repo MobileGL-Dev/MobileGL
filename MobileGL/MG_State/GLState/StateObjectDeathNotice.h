@@ -9,7 +9,6 @@
 #pragma once
 #include <Includes.h>
 
-#if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipeHandles.h>
 
 // P2 step e2, the frontend half: TELL the backend that a state object died, instead of
@@ -59,4 +58,3 @@ namespace MobileGL::MG_State::GLState {
     }
 
 } // namespace MobileGL::MG_State::GLState
-#endif // MOBILEGL_PIPE_PUSH

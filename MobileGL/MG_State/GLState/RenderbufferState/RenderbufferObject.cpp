@@ -30,7 +30,6 @@ namespace MobileGL {
             }
 
             RenderbufferObject::RenderbufferObject(Uint externalIndex) : m_externalIndex(externalIndex) {
-#if MOBILEGL_PIPE_PUSH
                 // P4a D-D1: resource_create from the constructor, carrying no storage. A
                 // renderbuffer is an INDEPENDENT class on the wire - it shares MGPResourceDesc's
                 // shape with textures and buffers and nothing else - and its handle is minted
@@ -42,10 +41,8 @@ namespace MobileGL {
                 // PipeFill.cpp decides.
                 MG_Pipe::MGPipeMintRenderbufferHandle(*this);
                 MG_Pipe::MGPipeEmitRenderbufferResourceCreate(*this);
-#endif
             }
 
-#if MOBILEGL_PIPE_PUSH
             RenderbufferObject::~RenderbufferObject() {
                 // P4a D-I1, the fixed three-step order: the wire delete first (published-gated,
                 // because a slot is not evidence of a record), then the death notice - the P2
@@ -57,7 +54,6 @@ namespace MobileGL {
                 // is deleted, not kept, for the reason ~TextureObjectBase states in full.
                 MG_Pipe::MGPipeEmitRenderbufferDestroyAndFree(m_lifetimeId);
             }
-#endif
 
             Uint RenderbufferObject::GetExternalIndex() const {
                 return m_externalIndex;
@@ -114,28 +110,21 @@ namespace MobileGL {
             void RenderbufferObject::SetInternalFormat(TextureInternalFormat format) {
                 m_internalFormat = format;
                 m_componentSizes = MG_Util::GetComponentSizesForInternalFormat(format);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishDescriptor();
-#endif
             }
 
             void RenderbufferObject::AllocateStorage(IntVec2 size) {
                 m_width = size.x();
                 m_height = size.y();
                 m_allocated = true;
-#if MOBILEGL_PIPE_PUSH
                 PipePublishDescriptor();
-#endif
             }
 
             void RenderbufferObject::SetSamples(Int samples) {
                 m_samples = samples;
-#if MOBILEGL_PIPE_PUSH
                 PipePublishDescriptor();
-#endif
             }
 
-#if MOBILEGL_PIPE_PUSH
             // D-D2: THE RENDERBUFFER PUBLICATION HOLE, CLOSED BY EMISSION AND NOT BY A NEW
             // VERSION. These three setters bump no version and raise no notice, so
             // `glBindRenderbuffer; glRenderbufferStorage(newSize)` on an attached renderbuffer
@@ -160,7 +149,6 @@ namespace MobileGL {
                 MG_Pipe::MGPipeEmitRenderbufferResourceRespecify(*this);
                 MGP_NOTE_AGGREGATE(FramebufferAttachment);
             }
-#endif
         } // namespace GLState
     } // namespace MG_State
 } // namespace MobileGL

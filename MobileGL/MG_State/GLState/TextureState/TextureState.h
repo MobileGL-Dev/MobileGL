@@ -38,7 +38,6 @@ namespace MobileGL::MG_State::GLState {
             Access = access;
             Format = format;
             ++Version;
-#if MOBILEGL_PIPE_PUSH
             // P4a D-A4 / final review M-A: the EARLIEST producer of kMGPipeBindShaderImage. The
             // ImageBindableHint the bit feeds prevents the texture re-mint (a texture the server
             // knows may be image-bound is allocated image-bindable up front, P9 W2), so it has
@@ -46,7 +45,6 @@ namespace MobileGL::MG_State::GLState {
             // the bind, not at the next validate point's image walk. Push-only through the
             // contract's door, like every other hook in this directory (G1).
             if (Texture) MG_Pipe::MGPipeNoteTextureImageBound(*Texture);
-#endif
         }
     };
 
@@ -107,7 +105,6 @@ namespace MobileGL::MG_State::GLState {
             }
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
-#if MOBILEGL_PIPE_PUSH
         // High-water mark of IMAGE units ever bound by glBindImageTexture, and it is a SECOND
         // mark rather than a widening of the one above because the two index different
         // namespaces: GL 4.6 core 8.22's image units are their own array, and folding them
@@ -139,7 +136,6 @@ namespace MobileGL::MG_State::GLState {
         }
         // -1 until an image unit is bound for the first time, i.e. "there is nothing to sweep".
         Int GetMaxTouchedImageUnit() const { return m_maxTouchedImageUnit; }
-#endif
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
         // Both counters below are pushed PipeInputs fields AND are moved by writes the
         // backends make into frontend objects during their own verb - a synthesised fallback
@@ -181,7 +177,6 @@ namespace MobileGL::MG_State::GLState {
         // again (the unit tests do exactly that between cases).
         Uint64 GetContextId() const { return m_contextId; }
 
-#if MOBILEGL_PIPE_PUSH
         // P2 brief D4, the two texture aggregates. CONTENT is an upload or a dirty region;
         // PARAMS is a glTexParameter or a glSamplerParameter. They are separate because
         // NEW_SAMPLER_VIEWS and NEW_SAMPLERS are separate dirty bits and a Minecraft frame
@@ -190,15 +185,12 @@ namespace MobileGL::MG_State::GLState {
         Uint64 GetAnyTextureContentGeneration() const { return m_anyTextureContentGeneration; }
         void NoteTextureParamsChanged() { ++m_anyTextureParamsGeneration; }
         Uint64 GetAnyTextureParamsGeneration() const { return m_anyTextureParamsGeneration; }
-#endif
 
     private:
-#if MOBILEGL_PIPE_PUSH
         Uint64 m_anyTextureContentGeneration = 0;
         Uint64 m_anyTextureParamsGeneration = 0;
         // See NoteImageUnitTouched: the image-unit twin of m_maxTouchedUnit, push builds only.
         Int m_maxTouchedImageUnit = -1;
-#endif
         static Uint64 AllocateContextId();
 
         const Uint64 m_contextId;

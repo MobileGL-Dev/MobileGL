@@ -1115,7 +1115,6 @@ namespace MobileGL::MG_State::GLState {
             return Artifacts();
         }
 
-#if MOBILEGL_PIPE_PUSH
         // The phase-B twin of GetLinkReflection, and it exists for exactly one caller:
         // create_shader_state publishes the WHOLE SpirvArtifacts beside the whole
         // LinkArtifacts, because the archive the far side deserialises into is those two
@@ -1130,7 +1129,6 @@ namespace MobileGL::MG_State::GLState {
         const SpirvArtifacts& GetSpirvReflection() const {
             return Spirv();
         }
-#endif
 
         static Bool IsValidUniformLocation(const LinkArtifacts& artifacts, Int location) {
             if (location < 0 || location > static_cast<Int>(artifacts.maxUniformLocation)) return false;

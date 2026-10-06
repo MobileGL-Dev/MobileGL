@@ -164,11 +164,9 @@ namespace MobileGL::MG_Util::PipeStats {
         Counter g_totalGateMiss[kGateCount];
         Counter g_totalPayloadBuckets[kPayloadHistogramBuckets];
         Counter g_frameCount{0};
-#if MOBILEGL_PIPE_PUSH
         // P6 gate 8's second histogram, and push-only for the same reason its accessor is: its
         // only sampler is the wire encoder, which a pull build does not compile.
         Counter g_totalStagedBlobBuckets[kStagedBlobHistogramBuckets];
-#endif
 
         // Window bases: the run totals as of the previous summary line. Only ever touched
         // from OnPresent()/Shutdown() (the present thread), so plain integers.
@@ -178,13 +176,11 @@ namespace MobileGL::MG_Util::PipeStats {
         Uint64 g_windowBaseGateMiss[kGateCount] = {};
         Uint64 g_windowBaseFrames = 0;
         Bool g_shutdownDone = false;
-#if MOBILEGL_PIPE_PUSH
         // The gauges' storage. Relaxed atomics like every other counter here: the publisher is
         // the GL thread at a frame boundary and the reader is whoever formats the line, which
         // under split can be the apply thread.
         Counter g_gauges[static_cast<Uint32>(Gauge::Count)] = {};
         constexpr Uint32 kGaugeCount = static_cast<Uint32>(Gauge::Count);
-#endif
 
         // Frames per summary line, latched by Init() from MOBILEGL_PIPE_STATS_PERIOD.
         Uint64 g_summaryPeriod = kDefaultSummaryFramePeriod;
@@ -225,14 +221,11 @@ namespace MobileGL::MG_Util::PipeStats {
             "stage-buffer",        "stage-texture",       "stage-ubo-global",
             "stage-ubo-named",     "stage-vertex-client", "stage-index-client",
             "stage-indirect-cmd",  "persistent-map-push", "residual-value-block",
-#if MOBILEGL_PIPE_PUSH
             "cso-blob-bytes", "stage-segment-bytes",
-#endif
         };
         const char* const kCallClassNames[kCallClassCount] = {
             "draws", "accessor-calls", "tex-upload-emissions", "tex-upload-box", "tex-upload-rect",
             "tex-upload-jobs",
-#if MOBILEGL_PIPE_PUSH
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
             "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
             "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
@@ -241,7 +234,6 @@ namespace MobileGL::MG_Util::PipeStats {
             "wire-indirect-native-draws", "wire-indirect-cpu-expansions", "wire-indirect-barriers",
             "wire-host-waits", "wire-host-waits-indirect", "wire-host-wait-us",
             "wire-indirect-native-dispatches",
-#endif
         };
         const char* const kGateNames[kGateCount] = {
             "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",
@@ -264,9 +256,7 @@ namespace MobileGL::MG_Util::PipeStats {
         // recorded baseline stops meaning anything.
         const char* const kByteClassShort[kByteClassCount] = {"buf",  "tex",  "ubog", "ubon", "vtxc",
                                                               "idxc", "icmd", "pmap", "resid",
-#if MOBILEGL_PIPE_PUSH
                                                               "csob-blob", "seg",
-#endif
         };
         const char* const kGateShort[kGateCount] = {"ers", "etl", "eub", "mfp", "mpm", "mdt"};
 
@@ -294,16 +284,12 @@ namespace MobileGL::MG_Util::PipeStats {
             }
             g_frameCount.store(0, std::memory_order_relaxed);
             g_windowBaseFrames = 0;
-#if MOBILEGL_PIPE_PUSH
             for (Uint32 i = 0; i < kStagedBlobHistogramBuckets; ++i) {
                 g_totalStagedBlobBuckets[i].store(0, std::memory_order_relaxed);
             }
-#endif
-#if MOBILEGL_PIPE_PUSH
             for (Uint32 i = 0; i < kGaugeCount; ++i) {
                 g_gauges[i].store(0, std::memory_order_relaxed);
             }
-#endif
         }
 
         void EmitSummaryLine() {
@@ -436,7 +422,6 @@ namespace MobileGL::MG_Util::PipeStats {
         Bump(g_totalCalls[index], count);
     }
 
-#if MOBILEGL_PIPE_PUSH
     // A STORE, NOT A BUMP, and the difference is the whole reason these are a separate kind.
     // The publisher hands over its OWN run total (a maximum, or a count it has been keeping
     // since the session opened), so accumulating deltas here would double every reading; and a
@@ -447,7 +432,6 @@ namespace MobileGL::MG_Util::PipeStats {
     }
 
     Uint64 GaugeValue(Gauge gauge) { return Read(g_gauges[static_cast<Uint32>(gauge)]); }
-#endif
 
     void CountGate(Gate gate, Bool hit) {
         const Uint32 index = static_cast<Uint32>(gate);
@@ -462,14 +446,12 @@ namespace MobileGL::MG_Util::PipeStats {
 
     void RecordDrawPayloadBytes(Uint64 bytes) { Bump(g_totalPayloadBuckets[PayloadBucketOf(bytes)], 1); }
 
-#if MOBILEGL_PIPE_PUSH
     // P6 gate 8's staged-blob distribution. A count, not a sum: the bytes already have a home
     // in stage-segment-bytes, and what this exists to answer is the SHAPE (how many blobs there
     // were and how big each one was), which a total cannot express.
     void RecordStagedBlobBytes(Uint64 bytes) {
         Bump(g_totalStagedBlobBuckets[PayloadBucketOf(bytes)], 1);
     }
-#endif
 
     void OnPresent() {
         // Every frame accumulator is EXCHANGED for zero, and the exchanged value is what gets
@@ -526,11 +508,9 @@ namespace MobileGL::MG_Util::PipeStats {
     Uint64 TotalPayloadBucket(Uint32 bucket) {
         return bucket < kPayloadHistogramBuckets ? Read(g_totalPayloadBuckets[bucket]) : 0;
     }
-#if MOBILEGL_PIPE_PUSH
     Uint64 TotalStagedBlobBucket(Uint32 bucket) {
         return bucket < kStagedBlobHistogramBuckets ? Read(g_totalStagedBlobBuckets[bucket]) : 0;
     }
-#endif
     Uint64 FrameCount() { return Read(g_frameCount); }
 
     const char* NameOf(ByteClass byteClass) { return kByteClassNames[static_cast<Uint32>(byteClass)]; }
@@ -590,7 +570,6 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " box=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadBoxEmissions)]);
         line += " rect=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadRectEmissions)]);
         line += " jobs=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadJobs)]);
-#if MOBILEGL_PIPE_PUSH
         // Push-only, like the two counters themselves: in a pull build there is no CSO to
         // mint, and a "csom=0 csob=0" that can never be anything else is noise on the one
         // line an operator greps.
@@ -704,7 +683,6 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " whwus=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaitMicros)]);
         // P8-SV: the indirect dispatches, on the same bracket (their barriers are in `wibar`).
         line += " wdsp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDispatches)]);
-#endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {
             if (i != 0) {
@@ -759,7 +737,6 @@ namespace MobileGL::MG_Util::PipeStats {
                     ", \"miss\": " + std::to_string(Read(g_totalGateMiss[i])) + "}";
             json += (i + 1 == kGateCount) ? "\n" : ",\n";
         }
-#if MOBILEGL_PIPE_PUSH
         // The gauges, under their long names. Run totals here as on the summary line.
         json += "  },\n  \"wire\": {\n";
         json += "    \"max-record-bytes\": " +
@@ -790,7 +767,6 @@ namespace MobileGL::MG_Util::PipeStats {
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)])) + ",\n";
         json += "    \"wire-deferred-syncs\": " +
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)])) + "\n";
-#endif
         json += "  },\n  \"cmd-bytes-per-draw-histogram\": [";
         for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
             if (i != 0) {
@@ -798,7 +774,6 @@ namespace MobileGL::MG_Util::PipeStats {
             }
             json += std::to_string(Read(g_totalPayloadBuckets[i]));
         }
-#if MOBILEGL_PIPE_PUSH
         // P6 gate 8's two per-frame numbers have their JSON homes where every other ByteClass and
         // CallClass already does - the `bytes` and `calls` blocks above, under their long names
         // (stage-segment-bytes, wire-records) - so there is nothing to add for them here. The
@@ -814,7 +789,6 @@ namespace MobileGL::MG_Util::PipeStats {
             }
             json += std::to_string(Read(g_totalStagedBlobBuckets[i]));
         }
-#endif
         json += "]\n}\n";
         return json;
     }

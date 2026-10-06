@@ -63,7 +63,6 @@ namespace MobileGL::MG_State::GLState {
         // resets the deleting context's bindings, and other contexts keep their own).
         void UnbindBufferObject(const SharedPtr<BufferObject>& bufferObject);
 
-#if MOBILEGL_PIPE_PUSH
     // P2 brief D4: "did the contents of ANY buffer object move". One counter for every
     // BufferObject ++m_changeSerial site, which is what NEW_VERTEX_BUFFERS /
     // NEW_INDEX_BUFFER / NEW_CONST_BUFFERS / NEW_SHADER_BUFFERS / NEW_SO_TARGETS all
@@ -102,13 +101,10 @@ namespace MobileGL::MG_State::GLState {
         if (it == BufferBindPointTargets.end()) return 0;
         return m_bindPointGeneration[std::distance(BufferBindPointTargets.begin(), it)];
     }
-#endif
 
     private:
-#if MOBILEGL_PIPE_PUSH
     Uint64 m_anyBufferChangeGeneration = 0;
     Array<Uint64, BufferBindPointTargets.size()> m_bindPointGeneration{};
-#endif
         Array<BindingSlot<BufferObject>, GlobalBufferTargets.size()> m_bindingSlots;
         // TODO: query the count somewhere globally?
         // For glBindBufferBase / glBindBufferRange

@@ -31,21 +31,17 @@ namespace MobileGL {
                                                       MipmapInput input) {
                 BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
-#if MOBILEGL_PIPE_PUSH
                 // AFTER the allocation, for TextureObjectWithOneMipmap's reason: BumpShapeVersion
                 // runs first and a descriptor built there would describe the level set this call
                 // is about to change. The FACE rides in `uploadTarget`, so the key the emitter
                 // drops is that face's level and no other face's (final review C-1).
                 PipePublishLevelDescriptor(uploadTarget, mipmapLevel);
-#endif
             }
 
             void TextureObject2DCube::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
-#if MOBILEGL_PIPE_PUSH
                 PipePublishTruncatedDescriptor(uploadTarget, levelCount);
-#endif
             }
 
             void TextureObject2DCube::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel,
@@ -63,11 +59,9 @@ namespace MobileGL {
                     MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
-#if MOBILEGL_PIPE_PUSH
                 // SIX FACES, SIX BLOBS, SIX DRAIN KEYS: the upload target is the face, and it is
                 // what the sub-data record's Target byte carries beside the resource target.
                 if (dirty) PipeNoteLevelDirty(uploadTarget, mipmapLevel);
-#endif
             }
 
             bool TextureObject2DCube::IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
@@ -80,9 +74,7 @@ namespace MobileGL {
                 MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
-#if MOBILEGL_PIPE_PUSH
                 PipeNoteLevelDirty(uploadTarget, mipmapLevel);
-#endif
             }
 
             MipmapDirtyRegion TextureObject2DCube::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,

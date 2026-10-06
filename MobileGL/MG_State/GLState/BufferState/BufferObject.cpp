@@ -82,7 +82,6 @@ namespace MobileGL::MG_State::GLState {
     BufferObject::BufferObject(Uint externalIndex)
         : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
           m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_ownsStagingData{} {
-#if MOBILEGL_PIPE_PUSH
         // P3a D-A2: a resource EXISTS before anything can name it, so resource_create is
         // emitted from the constructor and carries no storage - the store is defined lazily
         // by the first respecify and every backend already tolerates a resource with none.
@@ -90,7 +89,6 @@ namespace MobileGL::MG_State::GLState {
         // set_vertex_buffers names this buffer by handle out of a different subsystem.
         MG_Pipe::MGPipeMintResourceHandle(*this);
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) MG_Pipe::MGPipeEmitResourceCreate(*this);
-#endif
     }
 
     BufferObject::~BufferObject() {
@@ -101,7 +99,6 @@ namespace MobileGL::MG_State::GLState {
         // for a buffer that was never a member.
         MG_Remote::Client::PersistentMapTracker::Instance().Forget(*this);
 #endif
-#if MOBILEGL_PIPE_PUSH
         // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalogue
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
         // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
@@ -112,7 +109,6 @@ namespace MobileGL::MG_State::GLState {
         // a pipe record to drop and no legacy backend object, and one constructed the other
         // way round has the opposite, so the create's answer is the only one that pairs.
         if (MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this)) return;
-#endif
         if (m_resource.Backend() && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
             g_bufferBackendOps->OnDestroy(m_resource.ReleaseBackend());
         }
@@ -121,12 +117,10 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::NotifyRespecify() {
         ++m_changeSerial;
         MGP_NOTE_AGGREGATE(BufferChange);
-#if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             MG_Pipe::MGPipeEmitResourceRespecify(*this);
             return;
         }
-#endif
         if (g_bufferBackendOps && g_bufferBackendOps->Respecify) {
             g_bufferBackendOps->Respecify(*this);
         }
@@ -137,12 +131,10 @@ namespace MobileGL::MG_State::GLState {
         MGP_NOTE_AGGREGATE(BufferChange);
         if (size == 0) return;
         m_hasDefinedContent = true;
-#if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             MG_Pipe::MGPipeEmitResourceSubData(*this, offset, size);
             return;
         }
-#endif
         if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
             g_bufferBackendOps->SubData(*this, offset, size);
         }
@@ -153,7 +145,6 @@ namespace MobileGL::MG_State::GLState {
         MGP_NOTE_AGGREGATE(BufferChange);
         if (range.start >= range.end) return;
         m_hasDefinedContent = true;
-#if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             static_assert(sizeof(appAccess.GetRaw()) <= sizeof(Uint32),
                           "MGPFlushRange::AccessFlags is a Uint32 and carries the application's "
@@ -162,7 +153,6 @@ namespace MobileGL::MG_State::GLState {
                                                   static_cast<Uint32>(appAccess.GetRaw()));
             return;
         }
-#endif
         if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
             g_bufferBackendOps->FlushMappedRange(*this, range, appAccess);
         }
@@ -293,12 +283,10 @@ namespace MobileGL::MG_State::GLState {
         if (m_size < kLargeBufferAdoptBytes) return;
         if (m_resource.IsGpuResident()) return;
         if (m_isMapped) return;
-#if MOBILEGL_PIPE_PUSH
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             if (void* base = MG_Pipe::MGPipeEmitMapPersistent(*this)) m_resource.AdoptPersistentMap(base);
             return;
         }
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // R-6 IS "ALWAYS", AND THIS IS ITS SECOND DOOR. MGPipeApplyMapPersistent declines
         // every acquisition under split - but a split build whose backend registered no
@@ -588,7 +576,6 @@ namespace MobileGL::MG_State::GLState {
         // phase only gives the client a conservative set, and a zero-range announcement stays
         // illegal until P8/P9 make it mean "fully narrowed - nothing is dirty".
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-#if MOBILEGL_PIPE_PUSH
             if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled() && m_resource.IsGpuResident()) {
                 // P11 B2: A T0 STORE IS READ WHERE IT IS. Under split a store is resident only
                 // when T0 adopted it - its pages ARE the client's AHardwareBuffer - so no bytes
@@ -631,7 +618,6 @@ namespace MobileGL::MG_State::GLState {
                 // emission was synchronous and the writeback has already cleared the flag.
                 MG_Remote::Client::AwaitBufferWriteback(*this);
             }
-#endif
             // A buffer with no readback route - no size, or a backend that registered no
             // resource ops - can never catch up, and retrying on every subsequent read would
             // only repeat the same no-op. That is the ONE case the monolith clear covers that
@@ -645,7 +631,6 @@ namespace MobileGL::MG_State::GLState {
         // Cleared unconditionally: without a readback op the shadow can never catch up,
         // and retrying on every subsequent read would only repeat the same no-op.
         m_gpuWritePending = false;
-#if MOBILEGL_PIPE_PUSH
         if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             // The answer comes back through the reverse channel's OnBufferWriteback, which
             // resolves this handle to this object and writes the shadow before the server
@@ -655,7 +640,6 @@ namespace MobileGL::MG_State::GLState {
             MG_Pipe::MGPipeEmitResourceReadback(*this);
             return;
         }
-#endif
         if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->ReadbackFromGpu == nullptr) {
             return;
         }
@@ -704,7 +688,6 @@ namespace MobileGL::MG_State::GLState {
     // NotifyContentWrite on a resident store only bumps the serial: the backend has no
     // separate copy to sync, so no transfer op runs.
     void BufferObject::LandBytesIntoResidentStore(SizeT offset, DataPtr bytes) {
-#if MOBILEGL_PIPE_PUSH
         // buffer_subdata_resident stays NULLABLE and stays asymmetric: one backend
         // deliberately does not implement it, and the frontend checks the pipe table exactly
         // as it checks the op table it replaces, so a backend without it keeps the legacy
@@ -727,7 +710,6 @@ namespace MobileGL::MG_State::GLState {
             NotifyContentWrite(offset, bytes.size);
             return;
         }
-#endif
         if (bytes.size > 0 && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
             g_bufferBackendOps->ResidentSubData(*this, offset, bytes);
             m_hasDefinedContent = true;
@@ -762,14 +744,10 @@ namespace MobileGL::MG_State::GLState {
         // fills in place anyway, so a whole-arena clear would allocate a whole arena
         // for nothing.
         if (m_resource.IsGpuResident() &&
-#if MOBILEGL_PIPE_PUSH
             // The same question, asked of whichever table owns the family in this build.
             (MG_Pipe::MGPipeResourceSubsystemEnabled()
                  ? MG_Pipe::MGPipeResourceOpsHaveSubDataResident()
                  : (g_bufferBackendOps && g_bufferBackendOps->ResidentSubData))
-#else
-            g_bufferBackendOps && g_bufferBackendOps->ResidentSubData
-#endif
         ) {
             Vector<Uint8> expanded(size);
             if (pattern.size == 1) {
@@ -878,14 +856,12 @@ namespace MobileGL::MG_State::GLState {
         if (m_isMapped) {
             return false;
         }
-#if MOBILEGL_PIPE_PUSH
         if (m_size != 0 && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this);
             if (pushedBase == nullptr) return false;
             m_resource.AdoptPersistentMap(pushedBase);
             return true;
         }
-#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // R-6's second door, as in TryAdoptLargeStorage above.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return false;
@@ -943,7 +919,6 @@ namespace MobileGL::MG_State::GLState {
             // returning; AdoptPersistentMap then releases the shadow. Falls back to the
             // shadow when the backend declines (returns null). Only attempted once - the
             // storage is immutable and outlives unmap/remap.
-#if MOBILEGL_PIPE_PUSH
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
                 !(access & BufferMappingAccessBit::FlushExplicit) &&
                 MG_Pipe::MGPipeResourceSubsystemEnabled()) {
@@ -967,7 +942,6 @@ namespace MobileGL::MG_State::GLState {
                 }
                 return m_resource.Bytes() + range.start;
             }
-#endif
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
                 !(access & BufferMappingAccessBit::FlushExplicit) &&
 #if MOBILEGL_BUILD_DISAGGREGATED

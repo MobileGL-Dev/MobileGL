@@ -32,7 +32,6 @@ namespace MobileGL::MG_State::GLState {
 
     ProgramObject::~ProgramObject() {
         CancelLink();
-#if MOBILEGL_PIPE_PUSH
         // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
         // garbage sweep. This is the last SharedPtr to this object dropping - not
         // glDeleteProgram, which only marks the name and leaves a still-bound object very much
@@ -56,7 +55,6 @@ namespace MobileGL::MG_State::GLState {
         // a proven no-op, because the slot allocator refuses a slot that is not live at that
         // generation.
         MG_Pipe::MGPipeEmitShaderCsoDestroyAndFree(m_lifetimeId);
-#endif
     }
 
     // EnsureLinkJoined() is defined inline in ProgramObject.h (see the comment there for

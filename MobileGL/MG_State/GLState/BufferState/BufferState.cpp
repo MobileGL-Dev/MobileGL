@@ -40,7 +40,6 @@ namespace MobileGL::MG_State::GLState {
                 if (bindingPoint.GetBoundObject() == bufferObject) {
                     bindingPoint.Bind(nullptr);
                     bindingPoint.ClearRange();
-#if MOBILEGL_PIPE_PUSH
                     // An UNBIND, and the one writer of an indexed point that is not an
                     // entry point (GL_Buffer.cpp's BindBuffer{Base,Range}_State and
                     // Core.cpp's transform-feedback writers bump their own): without the
@@ -51,7 +50,6 @@ namespace MobileGL::MG_State::GLState {
                     // "BackendSlotTable.Generation"} (DeletedBoundBufferScenario).
                     NoteBindPointChanged(BufferBindPointTargets[static_cast<SizeT>(
                         &bindingPointArray - m_bufferBindPointTargets.data())]);
-#endif
                 }
             }
         }

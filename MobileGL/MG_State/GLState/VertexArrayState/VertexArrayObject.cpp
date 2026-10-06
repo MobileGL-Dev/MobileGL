@@ -38,7 +38,6 @@ namespace MobileGL::MG_State::GLState {
         }
     }
 
-#if MOBILEGL_PIPE_PUSH
     VertexArrayObject::~VertexArrayObject() {
         // P2 step e2 / P3a C-1: ANNOUNCE the death instead of leaving the backend to discover
         // it in a garbage sweep, and RETURN THE CLIENT'S OWN SLOT while doing it. This is the
@@ -62,7 +61,6 @@ namespace MobileGL::MG_State::GLState {
         // (BufferObject.cpp -> MGPipeEmitResourceDestroyAndFree).
         MG_Pipe::MGPipeEmitVertexElementsDestroyAndFree(m_lifetimeId);
     }
-#endif
 
     void VertexArrayObject::EnableAttribute(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;

@@ -23,7 +23,6 @@ namespace MobileGL::MG_State::GLState {
         return s_nextFramebufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
-#if MOBILEGL_PIPE_PUSH
     FramebufferObject::~FramebufferObject() {
         // P4a D-I2: A FRAMEBUFFER HAS A HANDLE AND NO WIRE LIFETIME. PipeCalls.def carries
         // resource_destroy and five delete_* rows and NO framebuffer delete, because a
@@ -42,7 +41,6 @@ namespace MobileGL::MG_State::GLState {
         // record's ContentHash.
         MG_Pipe::MGPipeEmitFramebufferDestroyAndFree(m_lifetimeId);
     }
-#endif
 
     // FramebufferAttachmentObject
     FramebufferAttachmentObject::FramebufferAttachmentObject(
