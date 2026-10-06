@@ -2,10 +2,10 @@
 # Regenerate: python3 scripts/link_ratchet.py --build-dir <dir> \
 #               --baseline scripts/data/link_ratchet_baseline.txt \
 #               --write-baseline scripts/data/link_ratchet_baseline.txt
-# base commit : 14e1c8b9b103b6900be8f174cf5f5b1a50dcfd66
-# configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DMOBILEGL_PIPE_PUSH=ON -DCMAKE_BUILD_TYPE=Release
+# base commit : daf2b44c71da79d261e74f15cee56079bc31bafc
+# configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : build-split
-# count       : 172 (171 at the base commit; +1 P11 M2, TextureObjectWithOneMipmap::GetStorageDirtyFootprint)
+# count       : 171
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores; `# P13` marks a symbol that cannot fall before P13 establishes module
@@ -176,7 +176,6 @@ MobileGL::MG_State::GLState::TextureObjectWithOneMipmap::UpdateMipmapSubData(Mob
 MobileGL::MG_State::GLState::TextureUnit::GetAllBindingSlots()
 MobileGL::MG_State::GLState::TextureUnit::GetBindingSlot(MobileGL::TextureTarget)
 MobileGL::MG_State::GLState::TextureUnit::GetSamplerObject() const
-MobileGL::MG_State::GLState::VertexArrayObject::GetAllAttributeVersions() const
 MobileGL::MG_State::GLState::VertexArrayObject::GetAllAttributes() const
 MobileGL::MG_State::GLState::VertexArrayObject::GetAttribute(unsigned int) const
 MobileGL::MG_State::GLState::VertexArrayObject::GetIndexBufferBindingSlot()
