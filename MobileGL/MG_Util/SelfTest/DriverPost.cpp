@@ -3028,7 +3028,7 @@ namespace MobileGL::MG_Util::SelfTest {
                                             graphicsQueueFamilyIndex, deviceExtensions, features,
                                             vkGetPhysicalDeviceFeatures2Fn, vkGetPhysicalDeviceProperties2Fn);
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The "Known Driver Bugs" section's Vulkan table (DriverBugProbes.h): each probe makes its
         // own throwaway device on the physical device picked above.
         {
