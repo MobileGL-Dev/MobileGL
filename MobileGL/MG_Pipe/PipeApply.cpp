@@ -119,6 +119,66 @@
 
 namespace MobileGL::MG_Pipe {
 
+    // ----------------------------------------------------------------------------
+    // P13 W5: THE RECORD ARM'S FAIL / LATCH SEAM (PipeSessionFail.h). Constant-initialized
+    // pointers, so a registration made during another translation unit's static init (FatalFunnel.cpp)
+    // is never overwritten by this one's.
+    namespace {
+        constinit MGPipeRecordFailHook g_recordFailHook = nullptr;
+        constinit MGPipeRecordLatchHook g_recordLatchHook = nullptr;
+        constinit MGPipeRecordLatchedHook g_recordLatchedHook = nullptr;
+
+        void FormatRecordLine(char (&line)[512], const char* fmt, va_list args) {
+            const int written = std::vsnprintf(line, sizeof(line), fmt, args);
+            if (written < 0) {
+                std::snprintf(line, sizeof(line), "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
+            }
+        }
+
+        [[noreturn]] void RecordDeath(MGFatalFamily family, const char* line) {
+            if (g_recordFailHook != nullptr) g_recordFailHook(family, line);
+            // NO HOOK (no MG_Remote in this library): the line, its stderr echo - the logger's
+            // console sink is off and a gtest death matcher reads the child's stderr - and the abort.
+            MGLOG_F("%s", line);
+            std::fputs(line, stderr);
+            std::fputc('\n', stderr);
+            std::fflush(stderr);
+            std::abort();
+        }
+    } // namespace
+
+    void MGPipeInstallRecordFailHooks(MGPipeRecordFailHook fail, MGPipeRecordLatchHook latch,
+                                      MGPipeRecordLatchedHook latched) {
+        g_recordFailHook = fail;
+        g_recordLatchHook = latch;
+        g_recordLatchedHook = latched;
+    }
+
+    void MGPipeRecordFail(MGFatalFamily family, const char* fmt, ...) {
+        char line[512];
+        va_list args;
+        va_start(args, fmt);
+        FormatRecordLine(line, fmt, args);
+        va_end(args);
+        RecordDeath(family, line);
+    }
+
+    bool MGPipeRecordLatch(MGFatalFamily family, const char* fmt, ...) {
+        char line[512];
+        va_list args;
+        va_start(args, fmt);
+        FormatRecordLine(line, fmt, args);
+        va_end(args);
+        if (g_recordLatchHook != nullptr) return g_recordLatchHook(family, line);
+        RecordDeath(family, line);
+    }
+
+    bool MGPipeRecordLatched() { return g_recordLatchedHook != nullptr && g_recordLatchedHook(); }
+
+    MGPipeRecordFailHook MGPipeRecordFailHookInstalled() { return g_recordFailHook; }
+    MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() { return g_recordLatchHook; }
+    MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() { return g_recordLatchedHook; }
+
 #if MOBILEGL_BUILD_DISAGGREGATED
     // ----------------------------------------------------------------------------
     // THE BACKEND-SIDE SESSION-FAIL SEAM (P7 wave 0). PipeSessionFail.h holds the argument;

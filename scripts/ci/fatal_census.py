@@ -110,7 +110,8 @@ EXCLUDED_PARTS = ("MG_Test", "MG_Benchmark", "MG_IntegrationTest")
 SOURCE_SUFFIXES = (".cpp", ".h", ".inc")
 
 BASELINE = Path(__file__).with_name("fatal_census_baseline.json")
-FAMILIES_DEF = ROOT / "MobileGL" / "MG_Remote" / "FatalFamilies.def"
+# P13 W5: the vocabulary moved to MG_Pipe so the record arm can name its deaths without MG_Remote.
+FAMILIES_DEF = ROOT / "MobileGL" / "MG_Pipe" / "FatalFamilies.def"
 PROTOCOL_FBS = ROOT / "MobileGL" / "MG_Remote" / "Protocol" / "protocol.fbs"
 
 # The funnel's own files. WireLog.cpp's abort is reached only through WireLogFatal, and rule 2
@@ -125,6 +126,9 @@ FUNNEL_FILES = {
     # call, so it is exempt from both rules for the same reason WireLog is.
     "MobileGL/MG_Remote/FatalFunnel.cpp",
     "MobileGL/MG_Remote/FatalFunnel.h",
+    # P13 W5: the seam header declares MGPipeRecordFail / MGPipeRecordLatch; it has no abort and no
+    # call, and its declarations would otherwise read as calls with no family word.
+    "MobileGL/MG_Pipe/PipeSessionFail.h",
 }
 
 # THE ALLOW-LIST FOR FUNNELS THAT DO NOT GET A WHOLE FILE TO THEMSELVES (P7 wave 0). An unmarked
@@ -141,6 +145,10 @@ FUNNEL_SITES = {
          "the no-hook default of the backend session-fail seam (MG_Pipe/PipeSessionFail.h): the "
          "line it logs is the CALLER's, family word and all, and with MG_Remote's hook installed "
          "this abort is never reached at all"),
+        ("[[noreturn]] void RecordDeath(",
+         "P13 W5: the no-hook default of the record arm's fail seam (MGPipeRecordFail / "
+         "MGPipeRecordLatch): the line is the CALLER's, family word and all, and wherever MG_Remote "
+         "is linked FatalFunnel.cpp's static registration sends it through SessionFail instead"),
     ),
     "MobileGL/MG_Pipe/generated/PipeWire.inc": (
         ("MGPipeWireProtocolFatal",
@@ -180,6 +188,10 @@ SESSION_FAIL_CALL = re.compile(r"(?<![A-Za-z0-9_])SessionFail\s*\(")
 # word to FatalFamilies.def. Without this, converting a site from SessionFail to SessionLatch
 # would quietly take it out of the census.
 SESSION_LATCH_CALL = re.compile(r"(?<![A-Za-z0-9_])SessionLatch\s*\(")
+# P13 W5: the record arm's twins (MG_Pipe/PipeSessionFail.h), which reach SessionFail / SessionLatch
+# through FatalFunnel.cpp's registration and die alone without it - held to the same rule. A
+# definition (`void MGPipeRecordFail(` / `bool MGPipeRecordLatch(`) is not a call.
+RECORD_FAIL_CALL = re.compile(r"(?<![A-Za-z0-9_])(?<!void )(?<!bool )MGPipeRecord(?:Fail|Latch)\s*\(")
 FAMILY_ROW = re.compile(r"^\s*X\(([A-Za-z][A-Za-z0-9]*)\s*,", re.MULTILINE)
 REFUSE_ENUM = re.compile(r"enum\s+RefuseCode\s*:[^{]*\{(.*?)\}", re.DOTALL)
 ENUM_VALUE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", re.MULTILINE)
@@ -310,7 +322,7 @@ def unnamed_funnel_call_lines(lines):
     found = []
     for index, line in enumerate(lines):
         if not (WIRE_LOG_FATAL_CALL.search(line) or SESSION_FAIL_CALL.search(line) or
-                SESSION_LATCH_CALL.search(line)):
+                SESSION_LATCH_CALL.search(line) or RECORD_FAIL_CALL.search(line)):
             continue
         window = "\n".join(lines[index:index + kMarkerWindow])
         if not MARKER.search(window):
@@ -331,6 +343,11 @@ SELF_TEST_CASES = (
     ('WireLogFatal("MGPipe: no family word");', 1),
     ('MGPipeSessionLatch(family, format);', 0),
     ('MGPipeSessionFail(family, format);', 0),
+    ('MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: no family word");', 1),
+    ('MGPipeRecordLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: no family word %d", x);', 1),
+    ('MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \\"w\\"}");', 0),
+    ('void MGPipeRecordFail(MGFatalFamily family, const char* fmt, ...) {', 0),
+    ('bool MGPipeRecordLatch(MGFatalFamily family, const char* fmt, ...) {', 0),
 )
 
 
@@ -485,7 +502,7 @@ def main():
     rowless = sorted(set(result["families"]) - declared_families())
     if rowless:
         failures.append(
-            "family word(s) with no row in MG_Remote/FatalFamilies.def: " + ", ".join(rowless) +
+            "family word(s) with no row in MG_Pipe/FatalFamilies.def: " + ", ".join(rowless) +
             ". A row is the family's projection onto the seven-value wire FatalCode (5.2's D2 "
             "ruling); a word with no row tells the peer nothing, and FatalCodeForFamily cannot "
             "compile a call that names it.")

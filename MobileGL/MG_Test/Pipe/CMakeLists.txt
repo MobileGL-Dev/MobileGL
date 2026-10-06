@@ -24,6 +24,12 @@ if (MSVC)
         target_compile_options(PipeCatalogueTest PRIVATE /Zc:preprocessor)
 endif()
 
+# P13 W5: the record arm's fail / latch seam, in both library shapes (with and without MG_Remote).
+add_executable(RecordFailSeamTest RecordFailSeamTest.cpp)
+target_include_directories(RecordFailSeamTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(RecordFailSeamTest PRIVATE GTest::gtest_main ${LINK_LIBRARIES})
+gtest_discover_tests(RecordFailSeamTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
 # P7 B4 aggregate-wait regression control shares the production selector; no device is needed.
 add_executable(MagmaAggregateWaitTest MagmaAggregateWaitTest.cpp)
 target_include_directories(MagmaAggregateWaitTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)

@@ -307,4 +307,23 @@ namespace MobileGL::MG_Remote {
     }
     } // namespace
 
+    // P13 W5: THE RECORD ARM'S DEATHS GO THROUGH THIS FUNNEL WHEREVER MG_Remote IS LINKED.
+    // Registered at static init rather than at role init: both roles, and unit cases that never
+    // run one, call into the record arm, and each of its deaths must count, publish and latch
+    // exactly as the direct SessionFail / SessionLatch call it replaced did. The line arrives
+    // formatted, so it is passed through "%s" - the same bytes reach the log and the frame.
+    namespace {
+        [[noreturn]] void RecordFailThroughFunnel(MGFatalFamily family, const char* line) {
+            SessionFail(family, "%s", line);
+        }
+        bool RecordLatchThroughFunnel(MGFatalFamily family, const char* line) {
+            return SessionLatch(family, "%s", line);
+        }
+        [[maybe_unused]] const bool g_recordFailHooksRegistered = [] {
+            MG_Pipe::MGPipeInstallRecordFailHooks(&RecordFailThroughFunnel, &RecordLatchThroughFunnel,
+                                                  &SessionLatched);
+            return true;
+        }();
+    } // namespace
+
 } // namespace MobileGL::MG_Remote

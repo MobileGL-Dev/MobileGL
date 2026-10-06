@@ -10,23 +10,21 @@
 // wire FatalCode, both generated from FatalFamilies.def so a family, its name and its wire code
 // cannot drift apart: adding a family is one row, and a row that forgets its code does not
 // compile.
+//
+// P13 W5: the vocabulary itself (the enum, its names, its count) lives in MG_Pipe/PipeFatalFamily.h
+// so the record arm can die by name in a library without MG_Remote; this header adds the wire
+// projection and re-exports the vocabulary under its old names.
 
 #pragma once
 
+#include <MG_Pipe/PipeFatalFamily.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
-
-#include "FatalFamilies.def"
 
 namespace MobileGL::MG_Remote {
 
-    // One value per row of FatalFamilies.def, in file order. The names ARE the family words that
-    // appear in every `Fatal{...}` log line, which is what lets FatalFamilyName round-trip
-    // against the string a site passes.
-    enum class MGFatalFamily : ::std::uint32_t {
-#define X(Family, WireCode, Why) Family,
-        MGL_FATAL_FAMILY_LIST(X)
-#undef X
-    };
+    using ::MobileGL::MG_Pipe::FatalFamilyName;
+    using ::MobileGL::MG_Pipe::MGFatalFamily;
+    using ::MobileGL::MG_Pipe::MGFatalFamilyCount;
 
     // THE PROJECTION, AS A TOTAL TABLE. Not a switch with a default arm: this build has no
     // -Werror, so a default would silently swallow a family added without a code. Every family
@@ -41,28 +39,6 @@ namespace MobileGL::MG_Remote {
         // Unreachable for any real enum value; kept so the function is total for the compiler
         // without a `default:` that would mask a missing row.
         return ::MobileGL::Wire::FatalCode::ProtocolCorruption;
-    }
-
-    // The family's own word, byte-for-byte what appears inside `Fatal{<name>, ...}`. A death
-    // site passes both the enum and its full message string; a test asserts this name is present
-    // in that string, which is what keeps the two from diverging.
-    inline const char* FatalFamilyName(MGFatalFamily family) {
-        switch (family) {
-#define X(Family, WireCode, Why) \
-    case MGFatalFamily::Family: return #Family;
-            MGL_FATAL_FAMILY_LIST(X)
-#undef X
-        }
-        return "<unknown>";
-    }
-
-    // The count, for a test that walks every family.
-    inline constexpr ::std::size_t MGFatalFamilyCount() {
-        ::std::size_t n = 0;
-#define X(Family, WireCode, Why) ++n;
-        MGL_FATAL_FAMILY_LIST(X)
-#undef X
-        return n;
     }
 
 } // namespace MobileGL::MG_Remote

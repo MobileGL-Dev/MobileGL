@@ -39,6 +39,8 @@
 
 #pragma once
 
+#include <MG_Pipe/PipeFatalFamily.h>
+
 namespace MobileGL::MG_Pipe {
 
     // THE FAMILIES THAT CROSS THIS BOUNDARY, AND ONLY THOSE. Not `MGFatalFamily` cast to an
@@ -84,6 +86,44 @@ namespace MobileGL::MG_Pipe {
     __attribute__((format(printf, 2, 3)))
 #endif
     void MGPipeSessionFail(MGPipeFatalFamily family, const char* fmt, ...);
+
+    // ---- P13 W5: THE RECORD ARM'S DEATHS, IN EVERY BUILD -------------------------------------
+    //
+    // The record arm's own code - the staged stores, the verb sink, the verb port - dies by
+    // family word (MG_Pipe::MGFatalFamily, the whole FatalFamilies.def vocabulary) and, where a
+    // session can be ended instead of the process, latches. With MG_Remote linked, FatalFunnel.cpp
+    // registers SessionFail / SessionLatch / SessionLatched here at static init, so every DISAGG
+    // process - unit cases with no role init included - counts, publishes and latches exactly as
+    // a direct call did. Without MG_Remote (the FCL shape) the defaults are the monolith answer:
+    // log the line, echo it to stderr (a death test reads the child's stderr), abort; latching is
+    // dying; nothing is ever latched.
+    //
+    // `line` is the FULLY FORMATTED message, family word and all, as for MGPipeSessionFail.
+    using MGPipeRecordFailHook = void (*)(MGFatalFamily family, const char* line);
+    using MGPipeRecordLatchHook = bool (*)(MGFatalFamily family, const char* line);
+    using MGPipeRecordLatchedHook = bool (*)();
+    // Last writer wins; a null leaves that half on its default.
+    void MGPipeInstallRecordFailHooks(MGPipeRecordFailHook fail, MGPipeRecordLatchHook latch,
+                                      MGPipeRecordLatchedHook latched);
+    // The installed hooks, or nullptr - so a test proves the registration happened (and restores
+    // what it replaced) without having to die to find out.
+    MGPipeRecordFailHook MGPipeRecordFailHookInstalled();
+    MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled();
+    MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled();
+    [[noreturn]]
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((format(printf, 2, 3)))
+#endif
+    void MGPipeRecordFail(MGFatalFamily family, const char* fmt, ...);
+    // Returns false (a Bool site reads `return MGPipeRecordLatch(...);`) when the hook latched the
+    // calling session; with no latch to raise it dies as MGPipeRecordFail does.
+    bool
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 2, 3)))
+#endif
+        MGPipeRecordLatch(MGFatalFamily family, const char* fmt, ...);
+    // Whether the calling session already latched (false with no hook).
+    bool MGPipeRecordLatched();
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // ---- THE LATCH TWIN: A LOST GPU DEVICE ENDS ITS SESSION, NOT THE PROCESS ----------------
