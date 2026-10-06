@@ -119,9 +119,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     EsprytSlotArmVerdict ClassifyEsprytSlotArm(Bool subsystemBitSet, Bool legacyMemosEnabled);
 
-    // This process's verdict, read off MG_Config::Features. Latches nothing and stops nothing.
-    EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict();
-
     // Says, at backend bring-up, that the knobs leave no arm - and does NOT stop.
     //
     // The stop cannot live here, and that is the whole point of the split. Backend context
@@ -137,6 +134,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // DirectGLESSlotTable.EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping, which runs
     // the real bring-up entry point under the pair in a forked child: edit that site back to
     // ResolveEsprytSlotTablesArm() and the case fails naming both knobs.
+    // This process's verdict, read off MG_Config::Features. Latches nothing and stops nothing.
+    EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict();
+
     void DiagnoseEsprytSlotArm();
 
     // Reads the config, logs, installs the death-notice consumer, and STOPS when the operator

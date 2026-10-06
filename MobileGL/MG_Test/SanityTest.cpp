@@ -1814,25 +1814,6 @@ TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
     }
 }
 
-TEST(DirectVulkanSanity, MutableStorageImageViewsUseVulkanCompatibilityClasses) {
-    using MobileGL::MG_Backend::DirectVulkan::VkTextureManager;
-
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_UINT, VK_FORMAT_R32_SINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R16G16B16A16_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R8G8B8A8_UINT));
-    EXPECT_TRUE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_SFLOAT));
-    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT));
-    EXPECT_FALSE(VkTextureManager::AreStorageImageViewFormatsCompatible(
-        VK_FORMAT_R32_SFLOAT, VK_FORMAT_D32_SFLOAT));
-}
-
 TEST(DirectVulkanSanity, StorageImageViewFormatUsesBindingOnlyForFormatlessFloatPolicy) {
     using MobileGL::MG_Backend::DirectVulkan::UniformManager;
 

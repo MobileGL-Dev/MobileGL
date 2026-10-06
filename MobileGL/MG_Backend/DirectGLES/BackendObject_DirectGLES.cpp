@@ -981,6 +981,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // built).
         UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
+        // The colour-attachment cap the framebuffer family checks is known from here on.
+        DirectGLES::ResolveRecordArmFamilies();
         PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
         return true;

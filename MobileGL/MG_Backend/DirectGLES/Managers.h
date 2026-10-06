@@ -755,6 +755,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool ResolveTextureResourceSubsystemArm();
     Bool ResolveSamplerSubsystemArm();
     Bool ResolveProgramSubsystemArm();
+    // P13 W6: every family runs the record arm - the frontend arms these resolvers used to choose
+    // between are gone, so no site asks them any more. What they still decide is whether this
+    // configuration and this driver CAN run it (a mask missing a family's dependency, a
+    // colour-attachment cap above the wire's width), and that is asked once, at capability
+    // bring-up, and stops by name when the answer is no.
+    void ResolveRecordArmFamilies();
 
     inline Bool FramebufferSubsystemEnabled() {
         static const Bool enabled = ResolveFramebufferSubsystemArm();
@@ -1288,33 +1294,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // that question otherwise. Push-only, like the rest of this block.
         Uint CurrentBufferContextGeneration();
 
-        // P5e (vi), CONTRACT-P5E §5.1 + §5.8 (ruling 1 / ID-81): THE ARM SELECTOR for this
-        // family, and it is a conjunction on purpose.
-        //
-        //   Transport != Monolith   the record arm exists because there is no frontend VAO on
-        //                           this side of a real split. Under Transport=monolith the
-        //                           push build keeps its frontend arms token for token - that
-        //                           is what the verify comparator compares against, and what
-        //                           makes MOBILEGL_IPC_RUN_AHEAD=0 a pure wait-rule A/B on
-        //                           identical server code rather than an arm swap.
-        //   the family bit          `0x0ff` (bit 7 on, bit 8 off) is a supported A/B and must
-        //                           keep running the legacy vertex-input walk; the bit is
-        //                           already the gate the rest of this family reads.
-        //
-        // It is NOT gated on run-ahead. The records carry the whole family either way, so a
-        // lockstep split session reads them too and the wait rule changes nothing here - which
-        // is the only reason ra can flip one constant at the end of the phase and change no
-        // backend code at all.
-        //
-        // P5e (mv): it lives in the HEADER rather than in DirectGLES.cpp because the multi-draw
-        // path is a second translation unit that has to select the SAME arm - and the addendum's
-        // rule is that a site states the transport test it relies on, which a copy of the
-        // conjunction in MultiDraw.cpp would satisfy in letter while giving the family two
-        // selectors that can drift apart. One definition, spelled at every site that reads it.
-        inline Bool VertexInputReadsRecords() {
-            return VertexInputSubsystemEnabled();
-        }
-
         // Registered as the frontend's BufferBackendOps at backend init and on
         // every MakeCurrent (the ES context can be destroyed and recreated, e.g.
         // by the trace replayer's probe context).
@@ -1380,15 +1359,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // its retained store) forever. Compared and stamped by
         // BackendVertexArrayObject::SyncToBackend.
         extern Uint64 g_bufferBackendIdGeneration;
-        // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
-        // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER / GL_TRANSFORM_FEEDBACK_BUFFER):
-        // skips the GL call when the (id, range) already at that index matches, like the
-        // array-buffer/texture/sampler caches already do. Invalidated on MakeCurrent
-        // (context may reset).
-        // Binds the transform feedback capture points [0, bufferCount) from the frontend
-        // state, and touches nothing else - in particular it never binds a zero the
-        // application did not ask for. See the definition for why that matters on Mali.
-        void SyncTransformFeedbackBindingPoints(SizeT bufferCount);
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id);
         void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size);
         void InvalidateIndexedBufferBindingCache();
@@ -1503,7 +1473,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         public:
             BackendVertexArrayObject();
             ~BackendVertexArrayObject();
-            void SyncToBackend(const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject);
             // PUBLIC AS OF P5e (vi), and the move is the point rather than a convenience: with
             // a live transport there is no frontend VAO on this side to hand to the overload
             // above, so VertexArrayImpl::SyncCurrentVAOFromRecords calls this ENTRY directly
@@ -1515,26 +1484,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncClientSideAttributesForDrawArrays(
                 const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
                 Uint32 fetchBaseInstance = 0);
-            // THE SAME UPLOAD FOR A DRAW WHOSE FETCHED ELEMENTS THE (first, count) RANGE DOES NOT
-            // DESCRIBE: an indexed draw reads the elements its indices name, an instanced one one
-            // element per instance, and the indirect forms a range that lives in GPU memory.
-            // `plan` is MGPipeClientFetchPlan's answer for this very draw, so this arm and the
-            // wire arm's owned snapshot fetch the same elements by construction.
-            //
-            // False when a client array could not be snapshotted (an index or command block this
-            // side cannot read, a fetch range that cannot be represented). The caller must then
-            // SKIP the draw: issuing it would have the shader read whatever the ES context last
-            // held for that attribute, which is a wrong picture rather than an error.
-            //
-            // UNGUARDED WITH ITS CALLERS. Its only call site is
-            // VertexArrayImpl::SyncClientSideVertexArraysForFetch in DirectGLES.cpp, whose
-            // body returns early unless the transport is Monolith - and the monolith arm is
-            // what the pull, verify and push builds run, not a split-arm fallback. Those
-            // flavors therefore compile it, so its declaration and definition (Managers.cpp)
-            // have to be visible there too.
-            Bool SyncClientSideAttributesForDraw(
-                const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject,
-                const MG_Pipe::MGPipeClientFetchPlan& plan, Uint32 fetchBaseInstance);
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
             void Bind() const;
 
@@ -1940,11 +1889,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // attachment sync and the image sweep both call it, which is why it is declared
             // once here rather than twice in two packages' worktrees.
             void SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture);
-            // The storage half of the sync for a texture created by glTextureView. Instead of
-            // allocating storage and replaying uploads, it makes this object's ES name BE a view
-            // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
-            // two names one image and independent per-texture parameters at the same time. The
-            // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
@@ -2532,13 +2476,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resolving it here keeps the monolith-glue lookup at one site per sync.
         const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(MG_Pipe::MGPipeHandle fbo);
 
-        // THE BINDING QUESTION, WHICH IS NOW A DIFFERENT QUESTION FROM THE DESCRIPTION (ID-19(d)):
-        // "is the framebuffer this handle names the one bound to `target`". One array compare
-        // against MGPipeApplierState::BoundFramebuffer, never a record lookup - a Named record
-        // describes an object without claiming any binding for it, so asking the record would
-        // give the wrong answer by construction.
-        Bool PushedFramebufferIsBoundTo(FramebufferTarget target, MG_Pipe::MGPipeHandle fbo);
-
         // ---- P5e (fb, CONTRACT-P5E.md §5.4): the reverse index, texture -> framebuffers ------
         //
         // "Which framebuffers currently have this texture attached." The detach walk
@@ -2554,8 +2491,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // why nothing prunes a dead row.
         void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
                                                const MG_Pipe::MGPFramebufferState& record);
-        Vector<MG_Pipe::MGPipeHandle> FramebuffersAttachingTexture(MG_Pipe::MGPipeHandle texture);
-
         // The record's surface for an attachment POINT, or null when this record does not
         // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
         // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
@@ -2754,8 +2689,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void EnsureDepthAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level,
                                      Bool withStencil, Bool stencilOnly = false);
         void EnsureDepthAttachmentLayer(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLint level, GLint layer);
-        void EnsureNoColorAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
-        void EnsureNoDepthAttachment(ScratchFramebuffer& fb, GLenum fbTarget);
         void EnsureReadBuffer(ScratchFramebuffer& fb, GLenum readBuffer);
         void EnsureDrawBuffer(ScratchFramebuffer& fb, GLenum drawBuffer);
         // A 1x1 RGBA8-renderbuffer-complete FBO (GenerateMipmap needs a complete
@@ -3007,9 +2940,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint GetUniformBlockBinding(Uint index) const;
             Int GetUniformSamplerOrImageUnitIndex(Uint location) const;
 
-            // The monolith-glue constructor: the archive IS the frontend's live tables, so
-            // there is no overlay and the three mutable fields answer from them directly.
-            static ProgramArchiveSource FromFrontend(const MG_State::GLState::ProgramObject& program);
             // The handle arm: the record's own archive, with its three tails overlaid.
             static ProgramArchiveSource FromRecord(MG_Pipe::MGPipeHandle cso,
                                                    const MG_Pipe::MGPipeShaderCsoRecord& record);
@@ -3079,7 +3009,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
-            void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
             // P5e (pg), CONTRACT-P5E.md §5.5: the same sync keyed on the ShaderCso HANDLE and
             // answered from the record - the archive the create carries and the three binding
             // tails set_program_bindings carries. It is an OVERLOAD beside the frontend one,
@@ -3361,12 +3290,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has to rebuild it. Computed from the values, so re-setting a block to the binding it
         // already has costs nothing. 0 when nothing was ever rebound.
         Uint64 ComputeShaderStorageBlockBindingSignature(const ProgramBuildSource& src);
-        // P5e (pg): the computation itself, for the monolith arm - the source constructor seeds
-        // itself with it and the monolith draw path asks it per draw. Push-only: in a pull build
-        // the overload above IS this body, so no name is added there.
-        Uint64 ComputeShaderStorageBlockBindingSignatureOf(
-            const MG_State::GLState::ProgramObject& program);
-
         // Everything the image-format bake needs from one walk of a program's uniform
         // reflection. GLSL ES requires a format layout qualifier on every image uniform;
         // desktop GLSL lets a writeonly (or readonly) declaration omit one, and the only
@@ -3581,9 +3504,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                         MG_Pipe::MGPipeKind::SamplerViewCso>;
         extern BackendSamplerViewTable g_backendSamplerViews;
 
-        // Resolve-or-create / resolve-only by the handle the call carried. Neither touches
-        // MGPipeSlots(): the handle ARRIVED, already minted by the side that owns minting.
-        BackendSamplerViewObject* GetOrCreateSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
         BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
 
         // MONOLITH GLUE, and named as such, the HandleOfBuffer shape: the SamplerViewCso handle

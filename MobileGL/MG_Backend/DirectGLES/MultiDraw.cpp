@@ -177,75 +177,42 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
         BoundIndexBufferView ResolveBoundIndexBuffer(IndexBufferQuestion question, const char* entry) {
             BoundIndexBufferView view;
-            if (BufferImpl::VertexInputReadsRecords()) {
-                const auto& st = MG_Pipe::MGPipeApplier();
-                const MG_Pipe::MGPipeHandle res = BufferImpl::ResolveDrawIndexBufferFromRecord(st).Res;
-                // A null Res is "no element array buffer bound", exactly as a null frontend slot
-                // is on the arm below - the batch's indices are a client array, and every caller
-                // already has an arm for that. It is NOT the arm test; the arm was decided above.
-                if (MG_Pipe::MGPipeHandleIsNull(res)) return view;
-                view.Present = true;
-                if (question == IndexBufferQuestion::Presence) return view;
+            const auto& st = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPipeHandle res = BufferImpl::ResolveDrawIndexBufferFromRecord(st).Res;
+            // A null Res is "no element array buffer bound", exactly as a null frontend slot
+            // is on the arm below - the batch's indices are a client array, and every caller
+            // already has an arm for that. It is NOT the arm test; the arm was decided above.
+            if (MG_Pipe::MGPipeHandleIsNull(res)) return view;
+            view.Present = true;
+            if (question == IndexBufferQuestion::Presence) return view;
 
-                if (question == IndexBufferQuestion::HostBytes) {
-                    // The applier has already consumed the persistent-map blocks for this
-                    // resource before the draw verb replayed; the one Sync* this arm owes is the
-                    // monolith's SyncGpuWrites, and (P8-C) SplitHostBytesForCpuRead is it: a store
-                    // a shader wrote on this side is read back from this server's own GL buffer,
-                    // because no writeback ever reaches the server's staged copy. That is also why
-                    // this arm cannot be expressed as "find the object and run the monolith body".
-                    auto* resource = BufferImpl::FindBufferResourceForHandle(res);
-                    if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
-                    view.Size = BufferImpl::ResourceWidthForHandle(res);
-                    view.HostBytes = BufferImpl::SplitHostBytesForCpuRead(*resource, res, "multidraw_index_rebase");
-                    if (view.HostBytes != nullptr && IndexBufferRecordHasDefinedContent(st, res)) {
-                        BufferImpl::RequireStagedCoverage(*resource, view.HostBytes, 0, view.Size,
-                                                          "multidraw_index_rebase");
-                    }
-                    // A null HostBytes is not a refusal: MappedData() on the monolith arm is
-                    // equally allowed to be null (an adopted coherent map keeps its bytes
-                    // elsewhere), and the one caller that asks declines the tier for it.
-                    return view;
-                }
-
-                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
+            if (question == IndexBufferQuestion::HostBytes) {
+                // The applier has already consumed the persistent-map blocks for this
+                // resource before the draw verb replayed; the one Sync* this arm owes is the
+                // monolith's SyncGpuWrites, and (P8-C) SplitHostBytesForCpuRead is it: a store
+                // a shader wrote on this side is read back from this server's own GL buffer,
+                // because no writeback ever reaches the server's staged copy. That is also why
+                // this arm cannot be expressed as "find the object and run the monolith body".
+                auto* resource = BufferImpl::FindBufferResourceForHandle(res);
                 if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
-                view.Id = resource->id;
-                if (question == IndexBufferQuestion::DriverNameAndSize) {
-                    view.Size = BufferImpl::ResourceWidthForHandle(res);
+                view.Size = BufferImpl::ResourceWidthForHandle(res);
+                view.HostBytes = BufferImpl::SplitHostBytesForCpuRead(*resource, res, "multidraw_index_rebase");
+                if (view.HostBytes != nullptr && IndexBufferRecordHasDefinedContent(st, res)) {
+                    BufferImpl::RequireStagedCoverage(*resource, view.HostBytes, 0, view.Size,
+                                                      "multidraw_index_rebase");
                 }
+                // A null HostBytes is not a refusal: MappedData() on the monolith arm is
+                // equally allowed to be null (an adopted coherent map keeps its bytes
+                // elsewhere), and the one caller that asks declines the tier for it.
                 return view;
             }
-            // MONOLITH GLUE from here down, token for token what each call site did before.
-            const auto& vao = MG_Pipe::gPipeInputs.GetBoundVertexArray();
-            if (!vao) return view;
-            const auto& ibo = vao->GetIndexBufferBindingSlot().GetBoundObject();
-            if (!ibo) return view;
-            view.Present = true;
-            switch (question) {
-            case IndexBufferQuestion::Presence:
-                break;
-            case IndexBufferQuestion::DriverName: {
-                const auto* resource = BufferImpl::EnsureBufferResource(ibo);
-                view.Id = resource ? resource->id : 0;
-                break;
+
+            auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
+            if (resource == nullptr) RefuseMissingIndexBufferRecord(entry, res, "backend resource");
+            view.Id = resource->id;
+            if (question == IndexBufferQuestion::DriverNameAndSize) {
+                view.Size = BufferImpl::ResourceWidthForHandle(res);
             }
-            case IndexBufferQuestion::DriverNameAndSize: {
-                const auto* resource = BufferImpl::EnsureBufferResource(ibo);
-                view.Id = resource ? resource->id : 0;
-                view.Size = ibo->GetSize();
-                break;
-            }
-            case IndexBufferQuestion::HostBytes:
-                // The shadow is the source of truth for CPU reads, but a persistent map or
-                // a shader write may have moved past it since the last sync.
-                ibo->SyncPersistentMappedRange();
-                ibo->SyncGpuWrites();
-                view.HostBytes = ibo->MappedData();
-                view.Size = ibo->GetSize();
-                break;
-            }
-            (void)entry;
             return view;
         }
 
