@@ -8280,7 +8280,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                        \
                               : (obj)->GetStorageType())
 
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). The client defined
         // level 0 as WxH RGBA8 with no data and then attached the image; the record's descriptor
         // still says so, but the texels are the image's, so nothing below may allocate or upload.
