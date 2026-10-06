@@ -106,7 +106,6 @@ jobs:
           -Pmobilegl.apkSuffix="${GITHUB_SHA}" -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
           -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
           -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
-          -Pmobilegl.pipePush="${MOBILEGL_CI_DISAGGREGATED}"
           --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
@@ -155,7 +154,6 @@ jobs:
           -Pmobilegl.debuggableRelease=true -Pmobilegl.logLevel=MOBILEGL_LOG_LEVEL_INFO
           -Pmobilegl.buildDisaggregated="${MOBILEGL_CI_DISAGGREGATED}"
           -Pmobilegl.buildDisaggregatedInproc="${MOBILEGL_CI_DISAGGREGATED}"
-          -Pmobilegl.pipePush="${MOBILEGL_CI_DISAGGREGATED}"
           --parallel --max-workers "$(nproc)"
         env:
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}

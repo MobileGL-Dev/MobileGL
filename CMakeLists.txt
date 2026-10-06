@@ -31,10 +31,10 @@ option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process,
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
-# The PipeInputs strangler (ARCHITECTURE.md 9.2). OFF is the pull build and must stay
-# byte-identical to a tree without either option: MGB_CTX is the live GLContext, no
-# MGPipe/PipeInputs source is compiled, every MGP_FILL is ((void)0).
-option(MOBILEGL_PIPE_PUSH "Backends read frontend state through the MGPipe PipeInputs block instead of MG_State::pGLContext (ARCHITECTURE.md 9.2 phase A)" OFF)
+# The PipeInputs strangler (ARCHITECTURE.md 9.2). ON since P13 W2: every build, the FCL-embedded
+# monolith included, pushes. OFF is the retired pull build, kept selectable only until P13 W3a
+# deletes the option (PLAN-P13 §6); nothing ships it and CI no longer builds it.
+option(MOBILEGL_PIPE_PUSH "Backends read frontend state through the MGPipe PipeInputs block instead of MG_State::pGLContext (ARCHITECTURE.md 9.2 phase A)" ON)
 option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; implies MOBILEGL_PIPE_PUSH; never shipped" OFF)
 # Track H's old-versus-new arm (ARCHITECTURE.md 9.6). With a MOBILEGL_PIPE_PUSH bit clear
 # the backend would still run the RE-KEYED memo code, so the bitmask alone stops being a
