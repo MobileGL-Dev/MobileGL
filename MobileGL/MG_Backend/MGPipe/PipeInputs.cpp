@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <cstring>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <Config.h>
 #include <MG_Util/Metrics/PipeStats.h>
 #endif

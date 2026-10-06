@@ -13,7 +13,7 @@
 // the live context happens on the client side, in MG_Impl/Pipe/PipeFill.cpp.
 #include <MG_State/GLState/Core.h>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answer lives in the
 // applier - MGPipeApplierTextureShutterSerial() / MGPipeApplierContextSerial(), declared here
 // so the accessors below can answer with them under a server-stamped verb. MG_Pipe is below
@@ -53,7 +53,7 @@ namespace MobileGL::MG_Pipe {
     Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
     Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ---- P5: the split arm of the read check (R-7.2, R-7.3) ------------------------------
     //
     // A stale read stops being one answer and becomes FOUR, keyed on the field's table-2 class
@@ -93,7 +93,7 @@ namespace MobileGL::MG_Pipe {
     // a read of a field whose stamp is older than the current verb serial is
     // Fatal{UnmigratedPipeInput, "Field@Verb"}; otherwise the accessor is a plain load.
 #if MOBILEGL_PIPE_POISON
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #define MGP_INPUT_CHECK(Field)                                                                                         \
     do {                                                                                                               \
         if ((m_serverStampedVerb && ::MobileGL::MG_Pipe::MGPipeFieldOwnershipOf(Field) ==                            \
@@ -266,7 +266,7 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
         const MGPipeFilledState& FilledState() const { return m_filled; }
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // TRUE between the server's verb-boundary stamp and whoever clears it. It is the
         // arming condition of the whole split read path: only inside a server-stamped verb is
         // a BARRIER-PULLED read counted rather than Fatal, and only there is a sticky forward
@@ -491,7 +491,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetSamplingResolutionGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetSamplingResolutionGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetSamplingResolutionGeneration, 0, 0);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
 #endif
             return m_samplingResolutionGeneration;
@@ -509,7 +509,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetTextureBindGeneration() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureBindGeneration);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureBindGeneration, 0, 0);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // See GetSamplingResolutionGeneration: the server answers from its own Serial.
             if (m_serverStampedVerb) return MGPipeApplierTextureShutterSerial();
 #endif
@@ -518,7 +518,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 GetTextureContextId() const {
             MGP_INPUT_CHECK(MGPipeInputField::GetTextureContextId);
             MGP_INPUT_VERIFY_READ(MGPipeInputField::GetTextureContextId, 0, 0);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // A context IDENTITY rather than a generation: stable within the served context,
             // moved by every MGPipeApplierReset - which is all the backends' per-context memo
             // keys ask of it.
@@ -757,7 +757,7 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState m_filled{};
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Bool m_serverStampedVerb = false;
 #endif
 
@@ -1016,7 +1016,7 @@ namespace MobileGL::MG_Pipe {
     // The docs budget ~20 KB; the block is a few KB.
     static_assert(sizeof(PipeInputs) < 20 * 1024, "PipeInputs outgrew its budget");
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ============================================================================
     // P5: the server-side verb stamp, and the counter that sizes what it leaves behind
     // ============================================================================
