@@ -423,7 +423,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::LatchIfGpuFaulted() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return pVulkanRenderer != nullptr && pVulkanRenderer->LatchIfGpuHung("apply");
 #else
         return false;
@@ -431,7 +431,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::Initialize() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         VkBufferManager::RegisterWireResourceOps();
         // P7 wave 2 package C (CONTRACT-P7 §5.5). BESIDE the resource ops and for the same
         // reason: this is the one place both Magma server roles pass through - the inproc
@@ -602,7 +602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool BackendObject_DirectVulkan::ExportNativeFence(int* fence) {
         *fence = -1;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         return pVulkanRenderer ? pVulkanRenderer->ExportNativeFence(fence) : true;
 #else

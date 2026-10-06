@@ -35,7 +35,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             HashType vertexInputHash = 0;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             VkRenderPass renderPass = VK_NULL_HANDLE;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // Nonzero is an exact, renderer-lifetime compatibility identity.
             // renderPass remains the valid creation handle, not the cache key.
             Uint64 wireRenderPassCompatibilityId = 0;

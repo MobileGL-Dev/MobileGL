@@ -317,7 +317,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   VkQueue graphicsQueue,
                                                   const VkTextureManager::TextureResource& oldResource,
                                                   VkTextureManager::TextureResource& newResource
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                                                   , Bool splitAspects = false
 #endif
                                                   ) {
@@ -378,7 +378,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.extent.width = std::max(oldResource.extent.width >> level, 1u);
             copy.extent.height = std::max(oldResource.extent.height >> level, 1u);
             copy.extent.depth = std::max(oldResource.depth >> level, 1u);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (splitAspects) {
                 for (const VkImageAspectFlags aspect : {VK_IMAGE_ASPECT_COLOR_BIT,
                                                         VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -721,7 +721,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyDeferredReleases();
         ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
         m_textureResources.clear();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Destroy images while the device/allocator still exist, including after context death.
         m_wireTextureResources.clear();
         m_wireRenderbufferResources.clear();
@@ -3820,7 +3820,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.perMipViews.empty() && resource.perMipSampledViews.empty() &&
             resource.attachmentViews.empty() && resource.alternateSampledViews.empty() &&
             resource.storageImageViews.empty()
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             && resource.yuvSource == nullptr
 #endif
         ) {
@@ -3994,7 +3994,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return current->mapped + alignedCursor;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VkTextureManager::WireUploadsAreIdle() {
         // An open batch still owns references even before it has a fence. Poll
         // submitted batches without waiting; reclamation is deferred if any lives.

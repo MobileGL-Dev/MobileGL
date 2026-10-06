@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "FrameContext.h"
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <Config.h>
 #endif
 
@@ -224,7 +224,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkImageMemoryBarrier presentBarrier{};
         presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
         presentBarrier.srcAccessMask = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // A layout transition writes the image too. Order it after the wire
         // render pass's storeOp, clears and copies instead of relying on the old
         // per-draw queue-idle path. This applies even when contents are discarded.
@@ -243,7 +243,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         presentBarrier.subresourceRange.baseArrayLayer = 0;
         presentBarrier.subresourceRange.layerCount = 1;
         vkCmdPipelineBarrier(commandBuffer,
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                              MG_Config::DataArmIsRecord()
                                  ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 #else

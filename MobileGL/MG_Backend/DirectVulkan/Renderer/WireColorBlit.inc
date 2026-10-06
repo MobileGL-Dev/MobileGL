@@ -1,6 +1,6 @@
 // Included by VulkanRenderer.cpp inside the backend namespace, after WireFramebuffer.inc.
 // The native blit owns no frontend object and never invokes the GL shader compiler.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include "WireColorBlitSpirv.h"
 
     struct VulkanRenderer::WireColorBlitResources {

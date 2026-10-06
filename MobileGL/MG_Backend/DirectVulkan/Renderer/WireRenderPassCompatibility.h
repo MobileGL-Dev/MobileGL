@@ -2,7 +2,7 @@
 #include <Includes.h>
 #include "../VkIncludes.h"
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Backend::DirectVulkan {
     // The wire draw pass has one graphics subpass, no input attachments,
     // multiview or extensions. Its Vulkan pipeline compatibility is formats,

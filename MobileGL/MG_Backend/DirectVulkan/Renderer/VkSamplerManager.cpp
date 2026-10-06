@@ -15,7 +15,7 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // An accessor view over the wire's POD values, not a GL object with constructor,
         // lifetime ID, allocator hooks or mutation callbacks. Both sources below use
         // one sampler policy, including format-sensitive border-color conversion.
@@ -221,7 +221,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return std::fabs(lhs - rhs) <= 1e-6f;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveEffectiveMaxLod(const SamplerSource& sampler) {
 #else
@@ -233,7 +233,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return sampler.GetMaxLod();
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveEffectiveMinLod(const SamplerSource& sampler, Float effectiveMaxLod) {
 #else
@@ -249,7 +249,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GL's non-mipmapped minification - large enough for lambda to stay positive, small enough
         // that a NEAREST mip mode still rounds down to level 0. Clamped rather than assigned, so a
         // texture whose GL_TEXTURE_MAX_LOD really is 0 keeps magnifying as GL says it must.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         template <class SamplerSource>
         Float ResolveSingleLevelMaxLod(const SamplerSource& sampler, Bool singleLevelView) {
 #else
@@ -275,7 +275,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const SamplerSource& sampler,
 #else
@@ -339,7 +339,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     Uint64 VkSamplerManager::BuildSamplerKey(const SamplerSource& sampler,
 #else
@@ -390,7 +390,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return XXH64_digest(m_hashState);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     VkSampler VkSamplerManager::GetOrCreateSamplerImpl(const SamplerSource& sampler,
                                                        TextureInternalFormat format,
@@ -409,7 +409,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the default-framebuffer blit shader had to work around with an explicit-LOD sample.
         const Bool singleLevelView = viewLevelCount == 1;
         // Resolved once and used for both the key and the create-info; see ResolvedBorderColor.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const ResolvedBorderColor borderColor = ResolveBorderColor(sampler, format);
 #else
         const ResolvedBorderColor borderColor = ResolveBorderColor(sampler, texture);
@@ -473,7 +473,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return vkSampler;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
                                                    const MG_State::GLState::ITextureObject& texture,
                                                    Bool forceNearestFiltering, Uint32 viewLevelCount) {
@@ -542,7 +542,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(
         const SamplerSource& sampler, TextureInternalFormat format) const {
@@ -557,7 +557,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // Border colour is sampler state: a bound sampler object supplies its own, and a texture
         // with none reaches the very same value through the sampler object it owns.
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         const auto format = texture.GetFormat();
 #endif
         const auto domain = ResolveBorderColorDomain(format);

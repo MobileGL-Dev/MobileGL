@@ -3199,7 +3199,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 if (descriptorKind == DescriptorBindingKind::StorageBuffer) {
                     const GLuint blockIndex =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                         program.GetShaderStorageBlockIndex(uniformName);
 #else
                         GetShaderStorageBlockIndex(program, uniformName);
@@ -3495,7 +3495,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                 updateAfterBindSampledImages + updateAfterBindStorageImages;
         const auto& uab = m_updateAfterBindLimits;
         entry.usesUpdateAfterBind =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // Vulkan forbids ANY update-after-bind binding in a set layout that
             // contains a dynamic buffer descriptor (VUID 03001/03011). Wire draws
             // retain UniformManager's per-frame, content-versioned descriptor sets;

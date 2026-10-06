@@ -12,7 +12,7 @@
 // The pure half of UniformManager's wire placeholder cache (WirePlaceholderImages.inc): WHICH
 // placeholder a binding with no usable image takes. A unit test pins it
 // (MG_Test/Pipeline/PipelineQuirkTest.cpp); the Vulkan half that makes the image stays in the .inc.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/MGPipeTypes.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {

@@ -46,7 +46,7 @@ public:
                                  const MG_State::GLState::ITextureObject& texture,
                                  Bool forceNearestFiltering = false,
                                  Uint32 viewLevelCount = 0);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // The applier owns these values: effective bound/builtin sampler parameters and
     // the sampled texture view's format/range. No frontend object is constructed.
     VkSampler GetOrCreateSamplerFromParameters(const SamplerParameters& parameters,
@@ -92,7 +92,7 @@ private:
         Bool usesCustomBorderColor = false;
     };
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     VkSampler GetOrCreateSamplerImpl(const SamplerSource& sampler, TextureInternalFormat format,
                                      Bool forceNearestFiltering, Uint32 viewLevelCount);
@@ -106,7 +106,7 @@ private:
     static VkSamplerMipmapMode ToVkMipmapMode(SamplerMipmapMode mode);
     static VkSamplerAddressMode ToVkAddressMode(SamplerWrapMode mode);
     static VkCompareOp ToVkCompareOp(SamplerCompareFunc func);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     ResolvedBorderColor ResolveBorderColor(const SamplerSource& sampler, TextureInternalFormat format) const;
 #else
@@ -117,7 +117,7 @@ private:
     // the sampler filters linearly both ways, otherwise the GL request clamped to the device limit.
     // GL happily carries GL_TEXTURE_MAX_ANISOTROPY on a NEAREST sampler (Blaze3D's blocks do exactly
     // that) while Vulkan forbids anisotropyEnable there, so the GL value must never be forwarded raw.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     template <class SamplerSource>
     Float ResolveEffectiveMaxAnisotropy(const SamplerSource& sampler,
 #else

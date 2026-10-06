@@ -19,7 +19,7 @@
 #include <unordered_set>
 
 #include <Config.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 // The handle-keyed arm's key type. Header-only POD, disagg-only, exactly the shape
 // MagmaPipeArms.h already gives this directory.
 #include <MG_Pipe/MGPipeHandles.h>
@@ -28,7 +28,7 @@
 namespace MobileGL::MG_State::GLState {
 class ITextureObject;
 }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 namespace MobileGL::MG_Pipe {
 struct MGPipeResourceRecord;
 }
@@ -355,7 +355,7 @@ public:
         // Serial at the last successful sync. 0 also means "this resource has only ever been
         // synced by the frontend arm" - a wire record's Serial starts at 0 on a create and moves
         // on every mutation, so the first handle sync of a fresh image always re-checks.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Uint64 syncedWireSerial = 0;
         // SHARED IMAGES: level 0 is a server shared image (an imported AHardwareBuffer), not a
         // VMA allocation. The resource owns the image and its dedicated imported memory, and
@@ -415,7 +415,7 @@ public:
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
             std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             std::swap(this->syncedWireSerial, that.syncedWireSerial);
             std::swap(this->importedMemory, that.importedMemory);
             std::swap(this->sharedImageId, that.sharedImageId);
@@ -466,7 +466,7 @@ public:
             if (image != VK_NULL_HANDLE && allocation != nullptr) {
                 vmaDestroyImage(s_allocator.Get(), image, allocation);
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (importedMemory != VK_NULL_HANDLE) {
                 if (image != VK_NULL_HANDLE) vkDestroyImage(s_device.Get(), image, nullptr);
                 vkFreeMemory(s_device.Get(), importedMemory, nullptr);
@@ -510,7 +510,7 @@ public:
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
             syncedShapeVersion = 0;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             syncedWireSerial = 0;
 #endif
         }
@@ -539,7 +539,7 @@ public:
     // preserve-on-recreate copy are the existing callers. No-op when the
     // batch is empty.
     void FlushPendingUploads();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // Non-blocking idle proof for wire-object retirement. Independent texture
     // submissions are not represented by VulkanRenderer's submit counter.
     Bool WireUploadsAreIdle();

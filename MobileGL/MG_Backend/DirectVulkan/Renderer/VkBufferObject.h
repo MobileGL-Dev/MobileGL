@@ -65,13 +65,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* GetMappedData() const { return m_mappedData; }
         Bool IsMapped() const { return m_mappedData != nullptr; }
         Bool IsValid() const {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (m_externalMemory != VK_NULL_HANDLE) return m_buffer != VK_NULL_HANDLE;
 #endif
             return m_allocator != nullptr && m_buffer != VK_NULL_HANDLE && m_allocation != nullptr;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P11 B2 (T0): a store whose memory is NOT this allocator's - a client's AHardwareBuffer
         // imported with VK_ANDROID_external_memory_android_hardware_buffer into `memory` (a
         // dedicated allocation bound to `buffer`, mapped persistently at `mapped`). It behaves

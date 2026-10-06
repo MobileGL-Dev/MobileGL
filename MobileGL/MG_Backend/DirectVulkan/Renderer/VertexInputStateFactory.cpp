@@ -801,7 +801,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
             return false;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto found = m_wireVertexFormatSupport.find(format);
             if (found != m_wireVertexFormatSupport.end()) return found->second;

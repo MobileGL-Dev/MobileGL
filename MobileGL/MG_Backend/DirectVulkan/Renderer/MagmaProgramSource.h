@@ -3,7 +3,7 @@
 
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include "../DirectVulkanResourceState.h"
@@ -15,7 +15,7 @@
 #endif
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // A borrowed view, valid only while its frontend object or server record lives.
     // It never constructs a ProgramObject on the server. Post-link mutable values
     // come from the record tails, not from the archive's link-time defaults.

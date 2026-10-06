@@ -1482,7 +1482,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     namespace {
         static constexpr Uint32 kDescriptorSetsPerFrame = 64;
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE HIDDEN GL PROGRAMS ONLY EXIST IN THE PULL
         // BUILD NOW. In a disaggregated build the monolith arm drives WireColorBlit.inc and
         // WireDepthMipmap.inc - the baked modules the wire arm already uses - so nothing below
@@ -1571,7 +1571,7 @@ void main() {
     gl_FragDepth = 0.25 * (depth0 + depth1 + depth2 + depth3);
 }
 )";
-#endif // !MOBILEGL_BUILD_DISAGGREGATED
+#endif // !MOBILEGL_BUILD_RECORD_ARM
 
 
         static Uint32 ComputeFullMipLevelCount(const IntVec3& baseTexelSize) {
@@ -3219,7 +3219,7 @@ void main() {
 
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const Bool wire = MG_Config::DataArmIsRecord();
         const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
@@ -3270,7 +3270,7 @@ void main() {
         CreateAllocator();
 
         CreateCommandPool();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         m_progressMarkers.Init(m_device, m_physicalDevice.queueFamilies.graphicsFamily);
 #endif
 
@@ -3445,7 +3445,7 @@ void main() {
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         m_uniformManager->SetWireInvalidStorageImageArm(m_wireNullDescriptor);
 #endif
         m_vertexInputStateFactory =
@@ -3498,7 +3498,7 @@ void main() {
         if (m_device != VK_NULL_HANDLE) {
             VK_VERIFY(vkDeviceWaitIdle(m_device));
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         m_progressMarkers.Shutdown();
 #endif
         // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
@@ -3616,7 +3616,7 @@ void main() {
             m_device = VK_NULL_HANDLE;
         }
         s_vkCmdDrawIndexedIndirectCount = nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         s_vkCmdWireDrawIndirectCount = nullptr;
 #endif
         s_vkCmdDrawMultiEXT = nullptr;
@@ -4595,7 +4595,7 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeBlitResources() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5f fv gave this an early return for every non-monolith transport, because the hidden
         // programs are frontend objects and creating them on the server would retain a client
         // compiler/allocator dependency. P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')) takes the last
@@ -4707,7 +4707,7 @@ void main() {
     }
 
     Bool VulkanRenderer::InitializeDepthMipmapResources() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the depth-mip half of the same step. In a
         // disaggregated build the monolith arm generates its depth chain with
         // WireDepthMipmap.inc's baked pass, so there is no hidden GL program to build on any
@@ -4834,7 +4834,7 @@ void main() {
         m_deferredDepthMipmapCleanup.clear();
     }
 
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): the pull build's blit pipeline, built out of the
     // hidden GL program through the program/pipeline factories. A disaggregated build has no
     // such program on either arm - WireColorBlit.inc owns its pipeline - so this is compiled
@@ -4893,7 +4893,7 @@ void main() {
         }
         return m_pipelineFactory->GetOrCreatePipeline(payload);
     }
-#endif // !MOBILEGL_BUILD_DISAGGREGATED
+#endif // !MOBILEGL_BUILD_RECORD_ARM
 
     Bool VulkanRenderer::GenerateDepthMipmapWithShader(FrameContext::FrameData& frame,
                                                        MG_State::GLState::ITextureObject& texture,
@@ -4903,7 +4903,7 @@ void main() {
                                                        const IntVec3& storageBaseTexelSize,
                                                        VkImageLayout originalLayout,
                                                        VkImageLayout finalLayout) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED PASS. Every
         // level below is WireDepthMipmap.inc's GenerateWireDepthMipLevel - the same 2x2
         // texelFetch box, the same clamp, the same average, the same half-texel offset, since
@@ -5356,7 +5356,7 @@ void main() {
         return rsp.PrimitiveRestartIndex <= MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS - milliseconds to spend in a pipeline-creation MISS
     // on the wire arm. See the call site below for why it exists: the device's divergence needs a
     // COLD driver pipeline cache, and this host's is always warm, so the only way to reproduce
@@ -5380,7 +5380,7 @@ void main() {
             const MG_State::GLState::VertexArrayObject& vao,
             const RenderPassEntry& renderPassEntry,
             Bool primitiveRestartEnable) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return GetOrCreatePipelineWithInput(mode, program, programObj, transformFlags,
             m_vertexInputStateFactory->GetOrCreateVertexInputState(vao), renderPassEntry, primitiveRestartEnable);
     }
@@ -5407,12 +5407,12 @@ void main() {
         // payload key on the resolved LAYOUT hash instead, so draws over identical
         // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         auto& vis = m_vertexInputStateFactory->GetOrCreateVertexInputState(vao);
 #endif
         const Uint64 vertexLayoutHash = vis.layoutHash;
         const Uint64 renderPassHash =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             wireRenderPassCompatibilityId != 0 ? 0 :
 #endif
             renderPassEntry.hash;
@@ -5442,7 +5442,7 @@ void main() {
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 entry.wireRenderPassCompatibilityId == wireRenderPassCompatibilityId &&
 #endif
                 entry.pipelineStateHash == pipelineStateHash &&
@@ -5631,7 +5631,7 @@ void main() {
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
         {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                 if (fbo && !fbo->IsDefault) {
@@ -5736,7 +5736,7 @@ void main() {
             .vertexInputHash = vertexLayoutHash,
             .pipelineLayout = programObj.pipelineLayout,
             .renderPass = renderPassEntry.renderPass,
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             .wireRenderPassCompatibilityId = wireRenderPassCompatibilityId,
 #endif
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
@@ -5865,7 +5865,7 @@ void main() {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const auto* wireFbo = MG_Config::DataArmIsRecord() ?
             MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
@@ -5874,12 +5874,12 @@ void main() {
         const auto& drawFboBinding =
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
 #else
         MOBILEGL_ASSERT(drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
 #endif
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
         Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
         if (wireFbo) for (SizeT i = 0; i < wireDrawBuffers.size(); ++i)
@@ -5891,7 +5891,7 @@ void main() {
         const auto& drawBuffers = drawFboBinding->GetDrawBuffers();
 #endif
         auto resolveCompleteColorAttachmentTexture = [&](Uint32 drawBufferIndex) -> MG_State::GLState::ITextureObject* {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (wireFbo) return nullptr;
 #endif
             if (isDefaultDrawFbo || drawBufferIndex >= drawBuffers.size()) {
@@ -5944,7 +5944,7 @@ void main() {
                 attachmentColorWriteMask = 0;
                 effectiveBlendEnabled = false;
             }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (wireFbo && !isDefaultDrawFbo) {
                 const Int32 slot = wireFbo->DrawBuffers[i];
                 if (slot < 0 || wireFbo->Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
@@ -6048,7 +6048,7 @@ void main() {
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (wireFbo && !isDefaultDrawFbo) {
                     const Int32 slot = wireFbo->DrawBuffers[i];
                     colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
@@ -6182,7 +6182,7 @@ void main() {
             entry.programHash = programObj.hash;
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             entry.wireRenderPassCompatibilityId = wireRenderPassCompatibilityId;
 #endif
             entry.pipelineStateHash = pipelineStateHash;
@@ -6550,7 +6550,7 @@ void main() {
         // the SAME draw-framebuffer binding the draw uses - see the assert below.
         MOBILEGL_ASSERT(
             [&] {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 if (MG_Config::DataArmIsRecord()) {
                     const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
                     return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
@@ -6896,7 +6896,7 @@ void main() {
                 if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                     entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
                     entry.renderPassHash == snap.renderPassHash &&
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                     entry.wireRenderPassCompatibilityId == 0 &&
 #endif
                     entry.pipelineStateHash == pipelineStateHash &&
@@ -6983,7 +6983,7 @@ void main() {
         // split server records every draw its client sends into the same frame command buffer, so
         // the same loading frame grows it the same way there.
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return false;
             // The wire route returns before the monolith branch's draw-gated
@@ -7618,7 +7618,7 @@ void main() {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         // Before the wire branch, for SetupDraw's reason.
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
             m_textureManager->CollectGarbage();
@@ -7683,7 +7683,7 @@ void main() {
 
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         SplitOversizedRecording();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
         if (MG_Config::DataArmIsRecord()) {
             if (!RewindWireDescriptorSetsIfDue()) return;
@@ -7794,7 +7794,7 @@ void main() {
 
         MGLOG_D("DirectVulkan: glMemoryBarrier(0x%x)", static_cast<Uint32>(barriers));
         vkCmdPipelineBarrier(frame.commandBuffer,
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                              // ALL_COMMANDS does not include HOST. The barrier's
                              // HOST_WRITE access must have a matching source stage.
                              MG_Config::DataArmIsRecord()
@@ -7962,7 +7962,7 @@ void main() {
     #include "WireYuvImage.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-framebuffer-record");
@@ -8366,7 +8366,7 @@ void main() {
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
             if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
@@ -9290,7 +9290,7 @@ void main() {
         MOBILEGL_ASSERT(clearReady,
                         "TryBlitToDefaultFramebufferWithShader: failed to materialize pending clear for textureId=%d",
                         sourceTexture->GetExternalIndex());
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B2 (CONTRACT-P7 §5.2, (B')): THE MONOLITH ARM ON THE BAKED MODULE. Below
         // this line the pull build binds a hidden GL program, writes three default-block
         // uniforms into its global UBO and hands the sampler to the application's descriptor
@@ -9505,7 +9505,7 @@ void main() {
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
             return;
@@ -10147,7 +10147,7 @@ void main() {
 
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
             return;
@@ -10466,7 +10466,7 @@ void main() {
         }
 
         Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord())
                 return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
 #endif
@@ -10480,7 +10480,7 @@ void main() {
                                           const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const Bool wire = MG_Config::DataArmIsRecord();
         MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
         if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) {
@@ -10515,7 +10515,7 @@ void main() {
         const auto* dstStorageTexture =
             dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
         if (
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             !wire &&
 #endif
             srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
@@ -10528,7 +10528,7 @@ void main() {
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) {
                 const Bool renderbuffer = endpoint.IsRenderbuffer();
                 // The same handle-keyed allocation used by wire FBO clear/draw/read.
@@ -10582,7 +10582,7 @@ void main() {
         CopyImageVkImage dstImage{};
         const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
         const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2-B, CONTRACT-P7 §3.2: `copy-image-in-place@P7` RETIRES.
         //
         // What the Fatal here used to say was true of the code below it and of nothing else: the
@@ -10626,7 +10626,7 @@ void main() {
         // dstLevel and the z origins below arrived relative to whichever name the application
         // passed - so a view's level 0 has to become the parent level it opened onto before it
         // can index a subresource, exactly as at every other attachment boundary.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (wire) {
             const auto mapSubresource = [this](const CopyImageEndpoint& endpoint, GLint& mip, GLint& layer) {
                 if (endpoint.IsRenderbuffer()) {
@@ -10746,7 +10746,7 @@ void main() {
                          __func__, srcZ, srcSlices.availableSlices, dstZ, dstSlices.availableSlices, srcDepth);
             return;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // THE ONE IN-PLACE SHAPE THAT STAYS A DECLINE (§3.2). GL 4.6 core 18.3.2: if the source
         // and destination name the same image AND the same level AND the same layers, the result
         // is UNDEFINED where the regions overlap. GENERAL makes the command legal to record, not
@@ -10786,7 +10786,7 @@ void main() {
         }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (MG_Config::DataArmIsRecord()) return true;
 #endif
             if (endpoint.IsRenderbuffer()) {
@@ -10919,7 +10919,7 @@ void main() {
                        srcImage.image, copySourceLayout,
                        dstImage.image, copyDestinationLayout,
                        1, &copyRegion);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The copy coordinates above are already storage-relative. Name that
         // storage here too, so a texture view's offsets are not applied twice.
         if (wire && !dstImage.isRenderbuffer) m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle,
@@ -11021,7 +11021,7 @@ void main() {
         // UNDER #if, although this function serves both arms of the disaggregated build: the PULL
         // build has no wire arm, cannot flush before a readback, and is the image G1 pins to
         // 0xa52203. Its single-fence wait stays the statement it always was.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Vector<VkFence> readbackFences;
         readbackFences.reserve(m_inFlightSubmits.size() + 1);
         for (const auto& record : m_inFlightSubmits) {
@@ -11066,7 +11066,7 @@ void main() {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             ReadWirePixels(x,y,width,height,format,type,pixels);
             return;
@@ -11764,11 +11764,11 @@ void main() {
         const SizeT dstPixelBytes = packed.size() / pixelCount;
 
         // Store honoring the client pack state (single slice).
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const SharedPtr<MG_State::GLState::BufferObject> wireReplyHasNoPackBuffer;
 #endif
         const auto& pixelPackBufferObject =
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             MG_Config::DataArmIsRecord() ? wireReplyHasNoPackBuffer :
 #endif
             MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
@@ -12046,7 +12046,7 @@ void main() {
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             GenerateWireMipmap();
             return;
@@ -12151,7 +12151,7 @@ void main() {
                             "GenerateMipmap: depth-stencil mipmap generation is not supported yet.");
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5c (T5 / tx): under an active transport the generated chain is defined on the
         // server's staged shadow (keyed by the synced TextureResource above) and the client's
         // level storage is never written; in monolith the client-object path runs unchanged.
@@ -12451,7 +12451,7 @@ void main() {
                          "undefined behaviour rather than a capture");
             return false;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord())
             return BeginWireXfbCaptureForDraw(frame);
 #endif
@@ -13574,13 +13574,13 @@ void main() {
             return false;
         }
         if (m_device == VK_NULL_HANDLE || m_graphicsQueue == VK_NULL_HANDLE) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             return IsFrameSerialComplete(serial);
 #else
             return true;
 #endif
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // More than one submit can carry the same frame serial (mid-frame flush,
         // then Present). The completed floor is clamped below any serial still
         // held by an in-flight record; the first matching fence is not proof.
@@ -13628,7 +13628,7 @@ void main() {
         // The queue was just drained; take the free frame-boundary drain when
         // nothing is recorded (present-less timer-query loops). No-op otherwise.
         TryDrainFrameTransients();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return IsFrameSerialComplete(serial);
 #else
         return true;
@@ -13646,7 +13646,7 @@ void main() {
             return false;
         }
         const auto& frame = m_frameContext.GetCurrent();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         return frame.isCommandRecording || frame.hasCommandBufferRecorded ||
                frame.isPreCommandRecording || frame.hasPreCommandBufferRecorded;
 #else
@@ -13654,7 +13654,7 @@ void main() {
 #endif
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::RewindWireDescriptorSetsIfDue() {
         if (!m_uniformManager || m_frameContext.GetFrameCount() == 0) return true;
         const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
@@ -13723,7 +13723,7 @@ void main() {
         }
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::WaitForSubmitsUpTo(Uint64 submitIndex, Uint64 timeoutNs) {
         if (submitIndex <= m_completedSubmitCounter) return true;
         if (submitIndex > m_submitCounter || m_device == VK_NULL_HANDLE) return false;
@@ -13745,7 +13745,7 @@ void main() {
 
     void VulkanRenderer::OnSubmitsCompletedUpTo(Uint64 submitIndex) {
         m_completedSubmitCounter = std::max(m_completedSubmitCounter, submitIndex);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // ---- P7 wave 2 package B3: THE COMPLETED-FRAME-SERIAL FLOOR MUST BE PROVABLE --------
         //
         // "Frame-serial completion piggybacks on submission completion" holds only while a
@@ -13776,7 +13776,7 @@ void main() {
         while (!m_inFlightSubmits.empty() && m_inFlightSubmits.front().submitIndex <= submitIndex) {
             SubmitRecord record = m_inFlightSubmits.front();
             m_inFlightSubmits.erase(m_inFlightSubmits.begin());
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             retiredAny = true;
             advanceTo = std::max(advanceTo, record.frameSerial);
 #else
@@ -13794,7 +13794,7 @@ void main() {
                 vkDestroyFence(m_device, record.fence, nullptr);
             }
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (retiredAny) {
             // Clamp to one below the lowest serial still in flight.
             for (const auto& remaining : m_inFlightSubmits) {
@@ -13848,7 +13848,7 @@ void main() {
     }
 
     Bool VulkanRenderer::TryDrainFrameTransients() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (m_wirePreparationDepth != 0) return false;
 #endif
         if (m_device == VK_NULL_HANDLE || m_frameContext.GetFrameCount() == 0) {
@@ -13864,7 +13864,7 @@ void main() {
             return false;
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             // Texture uploads submit on this queue with their own fences. The
             // renderer watermark alone cannot prove images/views are idle.
@@ -13908,7 +13908,7 @@ void main() {
         // loops still rewind the arena and age their caches every 8 iterations -
         // bounded by 8 iterations' transient usage.
         ++m_drainsSinceLastPresent;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // B3 probe: a drain that reaches here found the GPU caught up and nothing recording.
         // Every 8th one is treated as a FRAME BOUNDARY - mid-frame. This probe is what REFUTED
         // that as the OpenRA mechanism (one successful drain, zero boundary works across the
@@ -13997,7 +13997,7 @@ void main() {
     }
 
     Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         RetireWireDrawPass();
 #endif
         // Batched texture uploads must reach the queue before the frame's
@@ -14063,7 +14063,7 @@ void main() {
         // pooled fences and mid-frame command buffers.
         RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded &&
             !frame.isPreCommandRecording && !frame.hasPreCommandBufferRecorded) {
 #else
@@ -14111,7 +14111,7 @@ void main() {
         const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer(submittingPreCommandBuffer);
         if (retireResult != VK_SUCCESS) {
             MGLOG_E_ONCE("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             if (WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX)) {
                 // Every registered fence through this submission was waited.
             } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
@@ -14270,7 +14270,7 @@ void main() {
                 return false;
             }
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (!WaitForSubmitsUpTo(submitIndex, timeoutNs)) return false;
         // A blocking wait can drain a present-less loop's frame transients.
         TryDrainFrameTransients();
@@ -14453,7 +14453,7 @@ void main() {
                 return;
             }
             m_presentSuspended = false;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // A slot's Present fence alone does not prove its older pooled
             // flushes retired. Wait the full prefix before FrameContext may
             // free its retired command buffers and reset the slot fence.
@@ -14552,7 +14552,7 @@ void main() {
         const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
 #endif
         NoteDeviceLoss(presentSubmit, "Present vkQueueSubmit");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (presentSubmit != VK_SUCCESS && LatchWireDeviceLoss("present-submit")) return;
 #endif
         VK_VERIFY(presentSubmit);
@@ -14592,7 +14592,7 @@ void main() {
             result = VK_SUCCESS;
         }
         NoteDeviceLoss(result, "vkQueuePresentKHR");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (result != VK_SUCCESS && LatchWireDeviceLoss("present-queue")) return;
 #endif
         VK_VERIFY(result, "Present, vkQueuePresentKHR");
@@ -14644,7 +14644,7 @@ void main() {
         // 3) Advance frame slot.
         m_frameContext.AdvanceToNext();
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // FrameContext waits then resets the slot fence and frees retired
         // command buffers. A later Present fence is not aggregate proof for
         // earlier pooled flushes, so wait every registered submission in this
@@ -14680,7 +14680,7 @@ void main() {
                 m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
         }
         NoteDeviceLoss(result, "vkAcquireNextImageKHR");
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (result != VK_SUCCESS && LatchWireDeviceLoss("present-acquire")) return;
 #endif
         VK_VERIFY(result, "Present, vkAcquireNextImageKHR");
@@ -14689,7 +14689,7 @@ void main() {
         // before FrameContext reset the slot fence; this repeat is idempotent.
         OnSubmitsCompletedUpTo(m_frameContext.GetCurrent().lastSubmitIndex);
         CollectDeferredDepthMipmapCleanup(m_frameContext.GetCurrentFrameIndex());
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Its previous recording has completed. Drop cached attachment views
         // before the texture manager can release their retired images.
         ClearWireDrawPassCache(m_frameContext.GetCurrentFrameIndex());
@@ -15355,7 +15355,7 @@ void main() {
             getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                 vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Linux/Android request Vulkan 1.1: a 1.2 physical device alone does
         // not expose the promoted renderpass2/depth-resolve API to this app.
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -15879,7 +15879,7 @@ void main() {
             }
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // YUV shared images (WireYuvImage.inc) are sampled through a VkSamplerYcbcrConversion, a
         // feature of its own; asked only where AHardwareBuffers are imported at all.
         m_samplerYcbcrConversion = false;
@@ -15948,7 +15948,7 @@ void main() {
             }
         }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Codex closeout finding 2 (cf-magma): GL 4.6 core 8.26 makes an access through an
         // invalid image unit load zero and DISCARD stores and atomics. A null storage-image
         // descriptor is that rule exactly, so the wire arm binds one for such a unit
@@ -16061,7 +16061,7 @@ void main() {
             MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P8-D: the wire arm's glMultiDrawArraysIndirectCount. Null = that verb reads its count on
         // the CPU (WireDraw.inc's DrawWireIndirectNative answers false for it).
         s_vkCmdWireDrawIndirectCount = reinterpret_cast<PFNDrawIndexedIndirectCountFunc>(
@@ -16191,13 +16191,13 @@ void main() {
         // Last, because it records on m_graphicsQueue: decide the PRIMITIVES_GENERATED
         // reroute for XFB-inactive draws. Nothing else has touched the queue yet.
         ArmPrimGenReroute();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Same terms: it records on m_graphicsQueue, which nothing but the probe above has used.
         ArmWireDepthResolveOrder();
 #endif
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
     // PROPERTY OF THIS DEVICE. WireDepthResolveArm.h says why (the Adreno 830's no-draw
     // VK_KHR_depth_stencil_resolve pass writes nothing), WireDepthResolveProbe.h what is run. The
@@ -16822,7 +16822,7 @@ void main() {
 
         vkDeviceWaitIdle(m_device);
         OnSubmitsCompletedUpTo(m_submitCounter);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The old swapchain will be destroyed below, including recordings that
         // are being abandoned instead of submitted. Release all their views now.
         DestroyWireDrawPass();
@@ -17094,7 +17094,7 @@ void main() {
         FlushPendingCommands();
         VK_VERIFY(vkDeviceWaitIdle(m_device));
         OnSubmitsCompletedUpTo(m_submitCounter);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
@@ -17147,7 +17147,7 @@ void main() {
         return m_instance;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VulkanRenderer::GetWireAhbImport(WireAhbImport& out) const {
         out = WireAhbImport{};
         if (!m_wireAhbImport || m_device == VK_NULL_HANDLE || m_wireGetAhbProperties == nullptr) return false;

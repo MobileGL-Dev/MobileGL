@@ -198,7 +198,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.programHash, sizeof(payload.programHash)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (payload.wireRenderPassCompatibilityId != 0) {
             constexpr Uint64 wireDomain = 0x5749524552504b59ull;
             XXHASH_VERIFY(XXH64_update(m_hashState, &wireDomain, sizeof(wireDomain)));
@@ -286,7 +286,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_NULL_HANDLE;
         }
         m_cache.emplace(hash, PipelineCacheEntry{pipeline, payload.programHash,
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                                                  // Wire pipelines outlive their creator pass and
                                                  // may serve another compatible pass in flight.
                                                  // Never evict them by a recycled native handle.

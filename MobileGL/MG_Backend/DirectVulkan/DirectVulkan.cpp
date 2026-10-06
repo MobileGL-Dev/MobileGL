@@ -38,7 +38,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     RendererSlot pVulkanRenderer;
 
     namespace {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         void RejectWireLegacyBuffer() {
             if (MG_Config::DataArmIsRecord()) {
                 MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
@@ -138,7 +138,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     namespace {
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package C, OQ-8: THE PULL BUILD'S HALF, VERBATIM. A disaggregated build
         // answers GetShaderStorageBlock{Index,Binding} out of LinkArtifacts::storageBlocks
         // instead (see those functions below), which retires this whole cache - the map, the
@@ -184,7 +184,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<StorageBlockResource> storageBlocks;
             Vector<BufferVariableResource> bufferVariables;
         };
-#endif // !MOBILEGL_BUILD_DISAGGREGATED
+#endif // !MOBILEGL_BUILD_RECORD_ARM
 
         struct DrawElementsIndirectCommand {
             Uint32 count = 0;
@@ -201,7 +201,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 baseInstance = 0;
         };
 
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         // Keyed by GL program name so the freed-name reuse in IndexGenerator bounds the
         // map at the peak-simultaneous-program high-water mark; each slot's ownership is
         // checked against the program's lifetime id before it is served (see
@@ -223,7 +223,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-#if !MOBILEGL_BUILD_DISAGGREGATED
+#if !MOBILEGL_BUILD_RECORD_ARM
         String NormalizeDescriptorName(const SpvReflectDescriptorBinding& binding) {
             const char* rawName = binding.name;
             if (binding.type_description != nullptr && binding.type_description->type_name != nullptr) {
@@ -374,9 +374,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return cache;
         }
-#endif // !MOBILEGL_BUILD_DISAGGREGATED
+#endif // !MOBILEGL_BUILD_RECORD_ARM
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // The verb's handles identify server stores; never inspect a client binding.
         //
         // P8-D: THE GPU READS THE WORDS (VulkanRenderer::DrawWireIndirectNative, WireDraw.inc), as
@@ -495,7 +495,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): THE MONOLITH CONSUMER READS THE ARCHIVE
     // TOO, so one published list serves both of this backend's arms.
     //
@@ -646,7 +646,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
             return;
@@ -657,7 +657,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
             return;
@@ -714,7 +714,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
             return;
@@ -726,7 +726,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
             return;
@@ -804,7 +804,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawElementsInstancedBaseVertexBaseInstance(mode, count, type, indices, instancecount, 0, 0);
     }
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, type, indirect, 1, 0, true);
             return;
@@ -869,7 +869,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawArraysInstancedBaseInstance(mode, first, count, instancecount, 0);
     }
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             DrawWireIndirect(mode, 0, indirect, 1, 0, false);
             return;
@@ -943,7 +943,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void DispatchComputeIndirect(GLintptr indirect) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P8-SV: THE GPU READS THE GROUP COUNTS on the wire arm too - VulkanRenderer's
         // DispatchComputeIndirect takes its transport branch into DispatchWireComputeIndirect
         // (WireDraw.inc), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
@@ -1014,7 +1014,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             auto& state = MG_Pipe::MGPipeApplier();
             const auto handle = state.VerbStorageBlockProgram;
@@ -1058,7 +1058,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MakeUnique<GenericErrorInfo>("DirectVulkan", __func__, "Shader storage binding is out of range."));
             return;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package C, OQ-8: NOTHING LEFT TO PATCH, and the hazard goes with it.
         //
         // The frontend has already recorded the new binding on the program, and that record is
@@ -1140,7 +1140,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // memory) into uint32 values with the loop-closing first index appended.
     static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
                                            Vector<Uint32>& outIndices) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (MG_Config::DataArmIsRecord()) {
             const SizeT width = MG_Util::GetGLTypeSize(type);
             if ((width != 1 && width != 2 && width != 4) || count < 2) return false;
@@ -1318,7 +1318,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // MultiDrawIndexedCmd left the client-memory shape addressing a view whose byte
         // offset is a hardcoded 0, so UploadAndBindIndexBuffer saw a null client pointer,
         // declined the whole batch and painted nothing.)
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         const Bool noIndexBuffer = MG_Config::DataArmIsRecord()
             ? MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeApplier().IndexBuffer.Res)
             : MG_Pipe::gPipeInputs.GetBoundVertexArray()->GetIndexBufferBindingSlot().GetBoundObject() == nullptr;
@@ -1512,7 +1512,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // Pure status read (glGetSynciv must not flush).
         if (pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex)) return true;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P13 W4: A STATUS POLL THAT CAN NEVER BE ANSWERED. On the record arm a frame's draws stay
         // in one command buffer (and one render pass) until something submits it, so a client that
         // only polls - glGetSynciv in a loop, no flush bit, no swap - waits for work nothing will

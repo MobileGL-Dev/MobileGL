@@ -15,7 +15,7 @@
 // shader arm fetches sample 0 - not an average. Two arms that answer differently on two devices
 // would make "the wire arm is observably the monolith's" untestable, and GL 4.6 core 18.3.1
 // requires a SELECTED sample for stencil anyway.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // The pass's modules, layouts, render passes and pipeline, and the draw it records, are
     // WireDepthResolveProbe.cpp's (g5-msprobe): the multisample depth/stencil resolve probe runs
     // this exact arm as its CONTROL, so it is defined once for both.

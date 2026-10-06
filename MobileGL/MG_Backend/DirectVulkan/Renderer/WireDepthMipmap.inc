@@ -15,7 +15,7 @@
 // frontend objects and a GL compiler on the server's apply thread. The baked program below is
 // the same shader with the same arithmetic, driven by a push constant and its own descriptor
 // set, which is what lets the server generate a depth mip while owning nothing of the client.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include "WireDepthMipmapSpirv.h"
 
     struct VulkanRenderer::WireDepthMipmapResources {

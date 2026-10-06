@@ -13,7 +13,7 @@
 #include "../VkIncludes.h"
 #include <Includes.h>
 #include <vk_mem_alloc.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include "MG_Pipe/MGPipeTypes.h"
 #include <unordered_map>
 #endif
@@ -103,7 +103,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool Initialize(const VkBufferManagerInitInfo& initInfo);
         void Shutdown();
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Registered before caps publication; the initialized renderer owns the storage.
         static void RegisterWireResourceOps();
         // Transport resources are owned by their complete wire handle, never by a
@@ -254,7 +254,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DeferRelease(VkBufferObject&& buffer);
 
     private:
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         struct WireBufferResource {
             VkBufferObject buffer;
             Uint64 size = 0;
@@ -387,7 +387,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // in-flight and already-recorded GPU work.
         Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
                              SizeT offset, SizeT size);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
 #endif
         void CollectDeferredReleases(Uint32 frameIndex);

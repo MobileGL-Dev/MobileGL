@@ -56,7 +56,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void Shutdown();
 
         void BeginFrame(Uint32 frameIndex);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // A present-less wire frame may run arbitrarily many draws. Before its
         // descriptor cursor reaches this budget, the renderer retires the
         // submission that last used the sets and rewinds every layout cursor.
@@ -123,7 +123,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<SamplerImageFeedbackBinding>& outBindings) const;
         static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
                                                              GLint imageLevel, GLenum imageAccess);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Resolve lazy texture uploads/promotions before the caller captures the
         // command buffer passed to BindProgramUniformBuffers. Preparation may
         // submit older work, but descriptor recording must never rotate it.
@@ -283,7 +283,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<DescriptorPoolBucket> descriptorPools;
             UnorderedMap<VkDescriptorSetLayout, DescriptorSetCacheEntry> descriptorSetCacheByLayout;
             Vector<VkBufferView> texelBufferViews;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             mutable Vector<VkImageView> wireImageViews;
             // Own views in the vector above until this slot's fence/idle proof.
             // Cache hits preserve the handle, enabling descriptor-content reuse.
@@ -366,7 +366,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                       const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                       Uint32 element, VkDescriptorImageInfo& outImageInfo,
                                       Bool trustUnchangedHint = false) const;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Bool ResolveWireImageDescriptor(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
                                        const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                        Uint32 element, Bool storage, VkDescriptorImageInfo& out) const;
@@ -415,7 +415,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const void* payload = nullptr;  // fallback UploadTransient path
             VkDeviceSize payloadSize = 0;
         };
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         Bool ResolveWireUniformBufferPayload(const MagmaProgramSource& program, Uint32 blockIndex,
                                              Uint32 bindingPoint, UboBindResult& out) const;
 #endif

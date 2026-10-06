@@ -44,7 +44,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_allocation = other.m_allocation;
         m_mappedData = other.m_mappedData;
         m_size = other.m_size;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MoveExternalFrom(other);
 #endif
 
@@ -67,7 +67,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_allocation = other.m_allocation;
         m_mappedData = other.m_mappedData;
         m_size = other.m_size;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         MoveExternalFrom(other);
 #endif
 
@@ -170,7 +170,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferObject::Unmap() {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // An imported store stays mapped for its life (Destroy unmaps it).
         if (m_externalMemory != VK_NULL_HANDLE) return;
 #endif
@@ -200,7 +200,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         Memcpy(static_cast<Uint8*>(mapped) + offset, data, static_cast<SizeT>(size));
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (m_externalMemory != VK_NULL_HANDLE) {
             if (m_externalCoherent) return true;
             VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
@@ -234,7 +234,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resolvedSize == 0) {
             return true;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (m_externalMemory != VK_NULL_HANDLE) {
             if (m_externalCoherent) return true;
             VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};

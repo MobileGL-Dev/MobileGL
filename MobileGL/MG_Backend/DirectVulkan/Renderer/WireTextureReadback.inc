@@ -1,6 +1,6 @@
 // Server-owned texture readback. Included after WireFramebuffer.inc so image
 // layout tracking and frame retirement are the same as every other wire verb.
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     static Bool PackWireColorTight(const Uint8* source, SizeT sourceBytes, VkFormat format,
                                    TextureInternalFormat logicalFormat, const MG_Pipe::MGPReadbackInfo& info,
                                    Vector<Uint8>& result) {

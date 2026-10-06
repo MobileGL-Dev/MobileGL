@@ -10,7 +10,7 @@
 // MG_Pipe::MGPipeHandle for the P2 D12.5 memo table below. A header of constexpr constants,
 // so the pull build gains nothing from it.
 #include <MG_Pipe/MGPipeHandles.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
 #include <MG_Pipe/PipeApply.h>
 #endif
 
@@ -122,7 +122,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // normal types, and 4 (one packed word) for the 2_10_10_10 types and GL_BGRA. Returns 0 for
         // an unknown/unsupported type.
         static SizeT GetAttributeByteSize(DataType type, Int size, Bool isBgra);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // A wire VAO is a layout record plus a separate per-attribute buffer window.
         // No frontend VAO identity, address or memo participates in this layout.
         Bool BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
@@ -175,7 +175,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VulkanRendererConfig& m_config;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Physical-device format capabilities never change during this factory's
         // lifetime. The wire path rebuilds layouts without the legacy VAO memo.
         mutable UnorderedMap<VkFormat, Bool> m_wireVertexFormatSupport;
