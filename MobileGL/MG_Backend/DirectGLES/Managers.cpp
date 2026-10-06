@@ -2105,6 +2105,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_H_Respecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
                                  const void* initialBytes) {
                 auto* resource = FindBufferResourceForHandle(res);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P13 W4a (§1.4): ON MONOLITH'S RECORD ARM THE TWIN IS MINTED HERE, not lazily at
+                // the first draw. The record arm's readers have no frontend object to re-read a
+                // base from, so the base this call carries - the client's shadow, for an orphaning
+                // respecify too (PipeFill passes it there on this arm) - is the only way they learn
+                // it. Minting is GL-free; the storage stays lazy.
+                const Bool aliasesFrontend = MG_Config::RecordArmAliasesFrontend();
+                if (resource == nullptr && aliasesFrontend && initialBytes != nullptr) {
+                    resource = GetOrCreateBufferResourceForHandle(res);
+                }
+#else
+                constexpr Bool aliasesFrontend = false;
+#endif
                 if (resource != nullptr) {
                     // A respecify's companion pointer IS the shadow base (offset 0) - and an
                     // ORPHANING one (glBufferData with NULL) carries HasDefinedContent clear and
@@ -2116,7 +2129,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // every reader below treats a null base as "no bytes to move", which is the
                     // honest answer, and the ensure path re-reads the live base from the
                     // frontend object it still holds.
-                    if (desc.HasDefinedContent != 0 && initialBytes != nullptr) {
+                    // P13 W4a: an ALIASING store records the base whether or not the content is
+                    // defined - the pointer is the frontend shadow's new allocation either way, and
+                    // the upload below stays gated on the descriptor (RespecifyStorageWith's
+                    // initialData), so an orphan still uploads nothing.
+                    if ((desc.HasDefinedContent != 0 || aliasesFrontend) && initialBytes != nullptr) {
                         // R-11: in monolith this is the client's shadow base, unchanged; under
                         // split it is copied into server-owned storage first. A respecify's
                         // companion pointer is the base at offset 0 and covers the whole store.
@@ -2134,6 +2151,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                     // P8-C: whatever a shader wrote belonged to the store this call replaces.
                     resource->serverGpuWritten = false;
+                    resource->contentSinceRespecify = false;
 #endif
                 }
                 if (!resource) return; // lazy: the ensure path full-uploads on creation
@@ -2205,7 +2223,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Monolith is untouched: the twin stays lazy there because the frontend object's
                 // MappedData is the source and nothing is lost by deferring the allocation (D-A2).
                 if (resource == nullptr && bytes != nullptr &&
-                    MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                    MG_Config::DataArmIsRecord()) {
                     resource = GetOrCreateBufferResourceForHandle(res);
                 }
 #endif
@@ -2252,6 +2270,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // ("these bytes, at this base") and the drain takes this mutex to lift them.
                     resource->hostBytes =
                         MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes, offset, size);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    if (size != 0) resource->contentSinceRespecify = true;
+#endif
                 }
                 if (resource->pendingRespecify) return; // full re-upload pending anyway
                 if (!CanTouchGLNow() || resource->id == 0 ||
@@ -2312,6 +2333,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes,
                                                                   start, end - start);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                    if (end > start) resource->contentSinceRespecify = true;
+#endif
                 }
                 if (resource->pendingRespecify) return;
                 if (!CanTouchGLNow() || resource->id == 0 ||
@@ -2373,7 +2397,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // An empty capture may conservatively request a writeback before
                 // any draw materialized this buffer. Resolve its staged resource
                 // exactly as a GPU consumer would, then return the real bytes.
-                auto* resource = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                auto* resource = MG_Config::DataArmIsRecord()
                     ? EnsureBufferResourceForHandle(nullptr, res) : FindBufferResourceForHandle(res);
 #else
                 auto* resource = FindBufferResourceForHandle(res);
@@ -2446,6 +2470,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The shadow now matches the backend byte for byte; without this the next draw
                 // would see a newer serial and re-upload the readback over it.
                 resource->syncedChangeSerial = ResourceSerialOf(res);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P13 W4a: on monolith's record arm the base this twin reads IS the shadow the
+                // writeback just filled, so a whole-store readback is also the refresh
+                // SplitHostBytesForCpuRead would owe. (A copying store's copy is not the
+                // client's shadow, and keeps its mark.)
+                if (MG_Config::RecordArmAliasesFrontend() && readOffset == 0 && size >= ResourceWidthOf(res)) {
+                    resource->serverGpuWritten = false;
+                }
+#endif
             }
 
             void Ops_H_Destroy(MG_Pipe::MGPipeHandle res) {
@@ -3455,6 +3488,64 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return record != nullptr && record->Desc.HasDefinedContent != 0;
         }
 
+        // P13 W4a (§1.4): THE GPU-WRITE REFRESH OF AN ALIASING STORE. Monolith's record arm reads
+        // the frontend shadow in place (StagedShadowStore keeps the caller's pointer), so a store a
+        // shader wrote is refreshed the way the client refreshes it under split: the bytes are
+        // read back from this process's GL buffer and handed to OnBufferWriteback, whose consumer
+        // (the frontend, one call away) copies them into that shadow. The backend never writes
+        // frontend memory itself. Ops_H_Readback's order, for its reasons: queued uploads first,
+        // resident writes next, then the read, the serial stamp and - last - the epoch bump.
+        const Uint8* RefreshAliasedStoreFromGpu(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
+                                                const char* site) {
+            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized ||
+                resource.pendingRespecify || resource.contextGeneration != g_bufferContextGeneration ||
+                !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) {
+                MGLOG_E_ONCE("%s: buffer {%u, %u} was written on the GPU but its GL store cannot be read "
+                             "back here, so the CPU reads the shadow as it is",
+                             site, res.Slot, res.Gen);
+                return SplitHostBytes(resource);
+            }
+            const SizeT width = ResourceWidthOf(res);
+            const SizeT size = std::min(width, resource.storageSize);
+            if (size == 0) return SplitHostBytes(resource);
+            if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback == nullptr) {
+                MGLOG_E_ONCE("%s: buffer {%u, %u} was written on the GPU and no reverse channel is "
+                             "installed to refresh the shadow it aliases",
+                             site, res.Slot, res.Gen);
+                return SplitHostBytes(resource);
+            }
+            FlushPendingRangesFrom(resource, resource.hostBytes, width);
+            DrainResidentWritesNow(resource);
+            BindBufferId(TempBufferTarget, resource.id);
+            void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
+                                                        GL_MAP_READ_BIT);
+            if (mapped == nullptr) {
+                MGLOG_E_ONCE("%s: glMapBufferRange(read) failed for GPU-written buffer %u; the CPU reads the "
+                             "shadow as it is",
+                             site, resource.id);
+                return SplitHostBytes(resource);
+            }
+            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                res, 0,
+                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped), static_cast<Uint64>(size),
+                                    MG_Pipe::kMGHostSpanSegNone, 0});
+            if (resource.hostBytes == nullptr) {
+                // Every content-carrying record and every respecify of a store with a size hands
+                // its base over on this arm, so no base here means a shape nothing recorded. Keep
+                // the bytes in a private copy rather than answer "nothing" for GPU-written bytes.
+                MGLOG_W_ONCE("%s: GPU-written buffer {%u, %u} has no recorded shadow base; its refreshed "
+                             "bytes are kept in a private copy",
+                             site, res.Slot, res.Gen);
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                resource.hostBytes = ServerStaged().AdoptPrivateCopy(&resource, width, mapped, size);
+            }
+            g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+            resource.serverGpuWritten = false;
+            resource.syncedChangeSerial = ResourceSerialOf(res);
+            BumpBufferMutationEpoch();
+            return resource.hostBytes;
+        }
+
         // P8-C. The declaration says what; this says in what order, and it is Ops_H_Readback's
         // order because it is the same question asked by the server of itself instead of by the
         // client: (1) queued uploads land in the GL store first - reading back past them would
@@ -3465,15 +3556,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // serial stamp and the epoch bump, as Ops_H_ReadbackTracked does them.
         const Uint8* SplitHostBytesForCpuRead(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
                                               const char* site) {
+            // A coherent store - T0's import, or (P13 W4a) a map monolith's record arm donated -
+            // has no copy: its bytes are read through the map once queued writes have landed.
+            const Bool coherent = resource.persistentMapped && resource.persistentPtr != nullptr;
             Bool residentWritesQueued = false;
-            if (resource.externalAhb != nullptr) {
+            if (coherent) {
                 const std::lock_guard<std::mutex> lock(resource.pendingMutex);
                 residentWritesQueued = !resource.pendingResidentWrites.empty();
             }
             if (!resource.serverGpuWritten && !residentWritesQueued) return SplitHostBytes(resource);
-            // The marks are made only under a transport, where the staged store COPIES; the guard
-            // keeps a monolith store (which keeps the caller's pointer) from adopting a mapping.
-            if (!ServerStaged().CopiesIntoServerStorage()) return SplitHostBytes(resource);
+            if (!ServerStaged().CopiesIntoServerStorage() && !coherent) {
+                // P13 W4a (§1.4): an ALIASING store (monolith's record arm) is refreshed through
+                // the frontend - the writeback lands in the shadow the base points into. Any other
+                // non-copying store has no marks to answer.
+                if (MG_Config::RecordArmAliasesFrontend()) return RefreshAliasedStoreFromGpu(resource, res, site);
+                return SplitHostBytes(resource);
+            }
             if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized ||
                 resource.pendingRespecify || resource.contextGeneration != g_bufferContextGeneration ||
                 !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) {
@@ -3482,7 +3580,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              site, res.Slot, res.Gen);
                 return SplitHostBytes(resource);
             }
-            if (resource.externalAhb != nullptr) {
+            if (coherent) {
                 // T0: the copy IS this server's coherent map of the client's pages. Landing the
                 // queued writes and finishing makes them, and every shader write already queued,
                 // visible through it - Ops_H_Readback's persistent-map arm, for the same reason.
@@ -3803,7 +3901,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // A null object is the "no frontend to ask" case and is treated as "not mapped",
             // which is what the record already says.
             const Bool askTheObjectWhetherItIsMapped =
-                MG_Config::Transport == MG_Config::TransportMode::Monolith;
+                !MG_Config::DataArmIsRecord();
             if (askTheObjectWhetherItIsMapped && frontend != nullptr && frontend->IsMapped()) return false;
             if (resource->pendingRespecify || !resource->storageInitialized) return false;
             if (!resource->pendingRanges.empty()) return false;
@@ -3870,7 +3968,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // so a corrupt staged upload rendered the frontend's correct bytes and the R-2.5
                 // 0xDD audit could not reach a draw. R-2 / table 3: honest inproc is inproc that
                 // does not read the client object's memory. Under monolith nothing changes.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     return resource->hostBytes;
                 }
 #endif
@@ -3907,7 +4005,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // run on every twin's first ensure - harmless there only because liveHostBase()
                 // prefers MappedData() under monolith, and "under monolith nothing changes" should
                 // be true by construction rather than by luck.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                if (ServerStaged().CopiesIntoServerStorage() &&
                     !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
@@ -4015,7 +4113,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // layer-1 surface ("buffer-legacy-arm") and the client's own pre-verb
             // persistent-map push is the only producer; the call is skipped outright. Under
             // monolith D-N's placement stands.
-            if (bufferObject && MG_Config::Transport == MG_Config::TransportMode::Monolith) {
+            if (bufferObject && !MG_Config::DataArmIsRecord()) {
                 bufferObject->SyncPersistentMappedRange();
             }
 #else
@@ -4064,9 +4162,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // application's own declaration and the upload stays a pure NULL reallocation.
             const Bool shadowHasContent =
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Config::Transport != MG_Config::TransportMode::Monolith
+                MG_Config::DataArmIsRecord()
                     ? (record->Desc.HasDefinedContent != 0 ||
-                       ServerStaged().CoveredRunCount(resource) != 0)
+                       (ServerStaged().CopiesIntoServerStorage() ? ServerStaged().CoveredRunCount(resource) != 0
+                                                                 : resource->contentSinceRespecify))
                     :
 #endif
                 (bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0));
@@ -6216,7 +6315,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // rather than a stale read.
 #if MOBILEGL_BUILD_DISAGGREGATED
             const Bool sourceGpuWritten =
-                MG_Config::Transport != MG_Config::TransportMode::Monolith && resource->serverGpuWritten;
+                MG_Config::DataArmIsRecord() && resource->serverGpuWritten;
             if (sourceGpuWritten) {
                 BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res, "fp64_vertex_narrowing");
             }

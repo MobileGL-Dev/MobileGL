@@ -304,7 +304,7 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
         // monolith defects), left to P13 (ID-P8-13).
         TEST_F(WireIndirectDrawScenario, ComputeWrittenCountWordIsTheOneTheGpuReads) {
             if (!Ready() || IsSkipped()) return;
-            if (!m_magma && m_transport == "monolith") {
+            if (!m_magma && m_transport == "monolith" && !PeekSplitRuntime().dataArmIsRecord) {
                 GTEST_SKIP() << "Espryt's monolith arm reads the count word from the frontend shadow without "
                                 "a sync (OQ15; recorded for P13, ID-P8-13)";
             }

@@ -88,6 +88,13 @@ namespace MobileGL::MG_Remote::Client {
     // that the message wording lives in exactly one place.
     [[noreturn]] void UnmigratedVerbFatal(const char* slot);
 
+    // P13 W4: monolith's record arm. Overwrites the ported verb slots of the backend's own
+    // table with this file's emitters, which hand their planned record to an in-process
+    // ServerVerbSink instead of a session (EmitTables.cpp, "THE MONOLITH VERB PORT"). Installed
+    // by MG_Backend's bring-up when MG_Config::RecordArmAliasesFrontend() holds.
+    void InstallMonolithVerbPort(MG_Backend::GlobalBackendFunctionsTable& table);
+    Bool MonolithVerbPortInstalled();
+
     // How many of the 71 slots have a real emitter. Reported at bring-up and asserted by the
     // gate: a table that silently loses an emitter should not be able to look the same as one
     // that never had it.

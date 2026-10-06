@@ -364,7 +364,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // object's MappedData()/GetSize() (B3) and the client slot allocator (T2) are never
         // read. Coverage is asserted: commands read from bytes no record staged would be
         // zero-filled, which is a missing record, not a valid command stream.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
             if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
                 auto* resource = BufferImpl::FindBufferResourceForHandle(handle);
@@ -591,7 +591,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the .def's own "WHO READS IT" section names this function, and now it does. The reason
         // is the table's and is printed from it.
         Bool ResolveBufferBindingSubsystemArm() {
-            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
+            if (!MG_Config::DataArmIsRecord()) return false;
             const Uint64 mask = MG_Config::Features.PipePush;
             const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemBufferBindings) != 0;
             if (bitSet &&
@@ -819,7 +819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // The applier's ShaderBufferWritableMask survives as the server's record of WHICH
             // points a shader may write through, which is what P9's narrowing channel will name.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
+            if (MG_Config::DataArmIsRecord()) return;
 #endif
             const SizeT bindingPointCnt =
                 MG_Pipe::gPipeInputs.GetTouchedBufferBindingPointCount(BufferTarget::ShaderStorage);
@@ -1378,7 +1378,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // P5c (hd, CONTRACT-P5C §3.5): under an active transport the buffer is the verb
                 // record's handle; the frontend binding slot and the client allocator are
                 // never read (T2). The twin's ensure is what SyncBoundBuffer's did.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
                     if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
                         auto* resource = EnsureBufferResourceForHandle(nullptr, handle);
@@ -1450,7 +1450,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // P5c (hd, CONTRACT-P5C §3.5): see the draw-indirect twin above - the verb
                 // record's handle, never the frontend binding slot or the client allocator.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                if (MG_Config::DataArmIsRecord()) {
                     const MG_Pipe::MGPipeHandle handle = MG_Pipe::MGPipeApplier().VerbDispatchIndirectBuffer;
                     if (!MG_Pipe::MGPipeHandleIsNull(handle)) {
                         auto* resource = EnsureBufferResourceForHandle(nullptr, handle);
@@ -2506,7 +2506,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // from the GL thread (MG_Impl/Pipe/OwnedDrawInputs.h), so there is nothing for the
             // server to stage - and reading gPipeInputs there is the role violation this family's
             // other monolith glue is guarded against.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            if (MG_Config::DataArmIsRecord()) return true;
             const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             if (!currentVAO) return true;
 
@@ -2560,7 +2560,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool SyncClientSideVertexArraysForIndirectFetch(
             const Uint8* commandBytes, SizeT commandOffset, GLsizei stride, GLsizei index, Uint8 indexSize,
             const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            if (MG_Config::DataArmIsRecord()) return true;
             // P13 W4a (ID-P8-14a): ASK FIRST WHETHER THERE IS ANYTHING TO SNAPSHOT. The command
             // words below are read only to size a client-memory fetch; a VAO whose attributes all
             // come from buffers has none, and reading them anyway cost a whole-buffer readback of a
@@ -2601,7 +2601,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (count <= 0 || instanceCount <= 0) return true;
             // MONOLITH ONLY - see SyncClientSideVertexArraysForFetch; this wrapper's own read of
             // the bound VAO is the frontend read that must not happen on an apply thread.
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            if (MG_Config::DataArmIsRecord()) return true;
             const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             if (!currentVAO) return true;
             const Uint8 indexSize = static_cast<Uint8>(MG_Util::GetGLTypeSize(type));
@@ -4283,6 +4283,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     static_cast<MG_State::GLState::TextureObjectBuffer*>(imageBinding.Texture.get());
                 const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
                 BufferImpl::MarkBufferGpuWritten(bufferObject);
+#if MOBILEGL_BUILD_DISAGGREGATED
+                // P13 W4a: image units stay on this arm until W4c, but monolith's buffer readers
+                // are already the record arm's (SplitHostBytesForCpuRead), and they ask the TWIN.
+                if (MG_Config::DataArmIsRecord() && bufferObject) {
+                    if (auto* twin = BufferImpl::FindBufferResourceForHandle(
+                            BufferImpl::HandleOfBuffer(bufferObject.get()))) {
+                        twin->serverGpuWritten = true;
+                    }
+                }
+#endif
             }
         }
 
@@ -8302,13 +8312,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resource resolves from it by handle - the frontend binding slot and the client slot
         // allocator are never read (T2).
         const MG_Pipe::MGPipeHandle verbBufferHandle =
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? MG_Pipe::MGPipeApplier().VerbIndirectBuffer
                 : MG_Pipe::kMGPipeNullHandle;
 #endif
         const Bool useNative =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws()
                 :
 #endif
@@ -8325,7 +8335,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (paramsBinding >= 0) {
                 auto* resource =
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    MG_Config::DataArmIsRecord()
                         ? BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle)
                         :
 #endif
@@ -8404,13 +8414,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // P5c (hd, CONTRACT-P5C §3.5): see ExecuteIndexedIndirectCommands - the verb's handle,
         // never the frontend binding slot or the client allocator.
         const MG_Pipe::MGPipeHandle verbBufferHandle =
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? MG_Pipe::MGPipeApplier().VerbIndirectBuffer
                 : MG_Pipe::kMGPipeNullHandle;
 #endif
         const Bool useNative =
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws()
                 :
 #endif
@@ -8425,7 +8435,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (paramsBinding >= 0) {
                 auto* resource =
 #if MOBILEGL_BUILD_DISAGGREGATED
-                    MG_Config::Transport != MG_Config::TransportMode::Monolith
+                    MG_Config::DataArmIsRecord()
                         ? BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle)
                         :
 #endif
@@ -8868,7 +8878,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the family's back.
         void RefuseElementArrayBufferFromTheFrontend(const char* entry) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
+            if (!MG_Config::DataArmIsRecord()) return;
             if (!BufferImpl::VertexInputReadsRecords()) return;
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - %s read the frontend VAO's "
                     "element-array slot with a live transport. The index buffer of this family is "
@@ -8971,7 +8981,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // carried client indices (no index buffer bound) takes the client-pointer arm below,
         // `indices` already resolved through the server's segment resolver. Monolith takes
         // the original body, verbatim.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto& applierState = MG_Pipe::MGPipeApplier();
             const MG_Pipe::MGPipeHandle elements = applierState.IndexBuffer.Res;
             serverElementBinding = 0;
@@ -9270,7 +9280,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SharedPtr<MG_State::GLState::BufferObject>(nullptr)
                 :
 #endif
@@ -9311,7 +9321,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reads from the SERVER's staged shadow - the frontend binding slots, the frontend
         // accessors (B3) and the client allocator (T2) are never read. Monolith takes the
         // original body below, verbatim.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto& applierState = MG_Pipe::MGPipeApplier();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
             const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
@@ -9439,7 +9449,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SharedPtr<MG_State::GLState::BufferObject>(nullptr)
                 :
 #endif
@@ -9477,7 +9487,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5c (hd, CONTRACT-P5C §3.5): see the indexed twin - the verb record's handles and
         // the SERVER's staged shadow, never the frontend bindings or the client allocator.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+        if (MG_Config::DataArmIsRecord()) {
             const auto& applierState = MG_Pipe::MGPipeApplier();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
             const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
@@ -9710,7 +9720,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SharedPtr<MG_State::GLState::BufferObject>(nullptr)
                 :
 #endif
@@ -9759,7 +9769,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P5c (hd, CONTRACT-P5C §3.5): with an active transport the frontend binding slot
             // is never read - the Execute* helpers resolve the buffer from the verb record's
             // handle (T2). Monolith reads the slot as it always did.
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
+            MG_Config::DataArmIsRecord()
                 ? SharedPtr<MG_State::GLState::BufferObject>(nullptr)
                 :
 #endif

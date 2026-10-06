@@ -236,7 +236,9 @@ void main() {
             // THE ARMS THIS FILE SKIPS, BY NAME: the monolith arm of a backend whose reason is
             // non-null. Every split arm, and the inproc A/B, runs the case.
             bool SkipBrokenMonolith(const char* espryt, const char* magma) {
-                if (PeekSplitRuntime().transportName != "monolith") return false;
+                // P13 W4a: a monolith on the record arm runs the split arm's code, so it runs the case.
+                const SplitRuntimeState runtime = PeekSplitRuntime();
+                if (runtime.transportName != "monolith" || runtime.dataArmIsRecord) return false;
                 const std::string backend = Gl().BackendName();
                 const char* why = backend == "DirectGLES" ? espryt : backend == "DirectVulkan" ? magma : nullptr;
                 if (why == nullptr) return false;

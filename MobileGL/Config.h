@@ -744,7 +744,8 @@ namespace MobileGL::MG_Config {
     // caps, whether a store copies).
     //
     // MOBILEGL_PIPE_DATA_ARM=record (default) | frontend picks monolith's arm for the families
-    // already switched. It exists for W4-W6 only - bisecting a monolith red to the switch, and
+    // already switched, on a backend whose monolith takes the record arm at all (Espryt from W4a,
+    // Magma at its single flip). It exists for W4-W6 only - bisecting a monolith red to the switch, and
     // the per-thread CPU record (ID-P13-2) - and goes in W6 with the frontend arms. Latched once
     // by MG_ConfigLoader::Init(): the two arms keep their twins in different places.
     extern Bool MonolithTakesRecordArm;

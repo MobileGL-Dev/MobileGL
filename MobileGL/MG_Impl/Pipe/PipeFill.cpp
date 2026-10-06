@@ -984,8 +984,13 @@ namespace MobileGL::MG_Pipe {
         // InitialBytesNotCarried self-check aborted by name on the first
         // glBufferData(target, 0, NULL, usage) of the bsl-esc-menu trace. `GetSize() > 0` is
         // what makes the answer mean "there are bytes here" rather than "the store is defined".
-        const void* initialBytes =
-            (desc.HasDefinedContent != 0 && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
+        //
+        // P13 W4a: ON MONOLITH'S RECORD ARM THE BASE RIDES AN ORPHANING RESPECIFY TOO. That arm's
+        // twin aliases this shadow and has no object to re-read it from, and an orphan is exactly
+        // the call that reallocates it; the backend still uploads nothing for it, because its
+        // upload is gated on the descriptor's HasDefinedContent and not on the pointer.
+        const Bool carryBase = desc.HasDefinedContent != 0 || MG_Config::RecordArmAliasesFrontend();
+        const void* initialBytes = (carryBase && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
         // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
         // record: only an immutable store (a glBufferStorage*) is a real synchronous
         // allocation and only it is allowed one. In monolith the acknowledgement is

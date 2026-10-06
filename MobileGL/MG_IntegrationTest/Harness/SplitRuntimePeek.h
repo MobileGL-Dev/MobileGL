@@ -64,7 +64,8 @@ namespace MGITest {
         // The resolved transport, for a message: "monolith", "inproc", "spawn", "unix", "pipe".
         std::string transportName = "monolith";
         // P13 W4: MG_Config::DataArmIsRecord() - false in a build without the peek (and without
-        // MG_Remote), which stays on the frontend arm until W5.
+        // MG_Remote), which stays on the frontend arm until W5, and for Magma's monolith until
+        // its single flip.
         bool dataArmIsRecord = false;
         // ClientSession::Active() != nullptr.
         bool sessionActive = false;

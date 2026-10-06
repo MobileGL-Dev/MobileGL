@@ -1085,6 +1085,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // by SplitHostBytesForCpuRead's refresh and by a respecify. Only the server's own
             // CPU readers consult it; the client keeps its own set (GpuWritePending.h).
             Bool serverGpuWritten = false;
+            // P13 W4a: content-carrying records (sub-data, flush-range) arrived since the last
+            // respecify. A copying store answers this with its coverage; an ALIASING one (monolith's
+            // record arm) keeps no coverage, so the twin says it - the streaming idiom (orphan, then
+            // glBufferSubData) defines content no descriptor declares.
+            Bool contentSinceRespecify = false;
 #endif
         };
 
@@ -1159,7 +1164,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // exactly as the monolith arm reads the adopted map through MappedData().
         inline const Uint8* SplitHostBytes(const GLESBufferResource& resource) {
             if (resource.hostBytes != nullptr) return resource.hostBytes;
-            return resource.externalAhb != nullptr ? static_cast<const Uint8*>(resource.persistentPtr) : nullptr;
+            // P13 W4a: any coherent persistent store, not only T0's - monolith's record arm donates
+            // its maps in-process (Ops_H_MapPersistent), and such a store keeps no shadow at all.
+            // Under split the wire's map_persistent declines, so there this is still T0 alone.
+            return resource.persistentMapped && resource.persistentPtr != nullptr
+                       ? static_cast<const Uint8*>(resource.persistentPtr)
+                       : nullptr;
         }
 
         // P8-C: THE SAME BYTES, MADE CURRENT FIRST - for a reader that CONSUMES them (the restart
@@ -1315,7 +1325,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // selectors that can drift apart. One definition, spelled at every site that reads it.
         inline Bool VertexInputReadsRecords() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            return MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+            return MG_Config::DataArmIsRecord() &&
                    VertexInputSubsystemEnabled();
 #else
             return false;

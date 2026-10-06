@@ -294,7 +294,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // above, never inferred from a null).
         Uint BoundDrawIndirectBufferId() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+            if (MG_Config::DataArmIsRecord()) {
                 const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
                 if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
                 auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);

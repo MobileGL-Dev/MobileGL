@@ -385,14 +385,14 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 // Client addresses never cross the transport. Draw emission snapshots
                 // their referenced elements into owned buffers with a zero byte origin.
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                if (MG_Config::DataArmIsRecord() &&
                     !vao.GetAttribute(static_cast<Uint>(i)).Buffer) m_attributes[i].Offset = 0;
 #endif
             }
             for (SizeT i = 0; i < kBindings; ++i) {
                 m_bindingPoints[i] = MGPipeBuildVertexBindingPointWire(vao.GetBindingPoint(static_cast<Uint>(i)));
 #if MOBILEGL_BUILD_DISAGGREGATED
-                if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
+                if (MG_Config::DataArmIsRecord() &&
                     !vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
 #endif
             }

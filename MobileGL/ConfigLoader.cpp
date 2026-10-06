@@ -38,7 +38,7 @@ namespace MobileGL::MG_Config {
     String TransportEndpoint;
     Bool SplitTransportRequestedByConfig = false;
     IpcTable Ipc;
-    Bool MonolithTakesRecordArm = true;
+    Bool MonolithTakesRecordArm = false;
 #endif
 } // namespace MobileGL::MG_Config
 
@@ -465,7 +465,11 @@ namespace MobileGL::MG_ConfigLoader {
         String lowered = value;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        MG_Config::MonolithTakesRecordArm = true;
+        // P13 W4: the backends switch one at a time. Espryt's record arm runs in monolith from W4a;
+        // Magma's verb entry points pick one arm for every family at once, so it joins at its
+        // single flip, after Espryt's last family.
+        const Bool backendReady = MG_Config::ActiveBackendType == BackendType::DirectGLES;
+        MG_Config::MonolithTakesRecordArm = backendReady;
         if (lowered.empty() || lowered == "record") return;
         if (lowered == "frontend") {
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {

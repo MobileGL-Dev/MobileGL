@@ -35,6 +35,8 @@
 #include "PersistentMapTracker.h"
 
 #include "../Server/ServerLoop.h"
+#include "../Server/PipeApplier.h"
+#include <MG_Backend/BackendObjects.h>
 
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -237,6 +239,87 @@ namespace MobileGL::MG_Remote::Client {
         void BeforeReadOnlyVerb() {
             PushPersistentMapsBeforeVerb();
             MG_Pipe::MGPipeDrainDeferredDestroys();
+        }
+
+        // ---- P13 W4: THE MONOLITH VERB PORT ----------------------------------------------
+        //
+        // Monolith's record arm (MG_Config::RecordArmAliasesFrontend) reads the verb's own state -
+        // VerbIndirectBuffer, VerbDispatchIndirectBuffer, ... - and nothing in monolith wrote it:
+        // ServerVerbSink is its only writer, and monolith never decoded a verb record. So the
+        // ported slots run THESE emitters - the same plan, the same pre-verb hooks in the same
+        // order (persistent-map push, owned client-memory inputs, the GPU-write marks) - and hand
+        // the planned record, in this process and on this thread, to a ServerVerbSink bound to
+        // the one backend object, which stamps the verb state exactly as the apply thread does
+        // and calls the backend's REAL table (ServerVerbSink::Table, never gBackendFunctionsTable,
+        // so nothing re-enters this port). One planner and one sink body serve both shapes: the
+        // monolith record arm is the split record arm minus the codec and the ring.
+        Bool g_monolithVerbPort = false;
+
+        Server::ServerVerbSink& MonolithVerbSink() {
+            // Leaked at exit like every other MG_Remote singleton (ID-8).
+            static Server::ServerVerbSink& sink = *new Server::ServerVerbSink();
+            return sink;
+        }
+
+        // The session a ported verb emits through - or null, which is the monolith port.
+        ClientSession* VerbSessionFor(const char* slot) {
+            if (g_monolithVerbPort) return nullptr;
+            return &RequireSession(slot);
+        }
+
+        void ApplyOnMonolithPort(MG_Pipe::MGPWireOp op, const void* payload, const Wire::WireTail* tails,
+                                 Uint32 tailCount) {
+            Server::ServerVerbSink& sink = MonolithVerbSink();
+            MG_Backend::BackendObject* backend = MG_Backend::pActiveBackendObject.get();
+            if (sink.Backend() != backend) sink.SetBackend(backend);
+            Bool applied = false;
+            const char* row = nullptr;
+            switch (op) {
+            case MG_Pipe::MGPWireOp::DrawVbo: {
+                row = "draw_vbo";
+                const auto& info = *static_cast<const MG_Pipe::MGPDrawInfo*>(payload);
+                const auto* ranges = (tailCount > 0 && tails[0].Size != 0)
+                                         ? static_cast<const MG_Pipe::MGPDrawRange*>(tails[0].Bytes)
+                                         : nullptr;
+                const auto* indirect = ((info.Flags & MG_Pipe::kDrawIsIndirect) != 0 && tailCount > 1)
+                                           ? static_cast<const MG_Pipe::MGPDrawIndirect*>(tails[1].Bytes)
+                                           : nullptr;
+                applied = sink.OnDrawVbo(info, ranges, nullptr, indirect);
+                break;
+            }
+            case MG_Pipe::MGPWireOp::LaunchGrid:
+                row = "launch_grid";
+                applied = sink.OnLaunchGrid(*static_cast<const MG_Pipe::MGPGridInfo*>(payload));
+                break;
+            default:
+                // A slot InstallMonolithVerbPort routes here whose row this switch does not know:
+                // the two lists drifted, and falling through to the driver would be the very
+                // "ran the other arm and looked fine" this port exists to end.
+                UnmigratedVerbFatal("MonolithVerbPort");
+            }
+            if (!applied) {
+                MGLOG_E_ONCE("MGPipe: the monolith verb port's %s was declined by the sink; nothing was "
+                             "drawn or dispatched",
+                             row);
+            }
+        }
+
+        // The emission of a ported verb: the session's, or the port's.
+        void EmitVerbTails(ClientSession* session, MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
+                           const Wire::WireTail* tails, Uint32 tailCount) {
+            if (session != nullptr) {
+                session->EmitAndWaitTails(op, payload, payloadBytes, tails, tailCount, nullptr, 0, nullptr);
+                return;
+            }
+            ApplyOnMonolithPort(op, payload, tails, tailCount);
+        }
+        void EmitVerbNoTail(ClientSession* session, MG_Pipe::MGPWireOp op, const void* payload,
+                            Uint64 payloadBytes) {
+            if (session != nullptr) {
+                session->EmitAndWait(op, payload, payloadBytes, nullptr, 0, nullptr, 0, nullptr);
+                return;
+            }
+            ApplyOnMonolithPort(op, payload, nullptr, 0);
         }
 
         // =============================================================================
@@ -519,7 +602,7 @@ namespace MobileGL::MG_Remote::Client {
                             const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
                             const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
-            ClientSession& session = RequireSession(slot);
+            ClientSession* session = VerbSessionFor(slot);
             PersistentMapTracker::Instance().PushDrawConsumers();
             MG_Pipe::MGPipeDrainDeferredDestroys();
             // Snapshot before marking THIS draw's potential GPU writes: resolving
@@ -554,8 +637,7 @@ namespace MobileGL::MG_Remote::Client {
                 tails[1] = {indirect, sizeof(*indirect)};
                 tailCount = 2;
             }
-            session.EmitAndWaitTails(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails,
-                                     tailCount, nullptr, 0, nullptr);
+            EmitVerbTails(session, MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails, tailCount);
         }
 
         // ---- the single-draw indexed family: DrawElements, DrawElementsBaseVertex, the two
@@ -1293,7 +1375,7 @@ namespace MobileGL::MG_Remote::Client {
         // carried both calls before its Fatal precisely so that the package which flipped this
         // slot would inherit a call site that was already correct.
         void EmitDispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
-            ClientSession& session = RequireSession("DispatchCompute");
+            ClientSession* session = VerbSessionFor("DispatchCompute");
             PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
@@ -1307,12 +1389,11 @@ namespace MobileGL::MG_Remote::Client {
             record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
             record.IndirectOffset = 0;
             record.IsIndirect = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            EmitVerbNoTail(session, MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record));
         }
 
         void EmitDispatchComputeIndirect(GLintptr indirect) {
-            ClientSession& session = RequireSession("DispatchComputeIndirect");
+            ClientSession* session = VerbSessionFor("DispatchComputeIndirect");
             PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
@@ -1333,8 +1414,7 @@ namespace MobileGL::MG_Remote::Client {
                         MG_Pipe::MGPipeKind::Buffer, bound->GetLifetimeId());
                 }
             }
-            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            EmitVerbNoTail(session, MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record));
         }
 
         // glMemoryBarrier / glMemoryBarrierByRegion. The bits cross VERBATIM: the frontend has
@@ -2124,6 +2204,36 @@ namespace MobileGL::MG_Remote::Client {
             *new MG_Backend::GlobalBackendFunctionsTable{BuildRemoteEmitTable()};
         return table;
     }
+
+    void InstallMonolithVerbPort(MG_Backend::GlobalBackendFunctionsTable& table) {
+        // P13 W4a: the draw and dispatch families. Later W4 steps add their verbs here AND to
+        // ApplyOnMonolithPort's switch, in the same commit.
+        table.GL.DrawArrays = &EmitDrawArrays;
+        table.GL.DrawElements = &EmitDrawElements;
+        table.GL.DrawElementsBaseVertex = &EmitDrawElementsBaseVertex;
+        table.GL.DrawRangeElements = &EmitDrawRangeElements;
+        table.GL.DrawRangeElementsBaseVertex = &EmitDrawRangeElementsBaseVertex;
+        table.GL.DrawElementsInstanced = &EmitDrawElementsInstanced;
+        table.GL.DrawElementsInstancedBaseVertex = &EmitDrawElementsInstancedBaseVertex;
+        table.GL.DrawElementsInstancedBaseInstance = &EmitDrawElementsInstancedBaseInstance;
+        table.GL.DrawElementsInstancedBaseVertexBaseInstance = &EmitDrawElementsInstancedBaseVertexBaseInstance;
+        table.GL.DrawArraysInstanced = &EmitDrawArraysInstanced;
+        table.GL.DrawArraysInstancedBaseInstance = &EmitDrawArraysInstancedBaseInstance;
+        table.GL.MultiDrawArrays = &EmitMultiDrawArrays;
+        table.GL.MultiDrawElements = &EmitMultiDrawElements;
+        table.GL.MultiDrawElementsBaseVertex = &EmitMultiDrawElementsBaseVertex;
+        table.GL.DrawArraysIndirect = &EmitDrawArraysIndirect;
+        table.GL.DrawElementsIndirect = &EmitDrawElementsIndirect;
+        table.GL.MultiDrawArraysIndirect = &EmitMultiDrawArraysIndirect;
+        table.GL.MultiDrawElementsIndirect = &EmitMultiDrawElementsIndirect;
+        table.GL.MultiDrawArraysIndirectCount = &EmitMultiDrawArraysIndirectCount;
+        table.GL.MultiDrawElementsIndirectCount = &EmitMultiDrawElementsIndirectCount;
+        table.GL.DispatchCompute = &EmitDispatchCompute;
+        table.GL.DispatchComputeIndirect = &EmitDispatchComputeIndirect;
+        g_monolithVerbPort = true;
+    }
+
+    Bool MonolithVerbPortInstalled() { return g_monolithVerbPort; }
 
     Uint32 ImplementedVerbCount() { return kEmittedSlots; }
     Uint32 LocallyAnsweredSlotCount() { return kLocallyAnsweredSlots; }

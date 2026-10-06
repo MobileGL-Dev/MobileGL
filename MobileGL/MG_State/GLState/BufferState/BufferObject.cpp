@@ -544,8 +544,11 @@ namespace MobileGL::MG_State::GLState {
         // cleared by the time the applier calls back, and a second clear here would also
         // retire a GPU write announced by something other than a readback - a ReadPixels into
         // a pack PBO writes back through this same function.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            atOffset == 0 && data.size >= m_size) {
+        //
+        // P13 W4a: monolith's record arm refreshes an aliased store through this function too
+        // (Managers.cpp RefreshAliasedStoreFromGpu), and a whole-store landing there is exactly as
+        // current as one under split.
+        if (MG_Config::DataArmIsRecord() && atOffset == 0 && data.size >= m_size) {
             m_gpuWritePending = false;
         }
 #endif

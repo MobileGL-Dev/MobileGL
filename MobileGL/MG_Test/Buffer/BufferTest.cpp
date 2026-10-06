@@ -23,6 +23,31 @@
 
 using namespace MobileGL;
 
+namespace {
+    // P13 W4a: THE MONOLITH FRONTEND ARM, PINNED. The cases that use this assert how the frontend
+    // object pushes a map's bytes when the backend reads the object itself - the arm W4 retires
+    // family by family and W6 deletes. On the record arm (every wire, and monolith's from W4a) the
+    // client's persistent-map tracker owns that push instead, which the split lanes cover. When
+    // W6 deletes the frontend arm, these cases go with it.
+    class ScopedMonolithFrontendArm {
+    public:
+        ScopedMonolithFrontendArm() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            m_saved = MG_Config::MonolithTakesRecordArm;
+            MG_Config::MonolithTakesRecordArm = false;
+#endif
+        }
+        ~ScopedMonolithFrontendArm() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Config::MonolithTakesRecordArm = m_saved;
+#endif
+        }
+
+    private:
+        Bool m_saved = false;
+    };
+} // namespace
+
 class BufferTest : public ::testing::Test {
 protected:
     // GL error flags are sticky per error code and the context outlives an individual test in this
@@ -232,6 +257,7 @@ TEST_F(BufferTest, AcquireMemoryRangeWithoutExplicit) {
 }
 
 TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
+    const ScopedMonolithFrontendArm frontendArm;
     auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Uniform);
     Vector<Uint> bufferNames;
     MobileGL::MG_State::pGLContext->GenBufferNames(1, bufferNames);
@@ -2493,6 +2519,7 @@ TEST_F(BufferTest, MapBufferRangeAndUnmapBufferReseedAnAdoptedShaderStorageBuffe
 // before - the staging copy is written back into the shadow and the backend's flush op
 // carries the range down.
 TEST_F(BufferTest, ANonPersistentWriteMapOfAShadowBackedStoreStillFlushesThroughTheBackend) {
+    const ScopedMonolithFrontendArm frontendArm;
     ZeroCopyMockBackend mock;
     mock.provideMap = false;
     g_zeroCopyMock = &mock;
@@ -2953,6 +2980,7 @@ TEST_F(BufferTest, RespecifyingAStoreWhileItIsMappedDoesNotLandTheStagedBytesInt
 }
 
 TEST_F(BufferTest, RespecifyingAShadowBackedStoreWhileItIsMappedPushesNoRangeDown) {
+    const ScopedMonolithFrontendArm frontendArm;
     ZeroCopyMockBackend mock;
     mock.provideMap = false;
     g_zeroCopyMock = &mock;

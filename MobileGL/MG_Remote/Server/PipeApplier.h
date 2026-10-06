@@ -152,6 +152,7 @@ namespace MobileGL::MG_Remote::Server {
         // The server's private backend. Null until ServerLoop::CreateBackend has run, and a
         // verb that arrives before then declines by name rather than dereferencing.
         void SetBackend(MG_Backend::BackendObject* backend);
+        MG_Backend::BackendObject* Backend() const { return m_backend; }
         void SetMaxReplyBytes(Uint64 bytes) { m_maxReplyBytes = bytes; }
 
         // P11 B2: T0's map_persistent - ServerSession::AdoptStoreT0 (it owns the aux socket).

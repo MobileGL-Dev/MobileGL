@@ -704,7 +704,9 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Bool PersistentMapTracker::PushIsArmed() {
-        return MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        // P13 W4a: the record arm's buffer reads never ask the frontend object to sync a map, so
+        // the client pushes the mapped span wherever that arm runs - monolith's included.
+        return MG_Config::DataArmIsRecord();
     }
 
     // P5d round 3 (package D): the body this forwards to is now one relaxed load of the apply

@@ -124,7 +124,9 @@ namespace MobileGL::MG_Remote::Client {
     } // namespace
 
     Bool GpuWriteSetIsClientSide() {
-        return MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        // P13 W4a: wherever the backend reads records - every wire, and monolith's record arm -
+        // the client owns the conservative set; the backend marks only its own twins.
+        return MG_Config::DataArmIsRecord();
     }
 
     Bool ImageUnitIsAWritableBufferTexture(const ImageTextureBinding& binding) {

@@ -120,6 +120,22 @@ namespace MobileGL::MG_Remote::Server {
             return shadow.Bytes.data();
         }
 
+        // P13 W4a: a COPY even in a non-copying store - the fallback for a GPU-written store on
+        // monolith's record arm that never recorded the shadow base it aliases (Managers.cpp's
+        // RefreshAliasedStoreFromGpu). Whole-store, covered, and dropped with the key.
+        const Uint8* AdoptPrivateCopy(const void* key, SizeT width, const void* bytes, SizeT size) {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            Shadow& shadow = m_shadows[key];
+            shadow.SessionKey = CurrentStagedBucket().SessionKey;
+            if (shadow.Bytes.size() < std::max(width, size)) shadow.Bytes.resize(std::max(width, size), 0);
+            if (size != 0 && bytes != nullptr) {
+                std::memcpy(shadow.Bytes.data(), bytes, size);
+                CoverageAdd(shadow.Covered, 0, size);
+            }
+            m_any.store(true, std::memory_order_release);
+            return shadow.Bytes.data();
+        }
+
         void Drop(const void* key) {
             if (!m_any.load(std::memory_order_acquire)) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
