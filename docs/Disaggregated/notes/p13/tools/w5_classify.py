@@ -37,7 +37,9 @@ TRANSPORT = [r'ClientSession', r'ServerSession', r'ServerLoop', r'Transport::', 
              r'Transport\s*!=', r'Transport\s*==',
              # Second pass (S2): transport-shaped words that name no MG_Remote symbol.
              r'Window', r'SwapInterval', r'ContextLive', r'Ahb', r'AHardwareBuffer', r'HardwareBuffer', r'[Dd]ma[Bb]uf',
-             r'Gbm', r'SyncFile', r'sync_file', r'Session', r'Peer', r'Spawn', r'Tcp', r'Socket']
+             r'Gbm', r'SyncFile', r'sync_file', r'Session', r'Peer', r'Spawn', r'Tcp', r'Socket',
+             # Device loss and its recovery are a session's (the session ends, not the process).
+             r'Lost', r'Epoch', r'ResetNotif', r'Recover', r'StreamGate', r'ReplacementShare', r'ReplaceProcessDefault']
 RECORD = [r'DataArmIsRecord', r'RecordArm', r'Staged', r'\bWire', r'MGPipe', r'Handle', r'Record\b', r'Twin',
           r'Respecif', r'Readback', r'Verb', r'PersistentMap', r'GpuWrite', r'Emit', r'Applier', r'Slot',
           r'Residual', r'ContextValues', r'Cso\b', r'CSO', r'Placeholder', r'Mipmap', r'Shadow']
