@@ -1111,7 +1111,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::EnforceWireDeferredWatermark() {
-        const Uint64 budget = static_cast<Uint64>(MG_Config::Ipc.WireDeferredMb) * 1024u * 1024u;
+        const Uint64 budget = static_cast<Uint64>(MG_Config::RecordArm.WireDeferredMb) * 1024u * 1024u;
         // TWO TRIGGERS, ONE SWITCH. Bytes are what the knob names, but a VkBuffer costs per
         // OBJECT as well as per byte, and small orphans never reach a byte budget: measured on
         // bsl-esc-menu-854 (spawn, lavapipe), one stretch with no submission parked 12,498 stores

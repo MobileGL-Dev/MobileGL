@@ -40,6 +40,9 @@ namespace MobileGL::MG_Config {
     IpcTable Ipc;
     Bool MonolithTakesRecordArm = false;
 #endif
+#if MOBILEGL_BUILD_RECORD_ARM
+    RecordArmTable RecordArm;
+#endif
 } // namespace MobileGL::MG_Config
 
 namespace MobileGL::MG_ConfigLoader {
@@ -562,20 +565,11 @@ namespace MobileGL::MG_ConfigLoader {
         // are sanity, not policy.
         ipc.RingMb = QueryEnvUint32("MOBILEGL_IPC_RING_MB", 8, 1, 1024);
         ipc.StageMb = QueryEnvUint32("MOBILEGL_IPC_STAGE_MB", 32, 1, 4096);
-        // P7 wave 4 M2 (Config.h has the semantics). 0 is admitted ON PURPOSE as the negative
-        // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
-        ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
         ipc.SpinUs = QueryEnvUint32("MOBILEGL_IPC_SPIN_US", 50, 0, 1000000);
         // PH-6 (ID-P7-2; Config.h has the semantics). 0 is NOT admitted: a server with no
         // patience at all would forfeit a healthy run-ahead client the first time its ring
         // filled between two of the client's drains, which is an ordinary backlog.
         ipc.EventWaitMs = QueryEnvUint32("MOBILEGL_IPC_EVENT_WAIT_MS", 2000, 1, 600000);
-        // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
-        // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
-        ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
-        // Whole-range push is the 0 arm; with it on (default) only blocks whose
-        // xxHash64 changed since the last push are shipped.
-        ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
         ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
         // The create window. DEFAULT 6, and it works because a link that declares RetainsReplies
         // keeps a declared answer until its reader takes it - Config.h carries the three reasons it
@@ -699,8 +693,8 @@ namespace MobileGL::MG_ConfigLoader {
                 "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u poll-escalate=%u "
                 "adopt-tier=%s allow-t0=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
-                ipc.RingMb, ipc.StageMb, ipc.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
-                ipc.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
+                ipc.RingMb, ipc.StageMb, MG_Config::RecordArm.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
+                MG_Config::RecordArm.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
                 ipc.AdoptTier == 0 ? "0" : ipc.AdoptTier == 1 ? "1" : ipc.AdoptTier == 2 ? "2" : "unset(T0)",
                 ipc.AllowAdoptT0,
                 ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
@@ -712,6 +706,22 @@ namespace MobileGL::MG_ConfigLoader {
                     "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "
                     "live GLContext, so an unbarriered queue lets the server read future values");
         }
+    }
+#endif
+
+#if MOBILEGL_BUILD_RECORD_ARM
+    // P13 W5: the record arm's knobs (Config.h RecordArmTable), in every build that has the arm.
+    inline void InitRecordArm() {
+        MG_Config::RecordArmTable& ipc = MG_Config::RecordArm;
+        // P7 wave 4 M2 (Config.h has the semantics). 0 is admitted ON PURPOSE as the negative
+        // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
+        ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
+        // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
+        // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
+        ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
+        // Whole-range push is the 0 arm; with it on (default) only blocks whose
+        // xxHash64 changed since the last push are shipped.
+        ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
         if (ipc.WireDeferredMb == 0) {
             MGLOG_W("Config: MOBILEGL_IPC_WIRE_DEFERRED_MB=0 is the M2 NEGATIVE CONTROL: the "
                     "server never forces a sync for orphaned wire buffer stores, so a long frame "
@@ -730,6 +740,9 @@ namespace MobileGL::MG_ConfigLoader {
 
         InitBackendType();
         InitFeatures();
+#if MOBILEGL_BUILD_RECORD_ARM
+        InitRecordArm();
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // After InitFeatures, so the one line InitIpc logs is the last word on this run's
         // configuration, and before the accepted-env map is destroyed just below.

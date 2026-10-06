@@ -64,13 +64,13 @@ namespace {
     protected:
         void SetUp() override {
             m_transport = MG_Config::Transport;
-            m_blockKb = MG_Config::Ipc.PersistentBlockKb;
+            m_blockKb = MG_Config::RecordArm.PersistentBlockKb;
             m_adoptTier = MG_Config::Ipc.AdoptTier;
             m_pipeStats = MG_Config::Features.PipeStats;
             m_context = Move(MG_State::pGLContext);
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             MG_Config::Transport = MG_Config::TransportMode::InProcess;
-            MG_Config::Ipc.PersistentBlockKb = 64;
+            MG_Config::RecordArm.PersistentBlockKb = 64;
             MG_Config::Ipc.AdoptTier = 2;
             MG_Config::Features.PipeStats = true;
             MG_Util::PipeStats::Init();
@@ -87,7 +87,7 @@ namespace {
             PersistentMapTracker::Instance().ClearForTest();
             MG_State::pGLContext = Move(m_context);
             MG_Config::Transport = m_transport;
-            MG_Config::Ipc.PersistentBlockKb = m_blockKb;
+            MG_Config::RecordArm.PersistentBlockKb = m_blockKb;
             MG_Config::Ipc.AdoptTier = m_adoptTier;
             MG_Config::Features.PipeStats = m_pipeStats;
             MG_Util::PipeStats::Init();
@@ -470,7 +470,7 @@ TEST_F(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
 // whole buffer at unmap, so a scenario that unmapped before reading back went green and the
 // control was dead.
 TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
-    MG_Config::Ipc.PersistentBlockKb = 0;
+    MG_Config::RecordArm.PersistentBlockKb = 0;
     constexpr SizeT kSize = 128u * 1024u;
     auto buffer = MakeBuffer(23u, kSize);
 

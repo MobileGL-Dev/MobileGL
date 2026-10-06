@@ -700,7 +700,7 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     Uint64 PersistentMapTracker::BlockBytes() {
-        return static_cast<Uint64>(MG_Config::Ipc.PersistentBlockKb) * 1024ull;
+        return static_cast<Uint64>(MG_Config::RecordArm.PersistentBlockKb) * 1024ull;
     }
 
     Bool PersistentMapTracker::PushIsArmed() {
@@ -1049,7 +1049,7 @@ namespace MobileGL::MG_Remote::Client {
         // in both directions.
         BlockHashState* state = nullptr;
         const Uint8* shadow = nullptr;
-        if (MG_Config::Ipc.PersistentHashSuppress != 0) {
+        if (MG_Config::RecordArm.PersistentHashSuppress != 0) {
             shadow = buffer.MappedData();
             if (shadow != nullptr) {
                 state = &m_blockHashes[buffer.GetLifetimeId()];

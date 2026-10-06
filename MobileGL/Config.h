@@ -462,6 +462,37 @@ namespace MobileGL::MG_Config {
         NamedPipe = 4, // P6: Windows named pipe (Endpoint = <name>)
     };
 
+#if MOBILEGL_BUILD_RECORD_ARM
+    // P13 W5: THE RECORD ARM'S OWN KNOBS. They kept their MOBILEGL_IPC_* names (logs, CI lanes and
+    // notes spell them so), but they tune the record arm - the persistent-map push and Magma's wire
+    // stores - which runs in a library without a transport too, so they are not IpcTable's.
+    struct RecordArmTable {
+        // MOBILEGL_IPC_WIRE_DEFERRED_MB (P7 wave 4 M2, ID-P7-32): the SERVER's budget, in MiB,
+        // for orphaned wire buffer stores - the old VkBuffer every glBufferData that crosses the
+        // wire leaves behind - that a GPU command recorded but not yet retired may still name.
+        // Stores no command names are destroyed at once and stores whose last submission has
+        // retired are destroyed at the next park; this bounds the REST. When the parked bytes
+        // exceed it after a sweep, the server flushes what it has recorded and waits for it
+        // (WaitForWireBufferHostAccess's sync point, mid-frame), which retires every one. It is
+        // not a frame count because a frame is not bounded: a snapshot-exiting pbuffer replay
+        // delivers one present for 1.3 M calls. The same sync point also fires above a fixed
+        // 1024 parked stores (VkBufferManager::kWireDeferredCountCeiling), because small
+        // orphans never reach a byte budget. 0 IS THE NEGATIVE CONTROL for both, not "unlimited
+        // by design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
+        // and MagmaWireReclaimScenario's watermark cases must go red.
+        Uint32 WireDeferredMb = 64;
+        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.
+        // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and
+        // PersistentCoherentMapScenario must go RED under it (exit gate E3(a)).
+        Uint32 PersistentBlockKb = 64;
+        // MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS: 1 = the persistent-map push ships only
+        // blocks whose xxHash64 changed since the last push, instead of the whole mapped
+        // range every verb. 0 restores the whole-range push (A/B control).
+        Uint32 PersistentHashSuppress = 1;
+    };
+    extern RecordArmTable RecordArm;
+#endif
+
 #if MOBILEGL_BUILD_DISAGGREGATED
     // Parsed once by MG_ConfigLoader::Init(). Defaults to Monolith even here: building the
     // transport in is not the same as using it, and every existing lane of a build-split
@@ -520,20 +551,6 @@ namespace MobileGL::MG_Config {
         // stage chunk budget (MGPipeStageChunkBytes, a quarter of this), and a record type with
         // no cut is Fatal{RingOverrun, "SEG_STAGE"} rather than allowed to exceed it.
         Uint32 StageMb = 32;
-        // MOBILEGL_IPC_WIRE_DEFERRED_MB (P7 wave 4 M2, ID-P7-32): the SERVER's budget, in MiB,
-        // for orphaned wire buffer stores - the old VkBuffer every glBufferData that crosses the
-        // wire leaves behind - that a GPU command recorded but not yet retired may still name.
-        // Stores no command names are destroyed at once and stores whose last submission has
-        // retired are destroyed at the next park; this bounds the REST. When the parked bytes
-        // exceed it after a sweep, the server flushes what it has recorded and waits for it
-        // (WaitForWireBufferHostAccess's sync point, mid-frame), which retires every one. It is
-        // not a frame count because a frame is not bounded: a snapshot-exiting pbuffer replay
-        // delivers one present for 1.3 M calls. The same sync point also fires above a fixed
-        // 1024 parked stores (VkBufferManager::kWireDeferredCountCeiling), because small
-        // orphans never reach a byte budget. 0 IS THE NEGATIVE CONTROL for both, not "unlimited
-        // by design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
-        // and MagmaWireReclaimScenario's watermark cases must go red.
-        Uint32 WireDeferredMb = 64;
         // MOBILEGL_IPC_SPIN_US: spin before parking on a doorbell, either direction.
         Uint32 SpinUs = 50;
         // MOBILEGL_IPC_EVENT_WAIT_MS (PH-6, ID-P7-2): the SERVER's patience, in ms, for ONE
@@ -551,14 +568,6 @@ namespace MobileGL::MG_Config {
         // spent twice. Read by the server only (ServerSpawn.cpp passes it to a spawned child);
         // the lockstep arm (no kCapRunAheadApply, i.e. Magma) never waits and keeps P5C's Fatal.
         Uint32 EventWaitMs = 2000;
-        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.
-        // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and
-        // PersistentCoherentMapScenario must go RED under it (exit gate E3(a)).
-        Uint32 PersistentBlockKb = 64;
-        // MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS: 1 = the persistent-map push ships only
-        // blocks whose xxHash64 changed since the last push, instead of the whole mapped
-        // range every verb. 0 restores the whole-range push (A/B control).
-        Uint32 PersistentHashSuppress = 1;
         // MOBILEGL_IPC_BATCH_WAITS: 1 = value-class records (kCtxState / kCtxCso / kCtxObject
         // with no reply slot) are published without waiting for their own apply; the barrier
         // is taken at the next pull-reading verb (kCtxVerb syncs, queries, screen rows, and

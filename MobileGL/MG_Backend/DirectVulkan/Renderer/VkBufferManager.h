@@ -232,7 +232,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // back, and none was persistently mapped, in between - so a memo of resolved
         // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
         Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // Bumped every time this manager destroys a WIRE store's VkBuffer (see
         // m_wireStoreDestroyEpoch). Unchanged since a memo was taken means no VkBuffer handle
         // that memo names can have been freed and re-minted in between, which is the one
@@ -408,7 +408,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
         Vector<WeakPtr<VkBufferResource>> m_liveResources;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
         // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
         // the whole point is that these entries do not wait for a frame slot to come round.
