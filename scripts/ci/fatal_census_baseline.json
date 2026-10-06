@@ -1,7 +1,7 @@
 {
-  "abort_sites": 76,
+  "abort_sites": 75,
   "abort_sites_by_file": {
-    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 13,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 12,
     "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 12,
     "MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp": 2,
     "MobileGL/MG_Backend/DirectGLES/Utils.cpp": 1,
@@ -66,7 +66,6 @@
     "UnmigratedPipeInput",
     "UnmigratedSurface",
     "UnmigratedVerb",
-    "UnnamedIdentity",
     "UnsetCallMask",
     "UnsizedReadback"
   ]

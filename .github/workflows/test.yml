@@ -3548,6 +3548,12 @@ jobs:
       - name: Espryt memo-key purity check
         run: python3 scripts/ci/espryt_memo_purity.py --self-test
 
+      # P13 W3b: the pull build's switches stay retired - a preprocessor conditional on
+      # MOBILEGL_PIPE_PUSH / MOBILEGL_PIPE_LEGACY_MEMOS, or an MGB_CTX spelling, coming back is a
+      # red here. --self-test plants each shape first and requires the gate to catch it.
+      - name: Retired pull-build switches stay retired (P13)
+        run: python3 scripts/ci/retired_switches.py --self-test
+
       # The same question for the symbol tool the P1 gate is written in terms of.
       - name: Symbol report self-test
         run: python3 scripts/symbol_report.py --self-test
