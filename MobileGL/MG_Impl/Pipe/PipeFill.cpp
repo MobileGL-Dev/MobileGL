@@ -2227,7 +2227,7 @@ namespace MobileGL::MG_Pipe {
     // a server-stamped verb, so InvalidateCompileEnv keeps being reachable from backend
     // initialisation - the case the exemption was written for - and every monolith lane, split
     // build included, behaves as it does today.
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
 #define MGP_STICKY_FORWARD_PULL(Field) MGPipeStickyForwardPull(MGPipeInputField::Field)
 #else
 #define MGP_STICKY_FORWARD_PULL(Field) ((void)0)

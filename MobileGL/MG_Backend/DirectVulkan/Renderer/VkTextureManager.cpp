@@ -2153,6 +2153,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             resource.yuvSource.reset();
             resource.yuvConvertedFrame = 0;
         }
+#if MOBILEGL_BUILD_DISAGGREGATED
         if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
             const auto yuv = MG_Remote::Server::SharedImages::Find(record.SharedImageId);
             if (yuv != nullptr && MG_Remote::Server::SharedImages::FourccIsYuv(yuv->Fourcc)) {
@@ -2169,6 +2170,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return true;
             }
         }
+#endif
         // Level 0 is a shared image: bind its buffer. An image that cannot be bound here leaves
         // the texture the storage its NULL-data definition asked for, below.
         if (record.SharedImageId != 0 && !m_syncingYuvTextureStorage) {
@@ -2958,6 +2960,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         image = ImportedSharedImage{};
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
     VkTextureManager::SharedImageBind VkTextureManager::SyncWireSharedImage(
         const MG_Pipe::MGPipeResourceRecord& record, TextureResource& resource, Bool requireStorage) {
         const MG_Pipe::MGPResourceDesc& desc = record.Desc;
@@ -3031,6 +3034,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 desc.Resource.Gen, static_cast<unsigned long long>(id), image->Width, image->Height);
         return SharedImageBind::Bound;
     }
+#else
+    // P13 W5: a library without a transport allocates no shared image, so no record names one.
+    VkTextureManager::SharedImageBind VkTextureManager::SyncWireSharedImage(
+        const MG_Pipe::MGPipeResourceRecord&, TextureResource&, Bool) {
+        return SharedImageBind::Unresolved;
+    }
+#endif
 
     VkTextureManager::TextureResource* VkTextureManager::SyncTextureResourceByHandle(
         MG_Pipe::MGPipeHandle handle, Bool renderbuffer, Bool requireStorage) {

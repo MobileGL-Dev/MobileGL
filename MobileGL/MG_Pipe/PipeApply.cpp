@@ -225,7 +225,7 @@ namespace MobileGL::MG_Pipe {
 
 #endif // MOBILEGL_BUILD_RECORD_ARM
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     namespace {
         MGPipeSessionLatchHook g_sessionLatchHook = nullptr;
         MGPipeSessionLatchArmedHook g_sessionLatchArmedHook = nullptr;
@@ -240,6 +240,9 @@ namespace MobileGL::MG_Pipe {
 
     bool MGPipeSessionLatchArmed() { return g_sessionLatchArmedHook != nullptr && g_sessionLatchArmedHook(); }
 
+#endif // MOBILEGL_BUILD_RECORD_ARM
+
+#if MOBILEGL_BUILD_DISAGGREGATED
     bool MGPipeDebugDeviceLossDue() {
         long at = 0;
         if (const char* value = std::getenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT")) {
@@ -317,6 +320,9 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
+#endif // MOBILEGL_BUILD_DISAGGREGATED
+
+#if MOBILEGL_BUILD_RECORD_ARM
     bool MGPipeSessionLatch(MGPipeFatalFamily family, const char* fmt, ...) {
         char line[512];
         va_list args;
