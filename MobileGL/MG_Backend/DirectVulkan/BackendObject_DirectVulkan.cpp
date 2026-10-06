@@ -431,7 +431,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void BackendObject_DirectVulkan::Initialize() {
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
         VkBufferManager::RegisterWireResourceOps();
         // P7 wave 2 package C (CONTRACT-P7 §5.5). BESIDE the resource ops and for the same
         // reason: this is the one place both Magma server roles pass through - the inproc

@@ -52,6 +52,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // apply thread (and these reads all run there), so its cache is the authoritative one.
         // Before the session lands, or under monolith transport in a disaggregated build, fall
         // back to the process global exactly as the monolith path always has.
+#if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             if (MG_Backend::BackendObject* server = MG_Remote::Server::ServerLoopInstance().Backend()) {
                 return &server->GetFormatCapabilities();
@@ -66,6 +67,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     "on the apply thread");
             std::abort();
         }
+#endif
         return pActiveBackendObject ? &pActiveBackendObject->GetFormatCapabilities() : nullptr;
     }
 #endif
