@@ -263,13 +263,6 @@ jobs:
           cmake --build "${BUILD_DIR}" --target MobileGL --parallel "$(nproc)"
           python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
             --mode monolith --output "${BUILD_DIR}/runtime-mode.json"
-          python3 - "${BUILD_DIR}/runtime-mode.json" <<'PY'
-          import json, sys
-          rows = json.load(open(sys.argv[1]))['production_compilation']
-          if not rows or any(row['definitions'].get('MOBILEGL_PIPE_PUSH') != '1' for row in rows):
-              sys.exit('::error::the push control was not compiled with MOBILEGL_PIPE_PUSH=1 everywhere')
-          print(f'push control: {len(rows)} production sources compiled with MOBILEGL_PIPE_PUSH=1, zero MG_Remote symbols')
-          PY
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 

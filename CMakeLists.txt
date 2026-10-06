@@ -31,18 +31,16 @@ option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process,
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
-# The PipeInputs strangler (ARCHITECTURE.md 9.2). NOT AN OPTION SINCE P13 W3a: every build pushes,
-# the pull build is retired (PLAN-P13 §6). The variable stays ON - and MOBILEGL_PIPE_PUSH=1 stays
-# defined for the sources - only until W3b removes the `#if MOBILEGL_PIPE_PUSH` guards themselves;
-# the order is what keeps a guard from going "green by skipping" (§4.2). A -DMOBILEGL_PIPE_PUSH=OFF
-# (or the OFF that every pre-P13 build tree holds in its cache, the old default) is named and
-# dropped rather than honoured: a warning, not an error, so an existing tree reconfigures.
+# The PipeInputs strangler (ARCHITECTURE.md 9.2) is finished: since P13 every build pushes, and
+# there is neither an option nor a macro for it (W3a removed the option, W3b the `#if` guards and
+# the definition). A -DMOBILEGL_PIPE_PUSH=OFF (or the OFF that every pre-P13 build tree holds in its
+# cache, the old default) is named and dropped rather than honoured: a warning, not an error, so an
+# existing tree reconfigures. The RUNTIME MOBILEGL_PIPE_PUSH environment bitmask is unrelated.
 if (DEFINED CACHE{MOBILEGL_PIPE_PUSH} AND NOT "$CACHE{MOBILEGL_PIPE_PUSH}")
     message(WARNING "MobileGL: MOBILEGL_PIPE_PUSH=OFF asks for the pull build, which P13 retired; "
                     "ignored - every build pushes now")
 endif()
 unset(MOBILEGL_PIPE_PUSH CACHE)
-set(MOBILEGL_PIPE_PUSH ON)
 option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; never shipped" OFF)
 # Track H's old-versus-new arm (ARCHITECTURE.md 9.6) - MOBILEGL_PIPE_LEGACY_MEMOS - retired with the
 # pull path in P13 W3b: the pre-handle memo arm is no longer compiled anywhere. Named and dropped,
@@ -554,32 +552,30 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
 endif()
 
-if (MOBILEGL_PIPE_PUSH)
-    message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
-    list(APPEND SOURCE_FILES
-        MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
-        MobileGL/MG_Impl/Pipe/PipeFill.cpp
-        # P2's contract: the chunk table and its subset hash, the in-process applier, and
-        # the client's {slot, gen} allocator. All three are push-only, which is how the
-        # pull build gains no symbol from P2 (G1) - a declaration emits nothing.
-        MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
-        MobileGL/MG_Pipe/PipeApply.cpp
-        MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
-        # P4a's contract: the reflection-archive serializer over ProgramArtifacts.h's
-        # VisitFields tables. Push-only for the same G1 reason as the three above - in
-        # monolith the archive never crosses (create_shader_state hands the two structs over
-        # by pointer beside the record), so the codec is live code only in the VERIFY lane,
-        # where the applier serialises, deserialises and field-compares before storing.
-        MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
-        # P5's contract (integrator ruling R-17, package c1): the MONOLITH arm of the
-        # client->wire routing - the thirty-seven adapters that install gMGPipeScreen /
-        # gMGPipeContext over the MGPipeApply* entry points, and the reply mailbox the four
-        # acceptance rows answer through. Push-only for the same G1 reason as the five above:
-        # the two tables are inline variables that are zero in a pull build and nothing there
-        # can reach a thunk.
-        MobileGL/MG_Pipe/PipeRoute.cpp
-    )
-endif()
+message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
+list(APPEND SOURCE_FILES
+    MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
+    MobileGL/MG_Impl/Pipe/PipeFill.cpp
+    # P2's contract: the chunk table and its subset hash, the in-process applier, and
+    # the client's {slot, gen} allocator. All three are push-only, which is how the
+    # pull build gains no symbol from P2 (G1) - a declaration emits nothing.
+    MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
+    MobileGL/MG_Pipe/PipeApply.cpp
+    MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
+    # P4a's contract: the reflection-archive serializer over ProgramArtifacts.h's
+    # VisitFields tables. Push-only for the same G1 reason as the three above - in
+    # monolith the archive never crosses (create_shader_state hands the two structs over
+    # by pointer beside the record), so the codec is live code only in the VERIFY lane,
+    # where the applier serialises, deserialises and field-compares before storing.
+    MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
+    # P5's contract (integrator ruling R-17, package c1): the MONOLITH arm of the
+    # client->wire routing - the thirty-seven adapters that install gMGPipeScreen /
+    # gMGPipeContext over the MGPipeApply* entry points, and the reply mailbox the four
+    # acceptance rows answer through. Push-only for the same G1 reason as the five above:
+    # the two tables are inline variables that are zero in a pull build and nothing there
+    # can reach a thunk.
+    MobileGL/MG_Pipe/PipeRoute.cpp
+)
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
     message(STATUS "MobileGL: disaggregated transport ON, appending MG_Remote sources")
@@ -746,9 +742,6 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
 endif()
 
-if (MOBILEGL_PIPE_PUSH)
-    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_PUSH=1)
-endif()
 if (MOBILEGL_PIPE_VERIFY)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
 endif()

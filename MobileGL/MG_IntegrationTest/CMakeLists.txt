@@ -407,10 +407,8 @@ set(MGL_ITEST_CAPABILITY_ENV "")
 # The lanes themselves are registered in BOTH builds even so. `ctest -L integration-gpu` has to
 # be name-for-name identical between the pull build and the push build (P2 gate G2), and a lane
 # that exists in only one of them breaks that comparison for every future package - a much worse
-# outcome than four entries that skip.
-if (MOBILEGL_PIPE_PUSH)
-    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_PUSH_BUILD=1")
-endif()
+# outcome than four entries that skip. P13 W3b: every build pushes, so the marker is unconditional.
+list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_PUSH_BUILD=1")
 
 # THE THREE MARKERS BELOW ANSWER A QUESTION ABOUT THE SOURCE TREE, so each is only a true
 # statement about THIS LIBRARY while this build compiles the arm the source implements - and all
@@ -508,198 +506,191 @@ function(mgl_itest_probe_for_two_symbols outVar directory symbolRegexA symbolReg
     endif()
 endfunction()
 
-if (MOBILEGL_PIPE_PUSH)
-    # DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
-    # SlotTables.h existing: the bit is declared in the contract (MG_Pipe/MGPipe.h:77) and the
-    # backend has to name it to honour MOBILEGL_PIPE_PUSH's default mask, whatever files package C
-    # spreads the slot tables across.
-    mgl_itest_probe_for_symbol(MGL_ITEST_ESPRYT_SLOTS
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES" "kMGPipeSubsystemEsprytSlots")
-    if (MGL_ITEST_ESPRYT_SLOTS)
-        message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (${MGL_ITEST_ESPRYT_SLOTS})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
-    else()
-        message(STATUS "Integration tests: no DirectGLES source names kMGPipeSubsystemEsprytSlots - "
-                       "HandleRecycle.Handles will SKIP on it")
-    endif()
-
-    # The CSO counters' EMITTER. The tracker package may implement the tracker and the cache
-    # header-only - today it does (MG_Impl/Pipe/{Tracker,CsoCache}.h, no Tracker.cpp) - so what is
-    # looked for is what the control actually reads: a source emitting the two counters.
-    mgl_itest_probe_for_symbol(MGL_ITEST_CSO_EMITTER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "RenderStateCso(Mints|Binds)")
-    if (MGL_ITEST_CSO_EMITTER)
-        message(STATUS "Integration tests: the CSO counters have an emitter (${MGL_ITEST_CSO_EMITTER})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
-    else()
-        message(STATUS "Integration tests: no MG_Impl/Pipe source emits RenderStateCsoMints/Binds - "
-                       "CsoContentAddressing will SKIP")
-    endif()
-
-    # DirectVulkan's Track H arm, and the ABA knob's consumer. Both over the whole backend
-    # directory: the re-key is subsystem 4's bit wherever package D reads it, and the knob has a
-    # consumer if ANY DirectVulkan source reverts a guard on it - today two do, in two files.
-    mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_REKEY
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "kMGPipeSubsystemMagmaVertexInput")
-    if (MGL_ITEST_MAGMA_REKEY)
-        message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen} "
-                       "(${MGL_ITEST_MAGMA_REKEY})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
-    else()
-        message(STATUS "Integration tests: no DirectVulkan source names kMGPipeSubsystemMagmaVertexInput - "
-                       "HandleRecycle.Handles will SKIP on it")
-    endif()
-
-    # P3a's buffer question, and it is NOT the two above. Bits 5/6 re-keyed each backend's
-    # VERTEX-INPUT memos; a BUFFER only travels as a handle once the resource_* family does
-    # (P3a for DirectGLES, P7 for DirectVulkan), and until then a buffer's backend twin is
-    # still reached from the frontend BufferObject. HandleRecycle's buffer case therefore has
-    # a marker of its own: reading the P2 one would arm its Handles arm on a tree where
-    # nothing about a buffer is keyed on a handle.
-    #
-    # Probed by MGPipeResourceOps - the op table PipeApply.h declares and a backend registers -
-    # over each backend's whole directory, for the reason the block above gives: the owning
-    # package picks its own file layout, and a filename probe would answer "no" forever the
-    # moment it moved the code.
-    foreach(mglItestResourceBackend DirectGLES DirectVulkan)
-        mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_OPS
-            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestResourceBackend}" "MGPipeResourceOps")
-        if (MGL_ITEST_RESOURCE_OPS)
-            message(STATUS "Integration tests: ${mglItestResourceBackend} registers a resource op table "
-                           "(${MGL_ITEST_RESOURCE_OPS})")
-            list(APPEND MGL_ITEST_CAPABILITY_ENV
-                "MGITEST_HANDLE_REKEY_RESOURCES_${mglItestResourceBackend}=1")
-        else()
-            message(STATUS "Integration tests: no ${mglItestResourceBackend} source names "
-                           "MGPipeResourceOps - HandleRecycle.Handles' buffer case will SKIP on it")
-        endif()
-    endforeach()
-
-    # The client-side emitter of P3a's map-persistent-roundtrips counter, which is what
-    # StorageBufferRegrow, LargeArenaAdoption and ResourceSubsystemControl read. Same shape and
-    # same reason as the CSO emitter probe above: the counter is minted in MG_Impl/Pipe (package
-    # B), header-only today, so the question is "does any source there emit it", not "does a
-    # named file exist". Until it does, mpr= is structurally zero and an assertion about it
-    # would be a statement about nothing.
-    mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_EMITTER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "MapPersistentRoundtrips")
-    if (MGL_ITEST_RESOURCE_EMITTER)
-        message(STATUS "Integration tests: map-persistent-roundtrips has an emitter "
-                       "(${MGL_ITEST_RESOURCE_EMITTER})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_RESOURCE_EMITTER_PRESENT=1")
-    else()
-        message(STATUS "Integration tests: no MG_Impl/Pipe source emits MapPersistentRoundtrips - "
-                       "StorageBufferRegrow's, LargeArenaAdoption's and ResourceSubsystemControl's "
-                       "mpr entries will SKIP")
-    endif()
-
-    # P4a's THIRD re-key question, per backend, and it is not either of the two above. Bits 5/6
-    # re-keyed each backend's VERTEX-INPUT memos and bit 7/8 the BUFFER's; P4a re-keys six OBJECT
-    # classes - texture, renderbuffer, framebuffer, sampler CSO, sampler view, shader CSO - behind
-    # four new subsystem bits, and a backend has to NAME one of those constants to honour
-    # MOBILEGL_PIPE_PUSH's default mask. A P4a case that read either older marker would arm its
-    # Handles arm on a tree where nothing about a texture is keyed on a handle: green for a re-key
-    # that does not exist. Probed by the constants rather than by a file, for the reason the block
-    # above gives - packages D and E choose their own file layout.
-    foreach(mglItestObjectBackend DirectGLES DirectVulkan)
-        mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_REKEY
-            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
-            "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
-        if (MGL_ITEST_OBJECT_REKEY)
-            message(STATUS "Integration tests: ${mglItestObjectBackend} is keyed on {slot, gen} for "
-                           "P4a's object families (${MGL_ITEST_OBJECT_REKEY})")
-            list(APPEND MGL_ITEST_CAPABILITY_ENV
-                "MGITEST_HANDLE_REKEY_OBJECTS_${mglItestObjectBackend}=1")
-        else()
-            message(STATUS "Integration tests: no ${mglItestObjectBackend} source names "
-                           "kMGPipeSubsystem{Framebuffer,TextureResources,Samplers,Programs} - "
-                           "HandleRecycle's six P4a cases will SKIP their Handles arm on it")
-        endif()
-
-        # ...and whether the ABA knob reaches those kinds THERE. A conjunction over the WHOLE
-        # backend directory, for the reason mgl_itest_probe_for_two_symbols states: reading the
-        # knob is not the same as steering P4a's keys with it, so the weaker single-regex evidence
-        # would turn six always-on entries into a permanent red - but requiring one FILE to carry
-        # both halves would let a backend satisfy the question and miss the probe, and the six
-        # controls would then keep asserting the correct pixels with nothing recording that the
-        # flip was forgotten (F-M5).
-        mgl_itest_probe_for_two_symbols(MGL_ITEST_OBJECT_ABA
-            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
-            "PipeHandleAbaControl"
-            "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
-        if (MGL_ITEST_OBJECT_ABA)
-            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL steers "
-                           "${mglItestObjectBackend}'s P4a object keys (${MGL_ITEST_OBJECT_ABA})")
-            list(APPEND MGL_ITEST_CAPABILITY_ENV
-                "MGITEST_HANDLE_ABA_OBJECTS_${mglItestObjectBackend}=1")
-        else()
-            message(STATUS "Integration tests: MobileGL/MG_Backend/${mglItestObjectBackend} does not "
-                           "both read Features.PipeHandleAbaControl and name a P4a subsystem bit "
-                           "somewhere under it - HandleRecycle's six P4a cases will assert the "
-                           "CORRECT pixels on the AbaControl arm and say that it is not a control "
-                           "for them yet")
-        endif()
-    endforeach()
-
-    # The client-side emitter of P4a's four suppressor-visible emission counters, which is what
-    # ObjectSubsystemControl reads. Same shape and same reason as the CSO and map-persistent
-    # emitter probes above: the emitters are minted in MG_Impl/Pipe (packages B and C), header-only
-    # by design (D-P), so the question is "does any source there emit it", not "does a named file
-    # exist". Until one does, every counter in the emit[] bracket is structurally zero in BOTH arms
-    # of the A/B and an assertion about their difference would be a statement about nothing.
-    mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_EMITTER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "FramebufferEmissions")
-    if (MGL_ITEST_OBJECT_EMITTER)
-        message(STATUS "Integration tests: P4a's object emissions have an emitter "
-                       "(${MGL_ITEST_OBJECT_EMITTER})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_OBJECT_EMITTER_PRESENT=1")
-    else()
-        message(STATUS "Integration tests: no MG_Impl/Pipe source emits FramebufferEmissions - "
-                       "ObjectSubsystemControl's emission case will SKIP")
-    endif()
-
-    # ...and the CLIENT half of the texture-upload shape, separately, because it is a different
-    # question with a different owner's file behind it (review F-m7). ctu= is emitted by PipeStats
-    # in EVERY push build whether or not anything increments it, so "the counter read zero" and
-    # "no client emitter exists" are the same number and TextureUploadShape cannot tell them apart
-    # from the summary line alone. An emitter that STOPPED emitting reads exactly like no emitter
-    # at all in that field, and the two-sided assertion the scenario exists for would pass while
-    # comparing nothing. This probe is what separates them.
-    #
-    # THAT EMITTER HAS LANDED (P3b/P4b wave 2-D corrects this comment's tense):
-    # MG_Impl/Pipe/TextureEmit.h's EmitOneLevel increments
-    # CallClass::ClientTextureUploadEmissions on every piece it emits, so the probe hits and the
-    # else() arm below is unreachable on this tree. It is KEPT rather than deleted because it is
-    # what makes the arming decision falsifiable in both directions - a probe that cannot report
-    # "absent" cannot be shown to be looking for the right symbol.
-    mgl_itest_probe_for_symbol(MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "ClientTextureUploadEmissions")
-    if (MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER)
-        message(STATUS "Integration tests: the client texture-upload counter has an emitter "
-                       "(${MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER}) - TextureUploadShape's "
-                       "two-sided assertion is live")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT=1")
-    else()
-        message(STATUS "Integration tests: no MG_Impl/Pipe source emits "
-                       "ClientTextureUploadEmissions - TextureUploadShape records the SERVER shape "
-                       "only and asserts that ctu= is zero")
-    endif()
-
-    mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
-    if (MGL_ITEST_MAGMA_ABA)
-        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer "
-                       "(${MGL_ITEST_MAGMA_ABA})")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
-    else()
-        message(STATUS "Integration tests: no DirectVulkan source names PipeHandleAbaControl - "
-                       "HandleRecycle.AbaControl will SKIP")
-    endif()
+# DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
+# SlotTables.h existing: the bit is declared in the contract (MG_Pipe/MGPipe.h:77) and the
+# backend has to name it to honour MOBILEGL_PIPE_PUSH's default mask, whatever files package C
+# spreads the slot tables across.
+mgl_itest_probe_for_symbol(MGL_ITEST_ESPRYT_SLOTS
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES" "kMGPipeSubsystemEsprytSlots")
+if (MGL_ITEST_ESPRYT_SLOTS)
+    message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (${MGL_ITEST_ESPRYT_SLOTS})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
 else()
-    message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl}, "
-                   "CsoContentAddressing, ResourceSubsystemControl, ObjectSubsystemControl and "
-                   "TextureUploadShape stay registered (G2) and SKIP: every arm they assert is "
-                   "compiled only under MOBILEGL_PIPE_PUSH")
+    message(STATUS "Integration tests: no DirectGLES source names kMGPipeSubsystemEsprytSlots - "
+                   "HandleRecycle.Handles will SKIP on it")
+endif()
+
+# The CSO counters' EMITTER. The tracker package may implement the tracker and the cache
+# header-only - today it does (MG_Impl/Pipe/{Tracker,CsoCache}.h, no Tracker.cpp) - so what is
+# looked for is what the control actually reads: a source emitting the two counters.
+mgl_itest_probe_for_symbol(MGL_ITEST_CSO_EMITTER
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "RenderStateCso(Mints|Binds)")
+if (MGL_ITEST_CSO_EMITTER)
+    message(STATUS "Integration tests: the CSO counters have an emitter (${MGL_ITEST_CSO_EMITTER})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
+else()
+    message(STATUS "Integration tests: no MG_Impl/Pipe source emits RenderStateCsoMints/Binds - "
+                   "CsoContentAddressing will SKIP")
+endif()
+
+# DirectVulkan's Track H arm, and the ABA knob's consumer. Both over the whole backend
+# directory: the re-key is subsystem 4's bit wherever package D reads it, and the knob has a
+# consumer if ANY DirectVulkan source reverts a guard on it - today two do, in two files.
+mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_REKEY
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "kMGPipeSubsystemMagmaVertexInput")
+if (MGL_ITEST_MAGMA_REKEY)
+    message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen} "
+                   "(${MGL_ITEST_MAGMA_REKEY})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
+else()
+    message(STATUS "Integration tests: no DirectVulkan source names kMGPipeSubsystemMagmaVertexInput - "
+                   "HandleRecycle.Handles will SKIP on it")
+endif()
+
+# P3a's buffer question, and it is NOT the two above. Bits 5/6 re-keyed each backend's
+# VERTEX-INPUT memos; a BUFFER only travels as a handle once the resource_* family does
+# (P3a for DirectGLES, P7 for DirectVulkan), and until then a buffer's backend twin is
+# still reached from the frontend BufferObject. HandleRecycle's buffer case therefore has
+# a marker of its own: reading the P2 one would arm its Handles arm on a tree where
+# nothing about a buffer is keyed on a handle.
+#
+# Probed by MGPipeResourceOps - the op table PipeApply.h declares and a backend registers -
+# over each backend's whole directory, for the reason the block above gives: the owning
+# package picks its own file layout, and a filename probe would answer "no" forever the
+# moment it moved the code.
+foreach(mglItestResourceBackend DirectGLES DirectVulkan)
+    mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_OPS
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestResourceBackend}" "MGPipeResourceOps")
+    if (MGL_ITEST_RESOURCE_OPS)
+        message(STATUS "Integration tests: ${mglItestResourceBackend} registers a resource op table "
+                       "(${MGL_ITEST_RESOURCE_OPS})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV
+            "MGITEST_HANDLE_REKEY_RESOURCES_${mglItestResourceBackend}=1")
+    else()
+        message(STATUS "Integration tests: no ${mglItestResourceBackend} source names "
+                       "MGPipeResourceOps - HandleRecycle.Handles' buffer case will SKIP on it")
+    endif()
+endforeach()
+
+# The client-side emitter of P3a's map-persistent-roundtrips counter, which is what
+# StorageBufferRegrow, LargeArenaAdoption and ResourceSubsystemControl read. Same shape and
+# same reason as the CSO emitter probe above: the counter is minted in MG_Impl/Pipe (package
+# B), header-only today, so the question is "does any source there emit it", not "does a
+# named file exist". Until it does, mpr= is structurally zero and an assertion about it
+# would be a statement about nothing.
+mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_EMITTER
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "MapPersistentRoundtrips")
+if (MGL_ITEST_RESOURCE_EMITTER)
+    message(STATUS "Integration tests: map-persistent-roundtrips has an emitter "
+                   "(${MGL_ITEST_RESOURCE_EMITTER})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_RESOURCE_EMITTER_PRESENT=1")
+else()
+    message(STATUS "Integration tests: no MG_Impl/Pipe source emits MapPersistentRoundtrips - "
+                   "StorageBufferRegrow's, LargeArenaAdoption's and ResourceSubsystemControl's "
+                   "mpr entries will SKIP")
+endif()
+
+# P4a's THIRD re-key question, per backend, and it is not either of the two above. Bits 5/6
+# re-keyed each backend's VERTEX-INPUT memos and bit 7/8 the BUFFER's; P4a re-keys six OBJECT
+# classes - texture, renderbuffer, framebuffer, sampler CSO, sampler view, shader CSO - behind
+# four new subsystem bits, and a backend has to NAME one of those constants to honour
+# MOBILEGL_PIPE_PUSH's default mask. A P4a case that read either older marker would arm its
+# Handles arm on a tree where nothing about a texture is keyed on a handle: green for a re-key
+# that does not exist. Probed by the constants rather than by a file, for the reason the block
+# above gives - packages D and E choose their own file layout.
+foreach(mglItestObjectBackend DirectGLES DirectVulkan)
+    mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_REKEY
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
+        "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
+    if (MGL_ITEST_OBJECT_REKEY)
+        message(STATUS "Integration tests: ${mglItestObjectBackend} is keyed on {slot, gen} for "
+                       "P4a's object families (${MGL_ITEST_OBJECT_REKEY})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV
+            "MGITEST_HANDLE_REKEY_OBJECTS_${mglItestObjectBackend}=1")
+    else()
+        message(STATUS "Integration tests: no ${mglItestObjectBackend} source names "
+                       "kMGPipeSubsystem{Framebuffer,TextureResources,Samplers,Programs} - "
+                       "HandleRecycle's six P4a cases will SKIP their Handles arm on it")
+    endif()
+
+    # ...and whether the ABA knob reaches those kinds THERE. A conjunction over the WHOLE
+    # backend directory, for the reason mgl_itest_probe_for_two_symbols states: reading the
+    # knob is not the same as steering P4a's keys with it, so the weaker single-regex evidence
+    # would turn six always-on entries into a permanent red - but requiring one FILE to carry
+    # both halves would let a backend satisfy the question and miss the probe, and the six
+    # controls would then keep asserting the correct pixels with nothing recording that the
+    # flip was forgotten (F-M5).
+    mgl_itest_probe_for_two_symbols(MGL_ITEST_OBJECT_ABA
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
+        "PipeHandleAbaControl"
+        "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
+    if (MGL_ITEST_OBJECT_ABA)
+        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL steers "
+                       "${mglItestObjectBackend}'s P4a object keys (${MGL_ITEST_OBJECT_ABA})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV
+            "MGITEST_HANDLE_ABA_OBJECTS_${mglItestObjectBackend}=1")
+    else()
+        message(STATUS "Integration tests: MobileGL/MG_Backend/${mglItestObjectBackend} does not "
+                       "both read Features.PipeHandleAbaControl and name a P4a subsystem bit "
+                       "somewhere under it - HandleRecycle's six P4a cases will assert the "
+                       "CORRECT pixels on the AbaControl arm and say that it is not a control "
+                       "for them yet")
+    endif()
+endforeach()
+
+# The client-side emitter of P4a's four suppressor-visible emission counters, which is what
+# ObjectSubsystemControl reads. Same shape and same reason as the CSO and map-persistent
+# emitter probes above: the emitters are minted in MG_Impl/Pipe (packages B and C), header-only
+# by design (D-P), so the question is "does any source there emit it", not "does a named file
+# exist". Until one does, every counter in the emit[] bracket is structurally zero in BOTH arms
+# of the A/B and an assertion about their difference would be a statement about nothing.
+mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_EMITTER
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "FramebufferEmissions")
+if (MGL_ITEST_OBJECT_EMITTER)
+    message(STATUS "Integration tests: P4a's object emissions have an emitter "
+                   "(${MGL_ITEST_OBJECT_EMITTER})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_OBJECT_EMITTER_PRESENT=1")
+else()
+    message(STATUS "Integration tests: no MG_Impl/Pipe source emits FramebufferEmissions - "
+                   "ObjectSubsystemControl's emission case will SKIP")
+endif()
+
+# ...and the CLIENT half of the texture-upload shape, separately, because it is a different
+# question with a different owner's file behind it (review F-m7). ctu= is emitted by PipeStats
+# in EVERY push build whether or not anything increments it, so "the counter read zero" and
+# "no client emitter exists" are the same number and TextureUploadShape cannot tell them apart
+# from the summary line alone. An emitter that STOPPED emitting reads exactly like no emitter
+# at all in that field, and the two-sided assertion the scenario exists for would pass while
+# comparing nothing. This probe is what separates them.
+#
+# THAT EMITTER HAS LANDED (P3b/P4b wave 2-D corrects this comment's tense):
+# MG_Impl/Pipe/TextureEmit.h's EmitOneLevel increments
+# CallClass::ClientTextureUploadEmissions on every piece it emits, so the probe hits and the
+# else() arm below is unreachable on this tree. It is KEPT rather than deleted because it is
+# what makes the arming decision falsifiable in both directions - a probe that cannot report
+# "absent" cannot be shown to be looking for the right symbol.
+mgl_itest_probe_for_symbol(MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "ClientTextureUploadEmissions")
+if (MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER)
+    message(STATUS "Integration tests: the client texture-upload counter has an emitter "
+                   "(${MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER}) - TextureUploadShape's "
+                   "two-sided assertion is live")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT=1")
+else()
+    message(STATUS "Integration tests: no MG_Impl/Pipe source emits "
+                   "ClientTextureUploadEmissions - TextureUploadShape records the SERVER shape "
+                   "only and asserts that ctu= is zero")
+endif()
+
+mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
+if (MGL_ITEST_MAGMA_ABA)
+    message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer "
+                   "(${MGL_ITEST_MAGMA_ABA})")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
+else()
+    message(STATUS "Integration tests: no DirectVulkan source names PipeHandleAbaControl - "
+                   "HandleRecycle.AbaControl will SKIP")
 endif()
 
 mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
@@ -1243,13 +1234,12 @@ gtest_discover_tests(MobileGLIntegrationTest
 # OBJECT handles it is now also about stayed switched off - a lane that still passes and no longer
 # measures the key that ships. Each phase's constant survives as the NEXT phase's A/B control, which
 # is what ResourceSubsystemControl's Off lane uses 0x7f for and ObjectSubsystemControl's uses 0x1ff.
-if (MOBILEGL_PIPE_PUSH)
-    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x1fff")
-    set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
-else()
-    set(MGL_ITEST_HANDLES_ARM_KNOBS "")
-    set(MGL_ITEST_ABA_ARM_KNOBS "")
-endif()
+# P13 W3b (ID-P13-3): the pre-handle arm is no longer compiled, so the Handles arm needs neither
+# MOBILEGL_PIPE_LEGACY_MEMOS=0 nor a mask that switches anything off: it runs the default mask.
+# The Legacy and AbaControl lanes (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) went with that arm;
+# AbaControlHandles - the ABA control against the handle arm that ships - stays.
+set(MGL_ITEST_HANDLES_ARM_KNOBS "")
+set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
 
 mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
@@ -1258,19 +1248,6 @@ mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" ${MGL_ITEST_HANDLES_ARM_KNOBS}
-    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
-mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_LEGACY_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=legacy" "MOBILEGL_PIPE_PUSH=0"
-    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
-    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=legacy" "MOBILEGL_PIPE_PUSH=0"
-    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
-mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith"
-    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba" "MOBILEGL_PIPE_PUSH=0"
-    ${MGL_ITEST_ABA_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
@@ -1295,33 +1272,6 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS "integration-gpu\;integration-monolith-control"
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.HandleRecycle.Legacy."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_HANDLE_LEGACY_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.HandleRecycle.Legacy."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.HandleRecycle.AbaControl."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT}"
 )
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectVulkan.HandleRecycle.AbaControlHandles."
