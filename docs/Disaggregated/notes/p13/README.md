@@ -30,7 +30,7 @@
 | W6b | 已推（同上） | `742d43ae` `e0113503` `3aed7ae0` `e822c933` | 数据臂谓词从两后端所有分支折掉，记录臂 return 之后的前端臂代码删；XFB 角色状态只留一份；10 个前端臂单元用例删（逐条记入 `docs/ci/ci-cleanup-log.md`），两条 GL 采样规则移到 `TextureUnitSamplingScenario` |
 | W6c | 本地完成 | `dc1e95b4` | Magma 前端臂：前端 `MagmaProgramSource` 构造与 `IsWire()` 折掉，前端采样集遍历、占位纹理、VAO draw memo、`MagmaPipeIdentityTables` 与 ABA 旋钮、`TrySetupDrawFastPath` 与快照、前端 fallback 纹理删（约 7100 行） |
 | W6d | 本地完成 | `8abae647` `8bc39c79` | Espryt 各族臂谓词（framebuffer / texture / sampler / program / buffer / vertex input 及其别名）折为记录臂，`g_fboTextureSyncList` 等前端遍历删；启动时只查色彩附件上限（`ResolveRecordArmFamilies`）；未迁移仿真名单清空（审计保留，守 0） |
-| W6e | 本地完成 | `dab827d5` `737ef5e9` | 后端表里 verb port 在各模式都覆盖的前端对象入口（`ClearNamedFramebuffer*`、`BlitNamedFramebuffer`、`GetTex(ture)Image`、`MultiDrawElements`）及其实现删；Magma 前端 render pass、pending clear、renderbuffer 半边删。link ratchet 171 → 58，`# P13` 95 → 11（余下 11 条：Espryt 以前端对象铸句柄的 slot 表入口与 apply 线程拒绝函数 7 条、`PipeInputs` 访问器 3 条、FBO 附件 `IsComplete` 1 条） |
+| W6e–f | 本地完成 | `dab827d5` `737ef5e9` `922507f8` | 后端表里 verb port 在各模式都覆盖的前端对象入口（`ClearNamedFramebuffer*`、`BlitNamedFramebuffer`、`GetTex(ture)Image`、`MultiDrawElements`）及其实现删；Magma 前端 render pass、pending clear、renderbuffer 半边删。Magma 管线构建只读 draw framebuffer 记录，其后的前端纹理同步删。link ratchet 171 → 49，`# P13` 95 → 9（余下见 HANDOFF §3d，转 W7） |
 
 ### G1 退役读数（ID-P13-4，2026-10-06）
 
