@@ -232,51 +232,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // targets): a default-framebuffer pass of one surface is not another's.
         void SetDefaultFramebufferTarget(Uint64 serial) {
             m_defaultFramebufferTarget = serial;
-            m_rpFastValid = false;
         }
         // Destroys every cached pass and framebuffer (not the renderbuffers). The device must be
         // idle and no pass may be open: a surface target's image views are going away.
         void PurgeRenderPasses();
 
-        HashType ComputeHash(
-            const MG_State::GLState::FramebufferObject& fbo,
-            Uint32 swapchainImageIndex,
-            Bool includePendingClear = true,
-            Bool includeDefaultFboDepthStencil = true);
-        // drawUsesDepthStencil: whether the operation about to run inside the pass
-        // reads or writes the depth/stencil buffer (depth test or stencil test
-        // enabled, or a depth/stencil clear). Only consulted for the DEFAULT
-        // framebuffer: EGL undefines its ancillary buffers at every swap, so a
-        // default-FBO pass whose draws provably never touch depth/stencil is
-        // created WITHOUT the depth attachment - on a tiler that skips the whole
-        // depth tile load AND store. The flavor only escalates: once a pass with
-        // depth is active, later depth-less draws keep using it, and a depth-using
-        // draw against a depth-less active pass resolves to a new (incompatible)
-        // entry, which the caller's compatibility check turns into a pass split;
-        // the new pass's depth loads DONT_CARE (content was undefined all along).
-        //
-        // Returns NULLPTR when this framebuffer cannot be represented as a Vulkan render pass at
-        // all - a texture the texture manager declined to back (an unsupported format or sample
-        // count), or an attachment view it cannot construct (a layer span the image has no room
-        // for, a 3D image whose format was refused 2D-array compatibility). This used to be
-        // unrepresentable: the function returned a reference, so the only thing the two fallible
-        // calls it builds on could do was trip a MOBILEGL_ASSERT - which is compiled out of every
-        // INFO build - and then dereference the null resource, or hand VK_NULL_HANDLE to
-        // vkCreateFramebuffer. That took the whole process down (51 lost CTS records over 21
-        // bodies, one runner restart each) where a declined draw is merely a wrong picture.
-        //
-        // EVERY caller must handle nullptr by dropping the operation, exactly as the draw path
-        // already drops a draw whose sampler descriptor could not be resolved
-        // (UniformManager::BindProgramUniformBuffers). The failure paths log MGLOG_E_ONCE
-        // themselves, so a caller needs no message of its own.
-        [[nodiscard]] RenderPassEntry* GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
-                                                             Uint32 swapchainImageIndex,
-                                                             Bool drawUsesDepthStencil = true);
-        void QueueRenderbufferClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload,
-                                    const MG_State::GLState::FramebufferObject& drawFbo);
-        void QueueRenderbufferClear(const ClearAttachmentPayload& clearPayload,
-                                    const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        void PopPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer);
         // Frame boundary hook: ages the render-pass cache and evicts long-unused
         // entries (their command buffers retired many frames ago).
         void OnPresent();
@@ -308,28 +268,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     private:
 
-        // Per-draw fast-path memo for GetOrCreateRenderPass (dirty-flag state tracking): when the
-        // framebuffer state is provably unchanged since the last resolution, the active render pass
-        // is reused WITHOUT recomputing the expensive per-draw hash. Invalidated by FBO switch /
-        // version change, swapchain rotation, any attachment image recreation (the two epochs),
-        // or a pending clear. Portable to Vulkan 1.1 (no dynamic_rendering / imageless FB needed).
         Uint64 m_defaultFramebufferTarget = 0;
-        Bool m_rpFastValid = false;
-        const MG_State::GLState::FramebufferObject* m_rpFastFbo = nullptr;
-        // The FBO's never-reused lifetime id joins the raw pointer + Uint16 version:
-        // a deleted FBO reallocated at the same address whose fresh setup performed
-        // the same number of version bumps would otherwise compare equal (both count
-        // from 0), serving the dead framebuffer's pass to the new object.
-        Uint64 m_rpFastFboLifetimeId = 0;
-        Uint16 m_rpFastFboVersion = 0;
-        Uint32 m_rpFastSwapchainIndex = 0;
-        Uint64 m_rpFastTexEpoch = 0;
-        Uint64 m_rpFastRbEpoch = 0;
-        Uint64 m_rpFastRenderPassHash = 0;
-        // Whether the memoized entry carries a depth/stencil attachment; a
-        // default-FBO resolution whose effective depth request differs must
-        // miss the memo (the depth-less/depth-full flavors hash differently).
-        Bool m_rpFastHadDepthStencil = false;
 
     public:
         struct RenderbufferResource {
@@ -358,13 +297,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             void Destroy(VkDevice device, VmaAllocator allocator);
         };
-
-        // Public so the renderer's blit/copy/readback bindings can source renderbuffer
-        // attachments the same way texture attachments go through the texture manager.
-        RenderbufferResource* GetOrCreateRenderbufferResource(
-            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
-        Bool GetPendingRenderbufferClear(MG_State::GLState::RenderbufferObject* renderbuffer,
-                                         ClearAttachmentPayload& outPayload) const;
 
     private:
         struct PendingRenderbufferClear {
@@ -414,8 +346,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // do not repeat vkGetPhysicalDeviceImageFormatProperties.
         UnorderedMap<VkFormat, VkSampleCountFlags> m_attachmentSampleCountsByFormat;
 
-        Bool HasPendingRenderbufferClear(
-            const MG_State::GLState::FramebufferAttachmentObject& attachment) const;
         void CollectRenderbufferGarbage();
         // Frame-boundary margin after which a resource last referenced by a retired
         // GL object (or superseded backing) is provably past every in-flight frame.

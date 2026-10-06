@@ -565,14 +565,6 @@ public:
         Bool isTextureView = false;
     };
 
-    // The four component swizzles packed into one value, for the sampled-view cache key.
-    static Uint32 PackComponentSwizzle(const VkComponentMapping& components) {
-        return (static_cast<Uint32>(components.r) & 0xFFu) | ((static_cast<Uint32>(components.g) & 0xFFu) << 8) |
-               ((static_cast<Uint32>(components.b) & 0xFFu) << 16) |
-               ((static_cast<Uint32>(components.a) & 0xFFu) << 24);
-    }
-    TextureViewWindow ResolveTextureViewWindow(MG_State::GLState::ITextureObject& texture,
-                                               const TextureResource& resource) const;
     // Records what a GL texture view needs of the image it views, so the next sync of the
     // STORAGE texture creates (or recreates and copies forward) an image the view can be built
     // over. See m_viewRequestedImageFlags for why this is lazy rather than unconditional.
@@ -583,11 +575,6 @@ public:
     // VkImageFormatListCreateInfo the image is created with.
     void AppendViewRequestedFormats(const MG_State::GLState::ITextureObject& storageTexture,
                                     Vector<VkFormat>& outFormats) const;
-    // Builds (and caches, keyed by the whole window) one sampled VkImageView over a storage
-    // image. Shared back end of every GL-texture-view sampled path.
-    VkImageView GetOrCreateWindowedSampledView(MG_State::GLState::ITextureObject& texture,
-                                               TextureResource& resource, const TextureViewWindow& window);
-
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);
     // P5f (fm): THE HANDLE-KEYED ARM of SyncTextureAndGetDescriptor. Under an active transport
@@ -664,11 +651,6 @@ public:
         const auto it = m_wireTextureResources.find(key);
         return it != m_wireTextureResources.end() && it->second.image != VK_NULL_HANDLE ? &it->second : nullptr;
     }
-    VkImageView GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel);
-    VkImageView GetOrCreateAttachmentViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                                    Uint32 baseArrayLayer, Uint32 layerCount,
-                                                    VkImageViewType viewType);
-    VkImageView GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture, VkFormat format);
     void UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
                                                       MG_State::GLState::ITextureObject* texture,
                                                       Uint32 writtenMipLevel,
@@ -693,20 +675,6 @@ public:
         resource.lastRecordingWriteGeneration = m_recordingGeneration;
     }
     void StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture);
-    // Upload-ordering queries (VulkanRenderer::OrderPendingUploadAfterRecording). None of them
-    // syncs, so nothing pending is uploaded by asking. All answer for the STORAGE texture.
-    //
-    // Uploads are recorded into a batch submitted AHEAD of the frame's recording
-    // (FlushPendingUploads), so an upload into an image the open recording already WROTE lands
-    // before that write, which then overwrites the newer texels. (An image the recording only
-    // read keeps the old trade: its earlier reads see the newer texels.)
-    Bool HasLiveImage(MG_State::GLState::ITextureObject& textureOrView) const;
-    // The next sync would record client texels into the image that is live now: same shape (a
-    // shape change mints a new image instead) and content moved since the last sync.
-    Bool HasPendingTexelUpload(MG_State::GLState::ITextureObject& textureOrView) const;
-    Bool WasTextureWrittenThisRecording(MG_State::GLState::ITextureObject& textureOrView) const;
-    // The live resource, or null.
-    TextureResource* FindTextureResource(MG_State::GLState::ITextureObject& textureOrView);
     // `depthStencilTextureMode` is the texture's GL_DEPTH_STENCIL_TEXTURE_MODE; it only decides
     // anything for an image that carries both aspects. Defaulted so the call sites that have no
     // texture in hand keep the depth-aspect answer they have always given.

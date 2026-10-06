@@ -1191,39 +1191,6 @@ namespace {
     };
 } // namespace
 
-TEST_F(FramebufferTest, WidenedDrawBufferIsIdentifiedPerDrawBufferSlotNotPerAttachmentPoint) {
-    ScopedBackendOverride backend(MakeUnique<ThreeChannelAttachmentBackend>(/*substituted=*/true));
-
-    // Complementary's `composite` framebuffer again: draw buffer 0 is a natively renderable
-    // RGBA8, draw buffer 1 is the widened RGB8_SNORM. Only the second may be doctored.
-    GLuint framebuffer = 0;
-    GLuint colortex7 = 0;
-    GLuint colortex1 = 0;
-    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
-    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex7);
-    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &colortex1);
-    MG_Impl::GLImpl::TextureStorage2D(colortex7, 1, GL_RGBA8, 4, 4);
-    MG_Impl::GLImpl::TextureStorage2D(colortex1, 1, GL_RGB8_SNORM, 4, 4);
-    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, colortex7, 0);
-    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, colortex1, 0);
-
-    auto& framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
-    ASSERT_NE(framebufferObject, nullptr);
-    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color0);
-    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color1);
-
-    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
-              1u << 1);
-
-    // Swapping the draw-buffer array moves the bit with the SLOT, not with the attachment point:
-    // glColorMaski and glClearBufferfv both address slots.
-    framebufferObject->SetDrawBuffer(0, FramebufferAttachmentType::Color1);
-    framebufferObject->SetDrawBuffer(1, FramebufferAttachmentType::Color0);
-    EXPECT_EQ(MG_Backend::DirectGLES::FramebufferImpl::ComputeAlphaWidenedDrawBufferMask(*framebufferObject),
-              1u << 0);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-}
-
 TEST_F(FramebufferTest, DrawIntoAWidenedDrawBufferReachesTheDriverWithAlphaWritesMaskedOff) {
     ScopedRenderStateDriverStubs driver;
     MG_Backend::DirectGLES::FramebufferImpl::g_alphaWidenedDrawBufferMask = 1u << 1;

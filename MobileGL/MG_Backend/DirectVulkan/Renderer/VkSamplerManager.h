@@ -40,12 +40,6 @@ public:
     Bool Initialize(const InitInfo& initInfo);
     void Shutdown();
 
-    // viewLevelCount is the mip-level count of the image view this sampler will be paired
-    // with; 0 means "unknown, do not narrow". See GetOrCreateSampler for why it matters.
-    VkSampler GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
-                                 const MG_State::GLState::ITextureObject& texture,
-                                 Bool forceNearestFiltering = false,
-                                 Uint32 viewLevelCount = 0);
     // The applier owns these values: effective bound/builtin sampler parameters and
     // the sampled texture view's format/range. No frontend object is constructed.
     VkSampler GetOrCreateSamplerFromParameters(const SamplerParameters& parameters,

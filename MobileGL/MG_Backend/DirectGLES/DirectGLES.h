@@ -46,8 +46,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawArrays(GLenum mode, GLint first, GLsizei count);
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex);
     void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
-    void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                           GLsizei drawcount);
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                      GLsizei drawcount, const GLint* basevertex);
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride);
@@ -71,21 +69,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          GLuint baseinstance);
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount);
     void DrawArraysIndirect(GLenum mode, const void* indirect);
-    void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                 GLenum buffer, GLint drawbuffer, const GLfloat* value);
-    void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                 GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
-    void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                 GLenum buffer, GLint drawbuffer, const GLint* value);
-    void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                  GLenum buffer, GLint drawbuffer, const GLuint* value);
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter);
-    void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
-                              const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                              GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                              GLbitfield mask, GLenum filter);
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border);
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
@@ -98,7 +83,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void GenerateMipmap(GLenum target);
     const GLubyte* GetString(GLenum name);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-    void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
     void DispatchComputeIndirect(GLintptr indirect);
     void MemoryBarrier(GLbitfield barriers);

@@ -46,10 +46,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // expressed in whichever type matches (GL 4.6 core 15.2.3).
     VkClearColorValue MakeVkClearColorValue(const ClearAttachmentPayload& payload, Bool formatLacksAlpha);
 
-    // Applies that same rule in place, for the paths that have to bake it into the payload before
-    // the destination is known.
-    void ForceOpaqueClearAlpha(ClearAttachmentPayload& payload);
-
     // vkCmdClearColorImage names the image, so the driver applies the destination format's transfer
     // function to whatever value it is handed. Every other write path in this backend goes through
     // the UNORM twin view while GL_FRAMEBUFFER_SRGB is off (ResolveSrgbAttachmentWriteFormat) and
@@ -113,42 +109,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     class VkClearManager {
     public:
-        static PendingClearKey MakePendingClearKey(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        // Resolves a GL texture view to the storage it views before keying; see the definition.
-        static PendingClearKey MakePendingClearKey(MG_State::GLState::ITextureObject* rawTexture, Uint32 mipLevel = 0,
-                                                   Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
-
         Bool Initialize();
         void Shutdown();
 
-        void QueueClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload, const MG_State::GLState::FramebufferObject& drawFbo);
-        void QueueClear(
-            const ClearAttachmentPayload& clearPayload,
-            const SharedPtr<MG_State::GLState::ITextureObject>& texture);
-        void QueueClear(const ClearAttachmentPayload& clearPayload,
-                        const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        Bool HasPendingClear(MG_State::GLState::ITextureObject* texture);
-        Bool HasPendingClear(const PendingClearKey& key);
-        Bool HasPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        Bool GetPendingClear(const PendingClearKey& key, ClearAttachmentPayload& outPayload);
-        Bool GetPendingClear(const PendingClearKey& key, ClearAttachmentPayload& outPayload,
-                             SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-        Bool GetPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment,
-                             ClearAttachmentPayload& outPayload);
-        Bool GetPendingClears(MG_State::GLState::ITextureObject* texture, Vector<PendingClearEntry>& outEntries);
-        void PopPendingClear(MG_State::GLState::ITextureObject* texture);
-        void PopPendingClear(const PendingClearKey& key);
-        void PopPendingClear(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        SizeT CollectGarbage();
     private:
-        static TextureIdentity MakeTextureIdentity(MG_State::GLState::ITextureObject* texture);
-        static void MergeClearPayload(ClearAttachmentPayload& dst, const ClearAttachmentPayload& src);
-        void ErasePendingClearsForTextureLocked(const TextureIdentity& identity);
-        Bool LockTextureIdentityLocked(const TextureIdentity& identity,
-                                      SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-        Bool LockTextureLocked(const PendingClearKey& key,
-                               SharedPtr<MG_State::GLState::ITextureObject>& outTexture);
-
         Uint8 m_gcCounter = 0;
     public:
         // Lock-free probe for the consecutive-draw fast path: any pending clear

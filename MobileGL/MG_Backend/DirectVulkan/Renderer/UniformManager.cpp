@@ -602,7 +602,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& entry : m_descriptorReuseMemo) {
             entry.valid = false;
         }
-        m_fastRebindMemo.valid = false;
         m_lastBindValid = false;
     }
 
@@ -689,58 +688,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (auto& entry : m_descriptorReuseMemo) {
                 entry.valid = false;
             }
-            // The rebind memo's set may be among the freed ones.
-            m_fastRebindMemo.valid = false;
             MGLOG_D("UniformDescriptorBinder: freed %zu descriptor sets for destroyed layout", purgedSets);
         }
-    }
-
-    Bool UniformManager::ResolveSamplerDescriptor(VkCommandBuffer commandBuffer,
-                                                            const MagmaProgramSource& program,
-                                                            const ProgramFactory::VkProgramObject& programObj,
-                                                            Uint32 binding, Uint32 element,
-                                                            VkDescriptorImageInfo& outImageInfo,
-                                                            Bool trustUnchangedHint) const {
-        return ResolveWireImageDescriptor(commandBuffer, program, programObj, binding, element, false, outImageInfo);
-    }
-
-    Bool UniformManager::ResolveSamplerDescriptorOverride(
-        const SamplerBindingOverride& samplerBindingOverride, VkDescriptorImageInfo& outImageInfo) const {
-        MOBILEGL_ASSERT(m_textureManager != nullptr, "ResolveSamplerDescriptorOverride: texture manager is null");
-        MOBILEGL_ASSERT(m_samplerManager != nullptr, "ResolveSamplerDescriptorOverride: sampler manager is null");
-        MOBILEGL_ASSERT(samplerBindingOverride.texture != nullptr,
-                        "ResolveSamplerDescriptorOverride: override texture is null for binding %u",
-                        samplerBindingOverride.binding);
-        MOBILEGL_ASSERT(samplerBindingOverride.sampler != nullptr,
-                        "ResolveSamplerDescriptorOverride: override sampler is null for binding %u",
-                        samplerBindingOverride.binding);
-
-        auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*samplerBindingOverride.texture);
-        MOBILEGL_ASSERT(resource != nullptr,
-                        "ResolveSamplerDescriptorOverride: failed to sync override texture resource for binding %u textureId=%d",
-                        samplerBindingOverride.binding, samplerBindingOverride.texture->GetExternalIndex());
-        MOBILEGL_ASSERT(IsValidSampledImageLayout(resource->layout),
-                        "ResolveSamplerDescriptorOverride: invalid layout %d for binding %u textureId=%d",
-                        static_cast<Int>(resource->layout), samplerBindingOverride.binding,
-                        samplerBindingOverride.texture->GetExternalIndex());
-
-        outImageInfo = {
-            .sampler = m_samplerManager->GetOrCreateSampler(*samplerBindingOverride.sampler,
-                                                            *samplerBindingOverride.texture,
-                                                            samplerBindingOverride.forceNearestFiltering,
-                                                            resource->sampledLevelCount),
-            .imageView = samplerBindingOverride.imageView != VK_NULL_HANDLE ?
-                samplerBindingOverride.imageView :
-                // Same reason as in ResolveSamplerDescriptor: the resource's own views describe
-                // the storage texture, so a view has to be asked for its own.
-                (samplerBindingOverride.texture->IsTextureView()
-                     ? m_textureManager->GetOrCreateSampledImageView(*samplerBindingOverride.texture,
-                                                                     VK_FORMAT_UNDEFINED)
-                     : (resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView)),
-            .imageLayout = samplerBindingOverride.imageLayout != VK_IMAGE_LAYOUT_UNDEFINED ?
-                samplerBindingOverride.imageLayout : resource->layout,
-        };
-        return outImageInfo.sampler != VK_NULL_HANDLE;
     }
 
     Bool UniformManager::ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
@@ -1553,10 +1502,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              const MagmaProgramSource& program,
                                                              const ProgramFactory::VkProgramObject& programObj,
                                                              Uint32 frameIndex,
-                                                             VkPipelineBindPoint bindPoint,
-                                                             const SamplerBindingOverride* samplerBindingOverride,
-                                                             Bool samplerDescriptorsUnchangedHint,
-                                                             const Vector<SamplerBindingOverride>* samplerBindingOverrides) {
+                                                             VkPipelineBindPoint bindPoint) {
         // This program has a descriptor MobileGL could not resolve (see
         // VkProgramObject::declinedDescriptors). Refusing here is the whole of the decline: the
         // binding is still declared in the layout, so the pipeline is consistent with the shader
@@ -1575,39 +1521,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (frame.activeDescriptorPoolIndex >= frame.descriptorPools.size()) {
             frame.activeDescriptorPoolIndex = 0;
-        }
-
-        // Dynamic-offset-only rebind (see FastRebindMemo in the header): the last
-        // cacheable walk of this exact program selected a set whose contents are
-        // provably still what this walk would write - the hint covers every
-        // sampler binding, and an unchanged (buffer, range) for the single
-        // dynamic UBO covers the rest - except the dynamic offset, which rebinding
-        // the SAME set delivers without any descriptor write.
-        const Bool cacheable = samplerBindingOverride == nullptr &&
-                               (samplerBindingOverrides == nullptr || samplerBindingOverrides->empty());
-        if (cacheable && samplerDescriptorsUnchangedHint && m_fastRebindMemo.valid &&
-            m_fastRebindMemo.frameIndex == frameIndex &&
-            // A wire store destroyed since the memo was taken may have handed its handle
-            // value to a later mint (see FastRebindMemo): "same VkBuffer" then names a
-            // different store, so the memo is refused and the full walk re-records it.
-            m_fastRebindMemo.wireStoreDestroyEpoch == m_bufferManager->GetWireStoreDestroyEpoch() &&
-            m_fastRebindMemo.programLifetimeId == program.GetLifetimeId() &&
-            m_fastRebindMemo.programHash == programObj.hash) {
-            VkBuffer uboBuffer = VK_NULL_HANDLE;
-            VkDeviceSize uboRange = 0;
-            Uint32 uboDynamicOffset = 0;
-            if (ResolveDynamicUboDescriptor(program, programObj, m_fastRebindMemo.uboBinding, 0, frameIndex,
-                                            uboBuffer, uboRange, uboDynamicOffset) &&
-                uboBuffer == m_fastRebindMemo.uboBuffer && uboRange == m_fastRebindMemo.uboRange) {
-                auto& fastOffsets = m_dynamicOffsetsScratch;
-                fastOffsets.clear();
-                fastOffsets.push_back(uboDynamicOffset);
-                BindDescriptorSetDeduped(commandBuffer, bindPoint, programObj.pipelineLayout,
-                                         m_fastRebindMemo.set, fastOffsets);
-                return true;
-            }
-            // Any mismatch (arena wrap or growth, direct-bind retarget, upload
-            // failure) falls through to the full walk, which re-records the memo.
         }
 
         // The descriptor set is chosen AFTER the writes are built (below), so a draw
@@ -1660,13 +1573,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         texelBufferViews.reserve(m_maxBindings);
         dynamicOffsets.reserve(programObj.dynamicBindings.size() + uboArrayExtra);
 
-        // Eligibility probe for FastRebindMemo, filled by this walk: exactly one
-        // dynamic-UBO descriptor (no arrayed elements) and otherwise only
-        // combined-image samplers, so the whole set's content is pinned by the
-        // sampler hint plus one (buffer, range) compare.
-        Uint32 dynamicUboDescriptorCount = 0;
-        Uint32 fastRebindUboBinding = 0;
-        Bool fastRebindKindsEligible = true;
 
         // Iterate only the bindings this program declares. The old walk covered all 256 slots of
         // bindingKinds on every draw to find the 1-8 a real program uses.
@@ -1685,8 +1591,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             if (kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
                 const Uint32 descriptorCount = BindingDescriptorCount(programObj, binding);
-                dynamicUboDescriptorCount += descriptorCount;
-                fastRebindUboBinding = binding;
                 const SizeT firstBufferInfoIndex = bufferInfos.size();
                 for (Uint32 element = 0; element < descriptorCount; ++element) {
                     VkDescriptorBufferInfo bufferInfo{};
@@ -1719,7 +1623,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 texelBufferViews.push_back(bufferView);
-                fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
                 write.pTexelBufferView = &texelBufferViews.back();
                 writes.push_back(write);
@@ -1738,7 +1641,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 texelBufferViews.push_back(bufferView);
-                fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
                 write.pTexelBufferView = &texelBufferViews.back();
                 writes.push_back(write);
@@ -1760,7 +1662,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     bufferInfos.push_back(bufferInfo);
                 }
 
-                fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 write.descriptorCount = descriptorCount;
                 write.pBufferInfo = &bufferInfos[firstBufferInfoIndex];
@@ -1786,7 +1687,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                     imageInfos.push_back(imageInfo);
                 }
-                fastRebindKindsEligible = false;
                 write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
                 write.descriptorCount = descriptorCount;
                 write.pImageInfo = &imageInfos[firstImageInfoIndex];
@@ -1798,37 +1698,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // so a shader indexing them sampled a descriptor nobody had filled in
                 // (KHR-GL42.shading_language_420pack.binding_sampler_array).
                 const Uint32 descriptorCount = BindingDescriptorCount(programObj, binding);
-                // Overrides come only from MobileGL's own blit and depth-mipmap programs, whose
-                // samplers are scalars; the override replaces THE descriptor at its binding, so
-                // there is no element for it to mean on an arrayed one.
-                const Bool overrideThisBinding = samplerBindingOverride != nullptr &&
-                                                 samplerBindingOverride->binding == binding &&
-                                                 samplerBindingOverride->texture != nullptr &&
-                                                 samplerBindingOverride->sampler != nullptr;
-                MOBILEGL_ASSERT(
-                    !overrideThisBinding || descriptorCount == 1,
-                    "BindProgramUniformBuffers: sampler override targets arrayed binding %u (%u descriptors)",
-                    binding, descriptorCount);
                 const SizeT firstImageInfoIndex = imageInfos.size();
                 for (Uint32 element = 0; element < descriptorCount; ++element) {
                     VkDescriptorImageInfo imageInfo{};
-                    const SamplerBindingOverride* overrideForElement =
-                        overrideThisBinding && element == 0 ? samplerBindingOverride : nullptr;
-                    if (overrideForElement == nullptr && samplerBindingOverrides != nullptr) {
-                        const auto overrideIt = std::find_if(
-                            samplerBindingOverrides->begin(), samplerBindingOverrides->end(),
-                            [binding, element](const SamplerBindingOverride& candidate) {
-                                return candidate.binding == binding && candidate.element == element;
-                            });
-                        if (overrideIt != samplerBindingOverrides->end()) {
-                            overrideForElement = &*overrideIt;
-                        }
-                    }
-                    const Bool hasImage = overrideForElement != nullptr
-                                              ? ResolveSamplerDescriptorOverride(*overrideForElement, imageInfo)
-                                              : ResolveSamplerDescriptor(commandBuffer, program, programObj, binding,
-                                                                         element, imageInfo,
-                                                                         samplerDescriptorsUnchangedHint);
+                    const Bool hasImage = ResolveWireImageDescriptor(commandBuffer, program, programObj, binding,
+                                                                     element, false, imageInfo);
                     if (!hasImage) {
                         MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: sampler binding %u element %u "
@@ -1844,14 +1718,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         return false;
                     }
                     imageInfos.push_back(imageInfo);
-                }
-                if (descriptorCount > 1) {
-                    // The dynamic-offset-only rebind replays a whole descriptor set on the
-                    // strength of the sampler hint alone, and its eligibility probe was written
-                    // for bindings that carry one descriptor each. An arrayed sampler binding
-                    // also bypasses the per-binding descriptor memo, so there is nothing for it
-                    // to win here either.
-                    fastRebindKindsEligible = false;
                 }
                 write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 write.descriptorCount = descriptorCount;
@@ -1906,12 +1772,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         VkDescriptorSet reusedSet = VK_NULL_HANDLE;
-        if (cacheable) {
-            for (const auto& entry : m_descriptorReuseMemo) {
-                if (entry.valid && entry.signature == signature) {
-                    reusedSet = entry.set;
-                    break;
-                }
+        for (const auto& entry : m_descriptorReuseMemo) {
+            if (entry.valid && entry.signature == signature) {
+                reusedSet = entry.set;
+                break;
             }
         }
         if (reusedSet != VK_NULL_HANDLE) {
@@ -1929,31 +1793,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!writes.empty()) {
                 vkUpdateDescriptorSets(m_device, static_cast<Uint32>(writes.size()), writes.data(), 0, nullptr);
             }
-            if (cacheable) {
-                m_descriptorReuseMemo[m_descriptorReuseMemoNext] =
-                    DescriptorReuseEntry{signature, descriptorSet, true};
-                m_descriptorReuseMemoNext = (m_descriptorReuseMemoNext + 1) % kDescriptorReuseMemoSize;
-            } else {
-                for (auto& entry : m_descriptorReuseMemo) {
-                    entry.valid = false;
-                }
-            }
-        }
-
-        // (Re)record the dynamic-offset-only rebind memo. Recording on every
-        // cacheable walk (allocated or reused set alike - both hold exactly the
-        // content just computed) keeps the single slot tracking the most recent
-        // program; a non-cacheable override walk drops it alongside the reuse
-        // memo above.
-        if (cacheable && fastRebindKindsEligible && dynamicUboDescriptorCount == 1) {
-            m_fastRebindMemo = FastRebindMemo{
-                /*valid=*/true,          frameIndex,      program.GetLifetimeId(), programObj.hash,
-                fastRebindUboBinding,    bufferInfos[0].buffer,
-                bufferInfos[0].range,    descriptorSet,
-                m_bufferManager->GetWireStoreDestroyEpoch(),
-            };
-        } else {
-            m_fastRebindMemo.valid = false;
+            m_descriptorReuseMemo[m_descriptorReuseMemoNext] =
+                DescriptorReuseEntry{signature, descriptorSet, true};
+            m_descriptorReuseMemoNext = (m_descriptorReuseMemoNext + 1) % kDescriptorReuseMemoSize;
         }
 
         BindDescriptorSetDeduped(commandBuffer, bindPoint, programObj.pipelineLayout, descriptorSet,

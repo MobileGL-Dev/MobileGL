@@ -65,21 +65,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
-    void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, const GLfloat* value);
-    void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, const GLint* value);
-    void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                  GLint drawbuffer, const GLuint* value);
-    void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, GLfloat depth, GLint stencil);
     void Clear(GLbitfield mask);
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices);
     void DrawArrays(GLenum mode, GLint first, GLsizei count);
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex);
     void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount);
-    void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                           GLsizei drawcount);
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                      GLsizei drawcount, const GLint* basevertex);
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride);
@@ -105,11 +95,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawArraysIndirect(GLenum mode, const void* indirect);
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter);
-    void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
-                              const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                              GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                              GLbitfield mask, GLenum filter);
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border);
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
@@ -129,9 +114,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-    void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
-    void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget uploadTarget,
-                         GLint level, GLenum format, GLenum type, GLsizei bufSize, GLvoid* pixels);
     // GL fence sync objects, mapped onto the renderer's frame-serial busy
     // tracking: a fence captures the frame serial current at creation and is
     // signaled once every command recorded under that serial has completed on

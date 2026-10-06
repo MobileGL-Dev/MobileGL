@@ -440,12 +440,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return vkSampler;
     }
 
-    VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,
-                                                   const MG_State::GLState::ITextureObject& texture,
-                                                   Bool forceNearestFiltering, Uint32 viewLevelCount) {
-        return GetOrCreateSamplerImpl(sampler, texture.GetFormat(), forceNearestFiltering, viewLevelCount);
-    }
-
     VkSampler VkSamplerManager::GetOrCreateSamplerFromParameters(const SamplerParameters& parameters,
         TextureInternalFormat format, Bool forceNearestFiltering, Uint32 viewLevelCount) {
         return GetOrCreateSamplerImpl(SamplerParametersSource{parameters}, format,

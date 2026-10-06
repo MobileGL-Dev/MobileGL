@@ -30,6 +30,7 @@
 // P5 b1: MGPipeResourceTrackerInstance(), so the split probe case can ask the PRODUCTION
 // tracker for a buffer's handle instead of minting one by hand.
 #include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
@@ -373,12 +374,20 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
 
 TEST(DirectGLESSanity, ProvidesNamedFramebufferBlitForDirectStateAccess) {
     MobileGL::MG_Backend::DirectGLES::BackendObject_DirectGLES backend;
+    // P13 W6: the backend applies a blit (BlitFramebuffer, which the record sink calls with the
+    // verb's framebuffer handles); the named-framebuffer DSA entries are the verb port's alone -
+    // they record a verb naming the framebuffer, and the backend never sees a frontend object.
     const auto& funcs = backend.GetBackendFunctions().GL;
-
-    EXPECT_NE(funcs.ClearNamedFramebufferfv, nullptr);
-    EXPECT_NE(funcs.ClearNamedFramebufferfi, nullptr);
     EXPECT_NE(funcs.BlitFramebuffer, nullptr);
-    EXPECT_NE(funcs.BlitNamedFramebuffer, nullptr);
+    EXPECT_EQ(funcs.ClearNamedFramebufferfv, nullptr);
+    EXPECT_EQ(funcs.BlitNamedFramebuffer, nullptr);
+
+    MobileGL::MG_Backend::GlobalBackendFunctionsTable table = backend.GetBackendFunctions();
+    MobileGL::MG_Record::InstallMonolithVerbPort(table);
+    EXPECT_NE(table.GL.ClearNamedFramebufferfv, nullptr);
+    EXPECT_NE(table.GL.ClearNamedFramebufferfi, nullptr);
+    EXPECT_NE(table.GL.BlitFramebuffer, nullptr);
+    EXPECT_NE(table.GL.BlitNamedFramebuffer, nullptr);
 }
 
 TEST(DirectGLESSanity, RewritesBaseInstanceBuiltinForEsslVertexShaders) {

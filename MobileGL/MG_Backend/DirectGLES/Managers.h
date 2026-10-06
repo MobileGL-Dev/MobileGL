@@ -2324,8 +2324,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendFramebufferObject();
             BackendFramebufferObject(const BackendFramebufferObject&) = delete;
             BackendFramebufferObject& operator=(const BackendFramebufferObject&) = delete;
-            void SyncToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject,
-                               FramebufferTarget asTarget);
             // P5e SEAM (MG_Remote/CONTRACT-P5E.md §5.4; declared by c0e, bodied by fb): the same
             // sync keyed on the framebuffer HANDLE. The record's eleven surfaces ARE the point
             // set - the emitter refuses a point at or above the wire width - so the attachment
@@ -2333,10 +2331,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // handle is the argument. An OVERLOAD rather than a changed signature, so the
             // monolith arm and the pull build see no token move.
             void SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget asTarget);
-            // Apply only this FBO's read buffer (glReadBuffer) to the backend. Split out so it can
-            // still run when SyncCurrentFBO skips the READ-target sync because the same GL FBO is
-            // bound as both draw and read (otherwise glReadBuffer changes would be silently dropped).
-            void SyncReadBufferToBackend(const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject);
             // P5e (fb, §5.4): the same read-buffer push keyed on the handle, for the one path
             // that applies a read buffer without doing the rest of the sync - SyncCurrentFBO's
             // "one object is bound to BOTH bindings" skip, where the DRAW pass already did the
@@ -2513,15 +2507,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // unconditionally, since this is the format's own semantics rather than the
         // GL_CLAMP_READ_COLOR rule the clamp above implements.
         Bool IsAlphaWidenedFallbackReadAttachment();
-
-        // True when this attachment's storage carries an alpha channel its frontend format does
-        // not (the three-channel colour-renderable widening).
-        Bool IsAlphaWidenedColorAttachment(const MG_State::GLState::FramebufferAttachmentObject& attachmentObject);
-
-        // Bit i set = DRAW BUFFER i of `fbo` resolves to a colour attachment the backend widened
-        // from three channels to four. Indexed by draw-buffer slot, not by attachment point,
-        // because that is what glColorMaski / glClearBufferfv address.
-        Uint32 ComputeAlphaWidenedDrawBufferMask(const MG_State::GLState::FramebufferObject& fbo);
 
         // The same mask for whatever is currently bound to GL_DRAW_FRAMEBUFFER, recomputed by
         // SyncCurrentFBO (BackendFramebufferObject::SyncToBackend for the DRAW target, and reset

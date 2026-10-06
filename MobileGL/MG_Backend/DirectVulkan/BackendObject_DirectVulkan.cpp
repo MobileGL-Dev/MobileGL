@@ -987,7 +987,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.DrawElements = DrawElements;
             funcsTable.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
             funcsTable.GL.MultiDrawArrays = MultiDrawArrays;
-            funcsTable.GL.MultiDrawElements = MultiDrawElements;
             funcsTable.GL.MultiDrawElementsBaseVertex = MultiDrawElementsBaseVertex;
             funcsTable.GL.MultiDrawElementsIndirect = MultiDrawElementsIndirect;
             funcsTable.GL.MultiDrawArraysIndirect = MultiDrawArraysIndirect;
@@ -1008,19 +1007,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             funcsTable.GL.ClearBufferfv = ClearBufferfv;
             funcsTable.GL.ClearBufferuiv = ClearBufferuiv;
             funcsTable.GL.ClearBufferiv = ClearBufferiv;
-            funcsTable.GL.ClearNamedFramebufferfv = ClearNamedFramebufferfv;
-            funcsTable.GL.ClearNamedFramebufferfi = ClearNamedFramebufferfi;
-            funcsTable.GL.ClearNamedFramebufferiv = ClearNamedFramebufferiv;
-            funcsTable.GL.ClearNamedFramebufferuiv = ClearNamedFramebufferuiv;
             funcsTable.GL.BlitFramebuffer = BlitFramebuffer;
-            funcsTable.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
             funcsTable.GL.CopyTexImage2D = CopyTexImage2D;
             funcsTable.GL.CopyTexSubImage2D = CopyTexSubImage2D;
             funcsTable.GL.CopyImageSubData = CopyImageSubData;
             funcsTable.GL.GenerateMipmap = GenerateMipmap;
             funcsTable.GL.ReadPixels = ReadPixels;
-            funcsTable.GL.GetTexImage = GetTexImage;
-            funcsTable.GL.GetTextureImage = GetTextureImage;
             funcsTable.GL.DispatchCompute = DispatchCompute;
             funcsTable.GL.DispatchComputeIndirect = DispatchComputeIndirect;
             funcsTable.GL.MemoryBarrier = MemoryBarrier;

@@ -312,34 +312,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->ClearBufferiv(buffer, drawbuffer, value);
     }
 
-    void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, const GLfloat* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferfv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearNamedFramebufferfv called with null GL context");
-        pVulkanRenderer->ClearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
-    }
-
-    void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, const GLint* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferiv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearNamedFramebufferiv called with null GL context");
-        pVulkanRenderer->ClearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
-    }
-
-    void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                  GLint drawbuffer, const GLuint* value) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferuiv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearNamedFramebufferuiv called with null GL context");
-        pVulkanRenderer->ClearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
-    }
-
-    void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer, GLenum buffer,
-                                 GLint drawbuffer, GLfloat depth, GLint stencil) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearNamedFramebufferfi called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearNamedFramebufferfi called with null GL context");
-        pVulkanRenderer->ClearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
-    }
-
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
         DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
         return;
@@ -560,18 +532,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ReadPixels called with null GL context");
         pVulkanRenderer->ReadPixels(x, y, width, height, format, type, pixels);
     }
-    void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetTexImage called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::GetTexImage called with null GL context");
-        pVulkanRenderer->GetTexImage(target, level, format, type, pixels);
-    }
-    void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget uploadTarget,
-                         GLint level, GLenum format, GLenum type, GLsizei bufSize, GLvoid* pixels) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetTextureImage called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::GetTextureImage called with null GL context");
-        pVulkanRenderer->GetTextureImage(texture, uploadTarget, level, format, type, bufSize, pixels);
-    }
-
     void Clear(GLbitfield mask) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Clear called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::Clear called with null GL context");
@@ -780,13 +740,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer->MultiDrawElements(payload);
     }
 
-    void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                           GLsizei drawcount) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElements called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElements called with null GL context");
-        MultiDrawElementsImpl(mode, count, type, indices, drawcount, nullptr);
-    }
-
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsBaseVertex called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElementsBaseVertex called with null GL context");
@@ -822,15 +775,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BlitFramebuffer called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::BlitFramebuffer called with null GL context");
         pVulkanRenderer->BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-    }
-
-    void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
-                              const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                              GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
-                              GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BlitNamedFramebuffer called with null VulkanRenderer");
-        pVulkanRenderer->BlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0,
-                                              dstY0, dstX1, dstY1, mask, filter);
     }
 
     namespace {

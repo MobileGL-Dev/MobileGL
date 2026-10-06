@@ -243,38 +243,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                        const DrawCmdParam& drawParams,
                        const IndexBufferView* pIndexBufferView = nullptr);
-        void ClearAttachmentsOnActiveRenderPass(VkCommandBuffer commandBuffer,
-                                                const RenderPassEntry& compatibleRenderPassEntry);
-
         enum class ScissoredClearPrep {
             NotNeeded,  // scissor covers the whole target — take the deferred whole-surface path instead
             NoOp,       // nothing to clear (degenerate target or empty scissor rect)
             Ready,      // a render pass is active; record vkCmdClearAttachments with the returned rect
         };
-        ScissoredClearPrep PrepareScissoredClear(const MG_State::GLState::FramebufferObject& framebuffer,
-                                                 VkClearRect& outClearRect);
-
         void Clear(GLbitfield mask);
         void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
         void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
         void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
-        void ClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, const GLfloat* value);
-        void ClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, const GLint* value);
-        void ClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                      GLenum buffer, GLint drawbuffer, const GLuint* value);
-        void ClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& framebuffer,
-                                     GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                              GLbitfield mask, GLenum filter);
-        void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFbo,
-                                  const SharedPtr<MG_State::GLState::FramebufferObject>& drawFbo,
-                                  GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                  GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                  GLbitfield mask, GLenum filter);
         void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                        GLint x, GLint y, GLsizei width, GLsizei height);
         void CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
@@ -311,16 +292,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     Uint32 dstMipLevel, Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
                                     GLint dstY, GLint width, GLint height, VkImageLayout srcRestoreLayout,
                                     VkImageLayout dstRestoreLayout, Bool stencilAspect);
-        // One depth/stencil copy whose source and destination are the same format and whose region
-        // is a same-size, same-layer rectangle: the aspect named by `aspect` is staged through a
-        // device-local buffer so the destination's other aspect cannot be overwritten by the
-        // packed native word a whole-image copy moves.
-        Bool CopyDepthStencilAspectThroughBuffer(FrameContext::FrameData& frame, VkImage srcImage,
-                                                 VkImage dstImage, VkFormat format, Uint32 srcMipLevel,
-                                                 Uint32 srcBaseArrayLayer, Uint32 dstMipLevel,
-                                                 Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
-                                                 GLint dstY, GLsizei width, GLsizei height,
-                                                 VkImageAspectFlagBits aspect);
         static SizeT GetReadbackTexelSize(VkFormat sourceFormat);
         // Map a GL bottom-left-origin rectangle into the display-oriented swapchain image.
         // Quarter-turn surface transforms swap the copy extent's axes.
@@ -338,10 +309,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           GLsizei width, GLsizei height, GLenum destinationFormat,
                                           GLenum destinationType, SizeT destinationRowStride,
                                           Uint8* destinationPixels);
-        void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);
-        void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-                             TextureUploadTarget uploadTarget, GLint level, GLenum format, GLenum type,
-                             GLsizei bufSize, GLvoid* pixels);
         void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
         void DispatchComputeIndirect(GLintptr indirect);
         void MemoryBarrier(GLbitfield barriers);
@@ -354,8 +321,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const PhysicalDevice& GetPhysicalDevice() const;
         VkInstance GetInstance() const;
-        Bool IsDrawIndirectCountExtensionEnabled() const;
-
         // GL fence support, expressed in queue-submission indices backed by
         // real VkFences. A GL fence captures GetSyncPointSubmitIndex() at
         // creation: the index of the submission that will carry the commands
@@ -578,11 +543,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         };
         MultisampleResolveScratchImage m_msResolveScratch;
-        // Returns a scratch image at least `extent` in size with exactly `format`, transitioned to
-        // TRANSFER_DST and ready to be resolved into. Null image on failure (the caller then falls
-        // back to the direct resolve).
-        Bool AcquireMultisampleResolveScratchImage(VkCommandBuffer commandBuffer, VkFormat format,
-                                                   VkExtent2D extent);
         void DestroyMultisampleResolveScratchImage();
 
         struct DeferredDepthMipmapCleanup {
@@ -881,14 +841,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height);
-        void QueueClearBufferPayloadForFramebuffer(const MG_State::GLState::FramebufferObject& framebuffer,
-                                                  GLenum buffer, GLint drawbuffer,
-                                                  const ClearAttachmentPayload& clearPayload);
-        void RecordScissoredClearBuffer(const MG_State::GLState::FramebufferObject& framebuffer,
-                                        GLenum buffer, GLint drawbuffer,
-                                        const ClearAttachmentPayload& clearPayload,
-                                        const VkClearRect& clearRect);
-
         // ---- Submission fence tracking (GL sync objects) ----
         // One record per vkQueueSubmit still in flight, in ascending submit
         // order. Present/readback submissions reference the frame slot's
@@ -1588,74 +1540,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ShutdownDepthMipmapResources();
         void CollectDeferredDepthMipmapCleanup(Uint32 frameIndex);
         void DestroyDeferredDepthMipmapCleanup();
-        Bool TryBlitToDefaultFramebufferWithShader(FrameContext::FrameData& frame,
-                                                   MG_State::GLState::FramebufferObject& readFbo,
-                                                   MG_State::GLState::FramebufferObject& drawFbo,
-                                                   GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                                   GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                                   GLenum filter);
-        // Clears one layer of a colour image through a throwaway render pass whose entire content
-        // is its LOAD_OP_CLEAR. Two callers, both of which a transfer clear cannot serve: a z
-        // slice of a VK_IMAGE_TYPE_3D image (vkCmdClearColorImage cannot name one), and a
-        // MULTISAMPLE image (which carries no TRANSFER_DST usage at all). `finalLayout` is the
-        // layout the caller already tracks for the whole image, so this never has to touch
-        // resource->layout.
-        Bool ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
-                                           MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                           Uint32 depthSlice, const VkClearValue& clearValue,
-                                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        // Records the texture's queued clears. By default the texture is synced first, which
-        // uploads any pending texels BEFORE the clear - right only for texels written before it.
-        // `uploadPendingTexels = false` leaves them pending (OrderPendingUploadAfterRecording).
-        Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
-                                               MG_State::GLState::ITextureObject& texture,
-                                               Bool uploadPendingTexels = true);
-        // Texture uploads run in a batch submitted ahead of the frame's recording, so the upload
-        // the next sync of `texture` records would land BEFORE a write already recorded into the
-        // same image (a render, clear, blit or copy), and before a clear still queued for it (such
-        // a clear predates the texels: SettleTexelsBeforeQueuedClear). When either holds, this
-        // records the queued clear without the texels and submits the recording, so the upload
-        // follows both. An image the recording only READ keeps the old trade: no submit, and its
-        // earlier reads see the newer texels. It may end the render pass and replace
-        // frame.commandBuffer (recording again on return), so call it only where the caller holds
-        // no render-pass or command-buffer state across it. Returns whether it submitted.
-        Bool OrderPendingUploadAfterRecording(FrameContext::FrameData& frame,
-                                              MG_State::GLState::ITextureObject& texture);
-        // Called for each texture a glClear/glClearBuffer* is about to queue a clear on: uploads
-        // whatever texels are still pending (and mints the image if there is none), so that any
-        // texel pending when the clear is materialized was written after it.
-        void SettleTexelsBeforeQueuedClear(const MG_State::GLState::FramebufferObject& framebuffer,
-                                           const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        // The multisample arm of the above. Split out rather than branched inline because it
-        // shares none of the transfer path: a multisample image carries no TRANSFER_DST usage, so
-        // neither the TRANSFER_DST transition nor vkCmdClearColorImage is legal on one.
-        Bool MaterializeMultisamplePendingClear(VkCommandBuffer commandBuffer,
-                                                MG_State::GLState::ITextureObject& texture,
-                                                VkTextureManager::TextureResource& resource,
-                                                const Vector<PendingClearEntry>& pendingClears);
-        Bool MaterializePendingClearForRenderbuffer(
-            VkCommandBuffer commandBuffer,
-            const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);
-        // The default framebuffer's twin of the two above. It cannot go through
-        // MaterializePendingClearForTexture: the default FBO's colour attachment is a
-        // placeholder texture object, and syncing THAT would clear a texture image nobody
-        // presents instead of the acquired swapchain image.
-        Bool MaterializePendingClearForDefaultFramebuffer(VkCommandBuffer commandBuffer,
-                                                          MG_State::GLState::FramebufferObject& fbo,
-                                                          FramebufferAttachmentType attachmentType);
-        // Its depth/stencil half: a different image (the swapchain's depth/stencil twin), a
-        // different clear command and per-aspect masking.
-        Bool MaterializePendingDepthStencilClearForDefaultFramebuffer(
-            VkCommandBuffer commandBuffer, const MG_State::GLState::FramebufferAttachmentObject& attachment,
-            const ClearAttachmentPayload& payload);
         Bool SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame);
 
     public:
-        // Submits whatever is recorded and waits for it. The CPU is about to read memory
-        // a shader wrote (a mapped shader storage buffer), and coherent host-visible
-        // storage only guarantees visibility once the work that produced it has retired.
-        Bool FinishPendingGpuWork();
-
     private:
 
         void ShutdownSwapchain();
