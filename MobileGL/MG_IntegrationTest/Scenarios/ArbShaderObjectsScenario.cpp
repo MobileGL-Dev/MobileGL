@@ -73,6 +73,11 @@ void glGetObjectParameterfvARB(GLuint obj, GLenum pname, GLfloat* params);
 void glGetInfoLogARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* infoLog);
 void glGetAttachedObjectsARB(GLuint containerObj, GLsizei maxCount, GLsizei* count, GLuint* obj);
 GLint glGetUniformLocationARB(GLuint programObj, const char* name);
+void glBindAttribLocationARB(GLuint programObj, GLuint index, const char* name);
+GLint glGetAttribLocationARB(GLuint programObj, const char* name);
+void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glDisableVertexAttribArrayARB(GLuint index);
+void glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params);
 void glGetUniformfvARB(GLuint programObj, GLint location, GLfloat* params);
 void glGetShaderSourceARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* source);
 }
@@ -156,7 +161,13 @@ void main() { oColor = uColor; }
                 "glUniformMatrix2fvARB", "glUniformMatrix3fvARB", "glUniformMatrix4fvARB",
                 "glGetObjectParameterfvARB", "glGetObjectParameterivARB", "glGetInfoLogARB",
                 "glGetAttachedObjectsARB", "glGetUniformLocationARB", "glGetActiveUniformARB",
-                "glGetUniformfvARB", "glGetUniformivARB", "glGetShaderSourceARB"};
+                "glGetUniformfvARB", "glGetUniformivARB", "glGetShaderSourceARB",
+                // GL_ARB_vertex_shader, advertised alongside.
+                "glVertexAttrib1sARB", "glVertexAttrib1fARB", "glVertexAttrib1dARB", "glVertexAttrib4fARB",
+                "glVertexAttrib4fvARB", "glVertexAttrib4NubARB", "glVertexAttrib4NubvARB", "glVertexAttrib4uivARB",
+                "glVertexAttribPointerARB", "glEnableVertexAttribArrayARB", "glDisableVertexAttribArrayARB",
+                "glBindAttribLocationARB", "glGetActiveAttribARB", "glGetAttribLocationARB", "glGetVertexAttribdvARB",
+                "glGetVertexAttribfvARB", "glGetVertexAttribivARB", "glGetVertexAttribPointervARB"};
             for (const char* name : names) {
                 EXPECT_NE(reinterpret_cast<void*>(eglGetProcAddress(name)), nullptr) << name << " does not resolve";
             }
@@ -326,6 +337,55 @@ void main() { oColor = uColor; }
             glDeleteObjectARB(vs);
             glDeleteObjectARB(fs);
             glDeleteObjectARB(program);
+            EXPECT_EQ(FirstGLError(), 0u);
+        }
+
+        // GL_ARB_vertex_shader on an ARB program: a bound attribute location, and a constant
+        // attribute set through the ARB entry point that drives the draw.
+        TEST_F(ArbShaderObjectsScenario, ArbVertexShaderAttributesDrive) {
+            if (!Ready()) return;
+            constexpr const char* kAttribVertex = R"(#version 330 core
+in vec4 aColor;
+out vec4 vColor;
+void main() {
+    vec2 p = vec2(float((gl_VertexID & 1) << 2) - 1.0, float((gl_VertexID & 2) << 1) - 1.0);
+    vColor = aColor;
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+)";
+            constexpr const char* kAttribFragment = R"(#version 330 core
+in vec4 vColor;
+out vec4 oColor;
+void main() { oColor = vColor; }
+)";
+            const GLuint vs = ArbShader(GL_VERTEX_SHADER, kAttribVertex);
+            const GLuint fs = ArbShader(GL_FRAGMENT_SHADER, kAttribFragment);
+            const GLuint program = glCreateProgramObjectARB();
+            glAttachObjectARB(program, vs);
+            glAttachObjectARB(program, fs);
+            glBindAttribLocationARB(program, 3, "aColor");
+            glLinkProgramARB(program);
+            GLint linked = 0;
+            glGetObjectParameterivARB(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE);
+            EXPECT_EQ(glGetAttribLocationARB(program, "aColor"), 3);
+            EXPECT_EQ(glGetAttribLocation(program, "aColor"), 3);
+            glUseProgramObjectARB(program);
+            glBindVertexArray(m_vao);
+            glDisableVertexAttribArrayARB(3);
+            glVertexAttrib4fARB(3, 0.0f, 1.0f, 0.0f, 1.0f);
+            GLfloat current[4] = {};
+            glGetVertexAttribfvARB(3, GL_CURRENT_VERTEX_ATTRIB, current);
+            EXPECT_EQ(current[1], 1.0f);
+            EXPECT_EQ(current[0], 0.0f);
+            ASSERT_EQ(FirstGLError(), 0u);
+            DrawInto();
+            const Image green = ReadPixels(kEdge, kEdge);
+            EXPECT_TRUE(RegionIsMostly(green, 0, kEdge - 1, 0, kEdge - 1, "green", 0.0, "constant ARB attribute"));
+            glUseProgram(0);
+            glDeleteObjectARB(program);
+            glDeleteObjectARB(vs);
+            glDeleteObjectARB(fs);
             EXPECT_EQ(FirstGLError(), 0u);
         }
 

@@ -1335,35 +1335,6 @@ DECLARE_GL_FUNCTION_STUB_HEAD(void, WeightuivARB, GLint size, const GLuint* weig
 DECLARE_GL_FUNCTION_STUB_HEAD(void, WeightPointerARB, GLint size, GLenum type, GLsizei stride, const void* pointer) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, WeightPointerARB, size, type, stride, pointer)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexBlendARB, GLint count) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexBlendARB, count)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, GetBufferSubDataARB, GLenum target, GLintptrARB offset, GLsizeiptrARB size, void* data) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetBufferSubDataARB, target, offset, size, data)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1dARB, GLuint index, GLdouble x) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1dARB, index, x)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1sARB, GLuint index, GLshort x) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1sARB, index, x)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib1svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib1svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2dARB, GLuint index, GLdouble x, GLdouble y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2dARB, index, x, y)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2sARB, GLuint index, GLshort x, GLshort y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2sARB, index, x, y)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib2svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib2svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3dARB, GLuint index, GLdouble x, GLdouble y, GLdouble z) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3dARB, index, x, y, z)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3sARB, GLuint index, GLshort x, GLshort y, GLshort z) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3sARB, index, x, y, z)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib3svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib3svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NbvARB, GLuint index, const GLbyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NbvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NivARB, GLuint index, const GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NsvARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NsvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NubARB, GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NubARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NubvARB, GLuint index, const GLubyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NubvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NuivARB, GLuint index, const GLuint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NuivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4NusvARB, GLuint index, const GLushort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4NusvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4bvARB, GLuint index, const GLbyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4bvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4dARB, GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4dARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4dvARB, GLuint index, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4dvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4ivARB, GLuint index, const GLint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4ivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4sARB, GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4sARB, index, x, y, z, w)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4svARB, GLuint index, const GLshort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4svARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4ubvARB, GLuint index, const GLubyte* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4ubvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4uivARB, GLuint index, const GLuint* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4uivARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, VertexAttrib4usvARB, GLuint index, const GLushort* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, VertexAttrib4usvARB, index, v)
-DECLARE_GL_FUNCTION_STUB_HEAD(void, GetVertexAttribdvARB, GLuint index, GLenum pname, GLdouble* params) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, GetVertexAttribdvARB, index, pname, params)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DepthRangeArraydvNV, GLuint first, GLsizei count, const GLdouble* v) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DepthRangeArraydvNV, first, count, v)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, DepthRangeIndexeddNV, GLuint index, GLdouble n, GLdouble f) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, DepthRangeIndexeddNV, index, n, f)
 DECLARE_GL_FUNCTION_STUB_HEAD(void, WindowPos2dARB, GLdouble x, GLdouble y) DECLARE_GL_FUNCTION_STUB_END_NO_RETURN(void, WindowPos2dARB, x, y)
@@ -3142,6 +3113,62 @@ MOBILEGL_GL_API void glUniformMatrix3fvARB(GLint location, GLsizei count, GLbool
 }
 MOBILEGL_GL_API void glUniformMatrix4fvARB(GLint location, GLsizei count, GLboolean transpose, const GLfloat* value) {
     glUniformMatrix4fv(location, count, transpose, value);
+}
+
+// ---- GL_ARB_vertex_shader -----------------------------------------------------------------------
+// Advertised beside ARB_shader_objects (see BackendObject_*'s extension lists); every entry point is
+// the core one under the ARB name, and the three that take a program take an ARB handle.
+MOBILEGL_GL_API void glVertexAttrib1sARB(GLuint index, GLshort x) { glVertexAttrib1s(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1svARB(GLuint index, const GLshort* v) { glVertexAttrib1sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib1fARB(GLuint index, GLfloat x) { glVertexAttrib1f(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1fvARB(GLuint index, const GLfloat* v) { glVertexAttrib1fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib1dARB(GLuint index, GLdouble x) { glVertexAttrib1d(index, x); }
+MOBILEGL_GL_API void glVertexAttrib1dvARB(GLuint index, const GLdouble* v) { glVertexAttrib1dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2sARB(GLuint index, GLshort x, GLshort y) { glVertexAttrib2s(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2svARB(GLuint index, const GLshort* v) { glVertexAttrib2sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2fARB(GLuint index, GLfloat x, GLfloat y) { glVertexAttrib2f(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2fvARB(GLuint index, const GLfloat* v) { glVertexAttrib2fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib2dARB(GLuint index, GLdouble x, GLdouble y) { glVertexAttrib2d(index, x, y); }
+MOBILEGL_GL_API void glVertexAttrib2dvARB(GLuint index, const GLdouble* v) { glVertexAttrib2dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3sARB(GLuint index, GLshort x, GLshort y, GLshort z) { glVertexAttrib3s(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3svARB(GLuint index, const GLshort* v) { glVertexAttrib3sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z) { glVertexAttrib3f(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3fvARB(GLuint index, const GLfloat* v) { glVertexAttrib3fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib3dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z) { glVertexAttrib3d(index, x, y, z); }
+MOBILEGL_GL_API void glVertexAttrib3dvARB(GLuint index, const GLdouble* v) { glVertexAttrib3dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4sARB(GLuint index, GLshort x, GLshort y, GLshort z, GLshort w) { glVertexAttrib4s(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4svARB(GLuint index, const GLshort* v) { glVertexAttrib4sv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) { glVertexAttrib4f(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4fvARB(GLuint index, const GLfloat* v) { glVertexAttrib4fv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4dARB(GLuint index, GLdouble x, GLdouble y, GLdouble z, GLdouble w) { glVertexAttrib4d(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4dvARB(GLuint index, const GLdouble* v) { glVertexAttrib4dv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NubARB(GLuint index, GLubyte x, GLubyte y, GLubyte z, GLubyte w) { glVertexAttrib4Nub(index, x, y, z, w); }
+MOBILEGL_GL_API void glVertexAttrib4bvARB(GLuint index, const GLbyte* v) { glVertexAttrib4bv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4ivARB(GLuint index, const GLint* v) { glVertexAttrib4iv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4ubvARB(GLuint index, const GLubyte* v) { glVertexAttrib4ubv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4usvARB(GLuint index, const GLushort* v) { glVertexAttrib4usv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4uivARB(GLuint index, const GLuint* v) { glVertexAttrib4uiv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NbvARB(GLuint index, const GLbyte* v) { glVertexAttrib4Nbv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NsvARB(GLuint index, const GLshort* v) { glVertexAttrib4Nsv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NivARB(GLuint index, const GLint* v) { glVertexAttrib4Niv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NubvARB(GLuint index, const GLubyte* v) { glVertexAttrib4Nubv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NusvARB(GLuint index, const GLushort* v) { glVertexAttrib4Nusv(index, v); }
+MOBILEGL_GL_API void glVertexAttrib4NuivARB(GLuint index, const GLuint* v) { glVertexAttrib4Nuiv(index, v); }
+MOBILEGL_GL_API void glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) { glVertexAttribPointer(index, size, type, normalized, stride, pointer); }
+MOBILEGL_GL_API void glEnableVertexAttribArrayARB(GLuint index) { glEnableVertexAttribArray(index); }
+MOBILEGL_GL_API void glDisableVertexAttribArrayARB(GLuint index) { glDisableVertexAttribArray(index); }
+MOBILEGL_GL_API void glGetVertexAttribdvARB(GLuint index, GLenum pname, GLdouble* params) { glGetVertexAttribdv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params) { glGetVertexAttribfv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribivARB(GLuint index, GLenum pname, GLint* params) { glGetVertexAttribiv(index, pname, params); }
+MOBILEGL_GL_API void glGetVertexAttribPointervARB(GLuint index, GLenum pname, void** pointer) { glGetVertexAttribPointerv(index, pname, pointer); }
+MOBILEGL_GL_API void glBindAttribLocationARB(GLhandleARB programObj, GLuint index, const GLcharARB* name) {
+    glBindAttribLocation(ArbName(programObj), index, name);
+}
+MOBILEGL_GL_API void glGetActiveAttribARB(GLhandleARB programObj, GLuint index, GLsizei maxLength, GLsizei* length, GLint* size, GLenum* type, GLcharARB* name) {
+    glGetActiveAttrib(ArbName(programObj), index, maxLength, length, size, type, name);
+}
+MOBILEGL_GL_API GLint glGetAttribLocationARB(GLhandleARB programObj, const GLcharARB* name) {
+    return glGetAttribLocation(ArbName(programObj), name);
 }
 
 // KHR_robustness and EXT_robustness name the same entry points with their own suffixes (an ES
