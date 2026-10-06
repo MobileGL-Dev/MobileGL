@@ -87,6 +87,10 @@ namespace {
     // build directory - so a push build's 82 sanity cases said nothing about the code this
     // package actually changed.
     //
+    // P13 W3b: bits 0-13 are fixed on (ConfigLoader refuses any other mask), so the default is
+    // kMGPipeSubsystemsMigratedAtP5e. Before that it was kMGPipeSubsystemsMigratedAtP2, and the
+    // text below is the history of why it is set here at all.
+    //
     // The default here is therefore ConfigLoader's own push-build default
     // (kMGPipeSubsystemsMigratedAtP2, ConfigLoader.cpp), i.e. this binary runs the arm that
     // SHIPS in the build it was compiled for: legacy in build-linux (where the handle arm is
@@ -103,7 +107,7 @@ namespace {
     class EsprytSlotArmEnvironment final : public ::testing::Environment {
     public:
         void SetUp() override {
-            MobileGL::Uint64 bits = MobileGL::MG_Pipe::kMGPipeSubsystemsMigratedAtP2;
+            MobileGL::Uint64 bits = MobileGL::MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
             const char* knob = std::getenv("MOBILEGL_PIPE_PUSH");
             if (knob != nullptr && *knob != '\0') {
                 bits = std::strtoull(knob, nullptr, 0);
