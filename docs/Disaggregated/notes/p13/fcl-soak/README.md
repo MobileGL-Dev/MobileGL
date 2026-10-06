@@ -41,7 +41,6 @@ after (or do not reset that signal). Left for the user.
 |---|---|---|---|
 | clean (`soak-p13-clean-summary.txt`, `soak2.sh` with the SigCgt sampler and per-run ftrace) | P13 FCL lib at `c1e985c8` | 30 (22 Magma, 8 Espryt) | 18: Magma 13/22, Espryt 5/8 |
 | P12 control (`soak-p12-control-summary.txt`) | P12 end `743f4e8e` | 10 Magma | 2 |
-
 | matched A/B (`soak-ab-p12-p13-summary.txt`, `soak3.sh`): P12 and P13 libraries alternated launch by launch, Magma, same world, settings and network window, 40 s in-world | P12 `743f4e8e` / P13 `c1e985c8` | 10 + 10 | P12 4/10, P13 2/10 |
 
 **Does the P13 library raise the rate?** No evidence it does. The clean soak's 18/30 against the
@@ -51,8 +50,9 @@ overlapped the contaminated P13 runs below. In the matched, interleaved A/B the 
 more often (4/10) than the P13 one (2/10). The timeline is library-independent too: in every death
 logcat FCL's `Renderer:` line is followed by the JVM's signal reset after 0.2-0.6 s and by
 MobileGL's first log line after about 6.2 s for both libraries (P12 deaths: 6.3 s and 6.2 s), and
-the late deaths land at a fixed ~9.4 s after the `Renderer:` line on both libraries - a timeout
-started before MobileGL is loaded, not a window MobileGL's start-up widens.
+the deaths cluster at the same fixed offsets after the `Renderer:` line on both libraries (about
+1.3 s, 9.4 s and 17.4 s) - timeouts started before MobileGL is loaded, not a window MobileGL's
+start-up widens.
 
 Earlier P13 runs (first 5-run soak) are not counted: two soak scripts were found driving the
 phone at once and force-stopping each other's runs; `soak2.sh` now takes a lock.
