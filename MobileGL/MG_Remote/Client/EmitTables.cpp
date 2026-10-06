@@ -1266,7 +1266,7 @@ namespace MobileGL::MG_Remote::Client {
             // The unit's binding is the frontend's and has just been written by the caller, so
             // the texture this record names is the one the server's SyncImageTextureBinding
             // will pull for the same unit. Read from MG_State::pGLContext and NOT through
-            // MGB_CTX: on this side of a split MGB_CTX is gPipeInputs, which is the SERVER's
+            // gPipeInputs: on this side of a split gPipeInputs is gPipeInputs, which is the SERVER's
             // view, and the client asking it a question is how the two halves come to disagree.
             if (MG_State::pGLContext != nullptr) {
                 record.Res = PublishedTextureHandle(

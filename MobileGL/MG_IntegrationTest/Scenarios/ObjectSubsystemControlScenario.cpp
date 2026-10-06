@@ -34,7 +34,7 @@
 //       emit[fbe= sve= sse= sie= ctu=] bracket therefore carries a NON-ZERO total.
 //
 //   off (MOBILEGL_PIPE_PUSH=0x1ff, P3a's default = P4a's four subsystems cleared)
-//       The frontend dispatch falls through to the legacy MGB_CTX-reading arms, nothing is emitted
+//       The frontend dispatch falls through to the legacy gPipeInputs-reading arms, nothing is emitted
 //       through any of the four families, and every one of those five counters must read ZERO.
 //       This is the reading a dead switch fails: with the bits ignored, this lane would report the
 //       same non-zero counts as the other one.
@@ -540,7 +540,7 @@ void main() { oColor = texture(uTex, vUv); }
             } else if (m_lane == kLaneOff) {
                 EXPECT_EQ(total, 0)
                     << "with bits 9|10|11|12 CLEARED (MOBILEGL_PIPE_PUSH=0x1ff, P3a's default) the "
-                       "frontend dispatch must fall through to the legacy MGB_CTX-reading arms and "
+                       "frontend dispatch must fall through to the legacy (&MG_Pipe::gPipeInputs)-reading arms and "
                        "emit nothing through any of the four P4a families, so every counter in the "
                        "emit[] bracket must be zero. A non-zero count here is the dead-switch "
                        "reading: the bits are being ignored, both arms run the same code, and every "

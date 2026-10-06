@@ -54,7 +54,7 @@
 // THE CONTEXT ID IS GLContext::GetTextureContextId() AND NOTHING ELSE - the tree's existing
 // never-reused per-context id (TextureState::AllocateContextId; PipeInputs carries it as
 // m_textureContextId at seven fill points and the backends' own per-context memos key on it).
-// Deliberately NOT the GLContext ADDRESS that MGB_CTX_IDENTITY and MGPipeTracker::m_context
+// Deliberately NOT the GLContext ADDRESS that gPipeInputs and MGPipeTracker::m_context
 // compare, because Core.h states the reason that id exists at all: a context freed and remade
 // lands on the old heap address, which would put this same defect back one context recreation
 // later.

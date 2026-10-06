@@ -573,7 +573,7 @@ namespace MobileGL::MG_Remote::Server {
         // Save the server-visible pack state, force neutral for the read, restore. Both go through
         // the applier's own set_pixel_pack_state entry point (MGPipeApplySetPixelPackState writes
         // gPipeInputs.m_pixelStore[0], which the backend's ReadPixels reads via
-        // MGB_CTX->GetPixelStoreParameters); the read is synchronous on this thread, so the window
+        // gPipeInputs->GetPixelStoreParameters); the read is synchronous on this thread, so the window
         // in which the pack state is neutral does not outlive the call.
         const MG_Pipe::PixelStoreParameters savedPack =
             MG_Pipe::gPipeInputs.GetPixelStoreParameters(/*isUnpack=*/false);

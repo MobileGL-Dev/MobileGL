@@ -70,7 +70,7 @@
 // as GetBufferBindingSlot is m_bufferBindingSlot[15] indexed by its BufferTarget. Only [0]
 // (pack) has a carrier, and the applier writes it.
 //
-// AND THE UNPACK HALF HAS NO BACKEND READER AT ALL. Every MGB_CTX->GetPixelStoreParameters
+// AND THE UNPACK HALF HAS NO BACKEND READER AT ALL. Every gPipeInputs->GetPixelStoreParameters
 // call site in the tree passes `false`: DirectGLES.cpp:7924, :9399, :10893, :11272,
 // Utils.cpp:2302 and VulkanRenderer.cpp:10980 - six, not the five the scout named, and the
 // scout did not open them. PipeFill.cpp's own EmitPixelPackState says the same thing from
@@ -80,7 +80,7 @@
 // way it is a named abort on the first read.
 #define MGP_FIELD_OWNERSHIP_ARG_LIST(X)                                                              \
     X(GetPixelStoreParameters, 1, FATAL,                                                             \
-      "the unpack half has no carrier AND no backend reader; all six MGB_CTX sites pass false")
+      "the unpack half has no carrier AND no backend reader; all six (&MG_Pipe::gPipeInputs) sites pass false")
 
 // X(WireOp, Verb) - WHERE THE SERVER STAMPS.
 //

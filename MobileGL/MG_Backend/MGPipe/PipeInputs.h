@@ -37,9 +37,9 @@ namespace MobileGL::MG_Pipe {
 // TABLE 2 (CONTRACT-P5.md section 3, R-7): the four ownership classes, one per field, plus
 // the seven sticky forwards' own rows. Included HERE rather than from MG_Pipe/MGPipe.h with
 // gen_pipe.py's seven outputs, deliberately: MGPipe.h is in the PULL build's include closure
-// and G1 admits no symbol motion there, while this header is reached only through
-// PipeInputsSwitch.h's MOBILEGL_PIPE_PUSH arm. It is also exactly the header the poison check
-// below and the server's verb stamp both already see.
+// and G1 admitted no symbol motion there (until P13 retired the pull build), while this header is
+// what the backends include directly. It is also exactly the header the poison check below and the
+// server's verb stamp both already see.
 #include <MG_Pipe/generated/PipeFieldOwnership.inc>
 
     // PipeInputs.cpp. The poison Fatal with the verb's name ("<none>" before the first
@@ -255,11 +255,11 @@ namespace MobileGL::MG_Pipe {
         };
 
         // ---- identity / liveness (not fields) ----
-        // Whether a live GLContext exists. Forwarded (PipeFill.cpp): under push MGB_CTX_LIVE
+        // Whether a live GLContext exists. Forwarded (PipeFill.cpp): under push gPipeInputs
         // must be true as soon as a context exists, fill or no fill, which is what today's
         // null-context guards test.
         Bool IsLive() const;
-        // The live GLContext's address at the last fill; serves MGB_CTX_IDENTITY.
+        // The live GLContext's address at the last fill; serves gPipeInputs.
         const void* ContextIdentity() const { return m_contextIdentity; }
         // The verb of the last fill, kVerbCount before the first one.
         MGPipeVerb CurrentVerb() const { return m_currentVerb; }
@@ -442,7 +442,7 @@ namespace MobileGL::MG_Pipe {
         // BufferTarget, and Coverage.def:62-69 already rules that such a field stays ONE row.
         // Only [0] (pack) has a carrier - set_pixel_pack_state, which the applier writes
         // (PipeApply.cpp:1373) - so the field is APPLIER-DERIVED and the UNPACK half is FATAL:
-        // every MGB_CTX->GetPixelStoreParameters site in the tree passes false
+        // every gPipeInputs->GetPixelStoreParameters site in the tree passes false
         // (DirectGLES.cpp:7924, :9399, :10893, :11272, Utils.cpp:2302,
         // VulkanRenderer.cpp:10980), and PipeFill.cpp's EmitPixelPackState says the same from
         // the other side: "nothing on the far side of the boundary reads unpack state".
@@ -822,7 +822,7 @@ namespace MobileGL::MG_Pipe {
         TextureUnit* m_textureUnitBase = nullptr;
     };
 
-    // The single global the backends read through MGB_CTX (ARCHITECTURE.md 9.2). An inline
+    // The single global the backends read through gPipeInputs (ARCHITECTURE.md 9.2). An inline
     // variable: no .cpp is needed for the definition.
     //
     // P14 S2: IT IS THE PROCESS-WIDE BLOCK, and `gPipeInputs` below is the name every reader
@@ -850,15 +850,15 @@ namespace MobileGL::MG_Pipe {
     // ============================================================================
     //
     // ONE PROCESS, SEVERAL SERVED SESSIONS. The applier writes this block and the backend reads it
-    // through MGB_CTX, both on the SAME apply thread - the block IS "the state the record in hand
+    // through gPipeInputs, both on the SAME apply thread - the block IS "the state the record in hand
     // carries". Two sessions applying concurrently on two apply threads through one block would
     // read each other's render state, which is the cross-talk a multi-session server must not
     // have. Nothing about the block's contents changed; what changed is that the name resolves to
     // the SESSION'S block on a thread that belongs to one.
     //
-    // WHY A THREAD-LOCAL REFERENCE, AND NOT SOMETHING CLEVERER. MGB_CTX is
-    // `(&::MobileGL::MG_Pipe::gPipeInputs)` (MG_Pipe/PipeInputsSwitch.h) and is spelled at ~380
-    // sites in MG_Backend/MG_Impl; a reference whose TARGET varies with the calling thread is the
+    // WHY A THREAD-LOCAL REFERENCE, AND NOT SOMETHING CLEVERER. gPipeInputs is spelled at ~380
+    // sites in MG_Backend/MG_Impl (they read `MG_Pipe::gPipeInputs.` directly since P13 retired the
+    // pull/push switch macro); a reference whose TARGET varies with the calling thread is the
     // only shape that keeps all of them compiling and all of them correct. The cost is one TLS
     // address computation per access site - not one per field, and with no guard: the reference is
     // bound once per thread on its first use.
@@ -902,7 +902,7 @@ namespace MobileGL::MG_Pipe {
     // dual-block arm, PipeInputs.cpp) instead of a silent cross-role answer.
     //
     // THE READ SIDE'S SPELLING DOES NOT MOVE. gPipeInputs remains the server-role block, so the
-    // 379 MGB_CTX sites and PipeApply.cpp's applier writes are untouched; the only new spelling
+    // 379 gPipeInputs sites and PipeApply.cpp's applier writes are untouched; the only new spelling
     // is on the fill side (MG_Impl/Pipe/PipeFill.cpp), which asks MGPipeClientInputs(). Under
     // monolith transport - every unit and integration-gpu lane of a split build - the selection
     // folds back to the single shared block and behaviour is byte-for-byte the old one.

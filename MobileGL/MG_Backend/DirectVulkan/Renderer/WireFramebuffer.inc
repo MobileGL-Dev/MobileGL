@@ -240,12 +240,12 @@
         if (m_wireRetiredObjects.size() >= kRetiredObjectsBeforeSubmit && m_wirePreparationDepth == 0 &&
             HasPendingRecordedWork())
             (void)FlushPendingCommands();
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         const auto clearSurface = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                       Uint32 colorIndex) {
             if (!fbo.IsDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) return;
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
-                const auto mask = MGB_CTX->GetColorMaskIndexed(colorIndex);
+                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(colorIndex);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) return;
                 if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
                     MGLOG_W_ONCE("DirectVulkan: glClear with a partial color mask is not supported");
@@ -253,10 +253,10 @@
                 }
             }
             if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) {
-                if (!MGB_CTX->GetDepthMask()) aspect &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
+                if (!MG_Pipe::gPipeInputs.GetDepthMask()) aspect &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
             }
             if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {
-                const Uint32 mask = MGB_CTX->GetStencilState(StencilFace::Front).WriteMask & 255u;
+                const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
                 if (!mask) aspect &= ~VK_IMAGE_ASPECT_STENCIL_BIT;
                 else if (mask != 255u) {
                     MGLOG_W_ONCE("DirectVulkan: glClear with a partial stencil write mask is not supported");
@@ -268,8 +268,8 @@
             if (!image.image) return;
             m_textureManager->FlushPendingUploads();
             VkRect2D area{{0, 0}, image.extent};
-            if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
-                const auto& box = MGB_CTX->GetScissorBox();
+            if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+                const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
                 const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
                 const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(image.extent.width));
                 const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(image.extent.height));
@@ -917,8 +917,8 @@
         RetireWireDrawPass();
         // The scissor test clips blit writes: intersect the destination rectangle with
         // the scissor box and shrink the source proportionally.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
-            const IntVec4& scissor = MGB_CTX->GetScissorBox();
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const IntVec4& scissor = MG_Pipe::gPipeInputs.GetScissorBox();
             const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
                 const Bool dstFlipped = d1 < d0;
                 GLint lo = dstFlipped ? d1 : d0;

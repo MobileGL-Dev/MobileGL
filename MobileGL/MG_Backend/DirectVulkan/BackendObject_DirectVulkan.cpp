@@ -12,7 +12,7 @@
 #include "SubgroupSupportPolicy.h"
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 #include "MG_State/GLState/Core.h"
-#include <MG_Pipe/PipeInputsSwitch.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include "MG_State/GLState/TextureState/TextureState.h"
 #include "MG_Util/Classifiers/TextureEnumClassifier.h"
 #include "MG_Util/Converters/MGToGL/TextureEnumConverter.h"
@@ -462,8 +462,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
-        if (MGB_CTX_LIVE) {
-            MGB_CTX->InvalidateCompileEnv();
+        if (MG_Pipe::gPipeInputs.IsLive()) {
+            MG_Pipe::gPipeInputs.InvalidateCompileEnv();
         }
         PopulateFormatCapabilities(physicalDevice.handle, vkGetPhysicalDeviceFormatProperties, m_vulkanCaps,
                                    MutableFormatCapabilities());
@@ -1079,8 +1079,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_vulkanCaps = capabilities;
         UpdateDynamicBackendParameters();
         UpdateAdvertisedExtensions();
-        if (MGB_CTX_LIVE) {
-            MGB_CTX->InvalidateCompileEnv();
+        if (MG_Pipe::gPipeInputs.IsLive()) {
+            MG_Pipe::gPipeInputs.InvalidateCompileEnv();
         }
         MutableFormatCapabilities().Clear();
     }

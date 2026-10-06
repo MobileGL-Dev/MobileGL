@@ -9,7 +9,7 @@
 #include "MultiDraw.h"
 #include "Managers.h"
 #include <MG_State/GLState/Core.h>
-#include <MG_Pipe/PipeInputsSwitch.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Util/Metrics/PipeStats.h>
 #include <cstdlib>
 #include <cstring>
@@ -44,14 +44,14 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // verbatim is already "this batch restarts nowhere".
         Uint32 RestartSentinelFor(GLenum type) {
             if (ResolveRestartSubstitution(type) != RestartSubstitutionKind::None) {
-                return MGB_CTX->GetPrimitiveRestartIndex();
+                return MG_Pipe::gPipeInputs.GetPrimitiveRestartIndex();
             }
             return MG_Util::FixedRestartIndexForGLType(type);
         }
 
         Bool RestartActive() {
-            return MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-                   MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            return MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+                   MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
         }
 
         // Vertices per primitive for the modes whose sub-draws may be concatenated into a
@@ -95,7 +95,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // PrepareForDraw leave on GL_ELEMENT_ARRAY_BUFFER (and how big is its store)", and
         // "give me its bytes on the CPU" - and until now it asked all three of the FRONTEND
         // VAO, on the apply thread, once per indexed multi-draw. That was the last unguarded
-        // `MGB_CTX->GetBoundVertexArray()` in the backend: package vi retired the ordinary
+        // `gPipeInputs->GetBoundVertexArray()` in the backend: package vi retired the ordinary
         // draw path's copy (DirectGLES.cpp's SyncCurrentVertexAttributeValues / PrepareForDraw)
         // and this one survived only because these batches used to die earlier, on the
         // framebuffer row fb has since retired.
@@ -221,7 +221,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             }
 #endif
             // MONOLITH GLUE from here down, token for token what each call site did before.
-            const auto& vao = MGB_CTX->GetBoundVertexArray();
+            const auto& vao = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             if (!vao) return view;
             const auto& ibo = vao->GetIndexBufferBindingSlot().GetBoundObject();
             if (!ibo) return view;
@@ -269,7 +269,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         //
         // This was the LAST unguarded frontend read on the multi-draw apply path, and it sat
         // twenty lines above the function that retired its neighbour. It asked
-        // `MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect)` and then
+        // `gPipeInputs->GetBufferBindingSlot(BufferTarget::DrawIndirect)` and then
         // `EnsureBufferResource(<frontend object>)` - a registry lookup keyed by the client's
         // identity, which is §4.4's rule and not only the allocator's. Under run-ahead that is
         // `Fatal{UnmigratedPipeInput, "GetBufferBindingSlot@DrawArrays"}` on every batch the
@@ -306,7 +306,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 #endif
             // MONOLITH GLUE from here down, token for token what this function did before.
             const auto& indirect =
-                MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+                MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (!indirect) return 0;
             const auto* resource = BufferImpl::EnsureBufferResource(indirect);
             return resource ? resource->id : 0;

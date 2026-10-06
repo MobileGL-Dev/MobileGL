@@ -1538,7 +1538,7 @@ namespace MobileGL::MG_Pipe {
     //   DstGlName        CopyImageSubData takes two CopyImageEndpoints, each a frontend SharedPtr,
     //                    and the server has none. Under inproc and the verb barrier the server
     //                    rebuilds a TEXTURE endpoint from the GL name through the barrier-pulled
-    //                    sticky forward MGB_CTX->GetTextureObject(name) (counted in `rsp`,
+    //                    sticky forward gPipeInputs->GetTextureObject(name) (counted in `rsp`,
     //                    retired by P7 / P3b-P4b when the backend takes handles). A GL name is
     //                    NEVER an identity (section 4.2.1); it is the lookup key of a pull the
     //                    handle beside it will replace. No forward hands out a renderbuffer,

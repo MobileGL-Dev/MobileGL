@@ -18,7 +18,7 @@
 #include "VertexInputStateBuilder.h"
 
 #include "MG_State/GLState/Core.h"
-#include <MG_Pipe/PipeInputsSwitch.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 // P5c ev: the GPU-write announcement routes through the reverse channel (R2).
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
@@ -596,12 +596,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // round trip), which is why the honest-but-lossy path was kept over widening every
         // default-framebuffer Y-flip/pre-transform helper to floats. See the KNOWN INFIDELITY
         // note in MG_IntegrationTest/Scenarios/AdvertisedLimitsScenario.cpp.
-        const FloatVec4& stored = MGB_CTX->GetViewportIndexed(index);
+        const FloatVec4& stored = MG_Pipe::gPipeInputs.GetViewportIndexed(index);
         const IntVec4 viewportState(static_cast<Int>(std::lround(stored.x())),
                                     static_cast<Int>(std::lround(stored.y())),
                                     static_cast<Int>(std::lround(stored.z())),
                                     static_cast<Int>(std::lround(stored.w())));
-        const FloatVec2& depthRange = MGB_CTX->GetDepthRangeIndexed(index);
+        const FloatVec2& depthRange = MG_Pipe::gPipeInputs.GetDepthRangeIndexed(index);
         const IntVec2 logicalExtent = isDefaultFramebuffer
             ? ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent)
             : framebufferExtent;
@@ -656,7 +656,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ApplyBlendConstants(VkCommandBuffer commandBuffer) {
-        const FloatVec4& blendColor = MGB_CTX->GetBlendColor();
+        const FloatVec4& blendColor = MG_Pipe::gPipeInputs.GetBlendColor();
         const float blendConstants[4] = {
             blendColor.x(),
             blendColor.y(),
@@ -689,8 +689,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ApplyPolygonOffsetState(VkCommandBuffer commandBuffer) {
-        const Float constantFactor = MGB_CTX->GetPolygonOffsetUnits();
-        const Float slopeFactor = MGB_CTX->GetPolygonOffsetFactor();
+        const Float constantFactor = MG_Pipe::gPipeInputs.GetPolygonOffsetUnits();
+        const Float slopeFactor = MG_Pipe::gPipeInputs.GetPolygonOffsetFactor();
         auto& shadow = *g_dynamicStateShadow;
         if (shadow.depthBiasValid && shadow.depthBiasConstantFactor == constantFactor &&
             shadow.depthBiasSlopeFactor == slopeFactor) {
@@ -703,7 +703,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ApplyLineWidthState(VkCommandBuffer commandBuffer) {
-        Float lineWidth = MGB_CTX->GetLineWidth();
+        Float lineWidth = MG_Pipe::gPipeInputs.GetLineWidth();
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5c (hd, CONTRACT-P5C §3.7): with an active transport the dynamic parameters are the
         // SERVER's own backend's - the client caps mirror is client memory (rule E). Monolith
@@ -806,8 +806,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void ApplyStencilState(VkCommandBuffer commandBuffer) {
-        const StencilFaceState& frontStencil = MGB_CTX->GetStencilState(StencilFace::Front);
-        const StencilFaceState& backStencil = MGB_CTX->GetStencilState(StencilFace::Back);
+        const StencilFaceState& frontStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front);
+        const StencilFaceState& backStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Back);
         const Uint32 frontReference = static_cast<Uint32>(std::max(frontStencil.Ref, 0));
         const Uint32 backReference = static_cast<Uint32>(std::max(backStencil.Ref, 0));
 
@@ -1400,11 +1400,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void RecordClearBufferError(const char* func, ErrorCode code, const char* message) {
-        MGB_CTX->RecordError(code, MakeUnique<GenericErrorInfo>("DirectVulkan", func, message));
+        MG_Pipe::gPipeInputs.RecordError(code, MakeUnique<GenericErrorInfo>("DirectVulkan", func, message));
     }
 
     static void RecordTextureCopyError(const char* func, ErrorCode code, const char* message) {
-        MGB_CTX->RecordError(code, MakeUnique<GenericErrorInfo>("DirectVulkan", func, message));
+        MG_Pipe::gPipeInputs.RecordError(code, MakeUnique<GenericErrorInfo>("DirectVulkan", func, message));
     }
 
     static Bool HasDistinctCompleteDepthStencilTextureAttachments(
@@ -1460,7 +1460,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static void RecordUnsupportedFramebufferError(const char* func) {
-        MGB_CTX->RecordError(
+        MG_Pipe::gPipeInputs.RecordError(
             ErrorCode::InvalidFramebufferOperation,
             MakeUnique<GenericErrorInfo>(
                 "DirectVulkan", func,
@@ -3000,7 +3000,7 @@ void main() {
             // glReadPixels final conversion: GL_CLAMP_READ_COLOR defaults to GL_FIXED_ONLY,
             // clamping fixed-point (normalized) buffers to [0,1] - visible for SNORM reads.
             if (applyReadColorClamp && wideType == GL_FLOAT) {
-                const GLenum clampMode = MGB_CTX->GetClampReadColor();
+                const GLenum clampMode = MG_Pipe::gPipeInputs.GetClampReadColor();
                 const Bool clamp = clampMode == GL_TRUE ||
                     (clampMode == GL_FIXED_ONLY && !IsFloatingPointReadbackFormat(srcFormat));
                 if (clamp) {
@@ -3223,11 +3223,11 @@ void main() {
         const Bool wire = MG_Config::Transport != MG_Config::TransportMode::Monolith;
         const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         const Bool isDefault = wire ? (wireFbo && wireFbo->IsDefault) :
             (currentDrawFBO && currentDrawFBO->IsDefaultFramebuffer());
 #else
-        const auto& currentDrawFBO = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        const auto& currentDrawFBO = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         const Bool isDefault = currentDrawFBO != nullptr && currentDrawFBO->IsDefaultFramebuffer();
 #endif
         if (isDefault) {
@@ -3732,8 +3732,8 @@ void main() {
         // with restart off it is a legitimate index and excluding it would truncate the
         // converted stream by exactly that vertex.
         const Bool primitiveRestartActive =
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
         const Uint32 restartSentinel = indexSize == 1 ? 0xFFu : indexSize == 2 ? 0xFFFFu : 0xFFFFFFFFu;
         Uint32 maxIndex = 0;
         Bool sawIndex = false;
@@ -4307,7 +4307,7 @@ void main() {
             }
 
             const auto glType = programObj.vertexInputTypes[location];
-            const auto& currentValue = MGB_CTX->GetCurrentVertexAttribute(location);
+            const auto& currentValue = MG_Pipe::gPipeInputs.GetCurrentVertexAttribute(location);
             VkFormat format = VK_FORMAT_UNDEFINED;
             const void* sourceData = nullptr;
             VkDeviceSize sourceSize = 0;
@@ -4441,7 +4441,7 @@ void main() {
         Bool substituteRestart = false;
         // One bulk parameters fetch instead of up to three accessor calls per indexed
         // draw; all three inputs are pure reads of these fields.
-        const RenderStateParameters& rsp = MGB_CTX->GetRenderStateParameters();
+        const RenderStateParameters& rsp = MG_Pipe::gPipeInputs.GetRenderStateParameters();
         if (rsp.PrimitiveRestartEnabled && !rsp.PrimitiveRestartFixedIndexEnabled) {
             const Uint32 restartIndex = rsp.PrimitiveRestartIndex;
             const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
@@ -5297,9 +5297,9 @@ void main() {
     Uint32 VulkanRenderer::ResolveEffectiveSampleMask(VkSampleCountFlagBits rasterizationSamples) const {
         constexpr Uint32 kFullCoverage = 0xffffffffu;
         if (rasterizationSamples == VK_SAMPLE_COUNT_1_BIT) return kFullCoverage;
-        if (!MGB_CTX->IsCapabilityEnabled(CapabilityInput::Multisample)) return kFullCoverage;
-        if (!MGB_CTX->IsCapabilityEnabled(CapabilityInput::SampleMask)) return kFullCoverage;
-        return MGB_CTX->GetRenderStateParameters().SampleMaskValue;
+        if (!MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::Multisample)) return kFullCoverage;
+        if (!MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::SampleMask)) return kFullCoverage;
+        return MG_Pipe::gPipeInputs.GetRenderStateParameters().SampleMaskValue;
     }
 
 
@@ -5314,7 +5314,7 @@ void main() {
         //
         // Only reached with no render-state CSO bound, and only in a build with no pre-handle
         // arm to fall back to instead.
-        return MG_Pipe::MGPipeComputePipelineSubsetHash(MGB_CTX->GetRenderStateParameters());
+        return MG_Pipe::MGPipeComputePipelineSubsetHash(MG_Pipe::gPipeInputs.GetRenderStateParameters());
     }
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
@@ -5346,7 +5346,7 @@ void main() {
         if (!(aspects & DrawSetupAspect::IndexBuffer) || pIndexBufferView == nullptr) {
             return false;
         }
-        const RenderStateParameters& rsp = MGB_CTX->GetRenderStateParameters();
+        const RenderStateParameters& rsp = MG_Pipe::gPipeInputs.GetRenderStateParameters();
         if (rsp.PrimitiveRestartFixedIndexEnabled) {
             return true;
         }
@@ -5422,7 +5422,7 @@ void main() {
         // the VALUE hash of that subset, never the version itself: the version is monotonic, so
         // per-draw state flips (GL_BLEND toggles) would otherwise miss entries the memo holds.
         // The version only guards recomputing the hash - unchanged version, unchanged bytes.
-        const Uint renderStateVersion = MGB_CTX->GetPipelineStateVersion();
+        const Uint renderStateVersion = MG_Pipe::gPipeInputs.GetPipelineStateVersion();
         // P2 D12.1. Non-null means the client's render-state CSO handle is this draw's state
         // key and the hash below is not computed at all; null means the pre-handle arm. The
         // two arms' entries can never match each other: the handle arm stores hash 0 and a
@@ -5617,16 +5617,16 @@ void main() {
             syntheticVertexInputState.pNext = vis.state.pNext;
             pipelineVertexInputState = &syntheticVertexInputState;
         }
-        auto cullFaceEnabled = MGB_CTX->IsCapabilityEnabled(CapabilityInput::CullFace);
-        auto depthTestEnabled = MGB_CTX->IsCapabilityEnabled(CapabilityInput::DepthTest);
+        auto cullFaceEnabled = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::CullFace);
+        auto depthTestEnabled = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::DepthTest);
         auto polygonOffsetFillEnabled =
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) &&
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) &&
             DrawModeUsesPolygonFill(mode);
         auto rasterizerDiscardEnabled =
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard);
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard);
         auto colorLogicOpEnabled =
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::ColorLogicOp) && m_logicOpFeatureEnabled;
-        auto stencilTestEnabled = MGB_CTX->IsCapabilityEnabled(CapabilityInput::StencilTest);
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ColorLogicOp) && m_logicOpFeatureEnabled;
+        auto stencilTestEnabled = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::StencilTest);
         // A framebuffer without a depth (stencil) attachment behaves as if the depth
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
@@ -5642,7 +5642,7 @@ void main() {
 #endif
             {
             const auto& gatingFbo =
-                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
             if (gatingFbo != nullptr && !gatingFbo->IsDefaultFramebuffer()) {
                 const auto& depthAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Depth);
                 const auto& stencilAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Stencil);
@@ -5655,10 +5655,10 @@ void main() {
             }
         }
         }
-        const StencilFaceState& frontStencil = MGB_CTX->GetStencilState(StencilFace::Front);
-        const StencilFaceState& backStencil = MGB_CTX->GetStencilState(StencilFace::Back);
+        const StencilFaceState& frontStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front);
+        const StencilFaceState& backStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Back);
         const VkPolygonMode requestedPolygonMode =
-            MG_Util::ConvertPolygonModeToVkEnum(MGB_CTX->GetPolygonModeFront());
+            MG_Util::ConvertPolygonModeToVkEnum(MG_Pipe::gPipeInputs.GetPolygonModeFront());
         // VK_POLYGON_MODE_LINE/_POINT require the fillModeNonSolid device feature; fall back to
         // VK_POLYGON_MODE_FILL when the device lacks it.
         const VkPolygonMode effectivePolygonMode =
@@ -5746,18 +5746,18 @@ void main() {
             // driver's own rate. Both halves move the render state's PIPELINE version, so a cached
             // pipeline built at the old rate cannot be handed back for the new one.
             .sampleShadingEnable = m_sampleRateShadingFeatureEnabled &&
-                                   MGB_CTX->IsCapabilityEnabled(CapabilityInput::SampleShading),
-            .minSampleShading = MGB_CTX->GetMinSampleShadingValue(),
+                                   MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::SampleShading),
+            .minSampleShading = MG_Pipe::gPipeInputs.GetMinSampleShadingValue(),
             // Word 1 keeps its all-ones initialiser: GL has no state for samples 32..63.
             .sampleMask = {ResolveEffectiveSampleMask(renderPassEntry.sampleCount), 0xffffffffu},
             .subpass = 0,
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
-            .patchControlPoints = static_cast<Uint32>(MGB_CTX->GetPatchVertices()),
+            .patchControlPoints = static_cast<Uint32>(MG_Pipe::gPipeInputs.GetPatchVertices()),
             .viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin),
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
-                ? MG_Util::ConvertCullFaceModeToVkEnum(MGB_CTX->GetCullFaceMode(), invertClockwise)
+                ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs.GetCullFaceMode(), invertClockwise)
                 : VK_CULL_MODE_NONE,
             .frontFace = VK_FRONT_FACE_CLOCKWISE,
             // Read the geometry stage off the program's own shader list rather than
@@ -5771,13 +5771,13 @@ void main() {
             .provokingVertexMode = SelectProvokingVertexMode(
                 vkTopology, ProgramCapturesXfbFromGeometryStage(program)),
             .depthTestEnable = depthTestEnabled,
-            .depthWriteEnable = depthTestEnabled && MGB_CTX->GetDepthMask(),
+            .depthWriteEnable = depthTestEnabled && MG_Pipe::gPipeInputs.GetDepthMask(),
             .depthBiasEnable = polygonOffsetFillEnabled,
             .rasterizerDiscardEnable = rasterizerDiscardEnabled,
             .logicOpEnable = colorLogicOpEnabled,
             .stencilTestEnable = stencilTestEnabled,
-            .depthCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(MGB_CTX->GetDepthFunc()),
-            .logicOp = MG_Util::ConvertLogicOperationToVkEnum(MGB_CTX->GetLogicOp()),
+            .depthCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(MG_Pipe::gPipeInputs.GetDepthFunc()),
+            .logicOp = MG_Util::ConvertLogicOperationToVkEnum(MG_Pipe::gPipeInputs.GetLogicOp()),
             .frontStencilFailOp = MG_Util::ConvertStencilOperationToVkEnum(frontStencil.FailOp),
             .frontStencilPassOp = MG_Util::ConvertStencilOperationToVkEnum(frontStencil.PassDepthPassOp),
             .frontStencilDepthFailOp = MG_Util::ConvertStencilOperationToVkEnum(frontStencil.PassDepthFailOp),
@@ -5813,8 +5813,8 @@ void main() {
         // handed back after the application changed them.
         if (programObj.needsPassthroughTessControl && programObj.passthroughTessControlEmulatable &&
             vkTopology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
-            const FloatVec4& defaultOuterLevel = MGB_CTX->GetPatchDefaultOuterLevel();
-            const FloatVec2& defaultInnerLevel = MGB_CTX->GetPatchDefaultInnerLevel();
+            const FloatVec4& defaultOuterLevel = MG_Pipe::gPipeInputs.GetPatchDefaultOuterLevel();
+            const FloatVec2& defaultInnerLevel = MG_Pipe::gPipeInputs.GetPatchDefaultInnerLevel();
             payload.passthroughTessControlKey = ProgramFactory::ComputePassthroughTessControlKey(
                 payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel,
                 programObj.passthroughPerVertexMembers);
@@ -5869,10 +5869,10 @@ void main() {
         const auto* wireFbo = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
             MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
         const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 #else
         const auto& drawFboBinding =
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
@@ -5917,14 +5917,14 @@ void main() {
             BlendFactor dstAlpha = BlendFactor::Zero;
             BlendEquation colorEquation = BlendEquation::Add;
             BlendEquation alphaEquation = BlendEquation::Add;
-            MGB_CTX->GetBlendFuncIndexed(i, srcRGB, dstRGB, srcAlpha, dstAlpha);
-            MGB_CTX->GetBlendEquationIndexed(i, colorEquation, alphaEquation);
-            const Bool blendEnabled = MGB_CTX->IsCapabilityEnabledIndexed(CapabilityInput::Blend, i);
+            MG_Pipe::gPipeInputs.GetBlendFuncIndexed(i, srcRGB, dstRGB, srcAlpha, dstAlpha);
+            MG_Pipe::gPipeInputs.GetBlendEquationIndexed(i, colorEquation, alphaEquation);
+            const Bool blendEnabled = MG_Pipe::gPipeInputs.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i);
             // Per-draw-buffer color write mask (glColorMaski). Divergent per-attachment masks require
             // the independentBlend device feature; when it is absent, fall back to draw buffer 0's
             // mask for every attachment (matching the non-indexed glColorMask broadcast).
             const BoolVec4 bufferMask =
-                MGB_CTX->GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
+                MG_Pipe::gPipeInputs.GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
             VkColorComponentFlags attachmentColorWriteMask = static_cast<VkColorComponentFlags>(
                 (bufferMask.r() ? VK_COLOR_COMPONENT_R_BIT : 0u) |
                 (bufferMask.g() ? VK_COLOR_COMPONENT_G_BIT : 0u) |
@@ -6375,7 +6375,7 @@ void main() {
     VkRect2D VulkanRenderer::ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
                                                   VkSurfaceTransformFlagBitsKHR preTransform,
                                                   Bool isDefaultFbo) const {
-        const auto& parameters = MGB_CTX->GetRenderStateParameters();
+        const auto& parameters = MG_Pipe::gPipeInputs.GetRenderStateParameters();
         if ((parameters.ScissorTestEnabledMask & (1u << index)) == 0) {
             VkRect2D full{};
             full.offset = {0, 0};
@@ -6451,7 +6451,7 @@ void main() {
         // counter still would make Espryt skip re-syncing the blend state it just changed.
         // The second-level DynamicTailKey compare below is therefore what actually absorbs a
         // pipeline-only change, exactly as it did before P2: one key build, no vkCmd*.
-        const Uint paramsVersion = MGB_CTX->GetRenderStateParametersVersion();
+        const Uint paramsVersion = MG_Pipe::gPipeInputs.GetRenderStateParametersVersion();
         if (shadow.dynamicTailValid && shadow.dynamicTailParamsVersion == paramsVersion &&
             shadow.dynamicTailExtentX == extent.x() && shadow.dynamicTailExtentY == extent.y() &&
             shadow.dynamicTailIsDefaultFbo == isDefaultFbo) {
@@ -6475,7 +6475,7 @@ void main() {
         // re-derive the value its shadow already holds.
         DynamicStateShadow::DynamicTailKey key;
         {
-            const RenderStateParameters& p = MGB_CTX->GetRenderStateParameters();
+            const RenderStateParameters& p = MG_Pipe::gPipeInputs.GetRenderStateParameters();
             // Viewport 0 and its depth range: ApplyGLViewportState reads exactly those two
             // (per-index state for indices > 0 is keyed separately, see multiViewportKey below).
             key.viewport[0] = p.Viewports[0].x();
@@ -6557,7 +6557,7 @@ void main() {
                 }
 #endif
                 const auto& fbo =
-                    MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                    MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
                 return isDefaultFbo == (fbo != nullptr && fbo->IsDefaultFramebuffer());
             }(),
             "GetBaseTransformFlagsRaw: isDefaultFbo does not match the bound draw framebuffer");
@@ -6581,7 +6581,7 @@ void main() {
         // Entry select: by the draw program's lifetime id, MRU first (the id pins
         // the entry; every other fact is re-guarded below, so probing a stale
         // entry can only decline, never serve stale state).
-        const auto& program = *MGB_CTX->GetProgramForDraw();
+        const auto& program = *MG_Pipe::gPipeInputs.GetProgramForDraw();
         const Uint64 programLifetimeId = program.GetLifetimeId();
         SetupDrawSnapshot* snapPtr = nullptr;
         {
@@ -6629,7 +6629,7 @@ void main() {
         // captured draw after glBeginTransformFeedback would bind the undecorated
         // variant and silently capture nothing while the CPU bookkeeping advances.
         const Bool wantsXfbCapture = m_transformFeedbackFeatureEnabled &&
-                                     MGB_CTX->IsTransformFeedbackActive() &&
+                                     MG_Pipe::gPipeInputs.IsTransformFeedbackActive() &&
                                      program.GetTransformFeedbackVaryingCount() > 0;
         const Bool snapHasXfbCapture =
             static_cast<Bool>(ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags) &
@@ -6643,7 +6643,7 @@ void main() {
         // buffer binds (re-run every draw anyway). Declining here would send every
         // draw of a VAO-cycling stream (Minecraft chunk rendering) through the full
         // path, re-resolving descriptors and texture layouts nothing invalidated.
-        const auto& vao = *MGB_CTX->GetBoundVertexArray();
+        const auto& vao = *MG_Pipe::gPipeInputs.GetBoundVertexArray();
         // P2 D12.4: the handle replaces the (address, lifetime id) pair here too - one
         // compare instead of two, and the same identity the VAO draw memo is keyed on, so
         // the two cannot disagree about whether "the VAO moved". The config version stays:
@@ -6656,7 +6656,7 @@ void main() {
                    vao.GetLifetimeId() != snap.vaoLifetimeId ||
                    vao.GetConfigVersion() != snap.vaoConfigVersion);
         const auto& drawFbo =
-            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
             drawFbo->GetLifetimeId() != snap.drawFboLifetimeId ||
             drawFbo->GetObjectVersion() != snap.fboVersion) {
@@ -6667,8 +6667,8 @@ void main() {
         // back on what the snapshot already describes (a GL_BLEND toggle between
         // two draws, a redundant glBindSampler), and declining here sends every
         // such draw through the full SetupDraw.
-        const Uint renderStateVersion = MGB_CTX->GetPipelineStateVersion();
-        const Uint64 bindGeneration = MGB_CTX->GetTextureBindGeneration();
+        const Uint renderStateVersion = MG_Pipe::gPipeInputs.GetPipelineStateVersion();
+        const Uint64 bindGeneration = MG_Pipe::gPipeInputs.GetTextureBindGeneration();
         const Bool renderStateMoved = renderStateVersion != snap.renderStateVersion;
         const Bool bindsMoved = bindGeneration != snap.bindGeneration;
         if (renderStateMoved) {
@@ -6676,7 +6676,7 @@ void main() {
             // flavor input (depth/stencil participation); a flip of that must take
             // the full path's pass selection. One bulk parameters fetch instead of
             // two capability-accessor calls; both are pure reads of the same fields.
-            const RenderStateParameters& rsp = MGB_CTX->GetRenderStateParameters();
+            const RenderStateParameters& rsp = MG_Pipe::gPipeInputs.GetRenderStateParameters();
             const Bool drawUsesDepthStencil = rsp.DepthTestEnabled || rsp.StencilTestEnabled;
             if (drawUsesDepthStencil != snap.drawUsesDepthStencil) {
                 return false;
@@ -6850,7 +6850,7 @@ void main() {
         if (contentSum != snap.sampledContentSum || paramsSum != snap.sampledParamsSum) {
             return false;
         }
-        const Uint64 samplingResolutionGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+        const Uint64 samplingResolutionGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
         if (samplingResolutionGeneration != snap.samplingResolutionGeneration) {
             // Decline, not re-arm: snap.resolvedTransformFlags bakes the
             // ExplicitLod0Sampling verdict, which reads the effective sampler's
@@ -7004,7 +7004,7 @@ void main() {
             // was cancelled has no usable optimized module - and on an in-place
             // SanitizeAndOptimizeBinary failure GetGeneratedSpirv() still holds the RAW
             // glslang words, which must never reach vkCreateShaderModule. Drop the draw.
-            const auto& drawProgram = *MGB_CTX->GetProgramForDraw();
+            const auto& drawProgram = *MG_Pipe::gPipeInputs.GetProgramForDraw();
             if (!drawProgram.GetLinkStatus() || !drawProgram.GetSpirvStatus()) {
                 MGLOG_D("SetupDraw skipped: program=%u is linked=%d spirv=%d",
                         drawProgram.GetExternalIndex(), static_cast<int>(drawProgram.GetLinkStatus()),
@@ -7034,15 +7034,15 @@ void main() {
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
         }
         const auto& drawFbo =
-                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (drawFbo != nullptr && IsUnsupportedFramebufferForDirectVulkan(*drawFbo)) {
             // Nothing was mutated: other entries' per-probe guards (FBO identity +
             // version among them) stay authoritative, so none need invalidating.
             RecordUnsupportedFramebufferError(__func__);
             return false;
         }
-        const auto& vao = *MGB_CTX->GetBoundVertexArray();
-        const auto& program = *MGB_CTX->GetProgramForDraw();
+        const auto& vao = *MG_Pipe::gPipeInputs.GetBoundVertexArray();
+        const auto& program = *MG_Pipe::gPipeInputs.GetProgramForDraw();
         // The fast path declined (or had no entry for this program): whatever THIS
         // program's entry saw may be stale, and the full path below mutates state as
         // it goes, so the entry must not stay matchable if that path fails mid-way.
@@ -7082,7 +7082,7 @@ void main() {
         ProgramFactory::CompileOptionFlags transformFlags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(drawFboIsDefault));
         // Captured draws take the xfb-decorated program variant.
-        if (m_transformFeedbackFeatureEnabled && MGB_CTX->IsTransformFeedbackActive() &&
+        if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs.IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0) {
             transformFlags |= ProgramFactory::CompileOptionBit::XfbCapture;
         }
@@ -7096,13 +7096,13 @@ void main() {
         {
             const Uint64 lodProgramLifetimeId = program.GetLifetimeId();
             const Uint32 lodProgramVersion = program.GetBackendStateVersion();
-            const Uint64 lodBindGeneration = MGB_CTX->GetTextureBindGeneration();
+            const Uint64 lodBindGeneration = MG_Pipe::gPipeInputs.GetTextureBindGeneration();
             // The probe also reads the EFFECTIVE sampler's filters/aniso/LOD range
             // (ProgramSamplesOnlySingleLevelTextures), and those setters bump ONLY the
             // sampling-resolution generation - not the texture params version the sum
             // below covers. Without this key a filter/aniso change would keep serving
             // the stale verdict.
-            const Uint64 lodSamplingGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+            const Uint64 lodSamplingGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
             Bool lodMemoHit = false;
             if (m_lastLodDecisionValid && m_lastSampledSetValid &&
                 m_lastLodProgramLifetimeId == lodProgramLifetimeId &&
@@ -7220,7 +7220,7 @@ void main() {
         {
             const Uint64 programLifetimeId = program.GetLifetimeId();
             const Uint32 programVersion = program.GetBackendStateVersion();
-            const Uint64 bindGeneration = MGB_CTX->GetTextureBindGeneration();
+            const Uint64 bindGeneration = MG_Pipe::gPipeInputs.GetTextureBindGeneration();
             // The bind generation alone stopped covering this set the moment ResolveSampledBinding
             // started asking SamplesAsIncompleteTexture: membership now depends on the effective
             // sampler PARAMETERS (MIN_FILTER decides whether the mip chain is read at all) and on
@@ -7239,7 +7239,7 @@ void main() {
             // object a unit carries goes through TextureUnit::SetSamplerObject and moves the bind
             // generation instead. Same term the SetupDrawSnapshot fast path and the LOD memo
             // already carry.
-            const Uint64 samplingGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+            const Uint64 samplingGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
             const Bool sampledSetUnchanged =
                 m_lastSampledSetValid && m_lastSampledSetProgramLifetimeId == programLifetimeId &&
                 m_lastSampledSetProgramVersion == programVersion &&
@@ -7409,8 +7409,8 @@ void main() {
         // pass flavor (GL: a disabled depth/stencil test neither reads nor writes
         // its buffer).
         const Bool drawUsesDepthStencil =
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
-            MGB_CTX->IsCapabilityEnabled(CapabilityInput::StencilTest);
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::DepthTest) ||
+            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::StencilTest);
         auto* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
             *drawFbo, DefaultFramebufferWriteIndex(drawFbo->IsDefaultFramebuffer()), drawUsesDepthStencil);
         // nullptr: the framebuffer has an attachment DirectVulkan cannot represent (a texture the
@@ -7556,8 +7556,8 @@ void main() {
                 snap.fboVersion = drawFbo->GetObjectVersion();
                 snap.drawFboIsDefault = drawFboIsDefault;
                 snap.viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin);
-                snap.renderStateVersion = MGB_CTX->GetPipelineStateVersion();
-                snap.bindGeneration = MGB_CTX->GetTextureBindGeneration();
+                snap.renderStateVersion = MG_Pipe::gPipeInputs.GetPipelineStateVersion();
+                snap.bindGeneration = MG_Pipe::gPipeInputs.GetTextureBindGeneration();
                 snap.baseTransformFlags = GetBaseTransformFlagsRaw(drawFboIsDefault);
                 snap.resolvedTransformFlags = transformFlags.GetRaw();
                 snap.renderPassHash = nowActiveRenderPass->hash;
@@ -7583,7 +7583,7 @@ void main() {
                     snap.programObj = nullptr;
                     snap.programFactoryEpoch = 0;
                 }
-                snap.samplingResolutionGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+                snap.samplingResolutionGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
                 Uint64 snapContentSum = 0;
                 Uint64 snapParamsSum = 0;
                 // Per-entry copies of this draw's sampled set (the scratch vectors
@@ -7630,7 +7630,7 @@ void main() {
         auto& frame = m_frameContext.GetCurrent();
         // The DISPATCH accessor: with a pipeline bound this is its compute stage program
         // itself, never the graphics composite (which carries no compute stage at all).
-        const auto& program = *MGB_CTX->GetProgramForDispatch();
+        const auto& program = *MG_Pipe::gPipeInputs.GetProgramForDispatch();
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
             MGLOG_E_ONCE("DispatchCompute skipped: program=%u has no optimized SPIR-V",
                     program.GetExternalIndex());
@@ -7695,7 +7695,7 @@ void main() {
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // See DispatchCompute: the dispatch accessor, not the draw one.
-        const auto& program = *MGB_CTX->GetProgramForDispatch();
+        const auto& program = *MG_Pipe::gPipeInputs.GetProgramForDispatch();
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
             MGLOG_E_ONCE("DispatchComputeIndirect skipped: program=%u has no optimized SPIR-V",
                     program.GetExternalIndex());
@@ -7741,7 +7741,7 @@ void main() {
             return;
         }
 
-        auto indirectBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DispatchIndirect).GetBoundObject();
+        auto indirectBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DispatchIndirect).GetBoundObject();
         if (!indirectBuffer) {
             MGLOG_E_ONCE("DispatchComputeIndirect skipped: GL_DISPATCH_INDIRECT_BUFFER is not bound");
             return;
@@ -7826,10 +7826,10 @@ void main() {
 
         VkClearRect clearRect{};
         clearRect.rect = framebuffer.IsDefaultFramebuffer()
-            ? MakeDefaultFramebufferScissorRect(MGB_CTX->GetScissorBox(),
+            ? MakeDefaultFramebufferScissorRect(MG_Pipe::gPipeInputs.GetScissorBox(),
                                                 renderPassEntry->extent,
                                                 m_swapchainObject.GetPreTransform())
-            : MakeClampedScissorRect(MGB_CTX->GetScissorBox(), renderPassEntry->extent);
+            : MakeClampedScissorRect(MG_Pipe::gPipeInputs.GetScissorBox(), renderPassEntry->extent);
         clearRect.baseArrayLayer = 0;
         // GL 3.3 §4.4.7: clearing a layered framebuffer clears every layer.
         clearRect.layerCount = renderPassEntry->layers;
@@ -7968,9 +7968,9 @@ void main() {
             if (!fbo) MagmaWireFatal("clear-framebuffer-record");
             ClearAttachmentPayload payload{};
             payload.mask = mask;
-            payload.color = MGB_CTX->GetClearColor();
-            payload.depth = MGB_CTX->GetClearDepth();
-            payload.stencil = MGB_CTX->GetClearStencil();
+            payload.color = MG_Pipe::gPipeInputs.GetClearColor();
+            payload.depth = MG_Pipe::gPipeInputs.GetClearDepth();
+            payload.stencil = MG_Pipe::gPipeInputs.GetClearStencil();
             ClearWireFramebuffer(*fbo, payload);
             return;
         }
@@ -7980,10 +7980,10 @@ void main() {
             return;
         }
         // GL 3.3 §3.1: when RASTERIZER_DISCARD is enabled, Clear and ClearBuffer* are ignored.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
             return;
         }
-        auto* fbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
+        auto* fbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         MOBILEGL_ASSERT(fbo, "VulkanRenderer::Clear: draw framebuffer not found (fbo == nullptr)");
         if (IsUnsupportedFramebufferForDirectVulkan(*fbo)) {
             RecordUnsupportedFramebufferError(__func__);
@@ -7991,16 +7991,16 @@ void main() {
         }
 
         ClearFramebufferPayload payload {
-            .color = MGB_CTX->GetClearColor(),
-            .depth = MGB_CTX->GetClearDepth(),
-            .stencil = MGB_CTX->GetClearStencil()
+            .color = MG_Pipe::gPipeInputs.GetClearColor(),
+            .depth = MG_Pipe::gPipeInputs.GetClearDepth(),
+            .stencil = MG_Pipe::gPipeInputs.GetClearStencil()
         };
 
         // A render-pass loadOp clear always covers the complete attachment, while
         // OpenGL glClear is clipped by GL_SCISSOR_TEST. Blaze3D relies on this for
         // GuiItemAtlas: animated items clear only their atlas slot before being
         // redrawn. Queueing that clear as a loadOp erases every cached static item.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
             VkClearRect clearRect{};
             switch (PrepareScissoredClear(*fbo, clearRect)) {
             case ScissoredClearPrep::NoOp:
@@ -8023,7 +8023,7 @@ void main() {
                             continue;
                         }
 
-                        const BoolVec4 colorMask = MGB_CTX->GetColorMaskIndexed(drawBufferIndex);
+                        const BoolVec4 colorMask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(drawBufferIndex);
                         if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
                             continue;
                         }
@@ -8050,7 +8050,7 @@ void main() {
                 }
 
                 VkImageAspectFlags depthStencilAspects = 0;
-                if ((mask & GL_DEPTH_BUFFER_BIT) != 0 && MGB_CTX->GetDepthMask()) {
+                if ((mask & GL_DEPTH_BUFFER_BIT) != 0 && MG_Pipe::gPipeInputs.GetDepthMask()) {
                     const auto& depthAttachment = fbo->GetAttachment(FramebufferAttachmentType::Depth);
                     if (depthAttachment.IsComplete()) {
                         depthStencilAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -8063,7 +8063,7 @@ void main() {
                         // vkCmdClearAttachments writes every bit, so only a full (8-bit stencil) or
                         // zero mask can be expressed; treat a partial mask like a partial color mask.
                         const Uint32 stencilWriteMask =
-                            MGB_CTX->GetStencilState(StencilFace::Front).WriteMask;
+                            MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask;
                         if ((stencilWriteMask & 0xFFu) == 0xFFu) {
                             depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
                         } else if (stencilWriteMask != 0) {
@@ -8092,11 +8092,11 @@ void main() {
         // gating for the deferred path: drop fully-masked planes, warn on partial
         // masks vkCmdClear*/loadOp clears cannot express.
         GLbitfield deferredMask = mask;
-        if ((deferredMask & GL_DEPTH_BUFFER_BIT) != 0 && !MGB_CTX->GetDepthMask()) {
+        if ((deferredMask & GL_DEPTH_BUFFER_BIT) != 0 && !MG_Pipe::gPipeInputs.GetDepthMask()) {
             deferredMask &= ~static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT);
         }
         if ((deferredMask & GL_STENCIL_BUFFER_BIT) != 0) {
-            const Uint32 stencilWriteMask = MGB_CTX->GetStencilState(StencilFace::Front).WriteMask;
+            const Uint32 stencilWriteMask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask;
             if ((stencilWriteMask & 0xFFu) != 0xFFu) {
                 if (stencilWriteMask != 0) {
                     MGLOG_W_ONCE("DirectVulkan: deferred glClear with a partial stencil write mask is not supported");
@@ -8112,7 +8112,7 @@ void main() {
                 if (drawBuffers[drawBufferIndex] == FramebufferAttachmentType::None) {
                     continue;
                 }
-                const BoolVec4 colorMask = MGB_CTX->GetColorMaskIndexed(drawBufferIndex);
+                const BoolVec4 colorMask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(drawBufferIndex);
                 const Bool full = colorMask.r() && colorMask.g() && colorMask.b() && colorMask.a();
                 if (full) {
                     anyFullMask = true;
@@ -8133,7 +8133,7 @@ void main() {
                     if (attachmentType == FramebufferAttachmentType::None) {
                         continue;
                     }
-                    const BoolVec4 colorMask = MGB_CTX->GetColorMaskIndexed(drawBufferIndex);
+                    const BoolVec4 colorMask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(drawBufferIndex);
                     if (!(colorMask.r() && colorMask.g() && colorMask.b() && colorMask.a())) {
                         continue;
                     }
@@ -8176,7 +8176,7 @@ void main() {
             const ClearAttachmentPayload& clearPayload) {
         m_clearManager->CollectGarbage();
         // GL 3.3 §3.1: when RASTERIZER_DISCARD is enabled, Clear and ClearBuffer* are ignored.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
             return;
         }
         if (IsUnsupportedFramebufferForDirectVulkan(framebuffer)) {
@@ -8218,7 +8218,7 @@ void main() {
         }
 
         // GL 3.3 §4.2.3: ClearBuffer* is clipped by GL_SCISSOR_TEST exactly like Clear.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
             VkClearRect clearRect{};
             switch (PrepareScissoredClear(framebuffer, clearRect)) {
             case ScissoredClearPrep::NoOp:
@@ -8250,9 +8250,9 @@ void main() {
 
         // GL 3.3 §4.2.3: ClearBuffer* honors the write masks like Clear. Deferred
         // clears cannot express partial masks; warn and skip those.
-        const auto depthClearAllowed = [&]() -> Bool { return MGB_CTX->GetDepthMask(); };
+        const auto depthClearAllowed = [&]() -> Bool { return MG_Pipe::gPipeInputs.GetDepthMask(); };
         const auto stencilClearAllowed = [&]() -> Bool {
-            const Uint32 stencilWriteMask = MGB_CTX->GetStencilState(StencilFace::Front).WriteMask;
+            const Uint32 stencilWriteMask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask;
             if ((stencilWriteMask & 0xFFu) == 0xFFu) {
                 return true;
             }
@@ -8264,7 +8264,7 @@ void main() {
 
         switch (buffer) {
             case GL_COLOR: {
-                const BoolVec4 colorMask = MGB_CTX->GetColorMaskIndexed(static_cast<Uint32>(drawbuffer));
+                const BoolVec4 colorMask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(static_cast<Uint32>(drawbuffer));
                 if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
                     return;
                 }
@@ -8321,7 +8321,7 @@ void main() {
             if (!attachment.IsComplete()) {
                 return;
             }
-            const BoolVec4 colorMask = MGB_CTX->GetColorMaskIndexed(static_cast<Uint>(drawbuffer));
+            const BoolVec4 colorMask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(static_cast<Uint>(drawbuffer));
             if (!colorMask.r() && !colorMask.g() && !colorMask.b() && !colorMask.a()) {
                 return;
             }
@@ -8339,7 +8339,7 @@ void main() {
                 MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(colorTexture));
         } else {
             VkImageAspectFlags aspects = 0;
-            if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0 && MGB_CTX->GetDepthMask() &&
+            if ((clearPayload.mask & GL_DEPTH_BUFFER_BIT) != 0 && MG_Pipe::gPipeInputs.GetDepthMask() &&
                 framebuffer.GetAttachment(FramebufferAttachmentType::Depth).IsComplete()) {
                 aspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
             }
@@ -8347,7 +8347,7 @@ void main() {
                 framebuffer.GetAttachment(FramebufferAttachmentType::Stencil).IsComplete()) {
                 // GL 3.3 §4.2.3: the clear is masked by the front stencil write mask (see Clear).
                 const Uint32 stencilWriteMask =
-                    MGB_CTX->GetStencilState(StencilFace::Front).WriteMask;
+                    MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask;
                 if ((stencilWriteMask & 0xFFu) == 0xFFu) {
                     aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
                 } else if (stencilWriteMask != 0) {
@@ -8374,7 +8374,7 @@ void main() {
             return;
         }
 #endif
-        auto* fbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
+        auto* fbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         if (!fbo) {
             return;
         }
@@ -9511,8 +9511,8 @@ void main() {
             return;
         }
 #endif
-        auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
-        auto drawFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        auto readFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+        auto drawFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 
@@ -9544,8 +9544,8 @@ void main() {
 
         // The scissor test clips blit writes: intersect the destination rectangle with
         // the scissor box and shrink the source proportionally.
-        if (MGB_CTX->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
-            const IntVec4& scissor = MGB_CTX->GetScissorBox();
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const IntVec4& scissor = MG_Pipe::gPipeInputs.GetScissorBox();
             const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
                 const Bool dstFlipped = d1 < d0;
                 GLint lo = dstFlipped ? d1 : d0;
@@ -10169,7 +10169,7 @@ void main() {
             return;
         }
 
-        auto& textureUnit = MGB_CTX->GetTextureUnitObject(MGB_CTX->GetActiveTextureUnit());
+        auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(MG_Pipe::gPipeInputs.GetActiveTextureUnit());
         auto destinationTexture = textureUnit.GetBindingSlot(textureTarget).GetBoundObject();
         if (destinationTexture == nullptr) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
@@ -10177,7 +10177,7 @@ void main() {
             return;
         }
 
-        auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+        auto readFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
         if (readFbo == nullptr) {
             RecordTextureCopyError(__func__, ErrorCode::InvalidOperation,
                                    "CopyTexSubImage2D requires a framebuffer bound to GL_READ_FRAMEBUFFER.");
@@ -11076,7 +11076,7 @@ void main() {
             return;
         }
 
-        auto readFbo = MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+        auto readFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
         if (readFbo == nullptr) {
             MGLOG_E_ONCE("DirectVulkan::ReadPixels skipped: no read framebuffer is bound");
             return;
@@ -11771,8 +11771,8 @@ void main() {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport != MG_Config::TransportMode::Monolith ? wireReplyHasNoPackBuffer :
 #endif
-            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
-        const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
+            MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+        const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT packAlignment = packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : 1;
         const SizeT dstRowStride = ((rowPixels * dstPixelBytes) + packAlignment - 1) / packAlignment * packAlignment;
@@ -11802,7 +11802,7 @@ void main() {
     void VulkanRenderer::GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
         const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        auto& activeUnit = MGB_CTX->GetTextureUnitObject(MGB_CTX->GetActiveTextureUnit());
+        auto& activeUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(MG_Pipe::gPipeInputs.GetActiveTextureUnit());
         auto textureObject = activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
         GetTextureImage(textureObject, textureUploadTarget, level, format, type, -1, pixels);
     }
@@ -12074,7 +12074,7 @@ void main() {
             return;
         }
 
-        auto& textureUnit = MGB_CTX->GetTextureUnitObject(MGB_CTX->GetActiveTextureUnit());
+        auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(MG_Pipe::gPipeInputs.GetActiveTextureUnit());
         auto texture = textureUnit.GetBindingSlot(textureTarget).GetBoundObject();
         MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmap requires a bound texture.");
         MOBILEGL_ASSERT(texture->IsComplete(), "GenerateMipmap requires a complete texture.");
@@ -12380,7 +12380,7 @@ void main() {
     // resets its counter state, because those bytes describe the previous owner's span.
     Uint32 VulkanRenderer::CurrentXfbCounterSlot() {
         constexpr Uint32 kNoSlot = static_cast<Uint32>(kXfbCounterObjectSlots);
-        const Uint64 identity = MGB_CTX->GetBoundTransformFeedbackLifetimeId();
+        const Uint64 identity = MG_Pipe::gPipeInputs.GetBoundTransformFeedbackLifetimeId();
         MOBILEGL_ASSERT(identity != 0,
                         "transform feedback object reported the free-slot sentinel (0) as its identity - "
                         "every slot would then read as 'mine' without ever being claimed");
@@ -12397,7 +12397,7 @@ void main() {
         Uint32 slot = freeSlot;
         if (slot == kNoSlot) {
             for (Uint32 candidate = 0; candidate < kNoSlot; ++candidate) {
-                if (MGB_CTX->HasOpenTransformFeedbackSpan(m_xfbCounterSlotOwner[candidate])) {
+                if (MG_Pipe::gPipeInputs.HasOpenTransformFeedbackSpan(m_xfbCounterSlotOwner[candidate])) {
                     continue;
                 }
                 if (slot == kNoSlot || m_xfbCounterSlotLastUse[candidate] < m_xfbCounterSlotLastUse[slot]) {
@@ -12428,14 +12428,14 @@ void main() {
     }
 
     Bool VulkanRenderer::BeginXfbCaptureForDraw(FrameContext::FrameData& frame) {
-        if (!m_transformFeedbackFeatureEnabled || !MGB_CTX_LIVE ||
-            !MGB_CTX->IsTransformFeedbackActive()) {
+        if (!m_transformFeedbackFeatureEnabled || !MG_Pipe::gPipeInputs.IsLive() ||
+            !MG_Pipe::gPipeInputs.IsTransformFeedbackActive()) {
             return false;
         }
         // A paused span captures nothing, and the counter buffers keep their values, so the
         // next resumed draw appends exactly where the last captured one stopped - which is
         // what pause/resume means (ARB_transform_feedback2).
-        if (MGB_CTX->IsTransformFeedbackPaused()) {
+        if (MG_Pipe::gPipeInputs.IsTransformFeedbackPaused()) {
             return false;
         }
         // The bound pipeline's last pre-rasterization stage has to have been declared with Xfb
@@ -12455,7 +12455,7 @@ void main() {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
             return BeginWireXfbCaptureForDraw(frame);
 #endif
-        const auto& program = MGB_CTX->GetTransformFeedbackProgram();
+        const auto& program = MG_Pipe::gPipeInputs.GetTransformFeedbackProgram();
         if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
             return false;
         }
@@ -12469,7 +12469,7 @@ void main() {
         VkDeviceSize sizes[4] = {};
         for (SizeT i = 0; i < bufferCount; ++i) {
             if (!program->GetTransformFeedbackStride(static_cast<Uint>(i))) continue;
-            auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+            auto& point = MG_Pipe::gPipeInputs.GetBufferBindingPoint(BufferTarget::TransformFeedback,
                                                                       static_cast<Uint>(i));
             const auto& bufferObject = point.GetBoundObject();
             if (bufferObject == nullptr) {
@@ -12525,7 +12525,7 @@ void main() {
         }
 
         const Uint32 counterSlot = CurrentXfbCounterSlot();
-        const Uint64 generation = MGB_CTX->GetTransformFeedbackGeneration();
+        const Uint64 generation = MG_Pipe::gPipeInputs.GetTransformFeedbackGeneration();
         const Bool resume = m_xfbCountersValid[counterSlot] && m_xfbLastSeenGeneration[counterSlot] == generation;
         m_xfbLastSeenGeneration[counterSlot] = generation;
 
@@ -13199,7 +13199,7 @@ void main() {
             default: break;
         }
         if (mergeGranularity != 0) {
-            const RenderStateParameters& rsp = MGB_CTX->GetRenderStateParameters();
+            const RenderStateParameters& rsp = MG_Pipe::gPipeInputs.GetRenderStateParameters();
             if (rsp.PrimitiveRestartEnabled || rsp.PrimitiveRestartFixedIndexEnabled) {
                 mergeGranularity = 0;
             }
@@ -13277,7 +13277,7 @@ void main() {
             return;
         }
 
-        const auto& vao = *MGB_CTX->GetBoundVertexArray();
+        const auto& vao = *MG_Pipe::gPipeInputs.GetBoundVertexArray();
         const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
         if (!indexBuffer) {
             MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: no element array buffer is bound");
@@ -13287,13 +13287,13 @@ void main() {
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
             static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) + kGLDrawElementsIndirectCommandBytes;
-        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
         }
 
-        auto parameterBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+        auto parameterBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!parameterBuffer || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
             MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: invalid GL_PARAMETER_BUFFER binding or range");
             return;
@@ -13378,7 +13378,7 @@ void main() {
             return;
         }
 
-        const auto& vao = *MGB_CTX->GetBoundVertexArray();
+        const auto& vao = *MG_Pipe::gPipeInputs.GetBoundVertexArray();
         const auto* indexBuffer = vao.GetIndexBufferBindingSlot().GetBoundObject().get();
         if (!indexBuffer) {
             MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: no element array buffer is bound");
@@ -13388,7 +13388,7 @@ void main() {
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
             static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + kGLDrawElementsIndirectCommandBytes;
-        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
@@ -13458,7 +13458,7 @@ void main() {
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset +
             static_cast<SizeT>(stride) * static_cast<SizeT>(drawcount - 1) + kGLDrawArraysIndirectCommandBytes;
-        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto drawBuffer = MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (!drawBuffer || commandBytes > drawBuffer->GetSize()) {
             MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range");
             return;
@@ -13475,7 +13475,7 @@ void main() {
         // MONOLITH ONLY: with a transport the frontend VAO is not this side's to read at all
         // (the client owns those bytes and stages them itself), and this runs on the apply thread.
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
-            const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
+            const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
             Bool clientArray = false;
             if (currentVAO) {
                 for (const auto& attribute : currentVAO->GetAllAttributes()) {
@@ -14347,8 +14347,8 @@ void main() {
         if (!m_provokingVertexModePerPipeline) {
             return VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
         }
-        return (MGB_CTX_LIVE &&
-                MGB_CTX->GetProvokingVertexMode() == ProvokingVertexMode::FirstVertex)
+        return (MG_Pipe::gPipeInputs.IsLive() &&
+                MG_Pipe::gPipeInputs.GetProvokingVertexMode() == ProvokingVertexMode::FirstVertex)
                    ? VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT
                    : VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
     }

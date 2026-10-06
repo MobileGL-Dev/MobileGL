@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "Managers.h"
-#include <MG_Pipe/PipeInputsSwitch.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 // P3a: the handle-shaped resource op table, the applier's records and the reverse channel.
 // Both headers are compiled into the library only under push, so they are included here
 // under the same condition - a pull build must gain no declaration it cannot link.
@@ -7767,9 +7767,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // that needs no work costs the same nothing per draw that any other synced texture does.
         void BackendTextureObject::StampViewSyncKeys(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
-            if (MGB_CTX_LIVE) {
-                m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
-                m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+            if (MG_Pipe::gPipeInputs.IsLive()) {
+                m_syncedShapeContextId = MG_Pipe::gPipeInputs.GetTextureContextId();
+                m_syncedShapeGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
                 m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
             }
             m_syncedContentVersion = stateTextureObject->GetContentVersion();
@@ -8453,9 +8453,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // LEGACY ARM ONLY from P4a on: the memos it reads are the pre-handle ones and the
             // record above answers the same question in one compare.
             if (pushedStorage == nullptr)
-            if (m_isInitialized && m_syncedShapeContextId != 0 && MGB_CTX_LIVE &&
-                m_syncedShapeContextId == MGB_CTX->GetTextureContextId() &&
-                m_syncedShapeGeneration == MGB_CTX->GetSamplingResolutionGeneration() &&
+            if (m_isInitialized && m_syncedShapeContextId != 0 && MG_Pipe::gPipeInputs.IsLive() &&
+                m_syncedShapeContextId == MG_Pipe::gPipeInputs.GetTextureContextId() &&
+                m_syncedShapeGeneration == MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration() &&
                 m_syncedContentVersion == stateTextureObject->GetContentVersion() &&
                 m_syncedShapeParamsVersion == stateTextureObject->GetTextureParamsVersion() &&
                 stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
@@ -8573,9 +8573,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // The probe just proved "fully synced" from the real state, so the cheap
                     // gate may be (re)stamped here: the coarse generation only ever goes stale
                     // from OTHER textures' churn, and this draw re-validated this one.
-                    if (MGB_CTX_LIVE) {
-                        m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
-                        m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+                    if (MG_Pipe::gPipeInputs.IsLive()) {
+                        m_syncedShapeContextId = MG_Pipe::gPipeInputs.GetTextureContextId();
+                        m_syncedShapeGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
                         m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
                     }
                     return;
@@ -9878,9 +9878,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same instant, so the cheap gate's keys describe exactly this synced state.
             // Only Mipmap storage may arm it - the gate refuses other storage types anyway,
             // but a stale trio must not linger on an object that later switches type.
-            if (MGB_CTX_LIVE && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
-                m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
-                m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
+            if (MG_Pipe::gPipeInputs.IsLive() && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                m_syncedShapeContextId = MG_Pipe::gPipeInputs.GetTextureContextId();
+                m_syncedShapeGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
                 m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
             } else {
                 m_syncedShapeContextId = 0;
@@ -10895,7 +10895,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // read buffer names no colour attachment at all.
         static const MG_State::GLState::FramebufferAttachmentObject* GetReadColorAttachment() {
             const auto& readFBO =
-                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
                 return nullptr;
             }
@@ -11306,7 +11306,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 #endif
             const auto& readFBO =
-                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
                 return false;
             }
@@ -12969,7 +12969,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);
                 }
 #endif
-                return static_cast<Uint>(MGB_CTX->GetImageTextureBinding(unit).Format);
+                return static_cast<Uint>(MG_Pipe::gPipeInputs.GetImageTextureBinding(unit).Format);
             }
 
             // Combines one (unit, format) pair into a running digest. Commutative, so the order
@@ -13932,19 +13932,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // patch size - so a program built for one value is stale for another. Recorded here
             // and compared on the draw path (SyncCurrentProgram), the same shape as the
             // storage-block and image-format signatures next to it.
-            const Uint patchVertices = MGB_CTX_LIVE
-                                           ? MGB_CTX->GetPatchVertices()
+            const Uint patchVertices = MG_Pipe::gPipeInputs.IsLive()
+                                           ? MG_Pipe::gPipeInputs.GetPatchVertices()
                                            : 3u;
             m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
             // PATCH_DEFAULT_{OUTER,INNER}_LEVEL are the same kind of dynamic state and are baked
             // into the same stage (ES has no such state and no entry point to forward them to), so
             // they are recorded and compared alongside the patch size - the two move together, as
             // BuildPassthroughTessControlEssl's contract says.
-            m_passthroughTessControlOuterLevel = MGB_CTX_LIVE
-                                                     ? MGB_CTX->GetPatchDefaultOuterLevel()
+            m_passthroughTessControlOuterLevel = MG_Pipe::gPipeInputs.IsLive()
+                                                     ? MG_Pipe::gPipeInputs.GetPatchDefaultOuterLevel()
                                                      : FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
-            m_passthroughTessControlInnerLevel = MGB_CTX_LIVE
-                                                     ? MGB_CTX->GetPatchDefaultInnerLevel()
+            m_passthroughTessControlInnerLevel = MG_Pipe::gPipeInputs.IsLive()
+                                                     ? MG_Pipe::gPipeInputs.GetPatchDefaultInnerLevel()
                                                      : FloatVec2(1.0f, 1.0f);
 
             if (tessEvalShaderIndex < 0 ||
@@ -15777,8 +15777,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("Renderbuffer %u storage allocation ran out of memory: %dx%d, samples=%d, format=%s",
                              stateRBOObject->GetExternalIndex(), width, height, samples,
                              MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
-                if (MGB_CTX_LIVE) {
-                    MGB_CTX->RecordError(
+                if (MG_Pipe::gPipeInputs.IsLive()) {
+                    MG_Pipe::gPipeInputs.RecordError(
                         ErrorCode::OutOfMemory,
                         MakeUnique<GenericErrorInfo>("DirectGLES", "BackendRenderbufferObject::SyncToBackend",
                                                      "The ES driver could not allocate the renderbuffer storage."));
@@ -15868,7 +15868,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
                 // NO RecordError HERE. The object form reports the OOM to the application
                 // through the live GLContext; on this arm there is no application on this side
-                // of the wire to report it to, and MGB_CTX->RecordError is itself one of the
+                // of the wire to report it to, and gPipeInputs->RecordError is itself one of the
                 // BARRIER-PULLED rows (FieldOwnership.def) that rule F forbids an unbarriered
                 // apply to touch. The client raises its own errors from its own validator.
             }

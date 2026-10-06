@@ -5262,7 +5262,7 @@ TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotT
     // THE FRONTEND, MOVED ON: every enabled attribute now points at C, and nothing was
     // re-emitted. A walk that read GetAllAttributes() answers {C}. The VAO is BOUND IN A REAL
     // CONTEXT rather than free-standing, because that is the only shape in which the revert
-    // this case exists to catch - MGB_CTX->GetBoundVertexArray()->GetAllAttributes() - has
+    // this case exists to catch - gPipeInputs->GetBoundVertexArray()->GetAllAttributes() - has
     // anything to read at all; a free-standing object would make the revert crash instead of
     // disagree, which is a red for the wrong reason.
     SharedPtr<GLContext> previousContext = Move(MG_State::pGLContext);

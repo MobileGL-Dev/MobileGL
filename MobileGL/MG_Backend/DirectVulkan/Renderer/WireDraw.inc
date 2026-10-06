@@ -225,7 +225,7 @@
 
         ProgramFactory::CompileOptionFlags flags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
-        if (m_transformFeedbackFeatureEnabled && MGB_CTX->IsTransformFeedbackActive() &&
+        if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs.IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0)
             flags |= ProgramFactory::CompileOptionBit::XfbCapture;
         const auto* programObject = &m_programFactory->GetOrCreateProgram(program, flags);
@@ -399,7 +399,7 @@
                 return false;
             }
             indexType = width == 4 ? VK_INDEX_TYPE_UINT32 : width == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
-            const auto& restart = MGB_CTX->GetRenderStateParameters();
+            const auto& restart = MG_Pipe::gPipeInputs.GetRenderStateParameters();
             const Uint32 fixed = MG_Util::FixedRestartIndexForGLType(indices->indexType);
             const Bool replaceRestart = restart.PrimitiveRestartEnabled && !restart.PrimitiveRestartFixedIndexEnabled &&
                 restart.PrimitiveRestartIndex < fixed;
@@ -485,7 +485,7 @@
         Uint64 passHash = 0;
         WireDrawPassKey passKey{};
         passKey.isDefault = fbo->IsDefault;
-        passKey.framebufferSrgb = MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+        passKey.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
         if (fbo->IsDefault) {
             passKey.swapchain = m_swapchainObject.GetHandle();
             // A drawing pass on the default framebuffer is what makes the freshly acquired
@@ -500,7 +500,7 @@
             m_textureManager->FlushPendingUploads();
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
                 image.format = ResolveSrgbAttachmentWriteFormat(image.format,
-                    MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+                    MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
             const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
                 VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
             // Already in its attachment layout: its barrier (which closes any open pass) waits until
@@ -632,7 +632,7 @@
             VkFormat format = VK_FORMAT_UNDEFINED;
             const void* data = nullptr;
             VkDeviceSize size = 0;
-            if (!TryGetCurrentVertexAttributeUploadPayload(MGB_CTX->GetCurrentVertexAttribute(location),
+            if (!TryGetCurrentVertexAttributeUploadPayload(MG_Pipe::gPipeInputs.GetCurrentVertexAttribute(location),
                     programObj.vertexInputTypes[location], format, data, size)) {
                 MGL_WIRE_DECLINE_AT(CurrentAttributePayload, "a disabled array's current attribute value has no upload payload");
                 return false;

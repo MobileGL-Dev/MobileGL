@@ -15,7 +15,7 @@ namespace MobileGL::MG_Test {
     //
     // A unit test that constructs a GLContext by hand and then calls a BACKEND helper
     // directly enters through no GL entry point, so no MGP_FILL ever fires (P1 brief D7) and
-    // in a push build the PipeInputs block the helper's MGB_CTX reads is empty and unstamped:
+    // in a push build the PipeInputs block the helper's gPipeInputs reads is empty and unstamped:
     // its first accessor read is Fatal{UnmigratedPipeInput, "Field@<none>"}. The test is
     // right and the poison is right - what was missing is the verb, and this object is how a
     // test states it. Constructing it runs the real filler for `verb`, exactly the call
@@ -30,7 +30,7 @@ namespace MobileGL::MG_Test {
     //     scope ends. That matters when the suite runs as one process (a developer running
     //     the test binary directly, rather than one ctest entry per case): without it, one
     //     case's declaration would cover a later case that forgot to make one;
-    //   - it is a no-op in the pull build, where MGB_CTX is the live context and there is
+    //   - it is a no-op in the pull build, where gPipeInputs is the live context and there is
     //     nothing to fill, so the pull build stays byte-identical.
     //
     // Place it the way MGP_FILL is placed in production (P1 brief D7): immediately BEFORE the

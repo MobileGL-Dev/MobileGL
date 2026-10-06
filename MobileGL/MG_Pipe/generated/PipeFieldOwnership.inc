@@ -218,7 +218,7 @@ struct MGPipeFieldArgumentOwnership {
 inline constexpr SizeT kMGPipeFieldArgumentOwnershipCount = 1;
 inline constexpr MGPipeFieldArgumentOwnership
     kMGPipeFieldArgumentOwnership[kMGPipeFieldArgumentOwnershipCount] = {
-    {MGPipeInputField::GetPixelStoreParameters, 1u, MGPipeFieldOwnership::kFatal}, // the unpack half has no carrier AND no backend reader; all six MGB_CTX sites pass false
+    {MGPipeInputField::GetPixelStoreParameters, 1u, MGPipeFieldOwnership::kFatal}, // the unpack half has no carrier AND no backend reader; all six gPipeInputs sites pass false
 };
 
 constexpr MGPipeFieldOwnership MGPipeFieldOwnershipOf(MGPipeInputField field) {

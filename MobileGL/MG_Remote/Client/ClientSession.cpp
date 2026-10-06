@@ -2308,7 +2308,7 @@ namespace MobileGL::MG_Remote::Client {
         //
         // WITH ONE NAMED EXCEPTION, FOUND BY ITS OWN FATAL (P5d round 3): generate_mipmap is
         // catalogued kCtxObject, but its sink is the backend's GenerateMipmap, which reads
-        // MGB_CTX->GetActiveTextureUnit() and the unit's binding slot - residual inputs whose
+        // gPipeInputs->GetActiveTextureUnit() and the unit's binding slot - residual inputs whose
         // freshness is the CLIENT's verb serial. Published without a wait, the record sits in
         // the ring while this thread runs the next verb's MGPipeValidateForVerb, which moves
         // that serial and withdraws the server stamp; the apply thread then reads the unit
@@ -2317,7 +2317,7 @@ namespace MobileGL::MG_Remote::Client {
         // spin no longer read the clock). So it waits, exactly as the four stamping verbs
         // do. The rule this encodes: a record may skip its wait only if its apply reads
         // nothing the residual fill writes - the value carried in the payload is the whole
-        // input. No other kCtxObject row has a backend body behind it that reads MGB_CTX
+        // input. No other kCtxObject row has a backend body behind it that reads gPipeInputs
         // (set_texture_params, resource_subdata, resource_readback and get_texture_image
         // own reply slots and wait anyway; the resource_* transfers and object_death resolve
         // by handle).

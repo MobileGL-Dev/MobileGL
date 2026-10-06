@@ -13,7 +13,7 @@
 // session per process was a property of every file that named them. This slice gives each served
 // session its own {ServerSession, ServerLoop, PipeInputs} triple, held here, and resolves the two
 // singleton accessors through the CALLING THREAD's session - which is what makes the ~900 sites
-// that spell gPipeInputs, MGB_CTX, ServerSession::Active() or ServerLoopInstance() find the right
+// that spell gPipeInputs, gPipeInputs, ServerSession::Active() or ServerLoopInstance() find the right
 // one without one line of any of them moving.
 //
 // WHO IS A SESSION THREAD. Two threads per session, both created by the session itself:
@@ -78,7 +78,7 @@ namespace MobileGL::MG_Remote::Server {
         void InstallSessionRuntimeHooks();
 
         // THE SCOPE. Makes `runtime` the calling thread's session for as long as it lives: the
-        // session/loop the singleton accessors answer with, the PipeInputs block MGB_CTX reads,
+        // session/loop the singleton accessors answer with, the PipeInputs block gPipeInputs reads,
         // this session's segment resolver and this session's latch domain. Restores what was there
         // before on the way out (two nested scopes are not a shape anything uses, but a thread that
         // served one session and is then reused must not keep answering with the dead one).

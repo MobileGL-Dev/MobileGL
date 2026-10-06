@@ -32,7 +32,7 @@ from the catalogue (they all consume the same .def).
 Both modes refuse a catalogue whose call payload has no field list in PipeFields.def: a
 payload the G4 comparator cannot see is a payload MOBILEGL_PIPE_VERIFY is blind to. Both
 also refuse a field list that does not name every data member of its struct (or names one
-that is not a member), and a backend accessor read through MGB_CTX-> / pGLContext-> that
+that is not a member), and a backend accessor read through gPipeInputs-> / pGLContext-> that
 has no Coverage.def row (P1 brief D8, D12).
 """
 
@@ -463,10 +463,10 @@ def check_field_lists_cover_struct_members(field_lists, payloads, header_texts=N
         sys.exit("PipeFields.def does not cover its structs:\n  " + "\n  ".join(problems))
 
 
-ACCESSOR_READ_RE = re.compile(r"\b(?:MGB_CTX|pGLContext)\s*->\s*(\w+)")
+ACCESSOR_READ_RE = re.compile(r"\b(?:gPipeInputs\.|pGLContext)\s*->\s*(\w+)")
 
 
-# The scanner's NAMED exemptions: accessors a backend reads through MGB_CTX-> / pGLContext->
+# The scanner's NAMED exemptions: accessors a backend reads through gPipeInputs-> / pGLContext->
 # that are NOT PipeInputs fields and never will be, each with the reason written down. A name
 # here is a DEBT ENTRY, not a silence: it exists so the gate can tell "scoped, named, phased"
 # from "forgot the row".
@@ -486,7 +486,7 @@ SCAN_EXEMPT_ACCESSORS = {
 
 
 def scan_live_accessors(accessors, backend_dir=None, verbose=True):
-    """Every accessor a backend reads through MGB_CTX-> or pGLContext-> (comments and
+    """Every accessor a backend reads through gPipeInputs-> or pGLContext-> (comments and
     strings masked) must have a Coverage.def row - a read without a row is a PipeInputs
     field that does not exist. Rows no backend reads are printed, not refused (the dead
     GetBoundTransformFeedbackName row is deliberate). Returns the set of names read."""

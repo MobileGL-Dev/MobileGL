@@ -13,7 +13,7 @@
 #include "VkTextureManager.h"
 
 #include "MG_State/GLState/Core.h"
-#include <MG_Pipe/PipeInputsSwitch.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 
@@ -55,7 +55,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (payload.colorEncoding != ClearColorEncoding::Float) return;
         // With GL_FRAMEBUFFER_SRGB enabled GL performs the encoding itself, so the driver doing it
         // is exactly right and there is nothing to undo.
-        if (MGB_CTX->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
         if (ResolveSrgbAttachmentWriteFormat(destinationFormat, false) == destinationFormat) return;
 
         // sRGB -> linear (GL 4.6 core 8.24), applied to the colour channels only: alpha is stored
