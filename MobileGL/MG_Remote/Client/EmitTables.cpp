@@ -32,7 +32,7 @@
 
 #include "ClientSession.h"
 #include "GpuWritePending.h"
-#include "PersistentMapTracker.h"
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 
 #include "../Server/ServerLoop.h"
 #include "../Server/PipeApplier.h"
@@ -237,7 +237,7 @@ namespace MobileGL::MG_Remote::Client {
         // push still has to run - a coherent map is read by the GPU on any of them - but there
         // is no shader that could write one, so no mark walk.
         void BeforeReadOnlyVerb() {
-            PushPersistentMapsBeforeVerb();
+            MG_Record::PushPersistentMapsBeforeVerb();
             MG_Pipe::MGPipeDrainDeferredDestroys();
         }
 
@@ -717,7 +717,7 @@ namespace MobileGL::MG_Remote::Client {
                             const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
             VerbChannel session = ChannelFor(slot);
-            PersistentMapTracker::Instance().PushDrawConsumers();
+            MG_Record::PersistentMapTracker::Instance().PushDrawConsumers();
             MG_Pipe::MGPipeDrainDeferredDestroys();
             // Snapshot before marking THIS draw's potential GPU writes: resolving
             // a GPU-produced EBO here must not clear its pending mark for this draw.
@@ -1491,7 +1491,7 @@ namespace MobileGL::MG_Remote::Client {
         // slot would inherit a call site that was already correct.
         void EmitDispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
             VerbChannel session = ChannelFor("DispatchCompute");
-            PersistentMapTracker::Instance().PushDrawConsumers();
+            MG_Record::PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
             MG_Pipe::MGPGridInfo record{};
@@ -1510,7 +1510,7 @@ namespace MobileGL::MG_Remote::Client {
 
         void EmitDispatchComputeIndirect(GLintptr indirect) {
             VerbChannel session = ChannelFor("DispatchComputeIndirect");
-            PersistentMapTracker::Instance().PushDrawConsumers();
+            MG_Record::PersistentMapTracker::Instance().PushDrawConsumers();
             MarkGpuWritesForDispatch();
 
             MG_Pipe::MGPGridInfo record{};

@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Remote/Client/PersistentMapTracker.cpp
+// MobileGL - MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -7,9 +7,8 @@
 // End of Source File Header
 
 #include "PersistentMapTracker.h"
-#include "ClientSession.h"
-#include <MG_Remote/FatalFunnel.h>
-#include <MG_Remote/Transport/AdoptTier.h>
+#include <MG_Pipe/PipeSessionFail.h>
+#include <MG_Pipe/PipeClientSeam.h>
 
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
@@ -17,7 +16,7 @@
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Debug/Log.h>
-#include <MG_Remote/Server/ServerLoop.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 
 #include <xxhash.h>
 
@@ -30,7 +29,7 @@
 #include <ucontext.h>
 #include <unistd.h>
 
-namespace MobileGL::MG_Remote::Client {
+namespace MobileGL::MG_Record {
 
     using MG_State::GLState::BufferObject;
 
@@ -714,7 +713,9 @@ namespace MobileGL::MG_Remote::Client {
     // guard, two acquire loads and an out-of-line thread::id comparison. It stays out of line
     // here for WireTables.cpp's reason beside RunsAsTheServerRole: inlining it would put a
     // server header inside PersistentMapTracker.h, which MG_State's BufferObject.cpp includes.
-    Bool PersistentMapTracker::OnServerRole() { return Server::ServerLoop::OnApplyThread(); }
+    // P13 W5: the apply-thread question through MG_Pipe's role probe (MG_Remote installs it; a library
+    // without a transport has no server role, so it is false there).
+    Bool PersistentMapTracker::OnServerRole() { return MG_Pipe::MGPipeServerArm(); }
 
     // SyncPersistentMappedRange's early-out chain (BufferObject.cpp:341-353), in its order,
     // read as a membership test. Every line here has a line there; if one of them moves, the
@@ -757,7 +758,7 @@ namespace MobileGL::MG_Remote::Client {
         // A buffer mapped on a LOST context (a thread still on one, or a session that is lost)
         // never becomes a member: the push before every verb would carry its bytes to whichever
         // session is current, and a fresh one never created the buffer.
-        if (IsLivePersistentMap(buffer) && !ClientSession::DeviceLost()) {
+        if (IsLivePersistentMap(buffer) && !MG_Pipe::MGPipeClientDeviceLost()) {
             const auto range = buffer.GetMappedRange();
             // The mprotect arm registers beside the hash arm: tracked buffers are pushed
             // from the fault bitmap, everything else keeps the content scan. A failed
@@ -862,7 +863,7 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushBlocksFor(BufferObject& buffer) {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
         }
         PushBlocksForChecked(buffer);
@@ -1084,7 +1085,7 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushAllMembers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
         }
         if (m_livePersistentMaps.empty()) return;
@@ -1101,7 +1102,7 @@ namespace MobileGL::MG_Remote::Client {
     void PersistentMapTracker::PushDrawConsumers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
                     "producer belongs to the client; the server consumes transported bytes");
         }
         if (m_livePersistentMaps.empty()) return;
@@ -1258,38 +1259,5 @@ namespace MobileGL::MG_Remote::Client {
         PersistentMapTracker::Instance().PushAllMembers();
     }
 
-    Bool AdoptTierIsEmulate() {
-        const Uint32 tier = MG_Config::Ipc.AdoptTier;
-        if (tier == 2) return true;
-        // P11 B2: UNSET (T0 by default) reaching the T2 path - settled or not - is T2, quietly: a
-        // session-free caller (a unit case, a harness) runs the P5 default it always ran, and a
-        // settled session already counted its fallback at the handshake or its first map_persistent.
-        if (tier == MG_Config::kAdoptTierUnset) return true;
-        // P11 A1 (CONTRACT-P11 §1): THE VERDICT IS THE HANDSHAKE'S, NOT THIS CALL'S. Both roles
-        // settle the tier from the knob and the data plane before the first record
-        // (Transport/AdoptTier.cpp): a stream refuses T0/T1 by name and runs T2, a client over
-        // shared segments dies by name there, and a server over shared segments serves the T2
-        // its client settled. So a settled session reaching this with 0/1 is a T2 session and
-        // says nothing more - the one line was the handshake's.
-        if (tier <= 1 && Transport::AdoptTierSettledAtHandshake()) return true;
-        // A map_persistent NO handshake settled (a session-free caller) is still a NAMED
-        // refusal rather than a silent T2: falling back would make `MOBILEGL_IPC_ADOPT_TIER=0`
-        // look like a working T0 run and silently produce pmap bytes it must not produce.
-        // Anything above 2 is not a tier at all.
-        // `dl` (CONTRACT-P6 5.2): the family word every death here carries.
-        if (tier <= 1) {
-            SessionFail(MGFatalFamily::UnimplementedAdoptTier,
-                    "MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
-                    "reached a map_persistent that no handshake settled; T0 and T1 are not "
-                    "implemented and only T2 (emulate) runs.",
-                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
-        } else {
-            SessionFail(MGFatalFamily::UnimplementedAdoptTier,
-                    "MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
-                    "not an adoption tier; the only values are 0 and 1 (P11) and 2 (emulate, the "
-                    "P5 default).",
-                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
-        }
-    }
 
-} // namespace MobileGL::MG_Remote::Client
+} // namespace MobileGL::MG_Record

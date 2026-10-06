@@ -638,7 +638,7 @@ TEST(RemoteClientControls, PersistentMapProducerRefusesTheApplyThread) {
     const auto child = RunInChild([] {
         StartControlSession();
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            PersistentMapTracker::Instance().PushAllMembers();
+            MG_Record::PersistentMapTracker::Instance().PushAllMembers();
             return MOBILEGL_OK;
         }, nullptr);
     });

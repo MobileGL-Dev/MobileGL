@@ -11,6 +11,7 @@
 
 #include "ClientSession.h"
 #include <MG_Remote/FatalFunnel.h>
+#include <MG_Pipe/PipeClientSeam.h>
 #include <MG_Remote/Handshake.h>
 #include <MG_Remote/Transport/LinkMetrics.h>
 
@@ -24,7 +25,7 @@
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
 #include "EmitTables.h"
-#include "PersistentMapTracker.h"
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include "ServerProbe.h"
 
 #include <MGGitHash.h>
@@ -646,6 +647,16 @@ namespace MobileGL::MG_Remote::Client {
         return context != nullptr && context->IsFromEndedWireSession();
     }
 
+    // P13 W5: the record arm's client half (the persistent-map tracker) asks this through MG_Pipe's
+    // client seam, which has no MG_Remote to name. Registered at static init: the tracker may ask
+    // before any session starts, and must get this answer, not the seam's monolith default.
+    namespace {
+        [[maybe_unused]] const bool g_deviceLostProbeRegistered = [] {
+            MG_Pipe::MGPipeSetClientDeviceLostProbe(&ClientSession::DeviceLost);
+            return true;
+        }();
+    } // namespace
+
     String ClientSession::LastLossReason() {
         const std::lock_guard<std::mutex> lock(LossReasonMutex());
         return LossReason();
@@ -757,7 +768,7 @@ namespace MobileGL::MG_Remote::Client {
                 "the reset serial, persistent maps) start over",
                 static_cast<unsigned long long>(SessionsStarted()));
         ForgetWireTablesOfEndedSession();
-        PersistentMapTracker::Instance().ForgetEndedSession();
+        MG_Record::PersistentMapTracker::Instance().ForgetEndedSession();
         MG_Pipe::MGPipeForgetEndedSession();
     }
 

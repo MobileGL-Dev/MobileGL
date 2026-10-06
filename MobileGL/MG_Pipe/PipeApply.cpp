@@ -36,11 +36,13 @@
 // DEFINED below, so MG_Backend names no MG_Remote symbol of its own to reach Session::Fail. P13 W5:
 // in every build, for the record arm's fail / latch half.
 #include <MG_Pipe/PipeSessionFail.h>
+#include <MG_Pipe/PipeClientSeam.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 // R-6's tier gate. One spelling, asked at the one place the decline is decided. Outside the
 // MOBILEGL_PIPE_VERIFY block above on purpose: the tier is a property of the BUILD, not of the
 // comparator, and a split build without the comparator still declines every acquisition.
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
+#include <MG_Remote/Client/AdoptTierChoice.h>
 // P5c (ct), CONTRACT-P5C.md §6 layer 2: MGPipeApplierReset's role guard asks
 // ServerLoop::OnApplyThread() - the one predicate that tells the GL thread from the thread
 // that owns g_applier under an active transport - and ClientSession::Active(), which is what
@@ -181,6 +183,14 @@ namespace MobileGL::MG_Pipe {
     MGPipeRecordFailHook MGPipeRecordFailHookInstalled() { return g_recordFailHook; }
     MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() { return g_recordLatchHook; }
     MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() { return g_recordLatchedHook; }
+
+    // P13 W5: the client session's device-loss answer (PipeClientSeam.h). Constant-initialized for
+    // the same static-init reason as the hooks above.
+    namespace {
+        constinit MGPipeClientDeviceLostProbe g_clientDeviceLostProbe = nullptr;
+    } // namespace
+    void MGPipeSetClientDeviceLostProbe(MGPipeClientDeviceLostProbe probe) { g_clientDeviceLostProbe = probe; }
+    Bool MGPipeClientDeviceLost() { return g_clientDeviceLostProbe != nullptr && g_clientDeviceLostProbe(); }
 
 #if MOBILEGL_BUILD_RECORD_ARM
     // ----------------------------------------------------------------------------

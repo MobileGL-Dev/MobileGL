@@ -35,7 +35,8 @@
 #include <MG_Pipe/PipeApply.h>
 // R-6's tier gate, and the ONE spelling of it (b1's file, unchanged by this package): the
 // MapPersistent arm below asks it the same question MGPipeApplyMapPersistent asks.
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
+#include <MG_Remote/Client/AdoptTierChoice.h>
 #include <MG_Remote/Protocol/generated/protocol_generated.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #include <MG_Util/Debug/Log.h>

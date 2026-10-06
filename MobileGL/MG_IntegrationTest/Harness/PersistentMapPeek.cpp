@@ -23,7 +23,7 @@
 // build that never compiles MG_Remote, so keying on it would turn a healthy pull build into a
 // link error.
 #if defined(MGITEST_PERSISTENT_MAP_PEEK_LIVE) && defined(MGITEST_PERSISTENT_MAP_TRACKER)
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #define MGITEST_PERSISTENT_MAP_TRACKER_LIVE 1
 #endif
 
@@ -94,7 +94,7 @@ namespace MGITest {
         MobileGL::MG_State::GLState::BufferObject* buffer = FrontendBuffer(bufferName);
         if (buffer == nullptr) return false;
         *outLive = static_cast<bool>(
-            MobileGL::MG_Remote::Client::PersistentMapTracker::IsLivePersistentMap(*buffer));
+            MobileGL::MG_Record::PersistentMapTracker::IsLivePersistentMap(*buffer));
         return true;
 #else
         (void)bufferName;

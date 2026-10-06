@@ -90,7 +90,7 @@ namespace MobileGL::MG_Remote::Server {
     // ---------------------------------------------------------------------------------
     //
     // OnApplyThread() is the predicate under EVERY role guard on both hot paths -
-    // RefuseLegacyBufferArmFromApplyThread in BufferObject's accessors, PersistentMapTracker::
+    // RefuseLegacyBufferArmFromApplyThread in BufferObject's accessors, MG_Record::PersistentMapTracker::
     // OnServerRole, ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt, RunsAsTheServerRole,
     // MGPipeRefuseAllocatorFromApplyThread, RefuseLegacyTextureArmFromApplyThread. simpleperf at
     // head 56a77348 (FCL + Minecraft, VD12, Adreno 830) measured it at 2.66% self / 3.64%

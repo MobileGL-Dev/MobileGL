@@ -13,11 +13,13 @@
 #include <atomic>
 #include <MG_Pipe/PipeMutation.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
-// The client role's persistent-map tracker. MG_State reaching into MG_Remote/Client is the
-// layering ARCHITECTURE.md:575 names - the CLIENT role IS MG_State plus MG_Impl - and the
-// edge exists only in a build that has the transport at all.
+// MG_State reaching into MG_Remote/Client is the layering ARCHITECTURE.md:575 names - the CLIENT
+// role IS MG_State plus MG_Impl - and the edge exists only in a build that has the transport at all.
 #include <MG_Remote/Client/GpuWritePending.h>
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#endif
+#if MOBILEGL_BUILD_RECORD_ARM
+// The client role's persistent-map tracker (P13 W5: the record arm's, so beside this file).
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstdlib>
@@ -60,8 +62,8 @@ namespace MobileGL::MG_State::GLState {
         // of MG_Config::Transport and OnServerRole() is now one relaxed load of the apply
         // thread's key (ServerLoop.h), so the monolith answer costs a load each.
         void RefuseLegacyBufferArmFromApplyThread(const char* accessor) {
-            if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
-            if (!MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+            if (!MG_Record::PersistentMapTracker::PushIsArmed()) return;
+            if (!MG_Record::PersistentMapTracker::OnServerRole()) return;
             FatalLegacyBufferArmFromApplyThread(accessor);
         }
 #endif
@@ -97,7 +99,7 @@ namespace MobileGL::MG_State::GLState {
         // tracker is a leaked singleton whose entries are raw pointers, and an entry that
         // outlives its object is the one failure this set must not have. Forget is a no-op
         // for a buffer that was never a member.
-        MG_Remote::Client::PersistentMapTracker::Instance().Forget(*this);
+        MG_Record::PersistentMapTracker::Instance().Forget(*this);
 #endif
         // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalogue
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
@@ -419,11 +421,11 @@ namespace MobileGL::MG_State::GLState {
         // overwrite the server shadow through the monolith adapter without crossing the wire -
         // and "do nothing" is spelled Fatal, not `return`, because a server-side caller here
         // is a role violation and not a shape the design tolerates.
-        if (MG_Remote::Client::PersistentMapTracker::PushIsArmed()) {
-            if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) {
+        if (MG_Record::PersistentMapTracker::PushIsArmed()) {
+            if (MG_Record::PersistentMapTracker::OnServerRole()) {
                 FatalLegacyBufferArmFromApplyThread("SyncPersistentMappedRange");
             }
-            MG_Remote::Client::PersistentMapTracker::Instance().PushBlocksFor(*this);
+            MG_Record::PersistentMapTracker::Instance().PushBlocksFor(*this);
             return;
         }
 #endif
@@ -447,7 +449,7 @@ namespace MobileGL::MG_State::GLState {
         // push does, and a second route to the same record is a second thing to keep in step.
         if (size == 0) return;
         // Assert ownership at the final producer entry too, before serial/aggregate updates.
-        if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) {
+        if (MG_Record::PersistentMapTracker::OnServerRole()) {
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"PushMappedSpanBlock\"} - the server role (the apply "
                     "thread) reached the CLIENT persistent-map producer for buffer lifetime %llu "
                     "[%zu, +%zu). Under an active transport the server's staged copy is the draw's "
@@ -474,10 +476,10 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::NotePersistentMapStateChanged() {
-        if (!MG_Remote::Client::PersistentMapTracker::PushIsArmed()) return;
-        MG_Remote::Client::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
+        if (!MG_Record::PersistentMapTracker::PushIsArmed()) return;
+        MG_Record::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
         // Teardown must retire membership, but only the client publishes live-host-write state.
-        if (MG_Remote::Client::PersistentMapTracker::OnServerRole()) return;
+        if (MG_Record::PersistentMapTracker::OnServerRole()) return;
 
         // THE LIVE-HOST-WRITES BIT (ARCHITECTURE.md 12, CONTRACT-P5.md section 3). A live
         // WRITE map - persistent or not - mutates the shadow with no call, no serial and no
@@ -511,7 +513,7 @@ namespace MobileGL::MG_State::GLState {
         // carries are real, current and the cheapest honest ones there are. A zero-length
         // record would have been the alternative and it is illegal by contract rule A.
         if (m_size == 0) return;
-        const Uint64 blockBytes = MG_Remote::Client::PersistentMapTracker::BlockBytes();
+        const Uint64 blockBytes = MG_Record::PersistentMapTracker::BlockBytes();
         // MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 TURNS THE WHOLE MECHANISM OFF, STATE RECORD
         // INCLUDED (E3(a)). An earlier cut skipped the blocks and still shipped a whole buffer
         // here, which meant an unmap delivered the bytes the control exists to withhold - and
@@ -930,7 +932,7 @@ namespace MobileGL::MG_State::GLState {
                     // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
                     // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and
                     // an untrack after that would mprotect pages the buffer no longer owns.
-                    MG_Remote::Client::PersistentMapTracker::Instance().Forget(*this);
+                    MG_Record::PersistentMapTracker::Instance().Forget(*this);
 #endif
                     m_resource.AdoptPersistentMap(pushedBase);
 #if MOBILEGL_BUILD_RECORD_ARM

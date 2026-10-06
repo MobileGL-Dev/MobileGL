@@ -1964,14 +1964,14 @@ endif()
 # healthy pull build into a link error, which is why this decision is made here.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Remote/Client" "IsLivePersistentMap")
+        "${MGL_ITEST_ROOT}/MobileGL/MG_State/GLState/BufferState" "IsLivePersistentMap")
     if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
         message(STATUS "Integration tests: package b1's persistent-map tracker is present "
                        "(${MGL_ITEST_PERSISTENT_MAP_TRACKER}) - PersistentCoherentMapScenario's "
                        "membership assertion is live")
         target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_PERSISTENT_MAP_TRACKER=1)
     else()
-        message(STATUS "Integration tests: no source under MobileGL/MG_Remote/Client names "
+        message(STATUS "Integration tests: no source under MobileGL/MG_State/GLState/BufferState names "
                        "IsLivePersistentMap - package b1's tracker has not landed, so "
                        "PersistentCoherentMapScenario's membership assertion SKIPS")
     endif()

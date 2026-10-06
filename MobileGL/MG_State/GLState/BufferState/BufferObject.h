@@ -200,7 +200,7 @@ namespace MobileGL {
             // the private NotifySubData - the same serial, the same defined-content flag, the
             // same record - so the split arm and the monolith arm differ in HOW the span is
             // cut and in nothing else. Called only by
-            // MG_Remote::Client::PersistentMapTracker, which owns the cutting.
+            // MG_Record::PersistentMapTracker, which owns the cutting.
             void PushMappedSpanBlock(SizeT offset, SizeT size);
 
             // Called on every event that can move the tracker's membership predicate: map,

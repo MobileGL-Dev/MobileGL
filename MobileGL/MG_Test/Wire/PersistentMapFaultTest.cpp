@@ -45,7 +45,7 @@
 // Neither revert can be hidden by the other, which is the property R-16 asks for.
 
 #include <Config.h>
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include <MG_State/GLState/BufferState/PipeResource.h>
 #include <MG_Util/Debug/Log.h>
 
@@ -68,7 +68,7 @@ namespace {
     using MobileGL::SizeT;
     using MobileGL::Uint64;
     using MobileGL::Uint8;
-    using MobileGL::MG_Remote::Client::PersistentMapTracker;
+    using MobileGL::MG_Record::PersistentMapTracker;
     using MobileGL::MG_State::GLState::MapAlignedData;
     using MobileGL::MG_State::GLState::ShadowAllocationBytesFor;
 

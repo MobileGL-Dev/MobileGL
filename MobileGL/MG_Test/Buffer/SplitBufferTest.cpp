@@ -27,7 +27,8 @@
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Client/GpuWritePending.h>
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
+#include <MG_Remote/Client/AdoptTierChoice.h>
 #include <MG_Remote/Transport/AdoptTier.h>
 #endif
 
@@ -38,7 +39,7 @@ namespace {
 #if MOBILEGL_BUILD_DISAGGREGATED
     using MG_State::GLState::BufferObject;
     using MG_Remote::Client::GpuWriteProducer;
-    using MG_Remote::Client::PersistentMapTracker;
+    using MG_Record::PersistentMapTracker;
 
     // A backend that MINTS a persistent mapping, for the one case that needs the adopted arm
     // (TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo). Only AcquirePersistentMap is
@@ -390,7 +391,7 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
 
     // ...and the consequence, which is the one that would actually corrupt something.
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush) - before,
               static_cast<Uint64>(kSize))
         << "the declined twin's 4096 bytes and nothing else: the adopted buffer must contribute no "
@@ -414,7 +415,7 @@ TEST_F(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) {
     ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
 
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
 
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 4u)
         << "a 256 KiB span at a 64 KiB block size is four records, not one";
@@ -433,7 +434,7 @@ TEST_F(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) {
     auto buffer = MakeBuffer(22u, kSize);
     buffer->AcquireMemoryRange(Range1D{0, kSize},
                                BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 2u);
     EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(kSize));
     buffer->ReleaseMemory(false);
@@ -482,7 +483,7 @@ TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited)
         << "the rising-edge state record went out with the push disabled";
 
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 0u);
     EXPECT_EQ(MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush), before)
         << "MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 must ship nothing, so that "
@@ -621,10 +622,10 @@ TEST_F(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) {
 
     // Fresh state ships everything once, then re-arms; with nothing written a second push
     // ships nothing (and, with no edges, hashes nothing).
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 1u);
     EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(kSize));
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 1u);
 
     // The one page IS protected: a write through the application's pointer faults into the
@@ -634,7 +635,7 @@ TEST_F(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) {
     mapped[kSize - 1] = 0x5A;
     EXPECT_GT(PersistentMapTracker::FaultEpochForTest(), epochBefore)
         << "the sub-page map's page was not protected: the write did not fault";
-    MG_Remote::Client::PushPersistentMapsBeforeVerb();
+    MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 2u);
     EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(2 * kSize))
         << "the push is clamped to [begin, end) even though the protected page is wider";

@@ -50,7 +50,7 @@ namespace MGITest {
     // has to be made before the compiler sees it rather than by __has_include.
     bool PersistentMapTrackerAvailable();
 
-    // MG_Remote::Client::PersistentMapTracker::IsLivePersistentMap() for this buffer - b1-v1.md
+    // MG_Record::PersistentMapTracker::IsLivePersistentMap() for this buffer - b1-v1.md
     // 4.1 item 2. The membership set is meant to be exactly the early-out chain of
     // SyncPersistentMappedRange; asking it here is what makes a drift between the two fail in a
     // named test rather than silently stop the push.

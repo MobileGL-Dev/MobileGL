@@ -656,7 +656,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # MarkGpuWritten producers are on the server's side of the line, and the
         # block-granularity persistent-map push that tier T2 makes mandatory.
         MobileGL/MG_Remote/Client/GpuWritePending.cpp
-        MobileGL/MG_Remote/Client/PersistentMapTracker.cpp
+        # P13 W5: the adoption tier's verdict (the tracker itself moved to the record arm below).
+        MobileGL/MG_Remote/Client/AdoptTierChoice.cpp
         MobileGL/MG_Remote/Server/ServerSession.cpp
         MobileGL/MG_Remote/Server/PipeApplier.cpp
         MobileGL/MG_Remote/Server/ServerLoop.cpp
@@ -694,6 +695,8 @@ if (MOBILEGL_BUILD_RECORD_ARM)
         # arms and the probe that measures the first against the second, shared by the
         # renderer's bring-up and the Vulkan POST.
         MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
+        # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
+        MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
     )
 endif()
 

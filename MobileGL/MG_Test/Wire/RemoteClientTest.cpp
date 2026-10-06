@@ -45,7 +45,7 @@
 #include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/WireTables.h>
 #include <MG_Remote/Client/ClientSession.h>
-#include <MG_Remote/Client/PersistentMapTracker.h>
+#include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include <MG_Remote/Client/BackendObject_Remote.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
