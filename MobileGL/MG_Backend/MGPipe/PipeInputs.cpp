@@ -47,7 +47,7 @@ namespace MobileGL::MG_Pipe {
         return std::nullopt;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     // ================================================================================
     // P5: the server's verb stamp, the residual-pull counter, and the four-way read verdict
     // ================================================================================
@@ -348,12 +348,15 @@ namespace MobileGL::MG_Pipe {
     // MGPipeRoleSplitRehearsalActive is deliberately NOT latched: it is two global loads, asked once per
     // verb on the fill side and once per verb boundary on the stamp side, and a latch is a
     // second thing a test that flips the knob mid-process would have to know about.
+#if MOBILEGL_BUILD_DISAGGREGATED
+    // P13 W5: the role split, the two blocks and the context-live flag are the transport's; the
+    // stamp and the read verdicts around them are the record arm's (PipeInputs.h's dual block
+    // gives a build without a transport the one-block answers inline).
     Bool MGPipeRoleSplitRehearsalActive() {
         return MG_Config::Ipc.RoleSplitState &&
                MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
     // ---- D1c's predicates (CONTRACT-P6 3.2) -------------------------------------------------
     namespace {
         // Set once by ServerMain, before any GL work. A spawn server is the server for the whole
@@ -389,7 +392,6 @@ namespace MobileGL::MG_Pipe {
         return MGPipeRoleSplitRehearsalActive() ||
                MG_Config::Transport == MG_Config::TransportMode::Spawn;
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
 
     PipeInputs& MGPipeClientInputs() {
         return MGPipeRoleSplitRehearsalActive() ? gPipeInputsClientBlock : gPipeInputs;
@@ -407,7 +409,6 @@ namespace MobileGL::MG_Pipe {
 
     Bool MGPipeServerContextIsLive() { return MGPipeStampAccess::ServerContextLive(gPipeInputs); }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
     namespace { const void* g_serverOwnedWindow = nullptr; }
 
     void MGPipeServerSetOwnedWindow(const void* window) { g_serverOwnedWindow = window; }
@@ -430,7 +431,6 @@ namespace MobileGL::MG_Pipe {
         if (height != nullptr) *height = g_serverOwnedWindowHeight;
         return true;
     }
-#endif
 
     void MGPipeServerBlockNoteIdentity() {
         // D10: THE WIDER PREDICATE, and the narrow one was a latent crash rather than a missing
@@ -455,6 +455,7 @@ namespace MobileGL::MG_Pipe {
                                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
                                            (serial << 1) | Uint64{1})));
     }
+#endif // MOBILEGL_BUILD_DISAGGREGATED
 
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
@@ -509,7 +510,9 @@ namespace MobileGL::MG_Pipe {
         // "SetIdentity moves to ApplyOne" - the stamp is the per-verb half of ApplyOne, and
         // refreshing here rather than once at Attach keeps the token in step with
         // MGPipeApplierContextSerial across a context switch). A no-op with the rehearsal off.
+#if MOBILEGL_BUILD_DISAGGREGATED
         MGPipeServerBlockNoteIdentity();
+#endif
     }
 
     void MGPipeServerClearVerbBoundary() { MGPipeStampAccess::SetServerStamped(gPipeInputs, false); }
@@ -594,7 +597,7 @@ namespace MobileGL::MG_Pipe {
         if (ownership == MGPipeFieldOwnership::kBarrierPulled)
             CountBarrierPull(field, gPipeInputs.CurrentVerb());
     }
-#endif // MOBILEGL_BUILD_DISAGGREGATED
+#endif // MOBILEGL_BUILD_RECORD_ARM
 
 #if MOBILEGL_PIPE_VERIFY
     namespace {
