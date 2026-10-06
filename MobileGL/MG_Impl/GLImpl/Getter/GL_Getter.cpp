@@ -1332,7 +1332,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 if (MG_Config::Transport == MG_Config::TransportMode::Monolith) {
 #endif
                 MGP_FILL(GetIntegeri_v);
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
                 }
 #endif
                 getIntegeri(target, index, &backendValue);
