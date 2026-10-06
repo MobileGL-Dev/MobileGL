@@ -22,4 +22,10 @@ namespace MobileGL::MG_Pipe {
     void MGPipeSetClientDeviceLostProbe(MGPipeClientDeviceLostProbe probe);
     Bool MGPipeClientDeviceLost();
 
+    // A declined readback asks the session, briefly, whether a device loss is about to be
+    // reported (ClientSession::ConfirmLossAfterDecline). Without a session the answer is no.
+    using MGPipeClientLossConfirmer = Bool (*)(Uint32 waitMs);
+    void MGPipeSetClientLossConfirmer(MGPipeClientLossConfirmer confirmer);
+    Bool MGPipeClientConfirmLossAfterDecline(Uint32 waitMs);
+
 } // namespace MobileGL::MG_Pipe

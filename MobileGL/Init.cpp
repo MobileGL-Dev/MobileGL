@@ -24,8 +24,10 @@
 #if MOBILEGL_PIPE_VERIFY
 #include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeVerifyFlushSummary, before Debug::Close in DestroyImpl
 #endif
+#if MOBILEGL_BUILD_RECORD_ARM
+#include <MG_Impl/Pipe/Verb/VerbPort.h>
+#endif
 #if MOBILEGL_BUILD_DISAGGREGATED
-#include <MG_Remote/Client/EmitTables.h>
 #include <MG_Remote/Client/ServerProbe.h>
 #endif
 
@@ -183,13 +185,13 @@ namespace MobileGL {
 #endif
         {
             MG_Backend::Init();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P13 W4: monolith's record arm reads the verb's own state, which only a verb sink
-            // writes; the port routes the ported verbs through one (MG_Remote/Client/EmitTables.cpp).
+            // writes; the port routes the ported verbs through one (MG_Impl/Pipe/Verb/VerbPort.cpp).
             // Installed HERE, by the library's role-neutral init, rather than by MG_Backend's: the
             // port is client code, and the server image must not need it to link.
             if (MG_Config::RecordArmAliasesFrontend() && MG_Backend::pActiveBackendObject) {
-                MG_Remote::Client::InstallMonolithVerbPort(MG_Backend::gBackendFunctionsTable);
+                MG_Record::InstallMonolithVerbPort(MG_Backend::gBackendFunctionsTable);
             }
 #endif
         }

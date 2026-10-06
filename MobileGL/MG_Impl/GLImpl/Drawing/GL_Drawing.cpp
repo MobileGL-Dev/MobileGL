@@ -12,8 +12,8 @@
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
-#if MOBILEGL_BUILD_DISAGGREGATED
-#include <MG_Remote/Client/GpuWritePending.h>
+#if MOBILEGL_BUILD_RECORD_ARM
+#include <MG_Impl/Pipe/Verb/GpuWriteSet.h>
 #endif
 // CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
 // client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
@@ -1386,11 +1386,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGP_FILL(EndTransformFeedback);
             endXfb();
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P5 (b1), the second producer the client-side GPU-write set ADDS, and it has to be
         // taken HERE - before GLContext::EndTransformFeedback clears the live bindings, since
         // a mark taken after it marks nothing.
-        MG_Remote::Client::MarkEndTransformFeedbackCaptureTargets();
+        MG_Record::MarkEndTransformFeedbackCaptureTargets();
 #endif
         MG_State::pGLContext->EndTransformFeedback();
         // Captured results must be visible to MapBuffer/GetBufferSubData after

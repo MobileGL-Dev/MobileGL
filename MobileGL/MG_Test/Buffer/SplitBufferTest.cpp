@@ -38,7 +38,7 @@ namespace {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     using MG_State::GLState::BufferObject;
-    using MG_Remote::Client::GpuWriteProducer;
+    using MG_Record::GpuWriteProducer;
     using MG_Record::PersistentMapTracker;
 
     // A backend that MINTS a persistent mapping, for the one case that needs the adopted arm
@@ -76,7 +76,7 @@ namespace {
             MG_Config::Features.PipeStats = true;
             MG_Util::PipeStats::Init();
             PersistentMapTracker::Instance().ClearForTest();
-            MG_Remote::Client::ResetProducerMarkCountsForTest();
+            MG_Record::ResetProducerMarkCountsForTest();
         }
         void TearDown() override {
             // Belt and braces for the one case that installs a minting backend: a table left
@@ -128,9 +128,9 @@ TEST_F(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) {
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0).Bind(ssbo);
     MG_State::pGLContext->TouchBufferBindingPoint(BufferTarget::ShaderStorage, 0);
 
-    MG_Remote::Client::MarkGpuWritesForDraw();
+    MG_Record::MarkGpuWritesForDraw();
 
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::ShaderStorageBinding), 1u)
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::ShaderStorageBinding), 1u)
         << "a draw with an SSBO bound must mark it: the shader writes into the driver's buffer, "
            "behind the shadow glMapBuffer and glGetBufferSubData read";
 }
@@ -141,9 +141,9 @@ TEST_F(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::AtomicCounter, 0).Bind(counter);
     MG_State::pGLContext->TouchBufferBindingPoint(BufferTarget::AtomicCounter, 0);
 
-    MG_Remote::Client::MarkGpuWritesForDraw();
+    MG_Record::MarkGpuWritesForDraw();
 
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::AtomicCounterBinding), 1u);
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::AtomicCounterBinding), 1u);
 }
 
 // Row 2's DISCRIMINATOR - DirectGLES.cpp:2354-2357. This is the one row whose backend twin is
@@ -152,7 +152,7 @@ TEST_F(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
 // a byte of it.
 TEST_F(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) {
     MG_State::GLState::ImageTextureBinding empty{};
-    EXPECT_FALSE(MG_Remote::Client::ImageUnitIsAWritableBufferTexture(empty))
+    EXPECT_FALSE(MG_Record::ImageUnitIsAWritableBufferTexture(empty))
         << "an unbound image unit is not a GPU write";
 
     auto texture = MakeShared<MG_State::GLState::TextureObjectBuffer>(7u);
@@ -162,13 +162,13 @@ TEST_F(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) {
     MG_State::GLState::ImageTextureBinding readOnly{};
     readOnly.Texture = texture;
     readOnly.Access = GL_READ_ONLY;
-    EXPECT_FALSE(MG_Remote::Client::ImageUnitIsAWritableBufferTexture(readOnly))
+    EXPECT_FALSE(MG_Record::ImageUnitIsAWritableBufferTexture(readOnly))
         << "a GL_READ_ONLY image binding is left alone by the backend twin and must be left "
            "alone here";
 
     MG_State::GLState::ImageTextureBinding writable = readOnly;
     writable.Access = GL_READ_WRITE;
-    EXPECT_TRUE(MG_Remote::Client::ImageUnitIsAWritableBufferTexture(writable));
+    EXPECT_TRUE(MG_Record::ImageUnitIsAWritableBufferTexture(writable));
 }
 
 // Row 2's WALK, through the image unit the context actually holds.
@@ -186,9 +186,9 @@ TEST_F(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) {
     binding.Access = GL_WRITE_ONLY;
     MG_State::pGLContext->NoteImageUnitTouched(0);
 
-    MG_Remote::Client::MarkGpuWritesForDraw();
+    MG_Record::MarkGpuWritesForDraw();
 
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u);
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u);
 
     binding = MG_State::GLState::ImageTextureBinding{};
 }
@@ -216,13 +216,13 @@ TEST_F(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
     binding.Texture = texture;
     binding.Access = GL_READ_WRITE;
 
-    MG_Remote::Client::MarkGpuWritesForDraw();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 0u)
+    MG_Record::MarkGpuWritesForDraw();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 0u)
         << "the mark has never moved, so the sweep must not walk a single unit";
 
     MG_State::pGLContext->NoteImageUnitTouched(kUnit);
-    MG_Remote::Client::MarkGpuWritesForDraw();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u)
+    MG_Record::MarkGpuWritesForDraw();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::WritableImageBufferTexture), 1u)
         << "a unit at the mark is inside the walk";
 
     binding = MG_State::GLState::ImageTextureBinding{};
@@ -237,35 +237,35 @@ TEST_F(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsA
     MG_State::pGLContext->TouchBufferBindingPoint(BufferTarget::TransformFeedback, 0);
 
     ASSERT_FALSE(MG_State::pGLContext->IsTransformFeedbackActive());
-    MG_Remote::Client::MarkGpuWritesForDraw();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::TransformFeedbackCapture), 0u);
+    MG_Record::MarkGpuWritesForDraw();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::TransformFeedbackCapture), 0u);
 
     // The marking itself, driven at the row rather than through the capture state machine.
-    MG_Remote::Client::MarkBufferForProducer(target, GpuWriteProducer::TransformFeedbackCapture);
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::TransformFeedbackCapture), 1u);
+    MG_Record::MarkBufferForProducer(target, GpuWriteProducer::TransformFeedbackCapture);
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::TransformFeedbackCapture), 1u);
 }
 
 // Row 4 - P5's own: glReadPixels into a bound GL_PIXEL_PACK_BUFFER.
 TEST_F(SplitBufferSet, Row4AReadPixelsIntoAPackPboMarksThePbo) {
-    MG_Remote::Client::MarkReadPixelsPackBuffer();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::ReadPixelsPackBuffer), 0u)
+    MG_Record::MarkReadPixelsPackBuffer();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::ReadPixelsPackBuffer), 0u)
         << "a read into client memory binds no PBO and must mark nothing";
 
     auto pbo = MakeBuffer(16u, 1024);
     MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).Bind(pbo);
-    MG_Remote::Client::MarkReadPixelsPackBuffer();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::ReadPixelsPackBuffer), 1u);
+    MG_Record::MarkReadPixelsPackBuffer();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::ReadPixelsPackBuffer), 1u);
 }
 
 // Row 5 - P5's own: glEndTransformFeedback, in place of the unbounded ClientWaitSync.
 TEST_F(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) {
     auto target = MakeBuffer(17u, 256);
     ASSERT_FALSE(MG_State::pGLContext->IsTransformFeedbackActive());
-    MG_Remote::Client::MarkEndTransformFeedbackCaptureTargets();
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 0u);
+    MG_Record::MarkEndTransformFeedbackCaptureTargets();
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 0u);
 
-    MG_Remote::Client::MarkBufferForProducer(target, GpuWriteProducer::EndTransformFeedbackCapture);
-    EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 1u);
+    MG_Record::MarkBufferForProducer(target, GpuWriteProducer::EndTransformFeedbackCapture);
+    EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 1u);
 }
 
 // THE GATE ITSELF. On the monolith path the six backend sites are still the only producers and
@@ -277,13 +277,13 @@ TEST_F(SplitBufferSet, TheWholeSetIsInertOnTheMonolithPath) {
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0).Bind(ssbo);
     MG_State::pGLContext->TouchBufferBindingPoint(BufferTarget::ShaderStorage, 0);
 
-    MG_Remote::Client::MarkGpuWritesForDraw();
-    MG_Remote::Client::MarkGpuWritesForDispatch();
-    MG_Remote::Client::MarkReadPixelsPackBuffer();
-    MG_Remote::Client::MarkEndTransformFeedbackCaptureTargets();
+    MG_Record::MarkGpuWritesForDraw();
+    MG_Record::MarkGpuWritesForDispatch();
+    MG_Record::MarkReadPixelsPackBuffer();
+    MG_Record::MarkEndTransformFeedbackCaptureTargets();
 
     for (SizeT row = 0; row < static_cast<SizeT>(GpuWriteProducer::Count); ++row) {
-        EXPECT_EQ(MG_Remote::Client::ProducerMarkCount(static_cast<GpuWriteProducer>(row)), 0u)
+        EXPECT_EQ(MG_Record::ProducerMarkCount(static_cast<GpuWriteProducer>(row)), 0u)
             << "row " << row << " fired with Transport == Monolith";
     }
 }
@@ -532,7 +532,7 @@ TEST_F(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheReques
     // And with no readback route at all - no size, or a backend that registered no resource
     // ops - SyncGpuWrites must clear rather than block for ever. That is the ONE case
     // monolith's unconditional clear covers that a writeback cannot.
-    EXPECT_FALSE(MG_Remote::Client::BufferWritebackIsReachable(*buffer));
+    EXPECT_FALSE(MG_Record::BufferWritebackIsReachable(*buffer));
     buffer->SyncGpuWrites();
     EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
 }

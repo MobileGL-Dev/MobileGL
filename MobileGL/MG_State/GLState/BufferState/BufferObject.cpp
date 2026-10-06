@@ -630,7 +630,7 @@ namespace MobileGL::MG_State::GLState {
             // resource ops - can never catch up, and retrying on every subsequent read would
             // only repeat the same no-op. That is the ONE case the monolith clear covers that
             // the writeback cannot, so it is spelled out here rather than inherited.
-            if (m_gpuWritePending && !MG_Remote::Client::BufferWritebackIsReachable(*this)) {
+            if (m_gpuWritePending && !MG_Record::BufferWritebackIsReachable(*this)) {
                 m_gpuWritePending = false;
             }
             return;

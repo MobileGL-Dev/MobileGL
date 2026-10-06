@@ -127,16 +127,4 @@
             return ReadQueryReply<Int64>(session, MG_Pipe::MGPWireOp::QueryTimestamp, &request, sizeof(request));
         }
 
-        void EmitDeleteTransformFeedback(GLuint name) {
-            VerbChannel session = ChannelFor("DeleteTransformFeedback");
-            BeforeReadOnlyVerb();
-            const auto& context = *MG_State::pGLContext;
-            const MG_Pipe::MGPStreamOutputBind object{name, 0, context.GetTransformFeedbackLifetimeId(name)};
-            session.EmitAndWait(MG_Pipe::MGPWireOp::DeleteStreamOutput, &object, sizeof(object),
-                                nullptr, 0, nullptr, 0, nullptr);
-            if (context.GetBoundTransformFeedbackName() == name) {
-                const MG_Pipe::MGPStreamOutputBind fallback{0, 0, context.GetTransformFeedbackLifetimeId(0)};
-                session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &fallback, sizeof(fallback),
-                                    nullptr, 0, nullptr, 0, nullptr);
-            }
         }

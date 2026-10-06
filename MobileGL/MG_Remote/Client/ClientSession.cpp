@@ -653,6 +653,10 @@ namespace MobileGL::MG_Remote::Client {
     namespace {
         [[maybe_unused]] const bool g_deviceLostProbeRegistered = [] {
             MG_Pipe::MGPipeSetClientDeviceLostProbe(&ClientSession::DeviceLost);
+            MG_Pipe::MGPipeSetClientLossConfirmer([](Uint32 waitMs) -> Bool {
+                ClientSession* session = ClientSession::Active();
+                return session != nullptr && session->ConfirmLossAfterDecline(waitMs);
+            });
             return true;
         }();
     } // namespace

@@ -167,8 +167,8 @@ namespace MGITest {
             state.cmdBytesWritten = encoder.CmdBytesWritten();
             state.stageReclaimWaits = encoder.StageReclaimWaits();
             state.replyPostings = session->ReplyPostings();
-            state.packBufferReadbackMarks = MobileGL::MG_Remote::Client::ProducerMarkCount(
-                MobileGL::MG_Remote::Client::GpuWriteProducer::ReadPixelsPackBuffer);
+            state.packBufferReadbackMarks = MobileGL::MG_Record::ProducerMarkCount(
+                MobileGL::MG_Record::GpuWriteProducer::ReadPixelsPackBuffer);
             const auto fences = MobileGL::MG_Remote::Client::ReadFencePollCounters();
             state.fenceLocalAnswers = fences.LocalAnswers;
             state.fenceEscalations = fences.Escalations;

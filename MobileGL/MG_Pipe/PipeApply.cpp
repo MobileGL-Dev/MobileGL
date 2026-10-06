@@ -201,6 +201,13 @@ namespace MobileGL::MG_Pipe {
     } // namespace
     void MGPipeSetClientDeviceLostProbe(MGPipeClientDeviceLostProbe probe) { g_clientDeviceLostProbe = probe; }
     Bool MGPipeClientDeviceLost() { return g_clientDeviceLostProbe != nullptr && g_clientDeviceLostProbe(); }
+    namespace {
+        constinit MGPipeClientLossConfirmer g_clientLossConfirmer = nullptr;
+    } // namespace
+    void MGPipeSetClientLossConfirmer(MGPipeClientLossConfirmer confirmer) { g_clientLossConfirmer = confirmer; }
+    Bool MGPipeClientConfirmLossAfterDecline(Uint32 waitMs) {
+        return g_clientLossConfirmer != nullptr && g_clientLossConfirmer(waitMs);
+    }
 
 #if MOBILEGL_BUILD_RECORD_ARM
     // ----------------------------------------------------------------------------

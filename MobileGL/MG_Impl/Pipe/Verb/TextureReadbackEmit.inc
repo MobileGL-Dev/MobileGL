@@ -1,4 +1,4 @@
-// Included in EmitTables.cpp's client-only anonymous namespace.
+// Included in VerbPort.cpp's anonymous namespace (P13 W5: moved from MG_Remote/Client).
 // The server returns owned tight pixels. Only the client interprets PACK state
 // and application pointers. A pack-buffer destination (P9) is answered by nothing: the
 // client sends the layout it computed and the server lands the rows in the buffer; the
@@ -132,11 +132,11 @@
             }
             Vector<Uint8> bytes(static_cast<SizeT>(tight));
             const Uint64 capacity = session.MaxReplyBytes();
-            if (!capacity) Wire::WireProtocolFatal("GetTextureImage.reply", "zero reply capacity");
+            if (!capacity) MG_Pipe::MGPipeProtocolFatal("GetTextureImage.reply", "zero reply capacity");
             for (Uint64 offset = 0; offset < tight; ) {
                 info.DstOffset = offset;
                 info.DstSize = std::min(tight - offset, capacity);
-                Int32 status = Wire::ReplySink::kStatusError;
+                Int32 status = MG_Pipe::MGPipeReplySink::kStatusError;
                 Uint64 received = 0;
                 session.EmitAndWait(MG_Pipe::MGPWireOp::GetTextureImage, &info, sizeof(info), nullptr, 0,
                                     bytes.data() + offset, info.DstSize, &status, &received);
