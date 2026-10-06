@@ -78,11 +78,11 @@ namespace MobileGL::MG_Record {
             applier.BoundFramebuffer[0] = clear.Fbo;
         }
         switch (clear.Kind) {
-        case kMGPClearKindWhole:
+        case MG_Pipe::kMGPipeClearKindWhole:
             if (gl.Clear == nullptr) return false;
             gl.Clear(static_cast<GLbitfield>(clear.BufferMask));
             break;
-        case kMGPClearKindColor:
+        case MG_Pipe::kMGPipeClearKindColor:
             switch (clear.ValueClass) {
             case MG_Pipe::kMGPipeClearValueClassFloat:
                 if (gl.ClearBufferfv == nullptr) return false;
@@ -107,20 +107,20 @@ namespace MobileGL::MG_Record {
                 MG_Pipe::MGPipeProtocolFatalAt("MGPClear::ValueClass", clear.ValueClass, 3);
             }
             break;
-        case kMGPClearKindDepth:
+        case MG_Pipe::kMGPipeClearKindDepth:
             if (gl.ClearBufferfv == nullptr) return false;
             gl.ClearBufferfv(GL_DEPTH, 0, &clear.DepthValue);
             break;
-        case kMGPClearKindStencil:
+        case MG_Pipe::kMGPipeClearKindStencil:
             if (gl.ClearBufferiv == nullptr) return false;
             gl.ClearBufferiv(GL_STENCIL, 0, &clear.StencilValue);
             break;
-        case kMGPClearKindDepthStencil:
+        case MG_Pipe::kMGPipeClearKindDepthStencil:
             if (gl.ClearBufferfi == nullptr) return false;
             gl.ClearBufferfi(GL_DEPTH_STENCIL, 0, clear.DepthValue, clear.StencilValue);
             break;
         default:
-            MG_Pipe::MGPipeProtocolFatalAt("MGPClear::Kind", clear.Kind, kMGPClearKindDepthStencil + 1);
+            MG_Pipe::MGPipeProtocolFatalAt("MGPClear::Kind", clear.Kind, MG_Pipe::kMGPipeClearKindDepthStencil + 1);
         }
         ++m_clears;
         return true;
