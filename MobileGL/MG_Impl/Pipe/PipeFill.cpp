@@ -1205,6 +1205,9 @@ namespace MobileGL::MG_Pipe {
         record.Res = handle;
         record.Offset = offset;
         record.Size = size;
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResourceReadbacks, 1);
+        }
         // The answer travels back through MGPipeClientOnBufferWriteback, and the server's
         // epoch bump happens AFTER that writeback, never before.
         MGPipeRouteResourceReadback(record);

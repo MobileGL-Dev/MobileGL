@@ -233,7 +233,7 @@ namespace MobileGL::MG_Util::PipeStats {
             "residual-pulls", "server-verb-boundaries", "wire-records",
             "wire-indirect-native-draws", "wire-indirect-cpu-expansions", "wire-indirect-barriers",
             "wire-host-waits", "wire-host-waits-indirect", "wire-host-wait-us",
-            "wire-indirect-native-dispatches",
+            "wire-indirect-native-dispatches", "resource-readbacks",
         };
         const char* const kGateNames[kGateCount] = {
             "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",

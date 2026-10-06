@@ -284,6 +284,14 @@ namespace MobileGL::MG_Util::PipeStats {
         // wire store (VulkanRenderer::DispatchWireComputeIndirect). Their barriers count in `wibar`
         // with the draws': one barrier per shader write, whichever indirect read consumes it.
         WireIndirectNativeDispatches,
+        // P13 W4a (ID-P8-14a): one per resource_readback the CLIENT emitted - a whole buffer, or
+        // one slice of it, pulled back into the frontend shadow because a CPU reader needed bytes
+        // a GPU had written. Counted at the emitter (MGPipeEmitResourceReadbackRange), in every
+        // mode. It exists for the regression it was added with: monolith's indirect executors
+        // read the command buffer back once PER COMMAND, PER VIEWPORT PASS, whenever it carried a
+        // GPU write - before even asking whether the draw had a client-memory array to snapshot.
+        // Not on the summary line; read through TotalCalls by the scenario that pins it.
+        ResourceReadbacks,
         Count
     };
 

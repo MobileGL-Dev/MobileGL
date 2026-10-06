@@ -42,6 +42,7 @@
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 #include "../Harness/SplitRuntimePeek.h"
+#include "../Harness/WireIndirectPeek.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -795,6 +796,72 @@ void main() {
         EXPECT_FALSE(IsGreen(Half(image, 1)))
             << "round 2: the right half still drew - the narrowed copy of round 1 was reused after the "
                "second GPU write";
+    }
+
+
+    // P13 W4a (ID-P8-14a): AN INDIRECT DRAW WITH NO CLIENT-MEMORY ARRAY READS NOTHING BACK. The
+    // monolith indirect executors used to pull a GPU-written command buffer back into its shadow
+    // once PER COMMAND, PER VIEWPORT PASS - before asking whether any attribute came from client
+    // memory, which is the only reason the words are read on the CPU at all. On a phone that was a
+    // multi-minute hang (62bfe461). The positive control is the same draw with a client-memory
+    // attribute: there the words ARE needed, so the readback must still happen and still draw.
+    TEST_F(GpuWrittenDrawInputScenario, AnIndirectDrawWithNoClientArrayReadsNothingBack) {
+        if (!Ready()) return;
+        WireIndirectCounters before{};
+        if (!PeekWireIndirectCounters(&before)) GTEST_SKIP() << "no in-process counter peek on this platform";
+        const GLuint program = Program(kFlatVertex, kFlatFragment);
+        ASSERT_NE(program, 0u);
+        const std::vector<GLfloat> vertices = HalvesVertices();
+        BindVertices(vertices.data(), static_cast<GLsizeiptr>(vertices.size() * sizeof(GLfloat)));
+        constexpr int kCommands = 4;
+        Store(m_commands, GL_DRAW_INDIRECT_BUFFER, kCommands * sizeof(ArraysCommand), nullptr);
+        // Four copies of {6, 1, 3, 0}: the left half, four times.
+        WriteWithCompute(R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Commands { uint command[]; };
+void main() {
+    for (int i = 0; i < 4; ++i) {
+        command[4 * i + 0] = 6u; command[4 * i + 1] = 1u; command[4 * i + 2] = 3u; command[4 * i + 3] = 0u;
+    }
+}
+)",
+                         m_commands, 0, GL_COMMAND_BARRIER_BIT);
+        glBindVertexArray(m_vao);
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
+        PeekWireIndirectCounters(&before);
+        Image image = Render(program, [] { glMultiDrawArraysIndirect(GL_TRIANGLES, nullptr, kCommands, 0); });
+        WireIndirectCounters after{};
+        ASSERT_TRUE(PeekWireIndirectCounters(&after));
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(IsGreen(Half(image, 0))) << "the compute-written commands did not draw (" << Half(image, 0) << ")";
+        EXPECT_FALSE(IsGreen(Half(image, 1))) << "the right half drew: the commands were not the ones written";
+        EXPECT_EQ(after.resourceReadbacks - before.resourceReadbacks, 0u)
+            << "an indirect draw whose attributes all come from buffers read a buffer back into its "
+               "shadow; nothing on the CPU needs the command words for it";
+
+        // The positive control: attribute 0 from client memory, so the words size a snapshot.
+        WriteWithCompute(R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Commands { uint command[]; };
+void main() { command[0] = 6u; command[1] = 1u; command[2] = 3u; command[3] = 0u; }
+)",
+                         m_commands, 0, GL_COMMAND_BARRIER_BIT);
+        glBindVertexArray(m_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(GLfloat), vertices.data());
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
+        if (FirstGLError() != 0u) {
+            // A context that refuses client-memory arrays has no snapshot for the control to need.
+            GTEST_SKIP() << "client-memory vertex arrays are refused here; the positive control has no subject";
+        }
+        PeekWireIndirectCounters(&before);
+        image = Render(program, [] { glMultiDrawArraysIndirect(GL_TRIANGLES, nullptr, 1, 0); });
+        ASSERT_TRUE(PeekWireIndirectCounters(&after));
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(IsGreen(Half(image, 0))) << "the client-array control did not draw (" << Half(image, 0) << ")";
+        EXPECT_GE(after.resourceReadbacks - before.resourceReadbacks, 1u)
+            << "the positive control read nothing back: either the counter is dead or the command words "
+               "a client-array snapshot needs were taken from a stale shadow";
     }
 
 } // namespace MGITest

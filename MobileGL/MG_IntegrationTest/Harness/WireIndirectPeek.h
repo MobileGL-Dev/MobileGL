@@ -22,6 +22,7 @@ namespace MGITest {
         unsigned long long hostWaits = 0;      // wire-host-waits (`whw`)
         unsigned long long indirectWaits = 0;  // wire-host-waits-indirect (`whwi`)
         unsigned long long nativeDispatches = 0;  // P8-SV: wire-indirect-native-dispatches (`wdsp`)
+        unsigned long long resourceReadbacks = 0; // P13 W4a: resource-readbacks (client emissions)
     };
 
     bool PeekWireIndirectCounters(WireIndirectCounters* out);

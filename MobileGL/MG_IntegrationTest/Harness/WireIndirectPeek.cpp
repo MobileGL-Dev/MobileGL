@@ -27,6 +27,7 @@ namespace MGITest {
         out->hostWaits = Stats::TotalCalls(Stats::CallClass::WireHostWaits);
         out->indirectWaits = Stats::TotalCalls(Stats::CallClass::WireHostWaitsIndirect);
         out->nativeDispatches = Stats::TotalCalls(Stats::CallClass::WireIndirectNativeDispatches);
+        out->resourceReadbacks = Stats::TotalCalls(Stats::CallClass::ResourceReadbacks);
         return true;
     }
 #else

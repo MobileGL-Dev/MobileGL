@@ -2483,6 +2483,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // there is one. FALSE means the caller must SKIP the draw: the elements it would fetch are
         // not in the store the driver is about to read, and issuing it anyway is a wrong picture
         // rather than an error.
+        // Does the VAO feed any enabled attribute from client memory? `vertexRate`, when given,
+        // is set when one of those attributes advances per vertex rather than per instance.
+        static Bool VaoHasEnabledClientArray(const MG_State::GLState::VertexArrayObject& vao,
+                                             Bool* vertexRate = nullptr) {
+            Bool any = false;
+            const auto& attributes = vao.GetAllAttributes();
+            for (SizeT i = 0; i < attributes.size(); ++i) {
+                if (!attributes[i].Enabled || attributes[i].Buffer) continue;
+                any = true;
+                if (vertexRate != nullptr) *vertexRate |= attributes[i].Divisor == 0;
+            }
+            return any;
+        }
+
         static Bool SyncClientSideVertexArraysForFetch(Uint8 indexSize, Uint32 elementStart, GLsizei count,
                                                        GLsizei instanceCount, GLint baseVertex, Uint32 baseInstance,
                                                        const void* clientIndices, Uint64 clientIndexBytes) {
@@ -2498,15 +2512,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // A draw whose attributes all come from buffers has nothing to snapshot, and asking
             // the plan would read the index stream to answer a question nobody asked.
-            Bool clientArrays = false;
             Bool clientVertexRate = false;
-            const auto& attributes = currentVAO->GetAllAttributes();
-            for (SizeT i = 0; i < attributes.size(); ++i) {
-                if (!attributes[i].Enabled || attributes[i].Buffer) continue;
-                clientArrays = true;
-                clientVertexRate |= attributes[i].Divisor == 0;
-            }
-            if (!clientArrays) return true;
+            if (!VaoHasEnabledClientArray(*currentVAO, &clientVertexRate)) return true;
 
             auto* twin = ResolveVaoTwin(currentVAO);
             if (twin == nullptr) return false;
@@ -2554,6 +2561,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint8* commandBytes, SizeT commandOffset, GLsizei stride, GLsizei index, Uint8 indexSize,
             const SharedPtr<MG_State::GLState::BufferObject>& commandBuffer) {
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return true;
+            // P13 W4a (ID-P8-14a): ASK FIRST WHETHER THERE IS ANYTHING TO SNAPSHOT. The command
+            // words below are read only to size a client-memory fetch; a VAO whose attributes all
+            // come from buffers has none, and reading them anyway cost a whole-buffer readback of a
+            // GPU-written command buffer per command, per viewport pass (the hang 62bfe461 left
+            // behind on a phone).
+            {
+                const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
+                if (!currentVAO || !VaoHasEnabledClientArray(*currentVAO)) return true;
+            }
             const Uint8* source = commandBytes;
             if (commandBuffer) {
                 commandBuffer->SyncGpuWrites();
