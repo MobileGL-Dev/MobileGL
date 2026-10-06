@@ -16,7 +16,6 @@ them wrong.
 | 2026-10-06 | `DirectGLES.HandleRecycle.Legacy.*`, `DirectVulkan.HandleRecycle.Legacy.*`, `DirectVulkan.HandleRecycle.AbaControl.*` | Test / integration-gpu (`integration-monolith-control`) | they ran `MOBILEGL_PIPE_PUSH=0`, the pre-handle arm, which P13 W3b removed with `MOBILEGL_PIPE_LEGACY_MEMOS` (ID-P13-3) | `HandleRecycle.Handles.*` and `DirectVulkan.HandleRecycle.AbaControlHandles.*` (the ABA control against the handle arm that ships) stay |
 | 2026-10-06 | `DirectGLES.ResourceSubsystemControl.Off.*`, `DirectGLES.ResourceSubsystemOff.*`, `DirectGLES.ObjectSubsystemControl.{Off,Refused,RefusedTexture}.*` | Test / integration-gpu | they cleared subsystem bits (masks 0x7f / 0x1ff / 0x9ff / 0x5ff) to run legacy arms; since W3b bits 0-13 are fixed on (ID-P13-3) | one named-refusal control per lane, `DirectGLES.SubsystemMaskRefusal.<Lane>`: the same scenario and mask must go red with `Fatal{PipeSubsystemsFixedOn}` naming that mask (`Harness/RefusedMaskControl.cmake`); the `On` lanes now run 0x3fff |
 | 2026-10-06 | `SanityTest`: `DirectGLESSlotTable.{AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundThem, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping}` | Test / unit | they pinned the `MOBILEGL_PIPE_LEGACY_MEMOS=0` + cleared-bit knob pair; the knob is gone and the mask is refused at startup | the SubsystemMaskRefusal controls above |
-| 2026-10-06 | `SanityTest`: `DirectGLESTextureSync.UnitMemoRefusesToDriveATwinFromAnotherTexture` | Test / unit | **not a behaviour gap; the probe cannot run at the shipping mask in the unit lane.** The code it pins - the monolith arm's borrowed-slot unit list and its pairing check - is still live (`UnitTexturesByHandle()` is false on monolith), but at 0x3fff the twin sync below it reads applier records, and `MGPipeApplyResourceCreate` declines in every unit-lane process (`NoP4aConsumer`), so the probe observed nothing (red before W3b at 0x3fff too, green only at P2). | **replaced**, not just removed: `DsaUpdateKeepsTheBoundUnitScenario` asserts the same hazard through public GL at the shipping mask, every lane, both backends (A bound to unit 0, B respecified and filled by name, unit 0 must still sample A's texels and shape). The handle arm's ABA sibling (P5e tx2) stays in SanityTest. Goes away with the borrowed-slot list itself in W4c |
 | 2026-10-06 | `SanityTest`: `DirectGLESTextureSync.AnAttachmentOnlyTexturesParametersReachTheDriverWithNoSamplerView` | Test / unit | **not a behaviour gap.** At 0x3fff the parameter push is record-addressed (`SyncTextureParamsToBackend` reads the texture's applier record; nothing in it consults a sampler view), but the unit lane cannot create that record (`NoP4aConsumer`, as above), so the probe's handle half never had a record to read; its legacy half pinned the pre-handle push that W3b removed | `TextureParamsWithoutASamplerViewScenario` (G9): its four cases take a WHITE-BOX reading of the driver-side parameters before any sample (`TakeTheWhiteBoxReadingBeforeAnySample`, ID-19), at the shipping mask on every lane - the same property, observed where records exist |
 | 2026-10-06 | unit `RenderStateSpans.{ResidualTripWireIsSilentUntilTheApplierOwnsTheBytes, ResidualTripWireHoldsAcrossAVerbClassThatDoesNotPublishTheBlock, ResidualTripWireFiresNamingTheCapability}` and PeerLatchTest's `SetResidualValueStateBlobSize` row | Test / unit | P13 W3c deleted ResidualValueBlock and its applier trip wire (op 46 is a retired, declined row) | integration-verify's new `Negative control A2 (corrupted capability)`: the verify comparator must go red on a corrupted `IsCapabilityEnabled`; `PipeWireCodecTest.ResidualValueBlockCrossesAsItsOwnBlob` now pins that op 46 is declined; `TrackerTest...AClipDistanceEnableReArmsTheResidualBlock` now asserts the capability reaches the applier's block |
 
@@ -51,6 +50,32 @@ them wrong.
   `glCreateShaderObjectARB` / `glCreateProgramObjectARB` entry points are stubs
   (`MG_Impl/GLImpl/Exporting/Definitions.cpp`). The string was added on purpose for KWin; whether
   to implement the ARB handle entry points is a separate decision.
+
+### `SanityTest` `DirectGLESTextureSync.UnitMemoRefusesToDriveATwinFromAnotherTexture`, 2026-10-06 (removed in W3b, then RESTORED)
+
+- **First call (wrong)**: retired with the P2-mask probes as "its arm is gone". The orchestrator's
+  review asked whether its failure at the shipping mask was a behaviour gap.
+- **Finding**: the code it pins is LIVE. The monolith arm (DISAGG builds under
+  `MOBILEGL_TRANSPORT=monolith`, and the FCL build) still walks the frontend units with the
+  borrowed-slot work list and its `PairingsIntact` check (`UnitTexturesByHandle()` is false on
+  monolith). Its red at 0x3fff is not a product gap: at that mask the twin-sync body it observes
+  reads applier records, and a unit-lane process cannot create them (`MGPipeApplyResourceCreate`
+  declines under `NoP4aConsumer`), so the probe observed nothing.
+- **GL-level replacement tried and measured**: `DsaUpdateKeepsTheBoundUnitScenario` (A bound to
+  unit 0; B respecified and filled by name; unit 0 must still sample A). Red-checked locally: it
+  stays GREEN with `PairingsIntact` disabled, and still green with the frontend's by-name
+  bind-generation bump ALSO removed, and with by-name mipmap / readback / parameter / copy calls
+  added in the window. The hazard is no longer reachable through public GL: the by-name
+  emulation restores the slot before any draw can replay the list. The scenario stays as a GL
+  4.6 8.1/8.5 semantics test on every lane, but it is NOT a guard of the pairing check and is not
+  claimed as one.
+- **Decision**: the probe is restored, pinned to the P2 mask in its own process (the code under
+  test is mask-independent; the mask only selects the sync body it observes). Red-checked
+  locally: with `PairingsIntact` disabled it goes red at "the replay never reached the texture now
+  in the slot" (the stale pairing was replayed instead of the texture the slot holds); restored,
+  green. The resident-respecify assertion now runs first so a red names that damage when it
+  occurs. It goes with the borrowed-slot list itself when W4c moves monolith to the by-handle unit
+  walk.
 
 ## Infrastructure fixes (no check removed)
 
