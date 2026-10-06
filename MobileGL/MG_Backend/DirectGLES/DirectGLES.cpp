@@ -3200,7 +3200,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   mode here - a silent permanent fallback is, and that is what the line is for.
             //   The caller's MINOR-4 gate tick still counts EVERY decline, loud or not.
             if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) {
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 // P5e (tx2), CONTRACT-P5E §5.3: UNDER A LIVE WIRE THE DECLINE IS A REFUSAL.
                 //
                 // The fall-back below is the pre-handle snapshot walk over GetTextureUnitObject,
@@ -3215,9 +3215,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // process; an abort here took the compositor down with the offender). The
                     // answer while the latch drains is "no unit is bound": the walk the decline
                     // would run reads client memory, and the session stops at its next record.
-                    // Unarmed, SessionLatch is the old abort.
-                    if (!MG_Remote::SessionLatch(
-                            MG_Remote::MGFatalFamily::ProtocolCorruption,
+                    // Unarmed, SessionLatch is the old abort (P13 W5: through the record latch seam,
+                    // which is SessionLatch wherever MG_Remote is linked).
+                    if (!MG_Pipe::MGPipeRecordLatch(
+                            MG_Pipe::MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - a draw "
                             "touches units 0..%d and neither a sampler-view nor a sampler-state "
                             "window has ever been applied while the sampler subsystem bit is set; "
