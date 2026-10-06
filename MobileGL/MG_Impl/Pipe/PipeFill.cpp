@@ -3553,9 +3553,14 @@ namespace MobileGL::MG_Pipe {
         // supplies a field: with no live session (a monolith transport, the bring-up window, a
         // server-role-only fixture) nothing is emitted and the fields keep being pulled, byte
         // for byte as before (G1).
+        //
+        // P13 W4d: AND ON MONOLITH'S RECORD ARM, where the route is the in-process applier
+        // (Mono_SetContextValues) and the backend reads what the record put in gPipeInputs - the
+        // same supplier as a wire, one call away.
         const Bool contextValuesWireLive =
-            MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            MG_Remote::Client::ContextValuesWireLive();
+            MG_Config::Transport != MG_Config::TransportMode::Monolith
+                ? MG_Remote::Client::ContextValuesWireLive()
+                : MG_Config::RecordArmAliasesFrontend();
 #else
         constexpr Bool contextValuesWireLive = false;
 #endif
