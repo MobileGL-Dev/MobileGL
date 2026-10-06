@@ -73,6 +73,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/ArbShaderObjectsScenario.cpp
     Scenarios/CubeFaceReadbackScenario.cpp
+    Scenarios/TextureUnitSamplingScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/UnwrittenPositionOutputScenario.cpp
     Scenarios/SampleMaskScopeScenario.cpp
@@ -2456,6 +2457,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("ArbShaderObjectsScenario.*" "")
     # P13 W6: the cube-face readback rules the deleted frontend-arm unit cases pinned.
     mgl_itest_register_split_arms("CubeFaceReadbackScenario.*" "")
+    mgl_itest_register_split_arms("TextureUnitSamplingScenario.*" "")
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
     # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case

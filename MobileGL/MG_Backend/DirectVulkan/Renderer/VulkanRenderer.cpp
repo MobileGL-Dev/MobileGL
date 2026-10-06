@@ -3127,12 +3127,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline ProgramFactory::CompileOptionFlags GetShaderTransformFlags(VkSurfaceTransformFlagBitsKHR preTransform) {
         ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionBit::PositionZRemap;
-        const Bool wire = MG_Config::DataArmIsRecord();
-        const auto* wireFbo = wire ? MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
-        const auto currentDrawFBO = wire ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
-            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        const Bool isDefault = wire ? (wireFbo && wireFbo->IsDefault) :
-            (currentDrawFBO && currentDrawFBO->IsDefaultFramebuffer());
+        const auto* wireFbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+        const Bool isDefault = wireFbo && wireFbo->IsDefault;
         if (isDefault) {
             flags |= ProgramFactory::CompileOptionBit::PositionYFlip;
             // gl_FragCoord follows the same rule the default-framebuffer RECTANGLES follow
@@ -5010,27 +5006,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (stencil) test always passes and nothing is written - even when the bound
         // image is a packed depth-stencil texture attached through only one half.
         {
-            if (MG_Config::DataArmIsRecord()) {
-                const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
-                if (fbo && !fbo->IsDefault) {
-                    if (fbo->Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) depthTestEnabled = false;
-                    if (fbo->Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) stencilTestEnabled = false;
-                }
-            } else
-            {
-            const auto& gatingFbo =
-                MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-            if (gatingFbo != nullptr && !gatingFbo->IsDefaultFramebuffer()) {
-                const auto& depthAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Depth);
-                const auto& stencilAtt = gatingFbo->GetAttachment(MobileGL::FramebufferAttachmentType::Stencil);
-                if (!depthAtt.IsValid() || depthAtt.IsEmpty()) {
-                    depthTestEnabled = false;
-                }
-                if (!stencilAtt.IsValid() || stencilAtt.IsEmpty()) {
-                    stencilTestEnabled = false;
-                }
+            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+            if (fbo && !fbo->IsDefault) {
+                if (fbo->Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) depthTestEnabled = false;
+                if (fbo->Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) stencilTestEnabled = false;
             }
-        }
         }
         const StencilFaceState& frontStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front);
         const StencilFaceState& backStencil = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Back);
@@ -5240,8 +5220,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
-        const auto* wireFbo = MG_Config::DataArmIsRecord() ?
-            MG_Pipe::MGPipeApplier().DrawFramebuffer() : nullptr;
+        const auto* wireFbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
         const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
             MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
@@ -5903,10 +5882,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the SAME draw-framebuffer binding the draw uses - see the assert below.
         MOBILEGL_ASSERT(
             [&] {
-                if (MG_Config::DataArmIsRecord()) {
-                    const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
-                    return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
-                }
+                const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+                return isDefaultFbo == (fbo != nullptr && fbo->IsDefault);
                 const auto& fbo =
                     MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
                 return isDefaultFbo == (fbo != nullptr && fbo->IsDefaultFramebuffer());
@@ -6332,14 +6309,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // split server records every draw its client sends into the same frame command buffer, so
         // the same loading frame grows it the same way there.
         SplitOversizedRecording();
-        if (MG_Config::DataArmIsRecord()) {
-            if (!RewindWireDescriptorSetsIfDue()) return false;
-            // The wire route returns before the monolith branch's draw-gated
-            // sweep. Dead wire texture/renderbuffer records otherwise live
-            // until the next frame boundary, which a long trace may not reach.
-            m_textureManager->CollectGarbage();
-            return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
-        }
+        if (!RewindWireDescriptorSetsIfDue()) return false;
+        // The wire route returns before the monolith branch's draw-gated
+        // sweep. Dead wire texture/renderbuffer records otherwise live
+        // until the next frame boundary, which a long trace may not reach.
+        m_textureManager->CollectGarbage();
+        return SetupWireDraw(frame, mode, aspects, drawParams, pIndexBufferView);
         // Sync each sampled texture at most once across this whole draw: the layout
         // probe loop, the post-transition loop, and ResolveSamplerDescriptor would
         // otherwise each re-run the full SyncTexture path on the same textures.
@@ -6965,12 +6940,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VulkanRenderer::DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         // Before the wire branch, for SetupDraw's reason.
         SplitOversizedRecording();
-        if (MG_Config::DataArmIsRecord()) {
-            if (!RewindWireDescriptorSetsIfDue()) return;
-            m_textureManager->CollectGarbage();
-            DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
-            return;
-        }
+        if (!RewindWireDescriptorSetsIfDue()) return;
+        m_textureManager->CollectGarbage();
+        DispatchWireCompute(numGroupsX, numGroupsY, numGroupsZ);
+        return;
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // The DISPATCH accessor: with a pipeline bound this is its compute stage program
@@ -7029,12 +7002,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VulkanRenderer::DispatchComputeIndirect(GLintptr indirect) {
         SplitOversizedRecording();
         // P8-SV: the wire arm's own indirect dispatch, DispatchCompute's shape one call over.
-        if (MG_Config::DataArmIsRecord()) {
-            if (!RewindWireDescriptorSetsIfDue()) return;
-            m_textureManager->CollectGarbage();
-            DispatchWireComputeIndirect(indirect);
-            return;
-        }
+        if (!RewindWireDescriptorSetsIfDue()) return;
+        m_textureManager->CollectGarbage();
+        DispatchWireComputeIndirect(indirect);
+        return;
         m_textureManager->CollectGarbage();
         auto& frame = m_frameContext.GetCurrent();
         // See DispatchCompute: the dispatch accessor, not the draw one.
@@ -7139,9 +7110,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdPipelineBarrier(frame.commandBuffer,
                              // ALL_COMMANDS does not include HOST. The barrier's
                              // HOST_WRITE access must have a matching source stage.
-                             MG_Config::DataArmIsRecord()
-                                 ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT
-                                 : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
                              1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
@@ -7301,17 +7270,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     #include "WireYuvImage.inc"
 
     void VulkanRenderer::Clear(GLbitfield mask) {
-        if (MG_Config::DataArmIsRecord()) {
-            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
-            if (!fbo) MagmaWireFatal("clear-framebuffer-record");
-            ClearAttachmentPayload payload{};
-            payload.mask = mask;
-            payload.color = MG_Pipe::gPipeInputs.GetClearColor();
-            payload.depth = MG_Pipe::gPipeInputs.GetClearDepth();
-            payload.stencil = MG_Pipe::gPipeInputs.GetClearStencil();
-            ClearWireFramebuffer(*fbo, payload);
-            return;
-        }
+        const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+        if (!fbo) MagmaWireFatal("clear-framebuffer-record");
+        ClearAttachmentPayload payload{};
+        payload.mask = mask;
+        payload.color = MG_Pipe::gPipeInputs.GetClearColor();
+        payload.depth = MG_Pipe::gPipeInputs.GetClearDepth();
+        payload.stencil = MG_Pipe::gPipeInputs.GetClearStencil();
+        ClearWireFramebuffer(*fbo, payload);
+        return;
         m_clearManager->CollectGarbage();
         if ((mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) == 0) {
             return;
@@ -7703,12 +7670,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::QueueClearBufferPayload(GLenum buffer, GLint drawbuffer,
                                                  const ClearAttachmentPayload& clearPayload) {
-        if (MG_Config::DataArmIsRecord()) {
-            const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
-            if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
-            ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
-            return;
-        }
+        const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
+        if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
+        ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
+        return;
         auto* fbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject().get();
         if (!fbo) {
             return;
@@ -8727,10 +8692,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                          GLbitfield mask, GLenum filter) {
-        if (MG_Config::DataArmIsRecord()) {
-            BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
-            return;
-        }
+        BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
+        return;
         auto readFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
         auto drawFbo = MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         BlitNamedFramebuffer(readFbo, drawFbo, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -9367,10 +9330,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height) {
-        if (MG_Config::DataArmIsRecord()) {
-            CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
-            return;
-        }
+        CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
+        return;
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -9684,8 +9645,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
-            if (MG_Config::DataArmIsRecord())
-                return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
+            return endpoint.IsRenderbuffer() ? endpoint.RenderbufferHandle.Slot : endpoint.TextureHandle.Slot;
             if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetExternalIndex();
             return endpoint.Texture ? endpoint.Texture->GetExternalIndex() : 0u;
         }
@@ -9696,9 +9656,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                           const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        const Bool wire = MG_Config::DataArmIsRecord();
+        const Bool wire = true; // P13 W6: the record arm is the only arm
         MG_Pipe::MGPipeHandle dstStorageHandle = dstEndpoint.TextureHandle;
-        if (wire && HasPendingRecordedWork() && !FlushPendingCommands()) {
+        if (HasPendingRecordedWork() && !FlushPendingCommands()) {
             if (LatchWireDeviceLoss("copy-image-flush")) return;
             MagmaWireFatal("copy-image-flush");
         }
@@ -9740,24 +9700,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
         const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
-            if (MG_Config::DataArmIsRecord()) {
-                const Bool renderbuffer = endpoint.IsRenderbuffer();
-                // The same handle-keyed allocation used by wire FBO clear/draw/read.
-                // The legacy render-pass manager owns a different, frontend-keyed map.
-                auto* resource = m_textureManager->SyncTextureResourceByHandle(
-                    renderbuffer ? endpoint.RenderbufferHandle : endpoint.TextureHandle, renderbuffer);
-                if (!resource) MagmaWireFatal("copy-image-resource");
-                out.isRenderbuffer = renderbuffer;
-                out.image = resource->image;
-                out.trackedLayout = &resource->layout;
-                out.aspect = resource->aspect;
-                out.mipLevels = resource->mipLevels;
-                out.extent = resource->extent;
-                out.depth = resource->depth;
-                out.arrayLayers = resource->arrayLayers;
-                out.format = resource->format;
-                return out.image != VK_NULL_HANDLE;
-            }
+            const Bool renderbuffer = endpoint.IsRenderbuffer();
+            // The same handle-keyed allocation used by wire FBO clear/draw/read.
+            // The legacy render-pass manager owns a different, frontend-keyed map.
+            auto* resource = m_textureManager->SyncTextureResourceByHandle(
+                renderbuffer ? endpoint.RenderbufferHandle : endpoint.TextureHandle, renderbuffer);
+            if (!resource) MagmaWireFatal("copy-image-resource");
+            out.isRenderbuffer = renderbuffer;
+            out.image = resource->image;
+            out.trackedLayout = &resource->layout;
+            out.aspect = resource->aspect;
+            out.mipLevels = resource->mipLevels;
+            out.extent = resource->extent;
+            out.depth = resource->depth;
+            out.arrayLayers = resource->arrayLayers;
+            out.format = resource->format;
+            return out.image != VK_NULL_HANDLE;
             if (endpoint.IsRenderbuffer()) {
                 auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(endpoint.Renderbuffer);
                 if (resource == nullptr) return false;
@@ -9988,7 +9946,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
-            if (MG_Config::DataArmIsRecord()) return true;
+            return true;
             if (endpoint.IsRenderbuffer()) {
                 return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
             }
@@ -10260,10 +10218,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
-        if (MG_Config::DataArmIsRecord()) {
-            ReadWirePixels(x,y,width,height,format,type,pixels);
-            return;
-        }
+        ReadWirePixels(x,y,width,height,format,type,pixels);
+        return;
         if (width <= 0 || height <= 0) {
             return;
         }
@@ -10958,8 +10914,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Store honoring the client pack state (single slice).
         const SharedPtr<MG_State::GLState::BufferObject> wireReplyHasNoPackBuffer;
         const auto& pixelPackBufferObject =
-            MG_Config::DataArmIsRecord() ? wireReplyHasNoPackBuffer :
-            MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            wireReplyHasNoPackBuffer;
         const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT packAlignment = packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : 1;
@@ -11234,10 +11189,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
-        if (MG_Config::DataArmIsRecord()) {
-            GenerateWireMipmap();
-            return;
-        }
+        GenerateWireMipmap();
+        return;
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         // Whatever is left here is a coverage gap in this backend, not a broken invariant, so it
         // declines (leaving the mip chain unwritten) rather than asserting the process down. What
@@ -11341,9 +11294,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // server's staged shadow (keyed by the synced TextureResource above) and the client's
         // level storage is never written; in monolith the client-object path runs unchanged.
         const Bool allocatedMipmapStorage =
-            MG_Config::DataArmIsRecord()
-                ? EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, uploadTargets)
-                : EnsureGenerateMipmapStorageAllocated(*mipmapTexture, baseMipLevel, endMipLevel);
+            EnsureGenerateMipmapShadowAllocated(*resource, baseMipLevel, uploadTargets);
         MOBILEGL_ASSERT(allocatedMipmapStorage, "GenerateMipmap could not allocate a full mip chain for this texture.");
 
         resource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
@@ -11632,8 +11583,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                          "undefined behaviour rather than a capture");
             return false;
         }
-        if (MG_Config::DataArmIsRecord())
-            return BeginWireXfbCaptureForDraw(frame);
+        return BeginWireXfbCaptureForDraw(frame);
         const auto& program = MG_Pipe::gPipeInputs.GetTransformFeedbackProgram();
         if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
             return false;
@@ -12653,42 +12603,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vertexRange.instanceCount = 1;
         // MONOLITH ONLY: with a transport the frontend VAO is not this side's to read at all
         // (the client owns those bytes and stages them itself), and this runs on the apply thread.
-        if (!MG_Config::DataArmIsRecord()) {
-            const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
-            Bool clientArray = false;
-            if (currentVAO) {
-                for (const auto& attribute : currentVAO->GetAllAttributes()) {
-                    if (attribute.Enabled && !attribute.Buffer) {
-                        clientArray = true;
-                        break;
-                    }
-                }
-            }
-            if (clientArray) {
-                // The commands may be shader-written, and a stale shadow would size the upload
-                // off words no shader ever wrote.
-                drawBuffer->SyncGpuWrites();
-                const Uint8* commandHostBytes = drawBuffer->MappedData();
-                if (commandHostBytes == nullptr) {
-                    MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: a client-memory vertex array needs "
-                                 "the commands on the CPU and the indirect buffer has no readable shadow");
-                    return;
-                }
-                Uint64 lastElement = 0;
-                for (GLsizei idraw = 0; idraw < drawcount; ++idraw) {
-                    VkDrawIndirectCommand command{};
-                    Memcpy(&command,
-                           commandHostBytes + commandOffset + static_cast<SizeT>(idraw) * static_cast<SizeT>(stride),
-                           sizeof(command));
-                    lastElement = std::max<Uint64>(lastElement,
-                                                   static_cast<Uint64>(command.firstVertex) + command.vertexCount);
-                    vertexRange.firstInstance = std::max(vertexRange.firstInstance, command.firstInstance);
-                    vertexRange.instanceCount = std::max(vertexRange.instanceCount, command.instanceCount);
-                }
-                vertexRange.firstVertex = 0;
-                vertexRange.vertexCount = static_cast<Uint32>(lastElement);
-            }
-        }
 
         if (!SetupDraw(frame, mode, DrawSetupAspect::IndirectDrawBuffer, vertexRange)) {
             return;
@@ -12997,16 +12911,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        if (MG_Config::DataArmIsRecord()) {
-            // Texture uploads submit on this queue with their own fences. The
-            // renderer watermark alone cannot prove images/views are idle.
-            if (m_textureManager && !m_textureManager->WireUploadsAreIdle()) return false;
-            // No preparation, recording or GPU work remains. A minimized Present
-            // may have abandoned a recording tagged for a submission that will
-            // never occur, so reclaim those future-tagged objects as well.
-            CollectWireObjects(m_completedSubmitCounter, true);
-            ClearAllWireDrawPassCaches();
-        }
+        // Texture uploads submit on this queue with their own fences. The
+        // renderer watermark alone cannot prove images/views are idle.
+        if (m_textureManager && !m_textureManager->WireUploadsAreIdle()) return false;
+        // No preparation, recording or GPU work remains. A minimized Present
+        // may have abandoned a recording tagged for a submission that will
+        // never occur, so reclaim those future-tagged objects as well.
+        CollectWireObjects(m_completedSubmitCounter, true);
+        ClearAllWireDrawPassCaches();
 
         // Every submission is complete and nothing recorded references the
         // per-frame transients. Pure-reclaim work runs on every drain: it only
@@ -14420,11 +14332,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties{};
         descriptorIndexingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
         const Bool descriptorIndexingCore =
-#if MOBILEGL_BUILD_DISAGGREGATED && !defined(VK_USE_PLATFORM_WIN32_KHR)
+#if !defined(VK_USE_PLATFORM_WIN32_KHR)
             // CreateInstance requests Vulkan 1.1 on these platforms. A 1.2+ GPU
             // does not promote descriptor indexing into that application's core
-            // API; the wire path must enable VK_EXT_descriptor_indexing instead.
-            (!MG_Config::DataArmIsRecord()) &&
+            // API, so the record arm enables VK_EXT_descriptor_indexing instead (P13 W6:
+            // every library, not only the transport build - the old monolith-only `true`
+            // here treated the 1.2 device as core under a 1.1 instance).
+            false &&
 #endif
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
         const Bool descriptorIndexingExtension =
@@ -14446,8 +14360,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
             IsExtensionSupported(availableExtensions, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
-        const Bool wireDepthResolveEnabled = MG_Config::DataArmIsRecord() &&
-            getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
+        const Bool wireDepthResolveEnabled = getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
         m_wireCreateRenderPass2 = nullptr;
         m_wireDepthResolveModes = m_wireStencilResolveModes = 0;
         if (wireDepthResolveEnabled) {
@@ -14470,8 +14383,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // write the stencil aspect without it. Enabled on the same terms as the resolve
         // extensions above - wire arms only - and the arm declines stencil where it is absent
         // rather than producing an undefined aspect.
-        m_wireShaderStencilExport = MG_Config::DataArmIsRecord() &&
-            IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+        m_wireShaderStencilExport = IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
         if (m_wireShaderStencilExport)
             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
                                           VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
@@ -14487,8 +14399,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireGetAhbProperties = nullptr;
         m_sharedImageSyncFd = false;
 #if defined(__ANDROID__)
-        if (MG_Config::DataArmIsRecord() &&
-            m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
+        if (m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
             IsExtensionSupported(availableExtensions, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
             m_wireAhbImport = true;
@@ -15038,7 +14949,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             IsExtensionSupported(availableExtensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
             : IsExtensionSupported(availableExtensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
                                                                                             : nullptr;
-        if (MG_Config::DataArmIsRecord() && robustness2Name != nullptr &&
+        if (robustness2Name != nullptr &&
             getPhysicalDeviceFeatures2 != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             featureQuery.pNext = &robustness2Features;
@@ -15052,10 +14963,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_wireNullDescriptor = true;
             }
         }
-        if (MG_Config::DataArmIsRecord()) {
-            MGLOG_I("Magma wire: robustness2 nullDescriptor %s (%s)", m_wireNullDescriptor ? "enabled" : "unavailable",
-                    robustness2Name != nullptr ? robustness2Name : "no robustness2 extension");
-        }
+        MGLOG_I("Magma wire: robustness2 nullDescriptor %s (%s)", m_wireNullDescriptor ? "enabled" : "unavailable",
+                robustness2Name != nullptr ? robustness2Name : "no robustness2 extension");
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
@@ -15285,7 +15194,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // red when the real recording, readback or tally stops detecting it too.
     void VulkanRenderer::ArmWireDepthResolveOrder() {
         m_wirePreferShaderDepthResolve = false;
-        if (!MG_Config::DataArmIsRecord()) return;
         // ResolveWireDepthStencil's own test for the render-pass arm, less its per-format half
         // (the probe asks that per format): without it the shader pass is the only arm.
         const Bool renderPassArmAvailable = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&

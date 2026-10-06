@@ -384,13 +384,11 @@ namespace MobileGL::MG_Pipe {
                                                               vao.GetAttributeBindingIndex(static_cast<Uint>(i)));
                 // Client addresses never cross the transport. Draw emission snapshots
                 // their referenced elements into owned buffers with a zero byte origin.
-                if (MG_Config::DataArmIsRecord() &&
-                    !vao.GetAttribute(static_cast<Uint>(i)).Buffer) m_attributes[i].Offset = 0;
+                if (!vao.GetAttribute(static_cast<Uint>(i)).Buffer) m_attributes[i].Offset = 0;
             }
             for (SizeT i = 0; i < kBindings; ++i) {
                 m_bindingPoints[i] = MGPipeBuildVertexBindingPointWire(vao.GetBindingPoint(static_cast<Uint>(i)));
-                if (MG_Config::DataArmIsRecord() &&
-                    !vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
+                if (!vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
             }
             // Attributes first, then binding points, both ascending and contiguous.
             constexpr SizeT kAttribBytes = kAttribs * sizeof(MGPVertexAttribWire);

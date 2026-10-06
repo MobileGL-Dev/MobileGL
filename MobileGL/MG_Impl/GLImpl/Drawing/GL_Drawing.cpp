@@ -1341,7 +1341,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // BeginXfbCaptureForDraw does mark the capture targets - where the fence at the
             // caller still runs, so the readback it emits is pure new work on the monolith
             // path and integration-gpu cannot see it.
-            if (MG_Config::DataArmIsRecord()) buffer->SyncGpuWrites();
+            buffer->SyncGpuWrites();
             const Range1D range = bindingPoint.GetRange();
             const Uint8* mapped = buffer->MappedData();
             if (mapped == nullptr) continue;

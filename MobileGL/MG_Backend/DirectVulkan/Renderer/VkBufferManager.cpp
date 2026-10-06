@@ -235,9 +235,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     void VkBufferManager::RegisterWireResourceOps() {
-        if (MG_Config::DataArmIsRecord()) {
-            MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);
-        }
+        MG_Pipe::MGPipeSetResourceOps(&g_vulkanWireResourceOps);
     }
 
     namespace {
@@ -1383,7 +1381,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .frameCount = m_initInfo.frameCount,
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                     (MG_Config::DataArmIsRecord() ? VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT} : 0u) |
+                     (VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT}) |
                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
             .allocationFlags = m_initInfo.transientAllocationFlags,

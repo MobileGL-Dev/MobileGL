@@ -49,7 +49,7 @@
 // SyncGpuWrites, exactly as glMapBufferRange and glGetBufferSubData already do. Monolith keeps its
 // read as it was: its ReadPixels maps the driver PBO back into the shadow inside the call, and the
 // pull build compiles this to nothing (G1).
-#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                             do {                                                                                                     if (MG_Config::DataArmIsRecord()) (buffer)->SyncGpuWrites();       } while (0)
+#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                             do {                                                                                                     (buffer)->SyncGpuWrites();       } while (0)
 
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
@@ -6117,8 +6117,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         viewObject->SetInternalFormat(viewInternalFormat);
         viewObject->SetSamples(storageOwner->GetSamples());
         viewObject->SetFixedSampleLocations(storageOwner->HasFixedSampleLocations());
-        if (MG_Config::DataArmIsRecord())
-            MG_Pipe::MGPipeEmitSamplerViewCreate(*viewObject);
+        MG_Pipe::MGPipeEmitSamplerViewCreate(*viewObject);
     }
 
     void TexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width) {
@@ -6580,12 +6579,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     static void GetTextureImageForUploadTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                                TextureUploadTarget uploadTarget, GLint level, GLenum format,
                                                GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
-        if (MG_Config::DataArmIsRecord()) {
-            MGP_FILL(GetTextureImage);
-            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
-                                                                  bufSize, pixels);
-            return;
-        }
+        MGP_FILL(GetTextureImage);
+        MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
+                                                              bufSize, pixels);
+        return;
         if (MG_Backend::pActiveBackendObject != nullptr &&
             MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
             MGL_BACKEND_SLOT_LOCAL(GetTextureImage)) {
@@ -6607,8 +6604,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         auto uploadTarget = GetPrimaryUploadTarget(textureObject);
         // Unlike glGetTexImage's face target, this DSA call reads all six faces.
-        if (MG_Config::DataArmIsRecord() &&
-            textureObject->GetTarget() == TextureTarget::TextureCubeMap)
+        if (textureObject->GetTarget() == TextureTarget::TextureCubeMap)
             uploadTarget = TextureUploadTarget::Unknown;
         GetTextureImageForUploadTarget(textureObject, uploadTarget, level, format, type,
                                        bufSize, pixels, __func__);
@@ -6870,10 +6866,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
         if (!GetTexImage_State(target, level, format, type, pixels)) return;
-        if (MG_Config::DataArmIsRecord()) {
-            GetTexImage_Backend(target, level, format, type, pixels);
-            return;
-        }
+        GetTexImage_Backend(target, level, format, type, pixels);
+        return;
         if (MGL_BACKEND_SLOT_LOCAL(GetTexImage)) {
             GetTexImage_Backend(target, level, format, type, pixels);
             return;

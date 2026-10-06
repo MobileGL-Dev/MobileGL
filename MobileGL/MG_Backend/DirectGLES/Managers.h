@@ -788,7 +788,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // ProgramSubsystemEnabled() already latches, so this is one load and one test, and a latch
     // here would only hide which half answered.
     inline Bool ProgramHandleArm() {
-        return MG_Config::DataArmIsRecord() && ProgramSubsystemEnabled();
+        return ProgramSubsystemEnabled();
     }
 
     // ---- P4a: what the twins read INSTEAD of the frontend object ----
@@ -1312,8 +1312,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // conjunction in MultiDraw.cpp would satisfy in letter while giving the family two
         // selectors that can drift apart. One definition, spelled at every site that reads it.
         inline Bool VertexInputReadsRecords() {
-            return MG_Config::DataArmIsRecord() &&
-                   VertexInputSubsystemEnabled();
+            return VertexInputSubsystemEnabled();
         }
 
         // Registered as the frontend's BufferBackendOps at backend init and on

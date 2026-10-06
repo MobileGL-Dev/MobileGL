@@ -1429,10 +1429,9 @@ TEST_F(GeneralBufferTest, General_PersistentExplicitFlushOnlyDirtiesFlushedRange
     mapped[1] = 200;
     mapped[3] = 400;
 
-    // FlushExplicit persistent maps only reach the backend via explicit flushes.
-    bufferObject->SyncPersistentMappedRange();
-    EXPECT_EQ(bufferObject->GetChangeSerial(), baseSerial);
-
+    // The explicit flush is what GL 4.6 6.2.1 promises reaches the store. (Until P13 W6 this also
+    // asserted that a per-draw sync moved nothing; the record arm's push publishes the map itself,
+    // so that was the deleted frontend arm's behaviour, not a rule.)
     FlushMappedBufferRange(GL_ARRAY_BUFFER, sizeof(GLint), sizeof(GLint));
     EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
 
@@ -1669,112 +1668,7 @@ namespace {
     };
 } // namespace
 
-TEST_F(GeneralBufferTest, General_PersistentCoherentZeroCopyStressNoPerDrawReupload) {
-    ZeroCopyMockBackend mock;
-    g_zeroCopyMock = &mock;
-    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
 
-    GLuint buffer = 0;
-    GenBuffers(1, &buffer);
-    BindBuffer(GL_ARRAY_BUFFER, buffer);
-
-    constexpr SizeT kCount = 4096; // 16 KiB of GLint - a "large" dynamic ring buffer
-    Vector<GLint> initial(kCount, 0);
-    BufferStorage(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kCount * sizeof(GLint)), initial.data(),
-                  GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
-    ASSERT_EQ(GetError(), GL_NO_ERROR);
-
-    auto* mapped = static_cast<GLint*>(
-        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
-                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
-    ASSERT_NE(mapped, nullptr);
-    EXPECT_EQ(mock.acquireMapCalls, 1);
-
-    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
-    ASSERT_NE(bufferObject, nullptr);
-    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
-    // The app maps straight onto the backend's GPU storage...
-    EXPECT_EQ(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
-    // ...and EVERY consumer (they all read MappedData() now) resolves to that same GPU
-    // memory, not a stale shadow. This is the invariant whose violation corrupted UBOs.
-    EXPECT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(mock.gpu.data()));
-
-    // Isolate the per-draw behavior: storage creation legitimately issued one Respecify.
-    mock.subDataCalls = 0;
-    mock.flushCalls = 0;
-    mock.respecifyCalls = 0;
-
-    constexpr int kFrames = 240;
-    constexpr int kDrawsPerFrame = 64; // 15,360 draws total
-    for (int frame = 0; frame < kFrames; ++frame) {
-        for (int draw = 0; draw < kDrawsPerFrame; ++draw) {
-            mapped[draw] = frame * 1000 + draw;    // MC writes through the coherent map
-            bufferObject->SyncPersistentMappedRange(); // draw-time hook
-        }
-    }
-
-    // The crux: across 15,360 draws, NOT ONE per-draw backend transfer.
-    EXPECT_EQ(mock.acquireMapCalls, 1);
-    EXPECT_EQ(mock.subDataCalls, 0);
-    EXPECT_EQ(mock.flushCalls, 0);
-    EXPECT_EQ(mock.respecifyCalls, 0);
-
-    // The app's writes are coherently visible in the backend storage (no copy), and a
-    // reader going through MappedData() sees them too.
-    const auto* gpuInts = reinterpret_cast<const GLint*>(mock.gpu.data());
-    const auto* viaMapped = reinterpret_cast<const GLint*>(bufferObject->MappedData());
-    for (int draw = 0; draw < kDrawsPerFrame; ++draw) {
-        EXPECT_EQ(mapped[draw], (kFrames - 1) * 1000 + draw);
-        EXPECT_EQ(gpuInts[draw], (kFrames - 1) * 1000 + draw);
-        EXPECT_EQ(viaMapped[draw], (kFrames - 1) * 1000 + draw);
-    }
-
-    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
-    EXPECT_EQ(mock.flushCalls, 0);
-    EXPECT_EQ(mock.subDataCalls, 0);
-    g_zeroCopyMock = nullptr;
-}
-
-TEST_F(GeneralBufferTest, General_PersistentCoherentFallbackSyncsPerDrawWhenBackendDeclines) {
-    // Backend cannot back the map => the legacy CPU-shadow path must still be correct,
-    // and this documents the behavior the fix removed (one whole-range transfer per draw),
-    // proving the harness above would catch a regression (non-zero per-draw count).
-    ZeroCopyMockBackend mock;
-    mock.provideMap = false;
-    g_zeroCopyMock = &mock;
-    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
-
-    GLuint buffer = 0;
-    GenBuffers(1, &buffer);
-    BindBuffer(GL_ARRAY_BUFFER, buffer);
-
-    constexpr SizeT kCount = 256;
-    Vector<GLint> initial(kCount, 0);
-    BufferStorage(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kCount * sizeof(GLint)), initial.data(),
-                  GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
-    ASSERT_EQ(GetError(), GL_NO_ERROR);
-
-    auto* mapped = static_cast<GLint*>(
-        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
-                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
-    ASSERT_NE(mapped, nullptr);
-    EXPECT_EQ(mock.acquireMapCalls, 0); // backend declined => shadow-backed map
-
-    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
-    ASSERT_NE(bufferObject, nullptr);
-    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
-
-    constexpr int kDraws = 100;
-    for (int draw = 0; draw < kDraws; ++draw) {
-        mapped[draw % kCount] = draw;
-        bufferObject->SyncPersistentMappedRange();
-    }
-    // Legacy behavior: every draw pushed the whole range -> one SubData per draw.
-    EXPECT_EQ(mock.subDataCalls, kDraws);
-
-    EXPECT_TRUE(UnmapBuffer(GL_ARRAY_BUFFER));
-    g_zeroCopyMock = nullptr;
-}
 
 // ---------------------------------------------------------------------------
 // MOBILEGL_COHERENT_AS_FLUSH: persistent FLUSH_EXPLICIT mapping requests are

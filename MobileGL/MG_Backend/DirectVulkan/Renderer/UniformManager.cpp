@@ -586,15 +586,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_bufferManager = bufferManager;
         m_programFactory = programFactory;
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
-        if (MG_Config::DataArmIsRecord()) {
-            VkPhysicalDeviceProperties properties{};
-            vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
-            m_wireStorageOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minStorageBufferOffsetAlignment);
-            m_wireTexelOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minTexelBufferOffsetAlignment);
-            m_wireMaxUniformRange = properties.limits.maxUniformBufferRange;
-            m_wireMaxStorageRange = properties.limits.maxStorageBufferRange;
-            m_wireMaxTexelElements = properties.limits.maxTexelBufferElements;
-        }
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &properties);
+        m_wireStorageOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minStorageBufferOffsetAlignment);
+        m_wireTexelOffsetAlignment = std::max<VkDeviceSize>(1, properties.limits.minTexelBufferOffsetAlignment);
+        m_wireMaxUniformRange = properties.limits.maxUniformBufferRange;
+        m_wireMaxStorageRange = properties.limits.maxStorageBufferRange;
+        m_wireMaxTexelElements = properties.limits.maxTexelBufferElements;
         m_frameCount = frameCount;
         m_maxBindings = maxBindings;
         m_samplerResolveMemo.assign(m_maxBindings, SamplerResolveMemo{});

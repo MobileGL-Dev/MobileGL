@@ -1500,7 +1500,7 @@ namespace MobileGL::MG_Pipe {
         // existing backend hooks authoritative when present, and use this fallback otherwise.
         void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
                                            const void* bytes, const MGPSubRegion* regions) {
-            if (!MG_Config::DataArmIsRecord() || !bytes || upload.Blob.Size == 0) return;
+            if (!bytes || upload.Blob.Size == 0) return;
             auto& store = MG_Record::ServerStagedTexture();
             const auto& desc = stored.Desc;
             const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(upload.Res);
@@ -1523,7 +1523,6 @@ namespace MobileGL::MG_Pipe {
         }
 
         void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
-            if (!MG_Config::DataArmIsRecord()) return;
             auto& store = MG_Record::ServerStagedTexture();
             const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(desc.Resource);
             const auto define = [&](Uint16 target, Uint16 mip, const IntVec3& extent) {
@@ -1971,8 +1970,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplierReleaseObjectRecords() {
-        if (MG_Config::DataArmIsRecord() &&
-            (g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
+        if ((g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
             MG_Record::ServerStagedTexture().DropAll();
         }
         // The served context is going away and this applier with it. Under split that is one
@@ -2733,9 +2731,8 @@ namespace MobileGL::MG_Pipe {
         if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture) {
             if (g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr)
                 g_resourceOps->TextureDestroy(handle.Handle);
-            else if (MG_Config::DataArmIsRecord())
-                MG_Record::ServerStagedTexture().Drop(
-                    MG_Record::StagedTextureStore::KeyForHandle(handle.Handle));
+            else { MG_Record::ServerStagedTexture().Drop(
+                    MG_Record::StagedTextureStore::KeyForHandle(handle.Handle)); }
         }
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Destroy != nullptr) {

@@ -268,25 +268,6 @@ TEST_F(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) {
     EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 1u);
 }
 
-// THE GATE ITSELF. On the monolith path the six backend sites are still the only producers and
-// a second marker would be new behaviour (D-J) - and rows 4 and 5 would remove a stall that
-// monolith is entitled to keep.
-TEST_F(SplitBufferSet, TheWholeSetIsInertOnTheMonolithPath) {
-    MG_Config::Transport = MG_Config::TransportMode::Monolith;
-    auto ssbo = MakeBuffer(18u, 256);
-    MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0).Bind(ssbo);
-    MG_State::pGLContext->TouchBufferBindingPoint(BufferTarget::ShaderStorage, 0);
-
-    MG_Record::MarkGpuWritesForDraw();
-    MG_Record::MarkGpuWritesForDispatch();
-    MG_Record::MarkReadPixelsPackBuffer();
-    MG_Record::MarkEndTransformFeedbackCaptureTargets();
-
-    for (SizeT row = 0; row < static_cast<SizeT>(GpuWriteProducer::Count); ++row) {
-        EXPECT_EQ(MG_Record::ProducerMarkCount(static_cast<GpuWriteProducer>(row)), 0u)
-            << "row " << row << " fired with Transport == Monolith";
-    }
-}
 
 // =====================================================================================
 // The persistent-map push
@@ -814,7 +795,7 @@ TEST(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsAct
 }
 TEST(SplitBufferSet, Row4AReadPixelsIntoAPackPboMarksThePbo) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, TheWholeSetIsInertOnTheMonolithPath) { MGL_SPLIT_ONLY_OR_SKIP(); }
+
 TEST(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) { MGL_SPLIT_ONLY_OR_SKIP(); }

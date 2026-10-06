@@ -535,7 +535,7 @@ namespace MobileGL::MG_State::GLState {
         // P13 W4a: monolith's record arm refreshes an aliased store through this function too
         // (Managers.cpp RefreshAliasedStoreFromGpu), and a whole-store landing there is exactly as
         // current as one under split.
-        if (MG_Config::DataArmIsRecord() && atOffset == 0 && data.size >= m_size) {
+        if (atOffset == 0 && data.size >= m_size) {
             m_gpuWritePending = false;
         }
     }

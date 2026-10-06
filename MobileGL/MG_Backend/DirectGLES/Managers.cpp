@@ -2201,8 +2201,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // before this). So under split the subdata MINTS the twin it needs to stage into.
                 // Monolith is untouched: the twin stays lazy there because the frontend object's
                 // MappedData is the source and nothing is lost by deferring the allocation (D-A2).
-                if (resource == nullptr && bytes != nullptr &&
-                    MG_Config::DataArmIsRecord()) {
+                if (resource == nullptr && bytes != nullptr) {
                     resource = GetOrCreateBufferResourceForHandle(res);
                 }
                 if (!resource) return;
@@ -2406,8 +2405,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // An empty capture may conservatively request a writeback before
                 // any draw materialized this buffer. Resolve its staged resource
                 // exactly as a GPU consumer would, then return the real bytes.
-                auto* resource = MG_Config::DataArmIsRecord()
-                    ? EnsureBufferResourceForHandle(nullptr, res) : FindBufferResourceForHandle(res);
+                auto* resource = EnsureBufferResourceForHandle(nullptr, res);
                 if (!resource || resource->id == 0 || !resource->storageInitialized) return;
                 if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
                 if (resource->persistentMapped) {
@@ -3893,9 +3891,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // A null object is the "no frontend to ask" case and is treated as "not mapped",
             // which is what the record already says.
-            const Bool askTheObjectWhetherItIsMapped =
-                !MG_Config::DataArmIsRecord();
-            if (askTheObjectWhetherItIsMapped && frontend != nullptr && frontend->IsMapped()) return false;
             if (resource->pendingRespecify || !resource->storageInitialized) return false;
             if (!resource->pendingRanges.empty()) return false;
             if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
@@ -3960,9 +3955,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // so a corrupt staged upload rendered the frontend's correct bytes and the R-2.5
                 // 0xDD audit could not reach a draw. R-2 / table 3: honest inproc is inproc that
                 // does not read the client object's memory. Under monolith nothing changes.
-                if (MG_Config::DataArmIsRecord()) {
-                    return resource->hostBytes;
-                }
+                return resource->hostBytes;
                 if (bufferObject) return bufferObject->MappedData();
                 return resource->hostBytes;
             };
@@ -4099,9 +4092,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // layer-1 surface ("buffer-legacy-arm") and the client's own pre-verb
             // persistent-map push is the only producer; the call is skipped outright. Under
             // monolith D-N's placement stands.
-            if (bufferObject && !MG_Config::DataArmIsRecord()) {
-                bufferObject->SyncPersistentMappedRange();
-            }
 
             const auto* record = ResourceRecordOf(res);
             const SizeT size = record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
@@ -4144,12 +4134,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the last orphan". With no coverage and a clear bit the store is undefined by the
             // application's own declaration and the upload stays a pure NULL reallocation.
             const Bool shadowHasContent =
-                MG_Config::DataArmIsRecord()
-                    ? (record->Desc.HasDefinedContent != 0 ||
+                (record->Desc.HasDefinedContent != 0 ||
                        (ServerStaged().CopiesIntoServerStorage() ? ServerStaged().CoveredRunCount(resource) != 0
-                                                                 : resource->contentSinceRespecify))
-                    :
-                (bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0));
+                                                                 : resource->contentSinceRespecify));
             const void* initialData = shadowHasContent ? hostBase : nullptr;
             // M-3 / codex 4: a RespecifyStorageWith(..., initialData != nullptr) is a WHOLE-STORE
             // [0, size) upload from the base, so it owes the same coverage the pending-range drain
@@ -5018,8 +5005,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemFramebuffer (bit 9) clear (or refuses "
                 "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle g_fboSynced* arm");
         }
-        if (MG_Config::DataArmIsRecord() &&
-            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+        if (verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemFramebuffer (bit 9)",
                 "the pre-handle g_fboSynced* / g_fboTextureSyncList arm reads the framebuffer "
@@ -5061,8 +5047,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "refuses it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle texture "
                 "cheap-gate trio");
         }
-        if (MG_Config::DataArmIsRecord() &&
-            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+        if (verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemTextureResources (bit 10)",
                 "the pre-handle texture cheap-gate trio resolves through the frontend texture "
@@ -5095,8 +5080,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables UnitSamplerLookupMemo's WeakPtr "
                 "arm and SamplerPassMemo's raw-pointer rows");
         }
-        if (MG_Config::DataArmIsRecord() &&
-            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+        if (verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemSamplers (bit 11)",
                 "UnitSamplerLookupMemo's WeakPtr arm and SamplerPassMemo's raw-pointer rows are "
@@ -5122,8 +5106,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemPrograms (bit 12) clear and "
                 "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables g_programTwinLookupMemo");
         }
-        if (MG_Config::DataArmIsRecord() &&
-            verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
+        if (verdict != BufferImpl::PipeSubsystemArmVerdict::Handles) {
             StopOnTransportWithoutRecordArm(
                 "kMGPipeSubsystemPrograms (bit 12)",
                 "g_programTwinLookupMemo is keyed on the frontend ProgramObject and the legacy arm "
@@ -6279,7 +6262,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // at adoption for the same reason, so the fallback below is a null and a refusal
             // rather than a stale read.
             const Bool sourceGpuWritten =
-                MG_Config::DataArmIsRecord() && resource->serverGpuWritten;
+                resource->serverGpuWritten;
             if (sourceGpuWritten) {
                 BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res, "fp64_vertex_narrowing");
             }
@@ -6463,153 +6446,151 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             // P13 W4b (defect h): monolith's record arm takes the body too; its old arm only
             // cleared m_isInitialized and replayed the frontend shadow at the next sync.
-            if (MG_Config::DataArmIsRecord()) {
-                const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
-                // ES image binding needs immutable storage, but an already
-                // immutable core-format allocation needs no replacement. Keep
-                // its GPU contents and native name; normal serial/shape checks
-                // below still consume pending uploads and real redefinitions.
-                if (m_isInitialized && m_backendStorageImmutable && !GetImageBindableStorageWidening(format)) {
-                    m_imageBindableStorageRequired = true;
-                    m_forceTextureParamsResync = true;
-                    return;
-                }
-                // P9 W2 (notes/p9/W2-REMINT.md): EVERY BYTE THIS RE-MINT REPLAYS IS ALREADY ON THE
-                // SERVER. The GPU image holds what the GPU wrote (render targets, clears, copies,
-                // generated mips, image stores) and the staged store holds what the client uploaded;
-                // the client is never asked, so no pull protocol exists. Reading only the store would
-                // be wrong: a GPU-written level's store run is stale or absent - both host corpus
-                // re-mints (iris-photon, iris-derivative) are render targets with no staged bytes.
-                const Bool hadBackendStorage = m_isInitialized;
-                // The R-16 control for W2-b's fallback below: a readback the driver refuses cannot be
-                // produced on the host (llvmpipe renders every image format), so the test lane forces
-                // one. Read by the SERVER, like the MGITEST_MAGMA_FORCE_* knobs.
-                static const Bool s_forceReadbackFailure =
-                    std::getenv("MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE") != nullptr;
-                auto& store = MG_Record::ServerStagedTexture();
-                const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
-                const auto target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
-                GLenum canonicalFormat = GL_NONE, canonicalType = GL_NONE;
-                MG_Util::TextureFormatProcessor::NormalizePixelFormat(
-                    MG_Util::ConvertTextureInternalFormatToGLEnum(format), {}, nullptr,
-                    &canonicalFormat, &canonicalType);
-                for (const auto& uploadTarget :
-                     BufferImpl::StagedUploadTargetsForPipeTarget(record.Desc.Target)) {
-                    for (Uint32 level = 0; level < record.Desc.Levels; ++level) {
-                        const auto targetCode = static_cast<Uint16>(uploadTarget);
-                        const auto levelCode = static_cast<Uint16>(level);
-                        const IntVec3 extent = store.LevelExtentOrUndefined(key, targetCode, levelCode);
-                        if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) continue;
-                        const auto* pending = FindPipeTextureUpload(record, targetCode, levelCode);
-                        const Bool covered = store.IsCovered(key, targetCode, levelCode);
-                        const MG_Pipe::MGPBox whole{0, 0, 0, static_cast<Uint32>(extent.x()),
-                            static_cast<Uint32>(extent.y()), static_cast<Uint32>(extent.z())};
-                        // A genuinely full pending write owns every byte. A
-                        // union box covering the level is not sufficient when
-                        // its explicit rectangles leave GPU-written gaps.
-                        const auto coversWhole = [&](const auto& box) {
-                            return box.X == 0 && box.Y == 0 && box.Z == 0 &&
-                                   box.W == whole.W && box.H == whole.H && box.D == whole.D;
-                        };
-                        const Bool pendingWhole = pending && (pending->Regions.empty()
-                            ? coversWhole(pending->UnionBox)
-                            : std::any_of(pending->Regions.begin(), pending->Regions.end(), coversWhole));
-                        // W2-a: ONLY A LEVEL THE DRIVER ACTUALLY HOLDS IS READ BACK. The store's
-                        // Defined-ness follows the client's respecifies, the driver's follows this
-                        // twin's last sync, and the two differ for a level defined (null data, or null
-                        // data plus a partial upload) after that sync: the driver has no such level, so
-                        // the GPU cannot have written it. A covered level then replays its staged run
-                        // (the client's whole-level shadow, pending boxes included) and an uncovered one
-                        // is undefined content with nothing to preserve. Reading it anyway was
-                        // Fatal{ResourceUnavailable, "image-promotion-readback"} on legal GL.
-                        const Bool nativeLevel =
-                            m_isInitialized &&
-                            NativeTextureLevelHasExtent(m_backendTextureId, target, uploadTarget,
-                                                        static_cast<GLint>(level), extent);
-                        if (nativeLevel && !(covered && pendingWhole)) {
-                            Vector<Uint8> snapshot;
-                            const Bool readBack =
-                                !s_forceReadbackFailure &&
-                                ReadTextureLevelTight(m_backendTextureId, target, uploadTarget, format,
-                                                      static_cast<GLint>(level), extent,
-                                                      /*sourceUsesImageCarrier=*/false, canonicalFormat,
-                                                      canonicalType, snapshot);
-                            if (!readBack && !covered) {
-                                // The GPU holds this level, the driver will not hand it back, and no
-                                // CPU byte of it exists anywhere: the one case with no honest answer.
-                                MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-readback\"} {%u,%u} level=%u",
-                                        res.Slot, res.Gen, level);
-                                std::abort();
-                            }
-                            if (!readBack) {
-                                // W2-b: the driver refused the readback (a format it cannot attach
-                                // to a framebuffer - SNORM without EXT_render_snorm, 16-bit norm
-                                // without EXT_texture_norm16, float without EXT_color_buffer_float)
-                                // but the store covers the level. Its staged run is exactly what the
-                                // monolith re-mint replays; texels the GPU wrote since that upload
-                                // are not preserved, which is monolith's answer too.
-                                MGLOG_W_ONCE("MGPipe: image promotion of texture {%u,%u} level %u: the driver "
-                                             "refused the readback (internal format %u); replaying the level's "
-                                             "staged bytes instead (remint-readback-fallback)",
-                                             res.Slot, res.Gen, level, record.Desc.InternalFormat);
-                            }
-                            if (readBack && pending) {
-                                // Native contents include prior draws/image
-                                // writes; the pending stage owns ONLY its boxes.
-                                // Merge those boxes before adopting a whole-level
-                                // snapshot, never overwrite untouched GPU texels
-                                // with the rest of a stale client staging run.
-                                const SizeT pixels = static_cast<SizeT>(extent.x()) * extent.y() * extent.z();
-                                const SizeT stagedSize = store.LevelByteSize(key, targetCode, levelCode);
-                                if (!covered || !pixels || snapshot.size() != stagedSize || stagedSize % pixels) {
-                                    MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"image-promotion-pending\"}");
-                                    std::abort();
-                                }
-                                const SizeT bpp = stagedSize / pixels;
-                                const Uint8* staged = store.RequireLevelBytes(key, targetCode, levelCode, "image-promotion");
-                                const auto merge = [&](Int32 x, Int32 y, Int32 z, Uint32 w, Uint32 h, Uint32 d) {
-                                    if (x < 0 || y < 0 || z < 0 || Uint64(x) + w > whole.W ||
-                                        Uint64(y) + h > whole.H || Uint64(z) + d > whole.D) {
-                                        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"image-promotion-region\"}");
-                                        std::abort();
-                                    }
-                                    for (Uint32 slice = 0; slice < d; ++slice) {
-                                        for (Uint32 row = 0; row < h; ++row) {
-                                            const SizeT offset = ((static_cast<SizeT>(z + slice) * whole.H + y + row) * whole.W + x) * bpp;
-                                            Memcpy(snapshot.data() + offset, staged + offset, static_cast<SizeT>(w) * bpp);
-                                        }
-                                    }
-                                };
-                                if (pending->Regions.empty()) {
-                                    const auto& box = pending->UnionBox;
-                                    merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
-                                } else {
-                                    for (const auto& box : pending->Regions)
-                                        merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
-                                }
-                            }
-                            if (readBack) {
-                                store.Adopt(key, targetCode, levelCode, extent, snapshot.data(), snapshot.size());
-                            }
-                        }
-                        // Undefined contents have no byte run to preserve. A
-                        // first allocation can still be image-bindable without
-                        // inventing an upload or consulting the frontend.
-                        if (!store.IsCovered(key, targetCode, levelCode)) continue;
-                        if (!RearmPipeTextureLevelUpload(res,
-                                MG_Pipe::MGPipePackSubDataTarget(record.Desc.Target, static_cast<Uint32>(uploadTarget)),
-                                levelCode, whole)) {
-                            MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-pending-capacity\"}");
+            const auto format = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
+            // ES image binding needs immutable storage, but an already
+            // immutable core-format allocation needs no replacement. Keep
+            // its GPU contents and native name; normal serial/shape checks
+            // below still consume pending uploads and real redefinitions.
+            if (m_isInitialized && m_backendStorageImmutable && !GetImageBindableStorageWidening(format)) {
+                m_imageBindableStorageRequired = true;
+                m_forceTextureParamsResync = true;
+                return;
+            }
+            // P9 W2 (notes/p9/W2-REMINT.md): EVERY BYTE THIS RE-MINT REPLAYS IS ALREADY ON THE
+            // SERVER. The GPU image holds what the GPU wrote (render targets, clears, copies,
+            // generated mips, image stores) and the staged store holds what the client uploaded;
+            // the client is never asked, so no pull protocol exists. Reading only the store would
+            // be wrong: a GPU-written level's store run is stale or absent - both host corpus
+            // re-mints (iris-photon, iris-derivative) are render targets with no staged bytes.
+            const Bool hadBackendStorage = m_isInitialized;
+            // The R-16 control for W2-b's fallback below: a readback the driver refuses cannot be
+            // produced on the host (llvmpipe renders every image format), so the test lane forces
+            // one. Read by the SERVER, like the MGITEST_MAGMA_FORCE_* knobs.
+            static const Bool s_forceReadbackFailure =
+                std::getenv("MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE") != nullptr;
+            auto& store = MG_Record::ServerStagedTexture();
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
+            const auto target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
+            GLenum canonicalFormat = GL_NONE, canonicalType = GL_NONE;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                MG_Util::ConvertTextureInternalFormatToGLEnum(format), {}, nullptr,
+                &canonicalFormat, &canonicalType);
+            for (const auto& uploadTarget :
+                 BufferImpl::StagedUploadTargetsForPipeTarget(record.Desc.Target)) {
+                for (Uint32 level = 0; level < record.Desc.Levels; ++level) {
+                    const auto targetCode = static_cast<Uint16>(uploadTarget);
+                    const auto levelCode = static_cast<Uint16>(level);
+                    const IntVec3 extent = store.LevelExtentOrUndefined(key, targetCode, levelCode);
+                    if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) continue;
+                    const auto* pending = FindPipeTextureUpload(record, targetCode, levelCode);
+                    const Bool covered = store.IsCovered(key, targetCode, levelCode);
+                    const MG_Pipe::MGPBox whole{0, 0, 0, static_cast<Uint32>(extent.x()),
+                        static_cast<Uint32>(extent.y()), static_cast<Uint32>(extent.z())};
+                    // A genuinely full pending write owns every byte. A
+                    // union box covering the level is not sufficient when
+                    // its explicit rectangles leave GPU-written gaps.
+                    const auto coversWhole = [&](const auto& box) {
+                        return box.X == 0 && box.Y == 0 && box.Z == 0 &&
+                               box.W == whole.W && box.H == whole.H && box.D == whole.D;
+                    };
+                    const Bool pendingWhole = pending && (pending->Regions.empty()
+                        ? coversWhole(pending->UnionBox)
+                        : std::any_of(pending->Regions.begin(), pending->Regions.end(), coversWhole));
+                    // W2-a: ONLY A LEVEL THE DRIVER ACTUALLY HOLDS IS READ BACK. The store's
+                    // Defined-ness follows the client's respecifies, the driver's follows this
+                    // twin's last sync, and the two differ for a level defined (null data, or null
+                    // data plus a partial upload) after that sync: the driver has no such level, so
+                    // the GPU cannot have written it. A covered level then replays its staged run
+                    // (the client's whole-level shadow, pending boxes included) and an uncovered one
+                    // is undefined content with nothing to preserve. Reading it anyway was
+                    // Fatal{ResourceUnavailable, "image-promotion-readback"} on legal GL.
+                    const Bool nativeLevel =
+                        m_isInitialized &&
+                        NativeTextureLevelHasExtent(m_backendTextureId, target, uploadTarget,
+                                                    static_cast<GLint>(level), extent);
+                    if (nativeLevel && !(covered && pendingWhole)) {
+                        Vector<Uint8> snapshot;
+                        const Bool readBack =
+                            !s_forceReadbackFailure &&
+                            ReadTextureLevelTight(m_backendTextureId, target, uploadTarget, format,
+                                                  static_cast<GLint>(level), extent,
+                                                  /*sourceUsesImageCarrier=*/false, canonicalFormat,
+                                                  canonicalType, snapshot);
+                        if (!readBack && !covered) {
+                            // The GPU holds this level, the driver will not hand it back, and no
+                            // CPU byte of it exists anywhere: the one case with no honest answer.
+                            MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-readback\"} {%u,%u} level=%u",
+                                    res.Slot, res.Gen, level);
                             std::abort();
                         }
+                        if (!readBack) {
+                            // W2-b: the driver refused the readback (a format it cannot attach
+                            // to a framebuffer - SNORM without EXT_render_snorm, 16-bit norm
+                            // without EXT_texture_norm16, float without EXT_color_buffer_float)
+                            // but the store covers the level. Its staged run is exactly what the
+                            // monolith re-mint replays; texels the GPU wrote since that upload
+                            // are not preserved, which is monolith's answer too.
+                            MGLOG_W_ONCE("MGPipe: image promotion of texture {%u,%u} level %u: the driver "
+                                         "refused the readback (internal format %u); replaying the level's "
+                                         "staged bytes instead (remint-readback-fallback)",
+                                         res.Slot, res.Gen, level, record.Desc.InternalFormat);
+                        }
+                        if (readBack && pending) {
+                            // Native contents include prior draws/image
+                            // writes; the pending stage owns ONLY its boxes.
+                            // Merge those boxes before adopting a whole-level
+                            // snapshot, never overwrite untouched GPU texels
+                            // with the rest of a stale client staging run.
+                            const SizeT pixels = static_cast<SizeT>(extent.x()) * extent.y() * extent.z();
+                            const SizeT stagedSize = store.LevelByteSize(key, targetCode, levelCode);
+                            if (!covered || !pixels || snapshot.size() != stagedSize || stagedSize % pixels) {
+                                MGLOG_F("MGPipe: Fatal{StageSnapshotTooNarrow, \"image-promotion-pending\"}");
+                                std::abort();
+                            }
+                            const SizeT bpp = stagedSize / pixels;
+                            const Uint8* staged = store.RequireLevelBytes(key, targetCode, levelCode, "image-promotion");
+                            const auto merge = [&](Int32 x, Int32 y, Int32 z, Uint32 w, Uint32 h, Uint32 d) {
+                                if (x < 0 || y < 0 || z < 0 || Uint64(x) + w > whole.W ||
+                                    Uint64(y) + h > whole.H || Uint64(z) + d > whole.D) {
+                                    MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"image-promotion-region\"}");
+                                    std::abort();
+                                }
+                                for (Uint32 slice = 0; slice < d; ++slice) {
+                                    for (Uint32 row = 0; row < h; ++row) {
+                                        const SizeT offset = ((static_cast<SizeT>(z + slice) * whole.H + y + row) * whole.W + x) * bpp;
+                                        Memcpy(snapshot.data() + offset, staged + offset, static_cast<SizeT>(w) * bpp);
+                                    }
+                                }
+                            };
+                            if (pending->Regions.empty()) {
+                                const auto& box = pending->UnionBox;
+                                merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
+                            } else {
+                                for (const auto& box : pending->Regions)
+                                    merge(box.X, box.Y, box.Z, box.W, box.H, box.D);
+                            }
+                        }
+                        if (readBack) {
+                            store.Adopt(key, targetCode, levelCode, extent, snapshot.data(), snapshot.size());
+                        }
+                    }
+                    // Undefined contents have no byte run to preserve. A
+                    // first allocation can still be image-bindable without
+                    // inventing an upload or consulting the frontend.
+                    if (!store.IsCovered(key, targetCode, levelCode)) continue;
+                    if (!RearmPipeTextureLevelUpload(res,
+                            MG_Pipe::MGPipePackSubDataTarget(record.Desc.Target, static_cast<Uint32>(uploadTarget)),
+                            levelCode, whole)) {
+                        MGLOG_F("MGPipe: Fatal{ResourceUnavailable, \"image-promotion-pending-capacity\"}");
+                        std::abort();
                     }
                 }
-                // W2-d: `trp=` counts a re-mint of storage the backend ALREADY held, on this arm as
-                // on the frontend one (which counts in RequireImageBindableStorage). The keep path
-                // above is not a re-mint and returns before this; a first allocation holds nothing.
-                if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
-                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
-                }
+            }
+            // W2-d: `trp=` counts a re-mint of storage the backend ALREADY held, on this arm as
+            // on the frontend one (which counts in RequireImageBindableStorage). The keep path
+            // above is not a re-mint and returns before this; a first allocation holds nothing.
+            if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
             }
             // Every defined byte now belongs to the server and every required
             // replay is in its pending set. The existing upload path builds and
@@ -7759,7 +7740,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // to be transport-gated now say so themselves, so a future by-handle noter cannot quietly
 // re-open ID-107's hole somewhere else.
 #define MGB_TEXTURE_RECORD_ARM_SELECTED()                                                                          \
-    (MG_Config::DataArmIsRecord() && TextureResourceSubsystemEnabled())
+    (TextureResourceSubsystemEnabled())
 
         // Returns true when the caller must decline (no handle noted: the caller's bug it always
         // was, named by the caller's own log line), false when the record arm can serve the call,
@@ -8373,12 +8354,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Ruling 1's arm: the push-monolith build keeps the frontend test below token for
             // token, because there the two answers are the same answer and the verify comparator
             // needs the frontend arm.
-            if (MG_Config::DataArmIsRecord() && pushedStorage != nullptr &&
+            if (pushedStorage != nullptr &&
                 !MG_Pipe::MGPipeHandleIsNull(pushedStorage->Desc.ViewOf)) {
                 SyncTextureViewToBackendByRecord(pushedRes, *pushedStorage, stateTextureObject);
                 return;
             }
-            if (MG_Config::DataArmIsRecord() && pushedStorage != nullptr) {
+            if (pushedStorage != nullptr) {
                 // Not a view: fall through to the storage body with the frontend test skipped.
             } else
             // A texture created by glTextureView owns no storage: the levels, the format and
@@ -8431,10 +8412,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // P5e (tx2), ruling 1's arm: under a transport the re-dirty half is a NAMED
                     // refusal at its entry (§5.2) instead of a walk of the client's level shadows;
                     // the push-monolith build keeps the frontend transition exactly as it is.
-                    if (MG_Config::DataArmIsRecord()) {
-                        RequireImageBindableStorageByHandle(pushedRes, *pushedStorage);
-                    } else
-                    RequireImageBindableStorage(stateTextureObject);
+                    RequireImageBindableStorageByHandle(pushedRes, *pushedStorage);
                 }
 
                 // ONE compare replaces the whole cheap-gate trio AND the content version. The
@@ -11136,30 +11114,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // push-monolith arm keeps the frontend sync it had at f6cfcbd3, token for token,
                 // because tx2's record arm inside SyncMipmapsToBackend is itself selected by
                 // `Transport != Monolith` and cannot answer here.
-                if (MG_Config::DataArmIsRecord()) {
-                    backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
-                    // From here on every draw, clear and blit into this framebuffer can write the
-                    // texture behind the staged shadow's back (the frontend arm's note, by handle).
-                    TextureImpl::NoteDriverSideTextureWriteByHandle(surface.Res);
-                } else
-                {
-                    const SharedPtr<MG_State::GLState::ITextureObject> monolithTexture =
-                        (monolithAttachment != nullptr && monolithAttachment->IsTexture())
-                            ? monolithAttachment->GetTexture()
-                            : nullptr;
-                    if (!monolithTexture) {
-                        MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} on the "
-                                     "push-monolith arm, where the storage sync needs the frontend "
-                                     "texture and this caller supplied none - refusing to attach a "
-                                     "texture whose levels were never pushed",
-                                     surface.Res.Slot, surface.Res.Gen);
-                        return false;
-                    }
-                    backendTextureObject->SyncMipmapsToBackend(monolithTexture);
-                    // From here on every draw, clear and blit into this framebuffer can write the
-                    // texture behind the shadow's back.
-                    TextureImpl::NoteDriverSideTextureWrite(monolithTexture);
-                }
+                backendTextureObject->SyncMipmapsToBackendByHandle(surface.Res);
+                // From here on every draw, clear and blit into this framebuffer can write the
+                // texture behind the staged shadow's back (the frontend arm's note, by handle).
+                TextureImpl::NoteDriverSideTextureWriteByHandle(surface.Res);
                 const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
                 if (surface.Layered != 0) {
                     g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
@@ -11223,24 +11181,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // GLContext (RecordError) and the by-handle form deliberately does not, because
                 // under a transport there is no application on this side to report it to. On the
                 // push-monolith arm there is, so the monolith arm keeps the object form.
-                if (MG_Config::DataArmIsRecord()) {
-                    backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
-                } else
-                {
-                    const SharedPtr<MG_State::GLState::RenderbufferObject> monolithRenderbuffer =
-                        (monolithAttachment != nullptr && monolithAttachment->IsRenderbuffer())
-                            ? monolithAttachment->GetRenderbuffer()
-                            : nullptr;
-                    if (!monolithRenderbuffer) {
-                        MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} on the "
-                                     "push-monolith arm, where the storage allocation needs the "
-                                     "frontend renderbuffer and this caller supplied none - refusing "
-                                     "to attach a renderbuffer with no storage",
-                                     surface.Res.Slot, surface.Res.Gen);
-                        return false;
-                    }
-                    backendRenderbufferObject->SyncToBackend(monolithRenderbuffer);
-                }
+                backendRenderbufferObject->SyncToBackendByHandle(surface.Res);
                 backendRenderbufferObject->Bind();
                 g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
                                                       backendRenderbufferObject->GetBackendRenderbufferId());
@@ -11273,10 +11214,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the three-channel colour-renderable widening). GL answers such a read with 1.0, but
         // the storage holds whatever the draw wrote there, so the readback has to overwrite it.
         Bool IsAlphaWidenedFallbackReadAttachment() {
-            if (MG_Config::DataArmIsRecord()) {
-                const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
-                return record && IsAlphaWidenedColorSurface(record->ReadSurface);
-            }
+            const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
+            return record && IsAlphaWidenedColorSurface(record->ReadSurface);
             const auto* attachmentObject = GetReadColorAttachment();
             if (attachmentObject == nullptr) {
                 return false;
@@ -11285,11 +11224,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool IsFixedPointFallbackReadAttachment() {
-            if (MG_Config::DataArmIsRecord()) {
-                const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
-                return record && record->ReadSurface.Kind != MG_Pipe::kMGPipeSurfaceKindNone &&
-                    IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
-            }
+            const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
+            return record && record->ReadSurface.Kind != MG_Pipe::kMGPipeSurfaceKindNone &&
+                IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
             const auto& readFBO =
                 MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
@@ -11456,10 +11393,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // P5c (hd): with an active transport the handle is the caller's
                 // (m_pushedSyncHandle), never the client allocator's - see SyncToBackend.
                 const MG_Pipe::MGPipeHandle fbo =
-                    MG_Config::DataArmIsRecord()
-                        ? m_pushedSyncHandle
-                        :
-                        g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                    m_pushedSyncHandle;
                 // ID-19: the OBJECT's record, not "the record of whatever is bound to READ". A
                 // framebuffer whose read buffer is being pushed need not be the read binding at
                 // all - glNamedFramebufferReadBuffer and the DSA clears reach here by name - and
@@ -11632,10 +11566,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // is never probed (T2). A null there means a caller reached this arm without a
                 // record, which the null-record refusal below names.
                 const MG_Pipe::MGPipeHandle fbo =
-                    MG_Config::DataArmIsRecord()
-                        ? m_pushedSyncHandle
-                        :
-                        g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                    m_pushedSyncHandle;
                 pushedRecord = PushedFramebufferRecord(fbo);
                 if (pushedRecord == nullptr) {
                     MGLOG_E_ONCE("MGPipe: framebuffer %u has no applier record on the handle arm, so it "
@@ -12937,11 +12868,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // it - MGPImageView::InternalFormat is that same GLenum, copied by the client
                 // out of the unit's own binding. A unit the applier has never been told about
                 // answers 0, which is what an unbound unit answers on the frontend arm too.
-                if (MG_Config::DataArmIsRecord()) {
-                    const auto& st = MG_Pipe::MGPipeApplier();
-                    if (static_cast<SizeT>(unit) >= st.BoundShaderImages.size()) return 0;
-                    return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);
-                }
+                const auto& st = MG_Pipe::MGPipeApplier();
+                if (static_cast<SizeT>(unit) >= st.BoundShaderImages.size()) return 0;
+                return static_cast<Uint>(st.BoundShaderImages[static_cast<SizeT>(unit)].InternalFormat);
                 return static_cast<Uint>(MG_Pipe::gPipeInputs.GetImageTextureBinding(unit).Format);
             }
 

@@ -2334,9 +2334,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
-            MG_Config::DataArmIsRecord()
-                ? SplitReadbackPackBuffer() :
-            MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            SplitReadbackPackBuffer();
 
             // Destination layout is computed from the client-side PACK parameters; only the actual pixel
             // rows are written so skip regions of the destination stay untouched.

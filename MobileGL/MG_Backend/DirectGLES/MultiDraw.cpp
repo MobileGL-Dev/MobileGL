@@ -289,15 +289,13 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // an empty slot, and not the arm test (ID-110: the arm was decided by the transport
         // above, never inferred from a null).
         Uint BoundDrawIndirectBufferId() {
-            if (MG_Config::DataArmIsRecord()) {
-                const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
-                if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
-                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
-                if (resource == nullptr) {
-                    RefuseMissingIndirectBufferRecord("BoundDrawIndirectBufferId", res);
-                }
-                return resource->id;
+            const MG_Pipe::MGPipeHandle res = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
+            if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
+            auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, res);
+            if (resource == nullptr) {
+                RefuseMissingIndirectBufferRecord("BoundDrawIndirectBufferId", res);
             }
+            return resource->id;
             // MONOLITH GLUE from here down, token for token what this function did before.
             const auto& indirect =
                 MG_Pipe::gPipeInputs.GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();

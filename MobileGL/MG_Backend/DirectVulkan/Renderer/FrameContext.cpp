@@ -225,8 +225,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A layout transition writes the image too. Order it after the wire
         // render pass's storeOp, clears and copies instead of relying on the old
         // per-draw queue-idle path. This applies even when contents are discarded.
-        if (MG_Config::DataArmIsRecord())
-            presentBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+        presentBarrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         presentBarrier.dstAccessMask = 0;
         presentBarrier.oldLayout = oldLayout;
         presentBarrier.newLayout = presentLayout;
@@ -239,8 +238,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         presentBarrier.subresourceRange.baseArrayLayer = 0;
         presentBarrier.subresourceRange.layerCount = 1;
         vkCmdPipelineBarrier(commandBuffer,
-                             MG_Config::DataArmIsRecord()
-                                 ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
                              nullptr, 0, nullptr, 1, &presentBarrier);
 

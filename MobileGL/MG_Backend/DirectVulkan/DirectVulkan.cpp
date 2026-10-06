@@ -39,10 +39,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     namespace {
         void RejectWireLegacyBuffer() {
-            if (MG_Config::DataArmIsRecord()) {
-                MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
-                std::abort();
-            }
+            MGLOG_F("MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
+            std::abort();
         }
         // Generation of the live VulkanRenderer instance, mirroring
         // DirectGLES's g_syncContextGeneration. BackendObject_DirectVulkan
@@ -395,19 +393,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
-            return;
-        }
+        DrawWireIndirect(mode, type, indirect, drawcount, stride, true);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElementsIndirect called with null GL context");
         pVulkanRenderer->MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
-            return;
-        }
+        DrawWireIndirect(mode, 0, indirect, drawcount, stride, false);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawArraysIndirect called with null GL context");
 
@@ -459,20 +453,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
                                         GLsizei maxdrawcount, GLsizei stride) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
-            return;
-        }
+        DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElementsIndirectCount called with null GL context");
         pVulkanRenderer->MultiDrawElementsIndirectCount(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
     void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                       GLsizei maxdrawcount, GLsizei stride) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
-            return;
-        }
+        DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArraysIndirectCount called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawArraysIndirectCount called with null GL context");
 
@@ -545,10 +535,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawElementsInstancedBaseVertexBaseInstance(mode, count, type, indices, instancecount, 0, 0);
     }
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, type, indirect, 1, 0, true);
-            return;
-        }
+        DrawWireIndirect(mode, type, indirect, 1, 0, true);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElementsIndirect called with null GL context");
 
@@ -608,10 +596,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawArraysInstancedBaseInstance(mode, first, count, instancecount, 0);
     }
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
-        if (MG_Config::DataArmIsRecord()) {
-            DrawWireIndirect(mode, 0, indirect, 1, 0, false);
-            return;
-        }
+        DrawWireIndirect(mode, 0, indirect, 1, 0, false);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawArraysIndirect called with null GL context");
 
@@ -684,10 +670,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // DispatchComputeIndirect takes its transport branch into DispatchWireComputeIndirect
         // (WireDraw.inc), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
         // that was here (ReadWireBuffer, a whole-GPU wait once a shader had written the store) is gone.
-        if (MG_Config::DataArmIsRecord()) {
-            pVulkanRenderer->DispatchComputeIndirect(indirect);
-            return;
-        }
+        pVulkanRenderer->DispatchComputeIndirect(indirect);
+        return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchComputeIndirect called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DispatchComputeIndirect called with null GL context");
         pVulkanRenderer->DispatchComputeIndirect(indirect);
@@ -749,23 +733,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
-        if (MG_Config::DataArmIsRecord()) {
-            auto& state = MG_Pipe::MGPipeApplier();
-            const auto handle = state.VerbStorageBlockProgram;
-            if (handle.Slot >= state.ShaderCsos.size() || !state.ShaderCsos[handle.Slot].Live ||
-                state.ShaderCsos[handle.Slot].Gen != handle.Gen || !storageBlockName) {
-                MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:storage-block-program-record\"}");
-                std::abort();
-            }
-            auto& record = state.ShaderCsos[handle.Slot];
-            auto found = std::find_if(record.StorageOverrides.begin(), record.StorageOverrides.end(),
-                [&](const auto& entry) { return entry.Name == storageBlockName; });
-            if (found == record.StorageOverrides.end())
-                record.StorageOverrides.push_back({storageBlockName, static_cast<Int32>(storageBlockBinding)});
-            else found->Binding = static_cast<Int32>(storageBlockBinding);
-            ++record.BindingsSerial;
-            return;
+        auto& state = MG_Pipe::MGPipeApplier();
+        const auto handle = state.VerbStorageBlockProgram;
+        if (handle.Slot >= state.ShaderCsos.size() || !state.ShaderCsos[handle.Slot].Live ||
+            state.ShaderCsos[handle.Slot].Gen != handle.Gen || !storageBlockName) {
+            MGLOG_F("MGPipe: Fatal{UnmigratedVerb, \"Magma:storage-block-program-record\"}");
+            std::abort();
         }
+        auto& record = state.ShaderCsos[handle.Slot];
+        auto found = std::find_if(record.StorageOverrides.begin(), record.StorageOverrides.end(),
+            [&](const auto& entry) { return entry.Name == storageBlockName; });
+        if (found == record.StorageOverrides.end())
+            record.StorageOverrides.push_back({storageBlockName, static_cast<Int32>(storageBlockBinding)});
+        else found->Binding = static_cast<Int32>(storageBlockBinding);
+        ++record.BindingsSerial;
+        return;
         auto* programObject = TryGetDirectVulkanProgram(program);
         if (!programObject || storageBlockName == nullptr) return;
         const Int maxBindings =
@@ -852,28 +834,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // memory) into uint32 values with the loop-closing first index appended.
     static Bool BuildClosedLineLoopIndices(GLsizei count, GLenum type, const void* indices,
                                            Vector<Uint32>& outIndices) {
-        if (MG_Config::DataArmIsRecord()) {
-            const SizeT width = MG_Util::GetGLTypeSize(type);
-            if ((width != 1 && width != 2 && width != 4) || count < 2) return false;
-            const auto& bound = MG_Pipe::MGPipeApplier().IndexBuffer;
-            Vector<Uint8> owned;
-            const Uint8* bytes = static_cast<const Uint8*>(indices);
-            if (!MG_Pipe::MGPipeHandleIsNull(bound.Res)) {
-                owned.resize(static_cast<SizeT>(count) * width);
-                const Uint64 offset = bound.Offset + reinterpret_cast<Uint64>(indices);
-                if (offset < bound.Offset || !pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
-                        bound.Res, offset, owned.size(), owned.data())) return false;
-                bytes = owned.data();
-            }
-            if (!bytes) return false;
-            outIndices.resize(static_cast<SizeT>(count) + 1);
-            for (GLsizei i = 0; i < count; ++i) {
-                outIndices[i] = 0;
-                Memcpy(&outIndices[i], bytes + static_cast<SizeT>(i) * width, width);
-            }
-            outIndices[count] = outIndices[0];
-            return true;
+        const SizeT width = MG_Util::GetGLTypeSize(type);
+        if ((width != 1 && width != 2 && width != 4) || count < 2) return false;
+        const auto& bound = MG_Pipe::MGPipeApplier().IndexBuffer;
+        Vector<Uint8> owned;
+        const Uint8* bytes = static_cast<const Uint8*>(indices);
+        if (!MG_Pipe::MGPipeHandleIsNull(bound.Res)) {
+            owned.resize(static_cast<SizeT>(count) * width);
+            const Uint64 offset = bound.Offset + reinterpret_cast<Uint64>(indices);
+            if (offset < bound.Offset || !pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
+                    bound.Res, offset, owned.size(), owned.data())) return false;
+            bytes = owned.data();
         }
+        if (!bytes) return false;
+        outIndices.resize(static_cast<SizeT>(count) + 1);
+        for (GLsizei i = 0; i < count; ++i) {
+            outIndices[i] = 0;
+            Memcpy(&outIndices[i], bytes + static_cast<SizeT>(i) * width, width);
+        }
+        outIndices[count] = outIndices[0];
+        return true;
         const SizeT indexSize = MG_Util::GetGLTypeSize(type);
         if (indexSize == 0 || count < 2) {
             return false;
@@ -959,23 +939,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // batch that command buffer belongs to - the handle SetupDraw is holding goes stale, and
         // the next vkCmd* records into a command buffer that is no longer the frame's. Reconciling
         // HERE, before SetupDraw starts recording, keeps the wait out of the recording.
-        if (!MG_Config::DataArmIsRecord()) {
-            const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
-            Bool clientArray = false;
-            if (currentVAO) {
-                for (const auto& attribute : currentVAO->GetAllAttributes()) {
-                    if (attribute.Enabled && !attribute.Buffer) {
-                        clientArray = true;
-                        break;
-                    }
-                }
-            }
-            if (clientArray) {
-                if (const auto& elementBuffer = currentVAO->GetIndexBufferBindingSlot().GetBoundObject()) {
-                    elementBuffer->SyncGpuWrites();
-                }
-            }
-        }
 
         pVulkanRenderer->DrawElements(payload);
     }
@@ -1028,9 +991,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // MultiDrawIndexedCmd left the client-memory shape addressing a view whose byte
         // offset is a hardcoded 0, so UploadAndBindIndexBuffer saw a null client pointer,
         // declined the whole batch and painted nothing.)
-        const Bool noIndexBuffer = MG_Config::DataArmIsRecord()
-            ? MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeApplier().IndexBuffer.Res)
-            : MG_Pipe::gPipeInputs.GetBoundVertexArray()->GetIndexBufferBindingSlot().GetBoundObject() == nullptr;
+        const Bool noIndexBuffer = MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeApplier().IndexBuffer.Res);
         if (noIndexBuffer) {
             for (GLsizei i = 0; i < drawcount; ++i) {
                 if (count[i] <= 0) {

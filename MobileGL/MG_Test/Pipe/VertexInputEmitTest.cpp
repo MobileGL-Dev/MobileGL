@@ -237,7 +237,9 @@ namespace {
             const auto& attrib = vao->GetAttribute(index);
             const MGPVertexAttribWire& wire = Emitter().LastAttributes()[static_cast<SizeT>(i)];
             SCOPED_TRACE(::testing::Message() << "attribute " << i);
-            EXPECT_EQ(wire.Offset, static_cast<Uint64>(attrib.Offset));
+            // Client addresses never cross: an attribute with no buffer carries offset 0 (its
+            // bytes ride an owned buffer at draw time), every arm since P13 W6.
+            EXPECT_EQ(wire.Offset, attrib.Buffer ? static_cast<Uint64>(attrib.Offset) : 0ull);
             EXPECT_EQ(wire.Stride, static_cast<Int32>(attrib.Stride));
             EXPECT_EQ(wire.Type, static_cast<Uint32>(attrib.Type));
             EXPECT_EQ(wire.Size, static_cast<Uint8>(attrib.Size));

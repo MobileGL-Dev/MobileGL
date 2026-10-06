@@ -511,7 +511,8 @@ TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
     EXPECT_EQ(record.SourceIsVerbatimLevelShadow, 1)
         << "the client always declares the level shadow; the server clears it when it converts";
     EXPECT_EQ(record.Blob.Seg, kMGHostSpanSegNone);
-    EXPECT_EQ(record.Blob.Size, 0u) << "a monolith record does not declare its blob";
+    EXPECT_EQ(record.Blob.Size, 64u * 64u * 4u)
+        << "the record declares its blob on every arm since P13 W6 (the record arm reads it)";
     EXPECT_NE(record.Blob.Offset, 0u) << "Blob.Offset is the level shadow's address in monolith";
     EXPECT_EQ(Textures().SubDataPieceCount(), 1u)
         << "a level that fits one record is exactly one piece (fix A2's counter), so the "
