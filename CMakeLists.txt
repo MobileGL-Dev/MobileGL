@@ -44,13 +44,14 @@ endif()
 unset(MOBILEGL_PIPE_PUSH CACHE)
 set(MOBILEGL_PIPE_PUSH ON)
 option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; never shipped" OFF)
-# Track H's old-versus-new arm (ARCHITECTURE.md 9.6). With a MOBILEGL_PIPE_PUSH bit clear
-# the backend would still run the RE-KEYED memo code, so the bitmask alone stops being a
-# valid A/B the moment a handle wave lands: this option compiles the pre-handle arm - the
-# registries, OwnerEquals, the TwinLookupMemos, g_fbSlotCache, ComputePipelineStateHash,
-# the address-keyed VaoDrawMemo - beside it, behind the same PipeInputs interface. ON for
-# the whole migration window; it retires with the pull path itself at P13.
-option(MOBILEGL_PIPE_LEGACY_MEMOS "Compile the pre-handle memo arm beside the {slot, gen} arm so Track H has a real A/B (ARCHITECTURE.md 9.6)" ON)
+# Track H's old-versus-new arm (ARCHITECTURE.md 9.6) - MOBILEGL_PIPE_LEGACY_MEMOS - retired with the
+# pull path in P13 W3b: the pre-handle memo arm is no longer compiled anywhere. Named and dropped,
+# like MOBILEGL_PIPE_PUSH=OFF above (every pre-P13 tree holds the old default ON in its cache).
+if (DEFINED CACHE{MOBILEGL_PIPE_LEGACY_MEMOS} AND "$CACHE{MOBILEGL_PIPE_LEGACY_MEMOS}")
+    message(WARNING "MobileGL: MOBILEGL_PIPE_LEGACY_MEMOS=ON asks for the pre-handle memo arm, "
+                    "which P13 retired; ignored")
+endif()
+unset(MOBILEGL_PIPE_LEGACY_MEMOS CACHE)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
@@ -750,9 +751,6 @@ if (MOBILEGL_PIPE_PUSH)
 endif()
 if (MOBILEGL_PIPE_VERIFY)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
-endif()
-if (MOBILEGL_PIPE_LEGACY_MEMOS)
-    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_LEGACY_MEMOS=1)
 endif()
 
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")
