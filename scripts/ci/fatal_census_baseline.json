@@ -1,11 +1,11 @@
 {
-  "abort_sites": 76,
+  "abort_sites": 73,
   "abort_sites_by_file": {
     "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 12,
-    "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 12,
+    "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 10,
     "MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp": 2,
     "MobileGL/MG_Backend/DirectGLES/Utils.cpp": 1,
-    "MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp": 2,
+    "MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp": 1,
     "MobileGL/MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h": 1,
     "MobileGL/MG_Backend/DirectVulkan/Renderer/VkBufferManager.cpp": 10,
     "MobileGL/MG_Backend/Init.cpp": 2,

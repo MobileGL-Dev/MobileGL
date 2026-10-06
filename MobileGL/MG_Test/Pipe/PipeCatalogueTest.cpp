@@ -1455,23 +1455,15 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // `Transport != Monolith` return, so no transport ever reached it and on monolith it was a
     // no-op; the call and the name went together (notes/p8/SE.md).
     //
-    // TWO, NOT THREE (P13 W6): "get-tex-image-shadow" sat in GetTexImageViaShadowConversion, the
-    // monolith frontend arm's shadow readback; that arm went with the frontend data arm.
-    const char* const kNames[] = {
-        "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated (monolith grow)
-        "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
-    };
-    EXPECT_EQ(std::size(kNames), 2u);
-    // No duplicates: two sites sharing a name would make the grepped count and this list
-    // disagree in the one direction nobody would notice.
-    for (SizeT i = 0; i < std::size(kNames); ++i) {
-        for (SizeT j = i + 1; j < std::size(kNames); ++j) {
-            EXPECT_STRNE(kNames[i], kNames[j]);
-        }
-    }
-    // In monolith it really is a no-op: calling it changes nothing and returns nothing. The
-    // teeth are a split server's, and the call site is what P8 gives them to.
-    for (const char* name : kNames) MGPipeUnmigratedEmulation(name);
+    // NONE (P13 W6). "get-tex-image-shadow" sat in GetTexImageViaShadowConversion, the monolith
+    // frontend arm's shadow readback, and the two mipmap names in that arm's storage grow and CPU
+    // filter; all three went with the frontend data arm. The list is EMPTY and the audit
+    // (scripts/ci/unmigrated_emulation_sites.py) now holds the tree at zero call sites: a new
+    // emulation that reaches into client memory has to be named here before it can land. The one
+    // entry below is the array's terminator, not a name - C++ has no empty braced array.
+    const char* const kNames[] = {nullptr};
+    EXPECT_EQ(std::size(kNames), 1u);
+    EXPECT_EQ(kNames[0], nullptr);
 }
 
 // THE ShaderCso COMPOSITE BAND IS A SECOND SPACE, AND THE ALLOCATOR REPORTS IT SEPARATELY.

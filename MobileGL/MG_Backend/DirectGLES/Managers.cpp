@@ -4974,13 +4974,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void ResolveRecordArmFamilies() {
-        const Bool allArmed = FramebufferSubsystemEnabled() && TextureResourceSubsystemEnabled() &&
-                              SamplerSubsystemEnabled() && ProgramSubsystemEnabled() &&
-                              BufferImpl::ResourceSubsystemEnabled() && BufferImpl::VertexInputSubsystemEnabled();
-        if (!allArmed) {
+        // The masks are ConfigLoader's to refuse (any mask clearing bits 0-13 stops at startup),
+        // so the one question left is the driver's: MGPFramebufferState::Color[8] is the wire's
+        // width and this is the RAW ES cap, which nothing clamps. The framebuffer family used to
+        // refuse its bit and fall back to the legacy arm here (D-C3); with one arm, a driver
+        // reporting more stops by name instead of having the record truncate its attachments.
+        const Uint32 cap = static_cast<Uint32>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 0));
+        if (cap > MG_Pipe::kMGPipeMaxColorAttachments) {
+            MGLOG_E("MGPipe: this driver reports GL_MAX_COLOR_ATTACHMENTS = %u, above "
+                    "MGPFramebufferState::Color[%u]'s wire width", cap, MG_Pipe::kMGPipeMaxColorAttachments);
             BufferImpl::StopOnArmlessPipeSubsystem(
-                "an Espryt family refused the record arm at bring-up (see the line above), and the "
-                "record arm is the only arm since P13 W6");
+                "kMGPipeSubsystemFramebuffer (bit 9) cannot carry this driver's colour attachments, and "
+                "the record arm is the only arm since P13 W6");
         }
     }
 

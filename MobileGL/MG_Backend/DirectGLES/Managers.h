@@ -756,10 +756,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool ResolveSamplerSubsystemArm();
     Bool ResolveProgramSubsystemArm();
     // P13 W6: every family runs the record arm - the frontend arms these resolvers used to choose
-    // between are gone, so no site asks them any more. What they still decide is whether this
-    // configuration and this driver CAN run it (a mask missing a family's dependency, a
-    // colour-attachment cap above the wire's width), and that is asked once, at capability
-    // bring-up, and stops by name when the answer is no.
+    // between are gone, so no draw-path site asks them any more (the integration peeks still read
+    // the latches). The one refusal a running process can still meet - a driver whose colour-
+    // attachment cap exceeds the wire's width - is checked once, at capability bring-up.
     void ResolveRecordArmFamilies();
 
     inline Bool FramebufferSubsystemEnabled() {
