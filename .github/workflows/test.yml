@@ -881,6 +881,29 @@ jobs:
           fi
           echo "the corrupted field turned ${matched} selected entries red, as it must"
 
+      # NEGATIVE CONTROL A2 (P13 W3c): THE CAPABILITY CROSS-CHECK MOVED HERE. ResidualValueBlock
+      # carried the 35 capability bits redundantly so the applier could trip on a capability no
+      # record carried; P13 deleted it, and the intent is the comparator's now. So a corrupted
+      # capability field must turn the same selection red, or the block's deletion lost its
+      # check rather than moving it.
+      - name: Negative control A2 (corrupted capability)
+        working-directory: build-verify
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_PIPE_VERIFY_CORRUPT: IsCapabilityEnabled
+        run: |
+          FILTER='DirectGLES\.Verify\..*ClearThenReadPixels'
+          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 1 ]; then
+            echo "::error::negative control A2 selected ${matched} tests; its filter no longer matches anything"
+            exit 1
+          fi
+          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
+            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=IsCapabilityEnabled left ${matched} verify entries GREEN. The comparator does not compare the capability field, so deleting the residual block (P13 W3c) lost the check it carried."
+            exit 1
+          fi
+          echo "the corrupted capability field turned ${matched} selected entries red, as it must"
+
       # NEGATIVE CONTROL B (gate G5). The omission skips the STAMP of one field for one verb while
       # still copying its value - indistinguishable from a fill row nobody wrote - so the poison
       # must abort the glGenerateMipmap. Again: this step passes when ctest fails.

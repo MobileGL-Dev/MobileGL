@@ -27,6 +27,7 @@
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
@@ -1161,12 +1162,12 @@ namespace {
     // that reads the PIPELINE version - which is what this emitter used - never re-arms for
     // those eight, and nothing can see it downstream: a block that is not emitted cannot
     // diverge, so the trip wire is simply disarmed.
+    // P13 W3c: the residual block is gone, so the case now asserts what the re-arm stood in for -
+    // that the capability itself reaches the applier's assembled block on the next draw.
     TEST_F(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) {
         Draw();
-        ASSERT_TRUE(MGPipeApplier().HasResidual) << "the priming draw sent no residual block";
-        // Poison the server's copy so a re-emission is the only thing that can restore it.
-        MGPipeApplier().Residual = ResidualValueBlock{};
-        MGPipeApplier().HasResidual = false;
+        ASSERT_FALSE(MobileGL::MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+            << "the premise is gone: a fresh context already has clip distance 0 enabled";
 
         Ctx().SetCapability(CapabilityInput::ClipDistance0, true);
         // The premise: this moved the render-state counter and NOT the pipeline one.
@@ -1176,11 +1177,8 @@ namespace {
             << "the premise is gone: a clip-distance enable now moves the pipeline version";
         EXPECT_EQ(static_cast<Uint16>(Ctx().GetPipelineStateVersion()), pipelineBefore);
 
-        ASSERT_TRUE(MGPipeApplier().HasResidual)
-            << "a capability change that moves only m_version never re-armed the residual block";
-        const Uint64 bit = Uint64{1} << static_cast<SizeT>(CapabilityInput::ClipDistance0);
-        EXPECT_NE(MGPipeApplier().Residual.CapabilityBits & bit, 0ull)
-            << "the re-emitted block does not carry the capability that moved";
+        EXPECT_TRUE(MobileGL::MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+            << "a capability change that moves only m_version never reached the applier's block";
     }
 
     // MAJOR 3 of round 2's review, pinned. A fresh context resets the tracker's staging

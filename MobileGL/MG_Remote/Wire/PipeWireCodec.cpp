@@ -312,9 +312,6 @@ namespace MobileGL::MG_Remote::Wire {
         // corrupt Count can never wrap the arithmetic that is supposed to catch it.
         constexpr Uint64 kMaxRecordBytesOnTheWire = 0xFFFFFFFFull;
 
-        // MGPResidualValueState's blob is the block itself, which only ever ratchets DOWN.
-        static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE);
-
         // CreateShaderState's seven blob members are one contiguous run, which is what lets
         // the honesty pass walk them as an array.
         static_assert(offsetof(MGPProgramDesc, Reflection) ==
@@ -2265,31 +2262,11 @@ namespace MobileGL::MG_Remote::Wire {
             MGPipeApplySetDispatchProgram(*static_cast<const MGPHandleOnly*>(payload));
             return true;
 
-        case MGPWireOp::SetResidualValueState: {
-            // THE HARDEST ROW IN TABLE 1, and it is hard for a reason that does not show in
-            // the payload: MGPipeApplySetResidualValueState takes `const ResidualValueBlock&`
-            // - not a payload, not a const void* - and MGPResidualValueState is NEVER
-            // INSTANTIATED on the live path (PipeFill.cpp:2184 passes the block straight to
-            // the applier). So the encoder had to invent both the record fill and the blob
-            // fill, and this is the first code in the tree that reads either.
-            //
-            // The block is the blob, whole, and its size only ever ratchets DOWN
-            // (MGL_RESIDUAL_BLOCK_SIZE, 1248 -> 8 at P2, 0 at P13). Requiring exact equality
-            // rather than ">=" is what makes a client built against an older block a loud
-            // mismatch instead of a silently short read of CapabilityBits.
-            const auto& rec = *static_cast<const MGPResidualValueState*>(payload);
-            if (!RequireDeclaredBlob(op, rec.Blob, *m_segments)) return false;
-            if (rec.Blob.Size != sizeof(ResidualValueBlock)) {
-                return WireProtocolLatchAt("SetResidualValueState.Blob", rec.Blob.Size,
-                                           sizeof(ResidualValueBlock));
-            }
-            const void* bytes = ResolveOrFatal(op, rec.Blob);
-            if (bytes == nullptr) return false;
-            ResidualValueBlock block{};
-            std::memcpy(&block, bytes, sizeof(block));
-            MGPipeApplySetResidualValueState(block);
-            return true;
-        }
+        case MGPWireOp::SetResidualValueState:
+            // RETIRED (P13 W3c), on op 50's precedent: ResidualValueBlock is deleted, no client
+            // emits this row, and a record that claims it is declined after the bounds gate and
+            // the blob honesty pass above have run. The row stays because opcodes only grow.
+            return false;
 
         case MGPWireOp::SetTextureParams:
             noteAcceptance(MGPipeApplySetTextureParams(*static_cast<const MGPTextureParams*>(payload)));

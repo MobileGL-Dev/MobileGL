@@ -288,25 +288,12 @@ namespace MobileGL::MG_Remote::Client {
             ++g_emitted;
         }
 
-        // set_residual_value_state. CONTRACT-P5 table 1 row 6: the applier takes a frontend
-        // `ResidualValueBlock&` and `MGPResidualValueState` is never instantiated on the live
-        // path, so the encoder invents BOTH the record fill and the blob fill. The block IS
-        // the blob, whole - the decoder requires exactly sizeof(ResidualValueBlock) and says
-        // why ("a size that only ever ratchets down makes a short read silently lose
-        // CapabilityBits"), so the two sides state the same number from the same header.
-        void Wire_SetResidualValueState(const MG_Pipe::MGPResidualValueState* payload,
-                                        const void* blobBytes, Uint64 blobByteCount) {
-            if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithContext().SetResidualValueState(payload, blobBytes,
-                                                                       blobByteCount);
-                return;
-            }
-            ClientSession& session = RequireSession("SetResidualValueState");
-            MG_Pipe::MGPResidualValueState record = *payload;
-            record.Blob = StageRequired(session, "SetResidualValueState", blobBytes, blobByteCount);
-            session.EmitAndWait(MGPWireOp::SetResidualValueState, &record, sizeof(record), nullptr,
-                                0, nullptr, 0, nullptr);
-            ++g_emitted;
+        // set_residual_value_state: RETIRED (P13 W3c). Nothing calls it; the row stays installed so
+        // the table is total, and reaching it is a named death rather than a record on the wire.
+        void Wire_SetResidualValueState(const MG_Pipe::MGPResidualValueState*, const void*, Uint64) {
+            MGLOG_F("MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the wire table, "
+                    "but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
+            std::abort();
         }
 
         // resource_readback. kReplySlot, and the answer is COMPLETION only: the bytes travel

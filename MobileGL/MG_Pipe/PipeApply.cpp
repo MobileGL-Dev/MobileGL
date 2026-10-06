@@ -585,8 +585,6 @@ namespace MobileGL::MG_Pipe {
         static_assert(sizeof(kCapabilityNames) / sizeof(kCapabilityNames[0]) == kCapabilityCount,
                       "CapabilityInput gained a value; name it here or the residual trip wire "
                       "cannot say which capability diverged");
-        static_assert(kCapabilityCount <= 64,
-                      "ResidualValueBlock::CapabilityBits is a Uint64; 35 bits fit, 65 would not");
 
         // ============================================================================
         // P14 S5: THE APPLIER REGISTRY.
@@ -1793,11 +1791,7 @@ namespace MobileGL::MG_Pipe {
 #endif
         MGPipeApplier().RenderStateCsos.clear();
         MGPipeApplier().BoundRenderStateCso = kMGPipeNullHandle;
-        MGPipeApplier().Residual = ResidualValueBlock{};
-        MGPipeApplier().HasResidual = false;
         MGPipeApplier().ScatteredChunkBits = 0;
-        MGPipeApplier().ResidualCapabilitiesCompared = 0;
-        MGPipeApplier().ResidualDivergences = 0;
         MGPipeApplier().PatchCarrierComparisons = 0;
         MGPipeApplier().PatchCarrierDivergences = 0;
         // P3a. THIS RUNS AT EVERY CHANGE OF THE CURRENT CONTEXT, not once per fresh one:
@@ -2234,55 +2228,6 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
-    void MGPipeApplySetResidualValueState(const ResidualValueBlock& block) {
-        MGPipeApplier().Residual = block;
-        MGPipeApplier().HasResidual = true;
-        MGPipeApplier().ResidualCapabilitiesCompared = 0;
-
-        // THE TRIP WIRE (ARCHITECTURE.md 9.4, P2 brief D9). CapabilityBits is redundant with
-        // the assembled working block by design: every one of the 35 capabilities is
-        // answerable from RenderStateParameters now that P2 closed the three storage holes.
-        // So the day a later call takes a capability over and forgets to carry it, the two
-        // answers part and this says so on the next draw - which is what a migration carrier
-        // is for.
-        //
-        // THE ORACLE IS THE WORKING BLOCK, AND THE WIRE IS ARMED PER CAPABILITY by the
-        // applier's own scatter ledger: capability i is compared only once every chunk its
-        // answer is read out of has been scattered by this applier. That is not a weakening,
-        // it is the wire's whole precondition:
-        //
-        //   - with the render-state subsystem off (MOBILEGL_PIPE_PUSH=0x10 is a legal
-        //     configuration - D14's per-subsystem A/B) the ledger is empty and the wire says
-        //     nothing at all, which is right: the working block is then the per-verb fill
-        //     loop's, published per verb CLASS, so at a kDispatch or kTextureOp verb it holds
-        //     the previous draw's bytes and disagreeing with it means nothing;
-        //   - with it on, the applier is the block's only writer and its bytes are current at
-        //     every verb of every class - including the two above, which is the case a
-        //     RenderStateSpansTest case drives on purpose.
-        //
-        // NOT PipeInputs::m_capability, which the earlier form compared against and which
-        // FillPoints.def does publish at seven classes rather than five: where that
-        // publication is what makes m_capability fresh, the fill loop filled it out of the
-        // same GLContext the client built CapabilityBits from, so the comparison is a
-        // tautology. The redundancy this wire exists to check is between the CARRIED bits and
-        // the ASSEMBLED block.
-        const RenderStateParameters& working = MGPipeApplyAccess::RenderState(gPipeInputs);
-        const Uint32 owned = MGPipeApplier().ScatteredChunkBits;
-        for (SizeT i = 0; i < kCapabilityCount; ++i) {
-            const CapabilityInput cap = static_cast<CapabilityInput>(i);
-            const Uint32 sources = CapabilitySourceChunks(cap);
-            if ((owned & sources) != sources) continue;
-            ++MGPipeApplier().ResidualCapabilitiesCompared;
-            const Bool carried = ((block.CapabilityBits >> i) & 1ull) != 0;
-            const Bool assembledBit = MGPipeApplyAccess::DeriveCapability(working, cap);
-            if (carried == assembledBit) continue;
-            ++MGPipeApplier().ResidualDivergences;
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeResidualDiverged, \"%s\"")
-                                 " carried=%d assembled=%d",
-                                 kCapabilityNames[i], static_cast<int>(carried),
-                                 static_cast<int>(assembledBit));
-        }
-    }
 
     // ================================================================================
     // P3a: the nine resource entry points (D-A1, D-A2).

@@ -233,9 +233,8 @@
     X(SetPatchState,            MGPPatchState,              kCtxState,  kNone,                      kWaitNone)        \
     X(SetDrawProgram,           MGPHandleOnly,              kCtxState,  kNone,                      kWaitNone)        \
     X(SetDispatchProgram,       MGPHandleOnly,              kCtxState,  kNone,                      kWaitNone)        \
-    /* Migration-only carrier for Track V, retired field by field across P2..P13. Its       */      \
-    /* retirement is a compile error: MGL_RESIDUAL_BLOCK_SIZE only ever goes DOWN and the   */      \
-    /* final step asserts sizeof(ResidualValueBlock) == 0 (plan 6.3).                       */      \
+    /* RETIRED (P13 W3c): the migration-only Track V carrier. ResidualValueBlock is deleted; */      \
+    /* the row keeps its opcode (46), no client emits it and every decoder declines it.     */      \
     X(SetResidualValueState,    MGPResidualValueState,      kCtxState,  kHasBlob,                   kWaitNone)        \
     /* ---- context: per-object state and transfer (plan 4.4.3 set_texture_params, 4.4.4) ---- */   \
     X(SetTextureParams,         MGPTextureParams,           kCtxObject, kReplySlot,                 kWaitReply)       \

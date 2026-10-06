@@ -83,7 +83,6 @@ inline Bool MGPipeVerify(const MGPAttribValue& a, const MGPAttribValue& b, const
 inline Bool MGPipeVerify(const MGPVertexAttribDefaults& a, const MGPVertexAttribDefaults& b, const char** outField);
 inline Bool MGPipeVerify(const MGPPixelPackState& a, const MGPPixelPackState& b, const char** outField);
 inline Bool MGPipeVerify(const MGPPatchState& a, const MGPPatchState& b, const char** outField);
-inline Bool MGPipeVerify(const ResidualValueBlock& a, const ResidualValueBlock& b, const char** outField);
 inline Bool MGPipeVerify(const MGPResidualValueState& a, const MGPResidualValueState& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSubRegion& a, const MGPSubRegion& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSubData& a, const MGPSubData& b, const char** outField);
@@ -208,8 +207,6 @@ template <>
 struct MGPipeHasFieldVerifier<MGPPixelPackState> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPPatchState> : std::true_type {};
-template <>
-struct MGPipeHasFieldVerifier<ResidualValueBlock> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPResidualValueState> : std::true_type {};
 template <>
@@ -541,11 +538,6 @@ inline Bool MGPipeVerify(const MGPPatchState& a, const MGPPatchState& b, const c
     return true;
 }
 
-inline Bool MGPipeVerify(const ResidualValueBlock& a, const ResidualValueBlock& b, const char** outField) {
-    MGP_FIELDS_ResidualValueBlock(MGP_VERIFY_FIELD)
-    return true;
-}
-
 inline Bool MGPipeVerify(const MGPResidualValueState& a, const MGPResidualValueState& b, const char** outField) {
     MGP_FIELDS_MGPResidualValueState(MGP_VERIFY_FIELD)
     return true;
@@ -773,4 +765,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 85;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 84;

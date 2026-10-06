@@ -764,7 +764,7 @@ def gen_thunks(calls):
     return "\n".join(out)
 
 
-def gen_wire(calls, residual_fields=None):
+def gen_wire(calls):
     out = [banner("PipeWire.inc", "G3: wire records, size assertions and the applier's bounds gate.",
                   "PipeCalls.def")]
     out.append("""// Every record is a fixed header plus its payload, padded to the stream's 8-byte
@@ -1045,25 +1045,6 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
 }
 
 #undef MGP_WIRE_CHECK_BOUNDS""")
-    # The migration carrier's layout, asserted MEMBER BY MEMBER and not only by sizeof
-    # (plan 6.3): a heterogeneous POD is where padding differs across ABIs, and the monolith
-    # verify harness is blind to it because both sides are the same translation unit. The
-    # first member is pinned at 0 and the rest are pinned to ascend, which is the strongest
-    # statement a generator that cannot see the layout can make; sizeof plus
-    # MGL_RESIDUAL_BLOCK_SIZE pins the rest, and the ratchet only ever goes DOWN.
-    if residual_fields:
-        out.append("")
-        out.append("// The ResidualValueBlock layout, from PipeFields.def's")
-        out.append("// MGP_FIELDS_ResidualValueBlock. Retiring a field without lowering")
-        out.append("// MGL_RESIDUAL_BLOCK_SIZE is a build break, which is the point.")
-        out.append("static_assert(offsetof(ResidualValueBlock, %s) == 0," % residual_fields[0])
-        out.append("              \"the residual block's first member must sit at offset 0\");")
-        for previous, member in zip(residual_fields, residual_fields[1:]):
-            out.append("static_assert(offsetof(ResidualValueBlock, %s) >" % member)
-            out.append("                  offsetof(ResidualValueBlock, %s)," % previous)
-            out.append("              \"the residual block's members must stay in declaration order\");")
-        out.append("static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE,")
-        out.append("              \"the residual ratchet only ever goes down\");")
     return "\n".join(out) + "\n"
 
 
@@ -1724,7 +1705,7 @@ def main():
     write(os.path.join(GENERATED_DIR, "PipeTables.inc"), gen_tables(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeThunks.inc"), gen_thunks(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeWire.inc"),
-          gen_wire(calls, parse_field_lists().get("ResidualValueBlock")), args.check, changed)
+          gen_wire(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeWireLayout.inc"), gen_wire_layout(calls, payloads), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeVerify.inc"), gen_verify(payloads), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls, sticky, emitted),

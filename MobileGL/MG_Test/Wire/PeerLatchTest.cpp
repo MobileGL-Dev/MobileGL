@@ -1111,13 +1111,6 @@ namespace {
              entry.Name.Offset = staged.Offset;
              return Forge(c, r, P::MGPWireOp::SetProgramBindings, Bytes(p), {{}, {}, Bytes(entry)});
          }},
-        {"SetResidualValueStateBlobSize", "PipeWireCodec.cpp", "SetResidualValueState.Blob",
-         Outcome::Latched, "Fatal{ProtocolCorruption, \"SetResidualValueState.Blob\"} got=16 expected=8", false,
-         [](Client::ClientSession& c, PeerReport& r) {
-             P::MGPResidualValueState d{};
-             d.Blob = Stage(c, 16);
-             return Forge(c, r, P::MGPWireOp::SetResidualValueState, Bytes(d));
-         }},
         {"ResourceSubDataLevelExtent", "PipeWireCodec.cpp", "ResourceSubData.LevelExtent", Outcome::Latched,
          "Fatal{ProtocolCorruption, \"ResourceSubData.LevelExtent\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {

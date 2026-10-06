@@ -22,7 +22,7 @@
 // these structs (generated/PipeWire.inc) are memcpy'd; a field silently changing width is a
 // protocol break that no test would otherwise see.
 //
-// P0.5 DEBT, half repaid. The MG_State half is gone: ResidualValueBlock's
+// P0.5 DEBT, half repaid. The MG_State half is gone: the (since deleted) ResidualValueBlock's
 // RenderStateParameters and PixelStoreParameters now come from MGPipeValueTypes.h, so
 // this header no longer reaches RenderState.h (its closure still touches TextureEnum.h,
 // through BackendObject.h, for the reason in the next sentence). What remains is MGPCaps embedding
@@ -1236,42 +1236,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPPatchState, 40);
 
-    // Migration-only (section 6.3). Every stage removes fields and lowers
-    // MGL_RESIDUAL_BLOCK_SIZE; P13 asserts it is zero, which is the retirement trip wire.
-    //
-    // Layout must be asserted MEMBER BY MEMBER, not only by sizeof: a heterogeneous POD
-    // union is where padding differs across ABIs, and the monolith verify harness is blind
-    // to it because both sides are the same translation unit. G3 emits the offsetof
-    // assertions; under split the block is serialized field-wise rather than memcpy'd.
-    struct ResidualValueBlock {
-        // The 35 CapabilityInput bits, packed in enum order. P2 retired everything else:
-        // RenderStateParameters to create/bind_render_state + set_dynamic_state, Pack to
-        // set_pixel_pack_state, and the patch quintet to set_patch_state.
-        //
-        // What is left is deliberately REDUNDANT. Every one of the 35 capabilities is
-        // answerable from the assembled working block now that P2 gave FramebufferSrgb,
-        // DepthClamp and TextureCubeMapSeamless real storage - which is the point: the
-        // applier compares the two answers bit by bit, so the day a later call takes a
-        // capability over and forgets to carry it, the block says so on the next draw
-        // (Fatal{PipeResidualDiverged, "<Cap>"}, MG_Pipe/PipeApply.cpp).
-        Uint64 CapabilityBits;
-    };
-    static_assert(std::is_trivially_copyable_v<ResidualValueBlock>);
-// The retirement ratchet. This number only ever goes DOWN: every stage that lands a real
-// set_* call deletes fields here and lowers it, and P13 replaces it with
-// static_assert(sizeof(ResidualValueBlock) == 0), which stays red until the last field is
-// gone. Shrinking the block without lowering the number, or growing it at all, is a build
-// break - which is the point.
-//
-// Stable across the ABIs MobileGL ships on: the one member is a fixed-width scalar.
-//
-// P2: 1248 -> 8. RenderStateParameters (1168) retired to create/bind_render_state and
-// set_dynamic_state, PixelStoreParameters (28) to set_pixel_pack_state, and the patch
-// quintet (52 with its padding) to set_patch_state.
-#define MGL_RESIDUAL_BLOCK_SIZE 8
-    static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE,
-                  "the residual value block changed size; lower MGL_RESIDUAL_BLOCK_SIZE if a field "
-                  "retired, and do not raise it");
+    // P13 W3c: ResidualValueBlock - the migration-only carrier of the 35 capability bits - is
+    // DELETED. Its last member was redundant by design (every capability is answerable from the
+    // assembled working block) and existed only so the applier could trip on a capability no
+    // record carried; that cross-check is the verify comparator's job now (integration-verify's
+    // corrupted-capability control). `static_assert(sizeof(ResidualValueBlock) == 0)` cannot be
+    // written in C++ (a complete type is at least one byte), so the exit gate is the type's
+    // absence. The record row below stays: opcodes only ever grow, no client emits op 46 and
+    // every decoder declines it.
 
     struct MGPResidualValueState {
         Uint32 Version;

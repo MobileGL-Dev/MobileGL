@@ -1754,26 +1754,24 @@ TEST_F(PipeWireCodecTest, CreateShaderStateCrossesAsOneArchiveAndSixUndeclaredRu
 }
 
 // =====================================================================================
-// SetResidualValueState - table 1's hardest row
+// SetResidualValueState - RETIRED (P13 W3c)
 // =====================================================================================
 
 TEST_F(PipeWireCodecTest, ResidualValueBlockCrossesAsItsOwnBlob) {
-    // The applier takes `const ResidualValueBlock&` and MGPResidualValueState is never
-    // instantiated on the live path, so this is the first code in the tree that fills either.
+    // P13 W3c deleted ResidualValueBlock and retired op 46 on op 50's precedent: the row keeps
+    // its number, a record that claims it still passes the bounds gate and the blob honesty
+    // pass, and the decoder then DECLINES it - no applier entry point exists to reach.
     Wire2 wire;
-    ResidualValueBlock block{};
-    block.CapabilityBits = 0x0123456789ABCDEFull;
-
+    const Uint64 eightBytes = 0x0123456789ABCDEFull;
     MGPResidualValueState record{};
     record.Version = 3;
-    record.Blob = wire.Encoder().StageBytes(&block, sizeof(block));
-    EXPECT_EQ(record.Blob.Size, static_cast<Uint64>(MGL_RESIDUAL_BLOCK_SIZE));
+    record.Blob = wire.Encoder().StageBytes(&eightBytes, sizeof(eightBytes));
 
     ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetResidualValueState, &record, sizeof(record)),
               kInvalidSeq);
-    bool applied = false;
+    bool applied = true;
     ASSERT_TRUE(wire.PumpOne(&applied));
-    EXPECT_TRUE(applied);
+    EXPECT_FALSE(applied) << "a retired row must be declined, not applied";
 }
 
 // =====================================================================================
@@ -2260,34 +2258,37 @@ TEST_F(PipeWireCodecTest, TheAuditFillOverwritesExactlyTheRunsTheRecordResolved)
     // so this case asserts the bytes, not the flag.
     Wire2 wire;
     wire.Decoder().SetAuditPoison(true);
-    ResidualValueBlock block{};
-    block.CapabilityBits = 0x5555555555555555ull;
-    MGPResidualValueState record{};
-    record.Blob = wire.Encoder().StageBytes(&block, sizeof(block));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetResidualValueState, &record, sizeof(record)),
+    // P13 W3c: the vehicle used to be op 46's residual block; a live single-blob record now.
+    SamplerParameters params{};
+    params.minLod = -1.5f;
+    MGPSamplerDesc record{};
+    record.Cso = MakeHandle(91);
+    record.Parameters = wire.Encoder().StageBytes(&params, sizeof(params));
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
-    EXPECT_EQ(wire.Decoder().PoisonedStageBytes(), sizeof(ResidualValueBlock));
-    const auto* staged = wire.StageBase() + record.Blob.Offset;
-    for (std::size_t i = 0; i < sizeof(ResidualValueBlock); ++i) {
+    EXPECT_EQ(wire.Decoder().PoisonedStageBytes(), sizeof(SamplerParameters));
+    const auto* staged = wire.StageBase() + record.Parameters.Offset;
+    for (std::size_t i = 0; i < sizeof(SamplerParameters); ++i) {
         EXPECT_EQ(staged[i], 0xDD) << "byte " << i;
     }
 }
 
 TEST_F(PipeWireCodecTest, TheAuditFillIsOffByDefaultSoTheHotPathPaysNothing) {
     Wire2 wire;
-    ResidualValueBlock block{};
-    block.CapabilityBits = 0x77ull;
-    MGPResidualValueState record{};
-    record.Blob = wire.Encoder().StageBytes(&block, sizeof(block));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetResidualValueState, &record, sizeof(record)),
+    SamplerParameters params{};
+    params.minLod = 0.75f;
+    MGPSamplerDesc record{};
+    record.Cso = MakeHandle(92);
+    record.Parameters = wire.Encoder().StageBytes(&params, sizeof(params));
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_EQ(wire.Decoder().PoisonedStageBytes(), 0u);
-    const auto* staged = wire.StageBase() + record.Blob.Offset;
+    const auto* staged = wire.StageBase() + record.Parameters.Offset;
     EXPECT_NE(staged[0], 0xDD);
 }
 

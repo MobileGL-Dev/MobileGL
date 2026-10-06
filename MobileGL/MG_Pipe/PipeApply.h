@@ -612,11 +612,6 @@ namespace MobileGL::MG_Pipe {
         Vector<MGPipeRenderStateCsoRecord> RenderStateCsos;
         // The last bind, so a rebind of the same handle can be answered without a scatter.
         MGPipeHandle BoundRenderStateCso = kMGPipeNullHandle;
-        // The residual block as last received. Compared against the assembled state on every
-        // set_residual_value_state; a disagreement is the D9 trip wire.
-        ResidualValueBlock Residual{};
-        Bool HasResidual = false;
-
         // The GLOBAL chunk bits (MGPipeRenderStateSpans.h's numbering) this applier has
         // itself scattered into the working block since the last reset - its own ledger of
         // which bytes of PipeInputs::m_renderState are the APPLIER'S rather than the per-verb
@@ -641,8 +636,6 @@ namespace MobileGL::MG_Pipe {
         // go red for the reason it exists (ROADMAP.md), and only a poison or verify build
         // aborts: the shipped push build counts and logs, so these counters are how a unit
         // case sees the wire fire in EVERY build rather than in one.
-        Uint32 ResidualCapabilitiesCompared = 0; // of the 35, at the last set_residual_value_state
-        Uint32 ResidualDivergences = 0;          // cumulative
         Uint32 PatchCarrierComparisons = 0;      // cumulative, armed set_patch_state calls only
         Uint32 PatchCarrierDivergences = 0;      // cumulative
 
@@ -1282,10 +1275,6 @@ namespace MobileGL::MG_Pipe {
     // set_vertex_attrib_defaults: `tail` is hdr.Count MGPAttribValues for the attributes
     // named by hdr.Mask, in ascending location order.
     void MGPipeApplySetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr, const MGPAttribValue* tail);
-    // set_residual_value_state: what has no call of its own. Since P2 that is one Uint64 of
-    // capability bits, and every one of them is ALSO answerable from the assembled working
-    // block - which is the point. A disagreement is Fatal{PipeResidualDiverged, "<Cap>"}.
-    void MGPipeApplySetResidualValueState(const ResidualValueBlock& block);
 
     // ---------------------------------------------------------------------------------
     // P3a: the nine resource entry points (D-A1, D-A2)

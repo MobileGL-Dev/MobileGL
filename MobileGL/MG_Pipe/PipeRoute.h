@@ -448,13 +448,6 @@ namespace MobileGL::MG_Pipe {
                                                    const MGPAttribValue* tail) {
         MGP_SetVertexAttribDefaults(&hdr, tail, hdr.Count);
     }
-    // The block IS the blob (table 1 row 6) and its size is a header constant both sides
-    // read, so no call site has to know it.
-    inline void MGPipeRouteSetResidualValueState(const ResidualValueBlock& block) {
-        MGPResidualValueState record{};
-        record.Version = 0;
-        MGP_SetResidualValueState(&record, &block, sizeof(ResidualValueBlock));
-    }
 
     // ---- vertex input ------------------------------------------------------------------
     inline void MGPipeRouteCreateVertexElements(const MGPVertexElements& desc,

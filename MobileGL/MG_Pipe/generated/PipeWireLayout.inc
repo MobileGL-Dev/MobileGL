@@ -237,8 +237,6 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"MGPPatchState.Vertices", offsetof(MGPPatchState, Vertices), sizeof(((MGPPatchState*)nullptr)->Vertices)},
     {"MGPPatchState.Outer", offsetof(MGPPatchState, Outer), sizeof(((MGPPatchState*)nullptr)->Outer)},
     {"MGPPatchState.Inner", offsetof(MGPPatchState, Inner), sizeof(((MGPPatchState*)nullptr)->Inner)},
-    {"ResidualValueBlock", 0, sizeof(ResidualValueBlock)},
-    {"ResidualValueBlock.CapabilityBits", offsetof(ResidualValueBlock, CapabilityBits), sizeof(((ResidualValueBlock*)nullptr)->CapabilityBits)},
     {"MGPResidualValueState", 0, sizeof(MGPResidualValueState)},
     {"MGPResidualValueState.Version", offsetof(MGPResidualValueState, Version), sizeof(((MGPResidualValueState*)nullptr)->Version)},
     {"MGPResidualValueState.Blob", offsetof(MGPResidualValueState, Blob), sizeof(((MGPResidualValueState*)nullptr)->Blob)},

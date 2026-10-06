@@ -2798,7 +2798,7 @@ namespace MobileGL::MG_Pipe {
         //     and the static_assert below is that fact's trip wire rather than a claim in prose.
         //
         // NOT THREAD-LOCAL, AND THAT IS THIS FILE'S EXISTING RULE RATHER THAN A NEW ONE:
-        // g_residualDue, g_omission and the verify latches beside it are file-scope too, and what
+        // g_omission and the verify latches beside it are file-scope too, and what
         // keeps a single writer on them is the verb barrier (ROADMAP.md's G1 row states it for
         // gPipeInputs itself). A validate that runs on the apply thread is inside that barrier by
         // construction.
@@ -3186,67 +3186,6 @@ namespace MobileGL::MG_Pipe {
 #endif
 
 
-        // set_residual_value_state (P2 brief D9, ARCHITECTURE.md 9.4).
-        //
-        // Since P2 the block is one Uint64 of capability bits, and every one of the 35 is
-        // ALSO answerable from the assembled working block now that the contract closed the
-        // FramebufferSrgb / DepthClamp / TextureCubeMapSeamless storage holes. That
-        // redundancy is the whole point: the bits are read HERE from the frontend, and the
-        // applier compares them against the assembled answer, so the day a later call takes
-        // a capability over and forgets to carry it the block says so on the next draw
-        // (Fatal{PipeResidualDiverged, "<Cap>"}).
-        //
-        // Building the carried bits from the ASSEMBLED block instead would make the trip
-        // wire a tautology, which is exactly the failure P1's entry compare had and P2 is
-        // paying to remove.
-        //
-        // ON THIS BRANCH IT IS STILL HALF A TAUTOLOGY, and saying so is part of the honesty
-        // the trip wire is for: the applier compares these bits against gPipeInputs'
-        // capability mirror, and while MGPipeDeriveRenderStateFields is a stub that mirror is
-        // filled by the residual fill from the SAME IsCapabilityEnabled accessor a few lines
-        // below. It becomes an independent oracle the moment package A's c1 lands and the
-        // fill stops copying those fields. What it proves already is that the block is
-        // emitted, sized and suppressed - the resid= byte class and the one divergence it
-        // caught during development (GL_DITHER) are that evidence.
-        //
-        // Emitted once per context and again whenever the capability set may have moved
-        // (D9). THE SHUTTER FOR THAT IS NEW_RENDER_STATE, NOT NEW_PIPELINE_STATE, and the
-        // difference is a hole rather than a nicety: SetCapability's ClipDistance0..7 arms
-        // are deliberately NOT BumpVersions() (RenderState.cpp says so in as many words), so
-        // glEnable(GL_CLIP_DISTANCE0) moves m_version alone - and ClipDistance0..7 are 8 of
-        // the 35 CapabilityInputs this block carries. Arming on the pipeline version would
-        // leave the trip wire disarmed for those eight for an unbounded window, which is the
-        // under-firing direction ARCHITECTURE.md 13.2 names as the dangerous one, and no gate
-        // could see it: a block that is never emitted cannot diverge.
-        //
-        // So the arming is the coarsest always-true shutter - either render-state counter
-        // moved - which is the same answer DirtySurface.def's derivation gives SetCapability.
-        // It over-fires (a glViewport re-sends 8 bytes and re-runs the compare) and that is
-        // the intended trade: over-firing costs one 35-bit loop on a verb that already moved
-        // render state, under-firing renders stale.
-        Uint64 EmitResidualValueState(GLContext& ctx) {
-            ResidualValueBlock block{};
-            constexpr SizeT kCapabilityCount = static_cast<SizeT>(CapabilityInput::CapabilityInputCount);
-            static_assert(kCapabilityCount <= 64, "CapabilityBits is a Uint64");
-            for (SizeT i = 0; i < kCapabilityCount; ++i) {
-                if (ctx.IsCapabilityEnabled(static_cast<CapabilityInput>(i))) {
-                    block.CapabilityBits |= Uint64{1} << i;
-                }
-            }
-            MGPipeRouteSetResidualValueState(block);
-            if (MG_Util::PipeStats::Enabled()) {
-                // ByteClass::ResidualValueBlock has been a placeholder that "stays at 0
-                // until P2" since P0. This is what makes it non-zero.
-                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::ResidualValueBlock,
-                                             sizeof(ResidualValueBlock));
-            }
-            return sizeof(MGPResidualValueState) + sizeof(ResidualValueBlock);
-        }
-
-        // Set when the capability set may have moved, cleared when the block goes out. It is
-        // not part of the tracker because it is emission state, not a shutter: the shutter
-        // (the render-state counter) has already been consumed by the time this is read.
-        Bool g_residualDue = true;
 
         // The residual block is the ONE emission whose gate names a subsystem constant
         // directly instead of going through MGPipeSubsystemForDirty, and the reason is that
@@ -3701,7 +3640,6 @@ namespace MobileGL::MG_Pipe {
             // would be suppressed as unchanged and the server would draw against a window it
             // had just been told to empty.
             MGPipeShaderBufferEmitterInstance().Reset();
-            g_residualDue = true;
         }
 
         // P4a's segment, in ARCHITECTURE.md 5.4's RECOMMENDED order - framebuffer, then
@@ -3869,31 +3807,6 @@ namespace MobileGL::MG_Pipe {
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;
 #endif
         }
-        // ---- step 4b: the residual value block, and it goes out HERE ----
-        // ARMED OUTSIDE THE SUBSYSTEM GATE: whether the capability set may have moved is a
-        // fact about the frontend, not about which subsystems this build pushes, and a
-        // per-subsystem A/B that turns the block off must not also lose the record that one
-        // is owed.
-        if ((dirty & (MGPipeDirtyBit(MGPipeDirty::NewRenderState) |
-                      MGPipeDirtyBit(MGPipeDirty::NewPipelineState))) != 0) {
-            g_residualDue = true;
-        }
-        // Its trip wire compares the carried bits against the ASSEMBLED capability mirror,
-        // and that mirror is written either by the applier's derivation or by the fill loop
-        // above - so the block is only meaningful once step 4 has run. Emitting it with the
-        // other calls would compare against the previous verb's answer.
-        if ((pushMask & kMGPipeSubsystemResidualValues) != 0) {
-            // The trip wire compares against the ASSEMBLED capability mirror, so it can only
-            // run at a verb whose class actually carries that mirror - IsCapabilityEnabled is
-            // in seven of the nine class masks and kQuery and kXfbSpan do not read it, so at
-            // those verbs the mirror is whatever the last verb that did read it left behind.
-            // The change is HELD rather than dropped: dropping it would silently disarm the
-            // wire for a capability that moved between two queries.
-            if (g_residualDue && MGPipeFieldMaskHas(mask, MGPipeInputField::IsCapabilityEnabled)) {
-                payloadBytes += EmitResidualValueState(*ctx);
-                g_residualDue = false;
-            }
-        }
         if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
             // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
             // P0 and called by nothing; this is its first emitter, and the 24-bucket
@@ -3945,7 +3858,6 @@ namespace MobileGL::MG_Pipe {
         MGPipeImageEmitterInstance().Reset();
         MGPipeProgramEmitterInstance().Reset();
         MGPipeShaderBufferEmitterInstance().Reset();
-        g_residualDue = true;
         g_attribDefaultLastHeader = MGPVertexAttribDefaults{};
         g_lastFillWasBarriered = true;
     }

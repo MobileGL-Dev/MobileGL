@@ -70,8 +70,8 @@ namespace MobileGL::MG_Util::PipeStats {
         StageIndirectCmd,
         // Bytes pushed because a persistently mapped range was published to the backend.
         PersistentMapPush,
-        // PLACEHOLDER (plan section 6.3): the residual value block does not exist yet. The
-        // class is minted now so the counter names never churn; it stays at 0 until P2.
+        // RETIRED (P13 W3c): the residual value block was deleted. The class keeps its slot and
+        // its "resid" short name so the counter names never churn; nothing adds to it.
         ResidualValueBlock,
         // P4a's, and THE PUSH GUARD IS NEW ON THIS ENUM: CallClass has had one since P2 and
         // ByteClass has never had one, so the block is opened here rather than the member

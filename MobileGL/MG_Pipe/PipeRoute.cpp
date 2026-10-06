@@ -247,24 +247,12 @@ namespace MobileGL::MG_Pipe {
                                           static_cast<const SamplerParameters*>(blobBytes));
         }
 
-        // set_residual_value_state: CONTRACT-P5 table 1 row 6, "the hardest row in the table".
-        // The applier takes `const ResidualValueBlock&` - a frontend type - and
-        // MGPResidualValueState is never instantiated on the live path. So the BLOCK IS THE
-        // BLOB, in both arms, and the adapter copies it back out. Requiring exact equality
-        // rather than ">=" is the decoder's rule too (PipeWireCodec.cpp): a size that only
-        // ever ratchets down makes a short read silently lose CapabilityBits.
-        void Mono_SetResidualValueState(const MGPResidualValueState*, const void* blobBytes,
-                                        Uint64 blobByteCount) {
-            if (blobByteCount != sizeof(ResidualValueBlock) || blobBytes == nullptr) {
-                MGLOG_F("MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state carries %llu "
-                        "bytes, the block is %llu",
-                        static_cast<unsigned long long>(blobByteCount),
-                        static_cast<unsigned long long>(sizeof(ResidualValueBlock)));
-                std::abort();
-            }
-            ResidualValueBlock block{};
-            std::memcpy(&block, blobBytes, sizeof(block));
-            MGPipeApplySetResidualValueState(block);
+        // set_residual_value_state: RETIRED (P13 W3c). Nothing emits it any more; the row stays
+        // installed so the table is total, and reaching it is a named death.
+        void Mono_SetResidualValueState(const MGPResidualValueState*, const void*, Uint64) {
+            MGLOG_F("MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the monolith "
+                    "route, but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
+            std::abort();
         }
 
         // resource_readback carries kReplySlot but its answer is COMPLETION, not a value: the

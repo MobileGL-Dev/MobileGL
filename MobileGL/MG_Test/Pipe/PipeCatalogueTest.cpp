@@ -294,18 +294,14 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     EXPECT_EQ(gMGPipeContext.SetProgramBindings, nullptr);
 }
 
-// The retirement ratchet of the migration carrier (section 6.3): the constant and the
-// struct must agree, and the constant only ever goes down.
+// The retirement ratchet of the migration carrier (section 6.3) reached its end in P13 W3c:
+// ResidualValueBlock is deleted (a sizeof of zero cannot be written in C++, so the exit gate is
+// the type's absence - nothing in the tree can name it any more). What is left to pin is the
+// RETIRED ROW: op 46 keeps its number, because opcodes only ever grow, and its record keeps its
+// layout so a decoder can bounds-check what it then declines.
 TEST(PipeCatalogue, ResidualBlockSizeIsPinned) {
-    static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE);
-    EXPECT_EQ(sizeof(ResidualValueBlock), static_cast<SizeT>(MGL_RESIDUAL_BLOCK_SIZE));
-    // P2 ate 1240 of the 1248: RenderStateParameters retired to create/bind_render_state and
-    // set_dynamic_state, PixelStoreParameters to set_pixel_pack_state, the patch quintet to
-    // set_patch_state. What is left is one Uint64 of capability bits, and it is redundant on
-    // purpose - the applier's trip wire compares it against the assembled block.
-    EXPECT_EQ(sizeof(ResidualValueBlock), 8u);
-    EXPECT_LT(sizeof(ResidualValueBlock), sizeof(RenderStateParameters));
-    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 0u);
+    EXPECT_EQ(static_cast<Uint32>(MGPWireOp::SetResidualValueState), 46u);
+    EXPECT_EQ(sizeof(MGPResidualValueState), 32u);
 }
 
 // P0.5 moved the value structs into MG_Pipe/MGPipeValueTypes.h. These are the runtime twins
@@ -338,8 +334,8 @@ TEST(PipeCatalogue, ValueTypeLayoutsArePinned) {
 // word, at offset 0, and the members it used to carry are gone rather than merely moved -
 // which is exactly what "MGL_RESIDUAL_BLOCK_SIZE only ever goes down" has to mean.
 TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
-    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 0u);
-    EXPECT_EQ(sizeof(ResidualValueBlock), sizeof(Uint64));
+    // P13 W3c deleted the last capability word, so the carrier is gone altogether; the members
+    // it used to carry are pinned on the carriers that took them over.
     // The three carriers that took the retired members over.
     EXPECT_EQ(sizeof(MGPPixelPackState), sizeof(PixelStoreParameters));
     EXPECT_EQ(sizeof(MGPPatchState), 40u);
@@ -993,17 +989,8 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
     EXPECT_TRUE(MGPipeFieldEqual(1.5f, 1.5f));
     EXPECT_FALSE(MGPipeFieldEqual(-0.f, 0.f));
 
-    // The residual carrier is one field since P2, so the nested-struct case it used to
-    // demonstrate is demonstrated on RenderStateParameters directly - which is where it
-    // actually matters now that the block travels as create/bind_render_state chunks.
-    ResidualValueBlock left{};
-    ResidualValueBlock right{};
-    const char* field = nullptr;
-    EXPECT_TRUE(MGPipeVerify(left, right, &field));
-    right.CapabilityBits = 1ull << static_cast<Uint64>(CapabilityInput::FramebufferSrgb);
-    EXPECT_FALSE(MGPipeVerify(left, right, &field));
-    EXPECT_STREQ(field, "CapabilityBits");
-
+    // The nested-struct case is demonstrated on RenderStateParameters directly - which is where
+    // it actually matters now that the block travels as create/bind_render_state chunks.
     RenderStateParameters leftState{};
     RenderStateParameters rightState{};
     const char* inner = nullptr;
@@ -1054,8 +1041,8 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     // appended bind_context's MGPBindContext (docs/Disaggregated/design/11-state-ownership.md):
     // 84. A payload without a list here is one the comparator cannot see, so the row is not
     // optional bookkeeping - gen_pipe.py refuses the build without it.
-    // + shared_image's MGPSharedImageOp: 85.
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 85u);
+    // + shared_image's MGPSharedImageOp: 85. P13 W3c deleted ResidualValueBlock and its list: 84.
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 84u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);

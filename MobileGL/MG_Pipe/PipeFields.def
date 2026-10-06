@@ -173,11 +173,8 @@
 #define MGP_FIELDS_MGPPatchState(F) \
     F(Vertices) F(Outer) F(Inner)
 
-// P2 ratcheted this block from six rows to one: RenderStateParameters retired to
-// create/bind_render_state + set_dynamic_state, Pack to set_pixel_pack_state and the
-// patch trio to set_patch_state. What is left is the redundant capability trip wire.
-#define MGP_FIELDS_ResidualValueBlock(F) \
-    F(CapabilityBits)
+// P2 ratcheted ResidualValueBlock from six rows to one and P13 W3c deleted it; what stays is
+// the retired op 46's payload, which the record catalogue still has to lay out.
 
 #define MGP_FIELDS_MGPResidualValueState(F) \
     F(Version) F(Blob)
@@ -422,7 +419,7 @@
     P(MGPVertexBuffers) P(MGPIndexBuffer) P(MGPIndirectBuffers) P(MGPBoundView) P(MGPSamplerViews) \
     P(MGPSamplerStates) P(MGPImageView) P(MGPShaderImages) P(MGPBufferRange) P(MGPShaderBuffers) \
     P(MGPStreamOutputTargets) P(MGPGlobalConstants) P(MGPAttribValue) P(MGPVertexAttribDefaults) \
-    P(MGPPixelPackState) P(MGPPatchState) P(ResidualValueBlock) P(MGPResidualValueState) \
+    P(MGPPixelPackState) P(MGPPatchState) P(MGPResidualValueState) \
     P(MGPSubRegion) P(MGPSubData) P(MGPSubDataComplete) P(MGPFlushRange) P(MGPReadback) \
     P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPReadbackToBuffer) \
     P(MGPDrawInfo) \

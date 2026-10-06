@@ -660,7 +660,7 @@ namespace MobileGL {
     static_assert(std::is_trivially_copyable_v<RenderStateParameters>);
     static_assert(std::is_standard_layout_v<RenderStateParameters>); // offsetof legality
     static_assert(sizeof(RenderStateParameters) == 1168,
-                  "RenderStateParameters changed size; MGL_RESIDUAL_BLOCK_SIZE and the Espryt spans depend on it");
+                  "RenderStateParameters changed size; the Espryt spans depend on it");
     static_assert(offsetof(RenderStateParameters, BlendStates) < offsetof(RenderStateParameters, LogicOp));
     static_assert(std::tuple_size_v<decltype(RenderStateParameters::BlendStates)> == kMGMaxDrawBuffers);
     static_assert(std::is_trivially_copyable_v<SamplerParameters> && sizeof(SamplerParameters) == 100);

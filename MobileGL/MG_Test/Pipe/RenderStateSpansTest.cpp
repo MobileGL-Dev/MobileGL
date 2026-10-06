@@ -908,8 +908,8 @@ namespace {
     }
 
     // =====================================================================================
-    // 6. THE APPLIER'S OWN CASES: the two redundancy trip wires, and the entry points
-    //    nothing else drives.
+    // 6. THE APPLIER'S OWN CASES: the patch-carrier trip wire (the residual one retired with
+    //    its block in P13 W3c), and the entry points nothing else drives.
     //
     //    ROADMAP.md: every gate must be able to go red for the reason it exists. Both wires
     //    are therefore driven in three states - DISARMED (the applier has not scattered the
@@ -968,20 +968,6 @@ namespace {
         MGPipeApplySetDynamicState(dyn, dynamicBytes.data());
     }
 
-    // The residual block the tracker would emit for this context: the 35 capability answers
-    // the FRONTEND gives, packed in enum order. The wire's job is to disagree with the
-    // assembled block when the two have parted, so the carried side has to come from the
-    // frontend and not from the block.
-    ResidualValueBlock CarriedBitsOf(GLContext& ctx) {
-        ResidualValueBlock block{};
-        for (SizeT i = 0; i < kCapCount; ++i) {
-            if (ctx.IsCapabilityEnabled(static_cast<CapabilityInput>(i))) {
-                block.CapabilityBits |= Uint64{1} << i;
-            }
-        }
-        return block;
-    }
-
     MGPPatchState PatchStateOf(Uint32 vertices, const FloatVec4& outer, const FloatVec2& inner) {
         MGPPatchState patch{};
         patch.Vertices = vertices;
@@ -1038,120 +1024,10 @@ namespace {
     }
 #endif // MGTEST_HAVE_FORK
 
-    // -------------------------------------------------------------------------------------
-    // 6a. The residual trip wire is SILENT until the applier owns the bytes it would compare.
+    // 6a-6c (the residual capability trip wire) were retired with the residual block in P13 W3c:
+    // the capability cross-check is the verify comparator's now (integration-verify's
+    // corrupted-capability control).
     //
-    //     This is the shape MOBILEGL_PIPE_PUSH=0x10 has - the residual subsystem on and the
-    //     render-state subsystem off, which D14 makes a legal per-subsystem A/B. The working
-    //     block is then the per-verb fill loop's, published per verb CLASS, and disagreeing
-    //     with it means nothing. An earlier form of this wire aborted here.
-    // -------------------------------------------------------------------------------------
-    TEST(RenderStateSpans, ResidualTripWireIsSilentUntilTheApplierOwnsTheBytes) {
-        ApplierContextGuard guard;
-        GLContext& ctx = *MG_State::pGLContext;
-        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
-
-        // Nothing scattered: a block that disagrees on EVERY capability must pass in silence.
-        ResidualValueBlock everything{};
-        everything.CapabilityBits = ~Uint64{0};
-        MGPipeApplySetResidualValueState(everything);
-        EXPECT_EQ(MGPipeApplier().ScatteredChunkBits, 0u);
-        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, 0u);
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-
-        // A bind owns the PIPELINE half, which answers 27 of the 35; the eight ClipDistances
-        // are answered from a dynamic chunk and stay unarmed. That grain is why the arming is
-        // per capability and not per applier.
-        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/false);
-        MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
-        const Uint32 armedByThePipelineHalf = MGPipeApplier().ResidualCapabilitiesCompared;
-        // SOME, and not all. The exact number is 27 under the shipped table, but it is a
-        // consequence of the table rather than of the wire, so the case asserts the property
-        // and lets the two directions below say which capabilities are on which side - a
-        // hard-coded 27 would turn any legitimate boundary move into a failure here as well
-        // as in the two cases that exist to catch it.
-        EXPECT_GT(armedByThePipelineHalf, 0u);
-        EXPECT_LT(armedByThePipelineHalf, static_cast<Uint32>(kCapCount))
-            << "a bind alone cannot answer a capability whose mask is in the dynamic half";
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-
-        // ... and a block that disagrees on a CLIP DISTANCE still says nothing, because the
-        // chunk its answer is read out of has not been scattered.
-        ResidualValueBlock clipOnly = CarriedBitsOf(ctx);
-        clipOnly.CapabilityBits ^= Uint64{1} << static_cast<SizeT>(CapabilityInput::ClipDistance3);
-        MGPipeApplySetResidualValueState(clipOnly);
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-
-        // The dynamic half arms the remaining eight.
-        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
-        MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
-        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-    }
-
-    // -------------------------------------------------------------------------------------
-    // 6b. The armed wire HOLDS at a verb class that does not publish the working block.
-    //
-    //     A draw, a capability change, then a DISPATCH. kDispatch publishes
-    //     IsCapabilityEnabled and NOT GetRenderStateParameters (MG_Pipe/FillPoints.def), so
-    //     PipeInputs::m_capability is refilled from the live context here and the working
-    //     block is not - which is exactly why the block has to be the APPLIER'S to be an
-    //     oracle. It is: the applier scattered it, and the emission for this verb keeps it
-    //     current. This is the case that pins the class contract shut.
-    // -------------------------------------------------------------------------------------
-    TEST(RenderStateSpans, ResidualTripWireHoldsAcrossAVerbClassThatDoesNotPublishTheBlock) {
-        ApplierContextGuard guard;
-        GLContext& ctx = *MG_State::pGLContext;
-        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
-        {
-            MG_Test::ScopedPipeVerb draw(MGPipeVerb::DrawArrays);
-            ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
-            MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
-        }
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-
-        ctx.SetCapability(CapabilityInput::Dither, !ctx.IsCapabilityEnabled(CapabilityInput::Dither));
-        {
-            MG_Test::ScopedPipeVerb dispatch(MGPipeVerb::DispatchCompute);
-            ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
-            MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
-        }
-        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
-    }
-
-    // -------------------------------------------------------------------------------------
-    // 6c. The armed wire FIRES, naming the capability. The red half of 6a/6b.
-    // -------------------------------------------------------------------------------------
-    TEST(RenderStateSpans, ResidualTripWireFiresNamingTheCapability) {
-        ApplierContextGuard guard;
-        GLContext& ctx = *MG_State::pGLContext;
-        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
-        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
-
-        ResidualValueBlock diverging = CarriedBitsOf(ctx);
-        diverging.CapabilityBits ^= Uint64{1} << static_cast<SizeT>(CapabilityInput::Dither);
-
-#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
-#if MGTEST_HAVE_FORK
-        const ChildResult child = RunInChild([&diverging]() { MGPipeApplySetResidualValueState(diverging); });
-        EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "; log: " << child.Log;
-        EXPECT_NE(child.Log.find("Fatal{PipeResidualDiverged, \"Dither\"}"), std::string::npos)
-            << "the wire fired without naming the capability; log: " << child.Log;
-#else
-        GTEST_SKIP() << "no fork on this platform; the wire's verdict here is std::abort()";
-#endif
-#else
-        // A shipped push build counts and logs rather than aborting, so the wire is asserted
-        // in the form this build gives it.
-        const std::string before = ReadLog();
-        MGPipeApplySetResidualValueState(diverging);
-        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 1u);
-        EXPECT_NE(ReadLog().substr(before.size()).find("PipeResidualDiverged, \"Dither\""), std::string::npos)
-            << "the wire counted a divergence without logging which capability";
-#endif
-    }
-
     // -------------------------------------------------------------------------------------
     // 6d. The patch-carrier trip wire, in all three states - including a NaN outer level,
     //     which is a legal glPatchParameterfv value that must compare EQUAL to itself and
