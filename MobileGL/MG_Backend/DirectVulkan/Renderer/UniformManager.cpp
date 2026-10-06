@@ -3150,7 +3150,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool UniformManager::PrepareWireTextureResources(const MagmaProgramSource& program,
                                                       const ProgramFactory::VkProgramObject& programObj) {
         if (!program.IsWire()) return true;

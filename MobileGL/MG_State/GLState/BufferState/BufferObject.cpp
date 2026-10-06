@@ -991,7 +991,7 @@ namespace MobileGL::MG_State::GLState {
         return m_resource.Bytes();
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     SizeT BufferObject::ShadowAllocationBytes() const {
         // The extent of the very pointer MappedData() hands out, read by the same caller
         // (the tracker's registration) on the same thread: the same rule-E surface, the

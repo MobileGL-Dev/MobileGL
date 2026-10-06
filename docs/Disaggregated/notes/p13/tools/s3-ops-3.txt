@@ -1,0 +1,3 @@
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/UniformManager.cpp | Bool UniformManager::PrepareWireTextureResources(
+open | MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp | Bool VertexInputStateFactory::BuildWireVertexInput(
+open | MobileGL/MG_State/GLState/BufferState/BufferObject.cpp | SizeT BufferObject::ShadowAllocationBytes() const {

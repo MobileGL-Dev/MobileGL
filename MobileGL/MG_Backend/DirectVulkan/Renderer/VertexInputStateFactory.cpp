@@ -393,7 +393,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return entry;
     }
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
     Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
             const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
         out = BackendVertexInputState{};
