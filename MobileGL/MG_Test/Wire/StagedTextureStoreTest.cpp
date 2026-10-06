@@ -461,17 +461,11 @@ TEST(StagedTextureStoreTest, AFollowedCopyMovesTheWindowAndLeavesTheSourceAlone)
 #if MOBILEGL_BUILD_DISAGGREGATED
 TEST(StagedTextureStoreTest, AnAliasingStoreFollowsACopyIntoAServerOwnedDestination) {
     const auto savedTransport = MG_Config::Transport;
-    const Bool savedArm = MG_Config::MonolithTakesRecordArm;
     MG_Config::Transport = MG_Config::TransportMode::Monolith;
-    MG_Config::MonolithTakesRecordArm = true;
     struct Restore {
         MG_Config::TransportMode transport;
-        Bool arm;
-        ~Restore() {
-            MG_Config::Transport = transport;
-            MG_Config::MonolithTakesRecordArm = arm;
-        }
-    } restore{savedTransport, savedArm};
+        ~Restore() { MG_Config::Transport = transport; }
+    } restore{savedTransport};
     Server::StagedTextureStore store(/*copies=*/false);
     ASSERT_TRUE(store.Aliases());
     const Uint64 src = Server::StagedTextureStore::KeyForHandle(TestHandle(66, 1));

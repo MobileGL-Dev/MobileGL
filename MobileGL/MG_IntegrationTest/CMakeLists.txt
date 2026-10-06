@@ -72,6 +72,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/DrawParametersScenario.cpp
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/ArbShaderObjectsScenario.cpp
+    Scenarios/CubeFaceReadbackScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/UnwrittenPositionOutputScenario.cpp
     Scenarios/SampleMaskScopeScenario.cpp
@@ -1240,9 +1241,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # P13 W3b (ID-P13-3): the pre-handle arm is no longer compiled, so the Handles arm needs neither
 # MOBILEGL_PIPE_LEGACY_MEMOS=0 nor a mask that switches anything off: it runs the default mask.
 # The Legacy and AbaControl lanes (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) went with that arm;
-# AbaControlHandles - the ABA control against the handle arm that ships - stays.
+# AbaControlHandles went with the frontend arm in P13 W6.
 set(MGL_ITEST_HANDLES_ARM_KNOBS "")
-set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
 
 mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
@@ -1252,16 +1252,9 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" ${MGL_ITEST_HANDLES_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
-# P13 W4: THE ABA CONTROL'S SUBJECT IS THE FRONTEND ARM. The knob defeats the identity half of
-# Magma's frontend-arm keys (MagmaPipeIdentityTables); monolith's record arm keys every object on
-# the applier's {slot, gen}, which the knob does not - and must not - reach. So the lane pins the
-# frontend arm (MOBILEGL_PIPE_DATA_ARM, a W4-W6 knob) and goes with that arm in W6.
-mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT
-    "MOBILEGL_TRANSPORT=monolith" "MOBILEGL_PIPE_DATA_ARM=frontend"
-    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba"
-    ${MGL_ITEST_HANDLES_ARM_KNOBS} ${MGL_ITEST_ABA_ARM_KNOBS}
-    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
-
+# P13 W6: the AbaControlHandles lane pinned the frontend arm (its knob defeats the identity half
+# of Magma's frontend-arm keys); that arm is deleted, and the record arm keys every object on the
+# applier's {slot, gen}, which the knob does not reach. Removed (docs/ci/ci-cleanup-log.md).
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.HandleRecycle.Handles."
     TEST_FILTER "HandleRecycleScenario.*"
@@ -1280,16 +1273,6 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}"
 )
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.HandleRecycle.AbaControlHandles."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT}"
-)
-
 # --- G12: the CSO content-addressing negative control ---------------------------------
 #
 # PUSH BUILDS ONLY, and that is the honest scope rather than a convenience: the two counters the
@@ -2471,6 +2454,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # GL_ARB_shader_objects (P13): ARB-created shader / program objects travel the record arm like
     # core-created ones, so the scenario runs on every split arm as well as both monoliths.
     mgl_itest_register_split_arms("ArbShaderObjectsScenario.*" "")
+    # P13 W6: the cube-face readback rules the deleted frontend-arm unit cases pinned.
+    mgl_itest_register_split_arms("CubeFaceReadbackScenario.*" "")
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
     # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case

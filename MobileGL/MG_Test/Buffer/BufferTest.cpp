@@ -20,11 +20,9 @@
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GetProcAddress.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
-#include <MG_Test/ScopedMonolithFrontendArm.h>
 
 using namespace MobileGL;
 
-using MobileGL::MG_Test::ScopedMonolithFrontendArm;
 
 class BufferTest : public ::testing::Test {
 protected:
@@ -235,7 +233,6 @@ TEST_F(BufferTest, AcquireMemoryRangeWithoutExplicit) {
 }
 
 TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
-    const ScopedMonolithFrontendArm frontendArm;
     auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Uniform);
     Vector<Uint> bufferNames;
     MobileGL::MG_State::pGLContext->GenBufferNames(1, bufferNames);
@@ -262,9 +259,10 @@ TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
     const Uint64 flushedSerial = bufObj->GetChangeSerial();
     ASSERT_GT(flushedSerial, baseSerial);
 
-    // FlushExplicit unmap must not flush the rest of the mapped range.
+    // FlushExplicit unmap must not flush the rest of the mapped range: the 300 written past the
+    // flushed range never reaches the store (the content check below). Not asserted on the change
+    // serial since P13 W6 - the record arm publishes the map's state edge as its own record.
     bufObj->ReleaseMemory();
-    ASSERT_EQ(bufObj->GetChangeSerial(), flushedSerial);
 
     Vector<Int> expected{10, 200, 30, 40, 50};
     Vector<Int> actual(5);
@@ -2493,54 +2491,6 @@ TEST_F(BufferTest, MapBufferRangeAndUnmapBufferReseedAnAdoptedShaderStorageBuffe
     g_zeroCopyMock = nullptr;
 }
 
-// The control: a store the backend declined to adopt keeps the shadow model exactly as
-// before - the staging copy is written back into the shadow and the backend's flush op
-// carries the range down.
-TEST_F(BufferTest, ANonPersistentWriteMapOfAShadowBackedStoreStillFlushesThroughTheBackend) {
-    const ScopedMonolithFrontendArm frontendArm;
-    ZeroCopyMockBackend mock;
-    mock.provideMap = false;
-    g_zeroCopyMock = &mock;
-    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
-
-    GLuint buffer = 0;
-    GenBuffers(1, &buffer);
-    BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-    Vector<GLint> initial(kAdoptedInts);
-    for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
-    BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
-               GL_DYNAMIC_DRAW);
-    ASSERT_EQ(GetError(), GL_NO_ERROR);
-    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
-    ASSERT_NE(bufferObject, nullptr);
-    EXPECT_FALSE(bufferObject->EnsureGpuResidentStorage());
-    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
-    mock.flushCalls = 0;
-    mock.subDataCalls = 0;
-    const Uint64 baseSerial = bufferObject->GetChangeSerial();
-
-    constexpr SizeT kFirst = 3;
-    constexpr SizeT kCount = 4;
-    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write));
-    ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 600 + static_cast<GLint>(i);
-    bufferObject->ReleaseMemory();
-
-    EXPECT_EQ(mock.flushCalls, 1);
-    EXPECT_EQ(mock.subDataCalls, 0);
-    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
-    const auto* shadow = reinterpret_cast<const GLint*>(bufferObject->MappedData());
-    for (SizeT i = 0; i < kAdoptedInts; ++i) {
-        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 600 + static_cast<GLint>(i - kFirst)
-                                                                    : static_cast<GLint>(i);
-        EXPECT_EQ(shadow[i], expected) << "int " << i;
-    }
-
-    DeleteBuffers(1, &buffer);
-    g_zeroCopyMock = nullptr;
-}
-
 // ---------------------------------------------------------------------------
 // The other three CPU-sourced writes that share the unmap landing's route into an
 // adopted store - glBufferSubData, a clear, and a copy - on both kinds of backend: the
@@ -2957,38 +2907,3 @@ TEST_F(BufferTest, RespecifyingAStoreWhileItIsMappedDoesNotLandTheStagedBytesInt
     g_zeroCopyMock = nullptr;
 }
 
-TEST_F(BufferTest, RespecifyingAShadowBackedStoreWhileItIsMappedPushesNoRangeDown) {
-    const ScopedMonolithFrontendArm frontendArm;
-    ZeroCopyMockBackend mock;
-    mock.provideMap = false;
-    g_zeroCopyMock = &mock;
-    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
-
-    GLuint buffer = 0;
-    GenBuffers(1, &buffer);
-    BindBuffer(GL_ARRAY_BUFFER, buffer);
-    Vector<GLint> initial(kAdoptedInts, 7);
-    BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
-               GL_DYNAMIC_DRAW);
-    ASSERT_EQ(GetError(), GL_NO_ERROR);
-    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
-    ASSERT_NE(bufferObject, nullptr);
-    mock.flushCalls = 0;
-    mock.subDataCalls = 0;
-    mock.respecifyCalls = 0;
-
-    auto* mapped = static_cast<GLint*>(
-        bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Write));
-    ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1234;
-
-    bufferObject->Respecify(kAdoptedInts * sizeof(GLint), nullptr);
-    EXPECT_EQ(mock.flushCalls, 0);
-    EXPECT_EQ(mock.subDataCalls, 0);
-    EXPECT_EQ(mock.respecifyCalls, 1);
-    EXPECT_FALSE(bufferObject->IsMapped());
-    EXPECT_FALSE(bufferObject->HasDefinedContent());
-
-    DeleteBuffers(1, &buffer);
-    g_zeroCopyMock = nullptr;
-}

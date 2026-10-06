@@ -757,23 +757,13 @@ namespace MobileGL::MG_Config {
     inline constexpr TransportMode Transport = TransportMode::Monolith;
 #endif
 
-    // P13 W4: THE DATA-ARM QUESTION - do the backends read RECORDS (the applier's twins, the staged
-    // stores, the verb's own handles) rather than frontend objects? Under a wire the answer has
-    // always been yes; P13 makes it yes for monolith too ("monolith is the push variant"), one
-    // record family at a time. Each family's arm sites ask THIS rather than `Transport`, which
-    // keeps answering the questions that really are about the transport (lifecycle, roles, whose
-    // caps, whether a store copies).
-    //
-    // MOBILEGL_PIPE_DATA_ARM=record (default) | frontend picks monolith's arm for the families
-    // already switched, on a backend whose monolith takes the record arm at all (Espryt from W4a,
-    // Magma at its single flip). It exists for W4-W6 only - bisecting a monolith red to the switch, and
-    // the per-thread CPU record (ID-P13-2) - and goes in W6 with the frontend arms. Latched once
-    // by MG_ConfigLoader::Init(): the two arms keep their twins in different places.
-    extern Bool MonolithTakesRecordArm;
-    inline Bool DataArmIsRecord() { return Transport != TransportMode::Monolith || MonolithTakesRecordArm; }
+    // P13: THE DATA-ARM QUESTION, ANSWERED ONCE FOR EVERY BUILD. The backends read RECORDS (the
+    // applier's twins, the staged stores, the verb's own handles), never frontend objects - over a
+    // wire and on monolith alike ("monolith is the push variant"). W4 switched monolith family by
+    // family behind MOBILEGL_PIPE_DATA_ARM; W5 built the record arm into every library; W6 deleted
+    // the frontend arm and the knob. The predicate stays as a name for the sites that read it.
+    inline constexpr Bool DataArmIsRecord() { return true; }
     // ...and the record arm runs in this process over stores that ALIAS the frontend's shadows
     // (monolith) instead of copying them (every wire).
-    inline Bool RecordArmAliasesFrontend() {
-        return Transport == TransportMode::Monolith && MonolithTakesRecordArm;
-    }
+    inline Bool RecordArmAliasesFrontend() { return Transport == TransportMode::Monolith; }
 } // namespace MobileGL::MG_Config

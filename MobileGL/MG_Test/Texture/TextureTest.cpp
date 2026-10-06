@@ -13,7 +13,6 @@
 
 #include "Includes.h"
 #include "Init.h"
-#include <MG_Test/ScopedMonolithFrontendArm.h>
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
@@ -1061,99 +1060,6 @@ TEST_F(TextureTest, EverySamplerScalarPnameConvertsToTheQueriedType) {
     DrainPendingGlErrors();
 }
 
-// The CPU-shadow readback path performs no format/type conversion and packs rows tightly. Asking it
-// for a layout it cannot produce used to be answered by memcpying the SHADOW's layout into the
-// caller's buffer: on glGetTexImage, which has no bufSize argument, that is a heap overflow of
-// (shadowTexelSize - clientTexelSize) * texelCount bytes. It must refuse instead.
-TEST_F(TextureTest, ShadowReadbackRefusesALayoutItCannotProduceInsteadOfOverrunningTheBuffer) {
-    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
-    GLuint texture = 0;
-    MG_Impl::GLImpl::GenTextures(1, &texture);
-    ASSERT_NE(texture, 0u);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
-    const std::vector<GLubyte> source(8 * 8 * 4, 0x5A);
-    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, source.data());
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-
-    // The positive control first: the matching layout is answered, and answered correctly.
-    std::vector<GLubyte> matching(8 * 8 * 4, 0);
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                                     static_cast<GLsizei>(matching.size()), matching.data());
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    EXPECT_EQ(matching, source);
-
-    // GL_RED against an RGBA8 shadow: 1 client byte per texel against 4 shadow bytes. A verbatim copy
-    // would write 256 bytes into the 64 GL 4.6 core 8.11 says are required.
-    std::vector<GLubyte> narrow(8 * 8 * 1, 0xCD);
-    const std::vector<GLubyte> narrowBefore = narrow;
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RED, GL_UNSIGNED_BYTE, static_cast<GLsizei>(narrow.size()),
-                                     narrow.data());
-    ExpectSingleGlError(GL_INVALID_OPERATION);
-    EXPECT_EQ(narrow, narrowBefore) << "a refused readback must not touch the destination";
-
-    // And the widening direction, which is not an overflow but is still the wrong bytes.
-    std::vector<GLfloat> wide(8 * 8 * 4, 0.0f);
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RGBA, GL_FLOAT,
-                                     static_cast<GLsizei>(wide.size() * sizeof(GLfloat)), wide.data());
-    ExpectSingleGlError(GL_INVALID_OPERATION);
-
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
-    MG_Impl::GLImpl::DeleteTextures(1, &texture);
-    DrainPendingGlErrors();
-}
-
-// The same helper honours only GL_PACK_SWAP_BYTES and the bitmap LSB_FIRST path - the pixel-store
-// parameters carry a standing TODO in the pack processor. GL_PACK_ALIGNMENT defaults to 4, so a
-// 3-byte-per-texel format at an odd width needs row padding that would never be written, and the GPU
-// readback path DOES write it. Refusing keeps the two paths from answering the same call with two
-// different destination layouts.
-TEST_F(TextureTest, ShadowReadbackRefusesAPackStateItCannotHonour) {
-    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
-    GLuint texture = 0;
-    MG_Impl::GLImpl::GenTextures(1, &texture);
-    ASSERT_NE(texture, 0u);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
-    // The UNPACK side has the same default alignment of 4, and 5 * 3 = 15 is not a multiple of it -
-    // so a tightly-packed source would be read back out with a 16-byte row stride and the texture
-    // would hold the wrong bytes before the readback under test even runs. This is the pack rule
-    // being pinned below, seen from the upload side.
-    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    const std::vector<GLubyte> source(5 * 5 * 3, 0x21);
-    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 5, 5, 0, GL_RGB, GL_UNSIGNED_BYTE, source.data());
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-
-    // 5 * 3 = 15 bytes per row, which the default GL_PACK_ALIGNMENT of 4 pads to 16.
-    std::vector<GLubyte> padded(5 * 16, 0);
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RGB, GL_UNSIGNED_BYTE, static_cast<GLsizei>(padded.size()),
-                                     padded.data());
-    ExpectSingleGlError(GL_INVALID_OPERATION);
-
-    // With the padding removed the rows are tight and the same call is answered.
-    MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 1);
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    std::vector<GLubyte> tight(5 * 5 * 3, 0);
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RGB, GL_UNSIGNED_BYTE, static_cast<GLsizei>(tight.size()),
-                                     tight.data());
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    EXPECT_EQ(tight, source);
-
-    // A skip offset is ignored outright by the pack processor, so it is refused even when the rows
-    // themselves are tight.
-    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_ROWS, 1);
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
-    MG_Impl::GLImpl::GetTextureImage(texture, 0, GL_RGB, GL_UNSIGNED_BYTE, static_cast<GLsizei>(tight.size()),
-                                     tight.data());
-    ExpectSingleGlError(GL_INVALID_OPERATION);
-
-    MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_ROWS, 0);
-    MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 4);
-    MG_Impl::GLImpl::PixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
-    MG_Impl::GLImpl::DeleteTextures(1, &texture);
-    DrainPendingGlErrors();
-}
-
 // glTextureParameter* has no target token, so GL 4.6 core 8.10 applies the ten-target list to the
 // texture's EFFECTIVE target. The four vector DSA forms reached that gate for free by re-entering
 // through the bound-target path; the two scalar forms called the per-object setter directly and
@@ -2139,47 +2045,6 @@ TEST_F(TextureTest, GetTextureSubImageSelectsTheCubeFaceZOffsetNames) {
     MG_Impl::GLImpl::GetTextureSubImage(texture, 0, 0, 0, 6, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, sizeof(output),
                                         output);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
-}
-
-// glGetTexImage of ONE cube face packs one face, so a PIXEL_PACK_BUFFER holding one face is
-// exactly the right size for it. The validator used to measure the bound PBO against all SIX
-// faces' worth and refuse - INVALID_OPERATION for a buffer the copy that follows would have filled
-// precisely. glGetTexImage passes no bufSize, which skips the destination-size branch but NOT the
-// PBO one, so this is the only spelling where the six-face sizing was reachable at all.
-TEST_F(TextureTest, GetTexImageOfOneCubeFacePacksIntoAOneFacePixelPackBuffer) {
-    const MobileGL::MG_Test::ScopedMonolithFrontendArm frontendArm;
-    constexpr GLsizei kEdge = 2;
-    constexpr SizeT kFaceBytes = static_cast<SizeT>(kEdge) * kEdge * 4;
-
-    GLuint texture = 0;
-    MG_Impl::GLImpl::GenTextures(1, &texture);
-    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, texture);
-    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kEdge, kEdge);
-    for (int face = 0; face < 6; ++face) {
-        Uint8 seed[kFaceBytes];
-        for (SizeT i = 0; i < kFaceBytes; ++i) seed[i] = static_cast<Uint8>(10 + face);
-        MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, kEdge, kEdge, GL_RGBA,
-                                       GL_UNSIGNED_BYTE, seed);
-    }
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "seeding the six faces failed";
-
-    GLuint buffer = 0;
-    MG_Impl::GLImpl::GenBuffers(1, &buffer);
-    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
-    MG_Impl::GLImpl::BufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(kFaceBytes), nullptr, GL_STREAM_READ);
-    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "creating the one-face pixel pack buffer failed";
-
-    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
-        << "a pixel pack buffer sized for the one face this call packs was refused";
-
-    Uint8 packed[kFaceBytes] = {};
-    MG_Impl::GLImpl::GetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(kFaceBytes), packed);
-    EXPECT_EQ(static_cast<int>(packed[0]), 15) << "the PBO holds face " << (static_cast<int>(packed[0]) - 10)
-                                               << ", not -Z";
-
-    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
 TEST_F(TextureTest, TextureParameteriAndBindTextureUnitAreDirectStateAccess) {
