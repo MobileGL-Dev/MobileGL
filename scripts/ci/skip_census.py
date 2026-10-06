@@ -29,9 +29,20 @@ them out like that); every *.xml under a lane directory counts toward that lane,
 import argparse
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+
+
+# gtest_discover_tests names a value-parameterised case `<name>  # GetParam() = <printed value>`,
+# and a printed struct of pointers is raw bytes that move with every build. The census keys a
+# case by what it IS, not by where its parameter happened to land.
+_PARAM_SUFFIX = re.compile(r'\s+#\s+(?:GetParam|TypeParam)\(\) = .*$', re.S)
+
+
+def normalize_name(name):
+    return _PARAM_SUFFIX.sub('', name)
 
 
 def case_status(case):
@@ -58,6 +69,7 @@ def collect(root):
             name = case.get('name')
             if not name:
                 continue
+            name = normalize_name(name)
             status = case_status(case)
             # A name reported twice in one lane (a rerun) keeps its worst outcome.
             order = {'pass': 0, 'skip': 1, 'fail': 2}
@@ -88,7 +100,8 @@ def resolve_baseline(baseline):
     resolved = {}
     for lane, row in baseline.items():
         names = row['names'] if 'names' in row else baseline[row['names_from']]['names']
-        resolved[lane] = {'names': names, 'skipped': row['skipped']}
+        resolved[lane] = {'names': sorted({normalize_name(n) for n in names}),
+                          'skipped': sorted({normalize_name(n) for n in row['skipped']})}
     return resolved
 
 
@@ -195,6 +208,8 @@ def self_test():
         assert quiet(['check', str(lost), '--baseline', str(base)]) == 1, 'a lane that vanished must be red'
         assert quiet(['check', str(tmp / 'empty'), '--baseline', str(base)]) == 1, 'no JUnit must be red'
         assert quiet(['check', str(good), '--baseline', str(tmp / 'none.json')]) == 1, 'no baseline must be red'
+    assert normalize_name('S/T.Case/Leaf  # GetParam() = 64-byte object <46-CA 08-EB>') == 'S/T.Case/Leaf'
+    assert normalize_name('T.Plain') == 'T.Plain'
     twins = {'a/x': {'p': 'pass', 'q': 'skip'}, 'b/x': {'p': 'pass', 'q': 'pass'}}
     packed = to_baseline(twins)
     assert 'names_from' in packed['b/x'] and resolve_baseline(packed)['b/x']['names'] == ['p', 'q']
