@@ -7047,7 +7047,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
             // A shared image's EGLImage lives exactly as long as the name it was bound to.
             m_sharedImage = nullptr;
 #endif
@@ -16169,7 +16169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PipeTextureStorageRecordForRecord and CONTRACT-P5E.md §5.2.
             const MG_Pipe::MGPipeResourceRecord* storage = PipeTextureStorageRecordForRecord(record);
             if (storage == nullptr) return false;
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
             // Never clean while bound to a shared image: see IsDrawSyncClean.
             if (m_sharedImage != nullptr) return false;
 #endif

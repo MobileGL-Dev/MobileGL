@@ -2052,7 +2052,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bool IsDrawSyncClean(const MG_State::GLState::ITextureObject* t, Uint64 contextId,
                                  Uint64 samplingGeneration) const {
-#if MOBILEGL_BUILD_RECORD_ARM
+#if MOBILEGL_BUILD_DISAGGREGATED
                 // A shared image's texels move with its producer's presents, which nothing here
                 // sees: every use goes through SyncMipmapsToBackend's shared-image arm, which waits
                 // for a write that landed since the last one (SharedImageImpl::AcquireForSampling).
