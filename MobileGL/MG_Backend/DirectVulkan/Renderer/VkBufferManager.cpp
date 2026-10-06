@@ -1236,7 +1236,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkBufferManager::Shutdown() {
         if (g_activeBufferManager.Get() == this) {
             g_activeBufferManager.Get() = nullptr;
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // Under a transport the table is the PROCESS's and serves every session: it dispatches
             // to the calling session's own manager (WireManager), so one session's renderer going
             // away must not take it from the others - their buffer creates would be dropped from
@@ -1255,7 +1255,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_unboundTexelBuffer.Destroy();
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // DestroyAllDeferredReleases above emptied the parked list; this destroys the stores the
         // records still hold, so nothing this arm minted outlives the count.
         if (!m_wireBuffers.empty()) ++m_wireStoreDestroyEpoch;

@@ -3244,7 +3244,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                (samplerBindingOverrides == nullptr || samplerBindingOverrides->empty());
         if (cacheable && samplerDescriptorsUnchangedHint && m_fastRebindMemo.valid &&
             m_fastRebindMemo.frameIndex == frameIndex &&
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // A wire store destroyed since the memo was taken may have handed its handle
             // value to a later mint (see FastRebindMemo): "same VkBuffer" then names a
             // different store, so the memo is refused and the full walk re-records it.
@@ -3546,7 +3546,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             };
             mixWords(&programObj.descriptorSetLayout, sizeof(programObj.descriptorSetLayout));
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
             // P7 M2 round 2 (ID-P7-43): the buffer infos below name WIRE stores by VkBuffer
             // handle, and a wire store can be destroyed mid-frame (VkBufferManager::
             // DeferredWireRelease) with its handle value re-minted before this frame's memo
@@ -3611,7 +3611,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 /*valid=*/true,          frameIndex,      program.GetLifetimeId(), programObj.hash,
                 fastRebindUboBinding,    bufferInfos[0].buffer,
                 bufferInfos[0].range,    descriptorSet,
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
                 m_bufferManager->GetWireStoreDestroyEpoch(),
 #endif
             };

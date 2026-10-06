@@ -3506,7 +3506,7 @@ void main() {
         // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
         for (auto& [_, target] : m_parkedTargets) DestroyParkedTarget(target);
         m_parkedTargets.clear();
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
         // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
         WireDeclineTally::Dump("shutdown");
@@ -3518,11 +3518,15 @@ void main() {
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
         DestroyWireColorBlitResources();
+#if MOBILEGL_BUILD_DISAGGREGATED
         DestroyWireYuvResources();
+#endif
         DestroyWireDepthMipmapResources();
         DestroyWireMultisampleResolveResources();
+#if MOBILEGL_BUILD_DISAGGREGATED
         DestroySharedImagePresentTargets(false);
         DestroySharedImageSync();
+#endif
 #endif
         OnSubmitsCompletedUpTo(m_submitCounter);
         DestroySubmitFencePool();
@@ -13843,8 +13847,10 @@ void main() {
         // Mid-frame-flushed command buffers whose submission just completed can
         // be freed now; present-less flush loops have no other reclaim point.
         m_frameContext.FreeRetiredCommandBuffersCompletedUpTo(m_completedSubmitCounter);
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         CollectWireObjects(m_completedSubmitCounter);
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
         RecycleSharedImageSemaphores(m_completedSubmitCounter);
 #endif
     }
@@ -16030,11 +16036,13 @@ void main() {
             m_shaderDrawParametersFeatureEnabled ? "true" : "false");
         VK_VERIFY(vkCreateDevice(m_physicalDevice.handle, &deviceCreateInfo, nullptr, &m_device), "vkCreateDevice");
 
-#if MOBILEGL_BUILD_DISAGGREGATED
+#if MOBILEGL_BUILD_RECORD_ARM
         if (wireDepthResolveEnabled) {
             m_wireCreateRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(
                 vkGetDeviceProcAddr(m_device, wireDepthResolveCore ? "vkCreateRenderPass2" : "vkCreateRenderPass2KHR"));
         }
+#endif
+#if MOBILEGL_BUILD_DISAGGREGATED
         if (m_wireAhbImport) {
             m_wireGetAhbProperties =
                 reinterpret_cast<void*>(vkGetDeviceProcAddr(m_device, "vkGetAndroidHardwareBufferPropertiesANDROID"));
