@@ -801,7 +801,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VkBufferManager::ImportWireBuffer(MG_Pipe::MGPipeHandle res, void* ahb, Uint64 size) {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && MOBILEGL_BUILD_DISAGGREGATED // T0 is the transport's adoption tier
         auto* resource = FindWireBuffer(res);
         if (resource == nullptr || ahb == nullptr || size == 0 || size != resource->size) return false;
         VulkanRenderer::WireAhbImport ctx;
@@ -861,7 +861,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::snprintf(whyOut, static_cast<SizeT>(whyBytes), "%s", text.c_str());
             return ok;
         };
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && MOBILEGL_BUILD_DISAGGREGATED // T0 is the transport's adoption tier
         VulkanRenderer::WireAhbImport ctx;
         if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx))
             return answer(false, "the device did not take VK_ANDROID_external_memory_android_hardware_buffer");
