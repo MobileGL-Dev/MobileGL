@@ -26,8 +26,9 @@
 //
 // THE KNOB. MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h> is read BY THE ESPRYT SERVER
 // (WireTextureReadback.inc, ReadTextureImageWire): a colour level of exactly that extent is
-// treated as a level the driver refused to attach, which is what an Adreno does for every one of
-// these formats and what llvmpipe can be made to do no other way. The `DirectGLES.<arm>.StoreRead.`
+// treated as a level the driver refused to attach - what a driver without EXT_texture_norm16 /
+// EXT_render_snorm does for these formats (an Adreno 750, which has both, reads them all back
+// through the GPU; measured in P13), and what llvmpipe can be made to do no other way. The `DirectGLES.<arm>.StoreRead.`
 // entries set it, and this scenario then builds its textures at THAT extent instead of the default
 // one - so the knob is scoped by the extent, and the tcp lane's shared supervisor can carry it
 // (the TcpServer.Start fixture's ENVIRONMENT) without touching any other entry, this scenario's
