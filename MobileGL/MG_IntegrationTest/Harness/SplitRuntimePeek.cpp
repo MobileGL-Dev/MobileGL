@@ -27,6 +27,14 @@
 #include <thread>
 #define MGITEST_SPLIT_RUNTIME_PEEK_LIVE 1
 #endif
+// P13 W5: THE RECORD-ARM HALF OF THE PEEK, which needs no transport. A library built with the
+// record arm and without MG_Remote (the FCL shape) still answers dataArmIsRecord, so the scenarios
+// that branch on it assert the arm the process really runs rather than the frontend arm a missing
+// peek would imply.
+#if defined(MGITEST_RECORD_ARM_PEEK) && !defined(__ANDROID__)
+#include <Config.h>
+#define MGITEST_RECORD_ARM_PEEK_LIVE 1
+#endif
 
 namespace MGITest {
 
@@ -118,6 +126,9 @@ namespace MGITest {
 
     SplitRuntimeState PeekSplitRuntime() {
         SplitRuntimeState state;
+#if defined(MGITEST_RECORD_ARM_PEEK_LIVE)
+        state.dataArmIsRecord = MobileGL::MG_Config::DataArmIsRecord();
+#endif
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
         using MobileGL::MG_Config::TransportMode;
         state.peekAvailable = true;

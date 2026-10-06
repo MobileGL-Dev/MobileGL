@@ -1934,6 +1934,10 @@ endif()
 # none of which a message edit can move - and every Split case skips, naming the first one that is
 # not true. All this file has to decide now is whether that peek can be COMPILED, which is exactly
 # "did this build compile MG_Remote", which is exactly the build option.
+# P13 W5: the record arm's half of the peek (dataArmIsRecord) needs no transport.
+if (MOBILEGL_BUILD_RECORD_ARM)
+    target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_RECORD_ARM_PEEK=1)
+endif()
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_SPLIT_RUNTIME_PEEK=1)
     message(STATUS "Integration tests: the DirectGLES.Split. lanes arm from the RUNNING PROCESS - "
@@ -1958,11 +1962,12 @@ endif()
 
 # Package b1's client-side persistent-map tracker, which is what Harness/PersistentMapPeek.cpp
 # asks the membership question of (b1-v1.md 4.1 item 2). TWO halves, and both are needed:
-# MOBILEGL_BUILD_DISAGGREGATED because a build that never compiled MG_Remote cannot LINK the call,
-# and the content probe because b1 may not have landed it yet. __has_include in the peek would
-# answer yes in a pull build - the header is in the source tree of every build - and turn a
-# healthy pull build into a link error, which is why this decision is made here.
-if (MOBILEGL_BUILD_DISAGGREGATED)
+# MOBILEGL_BUILD_RECORD_ARM because a build that never compiled the record arm cannot LINK the call
+# (P13 W5: the tracker is record core, MG_Record, and no longer needs MG_Remote), and the content
+# probe because b1 may not have landed it yet. __has_include in the peek would answer yes in a
+# build without it - the header is in the source tree of every build - and turn a healthy build
+# into a link error, which is why this decision is made here.
+if (MOBILEGL_BUILD_RECORD_ARM)
     mgl_itest_probe_for_symbol(MGL_ITEST_PERSISTENT_MAP_TRACKER
         "${MGL_ITEST_ROOT}/MobileGL/MG_State/GLState/BufferState" "IsLivePersistentMap")
     if (MGL_ITEST_PERSISTENT_MAP_TRACKER)
