@@ -180,6 +180,16 @@ namespace MobileGL::MG_Pipe {
 
     bool MGPipeRecordLatched() { return g_recordLatchedHook != nullptr && g_recordLatchedHook(); }
 
+    void MGPipeProtocolFatal(const char* what, const char* detail) {
+        MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what,
+                         detail != nullptr ? detail : "");
+    }
+
+    void MGPipeProtocolFatalAt(const char* what, Uint64 got, Uint64 expected) {
+        MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu",
+                         what, static_cast<unsigned long long>(got), static_cast<unsigned long long>(expected));
+    }
+
     MGPipeRecordFailHook MGPipeRecordFailHookInstalled() { return g_recordFailHook; }
     MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() { return g_recordLatchHook; }
     MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() { return g_recordLatchedHook; }

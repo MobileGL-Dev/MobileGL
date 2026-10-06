@@ -697,6 +697,8 @@ if (MOBILEGL_BUILD_RECORD_ARM)
         MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
         # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
         MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
+        # The record verbs' consumer (ServerVerbSink under a transport is this plus the session's).
+        MobileGL/MG_Backend/Record/RecordVerbSink.cpp
     )
 endif()
 

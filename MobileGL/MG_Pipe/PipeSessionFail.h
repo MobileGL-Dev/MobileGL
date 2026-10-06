@@ -41,6 +41,8 @@
 
 #include <MG_Pipe/PipeFatalFamily.h>
 
+#include <cstdint>
+
 namespace MobileGL::MG_Pipe {
 
     // THE FAMILIES THAT CROSS THIS BOUNDARY, AND ONLY THOSE. Not `MGFatalFamily` cast to an
@@ -124,6 +126,10 @@ namespace MobileGL::MG_Pipe {
         MGPipeRecordLatch(MGFatalFamily family, const char* fmt, ...);
     // Whether the calling session already latched (false with no hook).
     bool MGPipeRecordLatched();
+    // The record arm's two ProtocolCorruption lines, worded exactly as the wire codec's
+    // WireProtocolFatal / WireProtocolFatalAt (so every census and death matcher reads them alike).
+    [[noreturn]] void MGPipeProtocolFatal(const char* what, const char* detail);
+    [[noreturn]] void MGPipeProtocolFatalAt(const char* what, ::std::uint64_t got, ::std::uint64_t expected);
 
 #if MOBILEGL_BUILD_RECORD_ARM
     // ---- THE LATCH TWIN: A LOST GPU DEVICE ENDS ITS SESSION, NOT THE PROCESS ----------------
