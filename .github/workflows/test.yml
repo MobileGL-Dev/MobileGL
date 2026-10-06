@@ -906,17 +906,19 @@ jobs:
 
       # NEGATIVE CONTROL B (gate G5). The omission skips the STAMP of one field for one verb while
       # still copying its value - indistinguishable from a fill row nobody wrote - so the poison
-      # must abort the glGenerateMipmap. Again: this step passes when ctest fails.
+      # must abort that verb. Again: this step passes when ctest fails.
       #
       # The entry it targets is PoisonOmissionScenario.WithoutOmissionCompletes, which is green in
-      # the ambient lane above and is the ONLY integration entry in the tree that calls
-      # glGenerateMipmap at all. It deliberately does not skip itself when the knob is set, exactly
-      # so that this control has something to turn red.
+      # the ambient lane above and deliberately does not skip itself when the knob is set, exactly
+      # so that this control has something to turn red. P13 W5: the pair is the pack state at
+      # ReadPixels (the split step's pair below). Monolith now runs the record arm, whose
+      # generate_mipmap resolves its texture by the verb's handle and never reads the active unit,
+      # so GenerateMipmap:GetActiveTextureUnit left this lane green (Test 37515697754).
       - name: Negative control B (omitted fill point)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_POISON_OMIT: GenerateMipmap:GetActiveTextureUnit
+          MOBILEGL_PIPE_POISON_OMIT: ReadPixels:GetPixelStoreParameters
         run: |
           FILTER='DirectGLES\.Verify\.PoisonOmissionScenario\.WithoutOmissionCompletes'
           matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
@@ -925,7 +927,7 @@ jobs:
             exit 1
           fi
           if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit left the verify lane GREEN. The per-verb poison is not armed, so a forgotten fill row would ship silently."
+            echo "::error::MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters left the verify lane GREEN. The per-verb poison is not armed, so a forgotten fill row would ship silently."
             exit 1
           fi
           echo "the omitted fill point turned the lane red, as it must"
@@ -1147,8 +1149,8 @@ jobs:
           done
           echo "both backends reported GetPixelStoreParameters@ReadPixels where=read at least twice in the SERVER half, as they must"
 
-      # NEGATIVE CONTROL B ON THE SPLIT ARM, WITH THE SPLIT ARM'S PAIR. The monolith pair
-      # (GenerateMipmap:GetActiveTextureUnit) is inert here - the split backend's generate_mipmap
+      # NEGATIVE CONTROL B ON THE SPLIT ARM, WITH THE SAME PAIR. GenerateMipmap:GetActiveTextureUnit
+      # (the pre-P13 monolith pair) is inert here - the split backend's generate_mipmap
       # resolves its texture by the verb's handle and never reads the active unit - so this step
       # withholds ReadPixels:GetPixelStoreParameters, which the server reads under its own stamp.
       # Measured at landing: 2 of 2 red, each child dying with

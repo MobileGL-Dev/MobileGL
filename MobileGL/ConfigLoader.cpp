@@ -690,7 +690,11 @@ namespace MobileGL::MG_ConfigLoader {
         const Bool backendReady = MG_Config::ActiveBackendType == BackendType::DirectGLES ||
                                   MG_Config::ActiveBackendType == BackendType::DirectVulkan;
         MG_Config::MonolithTakesRecordArm = backendReady;
-        if (lowered.empty() || lowered == "record") return;
+        if (lowered.empty() || lowered == "record") {
+            // The one line a device log can be asked for to show which arm a monolith runs.
+            MGLOG_I("Config: monolith data arm = %s", backendReady ? "record" : "frontend (backend has no record arm)");
+            return;
+        }
         if (lowered == "frontend") {
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 MGLOG_W("Config: MOBILEGL_PIPE_DATA_ARM=frontend is ignored under a transport - the "
