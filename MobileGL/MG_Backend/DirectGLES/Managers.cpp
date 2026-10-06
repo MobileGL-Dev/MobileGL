@@ -4062,7 +4062,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && MOBILEGL_BUILD_DISAGGREGATED
                 // P11 B2: A T0 STORE OUTLIVES ITS CONTEXT. Its pages are the client's
                 // AHardwareBuffer, which this twin still holds, so the store is imported again on
                 // the new context - the client keeps writing through the same pointer and nothing
