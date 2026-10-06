@@ -1700,8 +1700,8 @@
         auto& record = state.TextureResources[handle.Slot];
         record.Desc.Levels = std::max<Uint16>(record.Desc.Levels,static_cast<Uint16>(base+count));
         resource->syncedWireSerial = ++record.Serial;
-        auto& store = MG_Remote::Server::ServerStagedTexture();
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        auto& store = MG_Record::ServerStagedTexture();
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
         const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
         // The resource descriptor determines the upload-target set; no texture unit or
         // client upload-target vector participates in defining the generated shadow.
@@ -1719,7 +1719,7 @@
             default: break;
             }
             for (Uint32 level=base+1;level<base+count;++level) {
-                const IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(
+                const IntVec3 extent = MG_Record::StagedTextureMipExtent(
                     record.Desc.Target, record.Desc.Width, record.Desc.Height, record.Desc.Depth, level);
                 // PH-4: the record's own target and format, not NoteLevelDefined's Tex2D/RGBA8
                 // defaults - a 2D-array or 3D level has depth > 1, which the Tex2D device-limit rule

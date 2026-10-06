@@ -352,8 +352,8 @@
     static Bool ReadWireLevelFromStagedStore(MG_Pipe::MGPipeHandle res, TextureInternalFormat logicalFormat,
                                              TextureUploadTarget uploadTarget, GLint level, const IntVec3& extent,
                                              GLenum format, GLenum type, Vector<Uint8>& bytes) {
-        auto& store = MG_Remote::Server::ServerStagedTexture();
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+        auto& store = MG_Record::ServerStagedTexture();
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
         const auto target = static_cast<Uint16>(uploadTarget);
         const auto mip = static_cast<Uint16>(level);
         ReadbackChannelMapping mapping{};

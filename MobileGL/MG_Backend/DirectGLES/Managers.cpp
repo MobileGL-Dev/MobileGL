@@ -21,8 +21,8 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 // R-11's server-owned staging copy. Header-only and package v1's; see its own header block for
 // why GLESBufferResource does not simply gain a member.
-#include <MG_Remote/Server/StagedShadow.h>
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedShadow.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 #include <MG_Remote/Server/ServerLoop.h>
 // P5c (ct): object_death's producer (CONTRACT-P5C.md §5.2) - the death notice's split arm
 // emits the record through the client's emit helper instead of hopping a stack struct to the
@@ -1269,9 +1269,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // MG_Remote singleton (ID-8): ~BufferObject reaches the destroy path from exit
             // handlers, after this TU's globals would already be gone.
             // -------------------------------------------------------------------------------
-            MG_Remote::Server::StagedShadowStore& ServerStaged() {
-                static MG_Remote::Server::StagedShadowStore& store =
-                    *new MG_Remote::Server::StagedShadowStore(
+            MG_Record::StagedShadowStore& ServerStaged() {
+                static MG_Record::StagedShadowStore& store =
+                    *new MG_Record::StagedShadowStore(
                         MG_Config::Transport != MG_Config::TransportMode::Monolith);
                 return store;
             }
@@ -3137,7 +3137,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // (StagedTextureStore.h's coverage ruling). It is ALSO what places that run in
                 // the level image when the record carries a piece of the level rather than the
                 // whole of it (fix A2), which is why it is read here now.
-                auto& store = MG_Remote::Server::ServerStagedTexture();
+                auto& store = MG_Record::ServerStagedTexture();
                 // P13 W4b: an aliasing store (monolith's record arm) adopts too - it records where
                 // the run sits in the frontend's level shadow instead of copying it.
                 if (!store.Holds()) return;
@@ -3147,9 +3147,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (bytes == nullptr || record.Blob.Size == 0) return;
                 const auto* stored = PipeTextureRecordForHandle(res);
                 if (stored == nullptr) return;
-                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+                const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
                 const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target);
-                const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(stored->Desc, record);
+                const IntVec3 extent = MG_Record::StagedTextureUploadExtent(stored->Desc, record);
                 const SizeT runBytes = static_cast<SizeT>(record.Blob.Size);
                 // P8-E (notes/p8/E.md): THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
                 // (FollowCopyImageInStagedStore). The run is the client's shadow, stale everywhere it
@@ -3158,7 +3158,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // place that way is adopted as ever, and the store stops standing for the texture.
                 if (store.LevelHoldsFollowedCopy(key, uploadTarget, record.Level) &&
                     (record.RegionCount == 0 || regions != nullptr)) {
-                    Vector<MG_Remote::Server::StagedTextureStore::ClientTexelBox> boxes;
+                    Vector<MG_Record::StagedTextureStore::ClientTexelBox> boxes;
                     if (record.RegionCount == 0) {
                         const auto& box = record.UnionBox;
                         boxes.push_back({box.X, box.Y, box.Z, box.W, box.H, box.D});
@@ -3169,7 +3169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         }
                     }
                     const Uint64 imageOffset = record.RegionCount == 0
-                        ? 0 : MG_Remote::Server::StagedTextureRunImageOffset(record, regions);
+                        ? 0 : MG_Record::StagedTextureRunImageOffset(record, regions);
                     if (store.AdoptClientBoxes(key, uploadTarget, record.Level, extent, imageOffset, bytes, runBytes,
                                                boxes.data(), boxes.size())) {
                         return;
@@ -3186,15 +3186,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 store.AdoptRun(key, uploadTarget, record.Level, extent,
-                               MG_Remote::Server::StagedTextureRunImageOffset(record, regions), bytes,
+                               MG_Record::StagedTextureRunImageOffset(record, regions), bytes,
                                runBytes, /*frontendShadow=*/true);
             }
 
             void Ops_H_TextureRespecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
                                         const MG_Pipe::MGPRespecifiedLevel* level) {
-                auto& store = MG_Remote::Server::ServerStagedTexture();
+                auto& store = MG_Record::ServerStagedTexture();
                 if (!store.Holds()) return;
-                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+                const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
                 if (level != nullptr) {
                     // ONE glTexImage*D redefined one level: its exact extent crossed with the
                     // accepted scope carrier, including a legal noncanonical mutable mip.
@@ -3216,7 +3216,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     for (Uint32 levelIndex = 0; levelIndex < desc.Levels; ++levelIndex) {
                         store.NoteLevelDefined(
                             key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(levelIndex),
-                            MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+                            MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                       desc.Depth, levelIndex),
                             desc.Target, desc.InternalFormat);
                     }
@@ -3227,8 +3227,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Deliberately NOT gated on CopiesIntoServerStorage(): Drop's own m_any gate
                 // makes the monolith call one acquire load, and an unconditional drop cannot
                 // strand a key the latch state was misread for.
-                MG_Remote::Server::ServerStagedTexture().Drop(
-                    MG_Remote::Server::StagedTextureStore::KeyForHandle(res));
+                MG_Record::ServerStagedTexture().Drop(
+                    MG_Record::StagedTextureStore::KeyForHandle(res));
             }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 
@@ -3792,7 +3792,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // process's and every other session's GL buffers are still alive in the shared group.
             MGL_SERVER_STAGED_DROP_ALL();
 #if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Remote::Server::ServerStagedTexture().DropAll();
+            MG_Record::ServerStagedTexture().DropAll();
 #endif
         }
 
@@ -3818,7 +3818,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // tx's texture shadows die for the same reason, keyed by handle rather than address
             // but with the same recycled-identity failure mode: a new context's allocator may
             // hand out a {slot, gen} the old one's store still answers for.
-            MG_Remote::Server::ServerStagedTexture().DropAll();
+            MG_Record::ServerStagedTexture().DropAll();
             // P11 B2: every retired T0 import's fence named work on the context that just ended,
             // so all of them let go now. LIVE imports keep their reference: the next ensure
             // imports them again on the new context (EnsureBufferResourceForHandle).
@@ -6577,8 +6577,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // one. Read by the SERVER, like the MGITEST_MAGMA_FORCE_* knobs.
                 static const Bool s_forceReadbackFailure =
                     std::getenv("MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE") != nullptr;
-                auto& store = MG_Remote::Server::ServerStagedTexture();
-                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(res);
+                auto& store = MG_Record::ServerStagedTexture();
+                const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(res);
                 const auto target = BufferImpl::StagedTextureTargetForPipeTarget(record.Desc.Target);
                 GLenum canonicalFormat = GL_NONE, canonicalType = GL_NONE;
                 MG_Util::TextureFormatProcessor::NormalizePixelFormat(
@@ -8145,7 +8145,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // monolith). MGB_STAGED_TEXTURE_LIVE is the runtime discriminator; pushedStorage/pushedRes
 // are the function's own locals. All are #undef'd with the rest after the function.
 #define MGB_STAGED_TEXTURE_LIVE                                                                                        \
-    (pushedStorage != nullptr && MG_Remote::Server::ServerStagedTexture().Holds())
+    (pushedStorage != nullptr && MG_Record::ServerStagedTexture().Holds())
 #define MGB_TEXTURE_TARGET(obj)                                                                                        \
     (MGB_STAGED_TEXTURE_LIVE ? BufferImpl::StagedTextureTargetForPipeTarget(pushedStorage->Desc.Target)                \
                              : (obj)->GetTarget())
@@ -8154,20 +8154,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              : (obj)->GetUploadTargets())
 #define MGB_LEVEL_TEXEL_SIZE(obj, tgt, lvl)                                                                            \
     (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Remote::Server::ServerStagedTexture().LevelExtentOrUndefined(                                            \
-               MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
+         ? MG_Record::ServerStagedTexture().LevelExtentOrUndefined(                                            \
+               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
                static_cast<Uint16>(lvl))                                                                               \
          : (obj)->GetMipmapTexelSize(tgt, lvl))
 #define MGB_LEVEL_BYTE_SIZE(obj, tgt, lvl)                                                                             \
     (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Remote::Server::ServerStagedTexture().LevelByteSize(                                                     \
-               MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
+         ? MG_Record::ServerStagedTexture().LevelByteSize(                                                     \
+               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
                static_cast<Uint16>(lvl))                                                                               \
          : (obj)->GetMipmapByteSize(tgt, lvl))
 #define MGB_LEVEL_TEXELS(obj, tgt, lvl, site)                                                                          \
     (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Remote::Server::ServerStagedTexture().RequireLevelBytes(                                                 \
-               MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
+         ? MG_Record::ServerStagedTexture().RequireLevelBytes(                                                 \
+               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
                static_cast<Uint16>(lvl), site)                                                                         \
          : (obj)->MapMipmapData(tgt, lvl))
 #else
@@ -8188,8 +8188,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_LEVEL_NEEDS_UPLOAD(obj, tgt, lvl)                                                                          \
     (pushedStorage != nullptr                                                                                          \
          ? (FindPipeTextureUpload(*pushedStorage, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl)) != nullptr ||   \
-            MG_Remote::Server::ServerStagedTexture().IsLevelGpuDirty(                                                  \
-                MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),              \
+            MG_Record::ServerStagedTexture().IsLevelGpuDirty(                                                  \
+                MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),              \
                 static_cast<Uint16>(lvl)))                                                                             \
          : (obj)->IsStorageDirty(tgt, lvl))
 // Re-resolves the record itself, so it is safe after any amount of driver work - and it
@@ -8200,8 +8200,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (pushedStorage != nullptr) {                                                                                \
             ConsumePipeTextureUpload(pushedRes, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl));                    \
             if (MGB_STAGED_TEXTURE_LIVE) {                                                                             \
-                MG_Remote::Server::ServerStagedTexture().MarkLevelGpuDirty(                                            \
-                    MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),          \
+                MG_Record::ServerStagedTexture().MarkLevelGpuDirty(                                            \
+                    MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),          \
                     static_cast<Uint16>(lvl), false);                                                                  \
             }                                                                                                          \
         } else {                                                                                                       \
@@ -8386,8 +8386,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
             if (m_sharedImage != nullptr && !boxes.empty()) {
-                auto& store = MG_Remote::Server::ServerStagedTexture();
-                const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(record.Desc.Resource);
+                auto& store = MG_Record::ServerStagedTexture();
+                const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(record.Desc.Resource);
                 Bind(GL_TEXTURE_2D);
                 ScopedDefaultUnpackState unpackState;
                 BufferImpl::BindPixelUnpackBufferId(0);
@@ -8656,8 +8656,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     anyDefined = static_cast<TextureInternalFormat>(stagedDesc.InternalFormat) !=
                                  TextureInternalFormat::Unknown;
                 } else {
-                    auto& stagedStore = MG_Remote::Server::ServerStagedTexture();
-                    const Uint64 stagedKey = MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes);
+                    auto& stagedStore = MG_Record::ServerStagedTexture();
+                    const Uint64 stagedKey = MG_Record::StagedTextureStore::KeyForHandle(pushedRes);
                     for (const auto& uploadTarget : BufferImpl::StagedUploadTargetsForPipeTarget(stagedDesc.Target)) {
                         for (Uint32 level = 0; level < stagedDesc.Levels; ++level) {
                             if (stagedStore.IsLevelDefined(stagedKey, static_cast<Uint16>(uploadTarget),
@@ -9267,8 +9267,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     // asked (§2.2's last row).
                                     if (MGB_STAGED_TEXTURE_LIVE) {
                                         const IntVec3 gpuExtent =
-                                            MG_Remote::Server::ServerStagedTexture().LevelExtentOrUndefined(
-                                                MG_Remote::Server::StagedTextureStore::KeyForHandle(pushedRes),
+                                            MG_Record::ServerStagedTexture().LevelExtentOrUndefined(
+                                                MG_Record::StagedTextureStore::KeyForHandle(pushedRes),
                                                 static_cast<Uint16>(uploadTarget), static_cast<Uint16>(level));
                                         return MG_State::GLState::MipmapDirtyRegion{IntVec3{0, 0, 0}, gpuExtent};
                                     }
@@ -10687,8 +10687,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P8-E: the staged store stops standing for this texture's content (a no-op on a
             // monolith arm, where the store does not copy).
             if (!storeFollowsTheWrite && !MG_Pipe::MGPipeHandleIsNull(storage)) {
-                MG_Remote::Server::ServerStagedTexture().MarkDriverWritten(
-                    MG_Remote::Server::StagedTextureStore::KeyForHandle(storage));
+                MG_Record::ServerStagedTexture().MarkDriverWritten(
+                    MG_Record::StagedTextureStore::KeyForHandle(storage));
             }
 #else
             (void)storeFollowsTheWrite;
@@ -10698,7 +10698,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
                                           MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
                                           const IntVec3& destinationOrigin, const IntVec3& size) {
-            auto& store = MG_Remote::Server::ServerStagedTexture();
+            auto& store = MG_Record::ServerStagedTexture();
             // P13 W4b: an aliasing store (monolith's record arm) follows too; see FollowCopy.
             if (!store.Holds()) return false;
             // The store's level key for an endpoint copy-image addresses as ONE image with its
@@ -10727,9 +10727,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 PipeTextureRecordForHandle(destination)->Desc.InternalFormat) {
                 return false;
             }
-            return store.FollowCopy(MG_Remote::Server::StagedTextureStore::KeyForHandle(source), sourceTarget,
+            return store.FollowCopy(MG_Record::StagedTextureStore::KeyForHandle(source), sourceTarget,
                                     static_cast<Uint16>(sourceLevel), sourceOrigin,
-                                    MG_Remote::Server::StagedTextureStore::KeyForHandle(destination),
+                                    MG_Record::StagedTextureStore::KeyForHandle(destination),
                                     destinationTarget, static_cast<Uint16>(destinationLevel), destinationOrigin,
                                     size);
         }

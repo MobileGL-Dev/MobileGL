@@ -53,7 +53,7 @@
 #include <MG_Remote/Server/PipeApplier.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
-#include <MG_Remote/Server/StagedShadow.h>
+#include <MG_Backend/Record/StagedShadow.h>
 #include <MG_Remote/Transport/InProcessTransport.h>
 #include <MG_Remote/Transport/ReplySlot.h>
 #include <MG_Remote/Transport/Ring.h>
@@ -981,8 +981,8 @@ TEST(ServerLoopTest, TheAuditPoisonFillsExactlyTheStagedRunAfterTheApplierReturn
 // `raw - offset` cannot pass this, and the monolith arm below is the control that says so: it
 // is the SAME call with the same inputs, and it must see the 0xDD.
 TEST(StagedShadowTest, TheSplitArmCopiesAndSurvivesTheSourceBeingPoisoned) {
-    Server::StagedShadowStore splitStore(/*copies=*/true);
-    Server::StagedShadowStore monolithStore(/*copies=*/false);
+    MG_Record::StagedShadowStore splitStore(/*copies=*/true);
+    MG_Record::StagedShadowStore monolithStore(/*copies=*/false);
     const int key = 0;
 
     Vector<Uint8> staged(32, 0xAB);
@@ -1012,7 +1012,7 @@ TEST(StagedShadowTest, TheSplitArmCopiesAndSurvivesTheSourceBeingPoisoned) {
 // between them; runs with a gap do not, and that is the whole mechanism - it is what makes a
 // missing record detectable instead of papered over by a widened INVALIDATE_RANGE.
 TEST(StagedShadowTest, CoverageIsExactAndAGapIsNotCovered) {
-    Server::StagedShadowStore store(/*copies=*/true);
+    MG_Record::StagedShadowStore store(/*copies=*/true);
     const int key = 0;
     Vector<Uint8> bytes(16, 0x11);
 
@@ -1039,7 +1039,7 @@ TEST(StagedShadowTest, CoverageIsExactAndAGapIsNotCovered) {
 // just staged in the same generation (that regression really happened - TriangleScenario read a
 // shifted VBO). Both directions are asserted here.
 TEST(StagedShadowTest, HasShadowIsTrueAfterAdoptAndFalseAfterTheShadowIsDropped) {
-    Server::StagedShadowStore store(/*copies=*/true);
+    MG_Record::StagedShadowStore store(/*copies=*/true);
     const int key = 0;
     Vector<Uint8> bytes(16, Uint8{0x44});
     EXPECT_FALSE(store.HasShadow(&key)) << "nothing staged yet";
@@ -1052,7 +1052,7 @@ TEST(StagedShadowTest, HasShadowIsTrueAfterAdoptAndFalseAfterTheShadowIsDropped)
 }
 
 TEST(StagedShadowTest, DropForgetsOneResourceAndDropAllForgetsEveryOne) {
-    Server::StagedShadowStore store(/*copies=*/true);
+    MG_Record::StagedShadowStore store(/*copies=*/true);
     const int a = 0;
     const int b = 0;
     Vector<Uint8> bytes(8, 0x22);
@@ -1072,7 +1072,7 @@ TEST(StagedShadowTest, DropForgetsOneResourceAndDropAllForgetsEveryOne) {
 // exactly the shape this wave shipped three of.
 #if !defined(_WIN32)
 TEST(StagedShadowTest, ADrainOutsideTheStagedCoverageIsFatalByName) {
-    Server::StagedShadowStore store(/*copies=*/true);
+    MG_Record::StagedShadowStore store(/*copies=*/true);
     const int key = 0;
     Vector<Uint8> bytes(16, 0x33);
     const Uint8* base = store.Adopt(&key, 64, bytes.data(), 0, 16);

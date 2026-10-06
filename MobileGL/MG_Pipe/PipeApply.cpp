@@ -49,7 +49,7 @@
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Remote/Server/ServerSession.h>
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 #include <MG_Remote/CapsCodec.h>
 #endif
 
@@ -1497,11 +1497,11 @@ namespace MobileGL::MG_Pipe {
         void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
                                            const void* bytes, const MGPSubRegion* regions) {
             if (!MG_Config::DataArmIsRecord() || !bytes || upload.Blob.Size == 0) return;
-            auto& store = MG_Remote::Server::ServerStagedTexture();
+            auto& store = MG_Record::ServerStagedTexture();
             const auto& desc = stored.Desc;
-            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(upload.Res);
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(upload.Res);
             const Uint16 target = MGPipeSubDataUploadTargetOf(upload.Target);
-            const IntVec3 extent = MG_Remote::Server::StagedTextureUploadExtent(desc, upload);
+            const IntVec3 extent = MG_Record::StagedTextureUploadExtent(desc, upload);
             // RegionCount == 0 IS the whole-level spelling - "the run is the level shadow" - so it
             // is adopted with the spelling that replaces the level; every other record names a RUN
             // of the level by its own box (fix A2: a level too large to stage whole crosses as
@@ -1514,14 +1514,14 @@ namespace MobileGL::MG_Pipe {
                 return;
             }
             store.AdoptRun(key, target, upload.Level, extent,
-                           MG_Remote::Server::StagedTextureRunImageOffset(upload, regions), bytes,
+                           MG_Record::StagedTextureRunImageOffset(upload, regions), bytes,
                            static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
         }
 
         void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
             if (!MG_Config::DataArmIsRecord()) return;
-            auto& store = MG_Remote::Server::ServerStagedTexture();
-            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(desc.Resource);
+            auto& store = MG_Record::ServerStagedTexture();
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(desc.Resource);
             const auto define = [&](Uint16 target, Uint16 mip, const IntVec3& extent) {
                 store.NoteLevelDefined(key, target, mip, extent, desc.Target, desc.InternalFormat);
             };
@@ -1536,7 +1536,7 @@ namespace MobileGL::MG_Pipe {
             const auto defineChain = [&](TextureUploadTarget target) {
                 for (Uint32 mip = 0; mip < desc.Levels; ++mip)
                     define(static_cast<Uint16>(target), static_cast<Uint16>(mip),
-                           MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width,
+                           MG_Record::StagedTextureMipExtent(desc.Target, desc.Width,
                                                                     desc.Height, desc.Depth, mip));
             };
             switch (static_cast<MGPipeResourceTarget>(desc.Target)) {
@@ -1975,7 +1975,7 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::DataArmIsRecord() &&
             (g_resourceOps == nullptr || g_resourceOps->TextureDestroy == nullptr)) {
-            MG_Remote::Server::ServerStagedTexture().DropAll();
+            MG_Record::ServerStagedTexture().DropAll();
         }
 #endif
         // The served context is going away and this applier with it. Under split that is one
@@ -2750,8 +2750,8 @@ namespace MobileGL::MG_Pipe {
             if (g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr)
                 g_resourceOps->TextureDestroy(handle.Handle);
             else if (MG_Config::DataArmIsRecord())
-                MG_Remote::Server::ServerStagedTexture().Drop(
-                    MG_Remote::Server::StagedTextureStore::KeyForHandle(handle.Handle));
+                MG_Record::ServerStagedTexture().Drop(
+                    MG_Record::StagedTextureStore::KeyForHandle(handle.Handle));
         }
 #endif
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;

@@ -25,7 +25,7 @@
 #include <MG_Util/Debug/Log.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Pipe/PipeApply.h>
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 #include <MG_State/GLState/TextureState/TextureEnum.h>
 
 #include <csignal>
@@ -45,7 +45,7 @@
 
 using namespace MobileGL;
 
-namespace Server = MobileGL::MG_Remote::Server;
+namespace Server = MobileGL::MG_Record; // P13 W5: the stores moved to MG_Backend/Record
 
 namespace {
 

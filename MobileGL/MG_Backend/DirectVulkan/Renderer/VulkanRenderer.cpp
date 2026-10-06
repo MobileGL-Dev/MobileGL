@@ -47,7 +47,7 @@
 // WireBufferLegacyFatal die through. Declared by MG_Pipe on purpose - see PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 #include <MG_Remote/Server/ServerLoop.h>
 // Shared images: the present side resolves the image it imports (WireSharedImage.inc).
 #include <MG_Remote/Server/SharedImageRegistry.h>
@@ -1715,8 +1715,8 @@ void main() {
                 return false;
             }
             const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
-            auto& store = MG_Remote::Server::ServerStagedTexture();
-            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForTwinAddress(&resource);
+            auto& store = MG_Record::ServerStagedTexture();
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForTwinAddress(&resource);
             for (const auto uploadTarget : uploadTargets) {
                 for (Uint32 level = baseMipLevel + 1; level < requiredMipLevelCount; ++level) {
                     // Bytes the shadow held for a generated level go: the declaration below moves its

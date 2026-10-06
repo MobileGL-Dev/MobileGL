@@ -22,7 +22,7 @@
 // P5f (fm): the handle-keyed texture arm's two sources - the applier's resource records
 // (shape) and the server's staged-texture store (texels).
 #include <MG_Pipe/PipeApply.h>
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 // Shared images: a texture whose level 0 is a server-allocated AHardwareBuffer.
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #include "../DirectVulkan.h"
@@ -2076,8 +2076,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!handle.Slot || handle.Slot >= records.size()) return false;
         const auto& record = records[handle.Slot];
         if (!record.Live || record.Gen != handle.Gen || !MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) return false;
-        auto& store = MG_Remote::Server::ServerStagedTexture();
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        auto& store = MG_Record::ServerStagedTexture();
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
         const auto upload = static_cast<Uint16>(target);
         const auto native = m_wireTextureResources.find(key);
         if (native != m_wireTextureResources.end() && native->second.image && level < native->second.mipLevels) {
@@ -2486,12 +2486,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (record.PendingUploads.empty()) {
             return true;
         }
-        auto& store = MG_Remote::Server::ServerStagedTexture();
+        auto& store = MG_Record::ServerStagedTexture();
         // This arm runs under a transport (the store copies) or on monolith's record arm (it
         // aliases the frontend's level shadows); a store that holds neither has nothing to upload.
         MOBILEGL_ASSERT(store.Holds(),
                         "UploadPendingWireLevels under a staged store that holds no levels: the wire arm needs one");
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
         const TextureInternalFormat internalFormat = static_cast<TextureInternalFormat>(record.Desc.InternalFormat);
         const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(internalFormat);
         const TextureTarget target = WireTextureTargetOfPipeTarget(record.Desc.Target);
@@ -2658,7 +2658,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 pendingBytes = 0;
             for (const auto& pending : record.PendingUploads) {
                 pendingBytes += static_cast<Uint64>(
-                    store.LevelByteSize(MG_Remote::Server::StagedTextureStore::KeyForHandle(handle),
+                    store.LevelByteSize(MG_Record::StagedTextureStore::KeyForHandle(handle),
                                         pending.UploadTarget, pending.Level));
             }
             WireDeclineTally::SetPendingGauge(static_cast<Uint64>(record.PendingUploads.size()), pendingBytes);
@@ -3079,7 +3079,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             WireDeclineTally::Count(WireDeclineSite::TexRecordDeadOrStale);
             return nullptr;
         }
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
         auto [it, inserted] = resources.try_emplace(key);
         (void)inserted;
         TextureResource& resource = it->second;
@@ -3132,17 +3132,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case MGPipeResourceTarget::Tex2DArray: target = TextureUploadTarget::Texture2DArray; break;
         case MGPipeResourceTarget::TexCubeArray: target = TextureUploadTarget::CubeMapArray; break;
         case MGPipeResourceTarget::TexCube: {
-            const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+            const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
             for (Uint32 face = baseArrayLayer; face < 6 && face - baseArrayLayer < layerCount; ++face)
-                MG_Remote::Server::ServerStagedTexture().MarkLevelGpuDirty(key,
+                MG_Record::ServerStagedTexture().MarkLevelGpuDirty(key,
                     static_cast<Uint16>(TextureUploadTarget::CubeMapPositiveX) + face,
                     static_cast<Uint16>(mipLevel), true);
             return;
         }
         default: target = TextureUploadTarget::Texture2D; break;
         }
-        MG_Remote::Server::ServerStagedTexture().MarkLevelGpuDirty(
-            MG_Remote::Server::StagedTextureStore::KeyForHandle(handle),
+        MG_Record::ServerStagedTexture().MarkLevelGpuDirty(
+            MG_Record::StagedTextureStore::KeyForHandle(handle),
             static_cast<Uint16>(target), static_cast<Uint16>(mipLevel), true);
     }
 
@@ -3151,7 +3151,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (MG_Pipe::MGPipeHandleIsNull(handle)) {
             return false;
         }
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(handle);
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
         auto it = m_wireTextureResources.find(key);
         if (it == m_wireTextureResources.end() || it->second.image == VK_NULL_HANDLE) {
             return false;

@@ -15,7 +15,7 @@
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include "MG_Pipe/MGPipeCallbacks.h"
 #include "MG_Pipe/PipeApply.h"
-#include "MG_Remote/Server/StagedShadow.h"
+#include <MG_Backend/Record/StagedShadow.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include "MG_Remote/Transport/AdoptT0.h"
 #endif
@@ -461,7 +461,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<unsigned long long>(m_completedSerialFloor),
                     static_cast<unsigned long long>(resource->lastUseSubmitIndex));
         }
-        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage,
+        MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage,
                                                          static_cast<SizeT>(offset),
                                                          static_cast<SizeT>(offset + size));
         ++m_sliceEpochCounter;
@@ -475,7 +475,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const auto* resource = FindWireBuffer(res);
         if (!resource || offset > resource->size || size > resource->size - offset ||
-            !MG_Remote::Server::StagedShadowStore::CoverageHas(resource->stagedCoverage,
+            !MG_Record::StagedShadowStore::CoverageHas(resource->stagedCoverage,
                 static_cast<SizeT>(offset), static_cast<SizeT>(offset + size))) {
             MGLOG_F("Magma: Fatal{StageSnapshotTooNarrow, \"buffer-flush\"} {slot=%u, gen=%u}",
                     res.Slot, res.Gen);
@@ -795,7 +795,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->imported = true;
         resource->gpuWritesPending = false;
         resource->stagedCoverage.clear();
-        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
+        MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
         ++m_sliceEpochCounter;
         return mapped;
     }
@@ -830,7 +830,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->gpuWritesPending = false;
         // The whole store holds bytes the client supplied (its AHB, seeded from its shadow).
         resource->stagedCoverage.clear();
-        MG_Remote::Server::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
+        MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage, 0, static_cast<SizeT>(size));
         ++m_sliceEpochCounter;
         ++m_wireStoreCount;
         NoteWireStorePeaks();

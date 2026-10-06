@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Remote/Server/StagedShadow.h
+// MobileGL - MobileGL/MG_Backend/Record/StagedShadow.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -38,9 +38,9 @@
 #include <Includes.h>
 
 // P7 wave 0 / Ph slice (2): RequireCovered's death goes through Session::Fail like every other
-// one. Not an out-of-line helper - this header is already inside MG_Remote, so it may name
-// MG_Remote's own funnel, and check_include_closure.py's four probes do not reach it.
-#include <MG_Remote/FatalFunnel.h>
+// one. P13 W5: the store left MG_Remote (the record arm runs without it), so it dies through
+// MG_Pipe's record fail seam, which FatalFunnel.cpp points at SessionFail wherever MG_Remote is linked.
+#include <MG_Pipe/PipeSessionFail.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Math/VectorTypes.h>
 
@@ -50,7 +50,7 @@
 #include <cstring>
 #include <mutex>
 
-namespace MobileGL::MG_Remote::Server {
+namespace MobileGL::MG_Record {
 
     // P14: WHOSE STAGED BYTES ARE THESE? The two server stores below are one per process, but the
     // in-process display server serves several sessions in that process at once, and a session's
@@ -172,7 +172,7 @@ namespace MobileGL::MG_Remote::Server {
             if (it == m_shadows.end() || it->second.Bytes.data() != hostBase) return;
             if (CoverageHas(it->second.Covered, start, end)) return;
             // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
-            SessionFail(MGFatalFamily::StageSnapshotTooNarrow,
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::StageSnapshotTooNarrow,
                     "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the server's ladder wants "
                     "[%zu, %zu) of a buffer whose staged coverage does not include it. Under "
                     "split the authoritative shadow is SERVER-OWNED (rule C) and "
@@ -262,4 +262,4 @@ namespace MobileGL::MG_Remote::Server {
         std::atomic<Bool> m_any{false};
     };
 
-} // namespace MobileGL::MG_Remote::Server
+} // namespace MobileGL::MG_Record

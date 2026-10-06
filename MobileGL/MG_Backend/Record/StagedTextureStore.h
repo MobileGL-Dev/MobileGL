@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Remote/Server/StagedTextureStore.h
+// MobileGL - MobileGL/MG_Backend/Record/StagedTextureStore.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -100,10 +100,10 @@
 #include <MG_Pipe/MGPipeTypes.h>
 // StagedShadowStore::CoverageAdd / CoverageHas: ONE spelling of the covered set, so the texture
 // half's runs and the buffer half's ranges cannot drift apart on what "covered" means.
-#include <MG_Remote/Server/StagedShadow.h>
+#include <MG_Backend/Record/StagedShadow.h>
 // P7 wave 0 / Ph slice (2): RequireLevelBytes' death goes through Session::Fail. Named here
 // rather than left to StagedShadow.h's copy of the same include.
-#include <MG_Remote/FatalFunnel.h>
+#include <MG_Pipe/PipeSessionFail.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_Util/Math/VectorTypes.h>
@@ -118,7 +118,7 @@
 #include <Config.h>
 #endif
 
-namespace MobileGL::MG_Remote::Server {
+namespace MobileGL::MG_Record {
 
     // §1's server-side per-level extent (CONTRACT-P5C table 0): max(1, base_extent >> level)
     // per SHRINKING axis, with an array texture's layer count fixed - it is not a dimension of
@@ -440,7 +440,7 @@ namespace MobileGL::MG_Remote::Server {
             if (!validExtent ||
                 (supportsSubData && sizedFormat && !emptyExtent && !StagedTextureDeclaredLevelByteBound(
                     resourceTarget, internalFormat, extent, m_deviceLimits, &byteBound))) {
-                SessionFail(MGFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.NoteLevelDefined\"} - "
                             "the accepted respecify has no valid server-bounded texture level "
                             "(key=%llu, target=%u, level=%u, extent=%d,%d,%d, internalFormat=%u)",
@@ -683,7 +683,7 @@ namespace MobileGL::MG_Remote::Server {
             const LevelShadow* shadow = FindLevel(key, uploadTarget, level);
             if (shadow != nullptr && LevelComplete(*shadow)) return LevelData(*shadow);
             // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
-            SessionFail(MGFatalFamily::StageSnapshotTooNarrow,
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::StageSnapshotTooNarrow,
                     "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the texture sync wants the "
                     "bytes of (uploadTarget=%u, level=%u) and the server's staged shadow has no "
                     "COMPLETE covered run for it. Under split the authoritative shadow is "
@@ -876,14 +876,14 @@ namespace MobileGL::MG_Remote::Server {
             // `InternalFormat == 0`, but 0 is TextureInternalFormat::R8, so every R8 upload read
             // as "arrived before the level was declared".
             if (!shadow.Defined) {
-                SessionFail(MGFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
                             "resource_subdata arrived before the server declared texture level "
                             "(key=%llu, uploadTarget=%u, level=%u)",
                             static_cast<unsigned long long>(key), uploadTarget, level);
             }
             if (!StagedTextureTargetSupportsSubData(shadow.ResourceTarget)) {
-                SessionFail(MGFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"} - "
                             "resource_subdata is not legal for the server-declared texture target "
                             "(key=%llu, uploadTarget=%u, level=%u, target=%u)",
@@ -891,7 +891,7 @@ namespace MobileGL::MG_Remote::Server {
                             static_cast<Uint32>(shadow.ResourceTarget));
             }
             if (shadow.DeclaredByteBound == 0) {
-                SessionFail(MGFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                             "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelBound\"} - "
                             "resource_subdata into a byteless declared level: its extent is empty or "
                             "its format has no uncompressed size on this server "
@@ -901,7 +901,7 @@ namespace MobileGL::MG_Remote::Server {
                             shadow.InternalFormat);
             }
             if (shadow.Extent == extent) return;
-            SessionFail(MGFatalFamily::ProtocolCorruption,
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                         "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"} - "
                         "resource_subdata extent disagrees with the server-declared texture level "
                         "(key=%llu, uploadTarget=%u, level=%u, declared=%d,%d,%d, record=%d,%d,%d)",
@@ -918,7 +918,7 @@ namespace MobileGL::MG_Remote::Server {
                 constexpr Uint64 max = std::numeric_limits<Uint64>::max();
                 const Uint64 runBytes = static_cast<Uint64>(byteSize);
                 if (imageOffset > max - runBytes) {
-                    SessionFail(MGFatalFamily::ProtocolCorruption,
+                    MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                                 "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
                                 "texture run end overflows (handle=%llu, uploadTarget=%u, level=%u, "
                                 "offset=%llu, size=%llu)",
@@ -929,7 +929,7 @@ namespace MobileGL::MG_Remote::Server {
                 const Uint64 end = imageOffset + runBytes;
                 if (end > shadow.DeclaredByteBound ||
                     end > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
-                    SessionFail(MGFatalFamily::ProtocolCorruption,
+                    MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
                                 "MGPipe: Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"} - "
                                 "texture run exceeds the server-declared level byte bound "
                                 "(handle=%llu, uploadTarget=%u, level=%u, offset=%llu, size=%llu, "
@@ -1045,4 +1045,4 @@ namespace MobileGL::MG_Remote::Server {
     }
 #endif
 
-} // namespace MobileGL::MG_Remote::Server
+} // namespace MobileGL::MG_Record

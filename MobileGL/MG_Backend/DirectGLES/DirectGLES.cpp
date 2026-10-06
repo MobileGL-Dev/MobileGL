@@ -30,7 +30,7 @@
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 // P5c (tx): §1's server-side per-level extent derivation, for GenerateMipmap's shape reads.
-#include <MG_Remote/Server/StagedTextureStore.h>
+#include <MG_Backend/Record/StagedTextureStore.h>
 // Shared images: the registry the EGLImages are built from (SharedImageImpl below).
 #include <MG_Remote/Server/SharedImageRegistry.h>
 // Device loss ends the session through MG_Pipe's latch seam (LatchIfDeviceLost).
@@ -11461,9 +11461,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (desc.Width == 0 || desc.Levels == 0 || window.Base >= desc.Levels) return window;
         Uint32 end = std::min<Uint32>(applier.VerbMipLevelCount, desc.Levels);
         if (record.ParamsSerial) end = std::min<Uint32>(end, static_cast<Uint32>(record.Params.MaxLevel) + 1u);
-        const IntVec3 baseExtent = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+        const IntVec3 baseExtent = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                             desc.Depth, window.Base);
-        const Int shrinking = MG_Remote::Server::StagedTextureShrinkingAxisCount(desc.Target);
+        const Int shrinking = MG_Record::StagedTextureShrinkingAxisCount(desc.Target);
         Int largest = 1;
         for (Int axis = 0; axis < shrinking && axis < 3; ++axis) largest = std::max<Int>(largest, baseExtent[axis]);
         Uint32 chain = 1;
@@ -12137,7 +12137,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         window.StorageTextureId = storage->GetBackendTextureId();
         GenerateMipmapThroughViewWindow(window, [&record](Uint32 level) {
-            return MG_Remote::Server::StagedTextureMipExtent(record.Desc.Target, record.Desc.Width,
+            return MG_Record::StagedTextureMipExtent(record.Desc.Target, record.Desc.Width,
                                                              record.Desc.Height, record.Desc.Depth, level);
         });
         return true;
@@ -12158,9 +12158,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& desc = record.Desc;
         const GLuint textureId = backendTexture->GetBackendTextureId();
         for (Uint32 level = window.Base + 1; level < window.End; ++level) {
-            const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+            const IntVec3 srcSize = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level - 1);
-            const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+            const IntVec3 dstSize = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level);
             BlitDepthTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0,
                                static_cast<GLsizei>(srcSize.x()), static_cast<GLsizei>(srcSize.y()), textureId,
@@ -12177,9 +12177,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             IsIntegerColorFormat(static_cast<TextureInternalFormat>(desc.InternalFormat)) ? GL_NEAREST : GL_LINEAR;
         const GLuint textureId = backendTexture->GetBackendTextureId();
         for (Uint32 level = window.Base + 1; level < window.End; ++level) {
-            const IntVec3 srcSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+            const IntVec3 srcSize = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level - 1);
-            const IntVec3 dstSize = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+            const IntVec3 dstSize = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                              desc.Depth, level);
             BlitColorTexture2D(textureId, static_cast<GLint>(level - 1), 0, 0, static_cast<GLsizei>(srcSize.x()),
                                static_cast<GLsizei>(srcSize.y()), textureId, static_cast<GLint>(level), 0, 0,
@@ -12681,8 +12681,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Memcpy(rgb.data(), bytes.data(), bytes.size());
             return true;
         }
-        auto& store = MG_Remote::Server::ServerStagedTexture();
-        const Uint64 key = MG_Remote::Server::StagedTextureStore::KeyForHandle(mipRes);
+        auto& store = MG_Record::ServerStagedTexture();
+        const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(mipRes);
         const auto faceCode = static_cast<Uint16>(face);
         const auto levelCode = static_cast<Uint16>(level);
         const Bool half = format == TextureInternalFormat::RGB16F;
@@ -12753,7 +12753,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const GLuint textureId = backendTexture->GetBackendTextureId();
         const GLenum bindTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(textureTarget);
         for (const TextureUploadTarget face : faces) {
-            IntVec3 extent = MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+            IntVec3 extent = MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
                                                                       desc.Depth, window.Base);
             Vector<Float> level;
             const char* declined = nullptr;
@@ -12768,7 +12768,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (Uint32 dst = window.Base + 1; dst < window.End; ++dst) {
                 const IntVec3 dstExtent =
-                    MG_Remote::Server::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, dst);
+                    MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, dst);
                 // The monolith's box filter: the 2x2 source footprint, clamped where a dimension
                 // is already 1 (GL 4.6 core 8.14.4 leaves the filter to the implementation).
                 Vector<Float> next(static_cast<SizeT>(dstExtent.x()) * static_cast<SizeT>(dstExtent.y()) * 3);
@@ -12918,8 +12918,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto mipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
             // P8-SE: whether the staged store still stands for the texture is read BEFORE the note
             // below sets the mark, or the CPU arm's store route could never answer at all.
-            const Bool driverWrittenBefore = MG_Remote::Server::ServerStagedTexture().IsDriverWritten(
-                MG_Remote::Server::StagedTextureStore::KeyForHandle(mipRes));
+            const Bool driverWrittenBefore = MG_Record::ServerStagedTexture().IsDriverWritten(
+                MG_Record::StagedTextureStore::KeyForHandle(mipRes));
             // Every arm GenerateMipmapByRecord takes writes the levels above the base on the
             // driver only (P8-B2's CPU arm uploads its levels there too), so the note is
             // unconditional.
