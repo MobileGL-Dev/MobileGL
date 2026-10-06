@@ -1454,12 +1454,14 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // THREE, NOT FOUR (P8-SE). "copy-image-shadow-mirror" sat after the mirror's own
     // `Transport != Monolith` return, so no transport ever reached it and on monolith it was a
     // no-op; the call and the name went together (notes/p8/SE.md).
+    //
+    // TWO, NOT THREE (P13 W6): "get-tex-image-shadow" sat in GetTexImageViaShadowConversion, the
+    // monolith frontend arm's shadow readback; that arm went with the frontend data arm.
     const char* const kNames[] = {
         "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated (monolith grow)
         "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
-        "get-tex-image-shadow",         // GetTexImageViaShadowConversion
     };
-    EXPECT_EQ(std::size(kNames), 3u);
+    EXPECT_EQ(std::size(kNames), 2u);
     // No duplicates: two sites sharing a name would make the grepped count and this list
     // disagree in the one direction nobody would notice.
     for (SizeT i = 0; i < std::size(kNames); ++i) {
