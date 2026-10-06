@@ -82,7 +82,9 @@ FLOW_STOP = re.compile(r"^\s*(?:case\b|default\s*:|break\s*;|return\b|continue\s
 PP_OPEN = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
 PP_CLOSE = re.compile(r"^\s*#\s*endif\b")
 PP_STOP = re.compile(r"^\s*#\s*(?:else|elif)\b")
-PP_DISAGGREGATED = re.compile(r"^\s*#\s*(?:if|ifdef)\s+MOBILEGL_BUILD_DISAGGREGATED\s*$")
+# P13 W5: the record arm's own guard, MOBILEGL_BUILD_RECORD_ARM, is the same build-selecting kind of
+# opener (it equals the disaggregated build until W5's flip and is unifdef'd away after it).
+PP_DISAGGREGATED = re.compile(r"^\s*#\s*(?:if|ifdef)\s+MOBILEGL_BUILD_(?:DISAGGREGATED|RECORD_ARM)\s*$")
 
 
 def strip_code(text: str) -> str:
@@ -359,6 +361,24 @@ SELF_TEST_FIXTURES = (
      "#endif\n"
      "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
      "}\n", 1, NO_LOG),
+    ("log only on the other side of a RECORD_ARM #else", _DEF_GHOST,
+     "void F(int x) {\n"
+     "#if MOBILEGL_BUILD_RECORD_ARM\n"
+     "    MGLOG_W(\"x\");\n"
+     "#else\n"
+     "    MGLOG_D(\"compiled away\");\n"
+     "#endif\n"
+     "    WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "}\n", 1, NO_LOG),
+    ("count under its log across a column-0 RECORD_ARM #if/#endif", _DEF_GHOST,
+     "void F(int x) {\n"
+     "    if (x) {\n"
+     "        MGLOG_W(\"x\");\n"
+     "#if MOBILEGL_BUILD_RECORD_ARM\n"
+     "        WireDeclineTally::Count(WireDeclineSite::GhostRow);\n"
+     "#endif\n"
+     "    }\n"
+     "}\n", 0, "0 unlogged, 0 unknown"),
     ("log only under a #if 0 above the Count", _DEF_GHOST,
      "void F(int x) {\n"
      "    if (x) {\n"
