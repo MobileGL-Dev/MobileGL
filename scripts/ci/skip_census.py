@@ -67,8 +67,29 @@ def collect(root):
 
 
 def to_baseline(lanes):
-    return {lane: {'names': sorted(entries), 'skipped': sorted(n for n, s in entries.items() if s == 'skip')}
-            for lane, entries in sorted(lanes.items())}
+    """Lanes whose name set equals an earlier lane's say so (`names_from`) instead of repeating
+    it: most gtest lanes run the same few thousand names, and the baseline stays reviewable."""
+    out, seen = {}, {}
+    for lane, entries in sorted(lanes.items()):
+        names = sorted(entries)
+        key = tuple(names)
+        row = {'skipped': sorted(n for n, s in entries.items() if s == 'skip')}
+        if key in seen:
+            row['names_from'] = seen[key]
+        else:
+            row['names'] = names
+            seen[key] = lane
+        out[lane] = row
+    return out
+
+
+def resolve_baseline(baseline):
+    """The inverse of to_baseline's dedupe: every lane gets its own `names`."""
+    resolved = {}
+    for lane, row in baseline.items():
+        names = row['names'] if 'names' in row else baseline[row['names_from']]['names']
+        resolved[lane] = {'names': names, 'skipped': row['skipped']}
+    return resolved
 
 
 def compare(lanes, baseline):
@@ -123,7 +144,7 @@ def run(argv):
     if not args.baseline.exists():
         print(f'::error::skip census: no baseline at {args.baseline}; write one from a full run')
         return 1
-    red, info = compare(lanes, json.loads(args.baseline.read_text()))
+    red, info = compare(lanes, resolve_baseline(json.loads(args.baseline.read_text())))
     for line in info:
         print(f'note: {line}')
     for line in red:
@@ -133,6 +154,15 @@ def run(argv):
 
 
 def self_test():
+    import contextlib
+    import io
+
+    def quiet(argv):
+        # The negative controls print ::error:: lines on purpose; on a runner those would show
+        # as error annotations on a GREEN self-test, so their output is swallowed here.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return run(argv)
+
     def junit(path, cases):
         path.parent.mkdir(parents=True, exist_ok=True)
         body = ''.join(
@@ -145,8 +175,8 @@ def self_test():
         base = tmp / 'base.json'
         good = tmp / 'good'
         junit(good / 'junit-unit' / 'unit.xml', [('A', 'pass'), ('B', 'skip'), ('C', 'pass')])
-        assert run(['write', str(good), '--baseline', str(base)]) == 0
-        assert run(['check', str(good), '--baseline', str(base)]) == 0, 'identical run must be green'
+        assert quiet(['write', str(good), '--baseline', str(base)]) == 0
+        assert quiet(['check', str(good), '--baseline', str(base)]) == 0, 'identical run must be green'
         cases = {
             'pass -> skip': ([('A', 'skip'), ('B', 'skip'), ('C', 'pass')], 1),
             'new skipped case': ([('A', 'pass'), ('B', 'skip'), ('C', 'pass'), ('D', 'skip')], 1),
@@ -158,13 +188,16 @@ def self_test():
         for label, (run_cases, expected) in cases.items():
             d = tmp / label.replace(' ', '_').replace('>', '')
             junit(d / 'junit-unit' / 'unit.xml', run_cases)
-            got = run(['check', str(d), '--baseline', str(base)])
+            got = quiet(['check', str(d), '--baseline', str(base)])
             assert got == expected, f'{label}: exit {got}, expected {expected}'
         lost = tmp / 'lost'
         junit(lost / 'junit-other' / 'other.xml', [('A', 'pass')])
-        assert run(['check', str(lost), '--baseline', str(base)]) == 1, 'a lane that vanished must be red'
-        assert run(['check', str(tmp / 'empty'), '--baseline', str(base)]) == 1, 'no JUnit must be red'
-        assert run(['check', str(good), '--baseline', str(tmp / 'none.json')]) == 1, 'no baseline must be red'
+        assert quiet(['check', str(lost), '--baseline', str(base)]) == 1, 'a lane that vanished must be red'
+        assert quiet(['check', str(tmp / 'empty'), '--baseline', str(base)]) == 1, 'no JUnit must be red'
+        assert quiet(['check', str(good), '--baseline', str(tmp / 'none.json')]) == 1, 'no baseline must be red'
+    twins = {'a/x': {'p': 'pass', 'q': 'skip'}, 'b/x': {'p': 'pass', 'q': 'pass'}}
+    packed = to_baseline(twins)
+    assert 'names_from' in packed['b/x'] and resolve_baseline(packed)['b/x']['names'] == ['p', 'q']
     print('skip_census self-test: ok')
     return 0
 
