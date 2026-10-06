@@ -2131,7 +2131,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     # A single supervisor serves one session at a time. Fixture teardown also reaps a
     # child left behind by a failed client; the resource lock serializes this lane.
-    set(MOBILEGL_ITEST_TCP_ENDPOINT "tcp://127.0.0.1:40613" CACHE STRING "Loopback TCP integration endpoint")
+    # Below Linux's ephemeral range (32768-60999): thousands of loopback client connections run
+    # in this lane, and an outgoing socket that happens to own the port makes the supervisor's
+    # bind fail (TcpServer.Start.* red in 0.07 s on a hosted runner).
+    set(MOBILEGL_ITEST_TCP_ENDPOINT "tcp://127.0.0.1:30613" CACHE STRING "Loopback TCP integration endpoint")
     set(MOBILEGL_ITEST_TCP_DEVICE_ENDPOINT "" CACHE STRING "Optional device TCP integration endpoint")
     set(MOBILEGL_ITEST_TCP_DEVICE_TOKEN "" CACHE STRING "Token for the device TCP integration endpoint")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)

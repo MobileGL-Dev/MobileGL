@@ -221,8 +221,11 @@ include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # This source scanner must inspect the configured checkout, including in out-of-tree builds.
 # Apply the override after GoogleTest's deferred discovery, and only to this one test.
+# CTestTestfile scripts run with no policy settings, so IN_LIST (CMP0057) is not available here
+# on CMake 3.x: use list(FIND) instead.
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PipeCatalogueSourceRoot.cmake" CONTENT
-"if(\"PipeCatalogue.FrontendNeverTakesAnApplierAddress\" IN_LIST PipeCatalogueTest_TESTS)
+"list(FIND PipeCatalogueTest_TESTS \"PipeCatalogue.FrontendNeverTakesAnApplierAddress\" _mglSourceRootTest)
+if(NOT _mglSourceRootTest EQUAL -1)
     set_tests_properties(PipeCatalogue.FrontendNeverTakesAnApplierAddress PROPERTIES
         WORKING_DIRECTORY [==[${MGL_ROOT}]==])
 endif()
