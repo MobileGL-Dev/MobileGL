@@ -5,7 +5,7 @@
 # base commit : <unknown>
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : /home/swung/mgl-p13-split
-# count       : 58
+# count       : 49
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores; `# P13` marks a symbol that cannot fall before P13 establishes module
@@ -21,7 +21,6 @@ MobileGL::MG_Pipe::MGPipeSlotAllocator::FindByLifetimeId(MobileGL::MG_Pipe::MGPi
 MobileGL::MG_Pipe::MGPipeSlotAllocator::Free(MobileGL::MG_Pipe::MGPipeKind, MobileGL::MG_Pipe::MGPipeHandle) # P13
 MobileGL::MG_Pipe::MGPipeSlots() # P13
 MobileGL::MG_Pipe::PipeInputs::GetBufferBindingPointCount(MobileGL::BufferTarget) const
-MobileGL::MG_Pipe::PipeInputs::GetTextureObject(unsigned int) # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::HasOpenTransformFeedbackSpan(unsigned long) const # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::InvalidateCompileEnv() # P13 monolith arm: MGB_CTX accessor / GL readback packer (CONTRACT-P7 §12)
 MobileGL::MG_Pipe::PipeInputs::IsLive() const
@@ -48,18 +47,10 @@ MobileGL::MG_State::GLState::BufferObject::SyncPersistentMappedRange()
 MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long)
 MobileGL::MG_State::GLState::ClassifyVertexAttribType(unsigned int)
 MobileGL::MG_State::GLState::DecodeProgramArchive(unsigned char const*, unsigned long, MobileGL::MG_State::GLState::ProgramArchive&)
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetRenderbuffer() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::GetTexture() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsComplete() const # P13 monolith arm: reads an app FBO/RBO/VAO/buffer object (CONTRACT-P7 §12)
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsRenderbuffer() const
-MobileGL::MG_State::GLState::FramebufferAttachmentObject::IsTexture() const
-MobileGL::MG_State::GLState::FramebufferObject::GetAttachment(MobileGL::FramebufferAttachmentType) const
-MobileGL::MG_State::GLState::FramebufferObject::GetDrawBuffers() const
 MobileGL::MG_State::GLState::GetBufferBackendOps()
 MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
 MobileGL::MG_State::GLState::ProgramObject::JoinPendingLink() const
 MobileGL::MG_State::GLState::RenderbufferObject::GetExternalIndex() const
-MobileGL::MG_State::GLState::RenderbufferObject::GetInternalFormat() const
 MobileGL::MG_State::GLState::SamplerObject::GetAllSamplerParameters() const
 MobileGL::MG_State::GLState::SamplerObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::SamplerObject::GetLifetimeId() const

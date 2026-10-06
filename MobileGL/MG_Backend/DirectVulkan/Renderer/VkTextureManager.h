@@ -565,18 +565,6 @@ public:
         Bool isTextureView = false;
     };
 
-    // Records what a GL texture view needs of the image it views, so the next sync of the
-    // STORAGE texture creates (or recreates and copies forward) an image the view can be built
-    // over. See m_viewRequestedImageFlags for why this is lazy rather than unconditional.
-    void NoteTextureViewImageRequirements(MG_State::GLState::ITextureObject& viewTexture,
-                                          MG_State::GLState::ITextureObject& storageTexture);
-    VkImageCreateFlags GetViewRequestedImageFlags(const MG_State::GLState::ITextureObject& storageTexture) const;
-    // Appends every format a GL texture view reinterprets this storage as, for the narrowed
-    // VkImageFormatListCreateInfo the image is created with.
-    void AppendViewRequestedFormats(const MG_State::GLState::ITextureObject& storageTexture,
-                                    Vector<VkFormat>& outFormats) const;
-    TextureResource* SyncTextureAndGetDescriptor(
-        MG_State::GLState::ITextureObject& texture);
     // P5f (fm): THE HANDLE-KEYED ARM of SyncTextureAndGetDescriptor. Under an active transport
     // the apply thread may not name the client's ITextureObject (rule E), so the clear / blit /
     // readback / mipmap verbs resolve their attachment textures from the wire handle the
@@ -710,33 +698,8 @@ private:
     // stamp of 0 so a fresh resource counts as untouched.
     Uint64 m_recordingGeneration = 1;
 
-    Bool SyncTexture(MG_State::GLState::ITextureObject &texture,
-                     TextureResource &outResource);
-    Bool SyncTextureResource(const MG_State::GLState::ITextureObject &texture,
-                             TextureUploadTarget uploadTarget,
-                             const IntVec3 &texelSize, SizeT byteSize, Uint32 mipLevels,
-                             TextureResource &resource);
-    Bool SyncTextureViews(const MG_State::GLState::ITextureObject& texture, TextureResource& resource);
-    VkImageView CreateImageView(VkImage image, VkFormat format, VkImageAspectFlags aspect,
-                                VkImageViewType viewType, Uint32 baseMipLevel, Uint32 levelCount,
-                                Uint32 baseArrayLayer,
-                                Uint32 layerCount,
-                                const VkComponentMapping* components = nullptr,
-                                VkImageUsageFlags viewUsage = 0) const;
-    Bool UploadDirtyMipLevels(MG_State::GLState::TextureObjectMipmap &mipmapTexture,
-                      TextureUploadTarget uploadTarget,
-                      TextureResource &outResource);
-    static Bool CheckMipmapCompleteness(const MG_State::GLState::ITextureObject& texture,
-                                        TextureUploadTarget& outTarget,
-                                        IntVec3& outTexelSize,
-                                        SizeT& outByteSize,
-                                        Uint32& outMipLevelCount);
-    static Uint32 GetUploadMipLevelCount(const MG_State::GLState::TextureObjectMipmap& texture, TextureUploadTarget target);
-    static void ResolveViewMipRange(const MG_State::GLState::ITextureObject& texture, Uint32 mipLevels,
-                                    Uint32& outBaseMipLevel, Uint32& outLevelCount);
     static VkImageAspectFlags GetAspectMaskForFormat(VkFormat format);
     void DeferResourceRelease(TextureResource&& resource);
-    void DeferViewRelease(VkImageView view);
     void CollectDeferredReleases(Uint32 frameIndex);
     void DestroyDeferredReleases();
     // Frees the fence/command buffer/staging buffer of every in-flight texture

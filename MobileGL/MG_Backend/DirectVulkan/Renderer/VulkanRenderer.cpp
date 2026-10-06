@@ -193,25 +193,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    static VkColorComponentFlags GetSupportedColorWriteMaskForComponentCount(SizeT componentCount) {
-        switch (componentCount) {
-        case 1:
-            return VK_COLOR_COMPONENT_R_BIT;
-        case 2:
-            return VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
-        case 3:
-            return VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
-        case 4:
-            return VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        default:
-            MOBILEGL_ASSERT(false,
-                            "GetSupportedColorWriteMaskForComponentCount: unsupported componentCount=%zu",
-                            componentCount);
-            return 0;
-        }
-    }
-
     static Bool IsQuarterTurnPreTransform(VkSurfaceTransformFlagBitsKHR preTransform) {
         return preTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
                preTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
@@ -1127,11 +1108,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         static constexpr Uint32 kDescriptorSetsPerFrame = 64;
 
-
-        static Bool IsCubeMapFaceUploadTarget(TextureUploadTarget target) {
-            return target >= TextureUploadTarget::CubeMapPositiveX &&
-                   target <= TextureUploadTarget::CubeMapNegativeZ;
-        }
 
         enum class BlitSurfaceTransform : Uint32 {
             Identity = 0,
@@ -3239,34 +3215,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(payload.colorAttachmentCount <= PipelineFactory::PipelineCreatePayload::kMaxColorAttachments,
                         "GetOrCreatePipeline: colorAttachmentCount=%u exceeds payload capacity",
                         payload.colorAttachmentCount);
+        // The draw framebuffer is the applier's record on every arm (P13 W6): a draw with none
+        // has nothing to build a pipeline for, and is declined by name rather than guessed at.
         const auto* wireFbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
-        const auto drawFboBinding = wireFbo ? SharedPtr<MG_State::GLState::FramebufferObject>{} :
-            MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-        MOBILEGL_ASSERT(wireFbo != nullptr || drawFboBinding != nullptr, "GetOrCreatePipeline: draw framebuffer is null");
-        const Bool isDefaultDrawFbo = wireFbo ? wireFbo->IsDefault : drawFboBinding->IsDefaultFramebuffer();
-        Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> wireDrawBuffers{};
-        if (wireFbo) for (SizeT i = 0; i < wireDrawBuffers.size(); ++i)
-            wireDrawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
+        if (wireFbo == nullptr) {
+            MGLOG_E_ONCE("GetOrCreatePipeline skipped: no draw framebuffer record is bound");
+            return VK_NULL_HANDLE;
+        }
+        const Bool isDefaultDrawFbo = wireFbo->IsDefault;
+        Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> drawBuffers{};
+        for (SizeT i = 0; i < drawBuffers.size(); ++i)
+            drawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
                 static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
-        const auto& drawBuffers = wireFbo ? wireDrawBuffers : drawFboBinding->GetDrawBuffers();
-        auto resolveCompleteColorAttachmentTexture = [&](Uint32 drawBufferIndex) -> MG_State::GLState::ITextureObject* {
-            if (wireFbo) return nullptr;
-            if (isDefaultDrawFbo || drawBufferIndex >= drawBuffers.size()) {
-                return nullptr;
-            }
-
-            const auto drawBuffer = drawBuffers[drawBufferIndex];
-            if (drawBuffer == FramebufferAttachmentType::None) {
-                return nullptr;
-            }
-
-            const auto& attachment = drawFboBinding->GetAttachment(drawBuffer);
-            if (!attachment.IsTexture() || !attachment.IsComplete()) {
-                return nullptr;
-            }
-
-            return attachment.GetTexture().get();
-        };
         for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
             BlendFactor srcRGB = BlendFactor::One;
             BlendFactor dstRGB = BlendFactor::Zero;
@@ -3288,8 +3248,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 (bufferMask.b() ? VK_COLOR_COMPONENT_B_BIT : 0u) |
                 (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
-            MG_State::GLState::ITextureObject* colorAttachmentTexture = nullptr;
-            MG_State::GLState::RenderbufferObject* colorAttachmentRenderbuffer = nullptr;
             if (isDefaultDrawFbo && i < drawBuffers.size() &&
                 drawBuffers[i] == FramebufferAttachmentType::None) {
                 // The default framebuffer spans the same MAX_DRAW_BUFFERS slots as an FBO
@@ -3301,99 +3259,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 attachmentColorWriteMask = 0;
                 effectiveBlendEnabled = false;
             }
-            if (wireFbo && !isDefaultDrawFbo) {
+            if (!isDefaultDrawFbo) {
                 const Int32 slot = wireFbo->DrawBuffers[i];
                 if (slot < 0 || wireFbo->Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
                     attachmentColorWriteMask = 0;
                     effectiveBlendEnabled = false;
-                }
-            } else
-            if (!isDefaultDrawFbo && i < drawBuffers.size()) {
-                const auto drawBuffer = drawBuffers[i];
-                colorAttachmentTexture = resolveCompleteColorAttachmentTexture(i);
-                if (colorAttachmentTexture == nullptr && drawBuffer != FramebufferAttachmentType::None) {
-                    const auto& attachment = drawFboBinding->GetAttachment(drawBuffer);
-                    if (attachment.IsRenderbuffer() && attachment.IsComplete()) {
-                        colorAttachmentRenderbuffer = attachment.GetRenderbuffer().get();
-                    }
-                }
-                if (drawBuffer == FramebufferAttachmentType::None ||
-                    (colorAttachmentTexture == nullptr && colorAttachmentRenderbuffer == nullptr)) {
-                    // GL ignores writes and per-target blend state for GL_NONE draw buffer slots.
-                    // Depth-only or otherwise unattached draw buffers should also discard color writes.
-                    attachmentColorWriteMask = 0;
-                    effectiveBlendEnabled = false;
-                }
-                if (colorAttachmentRenderbuffer != nullptr) {
-                    const SizeT componentCount = MG_Util::GetBaseInternalFormatComponentCount(
-                        colorAttachmentRenderbuffer->GetInternalFormat());
-                    attachmentColorWriteMask &= GetSupportedColorWriteMaskForComponentCount(componentCount);
-                }
-                if (colorAttachmentTexture != nullptr) {
-                    auto* texture = colorAttachmentTexture;
-#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-                    const auto* textureResource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
-                    MOBILEGL_ASSERT(textureResource != nullptr,
-                                    "GetOrCreatePipeline: failed to sync color attachment textureId=%d",
-                                    texture->GetExternalIndex());
-                    VkFormatProperties attachmentFormatProperties{};
-                    vkGetPhysicalDeviceFormatProperties(
-                        m_physicalDevice.handle,
-                        textureResource->format,
-                        &attachmentFormatProperties);
-                    MOBILEGL_ASSERT(
-                        (attachmentFormatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0,
-                        "GetOrCreatePipeline: color attachment %u format=%d textureId=%d lacks VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT (program=%u)",
-                        i,
-                        static_cast<Int>(textureResource->format),
-                        texture->GetExternalIndex(),
-                        program.GetExternalIndex());
-#endif
-                    const SizeT componentCount = MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat());
-#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-                    const NumericDomain attachmentNumericDomain =
-                        GetNumericDomainForTextureInternalFormat(texture->GetFormat());
-                    for (Uint32 outputLocation = 0;
-                         outputLocation < ProgramFactory::VkProgramObject::kMaxVertexInputLocations;
-                         ++outputLocation) {
-                        if ((programObj.activeFragmentOutputLocationMask & (1u << outputLocation)) == 0 ||
-                            outputLocation != i) {
-                            continue;
-                        }
-
-                        const GLenum fragmentOutputType = programObj.fragmentOutputTypes[outputLocation];
-                        const NumericDomain fragmentOutputDomain =
-                            GetNumericDomainForShaderValueType(fragmentOutputType);
-                        // GL allows fragment outputs with more components than the bound color attachment;
-                        // excess components are discarded during conversion to the attachment format.
-                        MOBILEGL_ASSERT(
-                            attachmentNumericDomain == NumericDomain::Unknown ||
-                                fragmentOutputDomain == NumericDomain::Unknown ||
-                                attachmentNumericDomain == fragmentOutputDomain,
-                            "GetOrCreatePipeline: fragment output location=%d type=%u mismatches color attachment %u internalFormat=%d textureId=%d program=%u",
-                            static_cast<Int>(outputLocation),
-                            static_cast<Uint32>(fragmentOutputType),
-                            i,
-                            static_cast<Int>(texture->GetFormat()),
-                            texture->GetExternalIndex(),
-                            program.GetExternalIndex());
-                    }
-#endif
-                    const VkColorComponentFlags supportedColorWriteMask =
-                        GetSupportedColorWriteMaskForComponentCount(componentCount);
-                    if ((attachmentColorWriteMask & ~supportedColorWriteMask) != 0) {
-                        MGLOG_W_ONCE(
-                            "GetOrCreatePipeline: clamping colorWriteMask=0x%x to 0x%x on color attachment %u (componentCount=%zu textureId=%d internalFormat=%d program=%u blendEnabled=%d)",
-                            static_cast<Uint32>(attachmentColorWriteMask),
-                            static_cast<Uint32>(attachmentColorWriteMask & supportedColorWriteMask),
-                            i,
-                            componentCount,
-                            texture->GetExternalIndex(),
-                            static_cast<Int>(texture->GetFormat()),
-                            program.GetExternalIndex(),
-                            effectiveBlendEnabled ? 1 : 0);
-                        attachmentColorWriteMask &= supportedColorWriteMask;
-                    }
                 }
             }
             if (effectiveBlendEnabled) {
@@ -3403,40 +3273,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
-                if (wireFbo && !isDefaultDrawFbo) {
+                if (!isDefaultDrawFbo) {
                     const Int32 slot = wireFbo->DrawBuffers[i];
                     colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
-                } else
-                if (isDefaultDrawFbo) {
-                    colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
-                } else if (colorAttachmentRenderbuffer != nullptr) {
-                    textureExternalIndex = static_cast<Int>(colorAttachmentRenderbuffer->GetExternalIndex());
-                    // The SAME resolver GetOrCreateRenderbufferResource backs the image with, so the
-                    // probe cannot ask about a format the attachment does not have. The strict 1:1
-                    // converter is the wrong question here and answered VK_FORMAT_UNDEFINED for
-                    // RGBA2/RGBA12/RGB10/RGB12/RGB16 and the packed 16-bit formats for RGBA4/RGB5_A1
-                    // - and VkFormatProperties for UNDEFINED are all zero, so blending was
-                    // force-disabled forever on attachments that blend perfectly well. Every
-                    // three-channel colour renderbuffer was in that set too (R8G8B8_UNORM is rarely
-                    // supported), which is the more ordinary shape.
-                    //
-                    // Resolved rather than looked up: GetOrCreateRenderbufferResource creates images
-                    // and bumps epochs, which a pipeline-state query must not do as a side effect.
-                    // A renderbuffer has no device-fallback step after the resolver (unlike the
-                    // texture path's D24 -> D32 substitution), so the resolver IS its live format.
-                    colorAttachmentFormat =
-                        ResolveTextureFormatInfo(colorAttachmentRenderbuffer->GetInternalFormat()).format;
                 } else {
-                    auto* texture = colorAttachmentTexture;
-                    MOBILEGL_ASSERT(texture != nullptr,
-                                    "GetOrCreatePipeline: blend is enabled on draw buffer %u but no complete color attachment is bound",
-                                    i);
-                    textureExternalIndex = texture->GetExternalIndex();
-                    auto* textureResource = m_textureManager->SyncTextureAndGetDescriptor(*texture);
-                    MOBILEGL_ASSERT(textureResource != nullptr,
-                                    "GetOrCreatePipeline: failed to sync blend color attachment textureId=%d",
-                                    texture->GetExternalIndex());
-                    colorAttachmentFormat = textureResource->format;
+                    colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 }
 
                 // Blending on an attachment whose format lacks
