@@ -54,7 +54,7 @@ def tail_start(data, symfs, tail_ms):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--tail-ms=")]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     tail = next((float(a.split("=", 1)[1]) for a in sys.argv[1:] if a.startswith("--tail-ms=")), 0.0)
     data, symfs, comm, cpu = args[0], args[1], args[2], float(args[3])
     start = tail_start(data, symfs, tail)
@@ -62,6 +62,8 @@ def main():
     lib.SetRecordFile(data)
     lib.SetSymfs(symfs)
     counts = Counter()
+    detail = Counter()
+    detail_layer = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--detail=")), None)
     total = 0
     while True:
         sample = lib.GetNextSample()
@@ -75,17 +77,26 @@ def main():
         chain = lib.GetCallChainOfCurrentSample()
         frames += [(chain.entries[i].symbol.symbol_name, chain.entries[i].symbol.dso_name) for i in range(chain.nr)]
         found = None
+        owner = None
         for symbol, dso in frames:
             if "kallsyms" in dso:
                 continue
             found = layer_of(symbol, dso)
             if found:
+                owner = symbol
                 break
         counts[found or "other"] += 1
+        if detail_layer and found == detail_layer:
+            # the outermost frame of the same layer below the first non-layer caller: the entry
+            # into that layer, e.g. MGPipeValidateForVerb or EmitDrawRecord for the client half
+            names = [f for f, d in frames if layer_of(f, d) == found]
+            detail[owner.split("(")[0][-90:] + "  <-  " + names[-1].split("(")[0][-60:]] += 1
     print(f"{comm}: {total} samples, {cpu:.2f} ms/frame")
     for name in LAYERS:
         share = counts[name] / max(1, total)
         print(f"  {name:12} {100 * share:5.1f}%  {cpu * share:6.2f} ms/frame")
+    for key, n in detail.most_common(30):
+        print(f"    {cpu * n / max(1, total):6.3f} ms  {key}")
 
 
 if __name__ == "__main__":
