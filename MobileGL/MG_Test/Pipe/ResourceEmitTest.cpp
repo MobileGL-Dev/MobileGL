@@ -852,6 +852,59 @@ namespace {
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
     }
 
+    // P14: a vertex-elements record keeps the last vertex-buffer set and index binding applied
+    // while it was bound, and bind_vertex_elements re-applies them through the same two applies
+    // - every field and both serials move as if the records had arrived again. A re-create of
+    // the handle drops what it kept (the client drops its mirror at the same create).
+    TEST(ResourceEmit, AVertexElementsRecordKeepsItsBindingsAndABindReappliesThem) {
+        ApplierGuard guard;
+        const MGPipeHandle resA{7, 3};
+        const MGPipeHandle resB{8, 1};
+        const MGPipeHandle csoA{2, 1};
+        const MGPipeHandle csoB{3, 1};
+        const ElementsBlob elementsA = MakeElements(csoA, 2, 1, true);
+        const ElementsBlob elementsB = MakeElements(csoB, 2, 1, true);
+        MGPipeApplyCreateVertexElements(elementsA.Desc, elementsA.Data());
+        MGPipeApplyCreateVertexElements(elementsB.Desc, elementsB.Data());
+
+        const auto setBuffers = [](MGPipeHandle res, Uint32 stride, Uint32 baseInstance) {
+            MGPVertexBuffers hdr{};
+            hdr.Count = 1;
+            hdr.BaseInstance = baseInstance;
+            MGPVertexBuffer entry{};
+            entry.Res = res;
+            entry.Stride = stride;
+            MGPipeApplySetVertexBuffers(hdr, &entry);
+        };
+        MGPipeApplyBindVertexElements(ElementsHandle(csoA));
+        setBuffers(resA, 12, 0);
+        MGPipeApplySetIndexBuffer(MGPIndexBuffer{resA, 0, 0, 0});
+        MGPipeApplyBindVertexElements(ElementsHandle(csoB));
+        setBuffers(resB, 20, 0);
+        MGPipeApplySetIndexBuffer(MGPIndexBuffer{resB, 0, 0, 0});
+
+        // Back to A with nothing sent but the bind: A's own bindings come back.
+        const Uint64 vertexSerial = MGPipeApplier().VertexBuffersSerial;
+        const Uint64 indexSerial = MGPipeApplier().IndexBufferSerial;
+        MGPipeApplyBindVertexElements(ElementsHandle(csoA));
+        EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
+        EXPECT_EQ(MGPipeApplier().VertexBuffers[0].Res, resA);
+        EXPECT_EQ(MGPipeApplier().VertexBuffers[0].Stride, 12u);
+        EXPECT_EQ(MGPipeApplier().IndexBuffer.Res, resA);
+        EXPECT_GT(MGPipeApplier().VertexBuffersSerial, vertexSerial) << "a re-applied set must move its serial";
+        EXPECT_GT(MGPipeApplier().IndexBufferSerial, indexSerial);
+        MGPipeApplyBindVertexElements(ElementsHandle(csoB));
+        EXPECT_EQ(MGPipeApplier().VertexBuffers[0].Res, resB);
+        EXPECT_EQ(MGPipeApplier().IndexBuffer.Res, resB);
+
+        // A re-create drops what A kept: binding it again leaves B's bindings in place.
+        MGPipeApplyCreateVertexElements(elementsA.Desc, elementsA.Data());
+        MGPipeApplyBindVertexElements(ElementsHandle(csoA));
+        EXPECT_EQ(MGPipeApplier().VertexBuffers[0].Res, resB);
+        EXPECT_EQ(MGPipeApplier().IndexBuffer.Res, resB);
+        EXPECT_EQ(MGPipeApplier().RefusedVertexInputCalls, 0u);
+    }
+
     // C1's observable. A call that names a record this applier does not have is a DEFINED
     // no-op - nothing stored, nothing dispatched, no serial moved - because the teardown order
     // makes exactly one such sequence legal (release the records, then every ~BufferObject

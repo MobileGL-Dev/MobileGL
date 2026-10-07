@@ -673,10 +673,18 @@ namespace MobileGL::MG_Remote::Transport {
         auto& x = *m_impl;
         if (!x.Client() || span.Offset > x.memory->StageBytes() || span.Size > x.memory->StageBytes() - span.Offset)
             Corrupt("staged span outside window");
-        if (!x.stage.empty() && x.stage.back().Offset + x.stage.back().Size == span.Offset)
-            x.stage.back().Size += span.Size;
-        else
-            x.stage.push_back(span);
+        // Adjacent once the producer's 8-byte allocation granule is counted (StageAllocate rounds
+        // every blob up): one span then carries both, padding included, instead of one Stage
+        // message per small blob - a Minecraft chunk draw stages a 12-byte uniform span.
+        if (!x.stage.empty()) {
+            auto& back = x.stage.back();
+            const std::uint64_t end = back.Offset + back.Size;
+            if (span.Offset >= end && span.Offset - end < 8) {
+                back.Size = span.Offset + span.Size - back.Offset;
+                return;
+            }
+        }
+        x.stage.push_back(span);
     }
     MobileGLResult StreamLink::Flush() {
         auto& x = *m_impl;

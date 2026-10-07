@@ -103,6 +103,13 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
+        // The server now holds the set `contentHash` names without this slot having emitted it
+        // (P14: bind_vertex_elements re-applies the array's kept set). Same 0 -> 1 remap as
+        // ShouldEmit, so the next ShouldEmit of the same hash answers false.
+        void Latch(MGPipeSuppressorSlot slot, Uint64 contentHash) {
+            m_lastEmitted[static_cast<SizeT>(slot)] = contentHash == 0 ? 1 : contentHash;
+        }
+
         // A context change or a server reset: what the server has is no longer what this
         // slot last emitted, so the next resolved set must go out whatever it hashes to.
         void Invalidate(MGPipeSuppressorSlot slot) { m_lastEmitted[static_cast<SizeT>(slot)] = 0; }

@@ -2951,6 +2951,10 @@ namespace MobileGL::MG_Pipe {
         record.AttributeCount = desc.AttributeCount;
         record.BindingPointCount = desc.BindingPointCount;
         record.Live = true;
+        // A new configuration starts without kept bindings (see the record): the client drops
+        // its mirror of them at the same create.
+        record.StoredBuffersValid = false;
+        record.StoredIndexValid = false;
         // Serial 0 means "never created", so the first create of an identity lands on 1 and a
         // backend twin that has synced nothing can never accidentally match a live record.
         ++record.ContentSerial;
@@ -2973,6 +2977,14 @@ namespace MobileGL::MG_Pipe {
         const MGPipeVertexElementsRecord* record = ResolveVertexElements("bind_vertex_elements", handle.Handle);
         if (record == nullptr) return;
         MGPipeApplier().BoundVertexElements = handle.Handle;
+        // The array's kept bindings come back with it, through the same two applies their
+        // records take, so every serial and field moves exactly as it would for the records.
+        // (The apply writes the same entries back over themselves: harmless, and no copy.)
+        if (record->StoredBuffersValid) {
+            const MGPVertexBuffers header = record->StoredBuffersHeader;
+            MGPipeApplySetVertexBuffers(header, record->StoredBuffers.data());
+        }
+        if (record->StoredIndexValid) MGPipeApplySetIndexBuffer(record->StoredIndex);
     }
 
     void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) {
@@ -3043,6 +3055,15 @@ namespace MobileGL::MG_Pipe {
         // would keep the previous shift.
         MGPipeApplier().VertexFetchBaseInstance = hdr.BaseInstance;
         ++MGPipeApplier().VertexBuffersSerial;
+        // Kept by the bound array (MGPipeVertexElementsRecord's P14 note). A re-apply from the
+        // bind writes back what it read, which is harmless.
+        if (MGPipeVertexElementsRecord* bound = FindVertexElements(MGPipeApplier().BoundVertexElements)) {
+            bound->StoredBuffersValid = hdr.Start == 0 && hdr.Count <= kMGPipeVaoStoredVertexBuffers;
+            if (bound->StoredBuffersValid) {
+                bound->StoredBuffersHeader = hdr;
+                for (Uint32 i = 0; i < hdr.Count; ++i) bound->StoredBuffers[i] = tail[i];
+            }
+        }
     }
 
     void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record) {
@@ -3058,6 +3079,11 @@ namespace MobileGL::MG_Pipe {
         //     configuration's, which is exactly what the backend's two separate compares need.
         MGPipeApplier().IndexBuffer = record;
         ++MGPipeApplier().IndexBufferSerial;
+        // Kept by the bound array (MGPipeVertexElementsRecord's P14 note).
+        if (MGPipeVertexElementsRecord* bound = FindVertexElements(MGPipeApplier().BoundVertexElements)) {
+            bound->StoredIndex = record;
+            bound->StoredIndexValid = true;
+        }
     }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
@@ -3949,10 +3975,21 @@ namespace MobileGL::MG_Pipe {
         // bounded there - so this call can only ever allocate what the create already declared,
         // and the blob rule has a real field to cross-check against for once.
         const Uint32 size = stored->Desc.GlobalUboSize;
+        // A span (MGPGlobalConstants::Range) lands on the block the record already holds.
+        const Uint32 spanOffset = record.Range >> 16;
+        const Uint32 spanLength = record.Range & 0xffffu;
         const char* fault = nullptr;
         if (record.Version == ~Uint32{0}) {
             fault = "the version is the backends' never-uploaded sentinel, which no record may carry";
-        } else if (record.Blob.Size != 0 && record.Blob.Size != size) {
+        } else if (record.Range != 0 && (spanLength == 0 || spanOffset + spanLength > size)) {
+            fault = "the span runs outside the program's default uniform block";
+        } else if (record.Range != 0 && stored->GlobalConstants.size() != size) {
+            fault = "a span arrived for a block the record does not hold";
+        } else if (record.Range != 0 && record.Blob.Size != 0 && record.Blob.Size != spanLength) {
+            fault = "the declared blob length is not the span's length";
+        } else if (record.Range != 0 && bytes == nullptr) {
+            fault = "a span carries no bytes";
+        } else if (record.Range == 0 && record.Blob.Size != 0 && record.Blob.Size != size) {
             fault = "the declared blob length is not the program's own default uniform block size";
         } else if (size > kMGPipeMaxGlobalConstantsBytes) {
             fault = "the program's default uniform block is larger than any program may declare";
@@ -3968,7 +4005,9 @@ namespace MobileGL::MG_Pipe {
             return;
         }
 
-        if (size == 0) {
+        if (record.Range != 0) {
+            std::memcpy(stored->GlobalConstants.data() + spanOffset, bytes, spanLength);
+        } else if (size == 0) {
             stored->GlobalConstants.clear();
         } else {
             const Uint8* image = static_cast<const Uint8*>(bytes);

@@ -557,6 +557,60 @@ namespace {
         EXPECT_EQ(Emitter().CreateCount(), 3u);
     }
 
+    // P14: GL keeps a vertex array's buffer and element bindings ON THE ARRAY, and so does the
+    // applier's record (MGPipeVertexElementsRecord): a switch back to an array whose bindings did
+    // not move sends the bind alone - no set_vertex_buffers, no set_index_buffer. A binding that
+    // did move still goes out after the bind.
+    TEST(VertexInputEmit, ASwitchBetweenArraysWithUnchangedBindingsSendsOnlyTheBind) {
+        EmitterScope scope;
+        const SharedPtr<BufferObject> vertices = Ctx().CreateBufferObject(1);
+        vertices->Respecify(256, nullptr);
+        const SharedPtr<BufferObject> elements = Ctx().CreateBufferObject(2);
+        elements->Respecify(64, nullptr);
+        const SharedPtr<BufferObject> other = Ctx().CreateBufferObject(3);
+        other->Respecify(256, nullptr);
+        const auto configure = [&](Uint name, const SharedPtr<BufferObject>& buffer) {
+            const SharedPtr<VertexArrayObject> vao = MakeVao(name);
+            vao->SetAttributeFormat(0, 4, DataType::Float32, false, 16, 0, false);
+            vao->BindAttributeBuffer(0, buffer);
+            vao->EnableAttribute(0);
+            vao->GetIndexBufferBindingSlot().Bind(elements);
+            return vao;
+        };
+        const auto validate = [&] {
+            Uint64 bytes = Emitter().EmitVertexElements(Ctx());
+            bytes += Emitter().EmitVertexBuffers(Ctx(), 0);
+            bytes += Emitter().EmitIndexBuffer(Ctx());
+            return bytes;
+        };
+        const SharedPtr<VertexArrayObject> a = configure(1, vertices);
+        ASSERT_GT(validate(), 0u);
+        const SharedPtr<VertexArrayObject> b = configure(2, other);
+        ASSERT_GT(validate(), 0u);
+        const Uint64 sets = Emitter().VertexBufferSetCount();
+        const Uint64 indexSets = Emitter().IndexBufferSetCount();
+
+        for (int i = 0; i < 4; ++i) {
+            Ctx().BindVertexArray(1);
+            EXPECT_EQ(validate(), sizeof(MGPHandleOnly)) << "a switch to an unchanged array sent more than its bind";
+            Ctx().BindVertexArray(2);
+            EXPECT_EQ(validate(), sizeof(MGPHandleOnly));
+        }
+        EXPECT_EQ(Emitter().VertexBufferSetCount(), sets);
+        EXPECT_EQ(Emitter().IndexBufferSetCount(), indexSets);
+
+        // A moved binding is sent after the bind, and kept from then on.
+        Ctx().BindVertexArray(1);
+        a->BindAttributeBuffer(0, other);
+        EXPECT_GT(validate(), sizeof(MGPHandleOnly));
+        EXPECT_EQ(Emitter().VertexBufferSetCount(), sets + 1);
+        Ctx().BindVertexArray(2);
+        EXPECT_EQ(validate(), sizeof(MGPHandleOnly));
+        Ctx().BindVertexArray(1);
+        EXPECT_EQ(validate(), sizeof(MGPHandleOnly));
+        EXPECT_EQ(Emitter().VertexBufferSetCount(), sets + 1);
+    }
+
     // ============================ C-1: the death path ============================
     //
     // THE LEAK THIS RULES OUT, and why it is a client case rather than a backend one. Every

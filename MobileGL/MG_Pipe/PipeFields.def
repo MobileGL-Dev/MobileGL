@@ -159,7 +159,7 @@
     F(Name) F(Binding)
 
 #define MGP_FIELDS_MGPGlobalConstants(F) \
-    F(ShaderCso) F(Version) F(Blob)
+    F(ShaderCso) F(Version) F(Range) F(Blob)
 
 #define MGP_FIELDS_MGPAttribValue(F) \
     F(Location) F(ValueClass) F(FloatView) F(IntView) F(UintView)

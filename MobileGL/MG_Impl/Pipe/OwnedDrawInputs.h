@@ -59,6 +59,7 @@ namespace MobileGL::MG_Pipe {
                 binding.Res = info.IndexResource;
                 binding.IndexSize = info.IndexSize;
                 MGPipeRouteSetIndexBuffer(binding);
+                MGPipeVertexInputEmitterInstance().NoteIndexBufferRoutedElsewhere(m_context);
                 m_indexBindingChanged = true;
             }
 

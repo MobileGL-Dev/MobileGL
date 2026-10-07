@@ -181,13 +181,26 @@ namespace MobileGL::MG_Pipe {
             Uint64 bytes = 0;
             const Bool configMoved = !latch.Published || latch.ConfigVersion != configVersion ||
                                      latch.Gen != handle.Gen;
-            if (configMoved) bytes += EmitCreate(*vao, handle, latch, configVersion);
+            if (configMoved) {
+                bytes += EmitCreate(*vao, handle, latch, configVersion);
+                // The applier drops the record's kept bindings at the same create.
+                memo.StoredBuffersValid = false;
+                memo.StoredIndexValid = false;
+            }
             if (lifetimeId != m_boundLifetimeId || m_boundHandle != handle) {
                 MGPipeRouteBindVertexElements(HandleOnly(handle));
                 ++m_binds;
                 bytes += sizeof(MGPHandleOnly);
                 m_boundHandle = handle;
                 m_boundLifetimeId = lifetimeId;
+                // P14: the bind re-applies whatever the record keeps (PipeApply.h,
+                // MGPipeVertexElementsRecord). The mirror below says what that is; where it does
+                // not know, the next set goes out whatever it hashes to.
+                auto& suppressor = MGPipeSetHashSuppressorInstance();
+                if (memo.StoredBuffersValid) suppressor.Latch(MGPipeSuppressorSlot::SetVertexBuffers, memo.StoredBuffersHash);
+                else suppressor.Invalidate(MGPipeSuppressorSlot::SetVertexBuffers);
+                m_serverIndexKnown = memo.StoredIndexValid;
+                m_serverIndexRes = memo.StoredIndexRes;
             }
             return bytes;
         }
@@ -287,6 +300,14 @@ namespace MobileGL::MG_Pipe {
             m_lastBuffers.ContentHash = hash;
             MGPipeRouteSetVertexBuffers(m_lastBuffers, m_entries.data());
             ++m_bufferSets;
+            // The bound array now keeps this set (the applier's rule, mirrored): a draw-time
+            // client-array set is the array's too, but it names private buffers, so the mirror
+            // forgets rather than remembers it.
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) {
+                VaoMemo& bound = MemoFor(*vao);
+                bound.StoredBuffersValid = ownedClientBuffers == nullptr && count <= kMGPipeVaoStoredVertexBuffers;
+                bound.StoredBuffersHash = hash;
+            }
             return sizeof(MGPVertexBuffers) + static_cast<Uint64>(count) * sizeof(MGPVertexBuffer);
         }
 
@@ -316,9 +337,27 @@ namespace MobileGL::MG_Pipe {
                     MGPipeResourceTrackerInstance().NoteBoundAs(m_lastIndex.Res, BufferTarget::Index);
                 }
             }
+            // P14: the server already holds this binding - re-applied by the bind from the
+            // array's kept one, or sent last time - so there is nothing to send.
+            if (m_serverIndexKnown && m_serverIndexRes == m_lastIndex.Res) return 0;
             MGPipeRouteSetIndexBuffer(m_lastIndex);
             ++m_indexSets;
+            m_serverIndexKnown = true;
+            m_serverIndexRes = m_lastIndex.Res;
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) {
+                VaoMemo& bound = MemoFor(*vao);
+                bound.StoredIndexValid = true;
+                bound.StoredIndexRes = m_lastIndex.Res;
+            }
             return sizeof(MGPIndexBuffer);
+        }
+
+        // A set_index_buffer this emitter did not send (OwnedDrawInputs' private element
+        // buffer): the server's binding and the bound array's kept one are no longer known.
+        void NoteIndexBufferRoutedElsewhere(GLContext& ctx) {
+            m_serverIndexKnown = false;
+            const auto& vao = ctx.GetBoundVertexArray();
+            if (vao && vao->GetLifetimeId() == m_boundLifetimeId) MemoFor(*vao).StoredIndexValid = false;
         }
 
         // ---- what a unit case reads. None of it costs a copy: the emitter builds INTO
@@ -394,16 +433,19 @@ namespace MobileGL::MG_Pipe {
             }
             m_boundHandle = kMGPipeNullHandle;
             m_boundLifetimeId = 0;
+            m_serverIndexKnown = false;
         }
 
         void ResetCounters() { m_creates = m_binds = m_bufferSets = m_indexSets = 0; }
 
     private:
         // P14: what EmitVertexElements / EmitVertexBuffers / EmitIndexBuffer resolve from a VAO,
-        // direct-mapped on the VAO's lifetime id (monotonic, never reused) and dropped whole at an
-        // allocator reset. A colliding VAO simply takes the entry over. It changes no record: the
-        // same handles and entries are emitted, only found without the per-draw walk and lookups.
-        static constexpr SizeT kVaoMemoEntries = 1024;
+        // one entry per live VAO keyed on its lifetime id (monotonic, never reused), erased at the
+        // VAO's death and re-initialised after an allocator reset. A direct-mapped table was tried
+        // first and lost most entries to collisions: a Minecraft frame draws ~1,500 chunk arrays
+        // whose ids spread well past any fixed table. The handles and entries it keeps change no
+        // record; the kept-binding mirror below does decide what is sent, and is only ever
+        // believed when the server provably holds the same.
         static constexpr SizeT kVaoMemoBuffers = 8;
         struct VaoMemo {
             Uint64 LifetimeId = 0;
@@ -418,11 +460,29 @@ namespace MobileGL::MG_Pipe {
             Uint32 HashBaseInstance = 0;
             Uint64 Hash = 0;
             Array<MGPVertexBuffer, kVaoMemoBuffers> Buffers{};
+            // The mirror of what the applier's record for this array keeps (PipeApply.h's
+            // MGPipeVertexElementsRecord): valid only while the server provably keeps exactly
+            // this. A memo entry taken over by another array starts invalid, which only costs a
+            // re-send.
+            Bool StoredBuffersValid = false;
+            Uint64 StoredBuffersHash = 0;
+            Bool StoredIndexValid = false;
+            MGPipeHandle StoredIndexRes = kMGPipeNullHandle;
         };
+        // What the server's index binding is, when known (P14).
+        Bool m_serverIndexKnown = false;
+        MGPipeHandle m_serverIndexRes = kMGPipeNullHandle;
+        // The returned reference stays valid until the next MemoFor of a DIFFERENT array (an
+        // insert may grow the table) or ForgetVao.
         VaoMemo& MemoFor(const VertexArrayObject& vao) {
             const Uint64 lifetimeId = vao.GetLifetimeId();
             const Uint64 epoch = MGPipeSlots().ResetEpoch();
-            VaoMemo& memo = m_vaoMemo[lifetimeId % kVaoMemoEntries];
+            if (m_vaoMemo.empty() || (m_vaoMemoUsed + 1) * 2 > m_vaoMemo.size()) GrowVaoMemo();
+            const SizeT mask = m_vaoMemo.size() - 1;
+            SizeT i = VaoMemoHome(lifetimeId, mask);
+            while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId) i = (i + 1) & mask;
+            VaoMemo& memo = m_vaoMemo[i];
+            if (memo.LifetimeId == 0) ++m_vaoMemoUsed;
             if (memo.LifetimeId != lifetimeId || memo.SlotEpoch != epoch) {
                 memo = VaoMemo{};
                 memo.LifetimeId = lifetimeId;
@@ -430,7 +490,52 @@ namespace MobileGL::MG_Pipe {
             }
             return memo;
         }
-        Array<VaoMemo, kVaoMemoEntries> m_vaoMemo{};
+        static SizeT VaoMemoHome(Uint64 lifetimeId, SizeT mask) {
+            return static_cast<SizeT>((lifetimeId * 0x9E3779B97F4A7C15ull) >> 32) & mask;
+        }
+        void GrowVaoMemo() {
+            Vector<VaoMemo> old;
+            old.swap(m_vaoMemo);
+            m_vaoMemo.resize(old.empty() ? 1024 : old.size() * 2);
+            m_vaoMemoUsed = 0;
+            const SizeT mask = m_vaoMemo.size() - 1;
+            for (const VaoMemo& entry : old) {
+                if (entry.LifetimeId == 0) continue;
+                SizeT i = VaoMemoHome(entry.LifetimeId, mask);
+                while (m_vaoMemo[i].LifetimeId != 0) i = (i + 1) & mask;
+                m_vaoMemo[i] = entry;
+                ++m_vaoMemoUsed;
+            }
+        }
+        Vector<VaoMemo> m_vaoMemo;
+        SizeT m_vaoMemoUsed = 0;
+
+    public:
+        // The VAO died (MGPipeEmitVertexElementsDestroyAndFree): its entry goes, by backward-shift
+        // deletion so every other entry stays reachable from its home.
+        void ForgetVao(Uint64 lifetimeId) {
+            if (m_vaoMemo.empty() || lifetimeId == 0) return;
+            const SizeT mask = m_vaoMemo.size() - 1;
+            SizeT i = VaoMemoHome(lifetimeId, mask);
+            while (m_vaoMemo[i].LifetimeId != lifetimeId) {
+                if (m_vaoMemo[i].LifetimeId == 0) return;
+                i = (i + 1) & mask;
+            }
+            SizeT hole = i;
+            for (SizeT j = (hole + 1) & mask; m_vaoMemo[j].LifetimeId != 0; j = (j + 1) & mask) {
+                const SizeT home = VaoMemoHome(m_vaoMemo[j].LifetimeId, mask);
+                // Move j into the hole when its home is not strictly inside (hole, j].
+                const Bool between = hole <= j ? (home > hole && home <= j) : (home > hole || home <= j);
+                if (!between) {
+                    m_vaoMemo[hole] = m_vaoMemo[j];
+                    hole = j;
+                }
+            }
+            m_vaoMemo[hole] = VaoMemo{};
+            --m_vaoMemoUsed;
+        }
+
+    private:
 
         struct Latch {
             // The PER-CONTEXT half: "has this emitter told THIS server about this handle's

@@ -218,6 +218,37 @@ namespace MobileGL::MG_Pipe {
             m_lastConstants = MGPGlobalConstants{};
             m_lastConstants.ShaderCso = cso;
             m_lastConstants.Version = version;
+            // P14: the server holds this program's previous image while the latch names it (every
+            // path that could drop or replace the applier's block clears the latch), so only the
+            // span that moved goes out - when it is small enough to be worth it.
+            const Uint8* image = static_cast<const Uint8*>(program->GetUBOData());
+            if (cso == m_constantsCso && m_constantsShadow.size() == size && size <= 0xffffu) {
+                Uint32 first = 0;
+                while (first < size && image[first] == m_constantsShadow[first]) ++first;
+                Uint32 last = size;
+                while (last > first && image[last - 1] == m_constantsShadow[last - 1]) --last;
+                // Nothing moved but the version: one byte carries the new version.
+                if (first == size) {
+                    first = 0;
+                    last = 1;
+                }
+                const Uint32 length = last - first;
+                if (length * 2 <= size) {
+                    m_lastConstants.Range = (first << 16) | length;
+                    m_lastConstants.Blob.Seg = kMGHostSpanSegNone;
+                    m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(image + first);
+                    m_lastConstants.Blob.Size = 0;
+                    MGPipeRouteSetGlobalConstants(m_lastConstants, image + first, static_cast<Uint64>(length));
+                    std::memcpy(m_constantsShadow.data() + first, image + first, length);
+                    m_constantsVersion = version;
+                    ++m_constantSets;
+                    ++m_constantSpans;
+                    if (MG_Util::PipeStats::Enabled()) {
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, length);
+                    }
+                    return bytes + sizeof(MGPGlobalConstants) + length;
+                }
+            }
             // THE ONE BLOB RULE: Size 0 means "this record does not declare its blob" - which
             // is what a monolith emission is - and the bytes ride beside it as a companion
             // pointer. Offset carries the staging address for diagnostics only; nothing reads
@@ -233,6 +264,7 @@ namespace MobileGL::MG_Pipe {
                                           static_cast<Uint64>(size));
             m_constantsCso = cso;
             m_constantsVersion = version;
+            m_constantsShadow.assign(image, image + size);
             ++m_constantSets;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, size);
@@ -705,6 +737,10 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle m_dispatchCso = kMGPipeNullHandle;
         MGPipeHandle m_constantsCso = kMGPipeNullHandle;
         Uint32 m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+        // The image last sent for m_constantsCso (whole or patched by spans): what the server
+        // holds while the latch names it.
+        Vector<Uint8> m_constantsShadow;
+        Uint64 m_constantSpans = 0;
 
         Uint64 m_creates = 0;
         Uint64 m_binds = 0;

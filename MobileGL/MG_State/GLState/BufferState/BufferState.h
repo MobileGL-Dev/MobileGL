@@ -51,9 +51,14 @@ namespace MobileGL::MG_State::GLState {
             auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
             if (it == BufferBindPointTargets.end()) return;
             auto slot = std::distance(BufferBindPointTargets.begin(), it);
-            if (static_cast<SizeT>(index) + 1 > m_touchedBindPointCount[slot])
+            if (static_cast<SizeT>(index) + 1 > m_touchedBindPointCount[slot]) {
                 m_touchedBindPointCount[slot] = static_cast<SizeT>(index) + 1;
+                ++m_contextValuesGeneration;
+            }
         }
+        // Moves whenever a touched binding-point count does: the buffer half of
+        // GLContext::GetContextValuesGeneration.
+        Uint64 GetContextValuesGeneration() const { return m_contextValuesGeneration; }
         SizeT GetTouchedBindPointCount(const BufferTarget target) const {
             auto it = std::find(BufferBindPointTargets.begin(), BufferBindPointTargets.end(), target);
             if (it == BufferBindPointTargets.end()) return 0;
@@ -113,5 +118,6 @@ namespace MobileGL::MG_State::GLState {
         Array<Array<BindingSlotRange1D<BufferObject>, BufferBindingPointCount>, BufferBindPointTargets.size()>
             m_bufferBindPointTargets;
         Array<SizeT, BufferBindPointTargets.size()> m_touchedBindPointCount;
+        Uint64 m_contextValuesGeneration = 0;
     };
 } // namespace MobileGL::MG_State::GLState

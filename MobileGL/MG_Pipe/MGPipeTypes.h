@@ -1140,10 +1140,16 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPProgramBindings, 32);
 
     // Covers the DEFAULT UNIFORM BLOCK only (D6).
+    //
+    // Range (P14, was Pad0 and the size did not move): 0 means the bytes are the whole block.
+    // Otherwise it is (offset << 16) | length, and the bytes are only that span of the block,
+    // written over the image the program's record already holds - which the client sends only
+    // while it knows the server holds its previous image for the same ShaderCso (the latch that
+    // suppresses an unchanged block). A Minecraft chunk draw moves one vec3 of a ~230-byte block.
     struct MGPGlobalConstants {
         MGPipeHandle ShaderCso;
         Uint32 Version;
-        Uint32 Pad0;
+        Uint32 Range;
         MGPBlobRef Blob;
     };
     MGP_ASSERT_POD(MGPGlobalConstants, 40);

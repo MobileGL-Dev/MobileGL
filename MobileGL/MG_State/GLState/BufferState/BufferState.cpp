@@ -16,6 +16,7 @@ namespace MobileGL::MG_State::GLState {
             const auto target = static_cast<SizeT>(GlobalBufferTargets[i]);
             if (target < m_bindingSlotIndex.size()) m_bindingSlotIndex[target] = static_cast<Int16>(i);
         }
+        ++m_contextValuesGeneration;
         for (SizeT i = 0; i < m_touchedBindPointCount.size(); ++i) {
             m_touchedBindPointCount[i] = 0;
         }

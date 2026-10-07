@@ -500,6 +500,11 @@ namespace MobileGL::MG_Pipe {
     // The 32 is GL's MAX_VERTEX_ATTRIBS as MobileGL advertises it (kMGPipeMaxVertexAttribs,
     // MGPipeTypes.h), which is also the bound the record's two declared counts are checked
     // against before the blob is unpacked.
+    // The widest vertex-buffer set a vertex-elements record keeps as its own (see below). A
+    // wider set is not kept, and the client, which mirrors this rule, then re-sends it after
+    // every bind of that array.
+    inline constexpr Uint32 kMGPipeVaoStoredVertexBuffers = 16;
+
     struct MGPipeVertexElementsRecord {
         Uint32 Gen = 0;
         Bool Live = false;
@@ -511,6 +516,25 @@ namespace MobileGL::MG_Pipe {
         // including a RE-create on the same handle, which is how a configuration change
         // travels (the handle is minted per frontend VAO and Gen moves only on slot reuse).
         Uint64 ContentSerial = 0;
+        // P14: THE ARRAY'S OWN BUFFER AND ELEMENT BINDINGS, as GL keeps them on the vertex array
+        // object. The last set_vertex_buffers (window starting at 0, at most
+        // kMGPipeVaoStoredVertexBuffers entries) and the last set_index_buffer applied while this
+        // record was bound are kept here, and bind_vertex_elements re-applies them, exactly as if
+        // the two records had arrived again - so a client switching between arrays whose
+        // bindings did not move sends the bind alone. create_vertex_elements on the handle drops
+        // both (the client drops its mirror at the same create), so a kept set never outlives the
+        // configuration it was sent for. The client's mirror (VertexInputEmit.h) only ever
+        // believes a kept set the server also keeps; where it is unsure it re-sends.
+        Bool StoredBuffersValid = false;
+        Bool StoredIndexValid = false;
+        MGPVertexBuffers StoredBuffersHeader{};
+        Array<MGPVertexBuffer, kMGPipeVaoStoredVertexBuffers> StoredBuffers{};
+        MGPIndexBuffer StoredIndex{};
+        // P14: a backend's own derivation from this record (Magma's resolved vertex input
+        // layout), opaque here. It lives and dies with the record - a re-created or recycled
+        // record starts without it - and the backend keys it on ContentSerial plus the inputs it
+        // read, so it is never believed for a configuration it was not built from.
+        mutable SharedPtr<void> BackendMemo;
     };
 
     // set_framebuffer_state's record, HELD PER FRAMEBUFFER OBJECT and indexed by the handle's

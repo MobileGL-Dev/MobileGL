@@ -84,6 +84,7 @@ namespace MobileGL::MG_State::GLState {
         void NoteUnitTouched(Int unit, Bool bindingChanged = true) {
             if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) {
                 m_maxTouchedUnit = unit;
+                ++m_contextValuesGeneration;
                 // Push-on-mutation (MG_Pipe/PipeMutation.h): the high-water mark is a pushed
                 // PipeInputs field, and a bind reached from inside a verb - a backend binding
                 // its own synthesised fallback texture - would otherwise leave the block
@@ -105,6 +106,9 @@ namespace MobileGL::MG_State::GLState {
             }
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
+        // Moves whenever the active unit or the touched high-water mark does: the texture half of
+        // GLContext::GetContextValuesGeneration.
+        Uint64 GetContextValuesGeneration() const { return m_contextValuesGeneration; }
         // High-water mark of IMAGE units ever bound by glBindImageTexture, and it is a SECOND
         // mark rather than a widening of the one above because the two index different
         // namespaces: GL 4.6 core 8.22's image units are their own array, and folding them
@@ -198,6 +202,7 @@ namespace MobileGL::MG_State::GLState {
         Uint64 m_samplingResolutionGeneration = 0;
         Int m_maxTouchedUnit = -1;
         Int m_activeTextureUnit = 0;
+        Uint64 m_contextValuesGeneration = 0;
         Array<TextureUnit, MAX_TEXTURE_IMAGE_UNITS> m_textureUnits;
         Array<ImageTextureBinding, MAX_TEXTURE_IMAGE_UNITS> m_imageTextureBindings;
         // One default texture object (external name 0) per target, created with the context and

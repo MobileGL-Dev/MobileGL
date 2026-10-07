@@ -1436,6 +1436,7 @@ namespace MobileGL::MG_State {
                     point.ClearRange();
                 }
             }
+            ++m_transformFeedbackValuesGeneration;
             m_transformFeedbackActive = object.active;
             m_transformFeedbackPaused = object.paused;
             m_transformFeedbackPrimitiveMode = object.primitiveMode;

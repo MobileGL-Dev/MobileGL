@@ -35,7 +35,9 @@ namespace MobileGL::MG_Pipe {
         kMGPipeWireLayoutMembers, sizeof(kMGPipeWireLayoutMembers) / sizeof(WireLayoutMember));
     // Bump when a fixed-layout pipe carrier keeps its bytes but changes their meaning. The
     // mutable-level extent carrier reuses BufOffset/BufSize only on named image respecifies.
-    inline constexpr Uint32 kMGPipeResourceRespecifyExtentCarrierRevision = 1;
+    // 2 (P14): bind_vertex_elements re-applies the array's kept vertex-buffer and index
+    // bindings (PipeApply.h, MGPipeVertexElementsRecord), which a revision-1 peer would not.
+    inline constexpr Uint32 kMGPipeResourceRespecifyExtentCarrierRevision = 2;
 
     constexpr Uint64 WireCatalogueDigest() {
         Uint64 hash = 1469598103934665603ull;

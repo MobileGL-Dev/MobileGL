@@ -98,6 +98,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void TextureState::SetActiveTextureUnit(Int unit) {
+        if (unit != m_activeTextureUnit) ++m_contextValuesGeneration;
         m_activeTextureUnit = unit;
     }
 } // namespace MobileGL::MG_State::GLState

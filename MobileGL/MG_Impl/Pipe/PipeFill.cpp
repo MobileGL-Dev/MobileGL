@@ -1422,6 +1422,7 @@ namespace MobileGL::MG_Pipe {
         // refusal, and the refusal asserts (PipeApply.cpp's ResolveVertexElements), i.e. it
         // stops a verify build.
         MGPipeVertexInputEmitter& emitter = MGPipeVertexInputEmitterInstance();
+        emitter.ForgetVao(lifetimeId);
         const Bool published = emitter.RecordIsPublished(handle);
         if (published) {
             MGPHandleOnly only{};
@@ -3152,6 +3153,18 @@ namespace MobileGL::MG_Pipe {
         // server-role-only fixture) - nothing is emitted and the fields keep being pulled, byte
         // for byte as before (G1).
         Uint64 EmitContextValues(GLContext& ctx) {
+            // P14: nothing the record reads has moved since the record whose hash the suppressor
+            // still holds was built (same context, same input generation): it would be dropped.
+            static MGPContextValues s_lastValues{};
+            static Uint64 s_lastHash = 0;
+            static Uint64 s_lastContextId = 0;
+            static Uint64 s_lastGeneration = 0;
+            auto& suppressor = MGPipeSetHashSuppressorInstance();
+            const Uint64 contextId = ctx.GetTextureContextId();
+            const Uint64 generation = ctx.GetContextValuesGeneration();
+            if (s_lastHash != 0 && contextId == s_lastContextId && generation == s_lastGeneration &&
+                suppressor.LastEmitted(MGPipeSuppressorSlot::SetContextValues) == s_lastHash)
+                return 0;
             MGPContextValues values{};
             values.ActiveTextureUnit = static_cast<Uint32>(ctx.GetActiveTextureUnit());
             values.MaxTouchedTextureUnit = static_cast<Uint32>(ctx.GetMaxTouchedTextureUnit());
@@ -3174,9 +3187,8 @@ namespace MobileGL::MG_Pipe {
             // is byte-equal to the record whose hash the suppressor still holds, the suppressor
             // would drop it: skip the hash. (An InvalidateAll changes what the suppressor holds,
             // so a reset still re-emits.)
-            static MGPContextValues s_lastValues{};
-            static Uint64 s_lastHash = 0;
-            auto& suppressor = MGPipeSetHashSuppressorInstance();
+            s_lastContextId = contextId;
+            s_lastGeneration = generation;
             if (s_lastHash != 0 && std::memcmp(&values, &s_lastValues, sizeof(values)) == 0 &&
                 suppressor.LastEmitted(MGPipeSuppressorSlot::SetContextValues) == s_lastHash)
                 return 0;

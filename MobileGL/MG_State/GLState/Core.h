@@ -437,6 +437,7 @@ namespace MobileGL {
                 // feedback object currently bound to GL_TRANSFORM_FEEDBACK; see the object
                 // block further down for how a bind swaps them.
                 void BeginTransformFeedback(GLenum primitiveMode, const SharedPtr<ProgramObject>& program) {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackActive = true;
                     m_transformFeedbackPaused = false;
                     m_transformFeedbackPrimitiveMode = primitiveMode;
@@ -446,6 +447,7 @@ namespace MobileGL {
                     m_transformFeedbackInputPrimitives = 0;
                 }
                 void EndTransformFeedback() {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackActive = false;
                     m_transformFeedbackPaused = false;
                     m_transformFeedbackProgram.reset();
@@ -456,7 +458,10 @@ namespace MobileGL {
                 }
                 Bool IsTransformFeedbackActive() const { return m_transformFeedbackActive; }
                 Bool IsTransformFeedbackPaused() const { return m_transformFeedbackPaused; }
-                void SetTransformFeedbackPaused(Bool paused) { m_transformFeedbackPaused = paused; }
+                void SetTransformFeedbackPaused(Bool paused) {
+                    ++m_transformFeedbackValuesGeneration;
+                    m_transformFeedbackPaused = paused;
+                }
                 GLenum GetTransformFeedbackPrimitiveMode() const { return m_transformFeedbackPrimitiveMode; }
                 const SharedPtr<ProgramObject>& GetTransformFeedbackProgram() const {
                     return m_transformFeedbackProgram;
@@ -484,7 +489,16 @@ namespace MobileGL {
                 // Vertices already captured since BeginTransformFeedback (drives the
                 // buffer-capacity clamp on the primitives-written accounting).
                 void AddTransformFeedbackCapturedVertices(Uint64 vertices) {
+                    ++m_transformFeedbackValuesGeneration;
                     m_transformFeedbackCapturedVertices += vertices;
+                }
+                // P14: moves whenever any input of set_context_values does (the active texture
+                // unit, the two touched high-water marks, the transform feedback state of the bound
+                // object). Each half only ever counts up, so the sum moves exactly when one does;
+                // the emitter skips rebuilding the record while it holds.
+                Uint64 GetContextValuesGeneration() const {
+                    return m_textureState.GetContextValuesGeneration() + m_bufferState.GetContextValuesGeneration() +
+                           m_transformFeedbackValuesGeneration;
                 }
                 Uint64 GetTransformFeedbackCapturedVertices() const { return m_transformFeedbackCapturedVertices; }
                 // Raw assembled input primitives fed to the capture stage since Begin
@@ -655,6 +669,7 @@ namespace MobileGL {
                 Array<CurrentVertexAttributeValue, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributes{};
                 Bool m_transformFeedbackActive = false;
                 Bool m_transformFeedbackPaused = false;
+                Uint64 m_transformFeedbackValuesGeneration = 0;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
                 Uint64 m_anyVertexAttribDefaultGeneration = 0;

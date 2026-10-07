@@ -221,6 +221,7 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"MGPGlobalConstants", 0, sizeof(MGPGlobalConstants)},
     {"MGPGlobalConstants.ShaderCso", offsetof(MGPGlobalConstants, ShaderCso), sizeof(((MGPGlobalConstants*)nullptr)->ShaderCso)},
     {"MGPGlobalConstants.Version", offsetof(MGPGlobalConstants, Version), sizeof(((MGPGlobalConstants*)nullptr)->Version)},
+    {"MGPGlobalConstants.Range", offsetof(MGPGlobalConstants, Range), sizeof(((MGPGlobalConstants*)nullptr)->Range)},
     {"MGPGlobalConstants.Blob", offsetof(MGPGlobalConstants, Blob), sizeof(((MGPGlobalConstants*)nullptr)->Blob)},
     {"MGPAttribValue", 0, sizeof(MGPAttribValue)},
     {"MGPAttribValue.Location", offsetof(MGPAttribValue, Location), sizeof(((MGPAttribValue*)nullptr)->Location)},
