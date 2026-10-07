@@ -1087,6 +1087,14 @@ namespace MobileGL::MG_Remote::Server {
         static std::uint64_t sFrameIndex = 0;
         Uint64 applied = 0;
         const bool timed = ServerFrameStatsEnabled();
+        // P14: the GPU-fault verdict is asked once per kFaultCheckRecordStride records inside a
+        // drain, and on every Present. On Espryt it is glGetGraphicsResetStatus, a driver ioctl
+        // (~3 us): asked per record it was a quarter of the apply thread on Minecraft (~7,500
+        // records a frame). The apply loop still asks before every drain (above), so a fault that
+        // lands while the session is parked still stops its very next record; one that lands
+        // mid-drain is acted on within the stride - the frame was being applied either way.
+        constexpr Uint32 kFaultCheckRecordStride = 256;
+        Uint32 recordsSinceFaultCheck = 0;
         for (;;) {
             if (SessionLatched()) break;
             if (m_windowRequests.load(std::memory_order_acquire) != 0) {
@@ -1095,10 +1103,15 @@ namespace MobileGL::MG_Remote::Server {
             }
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
-                [this, &applier, timed](const Transport::RingRecordView& record) {
-                    // Check after acquiring each record: a producer may publish more work
-                    // while this drain is running, after the outer-loop reset check.
-                    if (m_backend != nullptr && m_backend->LatchIfGpuFaulted()) return false;
+                [this, &applier, timed, &recordsSinceFaultCheck](const Transport::RingRecordView& record) {
+                    // Checked inside the drain too: a producer may publish more work while this
+                    // drain is running, after the outer-loop check (stride above).
+                    if (m_backend != nullptr &&
+                        (++recordsSinceFaultCheck >= kFaultCheckRecordStride ||
+                         record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present))) {
+                        recordsSinceFaultCheck = 0;
+                        if (m_backend->LatchIfGpuFaulted()) return false;
+                    }
                     if (SessionLatched()) return false;
                     // P65ServerFrame: timed around the ONE call that is the server's work, and
                     // summed across the drains a frame spans. See the block above DrainRing's loop.
