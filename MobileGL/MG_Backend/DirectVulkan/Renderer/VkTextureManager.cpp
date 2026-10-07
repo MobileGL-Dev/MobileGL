@@ -1464,7 +1464,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Submit older renderer work before adding the new bytes to the batch,
         // otherwise Draw(old T), TexSubImage(T), Draw(new T) can upload before
         // the first draw. A clean texture never reaches this submission boundary.
-        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpdate()) {
+        if (pVulkanRenderer && !pVulkanRenderer->FlushWirePendingCommandsForTextureUpload()) {
             MGL_WIRE_DECLINE_AT(UploadFlushFailed,
                                 "texture {slot=%u, gen=%u}: earlier renderer work could not be submitted before "
                                 "its upload batch",

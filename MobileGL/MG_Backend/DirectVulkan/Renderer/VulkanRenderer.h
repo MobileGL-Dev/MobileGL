@@ -155,6 +155,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (HasPendingRecordedWork() && !FlushPendingCommands()) return false;
             return WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX);
         }
+        // The level-upload arm's half of the above, WITHOUT the CPU wait. Its bytes go through a
+        // staging buffer into an upload batch that is submitted on this same queue after this
+        // flush, and the batch's first barrier takes its source scope from the image's tracked
+        // layout (ALL_COMMANDS for GENERAL, the sampled-read stages for a read-only layout), so
+        // queue submission order already puts every earlier draw's access to the old texels
+        // ahead of the copy. The preserve arm keeps the wait: it retires the old image.
+        // (rd12 Magma: the wait was ~1.8 ms/frame of fence stall, one per lightmap update.)
+        Bool FlushWirePendingCommandsForTextureUpload() {
+            return !HasPendingRecordedWork() || FlushPendingCommands();
+        }
         // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
         // RetireWireObjects (WireDraw.inc) already tags future objects with exactly this, and
         // for the same reason: a draw being set up now is not in any submission yet, so the
