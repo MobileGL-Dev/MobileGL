@@ -106,6 +106,7 @@
         m_wireDrawPass.reset();
         m_wireDrawPassCompatibilityId = 0;
         m_wirePassMarksValid = false;
+        m_wirePassMemo.valid = false;
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
         m_wireDrawPassKey = {};
@@ -121,6 +122,7 @@
     void VulkanRenderer::RetireWireDrawPass() {
         m_wireDrawPassCompatibilityId = 0;
         m_wirePassMarksValid = false;
+        m_wirePassMemo.valid = false;
         if (!m_wireDrawPass) return;
         auto& frame = m_frameContext.GetCurrent();
         if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
@@ -202,6 +204,37 @@
         ~WirePreparationScope() { --depth; }
     };
 
+    Bool VulkanRenderer::WirePassMemoHolds(const MG_Pipe::MGPFramebufferState& fbo,
+                                           const FrameContext::FrameData& frame) const {
+        const auto& memo = m_wirePassMemo;
+        if (!memo.valid || fbo.IsDefault || !m_wireDrawPass || !frame.isCommandRecording) return false;
+        const auto* active = VkRenderPassManager::GetActiveRenderPass();
+        if (active == nullptr || active->commandBuffer != frame.commandBuffer || active->hash != m_wireDrawPass->hash ||
+            active->hash != memo.passHash)
+            return false;
+        const auto& st = MG_Pipe::MGPipeApplier();
+        if (memo.framebufferSerial != st.FramebufferSerial || memo.contextSerial != st.ContextSerial ||
+            !(memo.drawFramebuffer == st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)]) ||
+            memo.textureImageEpoch != m_textureManager->GetTextureImageEpoch() ||
+            memo.resourceEraseEpoch != m_textureManager->GetResourceEraseEpoch() ||
+            memo.framebufferSrgb != MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb))
+            return false;
+        // The resources are good while the erase epoch holds. Each must still be what the walk
+        // left: in GENERAL and synced to its record's serial with nothing pending.
+        for (const auto& attachment : memo.attachments) {
+            const auto* resource = attachment.resource;
+            if (resource == nullptr || resource->layout != VK_IMAGE_LAYOUT_GENERAL) return false;
+            const auto& records = attachment.renderbuffer ? st.RenderbufferResources : st.TextureResources;
+            const auto handle = attachment.storage;
+            if (handle.Slot >= records.size()) return false;
+            const auto& record = records[handle.Slot];
+            if (!record.Live || record.Gen != handle.Gen || record.Serial != resource->syncedWireSerial ||
+                !record.PendingUploads.empty())
+                return false;
+        }
+        return true;
+    }
+
     Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
             Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
         auto& state = MG_Pipe::MGPipeApplier();
@@ -259,15 +292,19 @@
         // (WireSharedImage.inc).
         AcquireNotedSharedImages();
         // Lazy image uploads/promotions can submit the old recording. Resolve
-        // ALL attachments before descriptor binding captures the current cmd.
-        for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
-            const Int32 slot = fbo->DrawBuffers[i];
-            if (slot >= 0) (void)ResolveWireImage(*fbo, fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+        // ALL attachments before descriptor binding captures the current cmd - unless the open
+        // pass's attachments are provably the ones this draw would resolve (WirePassMemo).
+        Bool passContinues = WirePassMemoHolds(*fbo, frame);
+        if (!passContinues) {
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                const Int32 slot = fbo->DrawBuffers[i];
+                if (slot >= 0) (void)ResolveWireImage(*fbo, fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+            }
+            if (fbo->IsDefault || fbo->Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                (void)ResolveWireImage(*fbo, fbo->Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+            else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                (void)ResolveWireImage(*fbo, fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
         }
-        if (fbo->IsDefault || fbo->Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            (void)ResolveWireImage(*fbo, fbo->Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
-        else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            (void)ResolveWireImage(*fbo, fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
         m_textureManager->FlushPendingUploads();
         const auto vaoHandle = state.BoundVertexElements;
         if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
@@ -483,7 +520,21 @@
             MGL_WIRE_DECLINE_AT(UniformBufferBinding, "the program's uniform/storage bindings could not be bound");
             return false;
         }
-
+        // Asked again: the descriptor resolve may have closed the pass, re-created an image or
+        // moved a layout.
+        if (passContinues) passContinues = WirePassMemoHolds(*fbo, frame);
+        // A memo that holds is the open pass itself (WirePassMemoHolds compared the active pass).
+        Bool continuing = true;
+        if (passContinues) {
+            auto& store = MG_Record::ServerStagedTexture();
+            if (!m_wirePassMarksValid || m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
+                for (const auto& mark : m_wirePassMemo.marks)
+                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
+                m_wirePassMarksValid = true;
+                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
+            }
+        } else {
+        m_wirePassMemo.valid = false;
         auto& attachments = scratch.attachments;
         auto& viewInfos = scratch.viewInfos;
         auto& colors = scratch.colors;
@@ -509,10 +560,13 @@
         auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
         sameLayoutAttachments.clear();
         scratch.gpuWriteMarks.clear();
+        m_wirePassMemo.attachments.clear();
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
             m_textureManager->FlushPendingUploads();
+            m_wirePassMemo.attachments.push_back(
+                {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
                 image.format = ResolveSrgbAttachmentWriteFormat(image.format,
                     MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
@@ -588,7 +642,7 @@
         passInfo.pAttachments = attachments.data();
         passInfo.subpassCount = 1;
         passInfo.pSubpasses = &subpass;
-        const Bool continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
+        continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
         {
             const auto* active = VkRenderPassManager::GetActiveRenderPass();
             const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
@@ -642,8 +696,21 @@
                 m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
             }
         }
-        auto& pass = *m_wireDrawPass;
-        // Interned once per pass: a continued pass has the same key, so the same compatibility.
+        {
+            // What this walk proved, for WirePassMemoHolds on the next draw.
+            const auto& st = MG_Pipe::MGPipeApplier();
+            auto& memo = m_wirePassMemo;
+            memo.valid = !fbo->IsDefault;
+            memo.framebufferSerial = st.FramebufferSerial;
+            memo.contextSerial = st.ContextSerial;
+            memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
+            memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+            memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+            memo.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+            memo.passHash = m_wireDrawPass->hash;
+            memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
+        }
+        // The compatibility key is built from this walk's attachments only when the pass is new.
         if (m_wireDrawPassCompatibilityId == 0) {
             auto& pipelinePassKey = scratch.compatibilityKey;
             pipelinePassKey.attachmentFormatsAndSamples.clear();
@@ -655,6 +722,9 @@
             pipelinePassKey.depthReference = depth.attachment;
             m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
         }
+        } // !passContinues
+        auto& pass = *m_wireDrawPass;
+        // Interned once per pass (above): a continued pass has the same compatibility.
         const Uint64 compatibilityId = m_wireDrawPassCompatibilityId;
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
             ResolvePrimitiveRestartEnable(aspects, indices), compatibilityId);

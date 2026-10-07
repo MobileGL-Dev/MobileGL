@@ -172,6 +172,7 @@
                       std::max(resource->extent.height >> level, 1u)};
         out.layout = resource->layout;
         out.trackedLayout = &resource->layout;
+        out.resource = resource;
         out.samples = resource->sampleCount;
         // P7 wave 2-B2: the shader multisample resolve SAMPLES this image, which is a question
         // about the image and not about the format - VkTextureManager asks for SAMPLED on every

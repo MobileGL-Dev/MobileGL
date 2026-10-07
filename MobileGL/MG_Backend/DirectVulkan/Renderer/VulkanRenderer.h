@@ -568,6 +568,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 swapchainImageIndex = 0;
             Bool is3D = false;
             MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+            // The storage's resource, for a non-default surface (null for the default framebuffer).
+            VkTextureManager::TextureResource* resource = nullptr;
         };
         // `isWriteTarget` selects which side of the default framebuffer this resolves: a write
         // re-points it at the image Present() acquired, a read keeps the current one (see
@@ -834,6 +836,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The current wire pass's attachments were marked GPU-written at this StagedTextureStore
         // clear generation (SetupWireDraw); false whenever the pass changes.
         Bool m_wirePassMarksValid = false;
+        // P14: THE OPEN PASS'S ATTACHMENTS, as the last full attachment walk resolved them. A draw
+        // into the same framebuffer record (FramebufferSerial moves on every framebuffer write,
+        // ContextSerial on every applier reset) while the pass is still open on this command buffer,
+        // with no texture image re-created or erased, and every attachment still in GENERAL with no
+        // pending upload, would resolve exactly these again and continue the pass: it skips both
+        // resolves and the pass key. Never for the default framebuffer, whose image index moves
+        // with each acquire.
+        struct WirePassMemo {
+            Bool valid = false;
+            Uint64 framebufferSerial = 0, contextSerial = 0;
+            MG_Pipe::MGPipeHandle drawFramebuffer = MG_Pipe::kMGPipeNullHandle;
+            Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
+            Bool framebufferSrgb = false;
+            Uint64 passHash = 0;
+            struct Attachment {
+                VkTextureManager::TextureResource* resource = nullptr;
+                MG_Pipe::MGPipeHandle storage = MG_Pipe::kMGPipeNullHandle;
+                Bool renderbuffer = false;
+            };
+            Vector<Attachment> attachments;
+            Vector<WireDrawScratch::GpuWriteMark> marks;
+        };
+        WirePassMemo m_wirePassMemo;
+        Bool WirePassMemoHolds(const MG_Pipe::MGPFramebufferState& fbo, const FrameContext::FrameData& frame) const;
         Uint64 m_wirePassMarksClearGeneration = 0;
         WireDrawScratch m_wireDrawScratch;
         struct WireRetiredObjects {
