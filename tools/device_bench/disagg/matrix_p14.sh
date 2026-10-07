@@ -136,7 +136,7 @@ run_one() {
     done
   fi
   local passflag=""
-  [ "$mode" = benchmark ] && passflag="--ez benchmark true --es benchmark_result_path $app/output/benchmark.json"
+  [ "$mode" = benchmark ] && passflag="--ez benchmark true --ez benchmark_finish ${FINISH:-false} --es benchmark_result_path $app/output/benchmark.json"
   local env; env="$(arm_env "$arm")"; [ -n "$EXTRA_ENV" ] && env="${env:+$env;}$EXTRA_ENV"
   if [ "$mode" = benchmark ]; then
     shq "su -c 'nohup taskset 01 $SAMPLER $pkg 10 $app/output/benchmark.json /data/local/tmp/p14cpu.csv $TIMEOUT >/dev/null 2>&1 &'" >/dev/null 2>&1

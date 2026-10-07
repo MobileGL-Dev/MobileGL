@@ -37,7 +37,7 @@ adb -s "$SER" shell "su -c 'pkill -INT simpleperf; rm -f /data/local/tmp/p14perf
 adb -s "$SER" shell "su -c 'simpleperf record --app $pkg -e cpu-clock --call-graph fp -f $FREQ -o /data/local/tmp/p14perf.data'" >"$OUT/record.log" 2>&1 &
 sp_pid=$!
 sleep 2
-adb -s "$SER" shell "am start -a top.mobilegl.plugin.TRACE_REPLAY -n $pkg/top.mobilegl.plugin.trace.TraceReplayActivity --es trace_path $app/input-$WL/trace.trace --es golden_path $app/input-$WL/golden.png --es output_dir $app/output --es backend $BACKEND $args --ez use_pbuffer true --ez benchmark true --es benchmark_result_path $app/output/benchmark.json --es mobilegl_env '$env'" >/dev/null
+adb -s "$SER" shell "am start -a top.mobilegl.plugin.TRACE_REPLAY -n $pkg/top.mobilegl.plugin.trace.TraceReplayActivity --es trace_path $app/input-$WL/trace.trace --es golden_path $app/input-$WL/golden.png --es output_dir $app/output --es backend $BACKEND $args --ez use_pbuffer true --ez benchmark true --ez benchmark_finish ${FINISH:-false} --es benchmark_result_path $app/output/benchmark.json --es mobilegl_env '$env'" >/dev/null
 waited=0
 until adb -s "$SER" exec-out "run-as $pkg cat $app/output/benchmark.json" 2>/dev/null | grep -q '"fps"'; do
   sleep 1; waited=$((waited + 1)); [ "$waited" -ge 600 ] && break
