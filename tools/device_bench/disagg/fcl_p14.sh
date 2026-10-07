@@ -79,5 +79,5 @@ case "${1:-run}" in
     done ;;
   restore)
     dir=$(libdir)
-    su_sh "am force-stop $FCL; cat /data/local/tmp/p14-fcl-orig.so > $dir/libMobileGL.so && md5sum $dir/libMobileGL.so; cat /data/local/tmp/p14-fcl-config.json > $CFG; setprop debug.mobilegl.fps_log ''; setprop debug.mobilegl.transport ''" ;;
+    su_sh "am force-stop $FCL; cat /data/local/tmp/p14-fcl-orig.so > $dir/libMobileGL.so && md5sum $dir/libMobileGL.so; cat /data/local/tmp/p14-fcl-config.json > $CFG; resetprop --delete debug.mobilegl.fps_log; resetprop --delete debug.mobilegl.transport" ;;
 esac
