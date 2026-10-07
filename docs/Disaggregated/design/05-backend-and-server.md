@@ -21,13 +21,15 @@ Espryt 的 persistent ring、buffer pool、fallback-repack、scratch FBO、驱�
 
 三步：A 别名（P1，机械替换 + 逐 verb 类填充点，`nm` 不变）→ B 推送（P2，tracker 填 `gPipeInputs`，verify 构建逐 draw 比对快照版）→ C 句柄化（P3a–P4a、P7，`SharedPtr<前端对象>` → 句柄 + 描述符，写回变回调）。poison 是**逐 verb 世代**：读一个当前 verb 未填的字段是 `Fatal{UnmigratedPipeInput, "<Getter>@<Verb>"}`。
 
+**P13 收尾**：pull 分支与宏一起删掉（W3b，`MGB_CTX` 不再存在，后端只经 `gPipeInputs` 与 applier 记录取状态）；单进程也走记录臂（W4–W5），后端的前端对象臂与前端键 twin 入口删除（W6）——Espryt 的 twin 表只收 client 铸好的句柄，对象死亡通知带句柄、按句柄释放（与 server 的 `object_death` 同一释放）。
+
 ### 9.3 Track V / Track H
 
 Track V（值类型：render state、pixel store、capability 位、标量）是机械迁移；Track H（167 个 `SharedPtr<MG_State…>` 读点）是真活。74% 的读点是翻译输入，所以"bump 一个版本让 server 自己拉"行不通，值本身必须过去。
 
 ### 9.4 残余值块
 
-迁移期临时调用 `SetResidualValueState`（`ResidualValueBlock`）：尺寸只降不升（1248 → 8，只剩 `CapabilityBits`），P13 变成 `static_assert(sizeof == 0)`；布局逐成员 `offsetof` 断言；stats 单独计字节。
+迁移期临时调用 `SetResidualValueState`（`ResidualValueBlock`）：尺寸只降不升（1248 → 8，只剩 `CapabilityBits`），P13 W3c 删除——op 46 退役为拒绝行，capability 交叉核对交给 verify 比较器；`set_context_values` 携带剩下的值类字段（单进程也发，W4d / W8）。
 
 ### 9.5 身份 memo 的重键
 
@@ -35,13 +37,13 @@ Track V（值类型：render state、pixel store、capability 位、标量）是
 
 ### 9.6 A/B 与口径收窄
 
-`MOBILEGL_PIPE_PUSH` 子系统位图在阶段 B 是真 A/B；阶段 C 之后位清零时后端仍跑重键后的代码，所以**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS`（默认 ON）保留 pre-handle 臂，随 pull 路径在 P13 退役。位依赖两侧都拒（客户端族门里**根本不发射**，否则会"客户端已清 dirty、服务端却走旧臂"而丢上传）；没有消费者的后端一条不发。退役的 twin 成员仍在 pull 构建里编译——真删会动 G1。
+`MOBILEGL_PIPE_PUSH` 子系统位图在阶段 B 是真 A/B；阶段 C 之后位清零时后端仍跑重键后的代码，所以**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS` 曾保留 pre-handle 臂。P13 结束了这段：`LEGACY_MEMOS` 与 pre-handle 臂删除，位 0–13 固定开、清位即启动期具名拒绝（原 Off 车道改为这条拒绝的阴性对照），只剩位 63 可设。位依赖两侧都拒（客户端族门里**根本不发射**，否则会"客户端已清 dirty、服务端却走旧臂"而丢上传）；没有消费者的后端一条不发。
 
 ## 10. server 侧
 
 ### 10.1 对象表与 applier
 
-`MG_Remote/Server/PipeApplier`：解码 → 更新对象表与 `PipeInputs` → 调后端。server 不持有 buffer 的完整副本（只有 staged shadow）、不持有前端对象图；任何传输下都不得有 `SharedPtr` 或裸前端指针跨过 applier 边界（P5c 角色守卫、P5e 规则 F）。`InProcessTransport` 与 spawn 走完全相同的编解码路径。
+`MG_Remote/Server/PipeApplier`：解码 → 更新对象表与 `PipeInputs` → 调后端。单进程（P13 起）是同一记录臂少了编解码与环：状态记录经 `PipeRoute` 的单进程表直进 applier，verb 记录由 `MG_Impl/Pipe/Verb` 的发射器交给本进程的 `MG_Backend/Record/RecordVerbSink`。server 不持有 buffer 的完整副本（只有 staged shadow）、不持有前端对象图；任何传输下都不得有 `SharedPtr` 或裸前端指针跨过 applier 边界（P5c 角色守卫、P5e 规则 F）。`InProcessTransport` 与 spawn 走完全相同的编解码路径。
 
 ### 10.2 monolith 侧的净收益
 

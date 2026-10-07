@@ -1,5 +1,7 @@
 # 仍开放的债务（跨阶段）
 
+> **2026-10-07（P13 收官）关闭三行**：ID-P8-13（9 条 monolith 缺陷——monolith 换到记录臂后对应 monolith 登记在集成车道上全过，旧的 monolith 前端臂在 W6 删除）、ID-P8-14（`SyncClientSideVertexArraysForIndirectFetch` 的整 buffer 回读与 Magma monolith 深度 mip 的 view 类型都属于已删的 monolith 前端臂）、`MOBILEGL_PIPE_TEXEL_RETAIN_MB`（W3b 随 pull 构建删除）。新增两行：W9 缓存容量重调与 Magma monolith 性能，都排在 P13 之后的性能轮，基线是 `dev` 构建。
+>
 > 路线图只列"有债务、看这里"。每条写明去向；已关闭的历史债与当时的完整债务表见 [`p5b/README.md`](p5b/README.md) 末节。开放问题另见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)。更新：2026-09-30（P8 第二波；按债务审查重排。同日：create-indirect 换成派生 fixture `minecraft-1.21.1-neoforge-create-indirect-in-world-align1024`（不是原抓取，16 字节对齐的 SSBO 范围绑定挪到 1024 对齐），ID-P8-14、ID-P8-19 两条关闭——红米两后端 monolith / spawn 全过，Magma spawn 不再丢设备）。去向「需裁定」= 等用户定；「可进行」= 随时可开的小修，不依赖别的阶段。
 
 | 债务 | 去向 |
@@ -25,8 +27,6 @@
 | P13 转出（W5 翻转后，ID-P13-2 记录项，用户裁定记为债务）：Magma monolith 走记录臂比前端臂慢约 16%——Y700 上 FCL MC 1.21.5、RD2 小场景、时钟未钉：记录臂 168 / 176 fps，同库强制前端臂 206 / 204 fps，即每帧 CPU 约 5.8 ms 对 4.9 ms（渲染线程都约占满一核）；Espryt 持平（224 / 226 对 222）。疑因：`VulkanRenderer::SetupDraw` 在记录臂直接进 `SetupWireDraw`，绕过只在前端臂跑的 `TrySetupDrawFastPath`（PLAN-P13 §1.3 已提示「换臂前先量」）。W6 删前端臂后这部分成本固定下来 | P13 收官后（用户裁定：P13 内不做性能工作）：性能工作的「之前」基线是 `dev` 分支构建（pull monolith），不是 W6 前的 feat 构建；在设备上钉时钟对比 dev 与 feat，场景为 FCL MC 与 anland glmark2，两个后端都测；再用 simpleperf profile Magma monolith 每 draw 成本，决定是否给 wire draw 臂补快路径 |
 | P13 转出（W9，用户裁定：P13 内不做性能工作）：缓存容量重调（CSO / 描述符 / 管线缓存容量按 `MOBILEGL_PIPE_STATS` 读数定初值、设备复核）未做，容量仍是 P8 时的值 | P13 之后的性能轮：以 `dev` 构建为基线（同 Magma 16% 那行），先在主机语料取 `MOBILEGL_PIPE_STATS` 读数定初值，再在设备上钉时钟复核 |
 | P13 转出（FCL 浸泡，用户裁定：FCL 暂不改、MobileGL 不做规避）：FCL game process can die silently (exit SIGNALED status=34, SIGRTMIN+2): the JVM signal reset after renderer selection drops libcore's AsynchronousCloseMonitor handler, and FCL's okhttp/Okio watchdog then kills the process; renderer-independent (reproduced on P12 and P13 libraries, both backends; untested with other renderers)。浸泡：P13 库 30 次（Magma 22 / Espryt 8）死 18 次、P12 库 10 次死 2 次；P12 / P13 逐次交替的对照（同场景同网络时段）P12 4/10、P13 2/10，时间线（`Renderer:` 行到 MobileGL 首行约 6.2 s、晚死固定在其后约 9.4 s）两库相同，无证据表明 MobileGL 拉高概率；全部 status=34，无 tombstone、无 kgsl；证据与机理见 [`p13/fcl-soak/README.md`](p13/fcl-soak/README.md) | fix belongs in FCL (save/restore libcore's SIGRTMIN+2 sigaction around JVM creation); left for the user |
-| P8 转出（monolith，ID-P8-13）：9 条 monolith 缺陷真实内容 0 命中，不在 dev 上修——Espryt `*IndirectCount` / 原生 indirect `gl_BaseVertex` / fp64 收窄读未同步影子；Magma `glMultiDrawArraysIndirectCount` CPU 臂同病；Magma 录制中途 `SyncGpuWrites` → SIGSEGV；Espryt RGB16F / RGB32F CPU 滤波读陈旧影子、R11F / 深度链无视 BASE / MAX；Magma 无 BLIT 颜色格式缺着色器 mip 臂；Espryt 拷贝后 `glGetTexImage` 读拷贝前影子（证据见 `notes/p8/{B,C,D,E}.md`） | P13（monolith 换到已修好的记录臂） |
-| P8 转出（monolith，feat，ID-P8-14）：feat 的 monolith 臂每次 indirect draw 在命令缓冲有 GPU 写时整 buffer 同步回读（`SyncClientSideVertexArraysForIndirectFetch`，`62bfe461`，dev 无）；Magma 的 split 构建 monolith 深度 mip 不传 view 类型，无深度 `BLIT_DST` 的设备上 1D 深度链会拿到 2D view（推断，Release 下断言编译掉，SV） | P13（monolith 换臂） |
 | P8 转出（MD）：dev 的 `RingAllocateSlow` 在出错的上下文上无上限地排水（设备上挂在 `glFinish`） | 小修（dev） |
 | P8 转出：`LogForwardChannel.APeerThatStopsReadingCostsWarnLinesNotTheCallersTime` 在负载下超时（两次），单跑必过 | 小修（放宽时限或隔离） |
 | P8 转出（SV）：`gen_pipe_dirty_surface.py` 扫描集成测试源，测试成员名与 GLContext 成员同名（如 `m_parameters`）会静默弄坏它的自检；`.Mip3DValidation.` 在没装校验层的车道上是失败不是跳过 | 小修 / CI 记录 |
@@ -42,7 +42,6 @@
 | P11 转出（B2，性能）：`glBufferStorage(NULL)` 的采纳先把整块零存储当 `resource_subdata` 发一遍（T2 与 T0 都是；MC 26.3 8 个存储、441.5 MiB） | 路线图推完后的性能工作 |
 | P12 未做：DirectGLES `g_Display` / `g_Surface` / `g_Context` 仍是全局（每进程一个会话时不需要）；cached-app freezer 的完整处理（文档从未定义）；多 context；server 窗口不转发输入 | 等出现第二个会话 / 第二个 context 的需求 |
 | P9 转出：Magma 每次 draw 对可写 SSBO / texel buffer / XFB 目标发整 buffer 的 `OnGpuWritten`（create-indirect 首帧 7,093 条），client 已自标同一批，冗余无害；`OnMipLevelsGenerated`、`OnCapsInvalidated` 仍无生产者。`OnTextureWriteback` 也无生产者，但别删：CPU 三通道 mip 退路要它（`CONTRACT-P5B.md:255`） | 以后的收窄 / 清理候选（ID-P9-7） |
-| `MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里 | P13（G1） |
 | 树外脚本：普查跑器、`wsl_p5_gate.sh` 等在 `~/w7/notes/`，git merge 不会传播；`~/w7/notes/p11/gate.sh` 是事实上的门 | 需要时入库 |
 
 已关闭的历史债（P5 的 27 个 wrong-answer、`rsp` 残余读、P5b 的 inproc 依赖、ABI 指纹、默认 staging 装不下 128 MiB 上传、184 符号棘轮 CI 门）及当时的完整债务表见 [`notes/p5b/README.md`](p5b/README.md) 末节。

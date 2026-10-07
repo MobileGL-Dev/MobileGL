@@ -20,23 +20,23 @@ MobileGL/MG_Remote/          仅 MOBILEGL_BUILD_DISAGGREGATED：CONTRACT-*.md、
 
 - `MOBILEGL_BUILD_DISAGGREGATED`（默认 OFF）追加 `MG_Remote/**`；OFF 时 `MG_Config::Transport` 是 `constexpr Monolith`。`MOBILEGL_BUILD_DISAGGREGATED_INPROC` 隐含前者并加角色隔离：两个角色靠 apply 线程与控制邮箱分开，而不是给 1494 个 `pGLContext->` 读点加 TLS。
 - `MOBILEGL_TRANSPORT = monolith | inproc | spawn` 是**拓扑**（G1 相关）；控制面与数据面由 §11.9 的两个变量选。**split build 不设 `MOBILEGL_TRANSPORT` 时是 monolith 对照臂**。
-- 四个构建 flavour：pull（默认）、push、verify、split；Android 三份 APK flavour（pull / push / split）。
+- 三个构建 flavour（P13 起）：默认（单进程记录臂，不编 `MG_Remote`，出货形态）、verify、split；Android 两份 APK flavour（单进程 / split）。pull 构建与 `MOBILEGL_PIPE_PUSH` CMake 选项在 P13 删除。
+- 模块（P13 W7）：`SOURCE_FILES` 按 link ratchet 的 PARTITION 拆成七个 OBJECT 库，`MobileGL` / `MobileGL_s` 由它们拼成；split 构建的 `MobileGL_server_linkcheck` 只链 SERVER 与 SHARED 模块并 `--no-undefined`，基线外的前端引用在构建时就失败（`scripts/ci/server_link_check.py`）。记录臂的 server 端代码在 `MG_Backend/Record/`（`RecordVerbSink`、`StagedShadow`、`StagedTextureStore`），客户端 verb 发射在 `MG_Impl/Pipe/Verb/`，不再依赖 `MG_Remote`。
 - 测试接线：ctest `ENVIRONMENT` 用 `mgl_itest_join_environment(...)` 构造；每条 split / spawn / tcp 条目带独立日志路径，日志按角色分文件（`<base>.client.log` / `<base>.server.log`）；spawn、tcp 车道与 split 名集合一致（`scripts/ci/spawn_lane_parity.py`），每条目记 arm 证明。
 - CI（`.github/workflows/test.yml`、`apk.yml`）：`pipe-gates`（G1–G8、生成器 self-test、符号报告、dirty-surface、字段归属、G5、文档引用 lint）、`flatc-check`、include 闭包、各 flavour 的 build / integration / retrace 车道、APK + AVD。两份 workflow 里的 `feat/disaggregated` 触发器是临时的，合入 `dev` 前移除。
 
 ## 附 A：开关
 
-CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_INPROC`（OFF，隐含前者）、`MOBILEGL_PIPE_PUSH`（OFF；push / verify / split flavour 打开）、`MOBILEGL_PIPE_VERIFY`（OFF；隐含 push，永不出货）、`MOBILEGL_PIPE_LEGACY_MEMOS`（ON）、`MOBILEGL_BUILD_SERVER_SPIKE`（仅 Android spike）、`MOBILEGL_FLATC_EXECUTABLE`（只服务 `flatc-check`）。
+CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_INPROC`（OFF，隐含前者）、`MOBILEGL_PIPE_VERIFY`（OFF，永不出货）、`MOBILEGL_BUILD_SERVER_SPIKE`（仅 Android spike）、`MOBILEGL_FLATC_EXECUTABLE`（只服务 `flatc-check`）。`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 在 P13 删除（旧缓存里的 OFF 只告警并忽略）。
 
 运行时，MGPipe（`MobileGL/Config.h`、`ConfigLoader.cpp`）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `MOBILEGL_PIPE_PUSH` | pull `0`；push `0x1fff` | 子系统位图（`MG_Pipe/MGPipe.h`，位永不复用；依赖两侧都拒）；位 63 是"关 CSO 内容寻址"的行为对照 |
+| `MOBILEGL_PIPE_PUSH` | `0x3fff` | 子系统位图（`MG_Pipe/MGPipe.h`，位永不复用）；P13 起位 0–13 固定开，清任何一位都在启动时具名拒绝；只剩位 63（"关 CSO 内容寻址"的行为对照）可设 |
 | `MOBILEGL_PIPE_VERIFY` / `_VERIFY_FATAL` / `_VERIFY_CORRUPT` / `_POISON_OMIT` | 0 / 1 / 空 / 空 | 影子比对与两个阴性对照（verify 构建才有） |
-| `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` | 0 | 故意打掉句柄身份的阴性对照 |
 | `MOBILEGL_PIPE_STATS` / `_STATS_PERIOD` / `_STATS_FILE` | 0 / 120 / 空 | 边界计数器（附 B）；dump 按角色写 `<base>.client.json` / `<base>.server.json` |
-| `MOBILEGL_PIPE_LEGACY_MEMOS` / `_TEXEL_RETAIN_MB` / `_INDEX_MIRROR_MB` | ON / 0 / 64 | pre-handle 臂、纹理拉取保留、索引镜像预算（P8） |
+| `MOBILEGL_PIPE_INDEX_MIRROR_MB` | 64 | 索引镜像预算（P8）；`_LEGACY_MEMOS`、`_TEXEL_RETAIN_MB`、`_HANDLE_ABA_CONTROL` 随各自的臂在 P13 删除 |
 
 运行时，传输与 IPC：
 
