@@ -202,6 +202,11 @@ def validation(tests, build, out):
     settings = {
         "VK_INSTANCE_LAYERS": "VK_LAYER_KHRONOS_validation",
         "VK_LAYER_ENABLES": "VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT",
+        # Submit-time validation is OFF by default in the layer, and without it a hazard between two
+        # queue submissions is never reported - measured (P14): a Magma upload barrier with its source
+        # scope broken stayed green until it was set. The heuristic tracks accesses through descriptors.
+        "VK_KHRONOS_VALIDATION_SYNCVAL_SUBMIT_TIME_VALIDATION": "true",
+        "VK_KHRONOS_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC": "true",
         # Loader diagnostics prove the layer was inserted, rather than merely installed.
         "VK_LOADER_DEBUG": "layer",
     }
