@@ -1,7 +1,7 @@
 {
-  "abort_sites": 73,
+  "abort_sites": 70,
   "abort_sites_by_file": {
-    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 12,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 10,
     "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 10,
     "MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp": 2,
     "MobileGL/MG_Backend/DirectGLES/Utils.cpp": 1,
@@ -12,7 +12,7 @@
     "MobileGL/MG_Backend/MGPipe/PipeInputs.cpp": 3,
     "MobileGL/MG_Impl/Pipe/PipeFill.cpp": 5,
     "MobileGL/MG_Impl/Pipe/ResourceTracker.h": 5,
-    "MobileGL/MG_Impl/Pipe/SlotAllocator.cpp": 2,
+    "MobileGL/MG_Impl/Pipe/SlotAllocator.cpp": 1,
     "MobileGL/MG_Pipe/PipeApply.cpp": 5,
     "MobileGL/MG_Pipe/PipeRoute.cpp": 7,
     "MobileGL/MG_Pipe/generated/PipeFilled.inc": 1,

@@ -71,11 +71,8 @@ IMAGE_SWEEP = r"^\s*static\s+.*\bg_imageSweep\w*"
 
 # ONE LINE PER ENTRY AND THE REASON IS THE ENTRY. A carve-out with no reason is how a
 # gate becomes a list of things that are allowed to be wrong.
-ALLOW = [
-    ("MobileGL/MG_Backend/DirectGLES/Managers.h", "using BackendMap",
-     "StateBackendObjectRegistry's non-slot map: unreachable since P13 W3b made the slot arm "
-     "unconditional, deleted with the rest of the monolith glue in P13 W6"),
-]
+# P13: the last entry (StateBackendObjectRegistry's non-slot `BackendMap`) went with the map itself.
+ALLOW = []
 # WHAT USED TO BE HERE, AND WHY IT IS NOT. Five more entries, and every one of them was a
 # carve-out for something no rule could have flagged in the first place:
 #   * two for `Array<SamplerImpl::BackendSamplerObject*...> rows` and
