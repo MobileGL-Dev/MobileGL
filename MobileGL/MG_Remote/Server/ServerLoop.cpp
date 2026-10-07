@@ -1095,6 +1095,18 @@ namespace MobileGL::MG_Remote::Server {
         // mid-drain is acted on within the stride - the frame was being applied either way.
         constexpr Uint32 kFaultCheckRecordStride = 256;
         Uint32 recordsSinceFaultCheck = 0;
+        // THE FAULT POLL ALSO RUNS BEFORE THE FIRST RECORD THE LAST POLL COULD NOT HAVE SEEN. The
+        // loop's per-wake poll covers what was in the ring when it woke, and the stride and Present
+        // cover a long drain; a record published while this drain was still running - after the
+        // previous record was applied and acknowledged, so after a reset the driver may already
+        // report - used to be popped and applied unpolled, and a GUILTY context ran one more record
+        // (ServerLoopEglLatchTest under CPU load). `polledHead` is the command ring's head as loaded
+        // just BEFORE the last poll: every record below it was visible when that poll ran. A record
+        // at or past it re-loads the head and polls first. While the client stays ahead this is one
+        // poll per batch the drain catches up to, never more than one per record.
+        Transport::LinkSignals signals{};
+        if (auto* link = session.DataLink()) signals = link->Signals();
+        std::uint64_t polledHead = 0;
         for (;;) {
             if (SessionLatched()) break;
             if (m_windowRequests.load(std::memory_order_acquire) != 0) {
@@ -1103,14 +1115,18 @@ namespace MobileGL::MG_Remote::Server {
             }
             bool corrupt = false;
             const bool popped = consumer.ApplyOne(
-                [this, &applier, timed, &recordsSinceFaultCheck](const Transport::RingRecordView& record) {
+                [this, &applier, timed, &recordsSinceFaultCheck, &signals,
+                 &polledHead](const Transport::RingRecordView& record) {
                     // Checked inside the drain too: a producer may publish more work while this
-                    // drain is running, after the outer-loop check (stride above).
-                    if (m_backend != nullptr &&
-                        (++recordsSinceFaultCheck >= kFaultCheckRecordStride ||
-                         record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present))) {
-                        recordsSinceFaultCheck = 0;
-                        if (m_backend->LatchIfGpuFaulted()) return false;
+                    // drain is running, after the outer-loop check (stride above, and `polledHead`).
+                    if (m_backend != nullptr) {
+                        const bool unseen = signals.CmdHead != nullptr && record.cursor >= polledHead;
+                        if (unseen || ++recordsSinceFaultCheck >= kFaultCheckRecordStride ||
+                            record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present)) {
+                            if (unseen) polledHead = signals.CmdHead->load(std::memory_order_acquire);
+                            recordsSinceFaultCheck = 0;
+                            if (m_backend->LatchIfGpuFaulted()) return false;
+                        }
                     }
                     if (SessionLatched()) return false;
                     // P65ServerFrame: timed around the ONE call that is the server's work, and
