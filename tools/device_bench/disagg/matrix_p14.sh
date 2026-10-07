@@ -129,7 +129,7 @@ run_one() {
   adb -s "$SER" logcat -c >/dev/null 2>&1
   if [ "$(arm_kind "$arm")" = tcp ]; then
     python "$(cygpath -w "$REPO_ROOT/tools/trace_replay/tcp_device_server.py")" start --serial "$SER" --package "$pkg" \
-      --backend "$backend" --listen tcp://127.0.0.1:40613 >"$dir/server-start.log" 2>&1 || { echo server_start_failed >"$dir/STATUS"; log "FAIL tcp server"; return 1; }
+      --backend "$backend" --listen tcp://127.0.0.1:40613 ${EXTRA_SERVER_ENV:+--env "$EXTRA_SERVER_ENV"} >"$dir/server-start.log" 2>&1 || { echo server_start_failed >"$dir/STATUS"; log "FAIL tcp server"; return 1; }
     local waited=0
     until adb -s "$SER" logcat -d 2>/dev/null | grep -q "listening on tcp://127.0.0.1:40613"; do
       sleep 1; waited=$((waited + 1)); [ $waited -ge 30 ] && { echo server_not_listening >"$dir/STATUS"; log "FAIL tcp listen"; return 1; }

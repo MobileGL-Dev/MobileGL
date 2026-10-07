@@ -693,6 +693,17 @@ private:
     // SyncWireTextureShape defining the RGBA8 storage a YUV shared image is converted into.
     Bool m_syncingYuvTextureStorage = false;
     Uint64 m_resourceEraseEpoch = 1;
+    // P14: a direct-mapped front for the two wire resource maps, keyed on the handle key
+    // ({slot, gen}, never reused) and believed only at the erase epoch it was taken at - an
+    // unordered_map node never moves until it is erased, and every erase moves the epoch.
+    struct WireResourceLookup {
+        Uint64 key = 0;
+        Uint64 eraseEpoch = 0;
+        TextureResource* resource = nullptr;
+    };
+    static constexpr SizeT kWireResourceLookupEntries = 256;
+    Array<WireResourceLookup, kWireResourceLookupEntries> m_wireTextureLookup{};
+    Array<WireResourceLookup, kWireResourceLookupEntries> m_wireRenderbufferLookup{};
     // Formats whose mutable-image probe failed on this device; their images are created
     // without MUTABLE_FORMAT_BIT so repeat syncs neither re-probe nor flag-mismatch.
     std::unordered_set<VkFormat> m_mutableFormatUnsupported;

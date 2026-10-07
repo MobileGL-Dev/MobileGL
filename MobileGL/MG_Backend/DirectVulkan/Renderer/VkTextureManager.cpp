@@ -1874,9 +1874,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return nullptr;
         }
         const Uint64 key = MG_Record::StagedTextureStore::KeyForHandle(handle);
-        auto [it, inserted] = resources.try_emplace(key);
-        (void)inserted;
-        TextureResource& resource = it->second;
+        auto& lookup = (renderbuffer ? m_wireRenderbufferLookup : m_wireTextureLookup)[key % kWireResourceLookupEntries];
+        if (lookup.resource == nullptr || lookup.key != key || lookup.eraseEpoch != m_resourceEraseEpoch) {
+            auto [it, inserted] = resources.try_emplace(key);
+            (void)inserted;
+            lookup = {key, m_resourceEraseEpoch, &it->second};
+        }
+        TextureResource& resource = *lookup.resource;
         if (resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
             record.PendingUploads.empty() && (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0)) {
             return &resource;

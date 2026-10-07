@@ -105,6 +105,7 @@
         }
         m_wireDrawPass.reset();
         m_wireDrawPassCompatibilityId = 0;
+        m_wirePassMarksValid = false;
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
         m_wireDrawPassKey = {};
@@ -119,6 +120,7 @@
 
     void VulkanRenderer::RetireWireDrawPass() {
         m_wireDrawPassCompatibilityId = 0;
+        m_wirePassMarksValid = false;
         if (!m_wireDrawPass) return;
         auto& frame = m_frameContext.GetCurrent();
         if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
@@ -506,6 +508,7 @@
         }
         auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
         sameLayoutAttachments.clear();
+        scratch.gpuWriteMarks.clear();
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
@@ -543,8 +546,9 @@
             layers = std::min(layers, image.layers);
             samples = image.samples;
             passHash = XXH64(&description, sizeof(description), passHash);
+            // Marked below, once the pass is known: a continued pass repeats the same marks.
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                m_textureManager->MarkWireTextureGpuWritten(image.storage, image.level, image.layer, image.layers);
+                scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
             if (image.isDefault) {
                 if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
                 else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
@@ -624,6 +628,19 @@
             created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
             created.layers = layers;
             created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
+        }
+        // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
+        // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
+        // same attachments - the pass key compared equal - repeats them only after a clear.
+        {
+            auto& store = MG_Record::ServerStagedTexture();
+            if (!continuing || !m_wirePassMarksValid ||
+                m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
+                for (const auto& mark : scratch.gpuWriteMarks)
+                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
+                m_wirePassMarksValid = true;
+                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
+            }
         }
         auto& pass = *m_wireDrawPass;
         // Interned once per pass: a continued pass has the same key, so the same compatibility.

@@ -53,6 +53,21 @@ def at(points, t):
     return v0 + (v1 - v0) * (t - t0) / max(1, t1 - t0)
 
 
+def window_delta(points, start, end):
+    """On-CPU ns a counter series gained inside [start, end]: the sum of its positive steps, each
+    weighted by how much of its interval lies in the window. Robust to a counter that restarts
+    (a thread id reused by a new thread under the same name reads as a drop, which is skipped)."""
+    if not points or points[0][0] > start + 250_000_000 or points[-1][0] < end - 250_000_000:
+        return None
+    total = 0.0
+    for (t0, v0), (t1, v1) in zip(points, points[1:]):
+        if t1 <= start or t0 >= end or v1 <= v0:
+            continue
+        overlap = min(t1, end) - max(t0, start)
+        total += (v1 - v0) * overlap / max(1, t1 - t0)
+    return total
+
+
 def reduce_run(run_dir, wl):
     bench_path = run_dir / "benchmark.json"
     if not bench_path.exists():
@@ -82,14 +97,14 @@ def reduce_run(run_dir, wl):
         for (pid, tid, comm), pts in series.items():
             if pid < 0:
                 continue
-            a, b = at(pts, start), at(pts, end)
-            if a is None or b is None:
+            used = window_delta(pts, start, end)
+            if used is None:
                 continue
-            ms = (b - a) / 1e6 / len(steady)
+            ms = used / 1e6 / len(steady)
             if ms <= 0.005:
                 continue
             threads.append({"pid": pid, "tid": tid, "comm": comm, "ms_per_frame": ms,
-                            "util": (b - a) / span})
+                            "util": used / span})
             procs[pid] += ms
         threads.sort(key=lambda r: -r["ms_per_frame"])
         out["threads"] = threads[:8]

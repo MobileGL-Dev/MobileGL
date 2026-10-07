@@ -292,6 +292,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
+        // P14: a direct-mapped front for m_wireBuffers (every draw resolves each vertex, index and
+        // uniform buffer). Keyed on WireBufferKey ({slot, gen}, never reused) and believed only at
+        // the erase count it was taken at: a node never moves until erased, and every erase moves
+        // the count.
+        struct WireBufferLookup {
+            Uint64 key = 0;
+            Uint64 eraseCount = 0;
+            WireBufferResource* resource = nullptr;
+        };
+        static constexpr SizeT kWireBufferLookupEntries = 256;
+        Array<WireBufferLookup, kWireBufferLookupEntries> m_wireBufferLookup{};
+        Uint64 m_wireBufferEraseCount = 0;
         // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
         // the whole point is that these entries do not wait for a frame slot to come round.
         Vector<DeferredWireRelease> m_deferredWireReleases;

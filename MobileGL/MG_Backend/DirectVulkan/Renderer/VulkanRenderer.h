@@ -825,7 +825,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<WireImage> sameLayoutAttachments;
             WireDrawPassKey passKey;
             WireRenderPassCompatibilityKey compatibilityKey;
+            struct GpuWriteMark {
+                MG_Pipe::MGPipeHandle storage;
+                Uint32 level, layer, layers;
+            };
+            Vector<GpuWriteMark> gpuWriteMarks;
         };
+        // The current wire pass's attachments were marked GPU-written at this StagedTextureStore
+        // clear generation (SetupWireDraw); false whenever the pass changes.
+        Bool m_wirePassMarksValid = false;
+        Uint64 m_wirePassMarksClearGeneration = 0;
         WireDrawScratch m_wireDrawScratch;
         struct WireRetiredObjects {
             Uint64 submitIndex = 0;

@@ -373,6 +373,7 @@ namespace MobileGL::MG_Record {
                 m_driverWritten[bucketed] = true;
             }
             shadow.GpuDirty = false;
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             return CopyRunInto(shadow, key, uploadTarget, level, imageOffset, bytes, byteSize, frontendShadow);
         }
 
@@ -390,6 +391,7 @@ namespace MobileGL::MG_Record {
             LevelShadow& shadow = m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)];
             RequireDeclaredLevel(shadow, key, uploadTarget, level, extent);
             shadow.GpuDirty = false;
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             // P8-E: the caller states these bytes ARE the level, which a followed copy is part of.
             shadow.HoldsFollowedCopy = false;
             shadow.Bytes.clear();
@@ -454,6 +456,7 @@ namespace MobileGL::MG_Record {
                 shadow.Covered.clear();
                 shadow.GpuDirty = false;
                 shadow.HoldsFollowedCopy = false;
+                m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             }
             shadow.Extent = extent;
             shadow.InternalFormat = internalFormat;
@@ -471,6 +474,7 @@ namespace MobileGL::MG_Record {
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows.erase(bucketed);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
         }
 
         // T5's dirty mark: a GPU-side generation made this level's texels newer than any
@@ -482,14 +486,22 @@ namespace MobileGL::MG_Record {
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows[bucketed].Levels[PackLevel(uploadTarget, level)].GpuDirty = dirty;
+            if (!dirty) m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             m_any.store(true, std::memory_order_release);
         }
+
+        // P14: moves whenever a level's GPU-dirty mark may have gone false - a CPU run or adoption
+        // over it, a redefinition, an explicit clear, or a level/shadow dropped. A caller that
+        // re-marks the same levels every draw (Magma's attachments) may skip the repeat while it
+        // has not moved: marking is idempotent until something clears it.
+        Uint64 GpuDirtyClearGeneration() const { return m_gpuDirtyClears.load(std::memory_order_relaxed); }
 
         void Drop(Uint64 key) {
             if (!m_any.load(std::memory_order_acquire)) return;
             const ShadowKey bucketed = Bucketed(key);
             const std::lock_guard<std::mutex> lock(m_mutex);
             m_shadows.erase(bucketed);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             m_driverWritten.erase(bucketed);
         }
 
@@ -503,10 +515,12 @@ namespace MobileGL::MG_Record {
             const std::lock_guard<std::mutex> lock(m_mutex);
             if (session == 0) {
                 m_shadows.clear();
+                m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
                 m_driverWritten.clear();
                 return;
             }
             EraseSession(m_shadows, session);
+            m_gpuDirtyClears.fetch_add(1, std::memory_order_relaxed);
             EraseSession(m_driverWritten, session);
         }
 
@@ -1024,6 +1038,7 @@ namespace MobileGL::MG_Record {
         // Read on every IsLevelGpuDirty / LevelExtentOrUndefined, so the monolith cost is one
         // acquire load of a never-written flag rather than a mutex and two hash lookups.
         std::atomic<Bool> m_any{false};
+        std::atomic<Uint64> m_gpuDirtyClears{0};
     };
 
     // ONE PER PROCESS, and its copying arm is decided ONCE at first use - StagedShadow's

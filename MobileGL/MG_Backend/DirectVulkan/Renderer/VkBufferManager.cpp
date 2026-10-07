@@ -184,8 +184,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     VkBufferManager::WireBufferResource* VkBufferManager::FindWireBuffer(MG_Pipe::MGPipeHandle res) {
-        const auto found = m_wireBuffers.find(WireBufferKey(res));
-        return found == m_wireBuffers.end() ? nullptr : &found->second;
+        const Uint64 key = WireBufferKey(res);
+        auto& lookup = m_wireBufferLookup[key % kWireBufferLookupEntries];
+        if (lookup.resource != nullptr && lookup.key == key && lookup.eraseCount == m_wireBufferEraseCount)
+            return lookup.resource;
+        const auto found = m_wireBuffers.find(key);
+        if (found == m_wireBuffers.end()) return nullptr;
+        lookup = {key, m_wireBufferEraseCount, &found->second};
+        return &found->second;
     }
 
     void VkBufferManager::CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
@@ -992,6 +998,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DeferWireRelease(std::move(found->second.buffer),
                          found->second.imported ? T0ReleaseSerial(found->second.lastUseSerial)
                                                 : found->second.lastUseSerial); // P11 B2, as Respecify
+        ++m_wireBufferEraseCount;
         m_wireBuffers.erase(found);
         PublishWireReclaimGauges();
     }
@@ -1163,6 +1170,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // DestroyAllDeferredReleases above emptied the parked list; this destroys the stores the
         // records still hold, so nothing this arm minted outlives the count.
         if (!m_wireBuffers.empty()) ++m_wireStoreDestroyEpoch;
+        ++m_wireBufferEraseCount;
         m_wireBuffers.clear();
         m_wireStoreCount = 0;
         m_wireStoreCountPeak = 0;
