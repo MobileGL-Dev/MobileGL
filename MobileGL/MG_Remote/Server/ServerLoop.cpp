@@ -708,8 +708,14 @@ namespace MobileGL::MG_Remote::Server {
             // backend's verdict - the driver's GUILTY report on Espryt, the hang watch on Magma - is
             // asked HERE, before the drain, so that frame is never applied: the session latches
             // (DeviceLost, its client reads a lost context) and leaves below. Cheap by contract.
-            if (m_backend != nullptr && !SessionLatched()) (void)m_backend->LatchIfGpuFaulted();
-            if (eventRingHasRoom()) DrainRing();
+            // The head is loaded BEFORE the poll, so every record below it was in the ring when the
+            // poll ran and the drain need not poll for it again (DrainRing's `polledHead`).
+            std::uint64_t polledHead = 0;
+            if (m_backend != nullptr && !SessionLatched()) {
+                polledHead = signals.CmdHead != nullptr ? signals.CmdHead->load(std::memory_order_acquire) : 0;
+                (void)m_backend->LatchIfGpuFaulted();
+            }
+            if (eventRingHasRoom()) DrainRing(polledHead);
             if (stopOrForfeit()) break;
             // The session-targeted device-loss debug knob (PipeSessionFail.h): asked here, after a
             // drain, so it reaches a client that never presents or reads back, once the session
@@ -1013,7 +1019,7 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
-    Uint64 ServerLoop::DrainRing() {
+    Uint64 ServerLoop::DrainRing(std::uint64_t polledHead) {
         // THE EMPTY-RING ANSWER COSTS TWO LOADS AND NOTHING ELSE, and that was AUDITED rather
         // than assumed (P5d round 3, package T item 2): the idle poll calls this on every
         // iteration, so a lock or a clock read in here would be the same defect
@@ -1101,12 +1107,11 @@ namespace MobileGL::MG_Remote::Server {
         // previous record was applied and acknowledged, so after a reset the driver may already
         // report - used to be popped and applied unpolled, and a GUILTY context ran one more record
         // (ServerLoopEglLatchTest under CPU load). `polledHead` is the command ring's head as loaded
-        // just BEFORE the last poll: every record below it was visible when that poll ran. A record
-        // at or past it re-loads the head and polls first. While the client stays ahead this is one
+        // just BEFORE the last poll (the apply loop's own, handed in): every record below it was
+        // visible when that poll ran. A record at or past it re-loads the head and polls first. While the client stays ahead this is one
         // poll per batch the drain catches up to, never more than one per record.
         Transport::LinkSignals signals{};
         if (auto* link = session.DataLink()) signals = link->Signals();
-        std::uint64_t polledHead = 0;
         for (;;) {
             if (SessionLatched()) break;
             if (m_windowRequests.load(std::memory_order_acquire) != 0) {

@@ -548,7 +548,9 @@ namespace MobileGL::MG_Remote::Server {
         // the probe's metadata is protected for the same lifetime as its frame.
         MobileGLResult PostSurfaceControlFrameWithCallerLock(SurfaceControlFrame& frame);
         // Pops and applies every record currently in the ring; returns how many it applied.
-        Uint64 DrainRing();
+        // `polledHead`: the command ring's head as loaded just before the caller's own fault poll
+        // (0 when the caller did not poll) - records below it need no poll of their own.
+        Uint64 DrainRing(std::uint64_t polledHead = 0);
         void SignalExited();
 
         ServerSession* m_session = nullptr;
