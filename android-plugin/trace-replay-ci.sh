@@ -511,6 +511,10 @@ run_retrace() {
 
   app_exited=0
   saw_app_process=0
+  # One failed pidof is not an exit: under memory pressure the adb shell call
+  # itself can fail while the app is alive (seen with the process still in
+  # pidof and the activity still initializing right after the "exit").
+  missed_app_polls=0
   poll_started="$(date +%s)"
   for _ in $(seq 1 "${timeout_seconds}"); do
     if adb_device_path shell run-as "${package_name}" ls "${app_dir}/output/result.json" >/dev/null 2>&1; then
@@ -518,6 +522,7 @@ run_retrace() {
     fi
     if adb_device_path shell pidof "${package_name}" >/dev/null 2>&1; then
       saw_app_process=1
+      missed_app_polls=0
     else
       poll_adb_state="$(adb_device_path get-state 2>/dev/null | tr -d '\r' || true)"
       if [ "${poll_adb_state}" != "device" ]; then
@@ -525,8 +530,11 @@ run_retrace() {
         break
       fi
       if [ "${saw_app_process}" -eq 1 ]; then
-        app_exited=1
-        break
+        missed_app_polls=$((missed_app_polls + 1))
+        if [ "${missed_app_polls}" -ge 3 ]; then
+          app_exited=1
+          break
+        fi
       fi
     fi
     sleep 1

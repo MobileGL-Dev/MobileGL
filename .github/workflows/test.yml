@@ -3465,7 +3465,8 @@ jobs:
           # Read the complete inventories before deleting anything. A failed API
           # request must fail this step, not look like "no failed cases" through
           # an unchecked process substitution.
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
+          # 50 rows per page: the jobs endpoint answers HTTP 502 for 90+ rows on a re-run attempt of a run this size.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=50" \
             --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
             > "${RUNNER_TEMP}/cleanup-jobs.txt"
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
