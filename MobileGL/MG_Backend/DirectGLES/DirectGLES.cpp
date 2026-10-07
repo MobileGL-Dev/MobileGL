@@ -5363,30 +5363,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // below forced Adreno into a ghost/stall on every uniform-dirtying
                     // draw (MC dirties uniforms every draw), which dominated frame time.
                     Bool ringBound = false;
-                    if (BufferImpl::UboRingAvailable()) {
+                    {
                         const SizeT bindSize =
                             std::max(uboSize, static_cast<SizeT>(backendProgram.GetGlobalUboBackendBlockSize()));
-                        const Uint64 frameSerial = CurrentFrameSerial();
                         auto& ringSlot = backendProgram.GetGlobalUboRingAllocation();
-                        Bool slotValid = ringSlot.ringGeneration == BufferImpl::UboRingGeneration() &&
-                                         ringSlot.frameSerial == frameSerial &&
-                                         ringSlot.contentVersion == uboContentVersion;
-                        if (!slotValid) {
-                            SizeT offset = 0;
-                            if (BufferImpl::UboRingAllocate(bindSize, offset)) {
-                                std::memcpy(static_cast<Uint8*>(BufferImpl::UboRingMappedPtr()) + offset,
-                                            MGB_UBO_BYTES, uboSize);
-                                if (MG_Util::PipeStats::Enabled()) {
-                                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
-                                                                 static_cast<Uint64>(uboSize));
-                                }
-                                ringSlot = {uboContentVersion, BufferImpl::UboRingGeneration(), frameSerial,
-                                            offset};
-                                slotValid = true;
+                        void* write = nullptr;
+                        Uint ringId = 0;
+                        const auto state = BufferImpl::UboRingPrepareSlot(ringSlot, uboContentVersion,
+                                                                          CurrentFrameSerial(), bindSize, write,
+                                                                          ringId);
+                        if (state == BufferImpl::UboRingSlotState::Allocated) {
+                            std::memcpy(write, MGB_UBO_BYTES, uboSize);
+                            if (MG_Util::PipeStats::Enabled()) {
+                                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
+                                                             static_cast<Uint64>(uboSize));
                             }
                         }
-                        if (slotValid) {
-                            BufferImpl::BindBufferRangeCached(GL_UNIFORM_BUFFER, 0, BufferImpl::UboRingBufferId(),
+                        if (state == BufferImpl::UboRingSlotState::Allocated ||
+                            state == BufferImpl::UboRingSlotState::Reused) {
+                            BufferImpl::BindBufferRangeCached(GL_UNIFORM_BUFFER, 0, ringId,
                                                               static_cast<GLintptr>(ringSlot.offset),
                                                               static_cast<GLsizeiptr>(bindSize));
                             ringBound = true;

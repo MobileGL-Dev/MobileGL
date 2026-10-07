@@ -426,8 +426,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // B3: the draw this slice is being acquired for is normally recorded into the NEXT
         // submission - normally, not always: a mid-draw flush (SyncWireTextureShape's preserve
         // path) can submit this index without the draw. This stamp is the defence term's input
-        // (see WriteWireBuffer); the floor behind lastUseSerial is the guarantee.
-        if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
+        // (see WriteWireBuffer); the floor behind lastUseSerial is the guarantee. Read off the
+        // owning renderer's counter (its GetWireNextSubmitIndex()) when it was handed one.
+        if (m_submitCounter != nullptr) resource->lastUseSubmitIndex = *m_submitCounter + 1;
+        else if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         outSlice = resource->buffer.GetSlice(0, resource->size);
         outSlice.mapped = nullptr;
         if (WireBufProbeEnabled()) {

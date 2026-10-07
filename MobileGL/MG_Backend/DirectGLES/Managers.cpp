@@ -4040,6 +4040,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool UboRingAllocate(SizeT size, SizeT& outOffset) { return RingAllocate(UboRing(), size, outOffset); }
 
+        UboRingSlotState UboRingPrepareSlot(UboRingAllocation& slot, Uint32 contentVersion, Uint64 frameSerial,
+                                            SizeT bindSize, void*& outWrite, Uint& outBufferId) {
+            if (MG_Config::Features.EsprytDisableUboRing) return UboRingSlotState::Unavailable;
+            PersistentRing& ring = UboRing();
+            if (!RingAvailable(ring)) return UboRingSlotState::Unavailable;
+            if (slot.ringGeneration == ring.store.generation && slot.frameSerial == frameSerial &&
+                slot.contentVersion == contentVersion) {
+                outBufferId = ring.store.id;
+                return UboRingSlotState::Reused;
+            }
+            SizeT offset = 0;
+            if (!RingAllocate(ring, bindSize, offset)) return UboRingSlotState::Failed;
+            // Read after the allocation: a grow mints a new store and generation.
+            outWrite = static_cast<Uint8*>(ring.store.mappedPtr) + offset;
+            slot = {contentVersion, ring.store.generation, frameSerial, offset};
+            outBufferId = ring.store.id;
+            return UboRingSlotState::Allocated;
+        }
+
         void* UboRingMappedPtr() { return UboRing().store.mappedPtr; }
         Uint UboRingBufferId() { return UboRing().store.id; }
         Uint32 UboRingGeneration() { return UboRing().store.generation; }

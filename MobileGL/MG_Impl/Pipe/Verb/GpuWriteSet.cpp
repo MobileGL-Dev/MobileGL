@@ -31,8 +31,7 @@ namespace MobileGL::MG_Record {
         // The transform-feedback rows, shared by the draw walk (row 3) and by
         // glEndTransformFeedback (row 5). Both mark the SAME set - the capture targets of the
         // capture program - and the split exists only so the two can be counted apart.
-        void MarkTransformFeedbackTargets(GpuWriteProducer producer) {
-            auto& context = MG_State::pGLContext;
+        void MarkTransformFeedbackTargets(MG_State::GLState::GLContext* context, GpuWriteProducer producer) {
             if (!context) return;
             if (!context->IsTransformFeedbackActive()) return;
             const auto& program = context->GetTransformFeedbackProgram();
@@ -49,8 +48,7 @@ namespace MobileGL::MG_Record {
             }
         }
 
-        void MarkShaderStorageBindings() {
-            auto& context = MG_State::pGLContext;
+        void MarkShaderStorageBindings(MG_State::GLState::GLContext* context) {
             if (!context) return;
             // The TOUCHED count, exactly as the backend twin uses it
             // (DirectGLES.cpp:559-560): the binding-point array is 84 entries wide and
@@ -62,8 +60,7 @@ namespace MobileGL::MG_Record {
             }
         }
 
-        void MarkAtomicCounterBindings() {
-            auto& context = MG_State::pGLContext;
+        void MarkAtomicCounterBindings(MG_State::GLState::GLContext* context) {
             if (!context) return;
             // WIDER THAN ITS BACKEND TWIN, ON PURPOSE AND IN THE SAFE DIRECTION.
             // SyncAtomicCounterBuffers (DirectGLES.cpp:578-583) walks the GL bindings the
@@ -79,8 +76,7 @@ namespace MobileGL::MG_Record {
             }
         }
 
-        void MarkWritableImageBufferTextures() {
-            auto& context = MG_State::pGLContext;
+        void MarkWritableImageBufferTextures(MG_State::GLState::GLContext* context) {
             if (!context) return;
             // The backend keeps a bitset of writable image-buffer units
             // (DirectGLES.cpp:2350-2352, maintained from its own SyncImageTextureBinding) and
@@ -139,17 +135,20 @@ namespace MobileGL::MG_Record {
 
     void MarkGpuWritesForDraw() {
         if (!GpuWriteSetIsClientSide()) return;
-        MarkShaderStorageBindings();
-        MarkAtomicCounterBindings();
-        MarkWritableImageBufferTextures();
-        MarkTransformFeedbackTargets(GpuWriteProducer::TransformFeedbackCapture);
+        // One read of the thread-local context for the four walks.
+        MG_State::GLState::GLContext* const context = MG_State::pGLContext.get();
+        MarkShaderStorageBindings(context);
+        MarkAtomicCounterBindings(context);
+        MarkWritableImageBufferTextures(context);
+        MarkTransformFeedbackTargets(context, GpuWriteProducer::TransformFeedbackCapture);
     }
 
     void MarkGpuWritesForDispatch() {
         if (!GpuWriteSetIsClientSide()) return;
-        MarkShaderStorageBindings();
-        MarkAtomicCounterBindings();
-        MarkWritableImageBufferTextures();
+        MG_State::GLState::GLContext* const context = MG_State::pGLContext.get();
+        MarkShaderStorageBindings(context);
+        MarkAtomicCounterBindings(context);
+        MarkWritableImageBufferTextures(context);
     }
 
     void MarkReadPixelsPackBuffer() {
@@ -162,7 +161,7 @@ namespace MobileGL::MG_Record {
 
     void MarkEndTransformFeedbackCaptureTargets() {
         if (!GpuWriteSetIsClientSide()) return;
-        MarkTransformFeedbackTargets(GpuWriteProducer::EndTransformFeedbackCapture);
+        MarkTransformFeedbackTargets(MG_State::pGLContext.get(), GpuWriteProducer::EndTransformFeedbackCapture);
     }
 
     Uint64 ProducerMarkCount(GpuWriteProducer producer) {

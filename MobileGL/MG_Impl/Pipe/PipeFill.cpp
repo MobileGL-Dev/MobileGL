@@ -2932,6 +2932,10 @@ namespace MobileGL::MG_Pipe {
             Array<Uint8, kClasses> WalkCount{};
             Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Sticky{};
             Array<Uint8, kClasses> StickyCount{};
+            // The walk's copy entries alone, in walk order (~11 of a draw's ~47): the copy loop
+            // visits only these, and the stamp loop runs apart over the whole walk.
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Copy{};
+            Array<Uint8, kClasses> CopyCount{};
         };
         ResidualFillPlan g_fillPlan;
 
@@ -3008,6 +3012,7 @@ namespace MobileGL::MG_Pipe {
                 const MGPipeFieldMask& classMask = kMGPipeClassFieldMask[c];
                 Uint8 walk = 0;
                 Uint8 sticky = 0;
+                Uint8 copy = 0;
                 for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
                     const auto field = static_cast<MGPipeInputField>(i);
                     if (!MGPipeFieldMaskHas(classMask, field)) continue;
@@ -3015,10 +3020,12 @@ namespace MobileGL::MG_Pipe {
                         g_fillPlan.Sticky[c][sticky++] = static_cast<Uint8>(i);
                         continue;
                     }
-                    g_fillPlan.Walk[c][walk++] = static_cast<Uint8>(
-                        i | (MGPipeFieldMaskHas(built, field) ? 0 : ResidualFillPlan::kCopy));
+                    const Bool copied = !MGPipeFieldMaskHas(built, field);
+                    g_fillPlan.Walk[c][walk++] = static_cast<Uint8>(i | (copied ? ResidualFillPlan::kCopy : 0));
+                    if (copied) g_fillPlan.Copy[c][copy++] = static_cast<Uint8>(i);
                 }
                 g_fillPlan.WalkCount[c] = walk;
+                g_fillPlan.CopyCount[c] = copy;
                 g_fillPlan.StickyCount[c] = sticky;
             }
             return built;
@@ -3864,16 +3871,28 @@ namespace MobileGL::MG_Pipe {
             if (filled.FilledGen[i] == 0) filled.FilledGen[i] = 1;
         }
 #endif
-        for (SizeT k = 0; fillOwed && k < g_fillPlan.WalkCount[planClass]; ++k) {
-            const Uint8 entry = g_fillPlan.Walk[planClass][k];
-            const SizeT i = entry & ~ResidualFillPlan::kCopy;
-            const auto field = static_cast<MGPipeInputField>(i);
-            if (entry & ResidualFillPlan::kCopy) MGPipeFillAccess::CopyField(inputs, *ctx, field);
+        if (fillOwed) {
+            // The copies first, then the stamps: no copy reads a stamp, so splitting the one walk
+            // into two loops changes nothing but the cost (the stamp loop no longer reloads its
+            // bounds and the omission pair around an out-of-line CopyField per entry).
+            const Uint8* const copies = g_fillPlan.Copy[planClass].data();
+            const SizeT copyCount = g_fillPlan.CopyCount[planClass];
+            for (SizeT k = 0; k < copyCount; ++k) {
+                MGPipeFillAccess::CopyField(inputs, *ctx, static_cast<MGPipeInputField>(copies[k]));
+            }
 #if MOBILEGL_PIPE_POISON
-            // The value is copied either way; only the stamp is withheld for the omitted pair.
-            if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;
-#else
-            (void)field;
+            // The value is copied either way; only the stamp is withheld for the omitted pair,
+            // which is put back to what it held after the branch-free stamp of the whole walk.
+            const Uint8* const walk = g_fillPlan.Walk[planClass].data();
+            const SizeT walkCount = g_fillPlan.WalkCount[planClass];
+            const Uint64 serial = filled.CurrentVerbSerial;
+            const Bool omit = g_omission.Armed && g_omission.Verb == verb;
+            const SizeT omitted = omit ? static_cast<SizeT>(g_omission.Field) : 0;
+            const Uint64 omittedGen = omit ? filled.FilledGen[omitted] : 0;
+            for (SizeT k = 0; k < walkCount; ++k) {
+                filled.FilledGen[walk[k] & ~ResidualFillPlan::kCopy] = serial;
+            }
+            if (omit) filled.FilledGen[omitted] = omittedGen;
 #endif
         }
         if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {

@@ -123,6 +123,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // frameSerial-minus-frameCount inference.
         void NotifyFrameSerialComplete(Uint64 serial);
         void SetCopyCommandProvider(IBufferCopyCommandProvider* provider);
+        // The owning renderer's submission counter: AcquireWireSlice stamps the next submission
+        // from it directly rather than finding the renderer through the session-local slot on
+        // every bind (a thread-local probe per vertex, index and uniform buffer of every draw).
+        void SetSubmitCounterSource(const Uint64* submitCounter) { m_submitCounter = submitCounter; }
 
         Bool UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data, VkDeviceSize size,
                              VkDeviceSize alignment, BufferSlice& outSlice);
@@ -290,6 +294,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See AcquireUnboundTexelBufferDescriptor. Same lifetime rules.
         VkBufferObject m_unboundTexelBuffer;
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
+        const Uint64* m_submitCounter = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
         // P14: a slot-indexed front for m_wireBuffers (every draw resolves each vertex, index and

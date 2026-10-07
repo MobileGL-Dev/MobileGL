@@ -1109,6 +1109,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Grows the ring (new GL store, generation bump) when the in-flight span
         // would be overrun. Returns false when storage (re)creation fails.
         Bool UboRingAllocate(SizeT size, SizeT& outOffset);
+        // The per-draw slot dance in ONE ring lookup (the ring is per native context, and each
+        // lookup of it is a thread-local probe): Unavailable when the ring cannot serve (the
+        // caller takes the in-place upload), Reused when `slot` already holds this content in
+        // this frame and ring generation, Allocated when a fresh slot was carved (`outWrite`
+        // is where its bytes go), Failed when allocation failed. `outBufferId` names the ring
+        // store for Reused and Allocated.
+        enum class UboRingSlotState : Uint8 { Unavailable, Reused, Allocated, Failed };
+        UboRingSlotState UboRingPrepareSlot(UboRingAllocation& slot, Uint32 contentVersion, Uint64 frameSerial,
+                                            SizeT bindSize, void*& outWrite, Uint& outBufferId);
         void* UboRingMappedPtr();
         Uint UboRingBufferId();
         Uint32 UboRingGeneration();

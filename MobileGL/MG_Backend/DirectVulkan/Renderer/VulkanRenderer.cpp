@@ -2205,6 +2205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         });
         MOBILEGL_ASSERT(succeeded, "VkBufferManager initialization failed.");
         m_bufferManager.SetCopyCommandProvider(this);
+        m_bufferManager.SetSubmitCounterSource(&m_submitCounter);
         if (m_timerQuerySupported) {
             m_timerQueryManager = MakeUnique<VkTimerQueryManager>();
             if (m_timerQueryManager->Initialize({.device = m_device,
