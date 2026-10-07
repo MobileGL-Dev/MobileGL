@@ -96,7 +96,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    GpuProgressMarkers::Bracket GpuProgressMarkers::Acquire() {
+    GpuProgressMarkers::Bracket GpuProgressMarkers::Acquire(Uint64 completedSubmitIndex) {
         Bracket bracket;
         if (m_device == VK_NULL_HANDLE) return bracket;
         const std::lock_guard<std::mutex> lock(m_mutex);
@@ -106,7 +106,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (slot.Claimed) continue;
             // Retire what finished since the watch last looked: frames come faster than its polls.
             if (slot.InFlight && vkGetEventStatus(m_device, slot.Finished) == VK_EVENT_SET) slot.InFlight = false;
-            if (!slot.InFlight && free == nullptr) free = &slot;
+            // Free once its submission is complete by fence, not by the event read (see the header).
+            if (!slot.InFlight && slot.SubmitIndex <= completedSubmitIndex && free == nullptr) free = &slot;
         }
         if (free == nullptr) {
             if (!AddSlot()) return bracket;
@@ -125,7 +126,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return bracket;
     }
 
-    void GpuProgressMarkers::Submitted(const Bracket& bracket) {
+    void GpuProgressMarkers::Submitted(const Bracket& bracket, Uint64 submitIndex) {
         if (!bracket.Valid()) return;
         const std::lock_guard<std::mutex> lock(m_mutex);
         if (bracket.Slot >= m_slots.size()) return;
@@ -133,6 +134,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         slot.Claimed = false;
         slot.InFlight = true;
         slot.Dirty = true;
+        slot.SubmitIndex = submitIndex;
         slot.Id = m_nextId++;
     }
 

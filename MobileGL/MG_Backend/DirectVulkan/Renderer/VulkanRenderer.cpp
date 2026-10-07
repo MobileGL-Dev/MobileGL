@@ -6117,9 +6117,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (LatchIfGpuHung("flush-submit")) return false;
         SharedImageSubmitSync sharedImageSync;
         AttachSharedImageSync(submitInfo, sharedImageSync);
-        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire();
+        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire(m_completedSubmitCounter);
         const VkResult result = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitInfo, fence, bracket);
-        if (result == VK_SUCCESS) m_progressMarkers.Submitted(bracket);
+        if (result == VK_SUCCESS) m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
         else m_progressMarkers.Abandon(bracket);
 #else
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
@@ -6586,10 +6586,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (LatchIfGpuHung("present-submit")) return;
         SharedImageSubmitSync sharedImageSync;
         AttachSharedImageSync(submitPacket.submitInfo, sharedImageSync);
-        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire();
+        const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire(m_completedSubmitCounter);
         const VkResult presentSubmit = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitPacket.submitInfo,
                                                                            frame.imageInFlightFence, bracket);
-        if (presentSubmit == VK_SUCCESS) m_progressMarkers.Submitted(bracket);
+        if (presentSubmit == VK_SUCCESS) m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
         else m_progressMarkers.Abandon(bracket);
 #else
         const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);

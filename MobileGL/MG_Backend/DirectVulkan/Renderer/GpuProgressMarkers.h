@@ -50,9 +50,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // The two buffers to put first and last in one submission (an invalid bracket when off or
         // when every slot is in flight: the submission then goes unwatched).
-        Bracket Acquire();
-        // The submission carrying `bracket` was accepted by vkQueueSubmit / was not submitted.
-        void Submitted(const Bracket& bracket);
+        //
+        // A slot is reused only once the submission it last bracketed is COMPLETE by its fence
+        // (`completedSubmitIndex`, the renderer's contiguous completed-submit floor), not merely once
+        // the host has read its `finished` event as set. A host read of an event gives no device-side
+        // ordering: nothing orders the bracket's `started` set (TOP_OF_PIPE, first buffer) against
+        // its `finished` set, so a host vkResetEvent plus a re-set in a later submission could
+        // overlap a set the earlier submission has not executed yet. The synchronization validator
+        // reports that as SYNC-vkCmdSetEvent-missingbarrier-set. Event reads still drive the watch.
+        Bracket Acquire(Uint64 completedSubmitIndex);
+        // The submission carrying `bracket` (renderer submit index `submitIndex`) was accepted by
+        // vkQueueSubmit / was not submitted.
+        void Submitted(const Bracket& bracket, Uint64 submitIndex);
         void Abandon(const Bracket& bracket);
 
         // The watch named one of this device's submissions as hanging the GPU.
@@ -74,6 +83,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool InFlight = false; // submitted and not yet seen finished
             Bool Claimed = false;  // handed out by Acquire, not yet submitted or abandoned
             Bool Dirty = false;    // its events were set by a past submission: reset before reuse
+            Uint64 SubmitIndex = 0; // the renderer submit index of the submission it last bracketed
         };
         static constexpr Uint32 kMaxSlots = 16;
 
