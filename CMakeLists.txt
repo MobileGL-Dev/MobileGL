@@ -973,8 +973,10 @@ endif()
 # are the link ratchet's baseline, each a named exemption that resolves to an aborting stub through
 # a generated linker response file (scripts/ci/server_link_check.py refuses, before the link, any
 # server reference the baseline does not name). Built with the split shape on Linux hosts; never
-# installed or loaded.
-if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)
+# installed or loaded. NOT in a verify build: the G4 comparator reads both halves by design (its
+# MGPipeVerifyReadHook and the program-artifact codec are frontend code the server half calls), the
+# baseline is the shipped split shape's, and a verify build never ships.
+if (MOBILEGL_BUILD_DISAGGREGATED AND NOT MOBILEGL_PIPE_VERIFY AND UNIX AND NOT APPLE AND NOT ANDROID)
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if (Python3_Interpreter_FOUND)
         set(MGL_SERVER_LINK_RSP "${CMAKE_BINARY_DIR}/mgl_server_link_exemptions.rsp")
