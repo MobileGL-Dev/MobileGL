@@ -1057,7 +1057,21 @@ namespace MobileGL::MG_Pipe {
     // every other thread - the client process, the in-process client+server shape, a unit case,
     // the whole monolith - it is the process-wide applier, which is what it has always been and
     // is byte-for-byte the old behaviour.
-    MGPipeApplierState& MGPipeApplier();
+    //
+    // P14: INLINE, because the backends ask it per state read (dozens of times per draw): in a
+    // process that serves no session - the whole monolith - no resolver is installed and the
+    // answer is the process-wide applier, a load and a branch with no call.
+    namespace Detail {
+        // Mirrors of PipeApply.cpp's g_applierKeyResolver / g_defaultApplier, written only there.
+        extern void* g_applierResolverInstalled;
+        extern MGPipeApplierState* g_processApplier;
+    } // namespace Detail
+    MGPipeApplierState& MGPipeApplierForSession();
+    inline MGPipeApplierState& MGPipeApplier() {
+        if (Detail::g_applierResolverInstalled == nullptr && Detail::g_processApplier != nullptr)
+            return *Detail::g_processApplier;
+        return MGPipeApplierForSession();
+    }
 
     // P13 W6: the backend's "my capabilities changed" notice, without naming the frontend. A
     // backend whose advertised limits / extensions move after a context exists (Magma's caps

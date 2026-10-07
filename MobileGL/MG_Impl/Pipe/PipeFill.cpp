@@ -2921,6 +2921,17 @@ namespace MobileGL::MG_Pipe {
             // exactly as it always was, so "does this verb read this field" stays the walk's
             // business and this stays a statement about EMISSION alone.
             MGPipeFieldMask Supplied{};
+            // P14: the walk itself, per verb class, built with Supplied: the non-sticky fields the
+            // class reads (bit 7 set = copy it, clear = the emitted call supplies it), and the
+            // sticky ones. The walk then visits only the ~47 fields a draw reads instead of testing
+            // all 63 against three masks per verb.
+            static constexpr Uint8 kCopy = 0x80;
+            static_assert(kMGPipeInputFieldCount < kCopy, "field indices must leave the copy bit free");
+            static constexpr SizeT kClasses = static_cast<SizeT>(MGPipeVerbClass::kClassCount);
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Walk{};
+            Array<Uint8, kClasses> WalkCount{};
+            Array<Array<Uint8, kMGPipeInputFieldCount>, kClasses> Sticky{};
+            Array<Uint8, kClasses> StickyCount{};
         };
         ResidualFillPlan g_fillPlan;
 
@@ -2993,6 +3004,23 @@ namespace MobileGL::MG_Pipe {
                 MG_Remote::Client::CapsMirrorInstance().Generation() : 0;
 #endif
             g_fillPlan.Supplied = built;
+            for (SizeT c = 0; c < ResidualFillPlan::kClasses; ++c) {
+                const MGPipeFieldMask& classMask = kMGPipeClassFieldMask[c];
+                Uint8 walk = 0;
+                Uint8 sticky = 0;
+                for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+                    const auto field = static_cast<MGPipeInputField>(i);
+                    if (!MGPipeFieldMaskHas(classMask, field)) continue;
+                    if (kMGPipeInputFieldSticky[i]) {
+                        g_fillPlan.Sticky[c][sticky++] = static_cast<Uint8>(i);
+                        continue;
+                    }
+                    g_fillPlan.Walk[c][walk++] = static_cast<Uint8>(
+                        i | (MGPipeFieldMaskHas(built, field) ? 0 : ResidualFillPlan::kCopy));
+                }
+                g_fillPlan.WalkCount[c] = walk;
+                g_fillPlan.StickyCount[c] = sticky;
+            }
             return built;
         }
 
@@ -3823,25 +3851,29 @@ namespace MobileGL::MG_Pipe {
         const Bool applierDerives = ApplierDerivesRenderStateFields();
         // BY VALUE, NOT BY REFERENCE: the memo's storage is rebuilt in place when the key moves,
         // and the walk below holds this across 63 iterations.
-        const MGPipeFieldMask supplied =
-            SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive);
-        for (SizeT i = 0; fillOwed && i < kMGPipeInputFieldCount; ++i) {
-            const auto field = static_cast<MGPipeInputField>(i);
-            if (!MGPipeFieldMaskHas(mask, field)) continue;
+        (void)SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive);
+        // The plan the call above just validated (or rebuilt) for this key: the class's fields in
+        // index order, sticky ones apart - the same visits, in the same order, as testing all 63.
+        const SizeT planClass = static_cast<SizeT>(verbClass);
+        (void)mask;
 #if MOBILEGL_PIPE_POISON
-            if (kMGPipeInputFieldSticky[i]) {
-                // Stamped once by the first fill that sees a live context; fresh through the
-                // Sticky -> FilledGen != 0 branch of MGPipeInputFieldIsFresh from then on.
-                if (filled.FilledGen[i] == 0) filled.FilledGen[i] = 1;
-                continue;
-            }
-#else
-            if (kMGPipeInputFieldSticky[i]) continue;
+        for (SizeT k = 0; fillOwed && k < g_fillPlan.StickyCount[planClass]; ++k) {
+            // Stamped once by the first fill that sees a live context; fresh through the
+            // Sticky -> FilledGen != 0 branch of MGPipeInputFieldIsFresh from then on.
+            const SizeT i = g_fillPlan.Sticky[planClass][k];
+            if (filled.FilledGen[i] == 0) filled.FilledGen[i] = 1;
+        }
 #endif
-            if (!MGPipeFieldMaskHas(supplied, field)) MGPipeFillAccess::CopyField(inputs, *ctx, field);
+        for (SizeT k = 0; fillOwed && k < g_fillPlan.WalkCount[planClass]; ++k) {
+            const Uint8 entry = g_fillPlan.Walk[planClass][k];
+            const SizeT i = entry & ~ResidualFillPlan::kCopy;
+            const auto field = static_cast<MGPipeInputField>(i);
+            if (entry & ResidualFillPlan::kCopy) MGPipeFillAccess::CopyField(inputs, *ctx, field);
 #if MOBILEGL_PIPE_POISON
             // The value is copied either way; only the stamp is withheld for the omitted pair.
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;
+#else
+            (void)field;
 #endif
         }
         if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {

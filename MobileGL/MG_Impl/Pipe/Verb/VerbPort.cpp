@@ -630,9 +630,13 @@ namespace MobileGL::MG_Record {
             MG_State::GLState::GLContext* ctx = MG_State::pGLContext.get();
             if (ctx == nullptr) return b;
             if (const auto& vao = ctx->GetBoundVertexArray()) {
+                auto& emitter = MG_Pipe::MGPipeVertexInputEmitterInstance();
                 if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
                     b.ElementBufferBound = true;
-                    b.ElementBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*bound);
+                    // The validate point's emitter resolved this element buffer already (P14).
+                    b.ElementBuffer = emitter.KnownIndexHandle(*vao, bound->GetLifetimeId());
+                    if (MG_Pipe::MGPipeHandleIsNull(b.ElementBuffer))
+                        b.ElementBuffer = MG_Pipe::MGPipeResourceTrackerInstance().Find(*bound);
                 }
                 // P5e (vi): the client-array probe, in the SAME single read of the bindings the
                 // rest of the plan is made from rather than in a second walk at the refusal -
@@ -640,11 +644,15 @@ namespace MobileGL::MG_Record {
                 // frontend pass. The test is the emitter's own: EmitVertexBuffers publishes
                 // Res == kMGPipeNullHandle for exactly `attrib.Enabled && !attrib.Buffer`, so
                 // the flag and the record agree by construction instead of by inspection.
-                const auto& attributes = vao->GetAllAttributes();
-                for (SizeT i = 0; i < attributes.size(); ++i) {
-                    if (attributes[i].Enabled && !attributes[i].Buffer) {
-                        b.ClientVertexArrays = true;
-                        break;
+                // A memoised buffer set has no client array in it (P14): the 32-attribute walk only
+                // runs when the memo does not know.
+                if (!emitter.KnownWithoutClientArrays(*vao)) {
+                    const auto& attributes = vao->GetAllAttributes();
+                    for (SizeT i = 0; i < attributes.size(); ++i) {
+                        if (attributes[i].Enabled && !attributes[i].Buffer) {
+                            b.ClientVertexArrays = true;
+                            break;
+                        }
                     }
                 }
             }

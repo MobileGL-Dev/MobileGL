@@ -352,6 +352,19 @@ namespace MobileGL::MG_Pipe {
             return sizeof(MGPIndexBuffer);
         }
 
+        // P14: two per-draw questions of the verb port (VerbPort.cpp's ReadDrawBindings), answered
+        // from the per-VAO memo when it knows: whether no enabled attribute is a client array (a
+        // memoised buffer set is exactly that, for the configuration version it was built at), and
+        // the handle of an element buffer it already resolved. False / null mean "ask the frontend".
+        Bool KnownWithoutClientArrays(const VertexArrayObject& vao) {
+            const VaoMemo& memo = MemoFor(vao);
+            return memo.BuffersValid && memo.ConfigVersion == vao.GetConfigVersion();
+        }
+        MGPipeHandle KnownIndexHandle(const VertexArrayObject& vao, Uint64 indexLifetimeId) {
+            const VaoMemo& memo = MemoFor(vao);
+            return memo.IndexLifetimeId == indexLifetimeId ? memo.IndexHandle : kMGPipeNullHandle;
+        }
+
         // A set_index_buffer this emitter did not send (OwnedDrawInputs' private element
         // buffer): the server's binding and the bound array's kept one are no longer known.
         void NoteIndexBufferRoutedElsewhere(GLContext& ctx) {
@@ -477,11 +490,17 @@ namespace MobileGL::MG_Pipe {
         VaoMemo& MemoFor(const VertexArrayObject& vao) {
             const Uint64 lifetimeId = vao.GetLifetimeId();
             const Uint64 epoch = MGPipeSlots().ResetEpoch();
+            // The three emitters of one validate ask for the same array: the last answer's index,
+            // believed only while that entry still holds this id (a grow or an erase moves entries).
+            if (m_lastMemoIndex < m_vaoMemo.size() && m_vaoMemo[m_lastMemoIndex].LifetimeId == lifetimeId &&
+                m_vaoMemo[m_lastMemoIndex].SlotEpoch == epoch)
+                return m_vaoMemo[m_lastMemoIndex];
             if (m_vaoMemo.empty() || (m_vaoMemoUsed + 1) * 2 > m_vaoMemo.size()) GrowVaoMemo();
             const SizeT mask = m_vaoMemo.size() - 1;
             SizeT i = VaoMemoHome(lifetimeId, mask);
             while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId) i = (i + 1) & mask;
             VaoMemo& memo = m_vaoMemo[i];
+            m_lastMemoIndex = i;
             if (memo.LifetimeId == 0) ++m_vaoMemoUsed;
             if (memo.LifetimeId != lifetimeId || memo.SlotEpoch != epoch) {
                 memo = VaoMemo{};
@@ -509,6 +528,7 @@ namespace MobileGL::MG_Pipe {
         }
         Vector<VaoMemo> m_vaoMemo;
         SizeT m_vaoMemoUsed = 0;
+        SizeT m_lastMemoIndex = ~SizeT{0};
 
     public:
         // The VAO died (MGPipeEmitVertexElementsDestroyAndFree): its entry goes, by backward-shift

@@ -793,7 +793,12 @@ namespace MobileGL::MG_Pipe {
         if (const auto hook = g_compileEnvChangedHook.load(std::memory_order_acquire)) hook();
     }
 
-    MGPipeApplierState& MGPipeApplier() {
+    namespace Detail {
+        void* g_applierResolverInstalled = nullptr;
+        MGPipeApplierState* g_processApplier = &g_defaultApplier;
+    } // namespace Detail
+
+    MGPipeApplierState& MGPipeApplierForSession() {
         const MGPipeApplierKeyResolver resolve = g_applierKeyResolver;
         if (resolve == nullptr) return g_defaultApplier;
         MGPipeApplierKey key;
@@ -815,7 +820,10 @@ namespace MobileGL::MG_Pipe {
         return *applier;
     }
 
-    void MGPipeSetApplierKeyResolver(MGPipeApplierKeyResolver resolver) { g_applierKeyResolver = resolver; }
+    void MGPipeSetApplierKeyResolver(MGPipeApplierKeyResolver resolver) {
+        g_applierKeyResolver = resolver;
+        Detail::g_applierResolverInstalled = reinterpret_cast<void*>(resolver);
+    }
 
     void MGPipeApplierRegisterContext(Uint64 sessionKey, Uint64 contextToken, Uint64 shareGroupToken) {
         std::lock_guard<std::mutex> guard(g_applierSessionsMutex);
@@ -2979,12 +2987,21 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplier().BoundVertexElements = handle.Handle;
         // The array's kept bindings come back with it, through the same two applies their
         // records take, so every serial and field moves exactly as it would for the records.
-        // (The apply writes the same entries back over themselves: harmless, and no copy.)
+        // The window copy and the serial bumps are the two applies' own (the kept set passed
+        // their gates when it arrived); only the store-back into this same record is skipped.
+        auto& applier = MGPipeApplier();
         if (record->StoredBuffersValid) {
-            const MGPVertexBuffers header = record->StoredBuffersHeader;
-            MGPipeApplySetVertexBuffers(header, record->StoredBuffers.data());
+            const MGPVertexBuffers& header = record->StoredBuffersHeader;
+            for (Uint32 i = 0; i < header.Count; ++i) applier.VertexBuffers[header.Start + i] = record->StoredBuffers[i];
+            applier.VertexBufferStart = header.Start;
+            applier.VertexBufferCount = header.Count;
+            applier.VertexFetchBaseInstance = header.BaseInstance;
+            ++applier.VertexBuffersSerial;
         }
-        if (record->StoredIndexValid) MGPipeApplySetIndexBuffer(record->StoredIndex);
+        if (record->StoredIndexValid) {
+            applier.IndexBuffer = record->StoredIndex;
+            ++applier.IndexBufferSerial;
+        }
     }
 
     void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) {

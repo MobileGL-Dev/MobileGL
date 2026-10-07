@@ -223,10 +223,19 @@ namespace MobileGL::MG_Pipe {
             // span that moved goes out - when it is small enough to be worth it.
             const Uint8* image = static_cast<const Uint8*>(program->GetUBOData());
             if (cso == m_constantsCso && m_constantsShadow.size() == size && size <= 0xffffu) {
+                // Word-wise from both ends, then byte-wise inside the first differing word.
+                const Uint8* shadow = m_constantsShadow.data();
+                const auto word = [](const Uint8* at) {
+                    Uint64 value;
+                    std::memcpy(&value, at, sizeof(value));
+                    return value;
+                };
                 Uint32 first = 0;
-                while (first < size && image[first] == m_constantsShadow[first]) ++first;
+                while (first + 8 <= size && word(image + first) == word(shadow + first)) first += 8;
+                while (first < size && image[first] == shadow[first]) ++first;
                 Uint32 last = size;
-                while (last > first && image[last - 1] == m_constantsShadow[last - 1]) --last;
+                while (last >= first + 8 && word(image + last - 8) == word(shadow + last - 8)) last -= 8;
+                while (last > first && image[last - 1] == shadow[last - 1]) --last;
                 // Nothing moved but the version: one byte carries the new version.
                 if (first == size) {
                     first = 0;
