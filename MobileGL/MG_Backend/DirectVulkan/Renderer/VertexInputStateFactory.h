@@ -74,6 +74,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkPipelineVertexInputStateCreateInfo state{
                 VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
             };
+
+            // Back to a default-constructed state while keeping the vectors' storage, so a
+            // per-draw scratch rebuilds without touching the heap. Every member is reset by the
+            // default assignment; only the vectors' buffers are carried across it.
+            void ResetKeepingCapacity() {
+                const auto keep = [](auto& vector) {
+                    auto storage = Move(vector);
+                    storage.clear();
+                    return storage;
+                };
+                auto keptBindings = keep(bindings);
+                auto keptAttributes = keep(attributes);
+                auto keptBufferKeys = keep(bindingBufferKeys);
+                auto keptBaseOffsets = keep(bindingBaseOffsets);
+                auto keptLocations = keep(bindingAttributeLocations);
+                auto keptClientMemory = keep(bindingUsesClientMemory);
+                auto keptConversions = keep(bindingConversions);
+                auto keptDivisors = keep(bindingDivisors);
+                *this = BackendVertexInputState{};
+                bindings = Move(keptBindings);
+                attributes = Move(keptAttributes);
+                bindingBufferKeys = Move(keptBufferKeys);
+                bindingBaseOffsets = Move(keptBaseOffsets);
+                bindingAttributeLocations = Move(keptLocations);
+                bindingUsesClientMemory = Move(keptClientMemory);
+                bindingConversions = Move(keptConversions);
+                bindingDivisors = Move(keptDivisors);
+            }
         };
 
         VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):

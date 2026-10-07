@@ -475,6 +475,22 @@ namespace MobileGL::MG_Pipe {
         // so it obeys VertexBuffersSerial's rule: ADVANCED, never returned to a value it has
         // already handed out.
         Uint64 BindingsSerial = 0;
+
+        // P14: the backend program factory's content hash of THIS record's program, one entry per
+        // compile variant (the factory's own memo key). The hash reads the archive's SPIR-V, the
+        // block-binding tail and the variant, so an entry is valid exactly while Serial (a relink)
+        // and BindingsSerial (set_program_bindings) still hold the values it was taken at. It
+        // lives in the record so it dies with it: a recycled slot starts from a fresh record and
+        // no other record can ever answer from it. Nothing in MG_Pipe reads it.
+        struct BackendHashMemoEntry {
+            Uint64 Serial = 0;
+            Uint64 BindingsSerial = 0;
+            Uint64 Hash = 0;
+            Uint32 Key = 0;
+            Bool Valid = false;
+        };
+        mutable Array<BackendHashMemoEntry, 4> BackendHashMemo{};
+        mutable Uint32 BackendHashMemoNext = 0;
     };
 
     // The vertex-elements CSO as the applier holds it: the unpacked blob, both views, plus

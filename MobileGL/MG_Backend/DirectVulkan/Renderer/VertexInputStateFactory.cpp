@@ -20,7 +20,8 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
             const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
-        out = BackendVertexInputState{};
+        // The caller's state is a per-draw scratch (WireDraw.inc): reset it without freeing.
+        out.ResetKeepingCapacity();
         for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
             const auto& attr = elements.Attributes[location];
             if (!attr.Enabled || !(activeMask & (1u << location))) continue;

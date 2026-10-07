@@ -785,6 +785,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 swapchainImageIndex = 0;
             Bool isDefault = false, framebufferSrgb = false;
             Bool operator==(const WireDrawPassKey&) const = default;
+            // Default values, vectors emptied but their storage kept (the per-draw scratch).
+            void ResetKeepingCapacity() {
+                auto keptAttachments = Move(attachments);
+                auto keptColorReferences = Move(colorReferences);
+                *this = WireDrawPassKey{};
+                keptAttachments.clear();
+                keptColorReferences.clear();
+                attachments = Move(keptAttachments);
+                colorReferences = Move(keptColorReferences);
+            }
         };
         struct WireDrawPassCacheEntry {
             WireDrawPassKey key;
@@ -799,6 +809,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Vector<WireDrawPassCacheEntry>> m_wireDrawPassCaches;
         WireDrawPassKey m_wireDrawPassKey;
         WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
+        // The interned compatibility id of m_wireDrawPass's attachments, or 0 when not known yet.
+        // A draw that continues the pass (its WireDrawPassKey compares equal, which covers every
+        // input of the compatibility key) reuses it instead of building and hashing the key again.
+        Uint64 m_wireDrawPassCompatibilityId = 0;
+        // P14: SetupWireDraw's per-draw containers, cleared and refilled every draw instead of
+        // allocated and freed (the heap was ~10% of a Minecraft frame on the wire arm). A nested
+        // SetupWireDraw - nothing does that today - would use a local set (WireDraw.inc).
+        struct WireDrawScratch {
+            VertexInputStateFactory::BackendVertexInputState input;
+            Vector<BufferSlice> vertexSlices;
+            Vector<VkAttachmentDescription> attachments;
+            Vector<VkImageViewCreateInfo> viewInfos;
+            Vector<VkAttachmentReference> colors;
+            Vector<WireImage> sameLayoutAttachments;
+            WireDrawPassKey passKey;
+            WireRenderPassCompatibilityKey compatibilityKey;
+        };
+        WireDrawScratch m_wireDrawScratch;
         struct WireRetiredObjects {
             Uint64 submitIndex = 0;
             UniquePtr<RenderPassEntry> drawPass;

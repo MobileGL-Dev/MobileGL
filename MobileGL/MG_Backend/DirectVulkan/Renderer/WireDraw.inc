@@ -104,6 +104,7 @@
                 VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
         m_wireDrawPass.reset();
+        m_wireDrawPassCompatibilityId = 0;
         for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
         m_wireDrawPassKey = {};
@@ -117,6 +118,7 @@
     }
 
     void VulkanRenderer::RetireWireDrawPass() {
+        m_wireDrawPassCompatibilityId = 0;
         if (!m_wireDrawPass) return;
         auto& frame = m_frameContext.GetCurrent();
         if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
@@ -201,6 +203,11 @@
     Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
             Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
         auto& state = MG_Pipe::MGPipeApplier();
+        // The per-draw containers (VulkanRenderer.h's WireDrawScratch). Nothing re-enters this
+        // function from inside it today; if something ever does, it gets its own set rather
+        // than clearing the outer draw's.
+        WireDrawScratch nestedScratch;
+        WireDrawScratch& scratch = m_wirePreparationDepth == 0 ? m_wireDrawScratch : nestedScratch;
         const auto program = WireProgramSource(state.BoundShaderCso);
         if (!program.GetLinkStatus() || !program.GetSpirvStatus()) {
             MGL_WIRE_DECLINE_AT(ProgramLinkOrSpirv, "program is not linked or carries no SPIR-V");
@@ -265,7 +272,7 @@
         if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
         const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
         if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
-        VertexInputStateFactory::BackendVertexInputState input{};
+        auto& input = scratch.input;
         // P7 wave 2 package C, CONTRACT-P7 §3.2: THE `vertex-layout` ROW IS RETIRED AND SPLIT.
         //
         // A false is now ONE reason and only one - `buffer-window`, an enabled attribute the
@@ -301,7 +308,8 @@
             WireDeclineTally::Count(WireDeclineSite::VertexFormatUnsupported);
             return false;
         }
-        Vector<BufferSlice> vertexSlices(input.bindings.size());
+        auto& vertexSlices = scratch.vertexSlices;
+        vertexSlices.assign(input.bindings.size(), BufferSlice{});
         for (SizeT binding = 0; binding < input.bindings.size(); ++binding) {
             const Uint32 location = input.bindingAttributeLocations[binding];
             const auto& attr = vao.Attributes[location];
@@ -474,15 +482,19 @@
             return false;
         }
 
-        Vector<VkAttachmentDescription> attachments;
-        Vector<VkImageViewCreateInfo> viewInfos;
-        Vector<VkAttachmentReference> colors;
+        auto& attachments = scratch.attachments;
+        auto& viewInfos = scratch.viewInfos;
+        auto& colors = scratch.colors;
+        attachments.clear();
+        viewInfos.clear();
+        colors.clear();
         VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
         VkExtent2D extent{~0u, ~0u};
         Uint32 layers = ~0u;
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         Uint64 passHash = 0;
-        WireDrawPassKey passKey{};
+        auto& passKey = scratch.passKey;
+        passKey.ResetKeepingCapacity();
         passKey.isDefault = fbo->IsDefault;
         passKey.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
         if (fbo->IsDefault) {
@@ -492,7 +504,8 @@
             // attachments below resolve the same index, so this key has to be taken after it.
             passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
         }
-        Vector<WireImage> sameLayoutAttachments;
+        auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
+        sameLayoutAttachments.clear();
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
             if (!image.image) return VK_ATTACHMENT_UNUSED;
@@ -580,9 +593,13 @@
             if (!stillOpen)
                 for (auto& image : sameLayoutAttachments) TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
         }
-        if (!continuing) RetireWireDrawPass();
+        if (!continuing) {
+            RetireWireDrawPass();
+            m_wireDrawPassCompatibilityId = 0;
+        }
         if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
-            m_wireDrawPassKey = Move(passKey);
+            // A copy, not a move: passKey is the scratch's, and a new pass is the rare case.
+            m_wireDrawPassKey = passKey;
             Vector<VkImageView> views;
             views.reserve(viewInfos.size());
             for (const auto& info : viewInfos) {
@@ -609,13 +626,19 @@
             created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
         }
         auto& pass = *m_wireDrawPass;
-        WireRenderPassCompatibilityKey pipelinePassKey{};
-        for (const auto& attachment : attachments)
-            pipelinePassKey.attachmentFormatsAndSamples.push_back(
-                (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
-        for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
-        pipelinePassKey.depthReference = depth.attachment;
-        const Uint64 compatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
+        // Interned once per pass: a continued pass has the same key, so the same compatibility.
+        if (m_wireDrawPassCompatibilityId == 0) {
+            auto& pipelinePassKey = scratch.compatibilityKey;
+            pipelinePassKey.attachmentFormatsAndSamples.clear();
+            pipelinePassKey.colorReferences.clear();
+            for (const auto& attachment : attachments)
+                pipelinePassKey.attachmentFormatsAndSamples.push_back(
+                    (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
+            for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
+            pipelinePassKey.depthReference = depth.attachment;
+            m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
+        }
+        const Uint64 compatibilityId = m_wireDrawPassCompatibilityId;
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
             ResolvePrimitiveRestartEnable(aspects, indices), compatibilityId);
         if (pipeline == VK_NULL_HANDLE) {
