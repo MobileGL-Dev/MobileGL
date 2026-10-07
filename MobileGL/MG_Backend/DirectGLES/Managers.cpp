@@ -5138,6 +5138,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     indexBufferSynced = true;
                 }
                 if (indexBufferSynced) {
+                    m_syncedIndexRes = st.IndexBuffer.Res;
+                    m_syncedIndexValid = true;
                     // The two element-array restore scopes (the restart substitution's and
                     // MultiDrawImpl's) put the DRIVER id back without touching this serial,
                     // which is correct: the serial records what the APPLIER last said, and
@@ -5151,12 +5153,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedElementsSerial = rec->ContentSerial;
                 m_syncedVertexBuffersSerial = st.VertexBuffersSerial;
                 m_hasSyncedElements = true;
+                // The window this walk emitted, for AdoptUnchangedBufferSets.
+                m_syncedBufferStart = st.VertexBufferStart;
+                m_syncedBufferCount = std::min<Uint32>(st.VertexBufferCount,
+                                                       MG_Pipe::kMGPipeMaxVertexAttribs - st.VertexBufferStart);
+                m_syncedBufferBaseInstance = st.VertexFetchBaseInstance;
+                for (Uint32 i = 0; i < m_syncedBufferCount; ++i)
+                    m_syncedBuffers[i] = st.VertexBuffers[m_syncedBufferStart + i];
+                m_syncedBuffersValid = st.VertexBufferStart <= MG_Pipe::kMGPipeMaxVertexAttribs;
+                m_syncedContextSerial = st.ContextSerial;
             }
             if (emitAttributes) {
                 m_syncedFetchBaseInstance = fetchBaseInstance;
                 m_lastWalkWasPlain = walkWasPlain;
             }
             m_syncedBufferIdGeneration = currentBufferIdGeneration;
+        }
+
+        void BackendVertexArrayObject::AdoptUnchangedBufferSets(const MG_Pipe::MGPipeApplierState& st) {
+            if (!m_hasSyncedElements || m_syncedContextSerial != st.ContextSerial) return;
+            if (m_syncedBuffersValid && m_syncedVertexBuffersSerial != st.VertexBuffersSerial &&
+                st.VertexBufferStart == m_syncedBufferStart && st.VertexFetchBaseInstance == m_syncedBufferBaseInstance &&
+                std::min<Uint32>(st.VertexBufferCount, MG_Pipe::kMGPipeMaxVertexAttribs - st.VertexBufferStart) ==
+                    m_syncedBufferCount) {
+                Bool same = true;
+                for (Uint32 i = 0; same && i < m_syncedBufferCount; ++i) {
+                    const auto& a = m_syncedBuffers[i];
+                    const auto& b = st.VertexBuffers[m_syncedBufferStart + i];
+                    same = a.Res == b.Res && a.Offset == b.Offset && a.Stride == b.Stride &&
+                           a.Divisor == b.Divisor && a.BindingIndex == b.BindingIndex;
+                }
+                if (same) {
+                    if (m_resolvedDrawBuffers.valid && m_resolvedDrawBuffers.buffersSerial == m_syncedVertexBuffersSerial)
+                        m_resolvedDrawBuffers.buffersSerial = st.VertexBuffersSerial;
+                    m_syncedVertexBuffersSerial = st.VertexBuffersSerial;
+                }
+            }
+            if (m_syncedIndexValid && m_syncedIndexSerial != st.IndexBufferSerial && m_syncedIndexRes == st.IndexBuffer.Res) {
+                if (m_resolvedDrawBuffers.iboSerial == m_syncedIndexSerial) m_resolvedDrawBuffers.iboSerial = st.IndexBufferSerial;
+                m_syncedIndexSerial = st.IndexBufferSerial;
+            }
         }
 
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
@@ -5166,8 +5202,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             // This rewrites the driver VAO's arrays behind SyncToBackendFromApplier's gate, so
-            // the next sync must not take its buffers-only walk.
+            // the next sync must not take its buffers-only walk, nor adopt an equal buffer set.
             m_lastWalkWasPlain = false;
+            m_syncedBuffersValid = false;
 
             Bind();
 

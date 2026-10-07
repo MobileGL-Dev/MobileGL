@@ -4690,6 +4690,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         VertexArrayImpl::BackendVertexArrayObject* vaoTwin = nullptr;
         Uint32 vaoConfigVersion = 0;
         vaoTwin = VertexArrayImpl::ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
+        if (vaoTwin != nullptr) vaoTwin->AdoptUnchangedBufferSets(MG_Pipe::MGPipeApplier());
         // One program resolve and one texture-key capture serve the whole draw, for
         // the same reason the twin resolve does: only frontend GL entry points move
         // either, and none can run inside this preparation. GetProgramForDraw is a

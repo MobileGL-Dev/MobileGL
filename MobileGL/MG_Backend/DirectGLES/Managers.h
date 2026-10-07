@@ -1181,6 +1181,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // overload, not defaulted to null") is what this obeys. The body is unchanged and
             // was already record-only - it is this family's existence proof (scout S1 §2).
             void SyncToBackendFromApplier();
+            // P14: the applier's buffer-set serials move whenever ANY VAO's set is published, so
+            // switching between two VAOs moves them although neither twin's buffers changed. Called
+            // before the draw's syncs: when the window this twin last emitted is the applier's
+            // window value for value, take the new serials as already synced (and carry the
+            // resolved-buffers memo along) instead of re-emitting a driver VAO that already holds
+            // exactly that. Only within the applier context the twin last synced against.
+            void AdoptUnchangedBufferSets(const MG_Pipe::MGPipeApplierState& st);
             void SyncClientSideAttributesForDrawArrays(
                 const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count,
                 Uint32 fetchBaseInstance = 0);
@@ -1396,6 +1403,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // path, so the driver VAO's enable flags are exactly the configuration's and a walk
             // for a moved buffer set alone may skip them (SyncToBackendFromApplier).
             Bool m_lastWalkWasPlain = false;
+            // P14: the vertex-buffer window and element buffer as last emitted into the driver
+            // VAO, for AdoptUnchangedBufferSets. Handles are {slot, gen}, never reused.
+            Array<MG_Pipe::MGPVertexBuffer, MG_Pipe::kMGPipeMaxVertexAttribs> m_syncedBuffers{};
+            Uint32 m_syncedBufferStart = 0, m_syncedBufferCount = 0, m_syncedBufferBaseInstance = 0;
+            Bool m_syncedBuffersValid = false;
+            MG_Pipe::MGPipeHandle m_syncedIndexRes = MG_Pipe::kMGPipeNullHandle;
+            Bool m_syncedIndexValid = false;
+            Uint64 m_syncedContextSerial = 0;
         };
 
         extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
