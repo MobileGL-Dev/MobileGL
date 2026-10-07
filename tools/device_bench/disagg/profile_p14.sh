@@ -33,7 +33,7 @@ esac
 adb -s "$SER" shell "am force-stop $PKG_FEAT; am force-stop $PKG_DEV; run-as $pkg sh -c 'rm -f $app/output/*.json'" >/dev/null 2>&1
 adb -s "$SER" shell "am start -a top.mobilegl.plugin.TRACE_REPLAY -n $pkg/top.mobilegl.plugin.trace.TraceReplayActivity --es trace_path $app/input-$WL/trace.trace --es golden_path $app/input-$WL/golden.png --es output_dir $app/output --es backend $BACKEND $args --ez use_pbuffer true --ez benchmark true --es benchmark_result_path $app/output/benchmark.json --es mobilegl_env '$env'" >/dev/null
 sleep "$DELAY"
-pids=$(adb -s "$SER" shell "su -c 'echo \$(pidof $pkg) \$(pgrep -f ^libMobileGLServer.so)'" | tr -d '\r' | tr -s ' ' ',' | sed 's/^,//; s/,$//')
+pids=$(adb -s "$SER" shell "su -c 'echo \$(pidof $pkg) \$(pgrep -f $pkg.*libMobileGLServer.so)'" | tr -d '\r' | tr -s ' ' ',' | sed 's/^,//; s/,$//')
 echo "pids=$pids" | tee "$OUT/pids.txt"
 adb -s "$SER" shell "su -c 'simpleperf record -e cpu-clock -p $pids --call-graph fp -f 4000 --duration $DUR -o /data/local/tmp/p14perf.data'" >"$OUT/record.log" 2>&1
 adb -s "$SER" exec-out "run-as $pkg cat $app/output/benchmark.json" >"$OUT/benchmark.json" 2>/dev/null

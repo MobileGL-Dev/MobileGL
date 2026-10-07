@@ -95,9 +95,9 @@ static int ScanPids(const char* pkg, int* pids) {
         snprintf(path, sizeof path, "/proc/%s/cmdline", e->d_name);
         if (ReadSmall(path, buf, sizeof buf) <= 0) continue;
         // The replay process (and its :services), plus the render-server processes the spawn and
-        // tcp arms exec (their cmdline is the server library's name, not the package's).
+        // tcp arms exec (their cmdline is the server library's path in the package's install dir).
         if ((strncmp(buf, pkg, len) == 0 && (buf[len] == 0 || buf[len] == ':')) ||
-            strncmp(buf, "libMobileGLServer.so", 20) == 0)
+            (strstr(buf, "libMobileGLServer.so") != NULL && strstr(buf, pkg) != NULL))
             pids[n++] = atoi(e->d_name);
     }
     closedir(d);
