@@ -2,7 +2,7 @@
 """Inclusive share of fixed components on one thread of a simpleperf profile, converted to
 milliseconds per frame with the thread's measured CPU ms/frame.
 
-    python components.py <perf.data> <binary_cache> <thread comm> [cpu_ms_per_frame]
+    python components.py <perf.data> <binary_cache> <thread comm> [cpu_ms_per_frame] [--tail-ms=N]
 
 A sample counts toward a component when any frame of its call chain matches the component's
 pattern (first match in COMPONENTS order wins for the 'exclusive' column, so the rows of that
@@ -14,6 +14,26 @@ from collections import Counter
 
 sys.path.insert(0, os.environ.get("SIMPLEPERF_DIR", ""))
 from simpleperf_report_lib import ReportLib  # noqa: E402
+
+
+def tail_start(data, symfs, tail_ms):
+    """Timestamp (ns) where the last `tail_ms` of the recording begins, or 0 for everything."""
+    if not tail_ms:
+        return 0
+    lib = ReportLib()
+    lib.SetRecordFile(data)
+    lib.SetSymfs(symfs)
+    # The end is the replay's last retraced call, not the recording's last sample: the app
+    # tears its context down after the benchmark ends, and that must not land in the window.
+    last = 0
+    while True:
+        sample = lib.GetNextSample()
+        if sample is None:
+            break
+        chain = lib.GetCallChainOfCurrentSample()
+        if any("retrace::retraceCall" in chain.entries[i].symbol.symbol_name for i in range(chain.nr)):
+            last = max(last, sample.time)
+    return last - int(tail_ms * 1e6)
 
 COMPONENTS = [
     ("trace parse (harness)", ("trace::Parser::", "BrotliFile", "trace::Call::~Call", "trace::File::")),
@@ -29,8 +49,11 @@ COMPONENTS = [
 
 
 def main():
-    data, symfs, comm = sys.argv[1], sys.argv[2], sys.argv[3]
-    cpu = float(sys.argv[4]) if len(sys.argv) > 4 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("--tail-ms=")]
+    tail = next((float(a.split("=", 1)[1]) for a in sys.argv[1:] if a.startswith("--tail-ms=")), 0.0)
+    data, symfs, comm = args[0], args[1], args[2]
+    cpu = float(args[3]) if len(args) > 3 else None
+    start = tail_start(data, symfs, tail)
     lib = ReportLib()
     lib.SetRecordFile(data)
     lib.SetSymfs(symfs)
@@ -41,7 +64,7 @@ def main():
         sample = lib.GetNextSample()
         if sample is None:
             break
-        if comm not in sample.thread_comm:
+        if comm not in sample.thread_comm or sample.time < start:
             continue
         total += 1
         frames = [lib.GetSymbolOfCurrentSample().symbol_name]

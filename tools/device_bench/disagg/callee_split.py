@@ -17,6 +17,26 @@ sys.path.insert(0, os.environ.get("SIMPLEPERF_DIR", ""))
 from simpleperf_report_lib import ReportLib  # noqa: E402
 
 
+def tail_start(data, symfs, tail_ms):
+    """Timestamp (ns) where the last `tail_ms` of the recording begins, or 0 for everything."""
+    if not tail_ms:
+        return 0
+    lib = ReportLib()
+    lib.SetRecordFile(data)
+    lib.SetSymfs(symfs)
+    # The end is the replay's last retraced call, not the recording's last sample: the app
+    # tears its context down after the benchmark ends, and that must not land in the window.
+    last = 0
+    while True:
+        sample = lib.GetNextSample()
+        if sample is None:
+            break
+        chain = lib.GetCallChainOfCurrentSample()
+        if any("retrace::retraceCall" in chain.entries[i].symbol.symbol_name for i in range(chain.nr)):
+            last = max(last, sample.time)
+    return last - int(tail_ms * 1e6)
+
+
 def short(name):
     name = name.split("(")[0]
     return name.replace("MobileGL::", "").replace("MG_Backend::DirectVulkan::", "DV::")[-110:]
@@ -30,10 +50,12 @@ def main():
     ap.add_argument("--depth", type=int, default=1)
     ap.add_argument("--thread", default=None)
     ap.add_argument("--top", type=int, default=40)
+    ap.add_argument("--tail-ms", type=float, default=0.0, help="only the last N ms of the recording")
     ap.add_argument("--leaf", action="store_true",
                     help="match <function> against the LEAF only and attribute to the nearest caller "
                          "outside the allocator/libc/atomics (who called malloc?)")
     args = ap.parse_args()
+    start = tail_start(args.data, args.symfs, args.tail_ms)
     lib = ReportLib()
     lib.SetRecordFile(args.data)
     lib.SetSymfs(args.symfs)
@@ -44,7 +66,7 @@ def main():
         sample = lib.GetNextSample()
         if sample is None:
             break
-        if args.thread and args.thread not in sample.thread_comm:
+        if (args.thread and args.thread not in sample.thread_comm) or sample.time < start:
             continue
         total += 1
         # frames leaf first: the sample's own symbol, then callchain entries (callers)
