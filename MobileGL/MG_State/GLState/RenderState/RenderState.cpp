@@ -6,6 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include <cstring>
+#include <new>
+#include <type_traits>
 #include "RenderState.h"
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include "MG_Util/Debug/Log.h"
@@ -35,6 +38,16 @@ namespace MobileGL {
             } // namespace
 
             RenderState::RenderState() {
+                // ZERO PADDING FIRST. The parameters' pipeline and dynamic chunks are pushed as
+                // bytes and content-addressed byte for byte (CsoCache's hash and memcmp), so the
+                // padding between members must not carry whatever the allocator left there: two
+                // contexts with equal state would otherwise mint two render-state CSOs, and the
+                // recorder goldens (MG_Test/Pipe/RecorderGoldenTest.cpp) would not be repeatable.
+                // Re-constructing in place keeps every default member initializer; the type is
+                // trivially destructible, so the first construction needs no destructor call.
+                static_assert(std::is_trivially_destructible_v<RenderStateParameters>);
+                std::memset(static_cast<void*>(&m_parameters), 0, sizeof(m_parameters));
+                new (&m_parameters) RenderStateParameters();
                 // The color writemask defaults to all-true for every draw buffer.
                 for (auto& mask : m_parameters.ColorMasks) {
                     mask = BoolVec4(true, true, true, true);

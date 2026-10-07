@@ -3555,7 +3555,12 @@ namespace MobileGL::MG_Pipe {
                 ? MG_Remote::Client::ContextValuesWireLive()
                 : MG_Config::RecordArmAliasesFrontend();
 #else
-        constexpr Bool contextValuesWireLive = false;
+        // P13 W8: a library without a transport is ALWAYS monolith's record arm, so it takes the
+        // eight fields from the record exactly as the split build's monolith does. This branch
+        // used to answer a constant false - the pre-W5 pull shape - and left the shipped (FCL)
+        // build pulling them by residual fill while the split build's monolith carried them; the
+        // recorder goldens (MG_Test/Pipe/RecorderGoldenTest.cpp) found the two streams differ.
+        const Bool contextValuesWireLive = MG_Config::RecordArmAliasesFrontend();
 #endif
         // AND THE SEVENTH IS P5eFamilyIsLive (ID-106), which is the same sentence for the
         // binding-point family and asks bit 13's OWN consumer bit rather than the resource
