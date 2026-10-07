@@ -93,7 +93,8 @@ namespace MobileGL::MG_State::GLState {
 
     // Opaque, refcounted handle to the backend's GPU storage for one buffer
     // (the driver-side resource). The active backend derives from it and attaches
-    // its own payload (VkBufferResource / GLESBufferResource). Held by PipeResource.
+    // its own payload (GLESBufferResource); since P13 it is held by the backend's own
+    // handle-keyed table, never by the frontend object.
     class BackendBufferResource {
     public:
         virtual ~BackendBufferResource() = default;
@@ -184,18 +185,12 @@ namespace MobileGL::MG_State::GLState {
         // errors the frontend refuses before reaching here.
         void ReleasePersistentMap() { m_gpuMapped = nullptr; }
 
-        // Backend GPU resource, owned here in both modes.
-        const SharedPtr<BackendBufferResource>& Backend() const { return m_backend; }
-        void SetBackend(SharedPtr<BackendBufferResource> backend) { m_backend = std::move(backend); }
-        SharedPtr<BackendBufferResource> ReleaseBackend() { return std::move(m_backend); }
-
     private:
         // MapAlignedData, not Data: a read-only glMapBuffer hands the application this very
         // pointer, and a range map hands it base + offset, so the base has to be on the
         // GL_MIN_MAP_BUFFER_ALIGNMENT grid for either to satisfy ARB_map_buffer_alignment.
         SharedPtr<MapAlignedData> m_shadow = MakeShared<MapAlignedData>();
         void* m_gpuMapped = nullptr;
-        SharedPtr<BackendBufferResource> m_backend;
         // See ShadowAllocationBytes. Split-only so the pull build's layout does not move (G1).
         SizeT m_shadowExtent = 0;
     };

@@ -18,6 +18,7 @@
 
 #include <Config.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
@@ -42,19 +43,37 @@ namespace {
     using MG_Record::PersistentMapTracker;
 
     // A backend that MINTS a persistent mapping, for the one case that needs the adopted arm
-    // (TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo). Only AcquirePersistentMap is
-    // filled in: the frontend null-checks every op individually, and a table with one live
-    // member is the smallest thing that makes AcquireMemoryRange's legacy adoption arm fire.
-    // The storage is the CASE's, not this table's - AdoptPersistentMap keeps the pointer and
-    // never owns it - so the base travels through a file-scope variable the case sets and
-    // clears around the one acquisition it wants minted.
+    // (TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo): a resource op table (P13: the
+    // only buffer op table there is) whose one live member is MapPersistent. The storage is the
+    // CASE's, not this table's - AdoptPersistentMap keeps the pointer and never owns it - so the
+    // base travels through a file-scope variable the case sets and clears.
     void* g_mintedPersistentBase = nullptr;
-    void* MintPersistentMap(BufferObject&) { return g_mintedPersistentBase; }
-    const MG_State::GLState::BufferBackendOps g_mintingBufferOps = [] {
-        MG_State::GLState::BufferBackendOps ops{};
-        ops.AcquirePersistentMap = &MintPersistentMap;
+    void* MintPersistentMap(MG_Pipe::MGPipeHandle, Uint64, const void*) { return g_mintedPersistentBase; }
+    const MG_Pipe::MGPipeResourceOps g_mintingResourceOps = [] {
+        MG_Pipe::MGPipeResourceOps ops{};
+        ops.MapPersistent = &MintPersistentMap;
         return ops;
     }();
+
+    // The window in which the case is a MONOLITH with that backend registered: the adopted buffer
+    // is created, mapped and destroyed inside one, so its records are applied synchronously.
+    struct ScopedMintingMonolith {
+        ScopedMintingMonolith()
+            : m_transport(MG_Config::Transport), m_push(MG_Config::Features.PipePush),
+              m_ops(MG_Pipe::MGPipeGetResourceOps()) {
+            MG_Config::Transport = MG_Config::TransportMode::Monolith;
+            MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
+            MG_Pipe::MGPipeSetResourceOps(&g_mintingResourceOps);
+        }
+        ~ScopedMintingMonolith() {
+            MG_Pipe::MGPipeSetResourceOps(m_ops);
+            MG_Config::Features.PipePush = m_push;
+            MG_Config::Transport = m_transport;
+        }
+        MG_Config::TransportMode m_transport;
+        Uint64 m_push;
+        const MG_Pipe::MGPipeResourceOps* m_ops;
+    };
 
     // Everything in this package is gated on `Transport != Monolith`, so every case has to
     // put the process into a split configuration and put it back. A fixture rather than a
@@ -82,7 +101,6 @@ namespace {
             // Belt and braces for the one case that installs a minting backend: a table left
             // behind would make the NEXT case's acquisition land in the adopted arm, and every
             // membership assertion in this file would then be about a different code path.
-            MG_State::GLState::SetBufferBackendOps(nullptr);
             g_mintedPersistentBase = nullptr;
             MG_Remote::Transport::ForgetAdoptTierSettlementForTest();
             PersistentMapTracker::Instance().ClearForTest();
@@ -327,7 +345,11 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
     Vector<Uint8> minted(kSize, static_cast<Uint8>(0));
     g_mintedPersistentBase = minted.data();
 
-    auto adopted = MakeBuffer(27u, kSize);
+    SharedPtr<BufferObject> adopted;
+    {
+        ScopedMintingMonolith minting;
+        adopted = MakeBuffer(27u, kSize);
+    }
     auto declined = MakeBuffer(28u, kSize);
 
     // The declined twin first, with no backend ops at all: same flags, same size, same call.
@@ -339,12 +361,9 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
            "assertion below proves nothing";
 
     {
-        MG_State::GLState::SetBufferBackendOps(&g_mintingBufferOps);
-        MG_Config::Transport = MG_Config::TransportMode::Monolith;
+        ScopedMintingMonolith minting;
         adopted->AcquireMemoryRange(Range1D{0, kSize},
                                     BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
-        MG_Config::Transport = MG_Config::TransportMode::InProcess;
-        MG_State::GLState::SetBufferBackendOps(nullptr);
     }
     ASSERT_TRUE(adopted->IsBackendPersistentMapped())
         << "the backend declined the mint, so there is no adopted arm here to ask about";
@@ -383,7 +402,10 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
     // being redefined, and a persistent map the application holds outlives every unmap by
     // definition (PipeResource.h:121-127). It is dropped here with the mapping still adopted,
     // which is also the shape ~BufferObject has to survive.
-    adopted.reset();
+    {
+        ScopedMintingMonolith minting;
+        adopted.reset();
+    }
     g_mintedPersistentBase = nullptr;
 }
 

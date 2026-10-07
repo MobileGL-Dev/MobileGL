@@ -1556,7 +1556,7 @@ TEST_F(GeneralBufferTest, General_GeneralTest_1) {
 // ---------------------------------------------------------------------------
 // Zero-copy persistent-coherent mapping via the PipeResource layer (regression
 // guard for the GpuMemory OOM / rendering-corruption bug). A fake backend hands
-// out a block of "GPU" memory from AcquirePersistentMap; the frontend adopts it
+// out a block of "GPU" memory from MapPersistent; the frontend adopts it
 // as the buffer's storage. The test asserts (a) the app maps straight onto that
 // GPU memory, (b) EVERY reader (MappedData(), the accessor all backend consumers
 // now use) resolves to that same GPU memory rather than a stale shadow - the bug
@@ -1583,50 +1583,53 @@ namespace {
 
     ZeroCopyMockBackend* g_zeroCopyMock = nullptr;
 
-    void* ZeroCopyMock_AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject) {
+    // P13: the mock is a MGPipeResourceOps table - the live resource family every backend
+    // registers - and no longer the deleted BufferBackendOps table. The frontend reaches it the
+    // way it reaches a real backend in monolith: the emitters build the records and the applier
+    // dispatches them synchronously.
+    void* ZeroCopyMock_MapPersistent(MG_Pipe::MGPipeHandle, Uint64 size, const void* seedBytes) {
         if (!g_zeroCopyMock || !g_zeroCopyMock->provideMap) return nullptr;
-        if (g_zeroCopyMock->gpu.size() != bufferObject.GetSize()) {
-            g_zeroCopyMock->gpu.assign(bufferObject.GetSize(), 0);
-            // Seed from the shadow (still current: the frontend adopts only after we return).
-            const Uint8* shadow = bufferObject.MappedData();
-            if (shadow != nullptr && bufferObject.GetSize() > 0) {
-                Memcpy(g_zeroCopyMock->gpu.data(), shadow, bufferObject.GetSize());
+        if (g_zeroCopyMock->gpu.size() != size) {
+            g_zeroCopyMock->gpu.assign(static_cast<SizeT>(size), 0);
+            // Seed from the shadow the frontend hands over (it adopts only after we return).
+            if (seedBytes != nullptr && size > 0) {
+                Memcpy(g_zeroCopyMock->gpu.data(), seedBytes, static_cast<SizeT>(size));
             }
         }
         ++g_zeroCopyMock->acquireMapCalls;
         return g_zeroCopyMock->gpu.data();
     }
 
-    void ZeroCopyMock_Respecify(MG_State::GLState::BufferObject&) {
+    void ZeroCopyMock_Respecify(MG_Pipe::MGPipeHandle, const MG_Pipe::MGPResourceDesc&, const void*) {
         if (g_zeroCopyMock) ++g_zeroCopyMock->respecifyCalls;
     }
-    void ZeroCopyMock_SubData(MG_State::GLState::BufferObject&, SizeT, SizeT) {
+    void ZeroCopyMock_SubData(MG_Pipe::MGPipeHandle, const MG_Pipe::MGPSubData&, const void*) {
         if (g_zeroCopyMock) ++g_zeroCopyMock->subDataCalls;
     }
-    void ZeroCopyMock_Flush(MG_State::GLState::BufferObject&, Range1D, Flags<BufferMappingAccessBit>) {
+    void ZeroCopyMock_Flush(MG_Pipe::MGPipeHandle, const MG_Pipe::MGPFlushRange&, const void*) {
         if (g_zeroCopyMock) ++g_zeroCopyMock->flushCalls;
     }
-    void ZeroCopyMock_OnDestroy(SharedPtr<MG_State::GLState::BackendBufferResource>&&) {}
+    void ZeroCopyMock_Destroy(MG_Pipe::MGPipeHandle) {}
 
-    const MG_State::GLState::BufferBackendOps kZeroCopyMockOps = {
+    const MG_Pipe::MGPipeResourceOps kZeroCopyMockOps = {
         .Respecify = ZeroCopyMock_Respecify,
         .SubData = ZeroCopyMock_SubData,
-        .FlushMappedRange = ZeroCopyMock_Flush,
-        .OnDestroy = ZeroCopyMock_OnDestroy,
-        .AcquirePersistentMap = ZeroCopyMock_AcquirePersistentMap,
+        .FlushRange = ZeroCopyMock_Flush,
+        .Destroy = ZeroCopyMock_Destroy,
+        .MapPersistent = ZeroCopyMock_MapPersistent,
     };
 
     // The same backend with the GPU-ordered landing ops a staging-ring backend offers: a
     // CPU write into an adopted store is queued (the mapping is NOT written through), and
     // a readback is what lands the queue before the application reads.
-    void ZeroCopyMock_ResidentSubData(MG_State::GLState::BufferObject&, SizeT offset, DataPtr data) {
+    void ZeroCopyMock_ResidentSubData(MG_Pipe::MGPipeHandle, const MG_Pipe::MGPSubData& record, const void* bytes) {
         if (!g_zeroCopyMock) return;
         auto& write = g_zeroCopyMock->residentWrites.emplace_back();
-        write.offset = offset;
-        const auto* bytes = static_cast<const Uint8*>(data.data);
-        write.bytes.assign(bytes, bytes + data.size);
+        write.offset = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferOffset(record));
+        const auto* first = static_cast<const Uint8*>(bytes);
+        write.bytes.assign(first, first + static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record)));
     }
-    void ZeroCopyMock_ReadbackFromGpu(MG_State::GLState::BufferObject&) {
+    void ZeroCopyMock_Readback(MG_Pipe::MGPipeHandle, const MG_Pipe::MGPReadback&) {
         if (!g_zeroCopyMock) return;
         ++g_zeroCopyMock->readbackCalls;
         for (const auto& write : g_zeroCopyMock->residentWrites) {
@@ -1639,32 +1642,32 @@ namespace {
         g_zeroCopyMock->residentWrites.clear();
     }
 
-    const MG_State::GLState::BufferBackendOps kResidentSubDataMockOps = {
+    const MG_Pipe::MGPipeResourceOps kResidentSubDataMockOps = {
         .Respecify = ZeroCopyMock_Respecify,
         .SubData = ZeroCopyMock_SubData,
-        .ResidentSubData = ZeroCopyMock_ResidentSubData,
-        .FlushMappedRange = ZeroCopyMock_Flush,
-        .OnDestroy = ZeroCopyMock_OnDestroy,
-        .AcquirePersistentMap = ZeroCopyMock_AcquirePersistentMap,
-        .ReadbackFromGpu = ZeroCopyMock_ReadbackFromGpu,
+        .SubDataResident = ZeroCopyMock_ResidentSubData,
+        .FlushRange = ZeroCopyMock_Flush,
+        .Readback = ZeroCopyMock_Readback,
+        .Destroy = ZeroCopyMock_Destroy,
+        .MapPersistent = ZeroCopyMock_MapPersistent,
     };
 
-    // These cases are BufferBackendOps dispatch tests. Since P3a a push build also installs the
-    // handle-shaped MGPipeResourceOps table at backend bring-up, and the frontend's push arms route
-    // every buffer mutation there first; the fixture therefore scopes BOTH tables, the way
-    // ResourceEmitTest's ApplierGuard scopes the applier, so the mock installed here is the arm
-    // that actually runs. The pipe-side dispatch has its own coverage in ResourceEmitTest.
+    // Installs the mock as the process's resource op table for the case and arms the resource
+    // subsystem bit (a fixture that never ran Initialize() has not loaded the fixed mask), and
+    // puts both back afterwards.
     struct ScopedBackendOps {
-        explicit ScopedBackendOps(const MG_State::GLState::BufferBackendOps* ops) {
-            MG_State::GLState::SetBufferBackendOps(ops);
+        explicit ScopedBackendOps(const MG_Pipe::MGPipeResourceOps* ops) {
+            m_savedPush = MG_Config::Features.PipePush;
+            MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
             m_savedResourceOps = MG_Pipe::MGPipeGetResourceOps();
-            MG_Pipe::MGPipeSetResourceOps(nullptr);
+            MG_Pipe::MGPipeSetResourceOps(ops);
         }
         ~ScopedBackendOps() {
             MG_Pipe::MGPipeSetResourceOps(m_savedResourceOps);
-            MG_State::GLState::SetBufferBackendOps(nullptr);
+            MG_Config::Features.PipePush = m_savedPush;
         }
         const MG_Pipe::MGPipeResourceOps* m_savedResourceOps = nullptr;
+        Uint64 m_savedPush = 0;
     };
 } // namespace
 

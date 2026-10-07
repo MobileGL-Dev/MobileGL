@@ -26,7 +26,6 @@
 
 namespace MobileGL::MG_State::GLState {
     namespace {
-        const BufferBackendOps* g_bufferBackendOps = nullptr;
         // Starts at 1 so a zero-initialized cache slot can never carry a live buffer's id.
         std::atomic<Uint64> g_nextBufferLifetimeId{1};
 
@@ -69,14 +68,6 @@ namespace MobileGL::MG_State::GLState {
         return g_nextBufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void SetBufferBackendOps(const BufferBackendOps* ops) {
-        g_bufferBackendOps = ops;
-    }
-
-    const BufferBackendOps* GetBufferBackendOps() {
-        return g_bufferBackendOps;
-    }
-
     BufferObject::BufferObject(Uint externalIndex)
         : m_externalIndex(externalIndex), m_size(0), m_usage(BufferUsage::StaticDraw), m_isMapped(false),
           m_mappingAccess(BufferMappingAccessBit::Null), m_mappedRange({0, 0}), m_ownsStagingData{} {
@@ -104,10 +95,7 @@ namespace MobileGL::MG_State::GLState {
         // while a backend's table was registered and destroyed after it was unregistered has
         // a pipe record to drop and no legacy backend object, and one constructed the other
         // way round has the opposite, so the create's answer is the only one that pairs.
-        if (MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this)) return;
-        if (m_resource.Backend() && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
-            g_bufferBackendOps->OnDestroy(m_resource.ReleaseBackend());
-        }
+        (void)MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this);
     }
 
     void BufferObject::NotifyRespecify() {
@@ -115,10 +103,6 @@ namespace MobileGL::MG_State::GLState {
         MGP_NOTE_AGGREGATE(BufferChange);
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             MG_Pipe::MGPipeEmitResourceRespecify(*this);
-            return;
-        }
-        if (g_bufferBackendOps && g_bufferBackendOps->Respecify) {
-            g_bufferBackendOps->Respecify(*this);
         }
     }
 
@@ -129,10 +113,6 @@ namespace MobileGL::MG_State::GLState {
         m_hasDefinedContent = true;
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             MG_Pipe::MGPipeEmitResourceSubData(*this, offset, size);
-            return;
-        }
-        if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
-            g_bufferBackendOps->SubData(*this, offset, size);
         }
     }
 
@@ -147,10 +127,6 @@ namespace MobileGL::MG_State::GLState {
                           "real Flags<BufferMappingAccessBit>, unnormalised");
             MG_Pipe::MGPipeEmitResourceFlushRange(*this, range.start, range.end - range.start,
                                                   static_cast<Uint32>(appAccess.GetRaw()));
-            return;
-        }
-        if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
-            g_bufferBackendOps->FlushMappedRange(*this, range, appAccess);
         }
     }
 
@@ -279,19 +255,6 @@ namespace MobileGL::MG_State::GLState {
         if (m_isMapped) return;
         if (MG_Pipe::MGPipeResourceSubsystemEnabled()) {
             if (void* base = MG_Pipe::MGPipeEmitMapPersistent(*this)) m_resource.AdoptPersistentMap(base);
-            return;
-        }
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // R-6 IS "ALWAYS", AND THIS IS ITS SECOND DOOR. MGPipeApplyMapPersistent declines
-        // every acquisition under split - but a split build whose backend registered no
-        // MGPipe resource ops falls through to the LEGACY hook below, which would mint a real
-        // pointer and adopt it. A donated address is meaningless across a process, and an
-        // inproc lane that adopted would be green for a reason spawn cannot reproduce.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return;
-#endif
-        if (g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) return;
-        if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
-            m_resource.AdoptPersistentMap(base);
         }
     }
 
@@ -627,12 +590,7 @@ namespace MobileGL::MG_State::GLState {
             // the applier, so the caller sees the reconciled shadow on return exactly as it
             // does today.
             MG_Pipe::MGPipeEmitResourceReadback(*this);
-            return;
         }
-        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->ReadbackFromGpu == nullptr) {
-            return;
-        }
-        g_bufferBackendOps->ReadbackFromGpu(*this);
     }
 
     void BufferObject::UploadSubData(DataPtr data, SizeT atOffset) {
@@ -699,15 +657,6 @@ namespace MobileGL::MG_State::GLState {
             NotifyContentWrite(offset, bytes.size);
             return;
         }
-        if (bytes.size > 0 && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
-            g_bufferBackendOps->ResidentSubData(*this, offset, bytes);
-            m_hasDefinedContent = true;
-            ++m_changeSerial;
-            MGP_NOTE_AGGREGATE(BufferChange);
-            m_gpuWritePending = true;
-            return;
-        }
-
         SyncGpuWrites();
         Memcpy(m_resource.Bytes() + offset, bytes.data, bytes.size);
         NotifyContentWrite(offset, bytes.size);
@@ -734,9 +683,7 @@ namespace MobileGL::MG_State::GLState {
         // for nothing.
         if (m_resource.IsGpuResident() &&
             // The same question, asked of whichever table owns the family in this build.
-            (MG_Pipe::MGPipeResourceSubsystemEnabled()
-                 ? MG_Pipe::MGPipeResourceOpsHaveSubDataResident()
-                 : (g_bufferBackendOps && g_bufferBackendOps->ResidentSubData))
+            MG_Pipe::MGPipeResourceSubsystemEnabled() && MG_Pipe::MGPipeResourceOpsHaveSubDataResident()
         ) {
             Vector<Uint8> expanded(size);
             if (pattern.size == 1) {
@@ -849,19 +796,7 @@ namespace MobileGL::MG_State::GLState {
             m_resource.AdoptPersistentMap(pushedBase);
             return true;
         }
-#if MOBILEGL_BUILD_DISAGGREGATED
-        // R-6's second door, as in TryAdoptLargeStorage above.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return false;
-#endif
-        if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) {
-            return false;
-        }
-        void* base = g_bufferBackendOps->AcquirePersistentMap(*this);
-        if (base == nullptr) {
-            return false;
-        }
-        m_resource.AdoptPersistentMap(base);
-        return true;
+        return false;
     }
 
     void* BufferObject::AcquireMemoryRange(Range1D range, Flags<BufferMappingAccessBit> access) {
@@ -922,18 +857,6 @@ namespace MobileGL::MG_State::GLState {
                     NotePersistentMapStateChanged();
                 }
                 return m_resource.Bytes() + range.start;
-            }
-            if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
-                !(access & BufferMappingAccessBit::FlushExplicit) &&
-#if MOBILEGL_BUILD_DISAGGREGATED
-                // R-6's second door, as in TryAdoptLargeStorage: no legacy mint under a
-                // transport, whatever the backend registered.
-                MG_Config::Transport == MG_Config::TransportMode::Monolith &&
-#endif
-                g_bufferBackendOps && g_bufferBackendOps->AcquirePersistentMap) {
-                if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
-                    m_resource.AdoptPersistentMap(base);
-                }
             }
             return m_resource.Bytes() + range.start;
         }
@@ -1005,14 +928,6 @@ namespace MobileGL::MG_State::GLState {
         RefuseLegacyBufferArmFromApplyThread("HasDefinedContent");
 #endif
         return m_hasDefinedContent;
-    }
-
-    const SharedPtr<BackendBufferResource>& BufferObject::GetBackendResource() const {
-        return m_resource.Backend();
-    }
-
-    void BufferObject::SetBackendResource(SharedPtr<BackendBufferResource> resource) {
-        m_resource.SetBackend(std::move(resource));
     }
 
     Bool BufferObject::IsMapped() const {

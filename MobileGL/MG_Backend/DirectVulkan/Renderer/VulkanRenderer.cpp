@@ -2222,12 +2222,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
              m_sampledReadStageMask,
              static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily)});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
-        m_clearManager = MakeUnique<VkClearManager>();
-        MOBILEGL_ASSERT(m_clearManager != nullptr, "VkClearManager creation failed.");
-        succeeded = m_clearManager->Initialize();
-        MOBILEGL_ASSERT(succeeded, "VkClearManager initialization failed.");
         m_renderPassManager =
-            MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config, *m_clearManager,
+            MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config,
                                             *m_textureManager, m_swapchainObject);
         MOBILEGL_ASSERT(m_renderPassManager != nullptr, "VkRenderPassManager creation failed.");
         succeeded = m_renderPassManager->Initialize();
@@ -2290,7 +2286,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Aging evictions (render passes and program entries) must purge the dependent
         // pipeline / compute-pipeline / descriptor-set caches in the same step; both
         // sweeps only run from the frame-boundary seams, long after initialization.
-        m_renderPassManager->SetEvictionObserver(this);
         m_programFactory->SetEvictionObserver(this);
 
         m_samplerManager = MakeUnique<VkSamplerManager>();
@@ -2396,7 +2391,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // No sweep runs during teardown, but the observers point at this renderer
         // and the factories die at different times below; disconnect them first.
         if (m_renderPassManager) {
-            m_renderPassManager->SetEvictionObserver(nullptr);
         }
         if (m_programFactory) {
             m_programFactory->SetEvictionObserver(nullptr);
@@ -2464,10 +2458,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_swapchainObject.Shutdown(m_device);
         }
         m_renderPassManager.reset();
-        if (m_clearManager) {
-            m_clearManager->Shutdown();
-            m_clearManager.reset();
-        }
         if (m_commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(m_device, m_commandPool, nullptr);
             m_commandPool = VK_NULL_HANDLE;
@@ -3995,22 +3985,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and an overlap check). Refused outright, and refused for real rather than through an
         // assertion the release build drops: recording the pair anyway is a validation error and,
         // on a tiler, a copy whose source has already been overwritten.
-        // Compared by STORAGE, not by GL object: a texture view and the texture it views are two
-        // different objects over one VkImage (ARB_texture_view), and GL 4.6 core 8.18 explicitly
-        // permits copying between them - so an object-identity test would let exactly the case
-        // this guard exists for through.
-        const auto* srcStorageTexture =
-            srcEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*srcEndpoint.Texture) : nullptr;
-        const auto* dstStorageTexture =
-            dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
-        if (
-            !wire &&
-            srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
-            MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
-                         CopyImageEndpointName(srcEndpoint));
-            return;
-        }
-
         // One resolver for both object kinds. The texture arm is the same
         // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
         // render-pass manager, which is where a renderbuffer's VkImage lives.
@@ -4092,10 +4066,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             (void)mapSubresource(srcEndpoint, srcLevel, srcZ);
             dstStorageHandle = mapSubresource(dstEndpoint, dstLevel, dstZ);
         }
-        srcLevel = static_cast<GLint>(ToStorageMipLevel(srcEndpoint.Texture.get(), srcLevel));
-        dstLevel = static_cast<GLint>(ToStorageMipLevel(dstEndpoint.Texture.get(), dstLevel));
-        srcZ = static_cast<GLint>(ToStorageArrayLayer(srcEndpoint.Texture.get(), srcZ));
-        dstZ = static_cast<GLint>(ToStorageArrayLayer(dstEndpoint.Texture.get(), dstZ));
+        srcLevel = std::max<GLint>(srcLevel, 0);
+        dstLevel = std::max<GLint>(dstLevel, 0);
+        srcZ = std::max<GLint>(srcZ, 0);
+        dstZ = std::max<GLint>(dstZ, 0);
         if (srcLevel < 0 || dstLevel < 0 || static_cast<Uint32>(srcLevel) >= srcImage.mipLevels ||
             static_cast<Uint32>(dstLevel) >= dstImage.mipLevels) {
             MGLOG_E_ONCE("%s: mip level out of range (src %d of %u, dst %d of %u); declining the copy", __func__,
@@ -4242,7 +4216,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool dstClearReady = materializeClear(dstEndpoint);
         MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination objectId=%u",
                         __func__, CopyImageEndpointName(dstEndpoint));
-        m_textureManager->StampTextureRecordingWrite(dstEndpoint.Texture.get());
 
         const VkImageLayout srcOriginalLayout = *srcImage.trackedLayout;
         const VkImageLayout dstOriginalLayout = *dstImage.trackedLayout;
@@ -6059,9 +6032,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_textureManager->BeginFrame(frameIndex);
         }
         m_bufferManager.BeginFrame(frameIndex);
-        if (m_renderPassManager) {
-            m_renderPassManager->OnPresent();
-        }
         // The pipeline memo can survive across these boundaries (no per-frame reset
         // on this path), so it must drop whenever the sweep destroys anything.
         if (m_programFactory) {
@@ -6548,7 +6518,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
-        m_renderPassManager->OnPresent();
         // A real presented frame is the canonical aging cadence; mid-frame drains
         // count against this and only age when presents stop coming.
         m_drainsSinceLastPresent = 0;
@@ -9134,7 +9103,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroyWireDrawPass();
         CollectWireObjects(m_submitCounter, true);
         ClearAllWireDrawPassCaches();
-        if (m_renderPassManager) m_renderPassManager->PurgeRenderPasses();
         InvalidatePipelineMemo();
         ResetDynamicStateShadow();
         DestroyParkedTarget(parked->second);
@@ -9202,19 +9170,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_computePipelines.clear();
-    }
-
-    void VulkanRenderer::OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) {
-        if (m_pipelineFactory == nullptr) {
-            return;
-        }
-        // The render-pass sweep's >1024-boundary idle guarantee covers these pipelines
-        // too (they are only bound by draws that hit the dying entries), so the factory
-        // destroys them immediately. The memo must drop as well: it can hand out a
-        // cached handle without touching the factory.
-        if (m_pipelineFactory->EvictByRenderPasses(renderPasses) > 0) {
-            InvalidatePipelineMemo();
-        }
     }
 
     void VulkanRenderer::OnProgramEvicted(ProgramFactory::HashType programHash,

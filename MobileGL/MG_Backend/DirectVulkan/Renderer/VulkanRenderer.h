@@ -132,7 +132,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     class VulkanRenderer : public IBufferCopyCommandProvider,
                            public FrameContext::IRecordingObserver,
-                           public VkRenderPassManager::IEvictionObserver,
                            public ProgramFactory::IEvictionObserver {
     public:
         VulkanRenderer(NativeWindowType window, const VulkanRendererConfig& cfg = {});
@@ -225,12 +224,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pool (harvest + reset) right after the frame command buffer begins
         // recording, before any render pass.
         void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) override;
-
-        // VkRenderPassManager::IEvictionObserver: the render-pass aging sweep just
-        // destroyed these VkRenderPasses; evict every graphics pipeline hashed on a
-        // dying handle (they share its >1024-boundary idleness, so immediate
-        // destruction is safe) and drop the last-pipeline memo if any went.
-        void OnRenderPassesDestroyed(const Vector<VkRenderPass>& renderPasses) override;
 
         // ProgramFactory::IEvictionObserver: an aged-out program entry was
         // destroyed; evict its compute pipeline and graphics pipelines (same
@@ -1469,7 +1462,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<ProgramFactory> m_programFactory;
         UniquePtr<UniformManager> m_uniformManager;
         UniquePtr<VertexInputStateFactory> m_vertexInputStateFactory;
-        UniquePtr<VkClearManager> m_clearManager;
         UniquePtr<VkRenderPassManager> m_renderPassManager;
         UniquePtr<VkTextureManager> m_textureManager;
         UniquePtr<VkSamplerManager> m_samplerManager;

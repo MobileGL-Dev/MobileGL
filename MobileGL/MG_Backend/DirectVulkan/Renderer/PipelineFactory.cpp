@@ -337,34 +337,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return evicted;
     }
 
-    Uint32 PipelineFactory::EvictByRenderPasses(const Vector<VkRenderPass>& renderPasses) {
-        if (renderPasses.empty() || m_cache.empty()) {
-            return 0;
-        }
-        // Sorted-batch membership test keeps a mass eviction (shader-pack switch,
-        // dimension exit) at one O(cache * log batch) scan instead of one full scan
-        // per dying pass.
-        Vector<VkRenderPass> sortedPasses = renderPasses;
-        std::sort(sortedPasses.begin(), sortedPasses.end());
-        Uint32 evicted = 0;
-        for (auto it = m_cache.begin(); it != m_cache.end();) {
-            if (std::binary_search(sortedPasses.begin(), sortedPasses.end(), it->second.renderPass)) {
-                if (it->second.pipeline != VK_NULL_HANDLE) {
-                    vkDestroyPipeline(m_device, it->second.pipeline, nullptr);
-                }
-                it = m_cache.erase(it);
-                ++evicted;
-            } else {
-                ++it;
-            }
-        }
-        if (evicted > 0) {
-            MGLOG_D("PipelineFactory::EvictByRenderPasses: evicted %u pipelines for %zu destroyed render passes",
-                    evicted, sortedPasses.size());
-        }
-        return evicted;
-    }
-
     Uint32 PipelineFactory::EvictByProgramHash(HashType programHash) {
         Uint32 evicted = 0;
         for (auto it = m_cache.begin(); it != m_cache.end();) {

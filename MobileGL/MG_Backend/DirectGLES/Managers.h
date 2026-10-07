@@ -540,10 +540,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const Bool enabled = ResolveFramebufferSubsystemArm();
         return enabled;
     }
-    inline Bool TextureResourceSubsystemEnabled() {
-        static const Bool enabled = ResolveTextureResourceSubsystemArm();
-        return enabled;
-    }
     inline Bool SamplerSubsystemEnabled() {
         static const Bool enabled = ResolveSamplerSubsystemArm();
         return enabled;
@@ -885,36 +881,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SlotTableRegistry<MG_State::GLState::BufferObject, GLESBufferResource, MG_Pipe::MGPipeKind::Buffer>;
         extern BackendBufferResourceTable g_backendBufferResources;
 
-        // Resolved once per process and latched, exactly like EsprytSlotTablesEnabled() and
-        // for the same reason: the two arms hold GLESBufferResource in DIFFERENT containers -
-        // the legacy arm in the frontend object's PipeResource::m_backend, the handle arm in
-        // the table above - so an answer that changed mid-run would strand every resource
-        // already built and leak the driver ids they own.
-        Bool ResolveResourceSubsystemArm();
-        // Same shape for the vertex-input family (bit 8), and separate because the two bits are
-        // separately clearable - but NOT independent, and the resolver says so out loud rather
-        // than half-running: bit 8 REQUIRES bit 7, because the vertex-input handle arm resolves
-        // every attribute's driver buffer id out of the resource slot table and only bit 7 puts
-        // twins there. `0x17f` (bit 8 on, bit 7 off) is therefore refused at arm resolution with
-        // a named MGLOG_E and runs the legacy vertex-input arm; `0x0ff` (bit 7 on, bit 8 off) is
-        // a real, supported A/B, because the legacy VAO walk reaches the handle arm through
-        // EnsureBufferResource's own dispatch. Both resolvers also answer
-        // MG_Config::Features.PipeLegacyMemos, so "the bit is clear and the legacy arm was taken
-        // away" is a named verdict instead of a silent legacy run.
-        Bool ResolveVertexInputSubsystemArm();
-
-        // INLINE for the reason SlotTables.h spells out at EsprytSlotTablesEnabled: both are
-        // consulted on the per-draw path (the VAO sync's gate, EnsureBufferResource, every
-        // buffer op), and out-of-line they would be a call through the PLT per consult.
-        inline Bool ResourceSubsystemEnabled() {
-            static const Bool enabled = ResolveResourceSubsystemArm();
-            return enabled;
-        }
-        inline Bool VertexInputSubsystemEnabled() {
-            static const Bool enabled = ResolveVertexInputSubsystemArm();
-            return enabled;
-        }
-
         // Resolve-or-create / resolve-only, by the handle the call carried. Neither touches
         // MGPipeSlots(): the handle ARRIVED already minted by the side that owns minting.
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
@@ -1059,8 +1025,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnServerSessionEndedWithOthersLive();
         void OnBackendContextDestroyed();
 
-        // Existing resource or nullptr; performs no GL calls.
-        GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject);
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();

@@ -38,56 +38,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool transformFeedbackUsageEnabled = false;
     };
 
-    // The DirectVulkan storage behind one frontend buffer (pipe_resource analogue).
-    // Owned (refcounted) by the frontend BufferObject; the manager holds only weak
-    // references (for shutdown) plus strong references on deferred-release lists.
-    class VkBufferResource : public MG_State::GLState::BackendBufferResource {
-    public:
-        ~VkBufferResource() override = default;
-
-        // Resident storage (may be invalid for streaming-only buffers).
-        VkBufferObject buffer;
-        VkDeviceSize storageSize = 0;
-        VkBufferUsageFlags usageFlags = 0;
-        // Frame serial of the last GPU reference; drives busy tracking.
-        Uint64 lastUseSerial = 0;
-        // Set when an immediate op could not be applied; forces a full re-upload
-        // on the next AcquireResidentSlice.
-        Bool pendingFullUpload = false;
-        // Backs a zero-copy coherent persistent map (PipeResource GPU residency): the
-        // buffer is HOST_VISIBLE+COHERENT, persistently mapped, carries every usage and is
-        // never orphaned or recreated. Draw-time acquire binds it directly, no re-upload.
-        Bool persistentMapped = false;
-
-        // Bumped from a manager-wide counter every time anything that decides which
-        // BufferSlice an Acquire*Slice call hands back changes: storage created or
-        // released, a full re-upload becoming due, a promotion/demotion between
-        // resident and streamed storage, or a new per-frame arena slice. Callers that
-        // memoise a resolved slice compare this to prove the memo still describes the
-        // buffer. The counter is manager-wide (never per-resource) so a freshly
-        // created resource - including one that replaces a destroyed resource at the
-        // same address - can never reproduce a value some memo already holds. 0 means
-        // "no slice has ever been handed out", which no memo can match.
-        Uint64 sliceEpoch = 0;
-
-        // Cached transient (streaming) slice for the current frame.
-        BufferSlice transientSlice{};
-        Uint64 transientFrameSerial = 0;
-        Uint64 transientChangeSerial = 0;
-        VkDeviceSize transientSize = 0;
-
-        // Streaming re-copies the whole store into the per-frame arena on every
-        // frame, which is right for genuinely per-frame data but pure waste for a
-        // Dynamic-hinted buffer the app stopped touching. After the content
-        // survives kStreamedPromotionStreak frame boundaries unchanged it is
-        // promoted to resident storage (one final upload, then zero per-frame
-        // cost); the first content change demotes it back to streaming, and the
-        // streaming path's existing downgrade releases the resident store.
-        Uint32 unchangedStreak = 0;
-        Bool promotedResident = false;
-        Uint64 promotedChangeSerial = 0;
-    };
-
     // Supplies a command buffer that is recording and outside any render pass,
     // for staged buffer-range copies. Implemented by VulkanRenderer.
     class IBufferCopyCommandProvider {
@@ -198,36 +148,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // UniformManager::AcquireUnboundTexelBufferView.
         BufferSlice AcquireUnboundTexelBufferDescriptor();
 
-        // Draw-time acquire for resident (device-storage) buffers: ensures the
-        // resource exists and is fully uploaded, marks it used this frame.
-        Bool AcquireResidentSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                  BufferSlice& outSlice);
-        // Draw-time acquire for streamed buffers: uploads the whole shadow into
-        // the per-frame arena (cached by change serial), releasing any resident
-        // storage the buffer may still own.
-        Bool AcquireStreamedSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                  BufferSlice& outSlice);
-
-        // Zero-copy persistent map (PipeResource GPU residency): create (once) a
-        // HOST_VISIBLE+COHERENT, persistently mapped resident buffer carrying every usage,
-        // seed it from the shadow, and return its mapped base for the app to write into
-        // directly. Idempotent. Returns nullptr on failure (frontend keeps its shadow).
-        void* AcquirePersistentMap(MG_State::GLState::BufferObject& bufferObject);
-
-        // Immediate ops, dispatched from the frontend BufferBackendOps table.
-        void OnRespecify(MG_State::GLState::BufferObject& bufferObject);
-        void OnSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, SizeT size);
-        void OnResidentSubData(MG_State::GLState::BufferObject& bufferObject, SizeT offset, DataPtr data);
-        void OnFlushMappedRange(MG_State::GLState::BufferObject& bufferObject, Range1D range,
-                                Flags<BufferMappingAccessBit> appAccess);
-        void OnResourceDestroyed(SharedPtr<MG_State::GLState::BackendBufferResource>&& resource);
-
         Uint64 GetFrameSerial() const { return m_frameSerial; }
-        // Highest value handed to any VkBufferResource::sliceEpoch. Unchanged since a
-        // memo was taken means no buffer this manager owns changed which slice it hands
-        // back, and none was persistently mapped, in between - so a memo of resolved
-        // slices needs no per-buffer re-check. See AcquirePersistentMap for the mapping half.
-        Uint64 GetSliceEpochCounter() const { return m_sliceEpochCounter; }
         // Bumped every time this manager destroys a WIRE store's VkBuffer (see
         // m_wireStoreDestroyEpoch). Unchanged since a memo was taken means no VkBuffer handle
         // that memo names can have been freed and re-minted in between, which is the one
@@ -237,16 +158,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
         Uint64 GetCompletedSerial() const;
-        // Busy = potentially referenced by GPU work that has not been fenced yet
-        // (including commands recorded for the current, unsubmitted frame).
-        Bool IsResourceBusy(const VkBufferResource& resource) const;
-        // Hand the manager a buffer to destroy once the frame that recorded commands
-        // naming it has completed. The renderer's blit path needs a device-local
-        // scratch store for one recorded operation, which cannot be a stack local:
-        // the glBlitFramebuffer that records the commands returns long before the
-        // command buffer is submitted.
-        void DeferRelease(VkBufferObject&& buffer);
-
     private:
         struct WireBufferResource {
             VkBufferObject buffer;
@@ -328,8 +239,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // while a memo still maps that handle to a descriptor set baked to the dead store's
         // memory: silent wrong bytes, no Fatal (ID-P7-43). m_wireStoreDestroyEpoch is the
         // fact the memos fold in: every wire-store destroy bumps it, so a memo taken before
-        // the destroy cannot match after it. Deliberately NOT m_sliceEpochCounter, which every
-        // WriteWireBuffer bumps and which would defeat the memo on every glBufferSubData.
+        // the destroy cannot match after it. Deliberately not bumped by WriteWireBuffer, which
+        // would defeat the memo on every glBufferSubData.
         struct DeferredWireRelease {
             VkBufferObject buffer;
             Uint64 lastUseSerial = 0;
@@ -368,25 +279,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void NoteWireStorePeaks();
         void PublishWireReclaimGauges();
         Bool InitializeTransientArenas();
-        static VkBufferUsageFlags GetVkBufferUsage(BufferKind kind);
-        VkBufferResource* GetOrCreateResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
-        static VkBufferResource* ResourceOf(MG_State::GLState::BufferObject& bufferObject);
-        Bool CreateResidentStorage(VkBufferResource& resource, VkDeviceSize size, VkBufferUsageFlags usage,
-                                   VkMemoryPropertyFlags requiredFlags = 0);
-        // Swap storage (conditional orphan) and refill it from the shadow copy.
-        Bool SwapStorageAndUploadAll(VkBufferResource& resource, MG_State::GLState::BufferObject& bufferObject);
-        // Record a staging-slice copy into the resident storage, ordered against
-        // in-flight and already-recorded GPU work.
-        Bool StagedRangeCopy(VkBufferResource& resource, const void* data,
-                             SizeT offset, SizeT size);
         Bool StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset, SizeT size);
         void CollectDeferredReleases(Uint32 frameIndex);
         void DestroyAllDeferredReleases();
-        void TrackLiveResource(const SharedPtr<VkBufferResource>& resource);
-        void ReleaseAllLiveResources();
-        // See VkBufferResource::sliceEpoch.
-        void BumpSliceEpoch(VkBufferResource& resource) { resource.sliceEpoch = ++m_sliceEpochCounter; }
-
         VkBufferManagerInitInfo m_initInfo{};
         BufferArena m_transientUploadArena;
         // See AcquireUnboundStorageDescriptor. Lazily created, never re-created, torn down
@@ -396,8 +291,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferObject m_unboundTexelBuffer;
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
-        Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;
-        Vector<WeakPtr<VkBufferResource>> m_liveResources;
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
         // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
         // the whole point is that these entries do not wait for a frame slot to come round.
@@ -413,17 +306,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_wireDeferredSyncs = 0;
         // See GetWireStoreDestroyEpoch and the DeferredWireRelease comment. Bumped on every
         // path that destroys a wire store's VkBuffer, and never reset (not even by Shutdown),
-        // for m_sliceEpochCounter's reason: a memo taken before a re-initialize must not match
+        // so that a memo taken before a re-initialize must not match
         // a handle minted after it.
         Uint64 m_wireStoreDestroyEpoch = 0;
-    // Size m_liveResources had just after the last sweep; the next sweep waits for it to double.
-    SizeT m_liveResourcesLastPruned = 0;
         Uint32 m_currentFrameIndex = 0;
         Uint64 m_frameSerial = 1;
         Uint64 m_completedSerialFloor = 0;
-        // Never reset (not even by Shutdown): a value handed to a resource must stay
-        // unique for the process, or a memo taken before a re-initialize could match
-        // a different resource's state after it.
-        Uint64 m_sliceEpochCounter = 0;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

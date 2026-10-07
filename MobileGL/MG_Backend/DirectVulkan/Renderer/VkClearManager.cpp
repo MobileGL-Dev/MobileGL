@@ -68,13 +68,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   toLinear(payload.color.z()), payload.color.w());
     }
 
-    static Uint32 ResolveAttachmentBaseArrayLayer(TextureUploadTarget target) {
-        if (!IsCubeMapFaceUploadTarget(target)) {
-            return 0;
-        }
-        return static_cast<Uint32>(target) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
-    }
-
     // ResolveAttachmentLayerCount used to be duplicated here, reading attachment.GetSize().z()
     // raw - no ToVulkanLevelExtent remap for a 1D array, no six-faces arm for a cube map. That is
     // not a cosmetic difference: the count below is not key-only, it is written straight into
@@ -82,16 +75,5 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // the entry - so a layered cube map's glClear reached one face and the other five were lost
     // for good, while the very same queued clear cleared all six through the render pass's
     // LOAD_OP_CLEAR. The helper now lives once, in VkTextureManager.h beside ToVulkanLevelExtent.
-
-    Bool VkClearManager::Initialize() {
-        return true;
-    }
-
-    void VkClearManager::Shutdown() {
-        const std::lock_guard<std::mutex> lock(m_mutex);
-        m_pendingClears.clear();
-        m_aliveObjects.clear();
-        m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
-    }
 
 } // namespace MobileGL::MG_Backend::DirectVulkan

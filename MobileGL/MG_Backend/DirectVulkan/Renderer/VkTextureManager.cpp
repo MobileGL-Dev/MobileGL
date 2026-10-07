@@ -228,30 +228,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    VkTextureManager::TextureIdentity VkTextureManager::MakeTextureIdentity(
-        MG_State::GLState::ITextureObject* texture) {
-        // A GL texture view (ARB_texture_view) is identified by the texture whose STORAGE it
-        // views, not by itself. Everything this identity keys - the TextureResource, the tracked
-        // image layout, the alive-object weak reference, the storage-usage marks, the per-draw
-        // sync memos - is a property of the IMAGE, and a view shares that image exactly. Doing
-        // the resolution here rather than at each call site is what makes it impossible to miss
-        // one: a layout update posted against a view's own identity would have found no resource
-        // at all, which is precisely how an attached view came back blank.
-        //
-        // One hop suffices and cannot recurse: glTextureView composes a view-of-a-view onto the
-        // root at creation, so a storage owner is never itself a view.
-        if (texture != nullptr) {
-            const auto& storageOwner = texture->GetViewStorageOwner();
-            if (storageOwner) {
-                texture = storageOwner.get();
-            }
-        }
-        return TextureIdentity{
-            .texture = texture,
-            .lifetimeId = texture ? texture->GetLifetimeId() : 0,
-        };
-    }
-
     static void GetImageTransitionDestinationState(VkImageLayout newLayout,
                                                    VkPipelineStageFlags& outDstStageMask,
                                                    VkAccessFlags& outDstAccessMask) {
@@ -551,13 +527,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         DestroyDeferredReleases();
         ++m_resourceEraseEpoch;  // every memoized resource pointer dies with the map
-        m_textureResources.clear();
         // Destroy images while the device/allocator still exist, including after context death.
         m_wireTextureResources.clear();
         m_wireRenderbufferResources.clear();
         m_sharedImageUses.clear();
-        m_aliveObjects.clear();
-        m_storageImageTextures.clear();
 
         m_device = VK_NULL_HANDLE;
         m_physicalDevice = VK_NULL_HANDLE;
@@ -597,118 +570,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (SizeT frameIndex = 0; frameIndex < frameCount; ++frameIndex) {
             CollectDeferredReleases(static_cast<Uint32>(frameIndex));
         }
-    }
-
-    void VkTextureManager::EraseTrackedTexture(const TextureIdentity& identity) {
-        m_viewRequestedImageFlags.erase(identity);
-        m_viewRequestedFormats.erase(identity);
-        auto resourceIt = m_textureResources.find(identity);
-        if (resourceIt != m_textureResources.end()) {
-            DeferResourceRelease(Move(resourceIt->second));
-            m_textureResources.erase(resourceIt);
-        }
-        m_aliveObjects.erase(identity);
-        m_storageImageTextures.erase(identity);
-        // Invalidate every cross-draw sampled-texture memo: the erased
-        // resource's address may be reused by a future emplace.
-        ++m_resourceEraseEpoch;
-    }
-
-    void VkTextureManager::PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-
-        Vector<TextureIdentity> staleAliases;
-        for (auto it = m_aliveObjects.begin(); it != m_aliveObjects.end(); ++it) {
-            if (it->first.texture != texture) {
-                continue;
-            }
-            const auto liveTexture = it->second.lock();
-            if (!liveTexture || liveTexture.get() != texture ||
-                liveTexture->GetLifetimeId() != it->first.lifetimeId) {
-                staleAliases.emplace_back(it->first);
-            }
-        }
-        for (const auto& identity : staleAliases) {
-            EraseTrackedTexture(identity);
-        }
-    }
-
-    void VkTextureManager::StampTextureRecordingUse(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-        auto it = m_textureResources.find(MakeTextureIdentity(texture));
-        if (it != m_textureResources.end()) {
-            it->second.lastRecordingGeneration = m_recordingGeneration;
-        }
-    }
-
-    void VkTextureManager::StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture) {
-        if (texture == nullptr) {
-            return;
-        }
-        auto it = m_textureResources.find(MakeTextureIdentity(&StorageTextureOf(*texture)));
-        if (it != m_textureResources.end()) {
-            StampResourceRecordingWrite(it->second);
-        }
-    }
-
-    void VkTextureManager::UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
-                                                                        MG_State::GLState::ITextureObject* texture,
-                                                                        Uint32 writtenMipLevel,
-                                                                        VkImageLayout newLayout) {
-        MOBILEGL_ASSERT(texture != nullptr, "UpdateTrackedImageLayoutAfterAttachmentWrite: texture is null");
-        auto it = m_textureResources.find(MakeTextureIdentity(texture));
-        MOBILEGL_ASSERT(it != m_textureResources.end(),
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d has no tracked resource",
-                        texture->GetExternalIndex());
-
-        auto& resource = it->second;
-        MOBILEGL_ASSERT(resource.image != VK_NULL_HANDLE,
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d has null image",
-                        texture->GetExternalIndex());
-        MOBILEGL_ASSERT(writtenMipLevel < resource.mipLevels,
-                        "UpdateTrackedImageLayoutAfterAttachmentWrite: textureId=%d mipLevel=%u out of range %u",
-                        texture->GetExternalIndex(), writtenMipLevel, resource.mipLevels);
-        // Pre-pass stream bookkeeping: the render pass that just ended wrote this image.
-        StampResourceRecordingWrite(resource);
-
-        if (resource.layout != newLayout && resource.mipLevels > 1) {
-            VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            VkAccessFlags srcAccessMask = 0;
-            GetImageTransitionSourceState(resource.layout, srcStageMask, srcAccessMask);
-
-            VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            VkAccessFlags dstAccessMask = 0;
-            GetImageTransitionDestinationState(newLayout, dstStageMask, dstAccessMask);
-
-            if (writtenMipLevel > 0) {
-                VkImageLayout lowerMipLayout = resource.layout;
-                const Bool lowerTransitioned = TransitionImageLayout(
-                    commandBuffer, resource.image, lowerMipLayout, newLayout,
-                    srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, 0, writtenMipLevel);
-                MOBILEGL_ASSERT(lowerTransitioned,
-                                "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition lower mip levels for textureId=%d",
-                                texture->GetExternalIndex());
-            }
-
-            const Uint32 upperBaseMipLevel = writtenMipLevel + 1;
-            if (upperBaseMipLevel < resource.mipLevels) {
-                VkImageLayout upperMipLayout = resource.layout;
-                const Bool upperTransitioned = TransitionImageLayout(
-                    commandBuffer, resource.image, upperMipLayout, newLayout,
-                    srcStageMask, dstStageMask, srcAccessMask, dstAccessMask,
-                    resource.aspect, upperBaseMipLevel, resource.mipLevels - upperBaseMipLevel);
-                MOBILEGL_ASSERT(upperTransitioned,
-                                "UpdateTrackedImageLayoutAfterAttachmentWrite: failed to transition upper mip levels for textureId=%d",
-                                texture->GetExternalIndex());
-            }
-        }
-
-        resource.layout = newLayout;
     }
 
     Bool VkTextureManager::TransitionImageLayout(VkCommandBuffer commandBuffer, VkImage image,
@@ -767,34 +628,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     SizeT VkTextureManager::PruneDeadTextures() {
-        Vector<MG_State::GLState::ITextureObject*> expiredTextures;
-        expiredTextures.reserve(m_aliveObjects.size());
-        for (auto it = m_aliveObjects.begin(); it != m_aliveObjects.end(); ++it) {
-            if (it->second.expired()) {
-                expiredTextures.emplace_back(it->first.texture);
-            }
-        }
-        for (auto* texture : expiredTextures) {
-            PruneStaleTextureAliases(texture);
-        }
-        SizeT prunedCount = expiredTextures.size();
-
-        // Orphan sweep: after the pass above, m_aliveObjects holds only live entries.
-        // Registration in SyncTextureAndGetDescriptor cannot fail for a SharedPtr-owned
-        // texture (weak_from_this fallback), so a resource whose identity has no alive
-        // entry has no trackable owner: its GL-side object is gone, or was never
-        // shared-owned, in which case recreation on a later sync is the safe fallback.
-        // Destruction goes through the per-frame deferred queues, never immediate.
-        Vector<TextureIdentity> orphanIdentities;
-        for (auto it = m_textureResources.begin(); it != m_textureResources.end(); ++it) {
-            if (m_aliveObjects.find(it->first) == m_aliveObjects.end()) {
-                orphanIdentities.emplace_back(it->first);
-            }
-        }
-        for (const auto& identity : orphanIdentities) {
-            EraseTrackedTexture(identity);
-        }
-        prunedCount += orphanIdentities.size();
+        // P13: only the handle-keyed tables are left; a resource whose record is no longer live
+        // at its generation is released through the per-frame deferred queues.
+        SizeT prunedCount = 0;
         const auto pruneWire = [&](auto& resources, const auto& records) {
             for (auto it = resources.begin(); it != resources.end();) {
                 const Uint32 slot = static_cast<Uint32>(it->first >> 32) & 0x7fffffffu;
@@ -2513,12 +2349,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             deferredViews.clear();
         }
         m_deferredViewReleases.clear();
-    }
-
-    MG_State::GLState::ITextureObject& VkTextureManager::StorageTextureOf(
-        MG_State::GLState::ITextureObject& texture) {
-        const auto& storageOwner = texture.GetViewStorageOwner();
-        return storageOwner ? *storageOwner : texture;
     }
 
     VkImageAspectFlags VkTextureManager::GetAspectMaskForFormat(VkFormat format) {

@@ -455,52 +455,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return request;
         }
 
-        // ---- P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6): THE INDEXED BINDING POINTS BY RECORD --
-        //
-        // WHICH ARM THIS SERVER TAKES, resolved once. Two conjuncts and both are the phase's
-        // standard shape (§5.8): a live TRANSPORT - the push build under Transport=monolith
-        // keeps its frontend arms token for token, which is what the verify comparator needs
-        // and what makes RUN_AHEAD=0 a pure wait-rule A/B on identical server code - AND the
-        // family bit, so an operator can put the whole binding-point family back on the
-        // frontend walk with one cleared bit.
-        //
-        // THE BINDING-POINT FAMILY'S DEPENDENCY ROW IS READ FROM MG_Pipe/SubsystemDeps.def
-        // (P3b/P4b R-5, switched over by wave 2-D package D3), refused here rather than half-run,
-        // in ResolveVertexInputSubsystemArm's exact shape. The hand-rolled
-        // `bitSet && !resourcesBitSet` this used to be was the sixth statement of D-K2's rule -
-        // the .def's own "WHO READS IT" section names this function, and now it does. The reason
-        // is the table's and is printed from it.
-        Bool ResolveBufferBindingSubsystemArm() {
-            const Uint64 mask = MG_Config::Features.PipePush;
-            const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemBufferBindings) != 0;
-            if (bitSet &&
-                !MG_Pipe::MGPipeSubsystemDependenciesAreSet(MG_Pipe::kMGPipeSubsystemBufferBindings, mask)) {
-                const Uint64 required =
-                    MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemBufferBindings);
-                MGLOG_E("MGPipe: kMGPipeSubsystemBufferBindings (bit 13) is set but "
-                        "MOBILEGL_PIPE_PUSH=0x%llx does not carry every bit "
-                        "MG_Pipe/SubsystemDeps.def says it requires (requires 0x%llx, missing "
-                        "0x%llx): %s - REFUSING bit 13 and running the legacy binding-point walk. "
-                        "Set every bit of the row, or clear bit 13",
-                        static_cast<unsigned long long>(mask),
-                        static_cast<unsigned long long>(required),
-                        static_cast<unsigned long long>(required & ~mask),
-                        MG_Pipe::MGPipeSubsystemDependencyWhy(MG_Pipe::kMGPipeSubsystemBufferBindings));
-                return false;
-            }
-            MGLOG_D("MGPipe: Espryt binding-point family runs the %s arm",
-                    bitSet ? "record" : "legacy");
-            return bitSet;
-        }
-
-        // FILE-LOCAL AND INLINE-MEMOISED, for EsprytSlotTablesEnabled's reason: this is
-        // consulted on the per-draw path (twice in SyncNeccessaryBuffers, once per UBO in the
-        // program rebind), and out of line it would be a call through the PLT per consult.
-        Bool BindingPointsComeFromRecords() {
-            static const Bool enabled = ResolveBufferBindingSubsystemArm();
-            return enabled;
-        }
-
         // The record arm of SyncBufferBindingPoints. Same shape, same order, same branches; the
         // four frontend reads become the applier's window and a handle per entry.
         //

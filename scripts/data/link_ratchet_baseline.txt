@@ -5,7 +5,7 @@
 # base commit : <unknown>
 # configure   : -DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON -DCMAKE_BUILD_TYPE=Release
 # build dir   : /home/swung/mgl-p13-split
-# count       : 36
+# count       : 27
 #
 # One demangled symbol per line. A trailing ` # note` is an annotation the parser
 # ignores. `# P13` (debts only P13's module work could clear) is refused since
@@ -25,25 +25,16 @@ MobileGL::MG_Remote::Client::ClientSession::StartSpawned()
 MobileGL::MG_Remote::Client::ClientSession::Stop()
 MobileGL::MG_Remote::Client::ClientSessionInstance()
 MobileGL::MG_Remote::Client::EmitObjectDeathRecord(MobileGL::MG_Pipe::MGPipeKind, unsigned long)
-MobileGL::MG_State::GLState::BufferObject::GetBackendResource() const
-MobileGL::MG_State::GLState::BufferObject::GetChangeSerial() const
 MobileGL::MG_State::GLState::BufferObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::BufferObject::GetSize() const
-MobileGL::MG_State::GLState::BufferObject::GetUsage() const
-MobileGL::MG_State::GLState::BufferObject::HasDefinedContent() const
-MobileGL::MG_State::GLState::BufferObject::MappedData() const
-MobileGL::MG_State::GLState::BufferObject::SetBackendResource(std::shared_ptr<MobileGL::MG_State::GLState::BackendBufferResource>)
-MobileGL::MG_State::GLState::BufferObject::SyncPersistentMappedRange()
 MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long)
 MobileGL::MG_State::GLState::ClassifyVertexAttribType(unsigned int)
 MobileGL::MG_State::GLState::DecodeProgramArchive(unsigned char const*, unsigned long, MobileGL::MG_State::GLState::ProgramArchive&)
-MobileGL::MG_State::GLState::GetBufferBackendOps()
 MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
 MobileGL::MG_State::GLState::ProgramObject::JoinPendingLink() const
 MobileGL::MG_State::GLState::SamplerObject::GetAllSamplerParameters() const
 MobileGL::MG_State::GLState::SamplerObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::SamplerObject::GetLifetimeId() const
-MobileGL::MG_State::GLState::SetBufferBackendOps(MobileGL::MG_State::GLState::BufferBackendOps const*)
 MobileGL::MG_State::GLState::TextureObjectBuffer::GetBufferBindingSlot(MobileGL::TextureUploadTarget)
 MobileGL::MG_State::GLState::TextureUnit::GetAllBindingSlots()
 MobileGL::MG_State::GLState::TextureUnit::GetSamplerObject() const

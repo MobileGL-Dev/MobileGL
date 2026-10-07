@@ -64,68 +64,6 @@ namespace MobileGL {
         // either the CPU shadow or the backend's persistently-mapped GPU memory) live
         // in PipeResource.h.
 
-        // Immediate buffer transfer interface implemented by the active backend
-        // (the pipe_context buffer-op analogue). Ops are invoked at GL call time,
-        // right after the shadow copy has been updated; contents are always read
-        // from the shadow so ops carry only ranges and flags.
-        //
-        // Every op must tolerate bufferObject.GetBackendResource() == nullptr:
-        // resources are created lazily by the backend's draw/bind-time ensure
-        // path, which performs a full upload from the shadow and thereby covers
-        // all ops that happened before the resource existed.
-        struct BufferBackendOps {
-            // Storage (re)definition: glBufferData / glBufferStorage. The orphaning
-            // point - the backend decides (busy-tracking) whether to swap storage
-            // or write in place. Shadow already holds the new contents.
-            void (*Respecify)(BufferObject& bufferObject) = nullptr;
-            // Contents update of [offset, offset + size) from the shadow.
-            void (*SubData)(BufferObject& bufferObject, SizeT offset, SizeT size) = nullptr;
-            // Contents update of an ADOPTED (GPU-resident) store. `data` holds the app's
-            // bytes, valid for the duration of the call only (a write map's staging
-            // store is freed the moment the unmap that lands it returns); the frontend
-            // has NOT touched the resident mapping. GL orders a
-            // glBufferSubData after already-submitted GPU reads of the store, and an
-            // in-place host write into the coherent mapping tears the frames still
-            // reading the old bytes (Minecraft patches LIVE chunk sections this way -
-            // the tear shows as one-frame wrong geometry/UVs during fast movement). The
-            // backend lands the bytes on the GPU timeline instead: after in-flight
-            // readers, before the next consumer. The frontend marks the buffer
-            // gpu-write-pending so reads reconcile through ReadbackFromGpu. Backends
-            // without this op keep the legacy ordered in-place host write.
-            void (*ResidentSubData)(BufferObject& bufferObject, SizeT offset, DataPtr data) = nullptr;
-            // Write-map flush (glUnmapBuffer / glFlushMappedBufferRange). Carries the
-            // app's real mapping flags so the backend can honour INVALIDATE_* /
-            // UNSYNCHRONIZED semantics per call instead of merging them.
-            void (*FlushMappedRange)(BufferObject& bufferObject, Range1D range,
-                                     Flags<BufferMappingAccessBit> appAccess) = nullptr;
-            // Final release of the backend resource (called from ~BufferObject).
-            // The backend defers actual destruction until the GPU is done with it.
-            void (*OnDestroy)(SharedPtr<BackendBufferResource>&& resource) = nullptr;
-            // Zero-copy persistent mapping. For a coherent (non-FLUSH_EXPLICIT) persistent
-            // write map, the backend may hand back a host-visible, COHERENT, persistently
-            // mapped pointer into its own GPU storage for the whole buffer [0, size),
-            // created with every buffer usage and seeded from the shadow. From that point
-            // the GPU buffer is the single source of truth: the app writes into it
-            // directly, all reads/writes resolve against it (HostData()), and NO further
-            // backend transfer ops are dispatched for this buffer. Returns nullptr when the
-            // backend cannot back the map; the frontend then keeps the CPU-shadow model.
-            // Must be idempotent: a second call for an already-backed buffer returns the
-            // same base pointer.
-            void* (*AcquirePersistentMap)(BufferObject& bufferObject) = nullptr;
-            // Pulls the backend's current contents for the whole buffer into the shadow
-            // (through WritebackFromBackend). Only ever called for a buffer the GPU may
-            // have written behind the frontend's back - a shader storage or atomic counter
-            // binding of a draw or dispatch - because nothing else can desynchronise the
-            // shadow. Backends that cannot read their storage back leave this null; the
-            // shadow then keeps its pre-dispatch bytes, which is the old behaviour.
-            void (*ReadbackFromGpu)(BufferObject& bufferObject) = nullptr;
-        };
-
-        // Registered by the active backend at init, cleared at shutdown.
-        // Null table (unit tests, benchmarks) => shadow-only state tracking.
-        void SetBufferBackendOps(const BufferBackendOps* ops);
-        const BufferBackendOps* GetBufferBackendOps();
-
         class BufferObject {
         public:
             using TargetEnum = BufferTarget;
@@ -272,9 +210,6 @@ namespace MobileGL {
             // the store undefined, so backends may (re)allocate GPU storage without
             // uploading the stale CPU shadow.
             Bool HasDefinedContent() const;
-
-            const SharedPtr<BackendBufferResource>& GetBackendResource() const;
-            void SetBackendResource(SharedPtr<BackendBufferResource> resource);
 
         private:
             // Sizes the store for a (re)definition, renewing an adopted GPU-resident

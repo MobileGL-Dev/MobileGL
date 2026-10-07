@@ -108,27 +108,6 @@ inline Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAt
     return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
 }
 
-// A GL framebuffer attachment's level/layer, and a GL image unit's, are relative to the texture
-// the application NAMED. When that texture was created by glTextureView (ARB_texture_view) they
-// are relative to the VIEW, and have to be shifted into the storage image's numbering before they
-// can index a Vulkan subresource - DirectVulkan gives a view no image of its own, it shares the
-// storage texture's (VkTextureManager::StorageTextureOf).
-//
-// Apply EXACTLY ONCE, at the boundary where a GL level/layer becomes a subresource index. Every
-// GetOrCreate*View entry point below expects values that have already been through here, and so
-// does everything that reads or copies an attachment directly. Both are identity on a plain
-// texture (TEXTURE_VIEW_MIN_LEVEL / MIN_LAYER are 0 there), so the conversion is unconditional
-// and there is no second, view-only code path to keep in step.
-inline Uint32 ToStorageMipLevel(const MG_State::GLState::ITextureObject* texture, Int glLevel) {
-    const Uint32 level = static_cast<Uint32>(glLevel > 0 ? glLevel : 0);
-    return texture != nullptr ? level + static_cast<Uint32>(texture->GetViewMinLevel()) : level;
-}
-
-inline Uint32 ToStorageArrayLayer(const MG_State::GLState::ITextureObject* texture, Int glLayer) {
-    const Uint32 layer = static_cast<Uint32>(glLayer > 0 ? glLayer : 0);
-    return texture != nullptr ? layer + static_cast<Uint32>(texture->GetViewMinLayer()) : layer;
-}
-
 class VkTextureManager {
 public:
     // Monotonic epoch bumped whenever a texture VkImage is (re)created. The render-pass
@@ -138,23 +117,6 @@ public:
     // Bumped whenever any tracked texture resource is erased; cached
     // TextureResource pointers are valid only while this is unchanged.
     Uint64 GetResourceEraseEpoch() const { return m_resourceEraseEpoch; }
-
-    struct TextureIdentity {
-        MG_State::GLState::ITextureObject* texture = nullptr;
-        Uint64 lifetimeId = 0;
-
-        Bool operator==(const TextureIdentity& other) const {
-            return texture == other.texture && lifetimeId == other.lifetimeId;
-        }
-    };
-
-    struct TextureIdentityHash {
-        SizeT operator()(const TextureIdentity& key) const {
-            SizeT hash = std::hash<MG_State::GLState::ITextureObject*>{}(key.texture);
-            hash ^= std::hash<Uint64>{}(key.lifetimeId) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-            return hash;
-        }
-    };
 
     struct InitInfo {
         VkDevice device = VK_NULL_HANDLE;
@@ -536,17 +498,6 @@ public:
     // present-less frame-boundary drain.
     void CollectAllDeferredReleases();
 
-    // ---- GL texture views (ARB_texture_view / GL 4.6 core 8.18) ----
-    // The GL texture whose STORAGE backs the given one: itself, or - for a texture created by
-    // glTextureView - the texture it views. Every image-scoped question (which VkImage, its
-    // LAYOUT, its uploads, its extent, its usage) must be asked of this object, because a view
-    // has none of its own; only the VkImageViews differ per GL texture object. Sharing one
-    // TextureResource is not an optimisation, it is the only correct arrangement: layout is a
-    // property of the image, and VulkanRenderer caches raw pointers straight to the resource's
-    // layout field, so a second resource aliasing the same image would desynchronise the moment
-    // either of them transitioned it.
-    static MG_State::GLState::ITextureObject& StorageTextureOf(MG_State::GLState::ITextureObject& texture);
-
     // The window a GL texture object opens onto its storage image. For a plain texture this is
     // the resource's own full extent; for a view it is the sub-range, format and aspect
     // glTextureView gave it. Views built from a non-default window must live in the KEYED caches
@@ -575,8 +526,8 @@ public:
     // loudly, which is the honest answer a missing record deserves.
     //
     // The resource lives in m_wireTextureResources keyed by StagedTextureStore::KeyForHandle -
-    // a NAMESPACE THE FRONTEND-KEYED m_textureResources NEVER MEETS, so a recycled {slot, gen}
-    // can never inherit its predecessor's image. Texture views resolve the storage owner from
+    // keyed by the handle's {slot, gen}, so a recycled slot can never inherit its
+    // predecessor's image. Texture views resolve the storage owner from
     // Desc.ViewOf and the window from ViewCso; buffer-backed textures remain P7's buffer arm.
     Bool ReadUnbackedWireLevel(MG_Pipe::MGPipeHandle handle, TextureUploadTarget target, Uint32 level,
                                const IntVec3& extent, VkFormat& format, Vector<Uint8>& bytes);
@@ -639,10 +590,6 @@ public:
         const auto it = m_wireTextureResources.find(key);
         return it != m_wireTextureResources.end() && it->second.image != VK_NULL_HANDLE ? &it->second : nullptr;
     }
-    void UpdateTrackedImageLayoutAfterAttachmentWrite(VkCommandBuffer commandBuffer,
-                                                      MG_State::GLState::ITextureObject* texture,
-                                                      Uint32 writtenMipLevel,
-                                                      VkImageLayout newLayout);
     // Recording-generation bookkeeping for the pre-pass command stream. The
     // generation advances every time the frame command buffer (re)begins
     // recording; a resource whose stamp does not match was not referenced by
@@ -652,8 +599,6 @@ public:
     void StampResourceRecordingUse(TextureResource& resource) const {
         resource.lastRecordingGeneration = m_recordingGeneration;
     }
-    // Map-lookup variant for callers that only hold the GL texture object.
-    void StampTextureRecordingUse(MG_State::GLState::ITextureObject* texture);
     Bool WasTouchedThisRecording(const TextureResource& resource) const {
         return resource.lastRecordingGeneration == m_recordingGeneration;
     }
@@ -662,7 +607,6 @@ public:
         resource.lastRecordingGeneration = m_recordingGeneration;
         resource.lastRecordingWriteGeneration = m_recordingGeneration;
     }
-    void StampTextureRecordingWrite(MG_State::GLState::ITextureObject* texture);
     // `depthStencilTextureMode` is the texture's GL_DEPTH_STENCIL_TEXTURE_MODE; it only decides
     // anything for an image that carries both aspects. Defaulted so the call sites that have no
     // texture in hand keep the depth-aspect answer they have always given.
@@ -707,9 +651,6 @@ private:
     // the single queue, so the scan stops at the first still-pending entry).
     // waitAll blocks on every entry - Shutdown's drain.
     void ReclaimCompletedUploads(Bool waitAll = false);
-    static TextureIdentity MakeTextureIdentity(MG_State::GLState::ITextureObject* texture);
-    void EraseTrackedTexture(const TextureIdentity& identity);
-    void PruneStaleTextureAliases(MG_State::GLState::ITextureObject* texture);
     SizeT PruneDeadTextures();
     // The two halves of SyncTextureResourceByHandle: shape from the resource record's
     // descriptor (create / recreate / compatibility), then the pending-upload walk against the
@@ -751,22 +692,6 @@ private:
     Uint32 m_gcFrameCounter = 0;
     // SyncWireTextureShape defining the RGBA8 storage a YUV shared image is converted into.
     Bool m_syncingYuvTextureStorage = false;
-    // Cross-draw sampled-texture memo: the same few textures (atlas, lightmap)
-    // are resolved on every draw, so cache their resource pointers and skip the
-    // alive/resource map lookups. Node-based std::unordered_map keeps the
-    // pointees stable across inserts; erases bump m_resourceEraseEpoch, which
-    // every memo entry must match. SyncTexture still runs on memo hits, so
-    // content/param freshness is unaffected. A dead-then-reused texture address
-    // cannot false-hit: the new object carries a new lifetime id.
-    struct SyncedTextureMemoEntry {
-        const MG_State::GLState::ITextureObject* texture = nullptr;
-        Uint64 lifetimeId = 0;
-        Uint64 eraseEpoch = 0;
-        TextureResource* resource = nullptr;
-    };
-    static constexpr Uint32 kSyncedTextureMemoSize = 8;
-    SyncedTextureMemoEntry m_syncedTextureMemo[kSyncedTextureMemoSize];
-    Uint32 m_syncedTextureMemoNext = 0;
     Uint64 m_resourceEraseEpoch = 1;
     // Formats whose mutable-image probe failed on this device; their images are created
     // without MUTABLE_FORMAT_BIT so repeat syncs neither re-probe nor flag-mismatch.
@@ -775,23 +700,6 @@ private:
     // exactly like the mutable-format verdict above, so it is answered at image creation and
     // remembered rather than probed once globally.
     std::unordered_set<VkFormat> m_2dArrayCompatibleUnsupported;
-    std::unordered_map<TextureIdentity, WeakPtr<MG_State::GLState::ITextureObject>, TextureIdentityHash> m_aliveObjects;
-    std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
-    // Textures that have been bound to a GL image unit (see MarkStorageImageTexture).
-    std::unordered_set<TextureIdentity, TextureIdentityHash> m_storageImageTextures;
-    // Extra VkImageCreateFlags a GL texture view needs on the storage image it views, keyed by
-    // the STORAGE texture's identity. Requested lazily, exactly like STORAGE usage above and for
-    // the same reason: VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT costs bandwidth compression on tilers
-    // (it is what VK_KHR_image_format_list exists to claw back), so setting it on every
-    // immutable-storage texture would tax every glTexStorage2D render target in a game for a
-    // feature almost none of them use. A SAME-format view - which is the common case, and the
-    // Better Clouds case - needs no flag at all and therefore costs nothing.
-    std::unordered_map<TextureIdentity, VkImageCreateFlags, TextureIdentityHash> m_viewRequestedImageFlags;
-    // Every VkFormat a GL texture view has asked to reinterpret this storage as. The narrowed
-    // VkImageFormatListCreateInfo the image is created with must name them: the list is a promise
-    // that NO other format will ever be viewed, and building a view outside it is
-    // VUID-VkImageViewCreateInfo-pNext-01585. Keyed, like the flags above, by the STORAGE texture.
-    std::unordered_map<TextureIdentity, std::unordered_set<VkFormat>, TextureIdentityHash> m_viewRequestedFormats;
     // Supported multisample counts per format, so repeat texture syncs do not
     // re-query vkGetPhysicalDeviceImageFormatProperties.
     std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;

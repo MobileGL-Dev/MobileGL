@@ -771,7 +771,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace BufferImpl {
         namespace {
             using MG_State::GLState::BackendBufferResource;
-            using MG_State::GLState::BufferBackendOps;
             using MG_State::GLState::BufferObject;
 
             // GL_ARRAY_BUFFER redundant-bind cache (id 0 = unknown/none).
@@ -1074,10 +1073,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (ring.fixedAlignment != 0) ring.store.alignment = ring.fixedAlignment;
                 ring.retired.clear();
                 ring.frameMarks.clear();
-            }
-
-            GLESBufferResource* ResourceOf(BufferObject& bufferObject) {
-                return static_cast<GLESBufferResource*>(bufferObject.GetBackendResource().get());
             }
 
             Bool CanTouchGLNow() {
@@ -1581,300 +1576,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             constexpr GLbitfield kMapCoherentBit = 0x0080;
             constexpr GLbitfield kDynamicStorageBit = 0x0100;
 
-            // Zero-copy persistent map: back the buffer with real immutable,
-            // persistently+coherently mapped GL storage (EXT_buffer_storage) and hand the
-            // app that mapped pointer (adopted by the frontend PipeResource). Returns
-            // nullptr when the extension is unavailable or the context is not current, in
-            // which case the frontend keeps its CPU-shadow model. Idempotent.
-            void* Ops_AcquirePersistentMap(BufferObject& bufferObject) {
-                if (!CanTouchGLNow() || !g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange ||
-                    !g_GLESFuncs.glGenBuffers) {
-                    return nullptr;
-                }
-                const SizeT size = bufferObject.GetSize();
-                if (size == 0) return nullptr;
-
-                auto* resource = static_cast<GLESBufferResource*>(bufferObject.GetBackendResource().get());
-                if (!resource) {
-                    auto created = MakeShared<GLESBufferResource>();
-                    resource = created.get();
-                    bufferObject.SetBackendResource(std::move(created));
-                }
-                // Before the generation is stamped, not after: everything on the resource
-                // describes a context that is gone, and the idempotency check below would
-                // otherwise hand the caller the dead context's mapped pointer.
-                if (resource->contextGeneration != g_bufferContextGeneration) {
-                    resource->id = 0;
-                    resource->persistentMapped = false;
-                    resource->persistentPtr = nullptr;
-                    resource->immutableStorage = false;
-                    resource->storageInitialized = false;
-                    resource->storageSize = 0;
-                }
-                resource->contextGeneration = g_bufferContextGeneration;
-
-                if (resource->persistentMapped && resource->persistentPtr && resource->storageSize == size) {
-                    return resource->persistentPtr; // idempotent
-                }
-
-                // Need a fresh id: glBufferStorage fails on a buffer that already has
-                // immutable storage, and any prior mutable store is replaced anyway.
-                if (resource->id != 0) {
-                    NoteBufferIdDeleted(resource->id);
-                    // Driver VAOs may have this id baked into attribute/element bindings
-                    // keyed on frontend versions this re-mint does not move.
-                    ++g_bufferBackendIdGeneration;
-                    g_GLESFuncs.glDeleteBuffers(1, &resource->id);
-                    resource->id = 0;
-                    resource->immutableStorage = false;
-                }
-                g_GLESFuncs.glGenBuffers(1, &resource->id);
-                if (resource->id == 0) return nullptr;
-
-                // Seed from the shadow (MappedData() is still the shadow: the frontend
-                // adopts and drops it only after this returns).
-                BindBufferId(TempBufferTarget, resource->id);
-                const void* initial = bufferObject.MappedData();
-                g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(size), initial,
-                                               GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit |
-                                                   kDynamicStorageBit);
-                // Set as soon as the store exists, not once the map succeeds: the failure
-                // path below leaves this id holding immutable storage, and whoever touches
-                // it next has to know that glBufferData cannot redefine it.
-                resource->immutableStorage = true;
-                void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
-                                                         GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
-                if (!ptr) {
-                    MGLOG_E_ONCE("Ops_AcquirePersistentMap: glMapBufferRange(persistent) failed for buffer %u",
-                            resource->id);
-                    resource->persistentMapped = false;
-                    resource->persistentPtr = nullptr;
-                    return nullptr;
-                }
-                resource->persistentPtr = ptr;
-                resource->persistentMapped = true;
-                resource->storageSize = size;
-                resource->storageInitialized = true;
-                resource->pendingRespecify = false;
-                {
-                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->pendingRanges.clear();
-                    resource->pendingResidentWrites.clear();
-                }
-                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-                return ptr;
-            }
-
-            void Ops_Respecify(BufferObject& bufferObject) {
-                auto* resource = ResourceOf(bufferObject);
-                if (!resource) return; // lazy: EnsureBufferResource full-uploads on creation
-                // The frontend hands an adopted mapping back before it redefines the store
-                // (BufferObject::RedefineStorage), so a resource that still carries the
-                // persistent state here describes the OLD store - and its storage is
-                // IMMUTABLE (glBufferStorageEXT), which the glBufferData below cannot
-                // respecify and which the driver would refuse in silence. Retire the id so
-                // EnsureBufferResource mints a mutable one, with a full upload from the
-                // shadow the frontend has just filled.
-                //
-                // Keyed on the STORAGE, not on persistentMapped: a glMapBufferRange that
-                // failed after its glBufferStorageEXT succeeded clears persistentMapped and
-                // still leaves an immutable store behind, and that one reached glBufferData.
-                if (resource->immutableStorage) {
-                    resource->persistentMapped = false;
-                    resource->persistentPtr = nullptr;
-                    if (resource->id != 0 && CanTouchGLNow() &&
-                        resource->contextGeneration == g_bufferContextGeneration) {
-                        NoteBufferIdDeleted(resource->id);
-                        // Frontend VAO bindings survive respecification; force their
-                        // backend twins to bind the replacement buffer name.
-                        ++g_bufferBackendIdGeneration;
-                        g_GLESFuncs.glDeleteBuffers(1, &resource->id);
-                        resource->id = 0;
-                        resource->immutableStorage = false;
-                    }
-                    // Off the context thread the id cannot be deleted here, and dropping it
-                    // would leak an immutable, persistently mapped store. It stays put, and
-                    // stays flagged, until EnsureBufferResource retires it on the thread
-                    // that owns the context.
-                    resource->storageInitialized = false;
-                    resource->storageSize = 0;
-                    resource->pendingRespecify = true;
-                    resource->pendingRanges.clear();
-                    resource->pendingResidentWrites.clear();
-                    return;
-                }
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration) {
-                    resource->pendingRespecify = true;
-                    resource->pendingRanges.clear();
-                    resource->pendingResidentWrites.clear();
-                    return;
-                }
-                if (bufferObject.GetSize() == 0) {
-                    resource->storageInitialized = false;
-                    resource->storageSize = 0;
-                    resource->pendingRespecify = false;
-                    resource->pendingRanges.clear();
-                    resource->pendingResidentWrites.clear();
-                    return;
-                }
-                RespecifyStorageNow(*resource, bufferObject);
-            }
-
-            void Ops_SubData(BufferObject& bufferObject, SizeT offset, SizeT size) {
-                auto* resource = ResourceOf(bufferObject);
-                if (!resource) return;
-                if (resource->pendingRespecify) return; // full re-upload pending anyway
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration ||
-                    !StorageMatches(*resource, bufferObject)) {
-                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->pendingRanges.Add({offset, offset + size});
-                    return;
-                }
-                // An adopted zero-copy persistent store already HAS the bytes (the
-                // frontend wrote them through the coherent mapping); a driver upload
-                // here would be a self-copy that re-synchronizes what coherent mapping
-                // made free.
-                if (resource->persistentMapped && resource->persistentPtr) {
-                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-                    return;
-                }
-                // An immediate glBufferSubData resolves the WAR hazard against frames
-                // still referencing this store on the CPU on some drivers - Mali parks
-                // the thread in osup_sync_object_wait until every referencing job
-                // retires, which serialized Minecraft 26.3's per-frame UBO/chunk-mesh
-                // update streams into ~1 fps. Queue the range instead (the shadow
-                // already holds the bytes) and let draw-time sync push the merged
-                // ranges through the staging ring.
-                if (MG_Config::Features.EsprytDisableUploadRing) {
-                    UploadRangeNow(*resource, bufferObject, offset, offset + size);
-                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-                    return;
-                }
-                const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                resource->pendingRanges.Add({offset, offset + size});
-            }
-
-            // App bytes for an ADOPTED store: queue them untouched-by-the-mapping; the
-            // draw-time sync (or a readback) lands them GPU-ordered through
-            // DrainResidentWritesNow. No GL here, so the op is thread-agnostic.
-            void Ops_ResidentSubData(BufferObject& bufferObject, SizeT offset, DataPtr data) {
-                auto* resource = ResourceOf(bufferObject);
-                if (!resource || data.size == 0) return;
-                const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                auto& write = resource->pendingResidentWrites.emplace_back();
-                write.offset = offset;
-                const auto* bytes = static_cast<const Uint8*>(data.data);
-                write.bytes.assign(bytes, bytes + data.size);
-            }
-
-            void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
-                                      Flags<BufferMappingAccessBit> appAccess) {
-                auto* resource = ResourceOf(bufferObject);
-                if (!resource) return;
-                if (resource->pendingRespecify) return;
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration ||
-                    !StorageMatches(*resource, bufferObject)) {
-                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->pendingRanges.Add(range);
-                    return;
-                }
-
-                // An adopted zero-copy persistent store already HAS the bytes: the
-                // frontend shadow IS the coherent mapping the app (or UploadSubData)
-                // wrote into, so publishing is free. The self-copy that used to run
-                // here mapped a buffer this backend keeps persistently mapped (an
-                // INVALID_OPERATION whose fallback was a WAR-stalling
-                // glBufferSubData).
-                if (resource->persistentMapped && resource->persistentPtr) {
-                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-                    return;
-                }
-
-                // Same WAR-hazard rule as Ops_SubData: an immediate synchronized upload
-                // (mapped or glBufferSubData) can park the thread on Mali until the
-                // frames still referencing this store retire. Queue the range for the
-                // staged flush at draw-time sync; the negative-control kill switch
-                // keeps the immediate paths below.
-                if (!MG_Config::Features.EsprytDisableUploadRing) {
-                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->pendingRanges.Add(range);
-                    return;
-                }
-
-                // Honour the app's real mapping flags per call: only reach for a
-                // mapped upload when the app allowed invalidation/unsynchronized
-                // access, otherwise a plain glBufferSubData carries the exact
-                // synchronization semantics.
-                const Bool invalidate = (appAccess & BufferMappingAccessBit::InvalidateRange) ||
-                                        (appAccess & BufferMappingAccessBit::InvalidateBuffer);
-                const Bool unsynchronized = static_cast<Bool>(appAccess & BufferMappingAccessBit::Unsynchronized);
-                if (PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC && (invalidate || unsynchronized)) {
-#ifdef TRACY_ENABLE
-                    ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-                    BindBufferId(TempBufferTarget, resource->id);
-                    void* mappedData = g_GLESFuncs.glMapBufferRange(
-                        TempBufferTarget, (GLintptr)range.start, (GLsizeiptr)(range.end - range.start),
-                        GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
-                            (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
-                    if (mappedData) {
-                        Memcpy(mappedData, bufferObject.MappedData() + range.start,
-                               range.end - range.start);
-                        g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
-                        resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-                        return;
-                    }
-                    MGLOG_E_ONCE("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
-                            resource->id);
-                }
-                UploadRangeNow(*resource, bufferObject, range.start, range.end);
-                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-            }
-
-            // A shader wrote this buffer through a storage/atomic-counter binding, so the ES
-            // driver's copy is ahead of the frontend shadow. Pull the whole thing back so
-            // MapBuffer/GetBufferSubData/CopyBufferSubData see the real results.
-            void Ops_ReadbackFromGpu(BufferObject& bufferObject) {
-                auto* resource = ResourceOf(bufferObject);
-                if (!resource || resource->id == 0 || !resource->storageInitialized) return;
-                if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
-                if (resource->persistentMapped) {
-                    // Queued resident SubData bytes land first (GPU-ordered), then the
-                    // finish makes them - and any shader writes already queued on this
-                    // context - visible through the coherent mapping the reads use.
-                    // There is no backend copy to read back in this case.
-                    DrainResidentWritesNow(*resource, bufferObject);
-                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
-                    return;
-                }
-                if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
-                const SizeT size = std::min<SizeT>(bufferObject.GetSize(), resource->storageSize);
-                if (size == 0) return;
-
-                // Queued app writes must land in the backend store before it is read
-                // back, or the writeback below would revert them in the shadow.
-                // The shared ladder, by ID-11: a push build has no FlushPendingRangesNow (see
-                // the note at its would-be forwarder), so this arm and the handle arm call the
-                // one body between them.
-                FlushPendingRangesFrom(*resource, bufferObject.MappedData(), bufferObject.GetSize());
-
-                BindBufferId(TempBufferTarget, resource->id);
-                void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
-                                                            GL_MAP_READ_BIT);
-                if (mapped == nullptr) {
-                    MGLOG_E_ONCE("Ops_ReadbackFromGpu: glMapBufferRange(read) failed for buffer %u", resource->id);
-                    return;
-                }
-                bufferObject.WritebackFromBackend({mapped, size}, 0);
-                g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
-                // The shadow now matches the backend byte for byte; without this the next
-                // draw would see a newer change serial and re-upload the readback over it.
-                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
-            }
-
             void Ops_OnDestroy(SharedPtr<BackendBufferResource>&& resource) {
                 if (!resource) return;
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
@@ -1909,44 +1610,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
                 g_deferredBufferReleases.push_back(std::move(resource));
                 g_hasDeferredBufferReleases.store(true, std::memory_order_release);
-            }
-
-            // Epoch-tracking wrappers: every op bumps the buffer-mutation epoch AFTER
-            // its impl returns (release; see Managers.h for why the order matters),
-            // covering every mutation branch inside - including the early returns
-            // that only queued pendingRanges or flagged pendingRespecify. Bumping on
-            // an op that turned out to be a no-op merely re-runs the probes once.
-            void Ops_RespecifyTracked(BufferObject& bufferObject) {
-                Ops_Respecify(bufferObject);
-                BumpBufferMutationEpoch();
-            }
-            void Ops_SubDataTracked(BufferObject& bufferObject, SizeT offset, SizeT size) {
-                Ops_SubData(bufferObject, offset, size);
-                BumpBufferMutationEpoch();
-            }
-            void Ops_ResidentSubDataTracked(BufferObject& bufferObject, SizeT offset, DataPtr data) {
-                Ops_ResidentSubData(bufferObject, offset, data);
-                BumpBufferMutationEpoch();
-            }
-            void Ops_FlushMappedRangeTracked(BufferObject& bufferObject, Range1D range,
-                                             Flags<BufferMappingAccessBit> appAccess) {
-                Ops_FlushMappedRange(bufferObject, range, appAccess);
-                BumpBufferMutationEpoch();
-            }
-            void Ops_OnDestroyTracked(SharedPtr<BackendBufferResource>&& resource) {
-                Ops_OnDestroy(std::move(resource));
-                BumpBufferMutationEpoch();
-            }
-            void* Ops_AcquirePersistentMapTracked(BufferObject& bufferObject) {
-                void* result = Ops_AcquirePersistentMap(bufferObject);
-                // Bump even on decline: the frontend still enters a persistent map the
-                // per-draw probes must start seeing (IsMapped-driven range pushes).
-                BumpBufferMutationEpoch();
-                return result;
-            }
-            void Ops_ReadbackFromGpuTracked(BufferObject& bufferObject) {
-                Ops_ReadbackFromGpu(bufferObject);
-                BumpBufferMutationEpoch();
             }
 
             // ---- P3a: the same seven ops plus the create/unmap pair, BY HANDLE ------------
@@ -3113,15 +2776,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             };
 
-            const BufferBackendOps g_glesBufferBackendOps = {
-                .Respecify = Ops_RespecifyTracked,
-                .SubData = Ops_SubDataTracked,
-                .ResidentSubData = Ops_ResidentSubDataTracked,
-                .FlushMappedRange = Ops_FlushMappedRangeTracked,
-                .OnDestroy = Ops_OnDestroyTracked,
-                .AcquirePersistentMap = Ops_AcquirePersistentMapTracked,
-                .ReadbackFromGpu = Ops_ReadbackFromGpuTracked,
-            };
         } // namespace
 
         Uint64 CurrentBufferMutationEpoch() {
@@ -3248,76 +2902,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (subsystemBitSet) return PipeSubsystemArmVerdict::Handles;
             if (legacyArmSurvivesLegacyMemos || legacyMemosEnabled) return PipeSubsystemArmVerdict::Legacy;
             return PipeSubsystemArmVerdict::NoArm;
-        }
-
-        Bool ResolveResourceSubsystemArm() {
-            const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
-            // The buffer family's legacy arm is the Ops_* table and g_glesBufferBackendOps, which
-            // are compiled UNCONDITIONALLY - only the VAO twin's memos and the pre-handle VAO
-            // body live under MOBILEGL_PIPE_LEGACY_MEMOS - so this family cannot be left armless
-            // and NoArm is unreachable for it. Said out loud rather than assumed, because the
-            // knob is still answered below.
-            const PipeSubsystemArmVerdict verdict =
-                ClassifyPipeSubsystemArm(bitSet, /*legacyMemosEnabled=*/true,
-                                         /*legacyArmSurvivesLegacyMemos=*/true);
-            // Unreachable for this family by the argument above, and stated as a stop anyway:
-            // the two P3a families answer an armless verdict the same way, and an unreachable
-            // branch that says something different is how the reachable one drifts.
-            if (verdict == PipeSubsystemArmVerdict::NoArm) {
-                StopOnArmlessPipeSubsystem("MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources "
-                                           "(bit 7) clear and the pre-handle buffer arm is gone");
-            }
-            const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
-            MGLOG_D("MGPipe: Espryt resource family runs the %s arm", enabled ? "handle" : "legacy");
-            return enabled;
-        }
-
-        Bool ResolveVertexInputSubsystemArm() {
-            const Uint64 mask = MG_Config::Features.PipePush;
-            const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
-            // The vertex-input family's row, READ FROM MG_Pipe/SubsystemDeps.def (P3b/P4b R-5,
-            // switched over by wave 2-D package D3) rather than restated as the hand-rolled
-            // `bitSet && !resourcesBitSet` this function used to carry - one of the six statements
-            // of D-K2's rule that R-5 found with nothing comparing them. The table's own sentence
-            // is what the refusal prints. The mirror pair (bit 7 set, bit 8 clear) is fine - the
-            // legacy VAO walk calls BindAttributeBuffer -> EnsureBufferResource, which dispatches
-            // to the handle arm by itself - and lives with the other mirror pairs in MGPipe.h.
-            if (bitSet && !MG_Pipe::MGPipeSubsystemDependenciesAreSet(MG_Pipe::kMGPipeSubsystemVertexInput, mask)) {
-                MGLOG_E("MGPipe: kMGPipeSubsystemVertexInput (bit 8) is set but MOBILEGL_PIPE_PUSH="
-                        "0x%llx does not carry every bit MG_Pipe/SubsystemDeps.def says it requires "
-                        "(requires 0x%llx, missing 0x%llx): %s - REFUSING bit 8 and running the "
-                        "legacy vertex-input arm. Set every bit of the row, or clear bit 8",
-                        static_cast<unsigned long long>(mask),
-                        static_cast<unsigned long long>(
-                            MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemVertexInput)),
-                        static_cast<unsigned long long>(
-                            MG_Pipe::MGPipeSubsystemRequires(MG_Pipe::kMGPipeSubsystemVertexInput) & ~mask),
-                        MG_Pipe::MGPipeSubsystemDependencyWhy(MG_Pipe::kMGPipeSubsystemVertexInput));
-                return false;
-            }
-            constexpr Bool kLegacyVaoArmCompiled = false;
-            // Unlike the buffer family, this one's legacy arm IS conditional: the pre-handle
-            // SyncToBackend body and the twin memos it reads are inside MOBILEGL_PIPE_LEGACY_MEMOS.
-            const PipeSubsystemArmVerdict verdict =
-                ClassifyPipeSubsystemArm(bitSet, /*legacyMemosEnabled=*/true,
-                                         /*legacyArmSurvivesLegacyMemos=*/false);
-            if (verdict != PipeSubsystemArmVerdict::Handles &&
-                (verdict == PipeSubsystemArmVerdict::NoArm || !kLegacyVaoArmCompiled)) {
-                // M-4: A STOP, not a log line. Continuing here left the process drawing through
-                // an UNCONFIGURED driver VAO - every attribute pointer whatever the last owner
-                // of that VAO name set it to - after one MGLOG_E that a lane summary does not
-                // read. The lanes that pin MOBILEGL_PIPE_LEGACY_MEMOS=0 all carry an explicit
-                // 0x1ff now, so this verdict is an operator's configuration and nothing else.
-                StopOnArmlessPipeSubsystem(
-                    kLegacyVaoArmCompiled
-                        ? "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemVertexInput (bit 8) clear and "
-                          "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle VAO sync"
-                        : "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemVertexInput (bit 8) clear and "
-                          "the pre-handle VAO sync is not compiled into this build");
-            }
-            const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
-            MGLOG_D("MGPipe: Espryt vertex-input family runs the %s arm", enabled ? "handle" : "legacy");
-            return enabled;
         }
 
         GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res) {
@@ -3544,10 +3128,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint64 g_bufferBackendIdGeneration = 0;
 
         void RegisterBufferBackendOps() {
-            MG_State::GLState::SetBufferBackendOps(&g_glesBufferBackendOps);
-            // P3a: the handle-shaped table goes up beside it, at the same two bring-up sites
-            // and with the same lifetime. Registration is UNCONDITIONAL, exactly as
-            // BufferBackendOps' is: the subsystem bit is the FRONTEND's dispatch predicate
+            // P3a: the handle-shaped resource table (P13: the only one - the legacy
+            // BufferBackendOps table is deleted). Registration is UNCONDITIONAL: the subsystem bit is the FRONTEND's dispatch predicate
             // (MGPipeResourceSubsystemEnabled reads the bit AND this table's presence), so a
             // build with bit 7 clear registers a table nobody calls and the A/B stays a pure
             // configuration question rather than a bring-up-order one.
@@ -3563,9 +3145,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void UnregisterBufferBackendOps() {
-            if (MG_State::GLState::GetBufferBackendOps() == &g_glesBufferBackendOps) {
-                MG_State::GLState::SetBufferBackendOps(nullptr);
-            }
             if (MG_Pipe::MGPipeGetResourceOps() == &g_glesResourceOps) {
                 MG_Pipe::MGPipeSetResourceOps(nullptr);
             }
@@ -3679,11 +3258,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (auto& resource : ready) RetireT0Import(*static_cast<GLESBufferResource*>(resource.get()));
         }
 #endif
-
-        GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject) {
-            if (!bufferObject) return nullptr;
-            return static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
-        }
 
         // The same five questions, asked of the applier instead of the frontend object, with
         // IDENTICAL semantics (D-A4):
