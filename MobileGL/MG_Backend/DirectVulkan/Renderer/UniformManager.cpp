@@ -153,8 +153,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool UniformManager::ResolveWireImageDescriptor(
         VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
         const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 element,
-        Bool storage, VkDescriptorImageInfo& out) const {
+        Bool storage, VkDescriptorImageInfo& out, VkTextureManager::TextureResource** outResource) const {
         out = {};
+        if (outResource != nullptr) *outResource = nullptr;
         auto& state = MG_Pipe::MGPipeApplier();
         const Int baseLocation = programObj.samplerUniformLocationByBinding[binding];
         const Int location = baseLocation + static_cast<Int>(element);
@@ -183,6 +184,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* resource = m_textureManager->SyncTextureResourceByHandle(handle, false, storage);
         if (!resource) WireDescriptorFatal("image-resource");
         m_textureManager->FlushPendingUploads();
+        if (outResource != nullptr) *outResource = resource;
 
         const auto target = static_cast<MG_Pipe::MGPipeResourceTarget>(record.Desc.Target);
         const Bool layerable = WireTargetHasLayers(target);
@@ -630,6 +632,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (auto& entry : m_descriptorReuseMemo) {
             entry.valid = false;
         }
+        m_wireDescriptorRebind.valid = false;
         m_lastBindValid = false;
     }
 
@@ -716,6 +719,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (auto& entry : m_descriptorReuseMemo) {
                 entry.valid = false;
             }
+            m_wireDescriptorRebind.valid = false;
             MGLOG_D("UniformDescriptorBinder: freed %zu descriptor sets for destroyed layout", purgedSets);
         }
     }
@@ -1550,6 +1554,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (frame.activeDescriptorPoolIndex >= frame.descriptorPools.size()) {
             frame.activeDescriptorPoolIndex = 0;
         }
+        if (TryRebindWireDescriptorSet(commandBuffer, program, programObj, frameIndex, bindPoint)) return true;
+        // What the full resolve below proves for the next draw's rebind (WireDescriptorRebind).
+        Bool rebindEligible = true;
+        auto& rebindResources = m_wireRebindResourcesScratch;
+        rebindResources.clear();
 
         // The descriptor set is chosen AFTER the writes are built (below), so a draw
         // whose resolved descriptor content matches the previous draw can reuse that
@@ -1609,6 +1618,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 break; // ascending, so nothing past the cap can follow
             }
             const auto kind = programObj.bindingKinds[binding];
+            if (kind != ProgramFactory::DescriptorBindingKind::UniformBufferDynamic &&
+                kind != ProgramFactory::DescriptorBindingKind::StorageBuffer &&
+                kind != ProgramFactory::DescriptorBindingKind::CombinedImageSampler)
+                rebindEligible = false;
 
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1729,8 +1742,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const SizeT firstImageInfoIndex = imageInfos.size();
                 for (Uint32 element = 0; element < descriptorCount; ++element) {
                     VkDescriptorImageInfo imageInfo{};
+                    VkTextureManager::TextureResource* sampledResource = nullptr;
                     const Bool hasImage = ResolveWireImageDescriptor(commandBuffer, program, programObj, binding,
-                                                                     element, false, imageInfo);
+                                                                     element, false, imageInfo, &sampledResource);
+                    // A placeholder (an empty unit) has no resource to re-check: full resolve.
+                    if (sampledResource == nullptr) rebindEligible = false;
+                    else rebindResources.push_back(sampledResource);
                     if (!hasImage) {
                         MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: sampler binding %u element %u "
@@ -1828,6 +1845,101 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         BindDescriptorSetDeduped(commandBuffer, bindPoint, programObj.pipelineLayout, descriptorSet,
                                  dynamicOffsets);
+
+        // Stamp what this full resolve depended on, for TryRebindWireDescriptorSet. Taken after
+        // the walk: the walk's own syncs and barriers are part of what it proved.
+        auto& rebind = m_wireDescriptorRebind;
+        rebind.valid = rebindEligible && descriptorSet != VK_NULL_HANDLE &&
+                       WireImageWriteEpoch() == m_wireImageBarrierEpoch;
+        if (rebind.valid) {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            rebind.frameIndex = frameIndex;
+            rebind.bindPoint = bindPoint;
+            rebind.programHash = programObj.hash;
+            rebind.layout = programObj.descriptorSetLayout;
+            rebind.pipelineLayout = programObj.pipelineLayout;
+            rebind.programHandle = program.Handle();
+            rebind.programSerial = program.GetBackendStateVersion();
+            rebind.programBindingsSerial = program.GetBlockBindingVersion();
+            rebind.contextSerial = st.ContextSerial;
+            rebind.samplerViewsSerial = st.SamplerViewsSerial;
+            rebind.samplerStatesSerial = st.SamplerStatesSerial;
+            rebind.shaderImagesSerial = st.ShaderImagesSerial;
+            rebind.shaderBuffersSerial = st.ShaderBuffersSerial;
+            rebind.textureShutterSerial = st.TextureShutterSerial;
+            rebind.storeDestroyEpoch = m_bufferManager->GetWireStoreDestroyEpoch();
+            rebind.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+            rebind.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+            rebind.samplerDestroyEpoch = m_samplerManager->DestroyEpoch();
+            rebind.samplerFrameBoundary = m_samplerManager->FrameBoundaryCount();
+            rebind.set = descriptorSet;
+            rebind.sampledResources.assign(rebindResources.begin(), rebindResources.end());
+            rebind.bufferInfos.assign(bufferInfos.begin(), bufferInfos.end());
+        }
+        return true;
+    }
+
+    Bool UniformManager::TryRebindWireDescriptorSet(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
+                                                    const ProgramFactory::VkProgramObject& programObj,
+                                                    Uint32 frameIndex, VkPipelineBindPoint bindPoint) {
+        const auto& rebind = m_wireDescriptorRebind;
+        if (!rebind.valid || rebind.frameIndex != frameIndex || rebind.bindPoint != bindPoint ||
+            rebind.programHash != programObj.hash || rebind.layout != programObj.descriptorSetLayout ||
+            rebind.pipelineLayout != programObj.pipelineLayout || !(rebind.programHandle == program.Handle()) ||
+            rebind.programSerial != program.GetBackendStateVersion() ||
+            rebind.programBindingsSerial != program.GetBlockBindingVersion())
+            return false;
+        const auto& st = MG_Pipe::MGPipeApplier();
+        if (rebind.contextSerial != st.ContextSerial || rebind.samplerViewsSerial != st.SamplerViewsSerial ||
+            rebind.samplerStatesSerial != st.SamplerStatesSerial || rebind.shaderImagesSerial != st.ShaderImagesSerial ||
+            rebind.shaderBuffersSerial != st.ShaderBuffersSerial || rebind.textureShutterSerial != st.TextureShutterSerial)
+            return false;
+        if (rebind.storeDestroyEpoch != m_bufferManager->GetWireStoreDestroyEpoch() ||
+            rebind.textureImageEpoch != m_textureManager->GetTextureImageEpoch() ||
+            rebind.resourceEraseEpoch != m_textureManager->GetResourceEraseEpoch() ||
+            rebind.samplerDestroyEpoch != m_samplerManager->DestroyEpoch() ||
+            rebind.samplerFrameBoundary != m_samplerManager->FrameBoundaryCount() ||
+            WireImageWriteEpoch() != m_wireImageBarrierEpoch)
+            return false;
+        // The resource pointers are good while the erase epoch holds (checked above). A sampled
+        // image that left GENERAL (rendered to, copied into) needs the full resolve's transition.
+        for (const auto* resource : rebind.sampledResources)
+            if (resource->layout != VK_IMAGE_LAYOUT_GENERAL) return false;
+        // The buffer descriptors, in the walk's order, re-resolved: a UBO's dynamic offset is this
+        // draw's; its buffer and range, and every storage buffer's window, must be the set's.
+        auto& infos = m_wireRebindBufferScratch;
+        infos.clear();
+        auto& dynamicOffsets = m_dynamicOffsetsScratch;
+        dynamicOffsets.clear();
+        for (const Uint32 binding : programObj.activeBindings) {
+            if (binding >= m_maxBindings) break;
+            const auto kind = programObj.bindingKinds[binding];
+            const Uint32 count = BindingDescriptorCount(programObj, binding);
+            if (kind == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic) {
+                for (Uint32 element = 0; element < count; ++element) {
+                    VkDescriptorBufferInfo info{};
+                    Uint32 offset = 0;
+                    if (!ResolveDynamicUboDescriptor(program, programObj, binding, element, frameIndex, info.buffer,
+                                                     info.range, offset))
+                        return false;
+                    infos.push_back(info);
+                    dynamicOffsets.push_back(offset);
+                }
+            } else if (kind == ProgramFactory::DescriptorBindingKind::StorageBuffer) {
+                for (Uint32 element = 0; element < count; ++element) {
+                    VkDescriptorBufferInfo info{};
+                    if (!ResolveStorageBufferDescriptor(program, programObj, binding, element, info)) return false;
+                    infos.push_back(info);
+                }
+            }
+        }
+        if (infos.size() != rebind.bufferInfos.size()) return false;
+        for (SizeT i = 0; i < infos.size(); ++i) {
+            const auto& a = infos[i];
+            const auto& b = rebind.bufferInfos[i];
+            if (a.buffer != b.buffer || a.offset != b.offset || a.range != b.range) return false;
+        }
+        BindDescriptorSetDeduped(commandBuffer, bindPoint, programObj.pipelineLayout, rebind.set, dynamicOffsets);
         return true;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

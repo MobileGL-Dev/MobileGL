@@ -260,7 +260,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    Bool storage);
         Bool ResolveWireImageDescriptor(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
                                        const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                       Uint32 element, Bool storage, VkDescriptorImageInfo& out) const;
+                                       Uint32 element, Bool storage, VkDescriptorImageInfo& out,
+                                       VkTextureManager::TextureResource** outResource = nullptr) const;
+        // P14: THE WIRE DESCRIPTOR REBIND. A draw whose image descriptors cannot have changed since
+        // the last full resolve of the same program in the same frame - same applier context, same
+        // unit / sampler / image / buffer-binding serials, same texture shutter, no texture image
+        // re-created or erased, no sampler destroyed, every sampled image still in GENERAL and no
+        // image write awaiting its barrier - re-resolves only its buffer descriptors (the UBO
+        // dynamic offsets move every draw) and, when those name the same buffers and ranges,
+        // rebinds the set it already has. Anything else, or any program with a texel buffer, storage
+        // image or placeholder descriptor, takes the full resolve.
+        struct WireDescriptorRebind {
+            Bool valid = false;
+            Uint32 frameIndex = 0;
+            VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            Uint64 programHash = 0;
+            VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+            VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+            MG_Pipe::MGPipeHandle programHandle = MG_Pipe::kMGPipeNullHandle;
+            Uint64 programSerial = 0, programBindingsSerial = 0;
+            Uint64 contextSerial = 0, samplerViewsSerial = 0, samplerStatesSerial = 0, shaderImagesSerial = 0;
+            Uint64 shaderBuffersSerial = 0, textureShutterSerial = 0;
+            Uint64 storeDestroyEpoch = 0, textureImageEpoch = 0, resourceEraseEpoch = 0;
+            Uint64 samplerDestroyEpoch = 0, samplerFrameBoundary = 0;
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            Vector<VkTextureManager::TextureResource*> sampledResources;
+            // The buffer descriptors in walk order: dynamic UBOs with offset 0 (their offset is the
+            // dynamic one), storage buffers whole.
+            Vector<VkDescriptorBufferInfo> bufferInfos;
+        };
+        WireDescriptorRebind m_wireDescriptorRebind;
+        Vector<VkDescriptorBufferInfo> m_wireRebindBufferScratch;
+        Vector<VkTextureManager::TextureResource*> m_wireRebindResourcesScratch;
+        Bool TryRebindWireDescriptorSet(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
+                                        const ProgramFactory::VkProgramObject& programObj, Uint32 frameIndex,
+                                        VkPipelineBindPoint bindPoint);
         Bool ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
                                              const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                              Uint32 frameIndex, Bool storage, VkBufferView& out);
