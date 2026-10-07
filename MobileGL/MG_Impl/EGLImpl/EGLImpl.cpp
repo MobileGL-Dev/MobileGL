@@ -46,12 +46,64 @@
 #include <dlfcn.h>
 #endif
 #include <algorithm>
+#include <chrono>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
+#if defined(__unix__) || defined(__linux__) || defined(__ANDROID__)
+#include <time.h>
+#endif
 
 namespace MobileGL::MG_Impl::EGLImpl {
     namespace {
+        // MOBILEGL_FPS_LOG=1 (on Android also the property debug.mobilegl.fps_log=1): one INFO line
+        // about every two seconds with the frames this process presented, their mean frame time and
+        // the presenting thread's CPU per frame. A frame rate for an app-hosted game that shows none
+        // of its own (a launcher's Minecraft with the debug overlay closed, which is itself a cost).
+        // Off, a swap pays one load and branch.
+        Bool FrameRateLogEnabled() {
+            static const Bool enabled = [] {
+                const char* value = std::getenv("MOBILEGL_FPS_LOG");
+#if defined(__ANDROID__)
+                char property[PROP_VALUE_MAX] = {};
+                if (value == nullptr && __system_property_get("debug.mobilegl.fps_log", property) > 0) value = property;
+#endif
+                return value != nullptr && value[0] == '1';
+            }();
+            return enabled;
+        }
+
+        void NoteSwapForFrameRateLog() {
+            if (!FrameRateLogEnabled()) return;
+            using Clock = std::chrono::steady_clock;
+            static Clock::time_point windowStart = Clock::now();
+            static Uint32 frames = 0;
+            static Double cpuStartMs = -1.0;
+            const auto threadCpuMs = []() -> Double {
+#if defined(__unix__) || defined(__linux__) || defined(__ANDROID__)
+                struct timespec now {};
+                if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) == 0)
+                    return static_cast<Double>(now.tv_sec) * 1000.0 + static_cast<Double>(now.tv_nsec) / 1e6;
+#endif
+                return -1.0;
+            };
+            if (cpuStartMs < 0.0) cpuStartMs = threadCpuMs();
+            ++frames;
+            const auto now = Clock::now();
+            const Double elapsedMs = std::chrono::duration<Double, std::milli>(now - windowStart).count();
+            if (elapsedMs < 2000.0) return;
+            const Double cpuNow = threadCpuMs();
+            MGLOG_I("MobileGL fps: %.1f over %u frames (%.2f ms/frame, presenting thread CPU %.2f ms/frame)",
+                    1000.0 * frames / elapsedMs, frames, elapsedMs / frames,
+                    cpuNow >= 0.0 && cpuStartMs >= 0.0 ? (cpuNow - cpuStartMs) / frames : -1.0);
+            windowStart = now;
+            frames = 0;
+            cpuStartMs = cpuNow;
+        }
+
         // SetDispatcherCurrentApiHook.
         std::atomic<EGLenum (*)()> g_dispatcherCurrentApi{nullptr};
         using EGLStateContext = MG_State::EGLState::EGLContext;
@@ -766,6 +818,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // A resize made between frames takes effect for the next one.
         ApplyWaylandResize(state, dpy, draw);
 #endif
+        NoteSwapForFrameRateLog();
         return EGL_TRUE;
     }
 

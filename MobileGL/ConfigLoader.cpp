@@ -458,6 +458,15 @@ namespace MobileGL::MG_ConfigLoader {
     inline void InitTransport() {
         String value;
         QueryEnvVariable("MOBILEGL_TRANSPORT", value, "monolith");
+#if defined(__ANDROID__)
+        // As debug.mobilegl.backend above: a developer picks the transport of an app-hosted
+        // library (a launcher's game process) without rebuilding it or its launcher.
+        char property[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.mobilegl.transport", property) > 0) {
+            MGLOG_I("Config: debug.mobilegl.transport=%s overrides MOBILEGL_TRANSPORT=%s", property, value.c_str());
+            value = property;
+        }
+#endif
         String lowered = value;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
