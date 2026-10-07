@@ -4962,10 +4962,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // half (an applier reset is not a slot recycle, so a re-created CSO at the same
             // {slot, gen} restarts its ContentSerial at 1). If that rule is ever reverted, this
             // gate is unsafe on any application that changes contexts.
-            const Bool attributesDirty = bufferIdsRemitted || !m_hasSyncedElements ||
-                                         !(m_syncedElementsHandle == st.BoundVertexElements) ||
-                                         m_syncedElementsSerial != rec->ContentSerial ||
-                                         m_syncedVertexBuffersSerial != st.VertexBuffersSerial;
+            const Bool elementsDirty = bufferIdsRemitted || !m_hasSyncedElements ||
+                                       !(m_syncedElementsHandle == st.BoundVertexElements) ||
+                                       m_syncedElementsSerial != rec->ContentSerial;
+            const Bool attributesDirty = elementsDirty || m_syncedVertexBuffersSerial != st.VertexBuffersSerial;
             const Bool indexBufferDirty = bufferIdsRemitted || m_syncedIndexSerial != st.IndexBufferSerial;
             // Emulation is server-owned: the client sends the draw's RAW base instance and never
             // learns the answer. Applied here as well as in the applier so the decision is the
@@ -4977,6 +4977,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!emitAttributes && !indexBufferDirty) {
                 return;
             }
+            // P14: ONLY THE BUFFER SET MOVED (a Minecraft chunk draw: same layout, next chunk's
+            // buffer). The driver VAO's enable flags are a function of the configuration alone,
+            // and the last full walk left them exactly as this configuration wants them, so the
+            // walk below re-points just the enabled attributes and skips the 32 enable/disable
+            // calls. Only after a walk in which every enabled attribute took the plain pointer
+            // path: the fp64, zero-stride, BGRA and no-buffer branches toggle enables or bind
+            // through other state, and the client-memory upload rewrites the VAO behind this
+            // gate, so any of them sends the next sync through the whole walk again.
+            const Bool buffersOnly = emitAttributes && !elementsDirty && m_lastWalkWasPlain &&
+                                     !m_hasConvertedFloat64Attribute;
+            Bool walkWasPlain = true;
             m_hasConvertedFloat64Attribute = false;
 
             Bind();
@@ -4996,6 +5007,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint attribIndex = 0; attribIndex < MG_Pipe::kMGPipeMaxVertexAttribs && emitAttributes;
                  ++attribIndex) {
                 const MGPVertexAttribWire& attrib = rec->Attributes[attribIndex];
+                if (buffersOnly && !attrib.Enabled) continue;
                 const MG_Pipe::MGPVertexBuffer* binding =
                     VertexBufferForAttributeIndex(st, attribIndex);
                 const Uint32 divisor = binding != nullptr ? binding->Divisor : 0u;
@@ -5003,11 +5015,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The enable/disable block. On this arm there is no per-attribute version to
                 // compare: the applier's Attributes[] IS what was last pushed, so a moved
                 // ContentSerial means re-emit and an unchanged one means the early-out above
-                // already returned.
-                if (attrib.Enabled) {
-                    g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
-                } else {
-                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                // already returned. A buffers-only walk leaves the flags as they are (above).
+                if (!buffersOnly) {
+                    if (attrib.Enabled) {
+                        g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
+                    } else {
+                        g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    }
                 }
 
                 // The fp64 narrowing, verbatim in behaviour including the Adreno workaround:
@@ -5017,6 +5031,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // carried separately from Type == Float64 on the wire precisely so this test
                 // can still tell the two apart.
                 if (attrib.IsLong || attrib.Type == static_cast<Uint32>(DataType::Float64)) {
+                    walkWasPlain = false;
                     if (attrib.Enabled && attrib.Type == static_cast<Uint32>(DataType::Float64) &&
                         binding != nullptr &&
                         SyncFloat64AttributeAsFloat32ByHandle(attribIndex, attrib, *binding, fetchBaseInstance)) {
@@ -5036,12 +5051,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                if (!attrib.Enabled || binding == nullptr) continue;
+                if (!attrib.Enabled) continue;
+                if (binding == nullptr) {
+                    walkWasPlain = false;
+                    continue;
+                }
 
                 // A resolved stride of zero is the binding model's "never advance" and
                 // glVertexAttribPointer cannot say it - its zero means "tightly packed", i.e.
                 // the opposite. ES 3.1's binding-point API can.
                 if (attrib.Stride == 0 && HasVertexBindingApi()) {
+                    walkWasPlain = false;
                     if (!SyncZeroStrideAttributeByHandle(attribIndex, attrib, *binding)) {
                         continue;
                     }
@@ -5051,6 +5071,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (!BindAttributeBufferByHandle(binding->Res)) {
+                    walkWasPlain = false;
                     continue;
                 }
 
@@ -5061,6 +5082,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // format: the per-draw sync must not grow a glGetError round trip for the
                 // formats real applications use.
                 const Bool formatMayBeRefused = attrib.IsBgra != 0;
+                if (formatMayBeRefused) walkWasPlain = false;
                 if (formatMayBeRefused) {
                     while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
                     } // start from a clean slate so the check below is about THIS call
@@ -5132,6 +5154,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             if (emitAttributes) {
                 m_syncedFetchBaseInstance = fetchBaseInstance;
+                m_lastWalkWasPlain = walkWasPlain;
             }
             m_syncedBufferIdGeneration = currentBufferIdGeneration;
         }
@@ -5142,6 +5165,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!stateVAOObject || count <= 0 || first < 0) {
                 return;
             }
+            // This rewrites the driver VAO's arrays behind SyncToBackendFromApplier's gate, so
+            // the next sync must not take its buffers-only walk.
+            m_lastWalkWasPlain = false;
 
             Bind();
 

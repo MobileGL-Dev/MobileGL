@@ -1392,6 +1392,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // baked into the driver VAO's attribute/element bindings may be dead even
             // though every frontend version matches, so the next sync re-emits them all.
             Uint64 m_syncedBufferIdGeneration = 0;
+            // P14: the last attribute walk sent every enabled attribute down the plain pointer
+            // path, so the driver VAO's enable flags are exactly the configuration's and a walk
+            // for a moved buffer set alone may skip them (SyncToBackendFromApplier).
+            Bool m_lastWalkWasPlain = false;
         };
 
         extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
