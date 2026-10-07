@@ -3165,11 +3165,22 @@ namespace MobileGL::MG_Pipe {
             values.TransformFeedbackGeneration = ctx.GetTransformFeedbackGeneration();
             values.BoundTransformFeedbackLifetimeId = ctx.GetBoundTransformFeedbackLifetimeId();
             values.TransformFeedbackCapturedVertices = ctx.GetTransformFeedbackCapturedVertices();
+            // P14: the record is rebuilt every draw and nearly always equal to the last one. When it
+            // is byte-equal to the record whose hash the suppressor still holds, the suppressor
+            // would drop it: skip the hash. (An InvalidateAll changes what the suppressor holds,
+            // so a reset still re-emits.)
+            static MGPContextValues s_lastValues{};
+            static Uint64 s_lastHash = 0;
+            auto& suppressor = MGPipeSetHashSuppressorInstance();
+            if (s_lastHash != 0 && std::memcmp(&values, &s_lastValues, sizeof(values)) == 0 &&
+                suppressor.LastEmitted(MGPipeSuppressorSlot::SetContextValues) == s_lastHash)
+                return 0;
             // The whole record is the hash input, padding included - `values{}` zeroes it, so
             // the pad bytes are defined and the hash is stable.
             const Uint64 contentHash = XXH64(&values, sizeof(values), 0);
-            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetContextValues,
-                                                             contentHash)) {
+            s_lastValues = values;
+            s_lastHash = contentHash == 0 ? 1 : contentHash; // the suppressor's own latch value
+            if (!suppressor.ShouldEmit(MGPipeSuppressorSlot::SetContextValues, contentHash)) {
                 return 0;
             }
             MGPipeRouteSetContextValues(values);

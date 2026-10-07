@@ -120,6 +120,9 @@ namespace MobileGL::MG_Pipe {
 
         // Context teardown / server reset / a unit test's fixture.
         void Reset();
+        // Moves at every Reset(): a memo of handles minted by this allocator is good only while it
+        // holds (a handle lives as long as its object, and only a reset forgets that).
+        Uint64 ResetEpoch() const { return m_resetEpoch; }
 
     private:
         struct SlotState {
@@ -161,6 +164,7 @@ namespace MobileGL::MG_Pipe {
             Uint32 BandLiveCount = 0;
         };
 
+        Uint64 m_resetEpoch = 0;
         KindState& StateOf(MGPipeKind kind);
         const KindState& StateOf(MGPipeKind kind) const;
         // The SlotState a (kind, slot) names, in whichever of the two vectors holds it, or

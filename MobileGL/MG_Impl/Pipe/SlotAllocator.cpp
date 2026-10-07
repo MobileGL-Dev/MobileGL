@@ -308,6 +308,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeSlotAllocator::Reset() {
+        ++m_resetEpoch;
         for (KindState& state : m_kinds) {
             state.Slots.clear();
             state.FreeList.clear();

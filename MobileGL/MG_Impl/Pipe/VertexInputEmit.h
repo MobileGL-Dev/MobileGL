@@ -168,7 +168,12 @@ namespace MobileGL::MG_Pipe {
 
             const Uint64 lifetimeId = vao->GetLifetimeId();
             const Uint32 configVersion = vao->GetConfigVersion();
-            const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::VertexElementsCso, lifetimeId);
+            // The VAO's handle is the allocator's for the object's whole life (only an allocator
+            // reset forgets it), so it is resolved once per VAO rather than per draw (VaoMemo).
+            VaoMemo& memo = MemoFor(*vao);
+            if (MGPipeHandleIsNull(memo.ElementsHandle))
+                memo.ElementsHandle = MGPipeSlots().Acquire(MGPipeKind::VertexElementsCso, lifetimeId);
+            const MGPipeHandle handle = memo.ElementsHandle;
             const SizeT slot = handle.Slot;
             if (slot >= m_latch.size()) m_latch.resize(slot + 1);
             Latch& latch = m_latch[slot];
@@ -200,7 +205,20 @@ namespace MobileGL::MG_Pipe {
                                 const Array<MGPipeHandle, kMGPipeMaxVertexAttribs>* ownedClientBuffers = nullptr) {
             const auto& vao = ctx.GetBoundVertexArray();
             Uint32 count = 0;
-            if (vao) {
+            // The resolved set is a function of the VAO's configuration alone (buffers, strides,
+            // divisors and enables all move its version; its buffers' handles live as long as the
+            // VAO holds the buffers), so it is walked once per configuration rather than per draw -
+            // a Minecraft frame binds hundreds of chunk VAOs. Not for client-memory arrays, whose
+            // entries the draw itself supplies.
+            VaoMemo* memo = vao && ownedClientBuffers == nullptr ? &MemoFor(*vao) : nullptr;
+            if (memo != nullptr && memo->BuffersValid && memo->ConfigVersion == vao->GetConfigVersion()) {
+                count = memo->BufferCount;
+                for (SizeT i = 0; i < count; ++i) {
+                    m_entries[i] = memo->Buffers[i];
+                    MGPipeResourceTrackerInstance().NoteBoundAs(m_entries[i].Res, BufferTarget::Vertex);
+                }
+            } else if (vao) {
+                Bool memoizable = memo != nullptr;
                 for (SizeT i = 0; i < kAttribs; ++i) {
                     if (vao->GetAttribute(static_cast<Uint>(i)).Enabled) count = static_cast<Uint32>(i) + 1;
                 }
@@ -230,6 +248,13 @@ namespace MobileGL::MG_Pipe {
                     entry.Stride = static_cast<Uint32>(attrib.Stride);
                     entry.Divisor = static_cast<Uint32>(attrib.Divisor);
                     entry.BindingIndex = static_cast<Uint32>(i);
+                    if (attrib.Enabled && !attrib.Buffer) memoizable = false;
+                }
+                if (memo != nullptr) {
+                    memo->BuffersValid = memoizable && count <= kVaoMemoBuffers;
+                    memo->ConfigVersion = vao->GetConfigVersion();
+                    memo->BufferCount = count;
+                    for (SizeT i = 0; i < count && i < kVaoMemoBuffers; ++i) memo->Buffers[i] = m_entries[i];
                 }
             }
 
@@ -261,7 +286,13 @@ namespace MobileGL::MG_Pipe {
             m_lastIndex = MGPIndexBuffer{};
             if (vao) {
                 if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
-                    m_lastIndex.Res = MGPipeSlots().Acquire(MGPipeKind::Buffer, bound->GetLifetimeId());
+                    // Per VAO, keyed on the element buffer's own lifetime id (VaoMemo).
+                    VaoMemo& memo = MemoFor(*vao);
+                    if (memo.IndexLifetimeId != bound->GetLifetimeId() || MGPipeHandleIsNull(memo.IndexHandle)) {
+                        memo.IndexLifetimeId = bound->GetLifetimeId();
+                        memo.IndexHandle = MGPipeSlots().Acquire(MGPipeKind::Buffer, memo.IndexLifetimeId);
+                    }
+                    m_lastIndex.Res = memo.IndexHandle;
                     // The INDEX|ELEMENT_ARRAY bind bits. ELEMENT_ARRAY's D-B7 reader
                     // (kCapNeedsHostIndexBytes) is RESERVED (P8-F) and was never built.
                     // Noted at every draw for RefreshBindMask's reason: an EBO defined through
@@ -353,6 +384,36 @@ namespace MobileGL::MG_Pipe {
         void ResetCounters() { m_creates = m_binds = m_bufferSets = m_indexSets = 0; }
 
     private:
+        // P14: what EmitVertexElements / EmitVertexBuffers / EmitIndexBuffer resolve from a VAO,
+        // direct-mapped on the VAO's lifetime id (monotonic, never reused) and dropped whole at an
+        // allocator reset. A colliding VAO simply takes the entry over. It changes no record: the
+        // same handles and entries are emitted, only found without the per-draw walk and lookups.
+        static constexpr SizeT kVaoMemoEntries = 1024;
+        static constexpr SizeT kVaoMemoBuffers = 8;
+        struct VaoMemo {
+            Uint64 LifetimeId = 0;
+            Uint64 SlotEpoch = 0;
+            MGPipeHandle ElementsHandle = kMGPipeNullHandle;
+            Uint64 IndexLifetimeId = 0;
+            MGPipeHandle IndexHandle = kMGPipeNullHandle;
+            Bool BuffersValid = false;
+            Uint32 ConfigVersion = 0;
+            Uint32 BufferCount = 0;
+            Array<MGPVertexBuffer, kVaoMemoBuffers> Buffers{};
+        };
+        VaoMemo& MemoFor(const VertexArrayObject& vao) {
+            const Uint64 lifetimeId = vao.GetLifetimeId();
+            const Uint64 epoch = MGPipeSlots().ResetEpoch();
+            VaoMemo& memo = m_vaoMemo[lifetimeId % kVaoMemoEntries];
+            if (memo.LifetimeId != lifetimeId || memo.SlotEpoch != epoch) {
+                memo = VaoMemo{};
+                memo.LifetimeId = lifetimeId;
+                memo.SlotEpoch = epoch;
+            }
+            return memo;
+        }
+        Array<VaoMemo, kVaoMemoEntries> m_vaoMemo{};
+
         struct Latch {
             // The PER-CONTEXT half: "has this emitter told THIS server about this handle's
             // configuration". Cleared by Reset() at every make-current.
