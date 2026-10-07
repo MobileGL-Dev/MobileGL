@@ -1,31 +1,26 @@
-# 当前阶段：P8 已收官（2026-09-30）；下一阶段 P13
+# 当前阶段：P13 已收官（2026-10-07）；下一阶段 P14
 
-> **更新 2026-09-30**。这一页只有摘要；计划与裁定在 [`notes/p8/PLAN-P8.md`](notes/p8/PLAN-P8.md)、[`notes/p8/INTEGRATOR-DECISIONS-P8.md`](notes/p8/INTEGRATOR-DECISIONS-P8.md)。上一阶段 P11 于 09-29 收官，见 [`notes/p11/README.md`](notes/p11/README.md)。
+> **更新 2026-10-07**。这一页只有摘要；计划与裁定在 [`notes/p13/PLAN-P13.md`](notes/p13/PLAN-P13.md)、[`notes/p13/INTEGRATOR-DECISIONS-P13.md`](notes/p13/INTEGRATOR-DECISIONS-P13.md)，逐波记录在 [`notes/p13/README.md`](notes/p13/README.md)。上一阶段 P8 于 09-30 收官，见 [`notes/p8/README.md`](notes/p8/README.md)。
 
 ## 目标
 
-补齐 server 侧仿真缺口（Espryt 生成 mip、Espryt 暂存影子与 GPU 写、Magma wire indirect、驱动拒读），并把 monolith 用例登记到 split 各臂；为 P13 删掉旧的「后端直接读前端」路径扫清前置。原范围已重定界（划掉保留在 [`notes/p8/README.md`](notes/p8/README.md)）。
+退役 pull 路径：单进程（FCL 内嵌库）也走 P8 修好的记录臂，删掉旧的「后端直接读前端」路径与它的全部编译期 / 运行期开关。
 
 ## 完成情况
 
 | 项 | 状态 |
 |---|---|
-| 只读核查与重定界 | ✅ 原 10 项里 6 项已完成、直接关闭（ID-P8-1） |
-| P8-0 普查（设备 + 主机） | ✅ 真实内容只 Magma wire indirect 命中；G 不做；create-indirect 门在多帧 trace 上成立（ID-P8-5） |
-| A 覆盖对齐 | ✅ 246 例登上 split / spawn / tcp，`split_coverage.py` 进门（ID-P8-7） |
-| B Espryt 生成 mip | ✅（ID-P8-8） |
-| C Espryt 暂存影子与 GPU 写 | ✅（ID-P8-9） |
-| D Magma wire 原生 indirect | ✅ create-indirect 每次整 GPU 等待 321 → 0（ID-P8-10） |
-| E 驱动拒读 / CopyImage | ✅（ID-P8-11） |
-| F 死闩清理与重分类 | ✅（ID-P8-6） |
-| G 大 blob 分片 | 不做（ID-P8-5） |
-| 第一波集成头 `39cd8fb7` | ✅ 整套门全绿，G1 不变（ID-P8-12） |
-| 第二波 SE / SV（split 余项） | ✅（ID-P8-15、-16） |
-| 第二波 MD + MF（Create 在 Adreno 上） | ✅ dev `f973008c` + feat 镜像：create-instancing × Espryt × monolith 0.870 → 0.99998；create-indirect 坏在 fixture（ID-P8-14） |
-| 出口 | ✅ 候选头 `49430538` 整套门全绿；设备矩阵无一格变差；P12 跨机门复跑一致（ID-P8-18、-19） |
+| W1 CI 地基（skip 普查、零 `MG_Remote` 符号检查、运行期形态证明） | ✅ |
+| W2–W3 默认翻转与去宏（`MOBILEGL_PIPE_PUSH` / `LEGACY_MEMOS` 删除，位 0–13 固定开） | ✅ |
+| W4–W5 单进程换到记录臂，记录臂移出 `MG_Remote` | ✅ |
+| W6 删后端的前端对象臂（Espryt / Magma），`# P13` 债务清零 | ✅ |
+| W7 七个 OBJECT 模块 + server-only 链接检查 | ✅ |
+| W8 recorder 金标（首跑抓到并修掉两个单进程推送内容缺陷） | ✅ |
+| W9 缓存容量重调 | 移到 P13 之后的性能轮（用户 10-07） |
+| W10 文档与收官 | ✅；FCL 真机两后端冒烟通过 |
 
 ## 下一步
 
-**P13**：删掉旧的「后端直接读前端」路径，monolith 换到 P8 已修好的记录臂（P8 留下的 9 条 monolith 缺陷随之消失，`DEBTS.md`）。开工前先做只读核查。
+**P14**：状态归属（同进程多 session / 多 context / share group），设计见 [`design/11-state-ownership.md`](design/11-state-ownership.md)。性能轮（基线 `dev` 构建，定频，FCL MC + anland glmark2，两后端）也排在 P13 之后。
 
-**待用户决策**：[`DEBTS.md`](notes/DEBTS.md) 六项「需裁定」（CI 触发条件、`TCP_USER_TIMEOUT`、HyperOS 下 FCL 保活、Mali 复测、TLS、`IDLE_EXIT_S`）。
+**待用户决策**：[`DEBTS.md`](notes/DEBTS.md) 中「需裁定」各项；FCL 无声死亡留给用户（`notes/p13/fcl-soak/README.md`）。

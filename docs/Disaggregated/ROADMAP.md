@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-09-30**：P0 到 P7、P12、P9、P10、P11、**P8** 已完成——拆分路线走完，单进程路线只剩 P13。P8（重定界）：server 侧仿真缺口补齐（Espryt 生成 mip、暂存副本与 GPU 写、驱动拒读；Magma wire 原生 indirect），246 个 monolith 用例登上 split 各臂并由覆盖门守住；红米上 Create 画错在 dev 与 feat 两条 flush 阶梯修好；契约 `MG_Remote/CONTRACT-P8.md`，G1 整阶段符号不变。下一阶段 **P13**（删掉旧的「后端直接读前端」路径；P8 已把 monolith 要换到的记录臂修好，9 条 monolith 缺陷随之消失）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
+> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
 
 ## 目标
 
@@ -8,7 +8,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 
 ## 两条路线
 
-- **单进程路线**：先把接口建起来，让单进程版本也受益（后端拥有自己的状态、可以挪到渲染线程）。P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → **P8** → P13。
+- **单进程路线**：先把接口建起来，让单进程版本也受益（后端拥有自己的状态、可以挪到渲染线程）。P0 → P0.5 → P1 → P2 → P3a → P4a → P3b/P4b → P7 → P8 → **P13**（走完）。
 - **拆分路线**：在接口之上逐步拆开前后端。P5 → P5b → P5c → P5d → P5e → P5f → P6 → P6.5 → Ph → P12 → P9 → P10 → **P11**（走完）。
 
 ## 阶段一览
@@ -37,7 +37,7 @@ client（跑应用的一方）与 server（跑驱动的一方）可以在**不�
 | [**P9**](notes/p9/README.md) | **反向通道：回读、日志、重铸不再同步等待 client** | ✅ 09-29：PACK-PBO 回读 fire-and-forget（两后端）、日志分级转发、重铸无拉取（`OnLog` / `OnTexturePullRequest` 删，回调 9 → 7），F1 / F2；契约 `MG_Remote/CONTRACT-P9.md`；G1 成立；事件量批处理无实测需求不做；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P10**](notes/p10/README.md) | **同步对象、查询与帧节奏** | ✅ 09-29：fence 轮询由 server 报告本地作答（`kEventFenceSignaled`、`MOBILEGL_IPC_POLL_ESCALATE`；主机 Magma·tcp −37%，Adreno 830 上两后端 0 次往返）；`SetSwapInterval` 转发、class C 清零；query / XFB / AsyncCompile 登记 split 各臂；credit 1/2/3 设备 loopback 在噪声内；契约 `MG_Remote/CONTRACT-P10.md`；G1 成立；余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | [**P11**](notes/p11/README.md) | **同机大缓冲零拷贝共享** | ✅ 09-29：T0 零拷贝导入（两后端，默认开，自测不过或 Stream 上静默退回 T2）；同机外部 client 经 helper + 令牌 broker 走共享内存（B1）；连接按 `PairBind` nonce 配对（修订 5）；采纳档位在握手时定；契约 `MG_Remote/CONTRACT-P11.md`；余项进 [`DEBTS.md`](notes/DEBTS.md) |
-| [P13](notes/p13/README.md) | 删掉旧的"后端直接读前端"路径 | 待排 |
+| [**P13**](notes/p13/README.md) | **删掉旧的"后端直接读前端"路径** | ✅ 10-07：单进程只走记录臂；pull / push 构建与 `PIPE_PUSH` / `LEGACY_MEMOS` 编译期开关、残余值块、后端前端对象臂删除；七个 OBJECT 模块与 server-only 真链接；link ratchet 172 → 27 具名债务；recorder 金标；G1 退役；FCL 真机两后端冒烟通过；性能轮（基线 `dev`）与余项进 [`DEBTS.md`](notes/DEBTS.md) |
 | **P14** | **状态归属：同进程多 session / 多 context / share group**（统一 server 的前提，anland 内置渲染器不做按进程隔离） | 设计 ✅ [`design/11-state-ownership.md`](design/11-state-ownership.md)，实现待做 |
 
 ## 另见
