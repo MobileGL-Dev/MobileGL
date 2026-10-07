@@ -471,18 +471,10 @@ ACCESSOR_READ_RE = re.compile(r"\b(?:gPipeInputs\.|pGLContext)\s*->\s*(\w+)")
 # here is a DEBT ENTRY, not a silence: it exists so the gate can tell "scoped, named, phased"
 # from "forgot the row".
 #
-# P5c (the tx/ev/hd merge): the G6 frontend-keyed registry's framebuffer arm - two probes a
-# backend makes inside MGPipeFrontendKeyedRegistryScope (CONTRACT-P5C.md section 3.1's second
-# named exemption: the registry probes ride the scope, an unwrapped probe still aborts, and
-# the scope retires with the twin tables at P3b/P4b). They are object-registry lookups, not
-# PipeInputs state reads, so no Coverage.def row can ever describe them - a row there is a
-# field in the fill table, and these have no storage to fill.
-SCAN_EXEMPT_ACCESSORS = {
-    "GetFramebufferObject": "P5c G6 registry probe (the default framebuffer's object), inside "
-                          "MGPipeFrontendKeyedRegistryScope; retires with the twin tables (P3b/P4b)",
-    "FindFramebufferObjectByLifetimeId": "P5c G6 registry probe, inside "
-                          "MGPipeFrontendKeyedRegistryScope; retires with the twin tables (P3b/P4b)",
-}
+# P13: the last two (the G6 frontend-keyed registry's framebuffer probes, GetFramebufferObject and
+# FindFramebufferObjectByLifetimeId) went with the frontend-keyed registry itself; no backend
+# reads them any more.
+SCAN_EXEMPT_ACCESSORS = {}
 
 
 def scan_live_accessors(accessors, backend_dir=None, verbose=True):
